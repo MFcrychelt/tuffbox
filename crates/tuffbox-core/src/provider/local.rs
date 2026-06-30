@@ -1,0 +1,124 @@
+use super::{
+    ContentProvider, ModDependencySpec, ProjectInfo, ProviderError, ProviderFileHashes,
+    ProviderFileInfo, ProviderSearchQuery, VersionInfo,
+};
+use sha1::Sha1;
+use sha2::{Digest, Sha512};
+use std::{fs, path::PathBuf};
+
+pub struct LocalJarProvider {
+    path: PathBuf,
+}
+
+impl LocalJarProvider {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    fn compute_hashes(&self) -> Result<ProviderFileHashes, ProviderError> {
+        let bytes = fs::read(&self.path)?;
+        let mut sha1_hasher = Sha1::new();
+        let mut sha512_hasher = Sha512::new();
+        sha1_hasher.update(&bytes);
+        sha512_hasher.update(&bytes);
+        let sha1_result = sha1_hasher.finalize();
+        let sha512_result = sha512_hasher.finalize();
+        Ok(ProviderFileHashes {
+            sha1: Some(hex::encode(sha1_result)),
+            sha512: Some(hex::encode(sha512_result)),
+        })
+    }
+
+    fn file_name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "local.jar".to_string())
+    }
+
+    fn mod_id(&self) -> String {
+        self.file_name()
+            .trim_start_matches("mods/")
+            .trim_end_matches(".jar")
+            .to_string()
+    }
+}
+
+impl ContentProvider for LocalJarProvider {
+    fn search(&self, _query: &ProviderSearchQuery) -> Result<Vec<ProjectInfo>, ProviderError> {
+        Ok(vec![self.get_project("local")?])
+    }
+
+    fn get_project(&self, _id: &str) -> Result<ProjectInfo, ProviderError> {
+        Ok(ProjectInfo {
+            id: self.mod_id(),
+            slug: self.mod_id(),
+            name: self.file_name(),
+            description: String::new(),
+            project_type: "mod".to_string(),
+            icon_url: None,
+        })
+    }
+
+    fn get_versions(
+        &self,
+        _id: &str,
+        _query: &ProviderSearchQuery,
+    ) -> Result<Vec<VersionInfo>, ProviderError> {
+        Ok(vec![VersionInfo {
+            id: self.mod_id(),
+            project_id: self.mod_id(),
+            version_number: "local".to_string(),
+            game_versions: Vec::new(),
+            loaders: Vec::new(),
+            files: vec![self.get_file("", &self.file_name())?],
+            dependencies: Vec::new(),
+        }])
+    }
+
+    fn get_file(
+        &self,
+        _version_id: &str,
+        filename: &str,
+    ) -> Result<ProviderFileInfo, ProviderError> {
+        let hashes = self.compute_hashes()?;
+        Ok(ProviderFileInfo {
+            url: self.path.to_string_lossy().to_string(),
+            filename: if filename.is_empty() {
+                self.file_name()
+            } else {
+                filename.to_string()
+            },
+            primary: true,
+            hashes,
+        })
+    }
+
+    fn resolve_dependencies(
+        &self,
+        _version_id: &str,
+    ) -> Result<Vec<ModDependencySpec>, ProviderError> {
+        Ok(Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn computes_hashes_for_local_jar() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.jar");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(b"fake jar content").unwrap();
+
+        let provider = LocalJarProvider::new(&path);
+        let file_info = provider.get_file("", "example.jar").unwrap();
+
+        assert_eq!(file_info.filename, "example.jar");
+        assert!(file_info.hashes.sha1.is_some());
+        assert!(file_info.hashes.sha512.is_some());
+    }
+}

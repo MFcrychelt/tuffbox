@@ -1,0 +1,32 @@
+//! TuffBox core.
+//!
+//! This crate contains deterministic project, graph and resolver logic.
+//! AI must not be used inside this crate.
+
+pub mod change_plan;
+pub mod diagnostics;
+pub mod graph;
+pub mod http;
+pub mod importer;
+pub mod launcher;
+pub mod lockfile;
+pub mod manifest;
+pub mod provider;
+pub mod resolver;
+pub mod snapshot;
+pub mod versions;
+pub mod mc_install;
+pub mod forge;
+pub mod jre;
+pub mod process;
+
+pub use change_plan::*;
+pub use diagnostics::*;
+pub use graph::*;
+pub use importer::*;
+pub use launcher::*;
+pub use lockfile::*;
+pub use manifest::*;
+pub use provider::*;
+pub use resolver::*;
+pub use snapshot::*;
