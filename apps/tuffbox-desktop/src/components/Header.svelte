@@ -7,7 +7,8 @@
   export let currentView: string;
 
   const titles: Record<string, string> = {
-    dashboard: "Home",
+    dashboard: "Launcher",
+    ide: "IDE Workflow",
     mods: "Mods",
     graph: "Dependency Graph",
     diagnostics: "Health Check",

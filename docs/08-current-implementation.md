@@ -98,6 +98,7 @@ apps/tuffbox-desktop/
 - Асинхронный запуск Minecraft: процесс стартует в фоновом потоке, UI не блокируется.
 - Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
+- IDE Workflow: добавлен каркас DaVinci Resolve-like production pages: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Реальные существующие страницы подключены внутрь workflow, будущие этапы имеют skeleton.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
 - Snapshots: UI получил rollback и compare panel; diff теперь сравнивает содержимое tracked changed files, а не только списки путей.
@@ -108,6 +109,7 @@ apps/tuffbox-desktop/
   - папка Minecraft instance — автоопределение Fabric/Forge/Neoforge и версии Minecraft по модам в `mods/`.
 - Главный экран:
   - кнопка Play отображает под надписью **Play** название сборки, версию Minecraft и модлоадер;
+  - отдельная боковая кнопка **Open IDE** открывает production workflow по этапам, чтобы лаунчер не смешивался с рабочей IDE;
   - меню быстрых действий (троеточие) на плитке сборки: Change Version, Create Desktop Shortcut, Download Server Pack, Links, Open Folder, Create logs.zip, Copy Modpack Link, Profile Options, Clone as..., Share Profile, Repair Profile, Remove from launcher, Delete Profile.
 - Модальное окно **Add Instance**: имя, выбор версии Minecraft (популярные версии сверху, затем релизы по убыванию), выбор loader (Vanilla/Fabric/Forge/NeoForge/Quilt) и его версии (по умолчанию последняя stable), папка для сохранения.
 - Реальный запуск Minecraft:

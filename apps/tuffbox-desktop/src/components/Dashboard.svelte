@@ -17,6 +17,7 @@
     ShieldAlert,
     Terminal,
     Minus,
+    Workflow,
   } from "lucide-svelte";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -24,7 +25,7 @@
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LaunchLogModal from "./LaunchLogModal.svelte";
 
-  export let currentView: "dashboard" | "mods" | "graph" | "diagnostics" | "snapshots" | "settings" | "project-settings";
+  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings";
 
   let selectedPath: string | null = $projectPath;
   let launching = false;
@@ -203,6 +204,10 @@
 
     {#if selectedProject}
       <div class="hero-actions">
+        <button class="ide-cta" on:click={() => (currentView = "ide")}>
+          <Workflow size={16} />
+          Open IDE
+        </button>
         <button class="ghost" on:click={openSettings}>
           <Settings size={16} />
           Settings

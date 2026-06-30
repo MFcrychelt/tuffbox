@@ -2,6 +2,7 @@
   import Sidebar from "./components/Sidebar.svelte";
   import Header from "./components/Header.svelte";
   import Dashboard from "./components/Dashboard.svelte";
+  import IdeWorkspace from "./components/IdeWorkspace.svelte";
   import Mods from "./components/Mods.svelte";
   import Graph from "./components/Graph.svelte";
   import Diagnostics from "./components/Diagnostics.svelte";
@@ -13,6 +14,7 @@
 
   type View =
     | "dashboard"
+    | "ide"
     | "mods"
     | "graph"
     | "diagnostics"
@@ -30,6 +32,8 @@
     <main class="content">
       {#if currentView === "dashboard"}
         <Dashboard bind:currentView />
+      {:else if currentView === "ide"}
+        <IdeWorkspace />
       {:else if currentView === "mods"}
         <Mods />
       {:else if currentView === "graph"}

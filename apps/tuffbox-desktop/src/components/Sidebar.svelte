@@ -1,25 +1,17 @@
 <script lang="ts">
   import {
     LayoutDashboard,
-    Package,
-    GitGraph,
-    Stethoscope,
-    History,
-    FileCode2,
+    Workflow,
     Settings,
     Plus,
   } from "lucide-svelte";
 
-  type View = "dashboard" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings";
   export let currentView: View;
 
-  const items: { id: View; label: string; icon: any }[] = [
-    { id: "dashboard", label: "Home", icon: LayoutDashboard },
-    { id: "mods", label: "Mods", icon: Package },
-    { id: "graph", label: "Graph", icon: GitGraph },
-    { id: "diagnostics", label: "Health", icon: Stethoscope },
-    { id: "snapshots", label: "History", icon: History },
-    { id: "configs", label: "Configs", icon: FileCode2 },
+  const items: { id: View; label: string; icon: any; featured?: boolean }[] = [
+    { id: "dashboard", label: "Launcher", icon: LayoutDashboard },
+    { id: "ide", label: "Open IDE", icon: Workflow, featured: true },
   ];
 </script>
 
@@ -33,6 +25,7 @@
       <button
         class="nav-item"
         class:active={currentView === item.id}
+        class:featured={item.featured}
         on:click={() => (currentView = item.id)}
         title={item.label}
       >
@@ -117,6 +110,16 @@
   .nav-item.active {
     background: rgba(27, 217, 106, 0.12);
     color: var(--accent-primary);
+  }
+
+  .nav-item.featured {
+    margin-top: 10px;
+    border: 1px solid rgba(27, 217, 106, 0.24);
+    background: linear-gradient(135deg, rgba(27, 217, 106, 0.12), rgba(139, 92, 246, 0.08));
+  }
+
+  .nav-item.featured.active {
+    box-shadow: 0 0 22px rgba(27, 217, 106, 0.18);
   }
 
   .nav-item.add {
