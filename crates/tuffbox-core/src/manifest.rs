@@ -35,6 +35,8 @@ pub struct ProjectManifest {
     pub minecraft: MinecraftSpec,
     pub loader: LoaderSpec,
     #[serde(default)]
+    pub brief: Option<PackBrief>,
+    #[serde(default)]
     pub java: Option<JavaSpec>,
     #[serde(default)]
     pub profiles: Vec<ProfileSpec>,
@@ -125,6 +127,23 @@ pub struct ProjectMetadata {
     pub description: Option<String>,
     #[serde(default)]
     pub authors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackBrief {
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub target_audience: String,
+    #[serde(default)]
+    pub gameplay_pillars: Vec<String>,
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    #[serde(default)]
+    pub release_targets: Vec<String>,
+    #[serde(default)]
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

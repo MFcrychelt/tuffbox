@@ -98,7 +98,7 @@ apps/tuffbox-desktop/
 - Асинхронный запуск Minecraft: процесс стартует в фоновом потоке, UI не блокируется.
 - Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
-- IDE Workflow: добавлен каркас DaVinci Resolve-like production pages: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Реальные существующие страницы подключены внутрь workflow, будущие этапы имеют skeleton.
+- IDE Workflow: добавлен DaVinci Resolve-like production flow: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Brief сохраняется в manifest, Test запускает реальные profiles и показывает `latest.log`, Export собирает базовый `.mrpack`.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
 - Snapshots: UI получил rollback и compare panel; diff теперь сравнивает содержимое tracked changed files, а не только списки путей.
@@ -122,6 +122,8 @@ apps/tuffbox-desktop/
 - Tauri commands:
   - `validate_project` — открыть и валидировать project manifest;
   - `list_mods` — список модов;
+  - `get_project_brief` / `update_project_brief` — сохранение pre-production brief в manifest с auto snapshot;
+  - `list_profiles` — список профилей для Test page;
   - `search_modrinth_mods` — поиск Modrinth с фильтрами текущих Minecraft/loader;
   - `add_modrinth_mod` / `remove_project_mod` / `update_project_mod` — безопасное управление модами из UI с auto snapshot;
   - `list_config_files` / `read_config_file` / `write_config_file` — безопасный Config Editor для текстовых конфигов проекта;
@@ -129,6 +131,7 @@ apps/tuffbox-desktop/
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
   - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `rollback_snapshot` — управление snapshots, rollback и сравнение tracked changed files;
+  - `export_modrinth_pack` — базовый экспорт `.mrpack` с remote mod downloads и overrides;
   - `generate_lockfile` — генерация lockfile;
   - `launch_profile` — подготовка и запуск профиля (заглушка);
   - `import_project` — импорт `.mrpack` / Prism `.zip`.

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use tuffbox_core::{
-    ContentProvider, DependencyGraph, ModSource, ModSpec, ProjectManifest, ProviderFileInfo,
+    ContentProvider, DependencyGraph, ModSource, ModSpec, PackBrief, ProjectManifest, ProviderFileInfo,
     ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind, TuffboxLockfile,
 };
 
@@ -35,6 +35,16 @@ struct SchemaStatus {
     detected: String,
     needs_migration: bool,
     supported: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileSummary {
+    id: String,
+    name: String,
+    side: String,
+    memory_mb: Option<u32>,
+    jvm_args: Vec<String>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -95,6 +105,37 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
         memory_mb: profile.memory_mb.unwrap_or(4096),
         jvm_args: profile.jvm_args.clone(),
     })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_project_brief(path: String) -> Result<PackBrief, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    Ok(manifest.brief.unwrap_or_default())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn update_project_brief(path: String, brief: PackBrief) -> Result<(), String> {
+    let manifest_path = PathBuf::from(&path);
+    auto_snapshot(&manifest_path, "update-brief").map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    manifest.brief = Some(brief);
+    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    Ok(manifest
+        .profiles
+        .into_iter()
+        .map(|p| ProfileSummary {
+            id: p.id,
+            name: p.name,
+            side: format!("{:?}", p.side).to_lowercase(),
+            memory_mb: p.memory_mb,
+            jvm_args: p.jvm_args,
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -272,6 +313,20 @@ fn diff_snapshots(project_dir: String, from: String, to: String) -> Result<tuffb
 fn rollback_snapshot(project_dir: String, id: String) -> Result<tuffbox_core::Snapshot, String> {
     let store = SnapshotStore::new(&project_dir);
     store.rollback(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn export_modrinth_pack(path: String, target_path: Option<String>) -> Result<tuffbox_core::ExportResult, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let output = target_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(&path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(format!("{}-{}.mrpack", manifest.project.id, manifest.project.version))
+        });
+    tuffbox_core::export_modrinth_pack(&manifest, &path, &output).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -579,6 +634,7 @@ fn create_instance(
             kind: loader_kind,
             version: loader_version,
         },
+        brief: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -863,6 +919,9 @@ pub fn run() {
             get_project_schema_status,
             migrate_project_schema,
             validate_project,
+            get_project_brief,
+            update_project_brief,
+            list_profiles,
             list_mods,
             search_modrinth_mods,
             add_modrinth_mod,
@@ -878,6 +937,7 @@ pub fn run() {
             create_snapshot,
             diff_snapshots,
             rollback_snapshot,
+            export_modrinth_pack,
             generate_lockfile,
             launch_profile,
             import_project,

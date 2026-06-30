@@ -38,6 +38,17 @@
         "version": { "type": "string" }
       }
     },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "goal": { "type": "string" },
+        "targetAudience": { "type": "string" },
+        "gameplayPillars": { "type": "array", "items": { "type": "string" } },
+        "constraints": { "type": "array", "items": { "type": "string" } },
+        "releaseTargets": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" }
+      }
+    },
     "java": {
       "type": "object",
       "properties": {

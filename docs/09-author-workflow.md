@@ -257,18 +257,18 @@ Brief | Setup | Content | Resolve | Tune | Test | Diagnose | Snapshots | Export 
 
 Реальные подключённые страницы:
 
+- Brief → сохраняемый pack brief в manifest;
 - Setup → ProjectSettings;
 - Content → Mods;
 - Resolve → Graph;
 - Tune → ConfigEditor;
+- Test → запуск выбранного profile и tail `latest.log`;
 - Diagnose → Diagnostics;
-- Snapshots → Snapshots.
+- Snapshots → Snapshots;
+- Export → базовый `.mrpack` builder.
 
 Skeleton pages:
 
-- Brief;
-- Test;
-- Export;
 - Release.
 
 Следующая задача — постепенно заменить skeleton pages на реальные сервисы и связать все этапы через единую модель project state / graph / change plan.

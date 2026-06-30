@@ -5,6 +5,7 @@
 
 pub mod change_plan;
 pub mod diagnostics;
+pub mod exporter;
 pub mod graph;
 pub mod http;
 pub mod importer;
@@ -22,6 +23,7 @@ pub mod process;
 
 pub use change_plan::*;
 pub use diagnostics::*;
+pub use exporter::*;
 pub use graph::*;
 pub use importer::*;
 pub use launcher::*;

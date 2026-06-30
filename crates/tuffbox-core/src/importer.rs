@@ -121,6 +121,7 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
             kind: loader_kind,
             version: loader_version,
         },
+        brief: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -192,6 +193,7 @@ pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportEr
             kind: loader_kind,
             version: loader_version,
         },
+        brief: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -374,6 +376,7 @@ pub fn import_prism_instance(path: impl AsRef<Path>) -> Result<ProjectManifest, 
             kind: loader_kind,
             version: loader_version,
         },
+        brief: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,

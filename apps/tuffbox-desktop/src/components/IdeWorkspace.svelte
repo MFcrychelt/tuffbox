@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
   import {
     ClipboardList,
     SlidersHorizontal,
@@ -21,6 +22,8 @@
   import ConfigEditor from "./ConfigEditor.svelte";
   import Diagnostics from "./Diagnostics.svelte";
   import Snapshots from "./Snapshots.svelte";
+  import TestRuns from "./TestRuns.svelte";
+  import ExportBuilder from "./ExportBuilder.svelte";
 
   type StageId =
     | "brief"
@@ -127,7 +130,63 @@
   ];
 
   let activeStage: StageId = "brief";
+  let briefGoal = "";
+  let briefAudience = "";
+  let briefPillars = "";
+  let briefConstraints = "";
+  let briefReleaseTargets = "";
+  let briefNotes = "";
+  let briefMessage = "";
+  let briefError = "";
+  let lastBriefPath: string | null = null;
 
+  async function loadBrief() {
+    if (!$projectPath || lastBriefPath === $projectPath) return;
+    briefError = "";
+    try {
+      const brief: any = await invoke("get_project_brief", { path: $projectPath });
+      briefGoal = brief.goal ?? "";
+      briefAudience = brief.targetAudience ?? "";
+      briefPillars = (brief.gameplayPillars ?? []).join("\n");
+      briefConstraints = (brief.constraints ?? []).join("\n");
+      briefReleaseTargets = (brief.releaseTargets ?? []).join("\n");
+      briefNotes = brief.notes ?? "";
+      lastBriefPath = $projectPath;
+    } catch (e) {
+      briefError = String(e);
+    }
+  }
+
+  async function saveBrief() {
+    if (!$projectPath) return;
+    briefError = "";
+    briefMessage = "";
+    try {
+      await invoke("update_project_brief", {
+        path: $projectPath,
+        brief: {
+          goal: briefGoal,
+          targetAudience: briefAudience,
+          gameplayPillars: lines(briefPillars),
+          constraints: lines(briefConstraints),
+          releaseTargets: lines(briefReleaseTargets),
+          notes: briefNotes,
+        },
+      });
+      briefMessage = "Brief saved. Auto snapshot created.";
+    } catch (e) {
+      briefError = String(e);
+    }
+  }
+
+  function lines(value: string) {
+    return value
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  $: if ($projectPath) loadBrief();
   $: activeIndex = stages.findIndex((stage) => stage.id === activeStage);
   $: active = stages[activeIndex] ?? stages[0];
   $: completed = new Set(stages.slice(0, Math.max(activeIndex, 0)).map((stage) => stage.id));
@@ -199,13 +258,22 @@
     <div class="stage-content">
       {#if activeStage === "brief"}
         <div class="skeleton-page">
-          <h2>Pack brief</h2>
-          <p>This is the pre-production page. It will store the design intent before any heavy dependency work starts.</p>
+          <div class="page-header">
+            <div>
+              <h2>Pack brief</h2>
+              <p>Pre-production document saved into the project manifest. Use it to keep the pack direction clear before dependency work.</p>
+            </div>
+            <button on:click={saveBrief} disabled={!$projectPath}>Save brief</button>
+          </div>
+          {#if briefError}<div class="inline-error">{briefError}</div>{/if}
+          {#if briefMessage}<div class="inline-success">{briefMessage}</div>{/if}
           <div class="brief-grid">
-            <label>Pack goal<textarea placeholder="Example: low-end-friendly tech + exploration Fabric pack for 1.21.x" /></label>
-            <label>Target player<textarea placeholder="Developers, server owners, casual players, low-end PCs..." /></label>
-            <label>Gameplay pillars<textarea placeholder="Performance, progression, QoL, server safety..." /></label>
-            <label>Hard constraints<textarea placeholder="No client-only mods in server profile, Java version, memory budget..." /></label>
+            <label>Pack goal<textarea bind:value={briefGoal} placeholder="Example: low-end-friendly tech + exploration Fabric pack for 1.21.x" /></label>
+            <label>Target player<textarea bind:value={briefAudience} placeholder="Developers, server owners, casual players, low-end PCs..." /></label>
+            <label>Gameplay pillars<textarea bind:value={briefPillars} placeholder="One pillar per line: Performance, progression, QoL..." /></label>
+            <label>Hard constraints<textarea bind:value={briefConstraints} placeholder="One constraint per line: No client-only mods in server profile..." /></label>
+            <label>Release targets<textarea bind:value={briefReleaseTargets} placeholder="Modrinth, private server, Prism zip, GitHub Releases..." /></label>
+            <label>Notes<textarea bind:value={briefNotes} placeholder="Open questions, references, balancing notes..." /></label>
           </div>
         </div>
       {:else if activeStage === "setup"}
@@ -224,29 +292,13 @@
       {:else if activeStage === "configs"}
         <ConfigEditor />
       {:else if activeStage === "test"}
-        <div class="skeleton-page">
-          <h2>Test matrix</h2>
-          <p>Planned page for client/server/dev/release runs, startup timing, latest.log tail and result history.</p>
-          <div class="cards">
-            <div><strong>Client smoke test</strong><span>Launch the selected client profile and watch latest.log.</span></div>
-            <div><strong>Server dry run</strong><span>Build a temporary server profile and detect client-only mods.</span></div>
-            <div><strong>Low-end profile</strong><span>Validate memory budget and optimization settings.</span></div>
-          </div>
-        </div>
+        <TestRuns />
       {:else if activeStage === "diagnose"}
         <Diagnostics />
       {:else if activeStage === "snapshots"}
         <Snapshots />
       {:else if activeStage === "export"}
-        <div class="skeleton-page">
-          <h2>Export builder</h2>
-          <p>Planned page for `.mrpack`, Prism instance zip, CurseForge zip, server pack and generated changelog.</p>
-          <div class="cards">
-            <div><strong>.mrpack</strong><span>Modrinth-compatible manifest + overrides.</span></div>
-            <div><strong>Server pack</strong><span>Server-only file set with install instructions.</span></div>
-            <div><strong>Prism zip</strong><span>Importable developer/testing instance.</span></div>
-          </div>
-        </div>
+        <ExportBuilder />
       {:else if activeStage === "release"}
         <div class="skeleton-page">
           <h2>Release room</h2>
@@ -418,6 +470,33 @@
 
   .skeleton-page h2 {
     margin-bottom: 8px;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .inline-error,
+  .inline-success {
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+  }
+
+  .inline-error {
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.28);
+  }
+
+  .inline-success {
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.08);
+    border-color: rgba(27, 217, 106, 0.25);
   }
 
   .brief-grid,
