@@ -28,6 +28,51 @@ struct ConfigFileSummary {
     modified: Option<u64>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SchemaStatus {
+    current: String,
+    detected: String,
+    needs_migration: bool,
+    supported: Vec<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_project_schema_status(path: String) -> Result<SchemaStatus, String> {
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let detected = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0.1.0")
+        .to_string();
+    let supported = tuffbox_core::manifest::SUPPORTED_PROJECT_SCHEMA_VERSIONS
+        .iter()
+        .map(|v| v.to_string())
+        .collect::<Vec<_>>();
+    if !supported.iter().any(|v| v == &detected) {
+        return Err(format!(
+            "unsupported project schema version {detected}; supported versions: {}",
+            supported.join(", ")
+        ));
+    }
+    Ok(SchemaStatus {
+        current: tuffbox_core::manifest::CURRENT_PROJECT_SCHEMA_VERSION.to_string(),
+        needs_migration: detected != tuffbox_core::manifest::CURRENT_PROJECT_SCHEMA_VERSION,
+        detected,
+        supported,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn migrate_project_schema(path: String) -> Result<SchemaStatus, String> {
+    auto_snapshot(&PathBuf::from(&path), "migrate-schema").map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    manifest.migrate_to_current_schema();
+    save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
+    get_project_schema_status(path)
+}
+
 #[tauri::command]
 fn validate_project(path: String) -> Result<ProjectSummary, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -786,6 +831,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            get_project_schema_status,
+            migrate_project_schema,
             validate_project,
             list_mods,
             search_modrinth_mods,

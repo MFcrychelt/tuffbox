@@ -99,6 +99,7 @@ apps/tuffbox-desktop/
 - Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
+- Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
 - Diagnostics/Snapshots/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
   - `.mrpack` — парсинг `modrinth.index.json`, создание `tuffbox.json` в выбранной папке;
@@ -121,6 +122,7 @@ apps/tuffbox-desktop/
   - `search_modrinth_mods` — поиск Modrinth с фильтрами текущих Minecraft/loader;
   - `add_modrinth_mod` / `remove_project_mod` / `update_project_mod` — безопасное управление модами из UI с auto snapshot;
   - `list_config_files` / `read_config_file` / `write_config_file` — безопасный Config Editor для текстовых конфигов проекта;
+  - `get_project_schema_status` / `migrate_project_schema` — проверка и миграция schemaVersion manifest с auto snapshot;
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
   - `list_snapshots` / `create_snapshot` — управление snapshots;
@@ -166,7 +168,7 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 
 ## Следующие задачи
 
-1. Реализовать версионирование/миграции схем manifest и lockfile.
+1. Подключить schema status/migration controls в Project Settings UI и расширить миграции под будущие версии.
 2. Расширить diff: сравнивать содержимое changed files между snapshots.
 3. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
 4. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.

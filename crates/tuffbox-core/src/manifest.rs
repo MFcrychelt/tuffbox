@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use thiserror::Error;
 
+pub const CURRENT_PROJECT_SCHEMA_VERSION: &str = "0.1.0";
+pub const SUPPORTED_PROJECT_SCHEMA_VERSIONS: &[&str] = &["0.1.0", "0.1"];
+
 #[derive(Debug, Error)]
 pub enum ManifestError {
     #[error("failed to read manifest {path}: {source}")]
@@ -16,6 +19,8 @@ pub enum ManifestError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("unsupported project schema version {version}; supported versions: {supported}")]
+    UnsupportedSchemaVersion { version: String, supported: String },
     #[error("project has no profiles")]
     NoProfiles,
     #[error("project has no client or both profile")]
@@ -40,6 +45,10 @@ pub struct ProjectManifest {
 }
 
 impl ProjectManifest {
+    pub fn migrate_to_current_schema(&mut self) {
+        self.schema_version = CURRENT_PROJECT_SCHEMA_VERSION.to_string();
+    }
+
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, ManifestError> {
         let path_ref = path.as_ref();
         let path_string = path_ref.display().to_string();
@@ -47,7 +56,12 @@ impl ProjectManifest {
             path: path_string.clone(),
             source,
         })?;
-        let manifest = serde_json::from_str(&raw).map_err(|source| ManifestError::Parse {
+        let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|source| ManifestError::Parse {
+            path: path_string.clone(),
+            source,
+        })?;
+        migrate_project_manifest_value(&mut value)?;
+        let manifest = serde_json::from_value(value).map_err(|source| ManifestError::Parse {
             path: path_string,
             source,
         })?;
@@ -70,6 +84,36 @@ impl ProjectManifest {
 
         Ok(())
     }
+}
+
+pub fn migrate_project_manifest_value(value: &mut serde_json::Value) -> Result<(), ManifestError> {
+    let version = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0.1.0")
+        .to_string();
+
+    if !SUPPORTED_PROJECT_SCHEMA_VERSIONS.contains(&version.as_str()) {
+        return Err(ManifestError::UnsupportedSchemaVersion {
+            version,
+            supported: SUPPORTED_PROJECT_SCHEMA_VERSIONS.join(", "),
+        });
+    }
+
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "schemaVersion".to_string(),
+            serde_json::Value::String(CURRENT_PROJECT_SCHEMA_VERSION.to_string()),
+        );
+        object
+            .entry("profiles".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        object
+            .entry("mods".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

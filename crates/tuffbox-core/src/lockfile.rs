@@ -1,5 +1,28 @@
 use crate::{graph::DependencyGraph, manifest::ProjectManifest};
 use serde::{Deserialize, Serialize};
+use std::{fs, path::Path};
+use thiserror::Error;
+
+pub const CURRENT_LOCKFILE_SCHEMA_VERSION: &str = "0.1.0";
+pub const SUPPORTED_LOCKFILE_SCHEMA_VERSIONS: &[&str] = &["0.1.0", "0.1"];
+
+#[derive(Debug, Error)]
+pub enum LockfileError {
+    #[error("failed to read lockfile {path}: {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("failed to parse lockfile {path}: {source}")]
+    Parse {
+        path: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("unsupported lockfile schema version {version}; supported versions: {supported}")]
+    UnsupportedSchemaVersion { version: String, supported: String },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +40,28 @@ pub struct TuffboxLockfile {
 }
 
 impl TuffboxLockfile {
+    pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, LockfileError> {
+        let path_ref = path.as_ref();
+        let path_string = path_ref.display().to_string();
+        let raw = fs::read_to_string(path_ref).map_err(|source| LockfileError::Read {
+            path: path_string.clone(),
+            source,
+        })?;
+        let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|source| LockfileError::Parse {
+            path: path_string.clone(),
+            source,
+        })?;
+        migrate_lockfile_value(&mut value)?;
+        serde_json::from_value(value).map_err(|source| LockfileError::Parse {
+            path: path_string,
+            source,
+        })
+    }
+
+    pub fn migrate_to_current_schema(&mut self) {
+        self.schema_version = CURRENT_LOCKFILE_SCHEMA_VERSION.to_string();
+    }
+
     pub fn from_manifest_and_graph(manifest: &ProjectManifest, graph: &DependencyGraph) -> Self {
         let mut mods: Vec<LockedMod> = manifest
             .mods
@@ -62,7 +107,7 @@ impl TuffboxLockfile {
             .collect();
 
         Self {
-            schema_version: "0.1.0".to_string(),
+            schema_version: CURRENT_LOCKFILE_SCHEMA_VERSION.to_string(),
             project_id: manifest.project.id.clone(),
             project_version: manifest.project.version.clone(),
             minecraft_version: manifest.minecraft.version.clone(),
@@ -80,6 +125,33 @@ impl TuffboxLockfile {
             generated_at: rfc3339_now(),
         }
     }
+}
+
+pub fn migrate_lockfile_value(value: &mut serde_json::Value) -> Result<(), LockfileError> {
+    let version = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0.1.0")
+        .to_string();
+
+    if !SUPPORTED_LOCKFILE_SCHEMA_VERSIONS.contains(&version.as_str()) {
+        return Err(LockfileError::UnsupportedSchemaVersion {
+            version,
+            supported: SUPPORTED_LOCKFILE_SCHEMA_VERSIONS.join(", "),
+        });
+    }
+
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "schemaVersion".to_string(),
+            serde_json::Value::String(CURRENT_LOCKFILE_SCHEMA_VERSION.to_string()),
+        );
+        object
+            .entry("mods".to_string())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    }
+
+    Ok(())
 }
 
 fn rfc3339_now() -> String {
