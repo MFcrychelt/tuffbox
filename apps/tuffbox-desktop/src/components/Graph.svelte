@@ -25,11 +25,16 @@
     edges: GraphEdge[];
   };
 
+  type PositionedNode = GraphNode & { x: number; y: number; tone: string };
+
   let graph: GraphModel | null = null;
   let loading = false;
   let error: string | null = null;
   let selectedId: string | null = null;
   let lastLoadedPath: string | null = null;
+  let resolving = false;
+  let message: string | null = null;
+  let changePlan: any | null = null;
 
   function normalizeNode(node: any): GraphNode {
     return {
@@ -56,6 +61,7 @@
         edges: (raw.edges ?? []).map(normalizeEdge),
       };
       selectedId = graph.nodes.find((n) => n.kind === "Mod")?.id ?? graph.nodes[0]?.id ?? null;
+      await loadChangePlan();
       lastLoadedPath = $projectPath;
     } catch (e) {
       error = String(e);
@@ -68,6 +74,92 @@
     return graph?.nodes.find((n) => n.id === id) ?? null;
   }
 
+  function point(id: string) {
+    return positionById.get(id);
+  }
+
+  function edgeDanger(edge: GraphEdge) {
+    return edge.kind === "Requires" && !nodeById(edge.to);
+  }
+
+  function modIdFromNode(nodeId: string) {
+    return nodeId.startsWith("mod:") ? nodeId.slice(4) : nodeId;
+  }
+
+  async function removeConflictNode(nodeId: string) {
+    if (!$projectPath) return;
+    const modId = modIdFromNode(nodeId);
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      await invoke("remove_project_mod", { path: $projectPath, modId });
+      message = `Removed conflicting mod ${modId}. Auto snapshot created.`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
+  }
+
+  async function loadChangePlan() {
+    if (!$projectPath) return;
+    try {
+      changePlan = await invoke("get_resolve_change_plan", { path: $projectPath });
+    } catch {
+      changePlan = null;
+    }
+  }
+
+  async function applyAction(index: number) {
+    if (!$projectPath || !changePlan) return;
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      const applied: string[] = await invoke("apply_resolve_action", { path: $projectPath, actionIndex: index });
+      message = applied.length ? `Applied action: ${applied.join(", ")}` : "No deterministic action was applied.";
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
+  }
+
+  async function applyChangePlan() {
+    if (!$projectPath || !changePlan) return;
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      const applied: string[] = await invoke("apply_resolve_change_plan", { path: $projectPath });
+      message = applied.length ? `Applied plan: ${applied.join(", ")}` : "No deterministic actions were applied.";
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
+  }
+
+  async function installMissingDependencies() {
+    if (!$projectPath || missingEdges.length === 0) return;
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      const installed: string[] = await invoke("resolve_missing_dependencies", { path: $projectPath });
+      message = installed.length ? `Installed dependencies: ${installed.join(", ")}` : "No installable missing dependencies were found.";
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
+  }
+
   $: nodes = graph?.nodes ?? [];
   $: edges = graph?.edges ?? [];
   $: selected = selectedId ? nodeById(selectedId) : null;
@@ -75,6 +167,7 @@
     ? edges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
     : [];
   $: missingEdges = edges.filter((edge) => edge.kind === "Requires" && !nodeById(edge.to));
+  $: conflictEdges = edges.filter((edge) => ["Conflicts", "BreaksWith"].includes(edge.kind) && nodeById(edge.from) && nodeById(edge.to));
   $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
     return acc;
@@ -82,6 +175,19 @@
   $: modNodes = nodes.filter((node) => node.kind === "Mod");
   $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile");
   $: profileNodes = nodes.filter((node) => node.kind === "Profile");
+  $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
+  $: positioned = (() => {
+    const counters: Record<string, number> = { runtime: 0, profile: 0, mod: 0 };
+    return nodes.map((node): PositionedNode => {
+      const group = node.kind === "Mod" ? "mod" : node.kind === "Profile" ? "profile" : "runtime";
+      const index = counters[group]++;
+      const x = group === "runtime" ? 140 : group === "profile" ? 430 : 770 + (index % 2) * 180;
+      const y = 70 + Math.floor(index / (group === "mod" ? 2 : 1)) * 92;
+      const tone = group === "runtime" ? "runtime" : group === "profile" ? "profile" : String(node.side ?? "unknown").toLowerCase();
+      return { ...node, x, y, tone };
+    });
+  })();
+  $: positionById = new Map(positioned.map((node) => [node.id, node]));
 
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
 </script>
@@ -92,10 +198,18 @@
       <GitGraph size={18} />
       <span>Dependency graph</span>
     </div>
-    <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
-      <RefreshCw size={16} class={loading ? "spin" : ""} />
-    </button>
+    <div class="toolbar-actions">
+      <button class="secondary" on:click={installMissingDependencies} disabled={!$projectPath || resolving || missingEdges.length === 0}>
+        <Workflow size={16} />
+        {resolving ? "Resolving..." : "Auto-install dependencies"}
+      </button>
+      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
+        <RefreshCw size={16} class={loading ? "spin" : ""} />
+      </button>
+    </div>
   </div>
+
+  {#if message}<div class="notice success">{message}</div>{/if}
 
   {#if loading}
     <div class="loading">Loading graph...</div>
@@ -119,7 +233,72 @@
         <span class="stat-value">{byKind.Mod ?? 0}</span>
         <span class="stat-label">Mods</span>
       </div>
+      <div class="stat-card" class:danger={conflictEdges.length > 0}>
+        <span class="stat-value">{conflictEdges.length}</span>
+        <span class="stat-label">Conflicts</span>
+      </div>
     </div>
+
+    {#if changePlan}
+      <section class="change-plan-panel">
+        <div>
+          <span class="eyebrow">Change plan</span>
+          <h2>{changePlan.summary}</h2>
+          <p>Risk: {changePlan.risk} · {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot required"}</p>
+        </div>
+        {#if changePlan.actions?.length}
+          <div class="plan-actions-list">
+            {#each changePlan.actions as action, index}
+              <div class="plan-action-row">
+                <code>{JSON.stringify(action)}</code>
+                <button class="secondary mini" on:click={() => applyAction(index)} disabled={resolving}>Apply action</button>
+              </div>
+            {/each}
+            <button on:click={applyChangePlan} disabled={resolving}>Apply full plan</button>
+          </div>
+        {:else}
+          <button class="secondary" on:click={applyChangePlan} disabled={resolving}>Mark reviewed</button>
+        {/if}
+      </section>
+    {/if}
+
+    <section class="graph-canvas" aria-label="Dependency graph canvas">
+      <svg viewBox={`0 0 1120 ${canvasHeight}`} role="img">
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
+          </marker>
+          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L7,3 z" fill="rgba(239,68,68,.85)" />
+          </marker>
+        </defs>
+        {#each edges as edge}
+          <line
+            class:danger-edge={edgeDanger(edge)}
+            x1={point(edge.from)?.x ?? 0}
+            y1={point(edge.from)?.y ?? 0}
+            x2={point(edge.to)?.x ?? 1060}
+            y2={point(edge.to)?.y ?? (point(edge.from)?.y ?? 0)}
+            marker-end={edgeDanger(edge) ? "url(#arrow-danger)" : "url(#arrow)"}
+          />
+        {/each}
+        {#each positioned as node}
+          <g
+            class="svg-node tone-{node.tone}"
+            class:selected={selectedId === node.id}
+            role="button"
+            tabindex="0"
+            transform={`translate(${node.x - 78}, ${node.y - 24})`}
+            on:click={() => (selectedId = node.id)}
+            on:keydown={(event) => event.key === "Enter" && (selectedId = node.id)}
+          >
+            <rect width="156" height="48" rx="14" />
+            <text x="14" y="20">{node.label.length > 18 ? `${node.label.slice(0, 18)}…` : node.label}</text>
+            <text x="14" y="36" class="sub">{node.kind}{node.version ? ` · ${node.version}` : ""}</text>
+          </g>
+        {/each}
+      </svg>
+    </section>
 
     <div class="graph-layout">
       <section class="node-column">
@@ -204,6 +383,26 @@
       </aside>
     </div>
 
+    {#if conflictEdges.length > 0}
+      <div class="conflict-panel">
+        <h3><AlertTriangle size={16} /> Conflicts</h3>
+        {#each conflictEdges as edge}
+          <div class="conflict-row">
+            <div>
+              <strong>{nodeById(edge.from)?.label ?? edge.from}</strong>
+              <span>{edge.kind} with</span>
+              <strong>{nodeById(edge.to)?.label ?? edge.to}</strong>
+              {#if edge.reason}<small>{edge.reason}</small>{/if}
+            </div>
+            <div class="conflict-actions">
+              <button class="ghost mini" on:click={() => removeConflictNode(edge.from)}>Remove left</button>
+              <button class="ghost mini" on:click={() => removeConflictNode(edge.to)}>Remove right</button>
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
     {#if missingEdges.length > 0}
       <div class="missing-panel">
         <h3><AlertTriangle size={16} /> Missing dependencies</h3>
@@ -221,15 +420,37 @@
 </div>
 
 <style>
-  .graph {
-    max-width: 1440px;
+   .graph {
+    max-width: none;
+    width: 100%;
+  }
+
+  .toolbar,
+  .toolbar-actions,
+  .notice {
+    display: flex;
+    align-items: center;
   }
 
   .toolbar {
-    display: flex;
     justify-content: space-between;
-    align-items: center;
     margin-bottom: 20px;
+  }
+
+  .toolbar-actions { gap: 10px; }
+
+  .notice {
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--border-radius-lg);
+    margin-bottom: 14px;
+    border: 1px solid var(--border-color);
+  }
+
+  .notice.success {
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.08);
+    border-color: rgba(27, 217, 106, 0.25);
   }
 
   .title,
@@ -253,6 +474,85 @@
     gap: 16px;
     margin-bottom: 20px;
     flex-wrap: wrap;
+  }
+
+  .change-plan-panel {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+    padding: 16px;
+    border: 1px solid rgba(27, 217, 106, .28);
+    border-radius: var(--border-radius-lg);
+    background: radial-gradient(circle at top left, rgba(27,217,106,.09), transparent 42%), var(--bg-secondary);
+  }
+
+  .change-plan-panel h2 { margin: 4px 0; font-size: 17px; }
+  .change-plan-panel p { color: var(--text-muted); }
+  .plan-actions-list { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
+  .plan-action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+  .mini { padding: 5px 8px; font-size: 11px; }
+
+  .graph-canvas {
+    margin-bottom: 18px;
+    background:
+      radial-gradient(circle at 78% 18%, rgba(27,217,106,.08), transparent 28%),
+      #09090b;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    overflow: auto;
+  }
+
+  .graph-canvas svg {
+    min-width: 980px;
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+
+  .graph-canvas line {
+    stroke: rgba(161, 161, 170, 0.5);
+    stroke-width: 1.6;
+  }
+
+  .graph-canvas line.danger-edge {
+    stroke: rgba(239, 68, 68, 0.8);
+    stroke-dasharray: 6 5;
+  }
+
+  .svg-node {
+    cursor: pointer;
+  }
+
+  .svg-node rect {
+    fill: #18181b;
+    stroke: rgba(255,255,255,.11);
+    stroke-width: 1;
+  }
+
+  .svg-node.selected rect,
+  .svg-node:hover rect {
+    stroke: rgba(27,217,106,.72);
+    fill: rgba(27,217,106,.12);
+  }
+
+  .svg-node.tone-client rect { stroke: rgba(139,92,246,.45); }
+  .svg-node.tone-server rect { stroke: rgba(59,130,246,.45); }
+  .svg-node.tone-both rect { stroke: rgba(27,217,106,.38); }
+  .svg-node.tone-runtime rect { stroke: rgba(245,158,11,.42); }
+  .svg-node.tone-profile rect { stroke: rgba(96,165,250,.42); }
+
+  .svg-node text {
+    fill: #e5e7eb;
+    font-size: 12px;
+    font-weight: 800;
+    pointer-events: none;
+  }
+
+  .svg-node text.sub {
+    fill: #a1a1aa;
+    font-size: 10px;
+    font-weight: 600;
   }
 
   .stat-card {

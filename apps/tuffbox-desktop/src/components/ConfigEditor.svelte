@@ -200,8 +200,9 @@
 </div>
 
 <style>
-  .config-editor {
-    max-width: 1500px;
+   .config-editor {
+    max-width: none;
+    width: 100%;
   }
 
   .toolbar,

@@ -21,6 +21,7 @@ crates/
 manifest.rs      # ProjectManifest, mods, profiles, loader, source metadata
 graph.rs         # DependencyGraph, GraphNode, GraphEdge
 diagnostics.rs   # Diagnostic model
+crash.rs         # Crash parser / Diagnose 2.0 models and heuristics
 change_plan.rs   # ChangePlan and ChangeAction
 lockfile.rs      # initial lockfile generator
 resolver.rs      # deterministic resolver skeleton
@@ -55,7 +56,14 @@ resolver.rs      # deterministic resolver skeleton
   - profile edge pointing to unknown mod.
 - Создавать простой fix plan для:
   - missing dependency;
-  - direct conflict.
+  - direct conflict;
+  - crash suspects из `crash-reports/*.txt` и `logs/latest.log`.
+- Анализировать краши в Diagnose 2.0:
+  - находить `crash-reports/*.txt`;
+  - читать tail `logs/latest.log`;
+  - извлекать parser signals по `Mod File`, `Caused by`, `Mixin`, `Exception`, `Suspected Mods`, OpenGL debug, performance stalls и resource warnings;
+  - маппить suspected mods на manifest по id/name/fileName/projectId;
+  - формировать deterministic fix plan без авто-применения.
 - Генерировать lockfile из manifest + graph с:
   - dependency edges;
   - source metadata (project_id, file_id, url, path);
@@ -96,12 +104,14 @@ apps/tuffbox-desktop/
   - сохранение изменений в manifest.
 - Окно лога запуска (Launch Log): открывается при нажатии Play, показывает последние строки `logs/latest.log` и обновляется каждую секунду.
 - Асинхронный запуск Minecraft: процесс стартует в фоновом потоке, UI не блокируется.
-- Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
+- Mods: установленный список отображается длинными компактными карточками, Add Modrinth использует плитки с иконками Modrinth, version/side/source-тегами и корректным Installed detection по slug/projectId. Иконки установленных Modrinth-модов догружаются lazy-командой `get_modrinth_project_icon`. Перед установкой показывается install plan с dependencies, доступна установка одного мода, установка с зависимостями и bulk install выбранных карточек через один snapshot. Перед изменением manifest создаётся auto snapshot.
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
-- IDE Workflow: добавлен DaVinci Resolve-like production flow: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Brief сохраняется в manifest, Test запускает реальные profiles и показывает `latest.log`, Export собирает базовый `.mrpack` и server pack, Release делает version bump, validation, changelog и release snapshot.
+- IDE Workflow: добавлен DaVinci Resolve-like production flow: Brief → Setup → Content → Resolve → Tune → History → Test → Diagnose → Snapshots → Export → Release. Вкладки этапов перенесены в нижний sticky rail, рабочая область занимает около 76% высоты экрана, лишние hero/output panels удалены. Brief сохраняется в manifest, Test запускает реальные profiles, пишет историю запусков в `.tuffbox/test-runs.json` и показывает `latest.log`, Export собирает `.mrpack`, server pack, Prism zip и CurseForge zip, Release делает version bump, validation, artifact checklist, changelog и release snapshot.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
+- Change History: новая IDE-вкладка показывает историю изменений timeline-деревом по категориям Mods/Configs/Shaders/Resource Packs/World/Data/Other, поддерживает сворачиваемые preview, persistent tracked-folder чекбоксы, регистрацию выбранных папок snapshot'ом и rollback отдельного tracked file.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
 - Snapshots: UI получил rollback, compare panel и inline text diff для tracked changed files; diff теперь сравнивает содержимое файлов, а не только списки путей.
+- Diagnose 2.0: Diagnostics page расширена до crash parser workspace — список crash reports, открытие выбранного отчёта, tail `latest.log` и `launcher.log`, grouped parser signals (Entrypoint/Loader mismatch/Render/Performance), crash report sections (`-- Head --`, `-- Mods --`, `-- System Details --`) с preview и parsed Mods section, suspected mods panel, последние snapshots/изменения рядом и кнопка **Create fix plan**.
 - Diagnostics/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
   - `.mrpack` — парсинг `modrinth.index.json`, создание `tuffbox.json` в выбранной папке;
@@ -112,6 +122,7 @@ apps/tuffbox-desktop/
   - отдельная боковая кнопка **Open IDE** открывает production workflow по этапам, чтобы лаунчер не смешивался с рабочей IDE;
   - меню быстрых действий (троеточие) на плитке сборки: Change Version, Create Desktop Shortcut, Download Server Pack, Links, Open Folder, Create logs.zip, Copy Modpack Link, Profile Options, Clone as..., Share Profile, Repair Profile, Remove from launcher, Delete Profile.
 - Модальное окно **Add Instance**: имя, выбор версии Minecraft (популярные версии сверху, затем релизы по убыванию), выбор loader (Vanilla/Fabric/Forge/NeoForge/Quilt) и его версии (по умолчанию последняя stable), папка для сохранения.
+- Test Runs: вкладка Test ведёт историю запусков в `.tuffbox/test-runs.json`, показывает status/duration и умеет сохранять логи конкретного run в `.tuffbox/test-runs/<run-id>/`.
 - Реальный запуск Minecraft:
   - скачивание client jar, библиотек, natives и assets по манифесту Mojang;
   - загрузка профиля Fabric/Quilt из мета-API, корректный разбор `mainClass`, проверка sha1 loader-библиотек и sequential retry/fallback для нестабильных загрузок с Fabric Maven;
@@ -123,17 +134,19 @@ apps/tuffbox-desktop/
   - `validate_project` — открыть и валидировать project manifest;
   - `list_mods` — список модов;
   - `get_project_brief` / `update_project_brief` — сохранение pre-production brief в manifest с auto snapshot;
-  - `list_profiles` — список профилей для Test page;
-  - `search_modrinth_mods` — поиск Modrinth с фильтрами текущих Minecraft/loader;
+  - `list_profiles` / `list_test_runs` / `capture_test_run_logs` — профили Test page, история запусков и capture логов по run;
+  - `search_modrinth_mods` / `get_modrinth_project_icon` — поиск Modrinth с фильтрами текущих Minecraft/loader и lazy-загрузка иконок;
   - `add_modrinth_mod` / `remove_project_mod` / `update_project_mod` — безопасное управление модами из UI с auto snapshot;
   - `list_config_files` / `read_config_file` / `write_config_file` — безопасный Config Editor для текстовых конфигов проекта;
   - `get_project_schema_status` / `migrate_project_schema` — проверка и миграция schemaVersion manifest с auto snapshot;
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
+  - `get_crash_diagnosis` / `create_crash_fix_plan` — Diagnose 2.0: crash reports, latest.log, suspected mods, recent snapshots и план исправления;
   - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `get_snapshot_file_diff` / `rollback_snapshot` — управление snapshots, rollback и inline сравнение tracked changed files;
-  - `validate_modrinth_export` / `generate_release_changelog` / `update_project_version` / `create_release_snapshot` — release workflow;
+  - `validate_modrinth_export` / `generate_release_changelog` / `update_project_version` / `create_release_snapshot` / `list_release_artifacts` / `create_release_draft` — release workflow, artifact registry и draft metadata;
   - `export_modrinth_pack` — базовый экспорт `.mrpack` с remote mod downloads и overrides;
   - `export_server_pack` — базовый server pack zip: server-safe mods, configs/scripts, download manifest, README и start scripts;
+  - `export_prism_instance` / `export_curseforge_pack` — базовые Prism/CurseForge zip builders с metadata, overrides и `tuffbox.remote-mods.json`;
   - `generate_lockfile` — генерация lockfile;
   - `launch_profile` — подготовка и запуск профиля (заглушка);
   - `import_project` — импорт `.mrpack` / Prism `.zip`.
@@ -176,9 +189,10 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 
 ## Следующие задачи
 
-1. Подключить schema status/migration controls в Project Settings UI и расширить миграции под будущие версии.
-2. Расширить Snapshot diff на manifest/lockfile и добавить side-by-side режим.
-3. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
-4. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
-5. Добавить change plan preview перед add/update/remove модов в UI.
-6. Test Launcher: расширить установку Forge/NeoForge и улучшить захват логов/статуса процесса.
+1. Улучшить Crash parser: Forge/NeoForge sections, Fabric loader table, Quilt reports, deobfuscated stacktrace hints.
+2. Подключить schema status/migration controls в Project Settings UI и расширить миграции под будущие версии.
+3. Расширить Snapshot diff на manifest/lockfile и добавить side-by-side режим.
+4. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
+5. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
+6. Добавить change plan preview перед add/update/remove модов в UI.
+7. Test Launcher: расширить установку Forge/NeoForge и улучшить захват логов/статуса процесса.

@@ -268,7 +268,7 @@
 </div>
 
 <style>
-  .snapshots { max-width: 1280px; }
+  .snapshots { max-width: none; width: 100%; }
   .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
   .title, .actions, .date, .compare-title, .diff-files h3 { display: flex; align-items: center; gap: 10px; }
   .title { color: var(--text-secondary); font-weight: 600; }

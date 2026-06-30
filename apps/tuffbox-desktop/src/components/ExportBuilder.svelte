@@ -11,11 +11,14 @@
 
   let targetPath = "";
   let serverTargetPath = "";
+  let prismTargetPath = "";
+  let curseforgeTargetPath = "";
   let projectDir = "";
   let exporting = false;
   let result: ExportResult | null = null;
   let error: string | null = null;
   let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
+  let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
 
   async function refreshDefaultPath() {
     if (!$projectPath) return;
@@ -25,6 +28,8 @@
     const version = $projectInfo?.version ?? "1.0.0";
     targetPath = `${projectDir}/${id}-${version}.mrpack`;
     serverTargetPath = `${projectDir}/${id}-${version}-server.zip`;
+    prismTargetPath = `${projectDir}/${id}-${version}-prism.zip`;
+    curseforgeTargetPath = `${projectDir}/${id}-${version}-curseforge.zip`;
   }
 
   async function exportMrpack() {
@@ -33,6 +38,14 @@
 
   async function exportServerPack() {
     await runExport("export_server_pack", serverTargetPath || null);
+  }
+
+  async function exportPrismInstance() {
+    await runExport("export_prism_instance", prismTargetPath || null);
+  }
+
+  async function exportCurseForgePack() {
+    await runExport("export_curseforge_pack", curseforgeTargetPath || null);
   }
 
   async function runExport(command: string, pathValue: string | null) {
@@ -73,12 +86,35 @@
     <div class="empty">Open a project to export a modpack.</div>
   {:else}
     <section class="panel">
-      <div class="format-card active">
-        <PackageOpen size={28} />
-        <div>
-          <h2>Modrinth .mrpack</h2>
-          <p>Creates `modrinth.index.json`, external mod downloads and `overrides/` for configs/scripts/resource packs.</p>
-        </div>
+      <div class="format-grid">
+        <button class="format-card" class:active={exportMode === "mrpack"} on:click={() => (exportMode = "mrpack")}>
+          <PackageOpen size={28} />
+          <div>
+            <h2>Modrinth .mrpack</h2>
+            <p>modrinth.index.json + remote downloads + overrides.</p>
+          </div>
+        </button>
+        <button class="format-card" class:active={exportMode === "server"} on:click={() => (exportMode = "server")}>
+          <PackageOpen size={28} />
+          <div>
+            <h2>Server pack</h2>
+            <p>Server-safe mods, configs, manifest and start scripts.</p>
+          </div>
+        </button>
+        <button class="format-card" class:active={exportMode === "prism"} on:click={() => (exportMode = "prism")}>
+          <PackageOpen size={28} />
+          <div>
+            <h2>Prism instance</h2>
+            <p>instance.cfg + mmc-pack.json + mods/configs.</p>
+          </div>
+        </button>
+        <button class="format-card" class:active={exportMode === "curseforge"} on:click={() => (exportMode = "curseforge")}>
+          <PackageOpen size={28} />
+          <div>
+            <h2>CurseForge zip</h2>
+            <p>manifest.json + overrides + remote mod manifest.</p>
+          </div>
+        </button>
       </div>
 
       <div class="paths-grid">
@@ -89,6 +125,14 @@
         <label>
           Server pack output path
           <input bind:value={serverTargetPath} placeholder=".../my-pack-1.0.0-server.zip" />
+        </label>
+        <label>
+          Prism instance output path
+          <input bind:value={prismTargetPath} placeholder=".../my-pack-1.0.0-prism.zip" />
+        </label>
+        <label>
+          CurseForge output path
+          <input bind:value={curseforgeTargetPath} placeholder=".../my-pack-1.0.0-curseforge.zip" />
         </label>
       </div>
 
@@ -112,21 +156,34 @@
       {/if}
 
       <div class="export-actions">
-        <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
-          <UploadCloud size={16} />
-          {exporting ? "Exporting..." : "Export .mrpack"}
-        </button>
-        <button class="secondary export" on:click={exportServerPack} disabled={exporting}>
-          <PackageOpen size={16} />
-          {exporting ? "Exporting..." : "Export server pack"}
-        </button>
+        {#if exportMode === "mrpack"}
+          <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
+            <UploadCloud size={16} />
+            {exporting ? "Exporting..." : "Export .mrpack"}
+          </button>
+        {:else if exportMode === "server"}
+          <button class="secondary export" on:click={exportServerPack} disabled={exporting}>
+            <PackageOpen size={16} />
+            {exporting ? "Exporting..." : "Export server pack"}
+          </button>
+        {:else if exportMode === "prism"}
+          <button class="secondary export" on:click={exportPrismInstance} disabled={exporting}>
+            <PackageOpen size={16} />
+            {exporting ? "Exporting..." : "Export Prism instance"}
+          </button>
+        {:else if exportMode === "curseforge"}
+          <button class="secondary export" on:click={exportCurseForgePack} disabled={exporting}>
+            <PackageOpen size={16} />
+            {exporting ? "Exporting..." : "Export CurseForge zip"}
+          </button>
+        {/if}
       </div>
     </section>
   {/if}
 </div>
 
 <style>
-  .export-builder { max-width: 1100px; }
+  .export-builder { max-width: none; width: 100%; }
   .toolbar, .title, .notice, .format-card { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
@@ -135,7 +192,10 @@
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
   .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 22px; display: grid; gap: 18px; }
-  .format-card { gap: 14px; padding: 18px; border-radius: var(--border-radius-lg); background: radial-gradient(circle at top left, rgba(27, 217, 106, 0.12), transparent 45%), var(--bg-tertiary); border: 1px solid rgba(27, 217, 106, 0.28); }
+  .format-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .format-card { gap: 14px; padding: 18px; text-align: left; justify-content: flex-start; color: var(--text-secondary); border-radius: var(--border-radius-lg); background: var(--bg-tertiary); border: 1px solid var(--border-color); transform: none; }
+  .format-card.active { background: radial-gradient(circle at top left, rgba(27, 217, 106, 0.12), transparent 45%), var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.45); color: var(--text-primary); }
+  .format-card.planned { opacity: .76; }
   .format-card h2 { margin: 0 0 4px; }
   .format-card p, .checks span { color: var(--text-muted); }
   label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
@@ -152,5 +212,5 @@
   .export-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .export { justify-self: start; }
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
-  @media (max-width: 900px) { .checks, .paths-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .checks, .paths-grid, .format-grid { grid-template-columns: 1fr; } }
 </style>

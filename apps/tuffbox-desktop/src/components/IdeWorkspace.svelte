@@ -13,9 +13,8 @@
     Rocket,
     CheckCircle2,
     Circle,
-    ArrowRight,
   } from "lucide-svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { projectPath } from "../lib/store";
   import ProjectSettings from "./ProjectSettings.svelte";
   import Mods from "./Mods.svelte";
   import Graph from "./Graph.svelte";
@@ -23,6 +22,7 @@
   import Diagnostics from "./Diagnostics.svelte";
   import Snapshots from "./Snapshots.svelte";
   import TestRuns from "./TestRuns.svelte";
+  import ChangeHistory from "./ChangeHistory.svelte";
   import ExportBuilder from "./ExportBuilder.svelte";
   import ReleaseRoom from "./ReleaseRoom.svelte";
 
@@ -32,6 +32,7 @@
     | "content"
     | "resolve"
     | "configs"
+    | "history"
     | "test"
     | "diagnose"
     | "snapshots"
@@ -87,6 +88,14 @@
       icon: FileCode2,
       goal: "Edit configs, scripts and overrides with rollback-safe saves.",
       outputs: ["configs", "KubeJS/scripts", "tracked changes"],
+    },
+    {
+      id: "history",
+      label: "History",
+      short: "Changes",
+      icon: History,
+      goal: "Review tracked changes across mods, configs, shaders, resource packs and project files.",
+      outputs: ["file tree", "change preview", "editor"],
     },
     {
       id: "test",
@@ -189,32 +198,63 @@
 
   $: if ($projectPath) loadBrief();
   $: activeIndex = stages.findIndex((stage) => stage.id === activeStage);
-  $: active = stages[activeIndex] ?? stages[0];
   $: completed = new Set(stages.slice(0, Math.max(activeIndex, 0)).map((stage) => stage.id));
 
-  function goNext() {
-    const next = stages[Math.min(activeIndex + 1, stages.length - 1)];
-    activeStage = next.id;
-  }
 </script>
 
 <div class="ide-workspace">
-  <header class="ide-hero">
-    <div>
-      <span class="eyebrow">TuffBox IDE workflow</span>
-      <h1>{active.label}</h1>
-      <p>{active.goal}</p>
-    </div>
-    <div class="project-context">
-      {#if $projectInfo}
-        <strong>{$projectInfo.name}</strong>
-        <span>{$projectInfo.minecraftVersion} · {$projectInfo.loaderKind} {$projectInfo.loaderVersion}</span>
-      {:else}
-        <strong>No project opened</strong>
-        <span>Open or create an instance from the launcher Home page.</span>
+  <section class="stage-shell">
+    <div class="stage-content">
+      {#if activeStage === "brief"}
+        <div class="skeleton-page">
+          <div class="page-header">
+            <div>
+              <h2>Pack brief</h2>
+              <p>Pre-production document saved into the project manifest. Use it to keep the pack direction clear before dependency work.</p>
+            </div>
+            <button on:click={saveBrief} disabled={!$projectPath}>Save brief</button>
+          </div>
+          {#if briefError}<div class="inline-error">{briefError}</div>{/if}
+          {#if briefMessage}<div class="inline-success">{briefMessage}</div>{/if}
+          <div class="brief-grid">
+            <label>Pack goal<textarea bind:value={briefGoal} placeholder="Example: low-end-friendly tech + exploration Fabric pack for 1.21.x" /></label>
+            <label>Target player<textarea bind:value={briefAudience} placeholder="Developers, server owners, casual players, low-end PCs..." /></label>
+            <label>Gameplay pillars<textarea bind:value={briefPillars} placeholder="One pillar per line: Performance, progression, QoL..." /></label>
+            <label>Hard constraints<textarea bind:value={briefConstraints} placeholder="One constraint per line: No client-only mods in server profile..." /></label>
+            <label>Release targets<textarea bind:value={briefReleaseTargets} placeholder="Modrinth, private server, Prism zip, GitHub Releases..." /></label>
+            <label>Notes<textarea bind:value={briefNotes} placeholder="Open questions, references, balancing notes..." /></label>
+          </div>
+        </div>
+      {:else if activeStage === "setup"}
+        {#if $projectPath}
+          <ProjectSettings showBack={false} stayAfterSave={true} />
+        {:else}
+          <div class="skeleton-page">
+            <h2>No project opened</h2>
+            <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
+          </div>
+        {/if}
+      {:else if activeStage === "content"}
+        <Mods />
+      {:else if activeStage === "resolve"}
+        <Graph />
+      {:else if activeStage === "configs"}
+        <ConfigEditor />
+      {:else if activeStage === "history"}
+        <ChangeHistory />
+      {:else if activeStage === "test"}
+        <TestRuns />
+      {:else if activeStage === "diagnose"}
+        <Diagnostics />
+      {:else if activeStage === "snapshots"}
+        <Snapshots />
+      {:else if activeStage === "export"}
+        <ExportBuilder />
+      {:else if activeStage === "release"}
+        <ReleaseRoom />
       {/if}
     </div>
-  </header>
+  </section>
 
   <nav class="workflow-rail" aria-label="Modpack production workflow">
     {#each stages as stage, index}
@@ -241,143 +281,64 @@
       {#if index < stages.length - 1}<span class="rail-line" />{/if}
     {/each}
   </nav>
-
-  <section class="stage-shell">
-    <aside class="stage-brief">
-      <h2>{active.label} outputs</h2>
-      <ul>
-        {#each active.outputs as output}
-          <li>{output}</li>
-        {/each}
-      </ul>
-      <button class="secondary next" on:click={goNext} disabled={activeIndex === stages.length - 1}>
-        Next stage
-        <ArrowRight size={16} />
-      </button>
-    </aside>
-
-    <div class="stage-content">
-      {#if activeStage === "brief"}
-        <div class="skeleton-page">
-          <div class="page-header">
-            <div>
-              <h2>Pack brief</h2>
-              <p>Pre-production document saved into the project manifest. Use it to keep the pack direction clear before dependency work.</p>
-            </div>
-            <button on:click={saveBrief} disabled={!$projectPath}>Save brief</button>
-          </div>
-          {#if briefError}<div class="inline-error">{briefError}</div>{/if}
-          {#if briefMessage}<div class="inline-success">{briefMessage}</div>{/if}
-          <div class="brief-grid">
-            <label>Pack goal<textarea bind:value={briefGoal} placeholder="Example: low-end-friendly tech + exploration Fabric pack for 1.21.x" /></label>
-            <label>Target player<textarea bind:value={briefAudience} placeholder="Developers, server owners, casual players, low-end PCs..." /></label>
-            <label>Gameplay pillars<textarea bind:value={briefPillars} placeholder="One pillar per line: Performance, progression, QoL..." /></label>
-            <label>Hard constraints<textarea bind:value={briefConstraints} placeholder="One constraint per line: No client-only mods in server profile..." /></label>
-            <label>Release targets<textarea bind:value={briefReleaseTargets} placeholder="Modrinth, private server, Prism zip, GitHub Releases..." /></label>
-            <label>Notes<textarea bind:value={briefNotes} placeholder="Open questions, references, balancing notes..." /></label>
-          </div>
-        </div>
-      {:else if activeStage === "setup"}
-        {#if $projectPath}
-          <ProjectSettings onBack={() => (activeStage = "brief")} />
-        {:else}
-          <div class="skeleton-page">
-            <h2>No project opened</h2>
-            <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
-          </div>
-        {/if}
-      {:else if activeStage === "content"}
-        <Mods />
-      {:else if activeStage === "resolve"}
-        <Graph />
-      {:else if activeStage === "configs"}
-        <ConfigEditor />
-      {:else if activeStage === "test"}
-        <TestRuns />
-      {:else if activeStage === "diagnose"}
-        <Diagnostics />
-      {:else if activeStage === "snapshots"}
-        <Snapshots />
-      {:else if activeStage === "export"}
-        <ExportBuilder />
-      {:else if activeStage === "release"}
-        <ReleaseRoom />
-      {/if}
-    </div>
-  </section>
 </div>
 
 <style>
   .ide-workspace {
-    max-width: 1600px;
+    width: min(1840px, 100%);
+    min-height: calc(100vh - 120px);
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
   }
 
-  .ide-hero,
   .workflow-rail,
   .stage-shell,
-  .skeleton-page,
-  .stage-brief,
-  .project-context {
+  .skeleton-page {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     background: var(--bg-secondary);
   }
 
-  .ide-hero {
-    display: flex;
-    justify-content: space-between;
-    gap: 20px;
-    padding: 22px 24px;
-    margin-bottom: 16px;
+  .stage-shell {
+    flex: 1;
+    min-height: 76vh;
+    padding: 18px;
     background:
-      radial-gradient(circle at top left, rgba(27, 217, 106, 0.13), transparent 35%),
-      var(--bg-secondary);
+      radial-gradient(circle at top right, rgba(27, 217, 106, 0.06), transparent 32%),
+      rgba(255, 255, 255, 0.015);
+    overflow: hidden;
   }
 
-  .eyebrow {
-    color: var(--accent-primary);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-weight: 800;
-  }
-
-  h1 {
-    margin: 4px 0;
-    font-size: 32px;
-  }
-
-  .ide-hero p,
-  .project-context span,
-  .skeleton-page p {
-    color: var(--text-muted);
-  }
-
-  .project-context {
-    min-width: 260px;
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 4px;
-    background: rgba(255, 255, 255, 0.02);
+  .stage-content {
+    min-width: 0;
+    width: 100%;
+    height: 100%;
   }
 
   .workflow-rail {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
     display: flex;
     align-items: stretch;
     gap: 0;
-    padding: 10px;
-    margin-bottom: 16px;
+    padding: 14px 16px;
     overflow-x: auto;
+    box-shadow: 0 -18px 40px rgba(0, 0, 0, 0.25);
+    background:
+      linear-gradient(180deg, rgba(24, 24, 27, 0.92), rgba(12, 12, 14, 0.98)),
+      var(--bg-secondary);
+    backdrop-filter: blur(18px);
   }
 
   .stage-tab {
-    min-width: 132px;
-    flex: 1 0 132px;
+    min-width: 148px;
+    min-height: 64px;
+    flex: 1 0 148px;
     justify-content: flex-start;
-    gap: 8px;
-    padding: 10px;
+    gap: 10px;
+    padding: 14px 12px;
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid transparent;
@@ -408,60 +369,22 @@
   }
 
   .rail-line {
-    width: 12px;
+    width: 10px;
     align-self: center;
     border-top: 1px solid var(--border-color);
   }
 
-  .stage-shell {
-    display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
-    gap: 16px;
-    padding: 16px;
-    background: rgba(255, 255, 255, 0.015);
-  }
-
-  .stage-brief {
-    padding: 16px;
-    align-self: start;
-    position: sticky;
-    top: 0;
-  }
-
-  .stage-brief h2 {
-    font-size: 14px;
-    margin-bottom: 12px;
-  }
-
-  .stage-brief ul {
-    list-style: none;
-    display: grid;
-    gap: 8px;
-    margin-bottom: 16px;
-  }
-
-  .stage-brief li {
-    color: var(--text-secondary);
-    padding: 8px 10px;
-    border-radius: 10px;
-    background: var(--bg-tertiary);
-  }
-
-  .next {
-    width: 100%;
-  }
-
-  .stage-content {
-    min-width: 0;
-  }
-
   .skeleton-page {
-    padding: 22px;
-    min-height: 520px;
+    padding: 24px;
+    min-height: 72vh;
   }
 
   .skeleton-page h2 {
     margin-bottom: 8px;
+  }
+
+  .skeleton-page p {
+    color: var(--text-muted);
   }
 
   .page-header {
@@ -518,19 +441,12 @@
   }
 
   @media (max-width: 1100px) {
-    .ide-hero,
     .stage-shell {
+      min-height: 72vh;
+    }
+
+    .brief-grid {
       grid-template-columns: 1fr;
-      flex-direction: column;
-    }
-
-    .stage-shell {
-      display: block;
-    }
-
-    .stage-brief {
-      position: static;
-      margin-bottom: 16px;
     }
   }
 </style>

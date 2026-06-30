@@ -250,6 +250,7 @@ fn main() -> anyhow::Result<()> {
                     query: Some(query),
                     minecraft_version: mc,
                     loader,
+                    ..Default::default()
                 })?;
                 println!("{}", serde_json::to_string_pretty(&results)?);
             }
@@ -265,6 +266,7 @@ fn main() -> anyhow::Result<()> {
                         query: None,
                         minecraft_version: mc,
                         loader,
+                        ..Default::default()
                     },
                 )?;
                 println!("{}", serde_json::to_string_pretty(&versions)?);
@@ -332,6 +334,7 @@ fn add_mod_from_modrinth(
         query: None,
         minecraft_version: Some(manifest.minecraft.version.clone()),
         loader: Some(loader_slug(&manifest.loader.kind)),
+        ..Default::default()
     };
     let versions = provider.get_versions(mod_id, &query)?;
     let version = versions
@@ -381,6 +384,7 @@ fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> any
         query: None,
         minecraft_version: Some(manifest.minecraft.version.clone()),
         loader: Some(loader_slug(&manifest.loader.kind)),
+        ..Default::default()
     };
     let versions = provider.get_versions(&project_id, &query)?;
     let version = versions

@@ -4,6 +4,7 @@
 //! AI must not be used inside this crate.
 
 pub mod change_plan;
+pub mod crash;
 pub mod diagnostics;
 pub mod exporter;
 pub mod graph;
@@ -22,6 +23,7 @@ pub mod jre;
 pub mod process;
 
 pub use change_plan::*;
+pub use crash::*;
 pub use diagnostics::*;
 pub use exporter::*;
 pub use graph::*;

@@ -57,6 +57,8 @@ impl ContentProvider for LocalJarProvider {
             description: String::new(),
             project_type: "mod".to_string(),
             icon_url: None,
+            client_side: None,
+            server_side: None,
         })
     }
 

@@ -84,6 +84,57 @@ struct ServerPackRemoteMod {
     sha512: Option<String>,
 }
 
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeManifest {
+    minecraft: CurseForgeMinecraft,
+    manifest_type: String,
+    manifest_version: u8,
+    name: String,
+    version: String,
+    author: String,
+    files: Vec<CurseForgeFile>,
+    overrides: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeMinecraft {
+    version: String,
+    mod_loaders: Vec<CurseForgeLoader>,
+}
+
+#[derive(Debug, Serialize)]
+struct CurseForgeLoader {
+    id: String,
+    primary: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CurseForgeFile {
+    project_id: u64,
+    file_id: u64,
+    required: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrismPack {
+    components: Vec<PrismComponent>,
+    format_version: u8,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PrismComponent {
+    cached_name: String,
+    cached_version: String,
+    uid: String,
+    version: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModrinthIndex {
@@ -362,6 +413,207 @@ pub fn export_server_pack(
         file_count,
         override_count,
     })
+}
+
+pub fn export_prism_instance(
+    manifest: &ProjectManifest,
+    manifest_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+) -> Result<ExportResult, ExportError> {
+    let manifest_path = manifest_path.as_ref();
+    let project_dir = manifest_path.parent().ok_or(ExportError::NoProjectDir)?;
+    let output_path = output_path.as_ref();
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let output = fs::File::create(output_path)?;
+    let mut zip = ZipWriter::new(output);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    zip.start_file("instance.cfg", options)?;
+    zip.write_all(prism_instance_cfg(manifest).as_bytes())?;
+
+    zip.start_file("mmc-pack.json", options)?;
+    zip.write_all(serde_json::to_string_pretty(&prism_pack(manifest))?.as_bytes())?;
+
+    zip.start_file("tuffbox.remote-mods.json", options)?;
+    zip.write_all(serde_json::to_string_pretty(&remote_mod_manifest(manifest))?.as_bytes())?;
+
+    let override_count = add_prism_files(&mut zip, project_dir, options)?;
+    zip.finish()?;
+
+    Ok(ExportResult {
+        path: output_path.to_path_buf(),
+        file_count: 3,
+        override_count,
+    })
+}
+
+pub fn export_curseforge_pack(
+    manifest: &ProjectManifest,
+    manifest_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+) -> Result<ExportResult, ExportError> {
+    let manifest_path = manifest_path.as_ref();
+    let project_dir = manifest_path.parent().ok_or(ExportError::NoProjectDir)?;
+    let output_path = output_path.as_ref();
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let output = fs::File::create(output_path)?;
+    let mut zip = ZipWriter::new(output);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let cf_manifest = CurseForgeManifest {
+        minecraft: CurseForgeMinecraft {
+            version: manifest.minecraft.version.clone(),
+            mod_loaders: curseforge_loaders(manifest),
+        },
+        manifest_type: "minecraftModpack".to_string(),
+        manifest_version: 1,
+        name: manifest.project.name.clone(),
+        version: manifest.project.version.clone(),
+        author: manifest.project.authors.first().cloned().unwrap_or_else(|| "TuffBox".to_string()),
+        files: Vec::new(),
+        overrides: "overrides".to_string(),
+    };
+
+    zip.start_file("manifest.json", options)?;
+    zip.write_all(serde_json::to_string_pretty(&cf_manifest)?.as_bytes())?;
+
+    zip.start_file("tuffbox.remote-mods.json", options)?;
+    zip.write_all(serde_json::to_string_pretty(&remote_mod_manifest(manifest))?.as_bytes())?;
+
+    let override_count = add_overrides(&mut zip, project_dir, options)?;
+    zip.finish()?;
+
+    Ok(ExportResult {
+        path: output_path.to_path_buf(),
+        file_count: cf_manifest.files.len() + 2,
+        override_count,
+    })
+}
+
+fn prism_instance_cfg(manifest: &ProjectManifest) -> String {
+    format!(
+        "InstanceType=OneSix
+name={}
+notes=Exported by TuffBox
+iconKey=default
+",
+        manifest.project.name
+    )
+}
+
+fn prism_pack(manifest: &ProjectManifest) -> PrismPack {
+    let mut components = vec![PrismComponent {
+        cached_name: "Minecraft".to_string(),
+        cached_version: manifest.minecraft.version.clone(),
+        uid: "net.minecraft".to_string(),
+        version: manifest.minecraft.version.clone(),
+    }];
+    if !matches!(manifest.loader.kind, LoaderKind::Vanilla) {
+        let uid = match manifest.loader.kind {
+            LoaderKind::Fabric => "net.fabricmc.fabric-loader",
+            LoaderKind::Forge => "net.minecraftforge",
+            LoaderKind::Neoforge => "net.neoforged",
+            LoaderKind::Quilt => "org.quiltmc.quilt-loader",
+            LoaderKind::Vanilla => "net.minecraft",
+        };
+        components.push(PrismComponent {
+            cached_name: format!("{:?}", manifest.loader.kind),
+            cached_version: manifest.loader.version.clone(),
+            uid: uid.to_string(),
+            version: manifest.loader.version.clone(),
+        });
+    }
+    PrismPack {
+        components,
+        format_version: 1,
+    }
+}
+
+fn curseforge_loaders(manifest: &ProjectManifest) -> Vec<CurseForgeLoader> {
+    if matches!(manifest.loader.kind, LoaderKind::Vanilla) {
+        return Vec::new();
+    }
+    let prefix = match manifest.loader.kind {
+        LoaderKind::Fabric => "fabric",
+        LoaderKind::Forge => "forge",
+        LoaderKind::Neoforge => "neoforge",
+        LoaderKind::Quilt => "quilt",
+        LoaderKind::Vanilla => "vanilla",
+    };
+    vec![CurseForgeLoader {
+        id: format!("{prefix}-{}", manifest.loader.version),
+        primary: true,
+    }]
+}
+
+fn remote_mod_manifest(manifest: &ProjectManifest) -> Vec<ServerPackRemoteMod> {
+    manifest
+        .mods
+        .iter()
+        .filter_map(|module| {
+            let url = module.source.url.clone()?;
+            let hashes = module.hashes.as_ref();
+            Some(ServerPackRemoteMod {
+                id: module.id.clone(),
+                name: module.name.clone(),
+                version: module.version.clone(),
+                file_name: module.file_name.clone(),
+                url,
+                sha1: hashes.and_then(|h| h.sha1.clone()),
+                sha512: hashes.and_then(|h| h.sha512.clone()),
+            })
+        })
+        .collect()
+}
+
+fn add_prism_files<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    project_dir: &Path,
+    options: SimpleFileOptions,
+) -> Result<usize, ExportError> {
+    let mut count = 0;
+    for root in ["config", "defaultconfigs", "kubejs", "scripts", "resourcepacks", "shaderpacks", "mods"] {
+        let dir = project_dir.join(root);
+        if dir.is_dir() {
+            count += add_dir_plain(zip, project_dir, &dir, options)?;
+        }
+    }
+    Ok(count)
+}
+
+fn add_dir_plain<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    project_dir: &Path,
+    dir: &Path,
+    options: SimpleFileOptions,
+) -> Result<usize, ExportError> {
+    let mut count = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            count += add_dir_plain(zip, project_dir, &path, options)?;
+        } else if path.is_file() {
+            let relative = path
+                .strip_prefix(project_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            zip.start_file(relative, options)?;
+            zip.write_all(&fs::read(&path)?)?;
+            count += 1;
+        }
+    }
+    Ok(count)
 }
 
 fn add_overrides<W: Write + Seek>(

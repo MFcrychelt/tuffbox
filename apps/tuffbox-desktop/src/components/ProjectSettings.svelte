@@ -5,7 +5,9 @@
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
-  export let onBack: () => void;
+  export let onBack: () => void = () => {};
+  export let showBack = true;
+  export let stayAfterSave = false;
 
   const memoryMarks = [1024, 2048, 4096, 6144, 8192, 12288, 16384];
   const loaders = [
@@ -86,7 +88,7 @@
       const info = await invoke("validate_project", { path: $projectPath });
       projectInfo.set(info as any);
       recentProjects.updateInfo($projectPath, info as any);
-      onBack();
+      if (!stayAfterSave) onBack();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -123,10 +125,12 @@
 
 <div class="settings-page">
   <header class="page-header">
-    <button class="ghost back" on:click={onBack}>
-      <ArrowLeft size={18} />
-      Back
-    </button>
+    {#if showBack}
+      <button class="ghost back" on:click={onBack}>
+        <ArrowLeft size={18} />
+        Back
+      </button>
+    {/if}
     <h1>Instance Settings</h1>
   </header>
 
@@ -235,7 +239,9 @@
     {/if}
 
     <div class="actions">
-      <button class="secondary" on:click={onBack}>Cancel</button>
+      {#if showBack}
+        <button class="secondary" on:click={onBack}>Cancel</button>
+      {/if}
       <button on:click={save} disabled={saving}>
         <Save size={16} />
         {saving ? "Saving..." : "Save changes"}
@@ -256,7 +262,8 @@
 
 <style>
   .settings-page {
-    max-width: 900px;
+    max-width: none;
+    width: 100%;
   }
 
   .page-header {

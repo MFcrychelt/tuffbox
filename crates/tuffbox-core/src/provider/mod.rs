@@ -32,6 +32,16 @@ pub struct ProviderSearchQuery {
     pub query: Option<String>,
     pub minecraft_version: Option<String>,
     pub loader: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub environment: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +53,10 @@ pub struct ProjectInfo {
     pub description: String,
     pub project_type: String,
     pub icon_url: Option<String>,
+    #[serde(default)]
+    pub client_side: Option<String>,
+    #[serde(default)]
+    pub server_side: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

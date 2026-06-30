@@ -23,9 +23,13 @@ impl ModrinthProvider {
 
 impl ContentProvider for ModrinthProvider {
     fn search(&self, query: &ProviderSearchQuery) -> Result<Vec<ProjectInfo>, ProviderError> {
-        let mut path = format!("/search?index=relevance&limit=10");
+        let index = query.sort.as_deref().unwrap_or("relevance");
+        let limit = query.limit.unwrap_or(24).clamp(1, 100);
+        let mut path = format!("/search?index={}&limit={}", urlencode(index), limit);
         if let Some(q) = &query.query {
-            path.push_str(&format!("&query={}", urlencode(q)));
+            if !q.trim().is_empty() {
+                path.push_str(&format!("&query={}", urlencode(q.trim())));
+            }
         }
         let facets = build_facets(query);
         if !facets.is_empty() {
@@ -115,7 +119,22 @@ fn build_facets(query: &ProviderSearchQuery) -> String {
         facets.push(vec![format!("versions:{mc}")]);
     }
     if let Some(loader) = &query.loader {
-        facets.push(vec![format!("categories:{loader}")]);
+        if !loader.trim().is_empty() {
+            facets.push(vec![format!("categories:{}", loader.trim().to_lowercase())]);
+        }
+    }
+    if let Some(category) = &query.category {
+        if !category.trim().is_empty() {
+            facets.push(vec![format!("categories:{}", category.trim().to_lowercase().replace(' ', "-"))]);
+        }
+    }
+    if let Some(environment) = &query.environment {
+        if !environment.trim().is_empty() {
+            facets.push(vec![format!("{}_side:required", environment.trim().to_lowercase())]);
+        }
+    }
+    if query.license.as_deref() == Some("open-source") {
+        facets.push(vec!["open_source:true".to_string()]);
     }
     if facets.is_empty() {
         return String::new();
@@ -125,9 +144,13 @@ fn build_facets(query: &ProviderSearchQuery) -> String {
 
 fn urlencode(value: &str) -> String {
     value
+        .replace('%', "%25")
         .replace(' ', "%20")
         .replace('[', "%5B")
         .replace(']', "%5D")
+        .replace('"', "%22")
+        .replace(':', "%3A")
+        .replace(',', "%2C")
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,6 +167,8 @@ struct ModrinthSearchHit {
     description: String,
     project_type: String,
     icon_url: Option<String>,
+    client_side: Option<String>,
+    server_side: Option<String>,
 }
 
 impl From<ModrinthSearchHit> for ProjectInfo {
@@ -155,6 +180,8 @@ impl From<ModrinthSearchHit> for ProjectInfo {
             description: hit.description,
             project_type: hit.project_type,
             icon_url: hit.icon_url,
+            client_side: hit.client_side,
+            server_side: hit.server_side,
         }
     }
 }
@@ -168,6 +195,8 @@ struct ModrinthProject {
     description: String,
     project_type: String,
     icon_url: Option<String>,
+    client_side: Option<String>,
+    server_side: Option<String>,
 }
 
 impl From<ModrinthProject> for ProjectInfo {
@@ -179,6 +208,8 @@ impl From<ModrinthProject> for ProjectInfo {
             description: project.description,
             project_type: project.project_type,
             icon_url: project.icon_url,
+            client_side: project.client_side,
+            server_side: project.server_side,
         }
     }
 }
@@ -274,6 +305,7 @@ mod tests {
                 query: Some("sodium".to_string()),
                 minecraft_version: Some("1.20.1".to_string()),
                 loader: Some("fabric".to_string()),
+                ..Default::default()
             })
             .unwrap();
         assert!(!results.is_empty());

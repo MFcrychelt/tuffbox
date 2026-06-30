@@ -4,10 +4,24 @@
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
+  type Artifact = { id: string; kind: string; path: string; createdAt: string; fileCount: number; overrideCount: number };
 
   let version = $projectInfo?.version ?? "1.0.0";
   let changelog = "";
   let issues: Issue[] = [];
+  let artifacts: Artifact[] = [];
+  let checklist: Record<string, boolean> = {
+    version: false,
+    validation: false,
+    artifacts: false,
+    changelog: false,
+    snapshot: false,
+  };
+  let publishTargets = [
+    { id: "modrinth", label: "Modrinth", state: "draft placeholder" },
+    { id: "curseforge", label: "CurseForge", state: "draft placeholder" },
+    { id: "github", label: "GitHub Releases", state: "draft placeholder" },
+  ];
   let loading = false;
   let error = "";
   let message = "";
@@ -21,6 +35,7 @@
     try {
       issues = await invoke("validate_modrinth_export", { path: $projectPath });
       changelog = await invoke("generate_release_changelog", { path: $projectPath });
+      artifacts = await invoke("list_release_artifacts", { path: $projectPath });
       version = $projectInfo?.version ?? version;
       lastLoadedPath = $projectPath;
     } catch (e) {
@@ -48,6 +63,38 @@
     }
   }
 
+  async function copyArtifactPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path);
+      message = "Artifact path copied.";
+    } catch {
+      message = path;
+    }
+  }
+
+  function markPublishTarget(id: string) {
+    publishTargets = publishTargets.map((target) =>
+      target.id === id ? { ...target, state: "prepared locally" } : target
+    );
+    message = `${publishTargets.find((target) => target.id === id)?.label} draft marked as prepared locally.`;
+  }
+
+  async function createReleaseDraft() {
+    if (!$projectPath) return;
+    loading = true;
+    error = "";
+    message = "";
+    try {
+      const result: any = await invoke("create_release_draft", { path: $projectPath, changelog });
+      message = `Release draft created: ${result.draftPath} (${result.artifactCount} artifacts).`;
+      await refresh();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
   async function createReleaseSnapshot() {
     if (!$projectPath) return;
     loading = true;
@@ -55,6 +102,7 @@
     message = "";
     try {
       const result: any = await invoke("create_release_snapshot", { path: $projectPath, changelog });
+      checklist.snapshot = true;
       message = `Release snapshot ${result.snapshot.id} created. Changelog: ${result.changelogPath}`;
     } catch (e) {
       error = String(e);
@@ -65,6 +113,11 @@
 
   $: errorCount = issues.filter((issue) => issue.severity === "error").length;
   $: warningCount = issues.filter((issue) => issue.severity === "warning").length;
+  $: checklist.version = Boolean(version.trim());
+  $: checklist.validation = errorCount === 0;
+  $: checklist.artifacts = artifacts.length > 0;
+  $: checklist.changelog = changelog.trim().length > 0;
+  $: releaseReady = Object.values(checklist).every(Boolean);
   $: if ($projectPath && lastLoadedPath !== $projectPath) refresh();
 </script>
 
@@ -101,6 +154,43 @@
           <div><strong>{changelog.split("\n").filter(Boolean).length}</strong><span>changelog lines</span></div>
         </div>
 
+        <div class="release-checklist">
+          <h3>Release checklist</h3>
+          {#each Object.entries(checklist) as [key, done]}
+            <label class:done>
+              <input type="checkbox" bind:checked={checklist[key]} />
+              <span>{key}</span>
+            </label>
+          {/each}
+          <div class="ready" class:ok={releaseReady}>{releaseReady ? "Ready to ship" : "Release not ready yet"}</div>
+        </div>
+
+        <div class="publish-targets">
+          <h3>Publish targets</h3>
+          {#each publishTargets as target}
+            <div class="publish-target">
+              <div><strong>{target.label}</strong><span>{target.state}</span></div>
+              <button class="ghost mini" on:click={() => markPublishTarget(target.id)}>Mark prepared</button>
+            </div>
+          {/each}
+        </div>
+
+        <div class="artifact-list">
+          <h3>Artifacts</h3>
+          {#if artifacts.length === 0}
+            <div class="muted-box">No exported artifacts recorded yet. Use Export stage first.</div>
+          {:else}
+            {#each artifacts.slice(0, 6) as artifact}
+              <div class="artifact-row">
+                <strong>{artifact.kind}</strong>
+                <span>{artifact.path}</span>
+                <small>{artifact.fileCount} files · {artifact.overrideCount} overrides</small>
+                <button class="ghost mini" on:click={() => copyArtifactPath(artifact.path)}>Copy path</button>
+              </div>
+            {/each}
+          {/if}
+        </div>
+
         <div class="issues">
           {#if issues.length === 0}
             <div class="issue ok"><CheckCircle2 size={16} /> Export validation passed.</div>
@@ -115,9 +205,14 @@
           {/if}
         </div>
 
-        <button on:click={createReleaseSnapshot} disabled={loading || errorCount > 0}>
-          <Camera size={16} /> Create release snapshot
-        </button>
+        <div class="release-actions">
+          <button class="secondary" on:click={createReleaseDraft} disabled={loading || !changelog.trim()}>
+            <Rocket size={16} /> Create release draft
+          </button>
+          <button on:click={createReleaseSnapshot} disabled={loading || errorCount > 0}>
+            <Camera size={16} /> Create release snapshot
+          </button>
+        </div>
       </section>
 
       <section class="panel changelog-panel">
@@ -135,7 +230,7 @@
 </div>
 
 <style>
-  .release-room { max-width: 1400px; }
+  .release-room { max-width: none; width: 100%; }
   .toolbar, .title, .notice, .version-row, .changelog-header { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
@@ -155,6 +250,22 @@
   .scorecards span, .changelog-header p { color: var(--text-muted); font-size: 12px; }
   .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
   .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
+  .release-checklist, .artifact-list, .publish-targets { display: grid; gap: 8px; }
+  .release-checklist h3, .artifact-list h3, .publish-targets h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
+  .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; text-transform: none; letter-spacing: 0; }
+  .release-checklist label.done { border-color: rgba(27, 217, 106, .28); }
+  .release-checklist input { width: auto; }
+  .ready { padding: 9px 10px; border-radius: 12px; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .ready.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, .35); }
+  .publish-target { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .publish-target div { display: grid; gap: 3px; }
+  .publish-target strong { color: var(--text-primary); }
+  .publish-target span { color: var(--text-muted); font-size: 12px; }
+  .artifact-row, .muted-box { display: grid; gap: 4px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .artifact-row strong { color: var(--text-primary); text-transform: uppercase; font-size: 12px; }
+  .artifact-row span, .artifact-row small, .muted-box { color: var(--text-muted); font-size: 12px; word-break: break-all; }
+  .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
+  .release-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .issues { display: grid; gap: 8px; }
   .issue { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }

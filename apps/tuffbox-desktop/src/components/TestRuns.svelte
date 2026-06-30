@@ -22,6 +22,8 @@
   let startedAt: number | null = null;
   let lastLoadedPath: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let runs: { id: string; profile: string; startedAt: string; status: string; logPath: string; durationSeconds?: number | null }[] = [];
+  let capturedRunIds: Record<string, boolean> = {};
 
   async function loadProfiles(force = false) {
     if (!$projectPath) return;
@@ -33,6 +35,7 @@
       selectedProfile = profiles.find((p) => p.id === selectedProfile)?.id ?? profiles[0]?.id ?? "client";
       lastLoadedPath = $projectPath;
       await refreshLog();
+      await loadRuns();
     } catch (e) {
       error = String(e);
     } finally {
@@ -50,6 +53,7 @@
     try {
       await invoke("launch_profile", { path: $projectPath, profile: selectedProfile });
       message = `Started profile ${selectedProfile}. Watch latest.log below.`;
+      await loadRuns();
       startPolling();
     } catch (e) {
       error = String(e);
@@ -61,12 +65,43 @@
     if (!$projectPath) return;
     try {
       log = await invoke("get_launch_log", { path: $projectPath });
-      if (log.includes("# Launch error:") || log.includes("Process exited")) {
+      if (log.includes("# Launch error:") || log.includes("Process exited") || log.includes("Stopping!")) {
+        const wasRunning = running;
         running = false;
+        await loadRuns();
+        if (wasRunning && runs[0] && !capturedRunIds[runs[0].id]) {
+          await captureRunLogs(runs[0], true);
+        }
       }
     } catch {
       // latest.log may not exist before first run.
     }
+  }
+
+  async function loadRuns() {
+    if (!$projectPath) return;
+    try {
+      runs = await invoke("list_test_runs", { path: $projectPath });
+    } catch {
+      runs = [];
+    }
+  }
+
+  async function captureRunLogs(run: { id: string }, silent = false) {
+    if (!$projectPath) return;
+    try {
+      const dir: string = await invoke("capture_test_run_logs", { path: $projectPath, runId: run.id });
+      capturedRunIds = { ...capturedRunIds, [run.id]: true };
+      if (!silent) message = `Captured logs to ${dir}`;
+    } catch (e) {
+      if (!silent) error = String(e);
+    }
+  }
+
+  function formatRunTime(value: string) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return value;
+    return new Date(seconds * 1000).toLocaleString();
   }
 
   function startPolling() {
@@ -132,6 +167,22 @@
             </button>
           {/each}
         {/if}
+
+        <h2 class="history-title">Run history</h2>
+        {#if runs.length === 0}
+          <div class="muted">No test runs recorded yet.</div>
+        {:else}
+          <div class="run-history">
+            {#each runs.slice(0, 10) as run}
+              <div class="run-row {run.status}">
+                <strong>{run.profile}</strong>
+                <span>{formatRunTime(run.startedAt)}</span>
+                <small>{run.status}{run.durationSeconds ? ` · ${run.durationSeconds}s` : ""}</small>
+                <button class="ghost mini" on:click={() => captureRunLogs(run)}>{capturedRunIds[run.id] ? "Logs captured" : "Capture logs"}</button>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </aside>
 
       <section class="run-panel">
@@ -157,7 +208,7 @@
 </div>
 
 <style>
-  .test-runs { max-width: 1400px; }
+  .test-runs { max-width: none; width: 100%; }
   .toolbar, .actions, .title, .run-header, .status { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
@@ -173,6 +224,15 @@
   .profile-card:hover, .profile-card.selected { transform: none; border-color: rgba(27, 217, 106, 0.4); background: rgba(27, 217, 106, 0.08); }
   .profile-card strong { color: var(--text-primary); }
   .profile-card span, .profile-card small, .muted, .run-header p { color: var(--text-muted); }
+  .history-title { margin-top: 22px; }
+  .run-history { display: grid; gap: 8px; }
+  .run-row { display: grid; gap: 3px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .run-row strong { color: var(--text-primary); }
+  .run-row span, .run-row small { color: var(--text-muted); font-size: 12px; }
+  .run-row.failed { border-color: rgba(239, 68, 68, .35); }
+  .run-row.finished { border-color: rgba(27, 217, 106, .28); }
+  .run-row.started { border-color: rgba(245, 158, 11, .28); }
+  .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
   .run-panel { overflow: hidden; }
   .run-header { justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border-color); }
   .run-header h2 { margin: 0 0 4px; }
