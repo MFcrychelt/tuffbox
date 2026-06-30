@@ -417,6 +417,20 @@ fn export_modrinth_pack(path: String, target_path: Option<String>) -> Result<tuf
     tuffbox_core::export_modrinth_pack(&manifest, &path, &output).map_err(|e| e.to_string())
 }
 
+#[tauri::command(rename_all = "camelCase")]
+fn export_server_pack(path: String, target_path: Option<String>) -> Result<tuffbox_core::ExportResult, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let output = target_path
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(&path)
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(format!("{}-{}-server.zip", manifest.project.id, manifest.project.version))
+        });
+    tuffbox_core::export_server_pack(&manifest, &path, &output).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn generate_lockfile(path: String) -> Result<TuffboxLockfile, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -1030,6 +1044,7 @@ pub fn run() {
             update_project_version,
             create_release_snapshot,
             export_modrinth_pack,
+            export_server_pack,
             generate_lockfile,
             launch_profile,
             import_project,

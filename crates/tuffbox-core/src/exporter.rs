@@ -47,6 +47,45 @@ pub enum ExportIssueSeverity {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct ServerPackManifest {
+    name: String,
+    version: String,
+    minecraft_version: String,
+    loader: ServerPackLoader,
+    included_mods: Vec<ServerPackMod>,
+    remote_mods: Vec<ServerPackRemoteMod>,
+    skipped_client_mods: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ServerPackLoader {
+    kind: String,
+    version: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerPackMod {
+    id: String,
+    name: String,
+    version: String,
+    file_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerPackRemoteMod {
+    id: String,
+    name: String,
+    version: String,
+    file_name: Option<String>,
+    url: String,
+    sha1: Option<String>,
+    sha512: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ModrinthIndex {
     format_version: u8,
     game: String,
@@ -223,6 +262,108 @@ pub fn export_modrinth_pack(
     })
 }
 
+pub fn export_server_pack(
+    manifest: &ProjectManifest,
+    manifest_path: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+) -> Result<ExportResult, ExportError> {
+    let manifest_path = manifest_path.as_ref();
+    let project_dir = manifest_path.parent().ok_or(ExportError::NoProjectDir)?;
+    let output_path = output_path.as_ref();
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let output = fs::File::create(output_path)?;
+    let mut zip = ZipWriter::new(output);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut included_mods = Vec::new();
+    let mut remote_mods = Vec::new();
+    let mut skipped_client_mods = Vec::new();
+    let mut file_count = 0;
+
+    for module in &manifest.mods {
+        if module.side == Side::Client {
+            skipped_client_mods.push(module.id.clone());
+            continue;
+        }
+
+        let Some(file_name) = module.file_name.clone() else {
+            if let Some(url) = &module.source.url {
+                let hashes = module.hashes.as_ref();
+                remote_mods.push(ServerPackRemoteMod {
+                    id: module.id.clone(),
+                    name: module.name.clone(),
+                    version: module.version.clone(),
+                    file_name: None,
+                    url: url.clone(),
+                    sha1: hashes.and_then(|h| h.sha1.clone()),
+                    sha512: hashes.and_then(|h| h.sha512.clone()),
+                });
+            }
+            continue;
+        };
+
+        let local_path = project_dir.join("mods").join(&file_name);
+        if local_path.is_file() {
+            zip.start_file(format!("mods/{file_name}"), options)?;
+            zip.write_all(&fs::read(&local_path)?)?;
+            file_count += 1;
+            included_mods.push(ServerPackMod {
+                id: module.id.clone(),
+                name: module.name.clone(),
+                version: module.version.clone(),
+                file_name,
+            });
+        } else if let Some(url) = &module.source.url {
+            let hashes = module.hashes.as_ref();
+            remote_mods.push(ServerPackRemoteMod {
+                id: module.id.clone(),
+                name: module.name.clone(),
+                version: module.version.clone(),
+                file_name: Some(file_name),
+                url: url.clone(),
+                sha1: hashes.and_then(|h| h.sha1.clone()),
+                sha512: hashes.and_then(|h| h.sha512.clone()),
+            });
+        }
+    }
+
+    let override_count = add_server_overrides(&mut zip, project_dir, options)?;
+    let server_manifest = ServerPackManifest {
+        name: manifest.project.name.clone(),
+        version: manifest.project.version.clone(),
+        minecraft_version: manifest.minecraft.version.clone(),
+        loader: ServerPackLoader {
+            kind: format!("{:?}", manifest.loader.kind).to_lowercase(),
+            version: manifest.loader.version.clone(),
+        },
+        included_mods,
+        remote_mods,
+        skipped_client_mods,
+    };
+
+    zip.start_file("tuffbox.server-pack.json", options)?;
+    zip.write_all(serde_json::to_string_pretty(&server_manifest)?.as_bytes())?;
+
+    zip.start_file("README_INSTALL.txt", options)?;
+    zip.write_all(server_readme(manifest, &server_manifest).as_bytes())?;
+    zip.start_file("start.bat", options)?;
+    zip.write_all(start_bat().as_bytes())?;
+    zip.start_file("start.sh", options)?;
+    zip.write_all(start_sh().as_bytes())?;
+    file_count += 4;
+
+    zip.finish()?;
+
+    Ok(ExportResult {
+        path: output_path.to_path_buf(),
+        file_count,
+        override_count,
+    })
+}
+
 fn add_overrides<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     project_dir: &Path,
@@ -236,6 +377,59 @@ fn add_overrides<W: Write + Seek>(
         }
     }
     Ok(count)
+}
+
+fn add_server_overrides<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    project_dir: &Path,
+    options: SimpleFileOptions,
+) -> Result<usize, ExportError> {
+    let mut count = 0;
+    for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
+        let dir = project_dir.join(root);
+        if dir.is_dir() {
+            count += add_dir(zip, project_dir, &dir, options)?;
+        }
+    }
+    Ok(count)
+}
+
+fn server_readme(manifest: &ProjectManifest, server_manifest: &ServerPackManifest) -> String {
+    let mut readme = format!(
+        "# {} {} server pack\n\nMinecraft: {}\nLoader: {} {}\n\n",
+        manifest.project.name,
+        manifest.project.version,
+        manifest.minecraft.version,
+        server_manifest.loader.kind,
+        server_manifest.loader.version,
+    );
+    readme.push_str("## Install\n\n");
+    readme.push_str("1. Install the matching Minecraft server and loader.\n");
+    readme.push_str("2. Copy folders from this archive into the server directory.\n");
+    readme.push_str("3. If `tuffbox.server-pack.json` contains `remoteMods`, download them into `mods/`.\n");
+    readme.push_str("4. Review EULA and run `start.bat` or `start.sh`.\n\n");
+    if !server_manifest.remote_mods.is_empty() {
+        readme.push_str("## Remote mods to download\n\n");
+        for module in &server_manifest.remote_mods {
+            readme.push_str(&format!("- {} {}: {}\n", module.name, module.version, module.url));
+        }
+        readme.push('\n');
+    }
+    if !server_manifest.skipped_client_mods.is_empty() {
+        readme.push_str("## Client-only mods skipped\n\n");
+        for id in &server_manifest.skipped_client_mods {
+            readme.push_str(&format!("- {id}\n"));
+        }
+    }
+    readme
+}
+
+fn start_bat() -> &'static str {
+    "@echo off\r\njava -Xmx4G -jar server.jar nogui\r\npause\r\n"
+}
+
+fn start_sh() -> &'static str {
+    "#!/usr/bin/env sh\njava -Xmx4G -jar server.jar nogui\n"
 }
 
 fn add_dir<W: Write + Seek>(

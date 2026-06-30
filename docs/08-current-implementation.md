@@ -98,7 +98,7 @@ apps/tuffbox-desktop/
 - Асинхронный запуск Minecraft: процесс стартует в фоновом потоке, UI не блокируется.
 - Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
-- IDE Workflow: добавлен DaVinci Resolve-like production flow: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Brief сохраняется в manifest, Test запускает реальные profiles и показывает `latest.log`, Export собирает базовый `.mrpack`, Release делает version bump, validation, changelog и release snapshot.
+- IDE Workflow: добавлен DaVinci Resolve-like production flow: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Brief сохраняется в manifest, Test запускает реальные profiles и показывает `latest.log`, Export собирает базовый `.mrpack` и server pack, Release делает version bump, validation, changelog и release snapshot.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
 - Snapshots: UI получил rollback и compare panel; diff теперь сравнивает содержимое tracked changed files, а не только списки путей.
@@ -133,6 +133,7 @@ apps/tuffbox-desktop/
   - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `rollback_snapshot` — управление snapshots, rollback и сравнение tracked changed files;
   - `validate_modrinth_export` / `generate_release_changelog` / `update_project_version` / `create_release_snapshot` — release workflow;
   - `export_modrinth_pack` — базовый экспорт `.mrpack` с remote mod downloads и overrides;
+  - `export_server_pack` — базовый server pack zip: server-safe mods, configs/scripts, download manifest, README и start scripts;
   - `generate_lockfile` — генерация lockfile;
   - `launch_profile` — подготовка и запуск профиля (заглушка);
   - `import_project` — импорт `.mrpack` / Prism `.zip`.

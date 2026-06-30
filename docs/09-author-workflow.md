@@ -265,7 +265,7 @@ Brief | Setup | Content | Resolve | Tune | Test | Diagnose | Snapshots | Export 
 - Test → запуск выбранного profile и tail `latest.log`;
 - Diagnose → Diagnostics;
 - Snapshots → Snapshots;
-- Export → базовый `.mrpack` builder;
+- Export → базовый `.mrpack` и server pack builder;
 - Release → version bump, export validation, generated changelog and release snapshot.
 
 Skeleton pages:

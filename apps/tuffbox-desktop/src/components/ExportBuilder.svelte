@@ -10,6 +10,7 @@
   };
 
   let targetPath = "";
+  let serverTargetPath = "";
   let projectDir = "";
   let exporting = false;
   let result: ExportResult | null = null;
@@ -23,17 +24,26 @@
     const id = $projectInfo?.id ?? "modpack";
     const version = $projectInfo?.version ?? "1.0.0";
     targetPath = `${projectDir}/${id}-${version}.mrpack`;
+    serverTargetPath = `${projectDir}/${id}-${version}-server.zip`;
   }
 
   async function exportMrpack() {
+    await runExport("export_modrinth_pack", targetPath || null);
+  }
+
+  async function exportServerPack() {
+    await runExport("export_server_pack", serverTargetPath || null);
+  }
+
+  async function runExport(command: string, pathValue: string | null) {
     if (!$projectPath) return;
     exporting = true;
     error = null;
     result = null;
     try {
-      result = await invoke("export_modrinth_pack", {
+      result = await invoke(command, {
         path: $projectPath,
-        targetPath: targetPath || null,
+        targetPath: pathValue,
       });
     } catch (e) {
       error = String(e);
@@ -71,15 +81,22 @@
         </div>
       </div>
 
-      <label>
-        Output path
-        <input bind:value={targetPath} placeholder=".../my-pack-1.0.0.mrpack" />
-      </label>
+      <div class="paths-grid">
+        <label>
+          .mrpack output path
+          <input bind:value={targetPath} placeholder=".../my-pack-1.0.0.mrpack" />
+        </label>
+        <label>
+          Server pack output path
+          <input bind:value={serverTargetPath} placeholder=".../my-pack-1.0.0-server.zip" />
+        </label>
+      </div>
 
       <div class="checks">
         <div><strong>Dependencies</strong><span>Minecraft + selected loader are written to the index.</span></div>
         <div><strong>Mods</strong><span>Modrinth/direct URL mods are exported as remote downloads.</span></div>
         <div><strong>Overrides</strong><span>config/defaultconfigs/kubejs/scripts/resourcepacks/shaderpacks are embedded.</span></div>
+        <div><strong>Server pack</strong><span>Excludes client-only mods, includes local server jars, download manifest, configs and start scripts.</span></div>
       </div>
 
       {#if issues.length > 0}
@@ -94,10 +111,16 @@
         </div>
       {/if}
 
-      <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
-        <UploadCloud size={16} />
-        {exporting ? "Exporting..." : "Export .mrpack"}
-      </button>
+      <div class="export-actions">
+        <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
+          <UploadCloud size={16} />
+          {exporting ? "Exporting..." : "Export .mrpack"}
+        </button>
+        <button class="secondary export" on:click={exportServerPack} disabled={exporting}>
+          <PackageOpen size={16} />
+          {exporting ? "Exporting..." : "Export server pack"}
+        </button>
+      </div>
     </section>
   {/if}
 </div>
@@ -117,7 +140,8 @@
   .format-card p, .checks span { color: var(--text-muted); }
   label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
   input { width: 100%; }
-  .checks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .paths-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .checks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .checks div { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 14px; padding: 14px; display: grid; gap: 4px; }
   .issues { display: grid; gap: 8px; }
   .issue { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
@@ -125,7 +149,8 @@
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
+  .export-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .export { justify-self: start; }
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
-  @media (max-width: 900px) { .checks { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .checks, .paths-grid { grid-template-columns: 1fr; } }
 </style>
