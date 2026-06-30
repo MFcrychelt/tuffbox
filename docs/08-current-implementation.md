@@ -100,7 +100,8 @@ apps/tuffbox-desktop/
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
-- Diagnostics/Snapshots/Settings: переоформлены в едином стиле.
+- Snapshots: UI получил rollback и compare panel; diff теперь сравнивает содержимое tracked changed files, а не только списки путей.
+- Diagnostics/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
   - `.mrpack` — парсинг `modrinth.index.json`, создание `tuffbox.json` в выбранной папке;
   - Prism instance `.zip` — парсинг `instance.cfg`, создание `tuffbox.json`;
@@ -125,7 +126,7 @@ apps/tuffbox-desktop/
   - `get_project_schema_status` / `migrate_project_schema` — проверка и миграция schemaVersion manifest с auto snapshot;
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
-  - `list_snapshots` / `create_snapshot` — управление snapshots;
+  - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `rollback_snapshot` — управление snapshots, rollback и сравнение tracked changed files;
   - `generate_lockfile` — генерация lockfile;
   - `launch_profile` — подготовка и запуск профиля (заглушка);
   - `import_project` — импорт `.mrpack` / Prism `.zip`.
@@ -169,7 +170,7 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 ## Следующие задачи
 
 1. Подключить schema status/migration controls в Project Settings UI и расширить миграции под будущие версии.
-2. Расширить diff: сравнивать содержимое changed files между snapshots.
+2. Улучшить Snapshot diff: показывать inline text diff для небольших файлов и manifest/lockfile.
 3. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
 4. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
 5. Добавить change plan preview перед add/update/remove модов в UI.

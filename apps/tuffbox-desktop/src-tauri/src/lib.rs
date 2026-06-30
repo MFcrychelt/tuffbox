@@ -244,7 +244,7 @@ fn create_snapshot(
     reason: String,
 ) -> Result<tuffbox_core::Snapshot, String> {
     let store = SnapshotStore::new(&project_dir);
-    let manifest_path = PathBuf::from(&project_dir).join("project.tuffbox.json");
+    let manifest_path = find_manifest_in_project_dir(&project_dir)?;
     let lockfile_path = manifest_path.with_extension("lock.json");
     let lockfile_path = if lockfile_path.exists() {
         Some(lockfile_path)
@@ -260,6 +260,18 @@ fn create_snapshot(
             &[] as &[&Path],
         )
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn diff_snapshots(project_dir: String, from: String, to: String) -> Result<tuffbox_core::SnapshotDiff, String> {
+    let store = SnapshotStore::new(&project_dir);
+    store.diff(from, to).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn rollback_snapshot(project_dir: String, id: String) -> Result<tuffbox_core::Snapshot, String> {
+    let store = SnapshotStore::new(&project_dir);
+    store.rollback(id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -592,6 +604,23 @@ fn create_instance(
     Ok(path.to_string_lossy().to_string())
 }
 
+fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
+    let dir = PathBuf::from(project_dir);
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.ends_with(".tuffbox.json"))
+            .unwrap_or(false)
+        {
+            return Ok(path);
+        }
+    }
+    Err("project manifest not found in project directory".to_string())
+}
+
 fn manifest_parent(path: &str) -> Result<PathBuf, String> {
     PathBuf::from(path)
         .parent()
@@ -847,6 +876,8 @@ pub fn run() {
             get_project_dir,
             list_snapshots,
             create_snapshot,
+            diff_snapshots,
+            rollback_snapshot,
             generate_lockfile,
             launch_profile,
             import_project,

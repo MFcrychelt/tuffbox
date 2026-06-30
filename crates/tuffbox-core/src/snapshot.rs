@@ -182,10 +182,21 @@ impl SnapshotStore {
         let from_files: std::collections::HashSet<_> = from.changed_files.iter().cloned().collect();
         let to_files: std::collections::HashSet<_> = to.changed_files.iter().cloned().collect();
 
+        let from_changed_dir = self.snapshots_dir.join(&from.id).join("changed_files");
+        let to_changed_dir = self.snapshots_dir.join(&to.id).join("changed_files");
+        let mut modified_files = Vec::new();
+        for relative in from_files.intersection(&to_files) {
+            let from_path = from_changed_dir.join(relative);
+            let to_path = to_changed_dir.join(relative);
+            if files_differ(&from_path, &to_path).map_err(SnapshotError::ReadMetadata)? {
+                modified_files.push(relative.clone());
+            }
+        }
+
         Ok(SnapshotDiff {
             added_files: to_files.difference(&from_files).cloned().collect(),
             removed_files: from_files.difference(&to_files).cloned().collect(),
-            modified_files: Vec::new(),
+            modified_files,
         })
     }
 
@@ -196,7 +207,8 @@ impl SnapshotStore {
                 id: id.as_ref().to_string(),
             })?;
 
-        let manifest_dst = self.project_dir.join("project.tuffbox.json");
+        let manifest_dst = find_project_manifest(&self.project_dir)
+            .unwrap_or_else(|| self.project_dir.join("project.tuffbox.json"));
         copy_file(&snapshot.manifest_path, &manifest_dst)?;
 
         if let Some(lockfile_path) = &snapshot.lockfile_path {
@@ -219,6 +231,31 @@ impl SnapshotStore {
 
         Ok(snapshot)
     }
+}
+
+fn find_project_manifest(project_dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(project_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".tuffbox.json"))
+                .unwrap_or(false)
+        })
+}
+
+fn files_differ(left: &Path, right: &Path) -> std::io::Result<bool> {
+    if !left.exists() || !right.exists() {
+        return Ok(left.exists() != right.exists());
+    }
+    let left_meta = fs::metadata(left)?;
+    let right_meta = fs::metadata(right)?;
+    if left_meta.len() != right_meta.len() {
+        return Ok(true);
+    }
+    Ok(fs::read(left)? != fs::read(right)?)
 }
 
 fn copy_file(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<(), SnapshotError> {
