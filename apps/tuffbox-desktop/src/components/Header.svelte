@@ -12,6 +12,7 @@
     graph: "Dependency Graph",
     diagnostics: "Health Check",
     snapshots: "Snapshot History",
+    configs: "Config Editor",
     settings: "Settings",
   };
 

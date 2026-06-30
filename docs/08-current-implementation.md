@@ -98,6 +98,7 @@ apps/tuffbox-desktop/
 - Асинхронный запуск Minecraft: процесс стартует в фоновом потоке, UI не блокируется.
 - Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
 - Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
+- Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Diagnostics/Snapshots/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
   - `.mrpack` — парсинг `modrinth.index.json`, создание `tuffbox.json` в выбранной папке;
@@ -119,6 +120,7 @@ apps/tuffbox-desktop/
   - `list_mods` — список модов;
   - `search_modrinth_mods` — поиск Modrinth с фильтрами текущих Minecraft/loader;
   - `add_modrinth_mod` / `remove_project_mod` / `update_project_mod` — безопасное управление модами из UI с auto snapshot;
+  - `list_config_files` / `read_config_file` / `write_config_file` — безопасный Config Editor для текстовых конфигов проекта;
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
   - `list_snapshots` / `create_snapshot` — управление snapshots;
@@ -164,9 +166,9 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 
 ## Следующие задачи
 
-1. Добавить в UI просмотр и редактирование конфигов (Config Editor, Stage 8).
-2. Реализовать версионирование/миграции схем manifest и lockfile.
-3. Расширить diff: сравнивать содержимое changed files между snapshots.
+1. Реализовать версионирование/миграции схем manifest и lockfile.
+2. Расширить diff: сравнивать содержимое changed files между snapshots.
+3. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
 4. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
 5. Добавить change plan preview перед add/update/remove модов в UI.
 6. Test Launcher: расширить установку Forge/NeoForge и улучшить захват логов/статуса процесса.

@@ -5,11 +5,12 @@
     GitGraph,
     Stethoscope,
     History,
+    FileCode2,
     Settings,
     Plus,
   } from "lucide-svelte";
 
-  type View = "dashboard" | "mods" | "graph" | "diagnostics" | "snapshots" | "settings";
+  type View = "dashboard" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings";
   export let currentView: View;
 
   const items: { id: View; label: string; icon: any }[] = [
@@ -18,6 +19,7 @@
     { id: "graph", label: "Graph", icon: GitGraph },
     { id: "diagnostics", label: "Health", icon: Stethoscope },
     { id: "snapshots", label: "History", icon: History },
+    { id: "configs", label: "Configs", icon: FileCode2 },
   ];
 </script>
 

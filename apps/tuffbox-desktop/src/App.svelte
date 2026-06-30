@@ -6,6 +6,7 @@
   import Graph from "./components/Graph.svelte";
   import Diagnostics from "./components/Diagnostics.svelte";
   import Snapshots from "./components/Snapshots.svelte";
+  import ConfigEditor from "./components/ConfigEditor.svelte";
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
   import { projectPath, projectInfo } from "./lib/store";
@@ -16,6 +17,7 @@
     | "graph"
     | "diagnostics"
     | "snapshots"
+    | "configs"
     | "settings"
     | "project-settings";
   let currentView: View = "dashboard";
@@ -36,6 +38,8 @@
         <Diagnostics />
       {:else if currentView === "snapshots"}
         <Snapshots />
+      {:else if currentView === "configs"}
+        <ConfigEditor />
       {:else if currentView === "settings"}
         <Settings />
       {:else if currentView === "project-settings"}

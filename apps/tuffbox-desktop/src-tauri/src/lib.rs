@@ -18,6 +18,16 @@ struct ProjectSummary {
     jvm_args: Vec<String>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigFileSummary {
+    path: String,
+    name: String,
+    extension: String,
+    size: u64,
+    modified: Option<u64>,
+}
+
 #[tauri::command]
 fn validate_project(path: String) -> Result<ProjectSummary, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -115,6 +125,44 @@ async fn update_project_mod(path: String, mod_id: String) -> Result<(), String> 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_config_files(path: String) -> Result<Vec<ConfigFileSummary>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut files = Vec::new();
+    for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
+        let dir = project_dir.join(root);
+        if dir.is_dir() {
+            collect_config_files(&project_dir, &dir, &mut files).map_err(|e| e.to_string())?;
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn read_config_file(path: String, relative_path: String) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    let target = safe_project_file(&project_dir, &relative_path)?;
+    let metadata = std::fs::metadata(&target).map_err(|e| e.to_string())?;
+    if metadata.len() > 2 * 1024 * 1024 {
+        return Err("file is too large for the MVP config editor".to_string());
+    }
+    std::fs::read_to_string(target).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn write_config_file(path: String, relative_path: String, content: String) -> Result<(), String> {
+    if content.len() > 2 * 1024 * 1024 {
+        return Err("file is too large for the MVP config editor".to_string());
+    }
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let target = safe_project_file(&project_dir, &relative_path)?;
+    auto_snapshot_with_changed_files(&manifest_path, "edit-config", &[PathBuf::from(&relative_path)])
+        .map_err(|e| e.to_string())?;
+    std::fs::write(target, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -499,6 +547,96 @@ fn create_instance(
     Ok(path.to_string_lossy().to_string())
 }
 
+fn manifest_parent(path: &str) -> Result<PathBuf, String> {
+    PathBuf::from(path)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "manifest has no parent directory".to_string())
+}
+
+fn collect_config_files(
+    project_dir: &Path,
+    dir: &Path,
+    files: &mut Vec<ConfigFileSummary>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            collect_config_files(project_dir, &path, files)?;
+            continue;
+        }
+        if !path.is_file() || !is_editable_config_path(&path) {
+            continue;
+        }
+        let metadata = std::fs::metadata(&path)?;
+        if metadata.len() > 2 * 1024 * 1024 {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(project_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        files.push(ConfigFileSummary {
+            name,
+            extension: path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase(),
+            path: relative,
+            size: metadata.len(),
+            modified,
+        });
+    }
+    Ok(())
+}
+
+fn safe_project_file(project_dir: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    let relative = PathBuf::from(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("invalid project-relative path".to_string());
+    }
+    if !is_editable_config_path(&relative) {
+        return Err("unsupported config file type".to_string());
+    }
+    let target = project_dir.join(relative);
+    let canonical_project = std::fs::canonicalize(project_dir).map_err(|e| e.to_string())?;
+    let canonical_target = std::fs::canonicalize(&target).map_err(|e| e.to_string())?;
+    if !canonical_target.starts_with(&canonical_project) {
+        return Err("file is outside project directory".to_string());
+    }
+    Ok(canonical_target)
+}
+
+fn is_editable_config_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str(),
+        "json" | "json5" | "toml" | "properties" | "cfg" | "conf" | "txt" | "js" | "zs" | "yaml" | "yml"
+    )
+}
+
 fn add_mod_from_modrinth(
     manifest: &mut ProjectManifest,
     mod_id: &str,
@@ -611,6 +749,14 @@ fn parse_side(side: Option<&str>) -> Side {
 }
 
 fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
+    auto_snapshot_with_changed_files(manifest_path, operation, &[])
+}
+
+fn auto_snapshot_with_changed_files(
+    manifest_path: &Path,
+    operation: &str,
+    changed_files: &[PathBuf],
+) -> anyhow::Result<Snapshot> {
     let project_dir = manifest_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display()))?;
@@ -624,7 +770,7 @@ fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapsh
         &reason,
         manifest_path,
         lockfile_path.as_ref(),
-        &[] as &[&PathBuf],
+        changed_files,
     )?)
 }
 
@@ -646,6 +792,9 @@ pub fn run() {
             add_modrinth_mod,
             remove_project_mod,
             update_project_mod,
+            list_config_files,
+            read_config_file,
+            write_config_file,
             get_graph,
             get_diagnostics,
             get_project_dir,
