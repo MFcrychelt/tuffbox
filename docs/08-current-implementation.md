@@ -96,8 +96,9 @@ apps/tuffbox-desktop/
   - сохранение изменений в manifest.
 - Окно лога запуска (Launch Log): открывается при нажатии Play, показывает последние строки `logs/latest.log` и обновляется каждую секунду.
 - Асинхронный запуск Minecraft: процесс стартует в фоновом потоке, UI не блокируется.
-- Mods: таблица с аватарами, версиями, side-тегами, поиском.
-- Graph/Diagnostics/Snapshots/Settings: переоформлены в едином стиле.
+- Mods: таблица с аватарами, версиями, side-тегами, поиском, быстрыми фильтрами по side и действиями Add/Update/Remove через Modrinth. Перед изменением manifest создаётся auto snapshot.
+- Graph: вместо сырого JSON добавлен визуальный обзор графа — runtime/profile/mod-ноды, счетчики, карточка выбранного узла, прямые связи и панель missing dependencies.
+- Diagnostics/Snapshots/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
   - `.mrpack` — парсинг `modrinth.index.json`, создание `tuffbox.json` в выбранной папке;
   - Prism instance `.zip` — парсинг `instance.cfg`, создание `tuffbox.json`;
@@ -108,14 +109,16 @@ apps/tuffbox-desktop/
 - Модальное окно **Add Instance**: имя, выбор версии Minecraft (популярные версии сверху, затем релизы по убыванию), выбор loader (Vanilla/Fabric/Forge/NeoForge/Quilt) и его версии (по умолчанию последняя stable), папка для сохранения.
 - Реальный запуск Minecraft:
   - скачивание client jar, библиотек, natives и assets по манифесту Mojang;
-  - загрузка профиля Fabric/Quilt из мета-API;
-  - формирование classpath и JVM/game аргументов;
+  - загрузка профиля Fabric/Quilt из мета-API, корректный разбор `mainClass`, проверка sha1 loader-библиотек и sequential retry/fallback для нестабильных загрузок с Fabric Maven;
+  - формирование classpath через системный path separator и корректная подстановка `${library_directory}` в JVM arguments;
   - запуск Java-процесса в фоновом потоке (`spawn_and_track`), UI не блокируется;
   - использование выбранной в настройках Java или автоопределение;
   - лог пишется в `logs/latest.log`.
 - Tauri commands:
   - `validate_project` — открыть и валидировать project manifest;
   - `list_mods` — список модов;
+  - `search_modrinth_mods` — поиск Modrinth с фильтрами текущих Minecraft/loader;
+  - `add_modrinth_mod` / `remove_project_mod` / `update_project_mod` — безопасное управление модами из UI с auto snapshot;
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
   - `list_snapshots` / `create_snapshot` — управление snapshots;
@@ -161,9 +164,9 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 
 ## Следующие задачи
 
-1. Добавить в UI управление модами: add/remove/update с Modrinth.
-2. Добавить в UI визуализацию графа зависимостей.
-3. Добавить в UI просмотр и редактирование конфигов (Config Editor, Stage 8).
-4. Реализовать версионирование/миграции схем manifest и lockfile.
-5. Расширить diff: сравнивать содержимое changed files между snapshots.
-6. Test Launcher: скачивание Minecraft libraries/assets, установка Fabric/Forge/NeoForge/Quilt, реальный запуск процесса, захват логов.
+1. Добавить в UI просмотр и редактирование конфигов (Config Editor, Stage 8).
+2. Реализовать версионирование/миграции схем manifest и lockfile.
+3. Расширить diff: сравнивать содержимое changed files между snapshots.
+4. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
+5. Добавить change plan preview перед add/update/remove модов в UI.
+6. Test Launcher: расширить установку Forge/NeoForge и улучшить захват логов/статуса процесса.

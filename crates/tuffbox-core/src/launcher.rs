@@ -137,17 +137,15 @@ impl TestLauncher {
         let game_dir = canonicalize(&options.instance_dir).unwrap_or_else(|_| options.instance_dir.clone());
         let natives_dir = canonicalize(&game.natives_dir).unwrap_or_else(|_| game.natives_dir.clone());
         let version_jar = canonicalize(&game.client_jar).unwrap_or_else(|_| game.client_jar.clone());
+        let library_dir = canonicalize(&launcher_dir.join("libraries"))
+            .unwrap_or_else(|_| launcher_dir.join("libraries"));
         let assets_dir_s = assets_dir.to_string_lossy();
         let game_dir_s = game_dir.to_string_lossy();
         let natives_dir_s = natives_dir.to_string_lossy();
         let version_jar_s = version_jar.to_string_lossy();
+        let library_dir_s = library_dir.to_string_lossy();
 
-        let classpath = game
-            .libraries
-            .iter()
-            .filter_map(|p| canonicalize(p).ok().map(|c| c.to_string_lossy().to_string()))
-            .collect::<Vec<_>>()
-            .join(";");
+        let classpath = classpath_string(&game.libraries);
 
         progress.log(&format!("# Main class: {}", game.main_class));
         progress.log(&format!("# Classpath entries: {}", game.libraries.len()));
@@ -159,7 +157,7 @@ impl TestLauncher {
         for arg in &game.jvm_args {
             let value = arg
                 .replace("${natives_directory}", &natives_dir_s)
-                .replace("${library_directory}", &game_dir_s)
+                .replace("${library_directory}", &library_dir_s)
                 .replace("${launcher_name}", "tuffbox")
                 .replace("${launcher_version}", "0.1.0")
                 .replace("${version_name}", &game.id)
@@ -201,6 +199,24 @@ impl TestLauncher {
 
         Ok((cmd, log_path))
     }
+}
+
+fn classpath_string(paths: &[PathBuf]) -> String {
+    let canonical_paths = paths
+        .iter()
+        .filter_map(|p| canonicalize(p).ok())
+        .collect::<Vec<_>>();
+
+    std::env::join_paths(canonical_paths.iter().map(|p| p.as_os_str()))
+        .map(|joined| joined.to_string_lossy().to_string())
+        .unwrap_or_else(|_| {
+            let separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+            canonical_paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(separator)
+        })
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, LauncherError> {

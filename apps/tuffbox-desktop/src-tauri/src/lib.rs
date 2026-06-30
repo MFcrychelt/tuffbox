@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
-use tuffbox_core::{DependencyGraph, ProjectManifest, Resolver, SnapshotStore, TuffboxLockfile};
+use tuffbox_core::{
+    ContentProvider, DependencyGraph, ModSource, ModSpec, ProjectManifest, ProviderFileInfo,
+    ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind, TuffboxLockfile,
+};
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +59,62 @@ fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
         })
         .collect();
     Ok(mods)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn search_modrinth_mods(
+    path: String,
+    query: String,
+) -> Result<Vec<tuffbox_core::ProjectInfo>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let provider = tuffbox_core::ModrinthProvider::new();
+        provider
+            .search(&ProviderSearchQuery {
+                query: Some(query),
+                minecraft_version: Some(manifest.minecraft.version.clone()),
+                loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+            })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn add_modrinth_mod(path: String, mod_id: String, side: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        auto_snapshot(&PathBuf::from(&path), "add-mod").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
+        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
+    auto_snapshot(&PathBuf::from(&path), "remove-mod").map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let original_len = manifest.mods.len();
+    manifest.mods.retain(|m| m.id != mod_id);
+    if manifest.mods.len() == original_len {
+        return Err(format!("mod {mod_id} not found in project"));
+    }
+    save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn update_project_mod(path: String, mod_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        auto_snapshot(&PathBuf::from(&path), "update-mod").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        update_mod_from_modrinth(&mut manifest, &mod_id).map_err(|e| e.to_string())?;
+        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -440,6 +499,141 @@ fn create_instance(
     Ok(path.to_string_lossy().to_string())
 }
 
+fn add_mod_from_modrinth(
+    manifest: &mut ProjectManifest,
+    mod_id: &str,
+    side: Option<String>,
+) -> anyhow::Result<()> {
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let project = provider.get_project(mod_id)?;
+
+    if manifest
+        .mods
+        .iter()
+        .any(|m| m.id == project.slug || m.source.project_id.as_deref() == Some(project.id.as_str()))
+    {
+        anyhow::bail!("mod {} is already in the project", project.slug);
+    }
+
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+    };
+    let versions = provider.get_versions(mod_id, &query)?;
+    let version = versions
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no compatible version found for {mod_id}"))?;
+
+    let file = ProviderFileInfo::primary_file(&version)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
+
+    let dependencies = provider.resolve_dependencies(&version.id)?;
+    let mod_spec = build_mod_spec(&project, &version, file, dependencies, parse_side(side.as_deref()));
+    manifest.mods.push(mod_spec);
+    Ok(())
+}
+
+fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> anyhow::Result<()> {
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let index = manifest
+        .mods
+        .iter()
+        .position(|m| m.id == mod_id)
+        .ok_or_else(|| anyhow::anyhow!("mod {mod_id} not found in project"))?;
+
+    let project_id = manifest.mods[index]
+        .source
+        .project_id
+        .clone()
+        .unwrap_or_else(|| mod_id.to_string());
+    let project = provider.get_project(&project_id)?;
+
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+    };
+    let versions = provider.get_versions(&project_id, &query)?;
+    let version = versions
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no compatible version found for {project_id}"))?;
+
+    let file = ProviderFileInfo::primary_file(&version)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
+
+    let side = manifest.mods[index].side;
+    let dependencies = provider.resolve_dependencies(&version.id)?;
+    manifest.mods[index] = build_mod_spec(&project, &version, file, dependencies, side);
+    Ok(())
+}
+
+fn build_mod_spec(
+    project: &tuffbox_core::ProjectInfo,
+    version: &tuffbox_core::VersionInfo,
+    file: ProviderFileInfo,
+    dependencies: Vec<tuffbox_core::ModDependencySpec>,
+    side: Side,
+) -> ModSpec {
+    ModSpec {
+        id: project.slug.clone(),
+        name: project.name.clone(),
+        source: ModSource {
+            kind: SourceKind::Modrinth,
+            project_id: Some(project.id.clone()),
+            file_id: Some(version.id.clone()),
+            url: Some(file.url),
+            path: None,
+        },
+        version: version.version_number.clone(),
+        file_name: Some(file.filename),
+        hashes: Some(tuffbox_core::FileHashes {
+            sha1: file.hashes.sha1,
+            sha512: file.hashes.sha512,
+        }),
+        side,
+        dependencies,
+        status: vec!["ok".to_string()],
+    }
+}
+
+fn parse_side(side: Option<&str>) -> Side {
+    match side {
+        Some("client") => Side::Client,
+        Some("server") => Side::Server,
+        Some("both") => Side::Both,
+        _ => Side::Both,
+    }
+}
+
+fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display()))?;
+    let lockfile_path = manifest_path.with_extension("lock.json");
+    let lockfile_path = if lockfile_path.exists() { Some(lockfile_path) } else { None };
+    let store = SnapshotStore::new(project_dir);
+    let name = format!("auto-before-{operation}");
+    let reason = format!("Auto snapshot before {operation}");
+    Ok(store.create(
+        &name,
+        &reason,
+        manifest_path,
+        lockfile_path.as_ref(),
+        &[] as &[&PathBuf],
+    )?)
+}
+
+fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> {
+    let json = serde_json::to_string_pretty(manifest)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -448,6 +642,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             validate_project,
             list_mods,
+            search_modrinth_mods,
+            add_modrinth_mod,
+            remove_project_mod,
+            update_project_mod,
             get_graph,
             get_diagnostics,
             get_project_dir,

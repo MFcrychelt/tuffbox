@@ -88,12 +88,24 @@ impl ContentProvider for ModrinthProvider {
         version_id: &str,
     ) -> Result<Vec<ModDependencySpec>, ProviderError> {
         let version: ModrinthVersion = self.get_json(&format!("/version/{version_id}"))?;
-        Ok(version
+        let mut dependencies: Vec<ModDependencySpec> = version
             .dependencies
             .into_iter()
             .map(ProviderDependency::from)
             .filter_map(provider_dependency_to_spec)
-            .collect())
+            .collect();
+
+        // Modrinth dependency payloads use immutable project IDs, while TuffBox
+        // mod nodes use stable human-readable slugs (`mod:sodium`, `mod:fabric-api`).
+        // Normalizing here keeps missing-dependency diagnostics consistent across
+        // CLI, desktop UI and imported manifests.
+        for dependency in &mut dependencies {
+            if let Ok(project) = self.get_project(&dependency.target) {
+                dependency.target = project.slug;
+            }
+        }
+
+        Ok(dependencies)
     }
 }
 

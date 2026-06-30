@@ -340,27 +340,30 @@ fn merge_fabric_profile(
         vanilla.main_class = fabric.main_class;
     }
 
-    let mut lib_tasks: Vec<(String, PathBuf)> = Vec::new();
+    let mut lib_tasks: Vec<DownloadTask> = Vec::new();
     for lib in &fabric.libraries {
-        // Replace ${modrinth.gameVersion} placeholder with actual MC version
+        // Replace ${modrinth.gameVersion} placeholder with actual MC version.
         let name = lib.name.replace("${modrinth.gameVersion}", mc_version);
-        let parts: Vec<&str> = name.split(':').collect();
-        if parts.len() < 3 {
+        let Some((group_path, artifact, version, classifier)) = parse_maven_name(&name) else {
+            progress.log(&format!("# Skipping unsupported loader library coordinate: {name}"));
             continue;
-        }
-        let group_path = parts[0].replace('.', "/");
-        let artifact = parts[1];
-        let version = parts[2];
-        let jar = format!("{}-{}.jar", artifact, version);
+        };
+        let jar = match classifier {
+            Some(classifier) => format!("{artifact}-{version}-{classifier}.jar"),
+            None => format!("{artifact}-{version}.jar"),
+        };
         let path = libraries_dir
             .join(&group_path)
-            .join(artifact)
-            .join(version)
+            .join(&artifact)
+            .join(&version)
             .join(&jar);
-        if !path.exists() {
-            let base = lib.url.trim_end_matches('/');
-            let url = format!("{base}/{}/{}/{}/{}", group_path, artifact, version, jar);
-            lib_tasks.push((url, path.clone()));
+        if !path.exists() || lib.sha1.is_some() {
+            let urls = fabric_library_urls(&lib.url, &group_path, &artifact, &version, &jar);
+            lib_tasks.push(DownloadTask {
+                urls,
+                path: path.clone(),
+                sha1: lib.sha1.clone(),
+            });
         }
         vanilla.libraries.push(path);
     }
@@ -368,31 +371,7 @@ fn merge_fabric_profile(
     if lib_tasks.is_empty() {
         progress.log("# All loader libraries already present.");
     } else {
-            let total = lib_tasks.len();
-        progress.log(&format!("# Downloading {total} loader libraries in parallel..."));
-        let counter = AtomicUsize::new(0);
-        let errs: Vec<String> = lib_tasks
-            .into_par_iter()
-            .filter_map(|(url, path)| {
-                if let Err(e) = fs::create_dir_all(path.parent().unwrap()) {
-                    return Some(format!("{url}: {e}"));
-                }
-                if let Err(e) = download_with_sha1(&url, &path, None) {
-                    return Some(format!("{url}: {e}"));
-                }
-                let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                if n % 5 == 0 || n == total {
-                    progress.log(&format!("# Loader libs: {n}/{total}..."));
-                }
-                None
-            })
-            .collect();
-        if !errs.is_empty() {
-            return Err(InstallError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                errs.join("\n"),
-            )));
-        }
+        download_tasks_with_sequential_retry("loader library", lib_tasks, progress, 5)?;
         progress.log("# Loader library download complete.");
     }
 
@@ -451,6 +430,120 @@ fn install_assets_index(index: &AssetIndex, assets_dir: &Path, progress: &Instal
     }
     progress.log("# Asset download complete.");
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct DownloadTask {
+    urls: Vec<String>,
+    path: PathBuf,
+    sha1: Option<String>,
+}
+
+fn download_tasks_with_sequential_retry(
+    label: &str,
+    tasks: Vec<DownloadTask>,
+    progress: &InstallProgress,
+    log_every: usize,
+) -> Result<(), InstallError> {
+    let total = tasks.len();
+    progress.log(&format!("# Downloading {total} {label}s in parallel..."));
+    let counter = AtomicUsize::new(0);
+
+    let failed: Vec<(DownloadTask, String)> = tasks
+        .into_par_iter()
+        .filter_map(|task| {
+            if let Some(parent) = task.path.parent() {
+                if let Err(e) = fs::create_dir_all(parent) {
+                    return Some((task, e.to_string()));
+                }
+            }
+            match download_task(&task) {
+                Ok(()) => {
+                    let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n % log_every == 0 || n == total {
+                        progress.log(&format!("# {label}s: {n}/{total}..."));
+                    }
+                    None
+                }
+                Err(e) => Some((task, e.to_string())),
+            }
+        })
+        .collect();
+
+    if failed.is_empty() {
+        return Ok(());
+    }
+
+    progress.log(&format!(
+        "# {} {label}(s) failed in parallel; retrying sequentially with fallback URLs...",
+        failed.len()
+    ));
+
+    let mut errors = Vec::new();
+    for (task, first_error) in failed {
+        match download_task(&task) {
+            Ok(()) => {
+                let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                progress.log(&format!("# {label}s: {n}/{total}..."));
+            }
+            Err(e) => {
+                let urls = task.urls.join(", ");
+                errors.push(format!("{urls}: first error: {first_error}; retry error: {e}"));
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(InstallError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            errors.join("\n"),
+        )))
+    }
+}
+
+fn download_task(task: &DownloadTask) -> Result<(), InstallError> {
+    let mut last_error = None;
+    for url in &task.urls {
+        match download_with_sha1(url, &task.path, task.sha1.as_deref()) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_error = Some(e),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        InstallError::MissingDownload(format!("no URL for {}", task.path.display()))
+    }))
+}
+
+fn fabric_library_urls(base_url: &str, group_path: &str, artifact: &str, version: &str, jar: &str) -> Vec<String> {
+    let base = base_url.trim_end_matches('/');
+    let primary = format!("{base}/{group_path}/{artifact}/{version}/{jar}");
+    let mut urls = vec![primary.clone()];
+
+    // Fabric's canonical host is maven.fabricmc.net, but some networks/proxies
+    // intermittently fail parallel TLS connections to it. maven2.fabricmc.net is
+    // an official alias/CDN endpoint for the same artifacts, so keep it as a
+    // deterministic fallback before surfacing the error to the UI log.
+    if base == "https://maven.fabricmc.net" || base == "http://maven.fabricmc.net" {
+        urls.push(format!(
+            "https://maven2.fabricmc.net/{group_path}/{artifact}/{version}/{jar}"
+        ));
+    }
+    urls
+}
+
+fn parse_maven_name(name: &str) -> Option<(String, String, String, Option<String>)> {
+    let parts: Vec<&str> = name.split(':').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    Some((
+        parts[0].replace('.', "/"),
+        parts[1].to_string(),
+        parts[2].to_string(),
+        parts.get(3).map(|s| s.to_string()),
+    ))
 }
 
 pub(crate) fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -> Result<(), InstallError> {
@@ -744,6 +837,7 @@ struct LoggingFile {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FabricProfileJson {
     #[serde(default)]
     libraries: Vec<FabricLibrary>,
@@ -755,5 +849,12 @@ struct FabricProfileJson {
 #[derive(Debug, Deserialize)]
 struct FabricLibrary {
     name: String,
+    #[serde(default = "default_fabric_maven_url")]
     url: String,
+    #[serde(default)]
+    sha1: Option<String>,
+}
+
+fn default_fabric_maven_url() -> String {
+    "https://maven.fabricmc.net/".to_string()
 }
