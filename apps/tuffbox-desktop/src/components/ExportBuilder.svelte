@@ -14,10 +14,12 @@
   let exporting = false;
   let result: ExportResult | null = null;
   let error: string | null = null;
+  let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
 
   async function refreshDefaultPath() {
     if (!$projectPath) return;
     projectDir = await invoke("get_project_dir", { path: $projectPath });
+    issues = await invoke("validate_modrinth_export", { path: $projectPath });
     const id = $projectInfo?.id ?? "modpack";
     const version = $projectInfo?.version ?? "1.0.0";
     targetPath = `${projectDir}/${id}-${version}.mrpack`;
@@ -80,7 +82,19 @@
         <div><strong>Overrides</strong><span>config/defaultconfigs/kubejs/scripts/resourcepacks/shaderpacks are embedded.</span></div>
       </div>
 
-      <button class="export" on:click={exportMrpack} disabled={exporting}>
+      {#if issues.length > 0}
+        <div class="issues">
+          {#each issues as issue}
+            <div class="issue {issue.severity}">
+              <strong>{issue.code}</strong>
+              <span>{issue.message}</span>
+              {#if issue.target}<code>{issue.target}</code>{/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
         <UploadCloud size={16} />
         {exporting ? "Exporting..." : "Export .mrpack"}
       </button>
@@ -105,6 +119,12 @@
   input { width: 100%; }
   .checks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
   .checks div { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 14px; padding: 14px; display: grid; gap: 4px; }
+  .issues { display: grid; gap: 8px; }
+  .issue { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
+  .issue.error { border-color: rgba(239, 68, 68, 0.3); }
+  .issue span { color: var(--text-muted); }
+  code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
   .export { justify-self: start; }
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
   @media (max-width: 900px) { .checks { grid-template-columns: 1fr; } }

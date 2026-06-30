@@ -47,6 +47,13 @@ struct ProfileSummary {
     jvm_args: Vec<String>,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseSnapshotResult {
+    snapshot: tuffbox_core::Snapshot,
+    changelog_path: String,
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_project_schema_status(path: String) -> Result<SchemaStatus, String> {
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -313,6 +320,87 @@ fn diff_snapshots(project_dir: String, from: String, to: String) -> Result<tuffb
 fn rollback_snapshot(project_dir: String, id: String) -> Result<tuffbox_core::Snapshot, String> {
     let store = SnapshotStore::new(&project_dir);
     store.rollback(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn validate_modrinth_export(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    Ok(tuffbox_core::validate_modrinth_export(&manifest))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn generate_release_changelog(path: String) -> Result<String, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let graph = DependencyGraph::from_manifest(&manifest);
+    let diagnostics = Resolver::analyze_project(&manifest, &graph);
+    let project_dir = manifest_parent(&path)?;
+    let snapshots = SnapshotStore::new(&project_dir).list().unwrap_or_default();
+    let mut out = String::new();
+    out.push_str(&format!("# {} {}\n\n", manifest.project.name, manifest.project.version));
+    if let Some(description) = &manifest.project.description {
+        out.push_str(description);
+        out.push_str("\n\n");
+    }
+    if let Some(brief) = &manifest.brief {
+        if !brief.goal.trim().is_empty() {
+            out.push_str(&format!("## Goal\n\n{}\n\n", brief.goal.trim()));
+        }
+    }
+    out.push_str("## Platform\n\n");
+    out.push_str(&format!("- Minecraft: {}\n", manifest.minecraft.version));
+    out.push_str(&format!("- Loader: {:?} {}\n", manifest.loader.kind, manifest.loader.version));
+    out.push_str(&format!("- Mods: {}\n\n", manifest.mods.len()));
+    out.push_str("## Included mods\n\n");
+    for module in &manifest.mods {
+        out.push_str(&format!("- {} `{}` ({:?})\n", module.name, module.version, module.side));
+    }
+    out.push_str("\n## Diagnostics\n\n");
+    if diagnostics.is_empty() {
+        out.push_str("- No current diagnostics.\n");
+    } else {
+        for diagnostic in diagnostics {
+            out.push_str(&format!("- {:?}: {} — {}\n", diagnostic.severity, diagnostic.code, diagnostic.message));
+        }
+    }
+    out.push_str("\n## Recent snapshots\n\n");
+    for snapshot in snapshots.iter().rev().take(5) {
+        out.push_str(&format!("- {} — {} ({})\n", snapshot.created_at, snapshot.name, snapshot.reason));
+    }
+    Ok(out)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn update_project_version(path: String, version: String) -> Result<ProjectSummary, String> {
+    if version.trim().is_empty() {
+        return Err("version cannot be empty".to_string());
+    }
+    let manifest_path = PathBuf::from(&path);
+    auto_snapshot(&manifest_path, "version-bump").map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    manifest.project.version = version;
+    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+    validate_project(path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn create_release_snapshot(path: String, changelog: String) -> Result<ReleaseSnapshotResult, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let changelog_dir = project_dir.join("releases");
+    std::fs::create_dir_all(&changelog_dir).map_err(|e| e.to_string())?;
+    let changelog_path = changelog_dir.join(format!("{}-CHANGELOG.md", manifest.project.version));
+    std::fs::write(&changelog_path, changelog).map_err(|e| e.to_string())?;
+    let snapshot = auto_snapshot_with_changed_files(
+        &manifest_path,
+        "release",
+        &[PathBuf::from("releases").join(format!("{}-CHANGELOG.md", manifest.project.version))],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(ReleaseSnapshotResult {
+        snapshot,
+        changelog_path: changelog_path.to_string_lossy().to_string(),
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -937,6 +1025,10 @@ pub fn run() {
             create_snapshot,
             diff_snapshots,
             rollback_snapshot,
+            validate_modrinth_export,
+            generate_release_changelog,
+            update_project_version,
+            create_release_snapshot,
             export_modrinth_pack,
             generate_lockfile,
             launch_profile,

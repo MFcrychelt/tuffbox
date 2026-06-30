@@ -29,6 +29,22 @@ pub struct ExportResult {
     pub override_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportIssue {
+    pub severity: ExportIssueSeverity,
+    pub code: String,
+    pub message: String,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportIssueSeverity {
+    Error,
+    Warning,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModrinthIndex {
@@ -56,6 +72,76 @@ struct ModrinthHashes {
     sha1: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sha512: Option<String>,
+}
+
+pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> {
+    let mut issues = Vec::new();
+    if manifest.minecraft.version.trim().is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Error,
+            "MISSING_MINECRAFT_VERSION",
+            "Minecraft version is required for .mrpack export.",
+            None,
+        ));
+    }
+    if !matches!(manifest.loader.kind, LoaderKind::Vanilla) && manifest.loader.version.trim().is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Error,
+            "MISSING_LOADER_VERSION",
+            "Loader version is required for .mrpack export.",
+            None,
+        ));
+    }
+    if manifest.mods.is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Warning,
+            "NO_MODS",
+            "The project has no mods; export will contain only overrides and dependencies.",
+            None,
+        ));
+    }
+    for module in &manifest.mods {
+        if module.source.url.as_deref().unwrap_or_default().is_empty() {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "MOD_WITHOUT_DOWNLOAD_URL",
+                "This mod cannot be represented as a remote Modrinth pack download and will be skipped by the MVP .mrpack exporter.",
+                Some(module.id.clone()),
+            ));
+        }
+        let hashes = module.hashes.as_ref();
+        if hashes.and_then(|h| h.sha1.as_ref()).is_none() && hashes.and_then(|h| h.sha512.as_ref()).is_none() {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "MOD_WITHOUT_HASH",
+                "This mod has no hash metadata; Modrinth clients may not verify it correctly.",
+                Some(module.id.clone()),
+            ));
+        }
+        if module.side == Side::Unknown {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "UNKNOWN_MOD_SIDE",
+                "Mod side is unknown; verify client/server compatibility before release.",
+                Some(module.id.clone()),
+            ));
+        }
+    }
+    issues
+}
+
+fn issue(
+    severity: ExportIssueSeverity,
+    code: &str,
+    message: &str,
+    target: Option<String>,
+) -> ExportIssue {
+    ExportIssue {
+        severity,
+        code: code.to_string(),
+        message: message.to_string(),
+        target,
+    }
 }
 
 pub fn export_modrinth_pack(

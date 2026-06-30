@@ -24,6 +24,7 @@
   import Snapshots from "./Snapshots.svelte";
   import TestRuns from "./TestRuns.svelte";
   import ExportBuilder from "./ExportBuilder.svelte";
+  import ReleaseRoom from "./ReleaseRoom.svelte";
 
   type StageId =
     | "brief"
@@ -300,15 +301,7 @@
       {:else if activeStage === "export"}
         <ExportBuilder />
       {:else if activeStage === "release"}
-        <div class="skeleton-page">
-          <h2>Release room</h2>
-          <p>Planned page for release snapshot, changelog review, Modrinth draft publishing and hotfix tracking.</p>
-          <div class="cards">
-            <div><strong>Release snapshot</strong><span>Freeze exact manifest/lockfile state.</span></div>
-            <div><strong>Changelog</strong><span>Summarize dependency/config changes since previous release.</span></div>
-            <div><strong>Post-release support</strong><span>Collect crash reports and plan hotfixes.</span></div>
-          </div>
-        </div>
+        <ReleaseRoom />
       {/if}
     </div>
   </section>
@@ -356,8 +349,7 @@
 
   .ide-hero p,
   .project-context span,
-  .skeleton-page p,
-  .cards span {
+  .skeleton-page p {
     color: var(--text-muted);
   }
 
@@ -499,16 +491,14 @@
     border-color: rgba(27, 217, 106, 0.25);
   }
 
-  .brief-grid,
-  .cards {
+  .brief-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 14px;
     margin-top: 18px;
   }
 
-  label,
-  .cards div {
+  label {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -525,13 +515,6 @@
     color: var(--text-primary);
     padding: 12px;
     font-family: inherit;
-  }
-
-  .cards div {
-    padding: 16px;
-    border-radius: var(--border-radius-lg);
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
   }
 
   @media (max-width: 1100px) {

@@ -265,10 +265,11 @@ Brief | Setup | Content | Resolve | Tune | Test | Diagnose | Snapshots | Export 
 - Test → запуск выбранного profile и tail `latest.log`;
 - Diagnose → Diagnostics;
 - Snapshots → Snapshots;
-- Export → базовый `.mrpack` builder.
+- Export → базовый `.mrpack` builder;
+- Release → version bump, export validation, generated changelog and release snapshot.
 
 Skeleton pages:
 
-- Release.
+- больше нет полностью пустых workflow pages; публикация в Modrinth/GitHub пока будущий этап.
 
-Следующая задача — постепенно заменить skeleton pages на реальные сервисы и связать все этапы через единую модель project state / graph / change plan.
+Следующая задача — углублять реальные сервисы: inline diff, server pack builder, Modrinth draft publishing, crash parser и change plan preview.
