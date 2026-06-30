@@ -101,7 +101,7 @@ apps/tuffbox-desktop/
 - IDE Workflow: добавлен DaVinci Resolve-like production flow: Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release. Brief сохраняется в manifest, Test запускает реальные profiles и показывает `latest.log`, Export собирает базовый `.mrpack` и server pack, Release делает version bump, validation, changelog и release snapshot.
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
-- Snapshots: UI получил rollback и compare panel; diff теперь сравнивает содержимое tracked changed files, а не только списки путей.
+- Snapshots: UI получил rollback, compare panel и inline text diff для tracked changed files; diff теперь сравнивает содержимое файлов, а не только списки путей.
 - Diagnostics/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
   - `.mrpack` — парсинг `modrinth.index.json`, создание `tuffbox.json` в выбранной папке;
@@ -130,7 +130,7 @@ apps/tuffbox-desktop/
   - `get_project_schema_status` / `migrate_project_schema` — проверка и миграция schemaVersion manifest с auto snapshot;
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
-  - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `rollback_snapshot` — управление snapshots, rollback и сравнение tracked changed files;
+  - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `get_snapshot_file_diff` / `rollback_snapshot` — управление snapshots, rollback и inline сравнение tracked changed files;
   - `validate_modrinth_export` / `generate_release_changelog` / `update_project_version` / `create_release_snapshot` — release workflow;
   - `export_modrinth_pack` — базовый экспорт `.mrpack` с remote mod downloads и overrides;
   - `export_server_pack` — базовый server pack zip: server-safe mods, configs/scripts, download manifest, README и start scripts;
@@ -177,7 +177,7 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 ## Следующие задачи
 
 1. Подключить schema status/migration controls в Project Settings UI и расширить миграции под будущие версии.
-2. Улучшить Snapshot diff: показывать inline text diff для небольших файлов и manifest/lockfile.
+2. Расширить Snapshot diff на manifest/lockfile и добавить side-by-side режим.
 3. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
 4. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
 5. Добавить change plan preview перед add/update/remove модов в UI.

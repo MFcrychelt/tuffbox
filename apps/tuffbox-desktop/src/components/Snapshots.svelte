@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare } from "lucide-svelte";
+  import { History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
   type Snapshot = {
@@ -17,6 +17,13 @@
     modifiedFiles: string[];
   };
 
+  type FileDiff = {
+    path: string;
+    fromExists: boolean;
+    toExists: boolean;
+    text: string;
+  };
+
   let snapshots: Snapshot[] = [];
   let loading = false;
   let newName = "";
@@ -27,6 +34,9 @@
   let fromId = "";
   let toId = "";
   let diff: SnapshotDiff | null = null;
+  let selectedDiffPath = "";
+  let fileDiff: FileDiff | null = null;
+  let diffLoading = false;
 
   async function ensureProjectDir() {
     if (!$projectPath) return null;
@@ -104,15 +114,50 @@
     if (!$projectPath || !fromId || !toId || fromId === toId) return;
     error = null;
     message = null;
+    fileDiff = null;
+    selectedDiffPath = "";
     try {
       const dir = await ensureProjectDir();
       if (!dir) return;
-      diff = await invoke("diff_snapshots", { projectDir: dir, from: fromId, to: toId });
+      const nextDiff: SnapshotDiff = await invoke("diff_snapshots", { projectDir: dir, from: fromId, to: toId });
+      diff = nextDiff;
+      const files = Array.from(new Set([...nextDiff.addedFiles, ...nextDiff.removedFiles, ...nextDiff.modifiedFiles])).sort();
+      selectedDiffPath = files[0] ?? "";
+      if (selectedDiffPath) await openFileDiff(selectedDiffPath);
     } catch (e) {
       error = String(e);
     }
   }
 
+  async function openFileDiff(path: string) {
+    const dir = await ensureProjectDir();
+    if (!dir || !fromId || !toId) return;
+    selectedDiffPath = path;
+    diffLoading = true;
+    error = null;
+    try {
+      fileDiff = await invoke("get_snapshot_file_diff", {
+        projectDir: dir,
+        from: fromId,
+        to: toId,
+        relativePath: path,
+      });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      diffLoading = false;
+    }
+  }
+
+  function lineClass(line: string) {
+    if (line.startsWith("+ ")) return "added";
+    if (line.startsWith("- ")) return "removed";
+    return "context";
+  }
+
+  $: allDiffFiles = diff
+    ? Array.from(new Set([...diff.addedFiles, ...diff.removedFiles, ...diff.modifiedFiles])).sort()
+    : [];
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
 </script>
 
@@ -160,10 +205,40 @@
           <div><strong>{diff.addedFiles.length}</strong><span>Added</span></div>
           <div><strong>{diff.removedFiles.length}</strong><span>Removed</span></div>
           <div><strong>{diff.modifiedFiles.length}</strong><span>Modified by content</span></div>
-          {#if diff.addedFiles.length || diff.removedFiles.length || diff.modifiedFiles.length}
-            <pre>{JSON.stringify(diff, null, 2)}</pre>
-          {/if}
         </div>
+
+        {#if allDiffFiles.length > 0}
+          <div class="inline-diff-shell">
+            <aside class="diff-files">
+              <h3><FileText size={14} /> Changed files</h3>
+              {#each allDiffFiles as path}
+                <button class:selected={selectedDiffPath === path} on:click={() => openFileDiff(path)}>
+                  <span>{path}</span>
+                  {#if diff.addedFiles.includes(path)}<small class="added-label">added</small>{/if}
+                  {#if diff.removedFiles.includes(path)}<small class="removed-label">removed</small>{/if}
+                  {#if diff.modifiedFiles.includes(path)}<small>modified</small>{/if}
+                </button>
+              {/each}
+            </aside>
+            <section class="inline-diff">
+              {#if diffLoading}
+                <div class="muted">Loading file diff...</div>
+              {:else if fileDiff}
+                <div class="inline-diff-header">
+                  <strong>{fileDiff.path}</strong>
+                  <span>{fileDiff.fromExists ? "from exists" : "from missing"} → {fileDiff.toExists ? "to exists" : "to missing"}</span>
+                </div>
+                <pre>
+{#each fileDiff.text.split("\n") as line}
+<span class={lineClass(line)}>{line}</span>
+{/each}
+                </pre>
+              {:else}
+                <div class="muted">Select a file to view inline diff.</div>
+              {/if}
+            </section>
+          </div>
+        {/if}
       {/if}
     {/if}
 
@@ -193,23 +268,38 @@
 </div>
 
 <style>
-  .snapshots { max-width: 1200px; }
+  .snapshots { max-width: 1280px; }
   .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
-  .title, .actions, .date, .compare-title { display: flex; align-items: center; gap: 10px; }
+  .title, .actions, .date, .compare-title, .diff-files h3 { display: flex; align-items: center; gap: 10px; }
   .title { color: var(--text-secondary); font-weight: 600; }
   .actions { gap: 10px; }
   .actions input { min-width: 180px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
-  .compare-panel, .diff-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; margin-bottom: 16px; }
+  .compare-panel, .diff-panel, .inline-diff-shell { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; margin-bottom: 16px; }
   .compare-panel { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 10px; align-items: center; }
   .compare-title { color: var(--text-secondary); font-weight: 700; }
   .diff-panel { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 12px; }
   .diff-panel div { background: var(--bg-tertiary); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
   .diff-panel strong { font-size: 24px; color: var(--text-primary); }
-  .diff-panel span, .changed { color: var(--text-muted); font-size: 12px; }
-  pre { grid-column: 1 / -1; overflow: auto; background: #0d0d10; border-radius: 12px; padding: 12px; color: var(--text-secondary); font-size: 12px; }
+  .diff-panel span, .changed, .muted { color: var(--text-muted); font-size: 12px; }
+  .inline-diff-shell { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 14px; }
+  .diff-files { border-right: 1px solid var(--border-color); padding-right: 14px; }
+  .diff-files h3 { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 10px; }
+  .diff-files button { width: 100%; justify-content: space-between; text-align: left; background: transparent; color: var(--text-secondary); border: 1px solid transparent; padding: 9px 10px; margin-bottom: 5px; transform: none; }
+  .diff-files button:hover, .diff-files button.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
+  .diff-files small { color: var(--text-muted); }
+  .added-label { color: var(--accent-primary) !important; }
+  .removed-label { color: #fca5a5 !important; }
+  .inline-diff { min-width: 0; }
+  .inline-diff-header { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 10px; color: var(--text-secondary); }
+  .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
+  pre { overflow: auto; max-height: 620px; background: #0d0d10; border-radius: 12px; padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
+  pre span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  pre span.added { color: #86efac; background: rgba(27, 217, 106, 0.08); }
+  pre span.removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
+  pre span.context { color: #a1a1aa; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
   .card { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 20px; display: flex; flex-direction: column; gap: 12px; transition: transform 0.15s ease; }
   .card:hover { transform: translateY(-2px); }
@@ -223,5 +313,5 @@
   .empty, .loading { color: var(--text-muted); padding: 80px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 900px) { .compare-panel { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { .compare-panel, .inline-diff-shell { grid-template-columns: 1fr; } .diff-files { border-right: 0; padding-right: 0; } }
 </style>

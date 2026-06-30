@@ -54,6 +54,15 @@ struct ReleaseSnapshotResult {
     changelog_path: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotFileDiff {
+    path: String,
+    from_exists: bool,
+    to_exists: bool,
+    text: String,
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_project_schema_status(path: String) -> Result<SchemaStatus, String> {
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -320,6 +329,29 @@ fn diff_snapshots(project_dir: String, from: String, to: String) -> Result<tuffb
 fn rollback_snapshot(project_dir: String, id: String) -> Result<tuffbox_core::Snapshot, String> {
     let store = SnapshotStore::new(&project_dir);
     store.rollback(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_snapshot_file_diff(
+    project_dir: String,
+    from: String,
+    to: String,
+    relative_path: String,
+) -> Result<SnapshotFileDiff, String> {
+    let relative = validate_relative_snapshot_path(&relative_path)?;
+    let base = PathBuf::from(project_dir).join(".tuffbox").join("snapshots");
+    let from_path = base.join(&from).join("changed_files").join(&relative);
+    let to_path = base.join(&to).join("changed_files").join(&relative);
+    let from_exists = from_path.is_file();
+    let to_exists = to_path.is_file();
+    let from_text = read_small_text_file(&from_path)?;
+    let to_text = read_small_text_file(&to_path)?;
+    Ok(SnapshotFileDiff {
+        path: relative_path,
+        from_exists,
+        to_exists,
+        text: unified_text_diff(&from_text, &to_text),
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -865,8 +897,88 @@ fn is_editable_config_path(path: &Path) -> bool {
             .unwrap_or("")
             .to_lowercase()
             .as_str(),
-        "json" | "json5" | "toml" | "properties" | "cfg" | "conf" | "txt" | "js" | "zs" | "yaml" | "yml"
+        "json" | "json5" | "toml" | "properties" | "cfg" | "conf" | "txt" | "js" | "zs" | "yaml" | "yml" | "md"
     )
+}
+
+fn validate_relative_snapshot_path(relative_path: &str) -> Result<PathBuf, String> {
+    let relative = PathBuf::from(relative_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("invalid snapshot-relative path".to_string());
+    }
+    Ok(relative)
+}
+
+fn read_small_text_file(path: &Path) -> Result<String, String> {
+    if !path.is_file() {
+        return Ok(String::new());
+    }
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if metadata.len() > 512 * 1024 {
+        return Ok(format!(
+            "# File is too large for inline diff: {} bytes\n",
+            metadata.len()
+        ));
+    }
+    std::fs::read_to_string(path).map_err(|_| "# Binary or non-UTF8 file; inline diff unavailable.\n".to_string())
+}
+
+fn unified_text_diff(before: &str, after: &str) -> String {
+    if before == after {
+        return "No content changes.".to_string();
+    }
+    let before_lines: Vec<&str> = before.lines().collect();
+    let after_lines: Vec<&str> = after.lines().collect();
+    let mut table = vec![vec![0usize; after_lines.len() + 1]; before_lines.len() + 1];
+    for i in (0..before_lines.len()).rev() {
+        for j in (0..after_lines.len()).rev() {
+            table[i][j] = if before_lines[i] == after_lines[j] {
+                table[i + 1][j + 1] + 1
+            } else {
+                table[i + 1][j].max(table[i][j + 1])
+            };
+        }
+    }
+
+    let mut out = String::new();
+    let mut i = 0;
+    let mut j = 0;
+    while i < before_lines.len() && j < after_lines.len() {
+        if before_lines[i] == after_lines[j] {
+            out.push_str("  ");
+            out.push_str(before_lines[i]);
+            out.push('\n');
+            i += 1;
+            j += 1;
+        } else if table[i + 1][j] >= table[i][j + 1] {
+            out.push_str("- ");
+            out.push_str(before_lines[i]);
+            out.push('\n');
+            i += 1;
+        } else {
+            out.push_str("+ ");
+            out.push_str(after_lines[j]);
+            out.push('\n');
+            j += 1;
+        }
+    }
+    while i < before_lines.len() {
+        out.push_str("- ");
+        out.push_str(before_lines[i]);
+        out.push('\n');
+        i += 1;
+    }
+    while j < after_lines.len() {
+        out.push_str("+ ");
+        out.push_str(after_lines[j]);
+        out.push('\n');
+        j += 1;
+    }
+    out
 }
 
 fn add_mod_from_modrinth(
@@ -1039,6 +1151,7 @@ pub fn run() {
             create_snapshot,
             diff_snapshots,
             rollback_snapshot,
+            get_snapshot_file_diff,
             validate_modrinth_export,
             generate_release_changelog,
             update_project_version,

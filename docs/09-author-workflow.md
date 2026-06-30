@@ -264,7 +264,7 @@ Brief | Setup | Content | Resolve | Tune | Test | Diagnose | Snapshots | Export 
 - Tune → ConfigEditor;
 - Test → запуск выбранного profile и tail `latest.log`;
 - Diagnose → Diagnostics;
-- Snapshots → Snapshots;
+- Snapshots → Snapshots with compare, rollback and inline tracked-file diff;
 - Export → базовый `.mrpack` и server pack builder;
 - Release → version bump, export validation, generated changelog and release snapshot.
 
