@@ -161,8 +161,9 @@ fn main() -> anyhow::Result<()> {
                 save_manifest(&manifest_path, &manifest)?;
                 if let Some(removed) = removed {
                     if let Some(file_name) = removed.file_name {
-                        if let Some(mods_dir) = tuffbox_core::mods_dir_for_manifest(&manifest_path) {
-                            let _ = std::fs::remove_file(mods_dir.join(file_name));
+                        if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+                            let content_dir = tuffbox_core::content_dir_for(&instance_dir, removed.content_type);
+                            let _ = std::fs::remove_file(content_dir.join(file_name));
                         }
                     }
                 }
@@ -292,7 +293,11 @@ fn main() -> anyhow::Result<()> {
                 .find(|p| p.id == profile_id)
                 .with_context(|| format!("profile {profile_id} not found"))?;
 
-            let java = tuffbox_core::TestLauncher::find_java()?;
+            let java = if let Some(java_path) = manifest.java.as_ref().and_then(|j| j.path.clone()) {
+                tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path))?
+            } else {
+                tuffbox_core::TestLauncher::find_java_for_minecraft(&manifest.minecraft.version)?
+            };
             let game_dir = manifest_path
                 .parent()
                 .map(|p| p.to_path_buf())
@@ -310,7 +315,7 @@ fn main() -> anyhow::Result<()> {
             // Same safety net as the desktop launcher: verify every
             // manifest-declared mod actually has its jar on disk before we
             // launch, so `tuffbox launch` never silently starts vanilla.
-            let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &game_dir.join("mods"));
+            let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &game_dir);
             if !sync_report.downloaded.is_empty() {
                 println!("Downloaded {} missing mod file(s).", sync_report.downloaded.len());
             }
@@ -451,6 +456,7 @@ fn build_mod_spec(
         side,
         dependencies,
         status: vec!["ok".to_string()],
+        content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(&project.project_type),
     }
 }
 
@@ -491,14 +497,15 @@ fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Downloads every manifest-declared mod that isn't already present with a
-/// matching hash into the project's `mods/` folder. Best-effort: failures
-/// are printed but don't abort the CLI command, since the manifest write
-/// already succeeded and diagnostics/graph will still flag missing files.
+/// Downloads every manifest-declared entry that isn't already present with
+/// a matching hash into its content-type-appropriate folder. Best-effort:
+/// failures are printed but don't abort the CLI command, since the
+/// manifest write already succeeded and diagnostics/graph will still flag
+/// missing files.
 fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) {
-    let mods_dir = tuffbox_core::mods_dir_for_manifest(manifest_path)
-        .unwrap_or_else(|| manifest_path.with_file_name("mods"));
-    let report = tuffbox_core::ensure_project_mods_downloaded(manifest, &mods_dir);
+    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
+        .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+    let report = tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir);
     for failure in &report.failed {
         eprintln!("warning: failed to download mod {}: {}", failure.mod_id, failure.error);
     }

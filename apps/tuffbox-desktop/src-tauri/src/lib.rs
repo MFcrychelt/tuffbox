@@ -284,6 +284,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                                 hashes: None,
                                 dependencies: vec![],
                                 status: vec![],
+                                content_type: tuffbox_core::manifest::ContentType::Mod,
                             }
                         };
 
@@ -304,6 +305,12 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
         .mods
         .into_iter()
         .map(|m| {
+            let content_type = match m.content_type {
+                tuffbox_core::manifest::ContentType::Mod => "mod",
+                tuffbox_core::manifest::ContentType::Resourcepack => "resourcepack",
+                tuffbox_core::manifest::ContentType::Shaderpack => "shader",
+                tuffbox_core::manifest::ContentType::Datapack => "datapack",
+            };
             serde_json::json!({
                 "id": m.id,
                 "name": m.name,
@@ -313,6 +320,7 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 "projectId": m.source.project_id,
                 "fileName": m.file_name,
                 "iconUrl": null,
+                "contentType": content_type,
             })
         })
         .collect();
@@ -336,6 +344,7 @@ async fn search_modrinth_mods(
     environment: Option<String>,
     license: Option<String>,
     sort: Option<String>,
+    content_type: Option<String>,
 ) -> Result<Vec<tuffbox_core::ProjectInfo>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -351,6 +360,7 @@ async fn search_modrinth_mods(
                 license,
                 sort,
                 limit: Some(30),
+                project_type: content_type,
             })
             .map_err(|e| e.to_string())
     })
@@ -470,12 +480,15 @@ fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
     }
     save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
 
-    // Remove the physical jar too, so a removed mod doesn't linger in
-    // `mods/` and get loaded by Minecraft anyway on the next launch.
+    // Remove the physical file too, so a removed entry doesn't linger in
+    // its content folder and get loaded by Minecraft anyway on the next
+    // launch. Uses the entry's own content type so resourcepacks/shaders
+    // are removed from the right folder, not `mods/`.
     if let Some(removed_mod) = removed_mod {
         if let Some(file_name) = removed_mod.file_name {
-            if let Some(mods_dir) = tuffbox_core::mods_dir_for_manifest(&PathBuf::from(&path)) {
-                let _ = std::fs::remove_file(mods_dir.join(file_name));
+            if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path)) {
+                let content_dir = tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
+                let _ = std::fs::remove_file(content_dir.join(file_name));
             }
         }
     }
@@ -668,6 +681,45 @@ fn create_crash_fix_plan(
     report_id: Option<String>,
 ) -> Result<tuffbox_core::ChangePlan, String> {
     Ok(get_crash_diagnosis(path, report_id)?.fix_plan)
+}
+
+/// Actually applies the crash-diagnosis fix plan (update/disable suspected
+/// mod, install missing dependency, etc.), the same way the Graph tab's
+/// "Apply full plan" does for resolver plans.
+///
+/// Previously the Diagnostics UI had a "Fix Issue" button that only set a
+/// success message in the frontend without calling into the backend at
+/// all — no snapshot, no manifest change, nothing. This command gives that
+/// button (renamed "Apply fix plan") a real effect: it recomputes the plan
+/// server-side (so the UI can't apply a stale/tampered plan), snapshots
+/// first when the plan calls for it, and returns what was actually done so
+/// the UI can report a truthful result instead of an assumed one.
+#[tauri::command(rename_all = "camelCase")]
+async fn apply_crash_fix_plan(path: String, report_id: Option<String>) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let diagnosis = get_crash_diagnosis(path.clone(), report_id)?;
+        let plan = diagnosis.fix_plan;
+
+        if plan.actions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if plan.requires_snapshot {
+            auto_snapshot(&manifest_path, "apply-crash-fix-plan").map_err(|e| e.to_string())?;
+        }
+
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let mut applied = Vec::new();
+        for action in plan.actions {
+            apply_change_action(&mut manifest, action, &mut applied)?;
+        }
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
+        Ok(applied)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1255,7 +1307,12 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| e.to_string())?
     } else {
-        TestLauncher::find_java().map_err(|e| e.to_string())?
+        // Auto-detect the best Java for this Minecraft version instead of
+        // always grabbing whatever JVM happens to be newest on the system
+        // — using e.g. Java 21 for Forge 1.20.1 (which needs Java 17)
+        // fails deep inside Forge's bootstrap launcher with a confusing
+        // module-system error instead of launching at all.
+        TestLauncher::find_java_for_minecraft(&manifest.minecraft.version).map_err(|e| e.to_string())?
     };
 
     let progress = tuffbox_core::mc_install::InstallProgress {
@@ -1264,6 +1321,14 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 
     progress.log(&format!("# Java: {} (major {})", java.path, java.major));
     progress.log(&format!("# Java version: {}", java.version));
+    let required_java = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
+    if java.major != required_java {
+        progress.log(&format!(
+            "# WARNING: Minecraft {} typically needs Java {required_java}, but the selected runtime is Java {}. \
+             If the game fails to start, install Java {required_java} and select it in Project Settings.",
+            manifest.minecraft.version, java.major
+        ));
+    }
 
     // game_dir = папка сборки (где mods, config, saves)
     let game_dir = PathBuf::from(&path)
@@ -1290,8 +1355,7 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
     // Without this, TuffBox would happily launch vanilla Minecraft while the
     // UI still shows a full mod list.
     progress.log("# Verifying mod files...");
-    let mods_dir = game_dir.join("mods");
-    let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &mods_dir);
+    let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &game_dir);
     if !sync_report.downloaded.is_empty() {
         progress.log(&format!(
             "# Downloaded {} missing mod file(s): {}",
@@ -1371,6 +1435,100 @@ fn open_project_folder(app: tauri::AppHandle, path: String) -> Result<(), String
 #[tauri::command]
 fn delete_project(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+/// Packs `logs/`, `crash-reports/` and test-run history into a zip next to
+/// the manifest and returns its path, so the UI's "Create logs.zip" action
+/// (previously an `alert("not implemented yet")` stub) actually produces a
+/// shareable archive.
+#[tauri::command(rename_all = "camelCase")]
+fn create_logs_zip(path: String) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let timestamp = tuffbox_core::time_util::compact_now();
+    let output = project_dir.join(format!("{}-logs-{timestamp}.zip", manifest.project.id));
+    let result = tuffbox_core::export_logs_zip(&project_dir, &output).map_err(|e| e.to_string())?;
+    Ok(result.path.to_string_lossy().to_string())
+}
+
+/// Duplicates a project (manifest + mods/config/overrides folders, minus
+/// `.tuffbox/` internal state and snapshots) into a sibling directory,
+/// implementing the previously-stubbed "Clone as..." action.
+#[tauri::command(rename_all = "camelCase")]
+fn clone_project(path: String, new_name: String) -> Result<String, String> {
+    let source_dir = manifest_parent(&path)?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+
+    let new_slug = slugify_project_name(&new_name);
+    let target_dir = source_dir
+        .parent()
+        .map(|p| p.join(&new_slug))
+        .ok_or_else(|| "project has no parent directory".to_string())?;
+    if target_dir.exists() {
+        return Err(format!("a folder named '{new_slug}' already exists next to this project"));
+    }
+    std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
+
+    for entry_name in ["mods", "config", "defaultconfigs", "kubejs", "scripts", "overrides"] {
+        let src = source_dir.join(entry_name);
+        if src.is_dir() {
+            copy_dir_recursive(&src, &target_dir.join(entry_name)).map_err(|e| e.to_string())?;
+        }
+    }
+
+    manifest.project.id = new_slug.clone();
+    manifest.project.name = new_name;
+
+    let target_manifest = target_dir.join(format!("{new_slug}.tuffbox.json"));
+    save_manifest(&target_manifest, &manifest).map_err(|e| e.to_string())?;
+
+    Ok(target_manifest.to_string_lossy().to_string())
+}
+
+fn slugify_project_name(name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        "cloned-project".to_string()
+    } else {
+        slug
+    }
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest)?;
+        }
+    }
+    Ok(())
+}
+
+/// Re-syncs a project's content folders against the manifest: re-downloads
+/// any missing/hash-mismatched mod/resourcepack/shaderpack/datapack files.
+/// This is the honest version of the previously-stubbed "Repair Profile"
+/// action — it doesn't pretend to fix arbitrary problems, but it does fix
+/// the most common real one (missing or corrupted content files).
+#[tauri::command(rename_all = "camelCase")]
+async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
+            .ok_or_else(|| "manifest has no parent directory".to_string())?;
+        Ok(tuffbox_core::ensure_project_mods_downloaded(&manifest, &instance_dir))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2128,6 +2286,11 @@ fn build_mod_spec(
         side,
         dependencies,
         status: vec!["ok".to_string()],
+        // Route the file into the right instance folder (mods/,
+        // resourcepacks/, shaderpacks/, datapacks/) based on what Modrinth
+        // actually says this project is, instead of always treating it as
+        // a mod jar.
+        content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(&project.project_type),
     }
 }
 
@@ -2185,19 +2348,20 @@ fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// Downloads every manifest-declared mod that isn't already present with a
-/// matching hash into the project's `mods/` folder.
+/// Downloads every manifest-declared entry that isn't already present with
+/// a matching hash into its content-type-appropriate folder (`mods/`,
+/// `resourcepacks/`, `shaderpacks/`, `datapacks/`).
 ///
-/// This is called right after any manifest mutation that adds/updates mods
-/// so the `.jar` files backing those entries actually exist before the next
-/// test launch, instead of only existing as metadata in the manifest.
-/// Failures are best-effort: a mod that fails to download still shows up in
-/// diagnostics/graph as missing rather than silently blocking the whole
+/// This is called right after any manifest mutation that adds/updates
+/// content so the files backing those entries actually exist before the
+/// next test launch, instead of only existing as metadata in the manifest.
+/// Failures are best-effort: an entry that fails to download still shows up
+/// in diagnostics/graph as missing rather than silently blocking the whole
 /// manifest write.
 fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) -> tuffbox_core::ModSyncReport {
-    let mods_dir = tuffbox_core::mods_dir_for_manifest(manifest_path)
-        .unwrap_or_else(|| manifest_path.with_file_name("mods"));
-    tuffbox_core::ensure_project_mods_downloaded(manifest, &mods_dir)
+    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
+        .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+    tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2233,6 +2397,7 @@ pub fn run() {
             resolve_missing_dependencies,
             get_crash_diagnosis,
             create_crash_fix_plan,
+            apply_crash_fix_plan,
             get_history_settings,
             update_history_settings,
             list_project_change_history,
@@ -2262,6 +2427,9 @@ pub fn run() {
             import_project,
             open_project_folder,
             delete_project,
+            create_logs_zip,
+            clone_project,
+            repair_project,
             get_home_dir,
             get_minecraft_versions,
             get_loader_versions,

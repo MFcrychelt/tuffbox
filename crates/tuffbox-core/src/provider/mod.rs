@@ -42,6 +42,12 @@ pub struct ProviderSearchQuery {
     pub sort: Option<String>,
     #[serde(default)]
     pub limit: Option<u32>,
+    /// Modrinth project type to restrict the search to: `mod`, `resourcepack`,
+    /// `datapack`, `shader`, `plugin`, `modpack`. Defaults to `mod` when unset
+    /// by the caller-side UI, but is left optional here so other providers
+    /// that don't distinguish content types can ignore it.
+    #[serde(default)]
+    pub project_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

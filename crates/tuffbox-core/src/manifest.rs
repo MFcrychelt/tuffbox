@@ -243,6 +243,54 @@ pub struct ModSpec {
     pub dependencies: Vec<ModDependencySpec>,
     #[serde(default)]
     pub status: Vec<String>,
+    /// What kind of content this entry is (mod jar, resourcepack, datapack,
+    /// shaderpack). Defaults to `Mod` for backward compatibility with
+    /// manifests written before this field existed.
+    ///
+    /// This matters because each content type lives in a different folder
+    /// inside the instance (`mods/`, `resourcepacks/`, `shaderpacks/`,
+    /// `datapacks/` under a world save) — treating everything as a mod jar
+    /// meant resourcepacks/shaders installed from Modrinth were written
+    /// into `mods/`, where loaders either ignore them or, worse, try to
+    /// load them as a mod and fail.
+    #[serde(default)]
+    pub content_type: ContentType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentType {
+    #[default]
+    Mod,
+    Resourcepack,
+    Shaderpack,
+    Datapack,
+}
+
+impl ContentType {
+    /// Parses a Modrinth `project_type` string (`mod`, `resourcepack`,
+    /// `shader`, `datapack`, ...) into a [`ContentType`]. Unknown/loader
+    /// project types (`modpack`, `plugin`) fall back to `Mod` since they're
+    /// still delivered as a jar the loader should see.
+    pub fn from_modrinth_project_type(project_type: &str) -> Self {
+        match project_type {
+            "resourcepack" => ContentType::Resourcepack,
+            "shader" => ContentType::Shaderpack,
+            "datapack" => ContentType::Datapack,
+            _ => ContentType::Mod,
+        }
+    }
+
+    /// The folder this content type lives in, relative to the instance
+    /// root (or, for datapacks, relative to a world save directory).
+    pub fn folder_name(self) -> &'static str {
+        match self {
+            ContentType::Mod => "mods",
+            ContentType::Resourcepack => "resourcepacks",
+            ContentType::Shaderpack => "shaderpacks",
+            ContentType::Datapack => "datapacks",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

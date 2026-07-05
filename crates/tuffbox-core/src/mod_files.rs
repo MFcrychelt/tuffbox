@@ -1,13 +1,16 @@
-//! Materializing mod `.jar` files on disk.
+//! Materializing mod/resourcepack/shaderpack/datapack files on disk.
 //!
-//! The manifest only stores *metadata* about a mod (source, version, url,
-//! hashes). Nothing elsewhere in the codebase used to turn that metadata
-//! into an actual file inside the project's `mods/` folder, which meant a
-//! freshly-added Modrinth mod would show up in the UI/manifest but Minecraft
-//! would launch without it. This module is the single place responsible for
-//! keeping `mods/` in sync with what the manifest declares.
+//! The manifest only stores *metadata* about an entry (source, version,
+//! url, hashes, content type). Nothing elsewhere in the codebase used to
+//! turn that metadata into an actual file inside the right instance
+//! folder, which meant a freshly-added Modrinth mod would show up in the
+//! UI/manifest but Minecraft would launch without it — and, separately,
+//! resourcepacks/shaderpacks/datapacks were all written into `mods/`
+//! regardless of their actual type. This module is the single place
+//! responsible for keeping each content folder in sync with what the
+//! manifest declares.
 
-use crate::manifest::{ModSpec, ProjectManifest, SourceKind};
+use crate::manifest::{ContentType, ModSpec, ProjectManifest, SourceKind};
 use crate::mc_install::{download_with_sha1, sha1_file, InstallError};
 use crate::provider::ModrinthProvider;
 use std::path::{Path, PathBuf};
@@ -43,10 +46,28 @@ pub fn mods_dir_for_manifest(manifest_path: &Path) -> Option<PathBuf> {
     manifest_path.parent().map(|dir| dir.join("mods"))
 }
 
-/// Ensures a single mod's `.jar` is present and hash-valid inside `mods_dir`,
-/// downloading it from `source.url` if necessary.
+/// Path to the project's instance root (the manifest's parent directory).
+pub fn instance_dir_for_manifest(manifest_path: &Path) -> Option<PathBuf> {
+    manifest_path.parent().map(|dir| dir.to_path_buf())
+}
+
+/// Resolves the correct target folder for a content entry under the
+/// instance root, based on its [`ContentType`].
+///
+/// Note: datapacks are inherently world-specific in vanilla Minecraft
+/// (they live under `saves/<world>/datapacks/`). Since a project can have
+/// multiple/no worlds yet, datapack entries are tracked under a top-level
+/// `datapacks/` folder in the project; exporters are responsible for
+/// copying them into the target world when packaging.
+pub fn content_dir_for(instance_dir: &Path, content_type: ContentType) -> PathBuf {
+    instance_dir.join(content_type.folder_name())
+}
+
+/// Ensures a single content entry's file is present and hash-valid inside
+/// its content-type-appropriate folder under `instance_dir`, downloading it
+/// from `source.url` if necessary.
 pub fn materialize_mod_file(
-    mods_dir: &Path,
+    instance_dir: &Path,
     module: &ModSpec,
 ) -> Result<MaterializeOutcome, ModFileError> {
     // Local/"drop-in" mods are expected to already exist in the folder; we
@@ -62,8 +83,9 @@ pub fn materialize_mod_file(
         return Err(ModFileError::NoDownloadUrl(module.id.clone()));
     };
 
-    std::fs::create_dir_all(mods_dir)?;
-    let target = mods_dir.join(file_name);
+    let target_dir = content_dir_for(instance_dir, module.content_type);
+    std::fs::create_dir_all(&target_dir)?;
+    let target = target_dir.join(file_name);
     let expected_sha1 = module.hashes.as_ref().and_then(|h| h.sha1.as_deref());
 
     if target.is_file() {
@@ -99,19 +121,22 @@ pub struct ModSyncFailure {
     pub error: String,
 }
 
-/// Downloads every mod declared in the manifest that isn't already present
-/// (with a matching hash) in the project's `mods/` folder.
+/// Downloads every entry declared in the manifest that isn't already
+/// present (with a matching hash) in its content-type-appropriate folder
+/// under `instance_dir` (`mods/`, `resourcepacks/`, `shaderpacks/`,
+/// `datapacks/`).
 ///
-/// This is the safety net that runs before a test launch: even if a mod was
-/// added to the manifest through some path that didn't already download it,
-/// the game will still see the right jars in `mods/` before Java starts.
+/// This is the safety net that runs before a test launch: even if an entry
+/// was added to the manifest through some path that didn't already
+/// download it, the game will still see the right files before Java
+/// starts.
 pub fn ensure_project_mods_downloaded(
     manifest: &ProjectManifest,
-    mods_dir: &Path,
+    instance_dir: &Path,
 ) -> ModSyncReport {
     let mut report = ModSyncReport::default();
     for module in &manifest.mods {
-        match materialize_mod_file(mods_dir, module) {
+        match materialize_mod_file(instance_dir, module) {
             Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
             Ok(MaterializeOutcome::AlreadyPresent) => report.already_present.push(module.id.clone()),
             Ok(MaterializeOutcome::Skipped) => report.skipped.push(module.id.clone()),
@@ -139,6 +164,7 @@ pub fn sync_mods_dir_to_manifest(
     let expected_file_names: std::collections::HashSet<String> = manifest
         .mods
         .iter()
+        .filter(|m| m.content_type == ContentType::Mod)
         .filter_map(|m| m.file_name.clone())
         .collect();
 
@@ -161,7 +187,8 @@ pub fn sync_mods_dir_to_manifest(
         }
     }
 
-    Ok(ensure_project_mods_downloaded(manifest, mods_dir))
+    let instance_dir = mods_dir.parent().unwrap_or(mods_dir);
+    Ok(ensure_project_mods_downloaded(manifest, instance_dir))
 }
 
 /// Attempts to identify an untracked local `.jar` file against Modrinth by
@@ -186,6 +213,8 @@ pub fn identify_local_jar_via_modrinth(
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown.jar".to_string());
 
+    let content_type = ContentType::from_modrinth_project_type(&project.project_type);
+
     Ok(Some(ModSpec {
         id: project.slug.clone(),
         name: project.name,
@@ -205,6 +234,7 @@ pub fn identify_local_jar_via_modrinth(
         side,
         dependencies: Vec::new(),
         status: vec!["ok".to_string()],
+        content_type,
     }))
 }
 
@@ -214,6 +244,15 @@ mod tests {
     use crate::manifest::{ModSource, Side};
 
     fn sample_mod(kind: SourceKind, file_name: Option<&str>, url: Option<&str>) -> ModSpec {
+        sample_content(kind, file_name, url, ContentType::Mod)
+    }
+
+    fn sample_content(
+        kind: SourceKind,
+        file_name: Option<&str>,
+        url: Option<&str>,
+        content_type: ContentType,
+    ) -> ModSpec {
         ModSpec {
             id: "example".to_string(),
             name: "Example".to_string(),
@@ -230,6 +269,7 @@ mod tests {
             side: Side::Both,
             dependencies: Vec::new(),
             status: vec!["ok".to_string()],
+            content_type,
         }
     }
 
@@ -260,7 +300,8 @@ mod tests {
     #[test]
     fn existing_file_without_hash_is_accepted_without_download() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("example.jar"), b"already here").unwrap();
+        std::fs::create_dir_all(dir.path().join("mods")).unwrap();
+        std::fs::write(dir.path().join("mods").join("example.jar"), b"already here").unwrap();
         let module = sample_mod(
             SourceKind::Modrinth,
             Some("example.jar"),
@@ -275,5 +316,40 @@ mod tests {
         let manifest_path = Path::new("/tmp/project/pack.tuffbox.json");
         let mods_dir = mods_dir_for_manifest(manifest_path).unwrap();
         assert_eq!(mods_dir, Path::new("/tmp/project/mods"));
+    }
+
+    #[test]
+    fn resourcepacks_are_routed_to_resourcepacks_folder_not_mods() {
+        let dir = tempfile::tempdir().unwrap();
+        let module = sample_content(
+            SourceKind::Modrinth,
+            Some("pack.zip"),
+            Some("https://example.invalid/should-not-be-fetched.zip"),
+            ContentType::Resourcepack,
+        );
+        // Pre-place the file where it *should* end up so no network call happens.
+        std::fs::create_dir_all(dir.path().join("resourcepacks")).unwrap();
+        std::fs::write(dir.path().join("resourcepacks").join("pack.zip"), b"pack").unwrap();
+
+        let outcome = materialize_mod_file(dir.path(), &module).unwrap();
+        assert!(matches!(outcome, MaterializeOutcome::AlreadyPresent));
+        assert!(!dir.path().join("mods").join("pack.zip").exists());
+    }
+
+    #[test]
+    fn shaderpacks_are_routed_to_shaderpacks_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            content_dir_for(dir.path(), ContentType::Shaderpack),
+            dir.path().join("shaderpacks")
+        );
+        assert_eq!(
+            content_dir_for(dir.path(), ContentType::Datapack),
+            dir.path().join("datapacks")
+        );
+        assert_eq!(
+            content_dir_for(dir.path(), ContentType::Mod),
+            dir.path().join("mods")
+        );
     }
 }

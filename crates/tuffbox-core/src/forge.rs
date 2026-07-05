@@ -102,8 +102,28 @@ fn default_true() -> bool {
     true
 }
 
-/// Parses the Modrinth `@{}` serialized artifact string.
+/// Parses a Forge/NeoForge library `downloads.artifact` entry.
+///
+/// The Modrinth launcher-meta API actually returns this as a plain JSON
+/// object (`{"path": ..., "url": ..., "sha1": ..., "size": ...}`) for every
+/// Forge version tested (e.g. 1.20.1-47.2.20). The previous implementation
+/// only handled a serialized `"@{path=...;url=...}"` *string* format,
+/// which doesn't match any real response from this endpoint — so
+/// `resolve_library` silently returned `None` for every library with an
+/// object-shaped artifact (including `mcp_config`, a hard dependency of
+/// the Forge install processors), those files were never downloaded, and
+/// the install then crashed with a raw "No such file or directory" once a
+/// processor tried to read them. This now handles both shapes.
 fn parse_artifact_value(v: &serde_json::Value) -> Option<ForgeArtifact> {
+    if let Some(obj) = v.as_object() {
+        return Some(ForgeArtifact {
+            path: obj.get("path")?.as_str()?.to_string(),
+            url: obj.get("url")?.as_str()?.to_string(),
+            sha1: obj.get("sha1").and_then(|s| s.as_str()).map(|s| s.to_string()),
+            size: obj.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
+        });
+    }
+
     let s = v.as_str()?;
     if !s.starts_with("@{") || !s.ends_with('}') {
         return None;
@@ -339,12 +359,19 @@ fn processor_classpath(
     libraries_dir: &Path,
     processor: &Processor,
 ) -> Result<String, InstallError> {
-    let mut paths: Vec<String> = Vec::new();
+    let mut paths: Vec<PathBuf> = Vec::new();
     for name in processor.classpath.iter().chain(std::iter::once(&processor.jar)) {
-        let path = maven_path(libraries_dir, name)?;
-        paths.push(path.to_string_lossy().to_string());
+        paths.push(maven_path(libraries_dir, name)?);
     }
-    Ok(paths.join(";"))
+    // `;` is only the classpath separator on Windows; using it
+    // unconditionally meant every processor invocation on Linux/macOS
+    // built a single-entry classpath string that Java parsed as one giant
+    // (nonexistent) path, so it could never find any class from the
+    // dependency jars — including the processor's own Main-Class — and
+    // failed with `ClassNotFoundException` on every real install.
+    std::env::join_paths(&paths)
+        .map(|joined| joined.to_string_lossy().to_string())
+        .map_err(|e| InstallError::Io(std::io::Error::other(e.to_string())))
 }
 
 fn resolve_data_value(

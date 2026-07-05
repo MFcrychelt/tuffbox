@@ -1033,6 +1033,7 @@ mod tests {
                 side: Side::Client,
                 dependencies: Vec::new(),
                 status: Vec::new(),
+                content_type: crate::manifest::ContentType::Mod,
             }],
             overrides: None,
         }

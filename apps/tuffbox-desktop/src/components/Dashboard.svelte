@@ -85,26 +85,56 @@
     activeMenuPath = null;
   }
 
+  let actionBusy = false;
+  let actionError: string | null = null;
+
   async function handleAction(action: string, project: RecentProject) {
     activeMenuPath = null;
+    actionError = null;
     switch (action) {
       case "change-version":
-        alert("Change Version: not implemented yet");
+        // Loader/Minecraft version is edited in Project Settings, not a
+        // separate one-off dialog — jump straight there instead of a stub.
+        currentView = "project-settings";
+        selectProject(project.path);
         break;
       case "desktop-shortcut":
-        alert("Create Desktop Shortcut: not implemented yet");
+        alert(
+          "Desktop shortcuts aren't implemented yet — this needs a native OS integration " +
+          "(Start Menu / .desktop file / .app bundle) that differs per platform and isn't " +
+          "wired up in this build. Use \"Open Folder\" and create one manually for now."
+        );
         break;
       case "server-pack":
-        alert("Download Server Pack: not implemented yet");
+        actionBusy = true;
+        try {
+          const result: any = await invoke("export_server_pack", { path: project.path, targetPath: null });
+          alert(`Server pack exported to:\n${result.path}`);
+        } catch (e) {
+          actionError = String(e);
+        } finally {
+          actionBusy = false;
+        }
         break;
       case "links":
-        alert("Links: not implemented yet");
+        alert(
+          "Links (Modrinth/CurseForge project pages) aren't implemented yet — this project " +
+          "isn't published anywhere, so there is nothing to link to."
+        );
         break;
       case "open-folder":
         await invoke("open_project_folder", { path: project.path });
         break;
       case "logs-zip":
-        alert("Create logs.zip: not implemented yet");
+        actionBusy = true;
+        try {
+          const zipPath = await invoke("create_logs_zip", { path: project.path });
+          alert(`Logs archive created:\n${zipPath}`);
+        } catch (e) {
+          actionError = String(e);
+        } finally {
+          actionBusy = false;
+        }
         break;
       case "copy-link":
         await navigator.clipboard.writeText(project.path);
@@ -114,14 +144,44 @@
         currentView = "project-settings";
         selectProject(project.path);
         break;
-      case "clone":
-        alert("Clone as...: not implemented yet");
+      case "clone": {
+        const newName = window.prompt("Name for the cloned project:", `${project.info.name} copy`);
+        if (!newName) break;
+        actionBusy = true;
+        try {
+          const clonedPath = await invoke<string>("clone_project", { path: project.path, newName });
+          const info = await invoke("validate_project", { path: clonedPath });
+          recentProjects.add({ path: clonedPath, info: info as any });
+          alert(`Cloned to:\n${clonedPath}`);
+        } catch (e) {
+          actionError = String(e);
+        } finally {
+          actionBusy = false;
+        }
         break;
+      }
       case "share":
-        alert("Share Profile: not implemented yet");
+        alert(
+          "Share Profile isn't implemented yet — cloud sharing requires a backend service " +
+          "that doesn't exist in this build (see roadmap P3: ecosystem)."
+        );
         break;
       case "repair":
-        alert("Repair Profile: not implemented yet");
+        actionBusy = true;
+        try {
+          const report: any = await invoke("repair_project", { path: project.path });
+          const downloaded = report.downloaded?.length ?? 0;
+          const failed = report.failed?.length ?? 0;
+          alert(
+            downloaded === 0 && failed === 0
+              ? "All mod files were already present and valid."
+              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`
+          );
+        } catch (e) {
+          actionError = String(e);
+        } finally {
+          actionBusy = false;
+        }
         break;
       case "remove":
         removeFromLauncher(project);
@@ -130,6 +190,7 @@
         await deleteProject(project);
         break;
     }
+    if (actionError) alert(`Action failed: ${actionError}`);
   }
 
   function removeFromLauncher(project: RecentProject) {

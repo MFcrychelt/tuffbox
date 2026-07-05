@@ -137,12 +137,21 @@ impl ContentProvider for ModrinthProvider {
 
 fn build_facets(query: &ProviderSearchQuery) -> String {
     let mut facets: Vec<Vec<String>> = Vec::new();
+    let project_type = query.project_type.as_deref().unwrap_or("mod");
+    facets.push(vec![format!("project_type:{project_type}")]);
+
     if let Some(mc) = &query.minecraft_version {
         facets.push(vec![format!("versions:{mc}")]);
     }
-    if let Some(loader) = &query.loader {
-        if !loader.trim().is_empty() {
-            facets.push(vec![format!("categories:{}", loader.trim().to_lowercase())]);
+    // The loader facet only makes sense for loader-bound content (mods,
+    // modpacks, plugins). Resourcepacks/datapacks/shaders aren't tied to a
+    // mod loader on Modrinth, so applying it there would silently zero out
+    // every result.
+    if matches!(project_type, "mod" | "modpack" | "plugin") {
+        if let Some(loader) = &query.loader {
+            if !loader.trim().is_empty() {
+                facets.push(vec![format!("categories:{}", loader.trim().to_lowercase())]);
+            }
         }
     }
     if let Some(category) = &query.category {

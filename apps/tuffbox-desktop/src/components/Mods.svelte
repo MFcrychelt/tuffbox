@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import {
     Search,
@@ -23,6 +24,7 @@
     iconUrl?: string | null;
     clientSide?: string | null;
     serverSide?: string | null;
+    contentType?: "mod" | "resourcepack" | "shader" | "datapack" | string;
   };
 
   type SearchResult = {
@@ -72,7 +74,10 @@
   let pendingInstall: SearchResult | null = null;
   let selectedResultIds: Record<string, boolean> = {};
 
-  const gameVersions = ["26.2", "26.1.2", "26.1.1", "26.1", "1.21.11", "1.21.10", "1.21.9", "1.21.8"];
+  // Populated from the real Mojang version manifest via get_minecraft_versions
+  // instead of a hand-maintained list, so it never goes stale as new
+  // Minecraft versions ship.
+  let gameVersions: string[] = [];
   const loaders = ["Fabric", "Forge", "NeoForge"];
   const categories = [
     "Adventure", "Cursed", "Decoration", "Economy", "Equipment", "Food", "Game Mechanics", "Library",
@@ -86,6 +91,19 @@
     { id: "newest", label: "Date published" },
     { id: "updated", label: "Date updated" },
   ];
+
+  onMount(async () => {
+    try {
+      const versions: { id: string; popular: boolean }[] = await invoke("get_minecraft_versions");
+      // Show the curated "popular" set plus a handful of the newest
+      // releases, so the filter stays short but current.
+      const popular = versions.filter((v) => v.popular).map((v) => v.id);
+      const latest = versions.filter((v) => !v.popular).slice(0, 8).map((v) => v.id);
+      gameVersions = [...new Set([...latest, ...popular])];
+    } catch {
+      // Network unavailable at startup — filter list stays empty, "Current / all" still works.
+    }
+  });
 
   async function load(force = false) {
     if (!$projectPath) return;
@@ -103,6 +121,20 @@
     }
   }
 
+  function contentTypeForFilter(filter: string): string {
+    switch (filter) {
+      case "resourcepack": return "resourcepack";
+      case "datapack": return "datapack";
+      case "shader": return "shader";
+      default: return "mod";
+    }
+  }
+
+  function switchContentFilter(next: string) {
+    contentFilter = next;
+    if (addOpen) searchMods();
+  }
+
   async function openAddModal() {
     addOpen = true;
     error = null;
@@ -118,11 +150,15 @@
         path: $projectPath,
         query: searchQuery.trim(),
         gameVersion: filterGameVersion || null,
-        loader: filterLoader ? filterLoader.toLowerCase() : null,
+        // Resourcepacks/datapacks/shaders aren't tied to a mod loader on
+        // Modrinth; sending a loader facet for them would return zero
+        // results, so only apply it for the "mod" tab.
+        loader: contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null,
         category: filterCategory || null,
         environment: filterEnvironment || null,
         license: filterLicense || null,
         sort: sortBy,
+        contentType: contentTypeForFilter(contentFilter),
       });
     } catch (e) {
       error = String(e);
@@ -303,7 +339,8 @@
       m.id.toLowerCase().includes(q) ||
       m.version.toLowerCase().includes(q);
     const matchesSide = sideFilter === "all" || m.side === sideFilter;
-    return matchesText && matchesSide;
+    const matchesContentType = (m.contentType ?? "mod") === contentFilter;
+    return matchesText && matchesSide && matchesContentType;
   });
 
   $: selectedResults = searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result));
@@ -321,10 +358,10 @@
 <div class="mods">
   <div class="toolbar">
     <div class="tabs" style="display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto;">
-      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => contentFilter = "mod"}>Mods</button>
-      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => contentFilter = "resourcepack"}>Resourcepacks</button>
-      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => contentFilter = "datapack"}>Datapacks</button>
-      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => contentFilter = "shader"}>Shaders</button>
+      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods</button>
+      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
+      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
+      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => switchContentFilter("shader")}>Shaders</button>
     </div>
     <div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
       <div class="search" style="flex: 1;">
@@ -470,11 +507,12 @@
           {/each}
           <button class="muted-filter" on:click={() => { filterGameVersion = ""; searchMods(); }}>Show all versions</button>
 
-          <h3>Loader</h3>
-          {#each loaders as loaderName}
-            <button class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>{loaderName}</button>
-          {/each}
-          <button class="muted-filter">Show more</button>
+          {#if contentFilter === "mod"}
+            <h3>Loader</h3>
+            {#each loaders as loaderName}
+              <button class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>{loaderName}</button>
+            {/each}
+          {/if}
 
           <h3>Category</h3>
           <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(); }}>All categories</button>

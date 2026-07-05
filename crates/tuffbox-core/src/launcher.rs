@@ -79,12 +79,28 @@ pub fn offline_uuid(player_name: &str) -> String {
 }
 
 impl TestLauncher {
+    /// Returns the newest installed Java runtime, with no regard for what
+    /// any particular Minecraft version needs. Prefer
+    /// [`Self::find_java_for_minecraft`] when a target version is known;
+    /// this is kept only for callers that generically need "some" JVM.
     pub fn find_java() -> Result<JavaRuntime, LauncherError> {
         crate::jre::find_all_runtimes()
             .map_err(|_| LauncherError::JavaNotFound)?
             .into_iter()
             .next()
             .ok_or(LauncherError::JavaNotFound)
+    }
+
+    /// Picks the installed Java runtime that best matches what
+    /// `mc_version` actually requires (see [`crate::jre::required_java_major`]),
+    /// instead of always grabbing the newest JVM on the system regardless
+    /// of compatibility. Falls back to the newest available runtime if
+    /// nothing meets the requirement, since attempting the launch with a
+    /// clear log message is more useful than refusing to start.
+    pub fn find_java_for_minecraft(mc_version: &str) -> Result<JavaRuntime, LauncherError> {
+        let runtimes = crate::jre::find_all_runtimes().map_err(|_| LauncherError::JavaNotFound)?;
+        let required = crate::jre::required_java_major(mc_version);
+        crate::jre::find_runtime_for(&runtimes, required).ok_or(LauncherError::JavaNotFound)
     }
 
     pub fn prepare_instance(
@@ -181,6 +197,16 @@ impl TestLauncher {
         let library_dir_s = library_dir.to_string_lossy();
 
         let classpath = classpath_string(&game.libraries);
+        // Same separator `classpath_string`/`std::env::join_paths` uses
+        // for `${classpath}`, needed for Forge's `-p <module-path>` JVM
+        // arg which uses a separate `${classpath_separator}` placeholder.
+        // This was never substituted before, so on Linux/macOS the
+        // literal string "${classpath_separator}" ended up inside the
+        // module path, which made every entry after the first
+        // unresolvable and crashed `securejarhandler`'s module
+        // initialization with `InaccessibleObjectException` instead of
+        // launching Forge.
+        let classpath_separator = if cfg!(target_os = "windows") { ";" } else { ":" };
 
         progress.log(&format!("# Main class: {}", game.main_class));
         progress.log(&format!("# Classpath entries: {}", game.libraries.len()));
@@ -196,6 +222,7 @@ impl TestLauncher {
                 .replace("${launcher_name}", "tuffbox")
                 .replace("${launcher_version}", "0.1.0")
                 .replace("${version_name}", &game.id)
+                .replace("${classpath_separator}", classpath_separator)
                 .replace("${classpath}", &classpath);
             cmd.arg(value);
         }

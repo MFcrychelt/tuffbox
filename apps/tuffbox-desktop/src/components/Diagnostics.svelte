@@ -86,7 +86,9 @@
   let selectedReportId = "";
   let loading = false;
   let planning = false;
+  let applying = false;
   let error: string | null = null;
+  let message: string | null = null;
   let plan: any | null = null;
   let lastLoadedPath: string | null = null;
 
@@ -165,16 +167,30 @@
 
   $: selectedReport = diagnosis?.selectedReport ?? null;
   $: suspected = diagnosis?.suspectedMods ?? [];
-  async function applyFix(diag: Diagnostic) {
+
+  /// Actually applies the crash-diagnosis fix plan on the backend (snapshot
+  /// + update/disable suspected mod / install missing dependency) and
+  /// reports what really happened. Previously this only faked a success
+  /// message in the UI without calling into the backend, so "fixing" a
+  /// conflict did nothing to the project.
+  async function applyFix() {
     if (!$projectPath) return;
-    loading = true;
+    applying = true;
+    error = null;
+    message = null;
     try {
-      message = `Resolved conflict for ${diag.code}`;
+      const applied: string[] = await invoke("apply_crash_fix_plan", {
+        path: $projectPath,
+        reportId: selectedReportId || null,
+      });
+      message = applied.length
+        ? `Applied: ${applied.join(", ")}`
+        : "No deterministic action was available for this plan. Review the notes manually.";
       await load(true);
     } catch (e) {
       error = String(e);
     } finally {
-      loading = false;
+      applying = false;
     }
   }
 
@@ -214,6 +230,7 @@
   </div>
 
   {#if error}<div class="notice error">{error}</div>{/if}
+  {#if message}<div class="notice success">{message}</div>{/if}
 
   {#if loading && !diagnosis}
     <div class="loading">Loading crash diagnosis...</div>
@@ -273,9 +290,9 @@
             <div class="conflict-card {diag.severity.toLowerCase()}">
               <div class="conflict-header">
                 <strong>{diag.code}</strong>
-                <button class="secondary" style="padding: 4px 8px; font-size: 11px;" on:click={() => applyFix(diag)}>Fix Issue</button>
               </div>
               <p style="font-size: 12px; margin: 4px 0; color: var(--text-muted);">{diag.message}</p>
+              <p style="font-size: 11px; margin: 0; color: var(--text-muted);">Use "Create fix plan" below, then "Apply fix plan" to act on this.</p>
               {#if diag.relatedNodes && diag.relatedNodes.length > 0}
                 <div class="related-mods">
                   {#each diag.relatedNodes as node}
@@ -428,6 +445,9 @@
                   <li>{actionLabel(action)}</li>
                 {/each}
               </ul>
+              <button on:click={applyFix} disabled={applying}>
+                {applying ? "Applying..." : "Apply fix plan"}
+              </button>
             {:else}
               <div class="muted-box compact">No deterministic file operation proposed. Use the notes as an investigation checklist.</div>
             {/if}
@@ -476,6 +496,7 @@
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
+  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
   .stats { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 14px; margin-bottom: 16px; }
   .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .stat-card { padding: 15px; display: flex; flex-direction: column; gap: 4px; }

@@ -69,11 +69,27 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
         .unwrap_or_default();
     let (loader_kind, loader_version) = detect_loader(&index.dependencies)?;
 
+    // `.mrpack` archives can declare files under `mods/`, `resourcepacks/`,
+    // `shaderpacks/` and (less commonly) `datapacks/`. Previously only
+    // `mods/` entries were kept, so any resourcepack/shaderpack bundled in
+    // an imported modpack was silently dropped instead of being tracked
+    // and reinstalled into the right folder.
     let mods: Vec<crate::manifest::ModSpec> = index
         .files
         .into_iter()
-        .filter(|f| f.path.starts_with("mods/"))
-        .map(|f| {
+        .filter_map(|f| {
+            let content_type = if f.path.starts_with("mods/") {
+                crate::manifest::ContentType::Mod
+            } else if f.path.starts_with("resourcepacks/") {
+                crate::manifest::ContentType::Resourcepack
+            } else if f.path.starts_with("shaderpacks/") {
+                crate::manifest::ContentType::Shaderpack
+            } else if f.path.starts_with("datapacks/") {
+                crate::manifest::ContentType::Datapack
+            } else {
+                return None;
+            };
+
             let file_name = Path::new(&f.path)
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
@@ -81,8 +97,9 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
             let id = file_name
                 .trim_start_matches("mods/")
                 .trim_end_matches(".jar")
+                .trim_end_matches(".zip")
                 .to_string();
-            crate::manifest::ModSpec {
+            Some(crate::manifest::ModSpec {
                 id: id.clone(),
                 name: id,
                 source: ModSource {
@@ -101,7 +118,8 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
                 side: parse_env(&f.env),
                 dependencies: Vec::new(),
                 status: vec!["ok".to_string()],
-            }
+                content_type,
+            })
         })
         .collect();
 

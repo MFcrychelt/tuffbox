@@ -676,6 +676,72 @@ fn server_readme(manifest: &ProjectManifest, server_manifest: &ServerPackManifes
     readme
 }
 
+/// Packs `logs/`, `crash-reports/` and `.tuffbox/test-runs/` from a project
+/// into a single zip, for easy sharing when asking for help debugging a
+/// modpack (the classic launcher "Create logs.zip" action).
+pub fn export_logs_zip(
+    project_dir: impl AsRef<Path>,
+    output_path: impl AsRef<Path>,
+) -> Result<ExportResult, ExportError> {
+    let project_dir = project_dir.as_ref();
+    let output_path = output_path.as_ref();
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let output = fs::File::create(output_path)?;
+    let mut zip = ZipWriter::new(output);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut file_count = 0;
+    for relative_root in ["logs", "crash-reports", ".tuffbox/test-runs"] {
+        let dir = project_dir.join(relative_root);
+        if dir.is_dir() {
+            file_count += add_dir_flat(&mut zip, project_dir, &dir, options)?;
+        }
+    }
+
+    zip.finish()?;
+
+    Ok(ExportResult {
+        path: output_path.to_path_buf(),
+        file_count,
+        override_count: 0,
+    })
+}
+
+/// Like [`add_dir`], but preserves the file's path relative to
+/// `project_dir` as-is inside the archive instead of nesting everything
+/// under an `overrides/` prefix (used for logs.zip, not modpack exports).
+fn add_dir_flat<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    project_dir: &Path,
+    dir: &Path,
+    options: SimpleFileOptions,
+) -> Result<usize, ExportError> {
+    let mut count = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            count += add_dir_flat(zip, project_dir, &path, options)?;
+        } else if path.is_file() {
+            let relative = path
+                .strip_prefix(project_dir)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            zip.start_file(relative, options)?;
+            zip.write_all(&fs::read(&path)?)?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 fn start_bat() -> &'static str {
     "@echo off\r\njava -Xmx4G -jar server.jar nogui\r\npause\r\n"
 }

@@ -90,6 +90,24 @@
     message = null;
   }
 
+  /// Pretty-prints the current buffer as JSON (2-space indent). Only wired
+  /// up for .json files since JSON5/TOML/CFG have comments and trailing
+  /// commas that `JSON.parse` would reject — formatting those needs a
+  /// real parser, which isn't implemented yet (tracked in the roadmap).
+  function formatJson() {
+    if (!selected) return;
+    try {
+      const parsed = JSON.parse(content);
+      content = JSON.stringify(parsed, null, 2) + "\n";
+      message = null;
+      error = null;
+    } catch (e) {
+      error = `Cannot format: invalid JSON (${e instanceof Error ? e.message : e})`;
+    }
+  }
+
+  $: canFormat = selected?.extension?.toLowerCase() === "json";
+
   function formatSize(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -120,6 +138,10 @@
       <button class="ghost" on:click={() => loadFiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         Refresh
+      </button>
+      <button class="secondary" on:click={formatJson} disabled={!canFormat || saving} title={canFormat ? "Pretty-print JSON" : "Formatting is only available for .json files"}>
+        <FileCode2 size={16} />
+        Format
       </button>
       <button class="secondary" on:click={resetFile} disabled={!dirty || saving}>
         <RotateCcw size={16} />
