@@ -226,9 +226,54 @@ fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
         .collect())
 }
 
-#[tauri::command]
-fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+#[tauri::command(rename_all = "camelCase")]
+async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = std::path::PathBuf::from(&path);
+        let mut manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+        
+        let mut project_dir = manifest_path.clone();
+        if manifest_path.is_file() {
+            project_dir.pop();
+        }
+        let mods_dir = project_dir.join("mods");
+        
+        if let Ok(entries) = std::fs::read_dir(mods_dir) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_file() && entry.path().extension().map_or(false, |e| e == "jar") {
+                        let file_name = entry.file_name().to_string_lossy().to_string();
+                        if !manifest.mods.iter().any(|m| m.file_name.as_deref() == Some(&*file_name)) {
+                            manifest.mods.push(tuffbox_core::manifest::ModSpec {
+                                id: file_name.clone(),
+                                name: file_name.clone(),
+                                version: "unknown".to_string(),
+                                side: tuffbox_core::manifest::Side::Both,
+                                source: tuffbox_core::manifest::ModSource {
+                                    kind: tuffbox_core::manifest::SourceKind::Local,
+                                    project_id: None,
+                                    file_id: None,
+                                    url: None,
+                                    path: Some(format!("mods/{}", file_name)),
+                                },
+                                file_name: Some(file_name),
+                                hashes: None,
+                                dependencies: vec![],
+                                status: vec![],
+                            });
+                        }
+                    }
+                }
+            }
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        }
+        
+        list_mods_impl(&path)
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
+    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
     let mods = manifest
         .mods
         .into_iter()
@@ -246,6 +291,13 @@ fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
         })
         .collect();
     Ok(mods)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        list_mods_impl(&path)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2070,6 +2122,7 @@ pub fn run() {
             update_project_brief,
             list_profiles,
             list_mods,
+            sync_mods_folder,
             search_modrinth_mods,
             preview_modrinth_install,
             get_modrinth_project_icon,

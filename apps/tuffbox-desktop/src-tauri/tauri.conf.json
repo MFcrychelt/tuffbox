@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "TuffBox IDE",
-        "width": 1280,
-        "height": 800,
+        "width": 1440,
+        "height": 900,
         "resizable": true,
         "fullscreen": false,
         "center": true,

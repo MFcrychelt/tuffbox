@@ -2,6 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import * as d3 from "d3-force";
+  import { onMount } from "svelte";
 
   type GraphNode = {
     id: string;
@@ -25,7 +27,7 @@
     edges: GraphEdge[];
   };
 
-  type PositionedNode = GraphNode & { x: number; y: number; tone: string };
+  type PositionedNode = GraphNode & { x: number; y: number; fx?: number | null; fy?: number | null; tone: string };
 
   let graph: GraphModel | null = null;
   let loading = false;
@@ -176,17 +178,30 @@
   $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile");
   $: profileNodes = nodes.filter((node) => node.kind === "Profile");
   $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
-  $: positioned = (() => {
-    const counters: Record<string, number> = { runtime: 0, profile: 0, mod: 0 };
-    return nodes.map((node): PositionedNode => {
+  let positioned: PositionedNode[] = [];
+  let simulation: d3.Simulation<PositionedNode, undefined> | null = null;
+
+  $: if (nodes && edges) {
+    const initializedNodes = nodes.map((node) => {
       const group = node.kind === "Mod" ? "mod" : node.kind === "Profile" ? "profile" : "runtime";
-      const index = counters[group]++;
-      const x = group === "runtime" ? 140 : group === "profile" ? 430 : 770 + (index % 2) * 180;
-      const y = 70 + Math.floor(index / (group === "mod" ? 2 : 1)) * 92;
       const tone = group === "runtime" ? "runtime" : group === "profile" ? "profile" : String(node.side ?? "unknown").toLowerCase();
-      return { ...node, x, y, tone };
+      return { ...node, x: 500, y: 300, tone };
     });
-  })();
+
+    const d3Links = edges.map(e => ({ source: e.from, target: e.to, ...e }));
+
+    if (simulation) simulation.stop();
+
+    simulation = d3.forceSimulation<PositionedNode>(initializedNodes)
+      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(150))
+      .force("charge", d3.forceManyBody().strength(-400))
+      .force("center", d3.forceCenter(560, 300))
+      .force("x", d3.forceX(560).strength(0.05))
+      .force("y", d3.forceY(300).strength(0.05))
+      .on("tick", () => {
+        positioned = [...initializedNodes];
+      });
+  }
   $: positionById = new Map(positioned.map((node) => [node.id, node]));
 
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
@@ -265,10 +280,10 @@
     <section class="graph-canvas" aria-label="Dependency graph canvas">
       <svg viewBox={`0 0 1120 ${canvasHeight}`} role="img">
         <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="22" refY="3" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
           </marker>
-          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="22" refY="3" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(239,68,68,.85)" />
           </marker>
         </defs>
@@ -288,13 +303,31 @@
             class:selected={selectedId === node.id}
             role="button"
             tabindex="0"
-            transform={`translate(${node.x - 78}, ${node.y - 24})`}
-            on:click={() => (selectedId = node.id)}
-            on:keydown={(event) => event.key === "Enter" && (selectedId = node.id)}
+            transform={`translate(${node.x}, ${node.y})`}
+            on:mousedown={(e) => {
+              selectedId = node.id;
+              if (simulation) {
+                let isDragging = true;
+                node.fx = node.x;
+                node.fy = node.y;
+                const onMouseMove = (ev) => {
+                  node.fx = ev.offsetX;
+                  node.fy = ev.offsetY;
+                  simulation.alpha(0.3).restart();
+                };
+                const onMouseUp = () => {
+                  node.fx = null;
+                  node.fy = null;
+                  window.removeEventListener('mousemove', onMouseMove);
+                  window.removeEventListener('mouseup', onMouseUp);
+                };
+                window.addEventListener('mousemove', onMouseMove);
+                window.addEventListener('mouseup', onMouseUp);
+              }
+            }}
           >
-            <rect width="156" height="48" rx="14" />
-            <text x="14" y="20">{node.label.length > 18 ? `${node.label.slice(0, 18)}…` : node.label}</text>
-            <text x="14" y="36" class="sub">{node.kind}{node.version ? ` · ${node.version}` : ""}</text>
+            <circle r="6" />
+            <text x="10" y="4">{node.label}</text>
           </g>
         {/each}
       </svg>

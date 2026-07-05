@@ -79,7 +79,8 @@
     error = null;
     message = null;
     try {
-      entries = await invoke("list_project_change_history", { path: $projectPath });
+      let data = await invoke("list_project_change_history", { path: $projectPath });
+      entries = data.reverse();
       selectedId = entries[0]?.id ?? "";
       lastLoadedPath = $projectPath;
     } catch (e) {
@@ -247,17 +248,15 @@
               <div class="timeline-item">
                 <button
                   class="file-strip {entry.kind}"
-                  class:selected={selected?.id === entry.id}
-                  on:click={() => toggleExpanded(entry)}
+                  on:click={() => {
+                    const el = document.getElementById('change-' + entry.id);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }}
                   title={entry.path}
                 >
-                  <span class="chev">{#if expanded[entry.id]}<ChevronDown size={14} />{:else}<ChevronRight size={14} />{/if}</span>
                   <span class="file-title">{entry.path}</span>
-                  <small>{entry.kind.replace("_", " ")} · {entry.operation}</small>
+                  <small>{entry.kind.replace("_", " ")}</small>
                 </button>
-                {#if expanded[entry.id]}
-                  <pre class="mini-diff">{entry.preview || "No preview available."}</pre>
-                {/if}
               </div>
             {/each}
           </section>
@@ -265,40 +264,48 @@
       </aside>
 
       <section class="change-preview">
-        {#if selected}
-          <div class="preview-header">
-            <div>
-              <span class="eyebrow">{selected.category} · {selected.kind.replace("_", " ")}</span>
-              <h2><FileText size={18} /> {selected.path}</h2>
-              <p>{selected.createdAt} · {selected.reason}</p>
-            </div>
-            <div class="preview-actions">
-              <button class="secondary" on:click={() => rollbackEntry(selected)} disabled={selected.kind !== "file_changed"}>
-                <RotateCcw size={16} /> Rollback file
-              </button>
-              <button class="secondary" on:click={() => openFullFile(selected)} disabled={!selected.canOpen}>
-                <Maximize2 size={16} />
-                Open full file
-              </button>
-            </div>
-          </div>
+        <div class="all-changes-list">
+          {#each visible as entry (entry.id)}
+            <div class="change-card" id="change-{entry.id}">
+              <div class="preview-header">
+                <div>
+                  <span class="eyebrow">{entry.category} · {entry.kind.replace("_", " ")}</span>
+                  <h2><FileText size={18} /> {entry.path}</h2>
+                  <p>{entry.createdAt} · {entry.reason}</p>
+                </div>
+                <div class="preview-actions">
+                  <button class="secondary" on:click={() => rollbackEntry(entry)} disabled={entry.kind !== "file_changed"}>
+                    <RotateCcw size={16} /> Rollback
+                  </button>
+                  <button class="secondary" on:click={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                    <Maximize2 size={16} /> Open
+                  </button>
+                </div>
+              </div>
 
-          <div class="summary-card">
-            <strong>{selected.operation}</strong>
-            <pre>{selected.preview || "No preview available."}</pre>
-          </div>
+              <div class="summary-card" on:click={() => toggleExpanded(entry)} style="cursor: pointer;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <strong>{entry.operation}</strong>
+                  <span class="chev">{#if expanded[entry.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
+                </div>
+                {#if !expanded[entry.id]}
+                  <pre class="mini-preview">{entry.preview || "No preview available."}</pre>
+                {/if}
+              </div>
 
-          <div class="diff-card">
-            <div class="diff-title">Inline diff preview</div>
-            <pre>
-{#each (selected.diff || selected.preview || "No diff available.").split("\n") as line}
+              {#if expanded[entry.id]}
+                <div class="diff-card">
+                  <div class="diff-title">Inline diff preview</div>
+                  <pre>
+{#each (entry.diff || entry.preview || "No diff available.").split("\n") as line}
 <span class={lineClass(line)}>{line}</span>
 {/each}
-            </pre>
-          </div>
-        {:else}
-          <div class="empty inner">Select a change on the left.</div>
-        {/if}
+                  </pre>
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
       </section>
     </div>
   {/if}
@@ -359,7 +366,10 @@
   .file-strip small { grid-column: 2; }
   .mini-diff { margin: 6px 0 0 26px; max-height: 150px; padding: 10px; border: 1px solid var(--border-color); border-radius: 10px; background: #09090b; color: #a1a1aa; }
   .file-strip small, .preview-header p, .eyebrow { color: var(--text-muted); font-size: 12px; }
-  .change-preview { min-width: 0; padding: 16px; }
+  .change-preview { min-width: 0; padding: 16px; overflow-y: auto; max-height: 80vh; }
+  .change-card { margin-bottom: 32px; padding-bottom: 32px; border-bottom: 1px solid var(--border-color); }
+  .change-card:last-child { border-bottom: none; }
+  .mini-preview { margin-top: 10px; max-height: 80px; overflow: hidden; opacity: 0.7; mask-image: linear-gradient(to bottom, black 50%, transparent 100%); }
   .preview-header { justify-content: space-between; gap: 16px; margin-bottom: 14px; }
   .preview-actions { gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
   .preview-header h2 { gap: 10px; margin: 4px 0; font-size: 20px; }

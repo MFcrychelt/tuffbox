@@ -394,7 +394,7 @@ pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> V
         if trimmed.is_empty() || trimmed.starts_with('|') || trimmed.starts_with("Mod") || trimmed.starts_with('-') {
             continue;
         }
-        let normalized = trimmed.trim_matches(|c: char| c == '	' || c == '|' || c == '[' || c == ']');
+        let normalized = trimmed.trim_matches(|c: char| c == '\t' || c == '|' || c == '[' || c == ']');
         let parts = normalized.split_whitespace().collect::<Vec<_>>();
         if parts.is_empty() {
             continue;
@@ -844,7 +844,7 @@ fn extract_quoted_mod_ids(line: &str) -> Vec<String> {
     let mut ids = Vec::new();
     if let Some(pos) = lower.find("provided by '") {
         let start = pos + "provided by '".len();
-        if let Some(end) = line[start..].find(''') {
+        if let Some(end) = line[start..].find('\'') {
             let token = normalize_token(&line[start..start + end]);
             if !token.is_empty() {
                 ids.push(token);

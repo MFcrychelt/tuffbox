@@ -51,8 +51,11 @@
   let mutating = false;
   let filter = "";
   let sideFilter = "all";
+  let contentFilter = "mod"; // mod, resourcepack, datapack, shader
   let error: string | null = null;
   let lastLoadedPath: string | null = null;
+
+  let contentFilter: "mods" | "resourcepacks" | "datapacks" | "shaderpacks" = "mods";
 
   let addOpen = false;
   let searchQuery = "";
@@ -319,22 +322,43 @@
 
 <div class="mods">
   <div class="toolbar">
-    <div class="search">
-      <Search size={16} />
-      <input bind:value={filter} placeholder="Search installed mods..." />
+    <div class="tabs" style="display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto;">
+      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => contentFilter = "mod"}>Mods</button>
+      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => contentFilter = "resourcepack"}>Resourcepacks</button>
+      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => contentFilter = "datapack"}>Datapacks</button>
+      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => contentFilter = "shader"}>Shaders</button>
     </div>
-    <div class="actions">
-      <button class="secondary filter-button" disabled>
-        <Filter size={16} />
-        {sideFilter === "all" ? "All sides" : sideFilter}
-      </button>
-      <button on:click={openAddModal} disabled={!$projectPath || mutating}>
-        <Plus size={16} />
-        Add Mod
-      </button>
-      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
-      </button>
+    <div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
+      <div class="search" style="flex: 1;">
+        <Search size={16} />
+        <input bind:value={filter} placeholder="Search {contentFilter}s..." />
+      </div>
+      <div class="actions">
+        <button class="secondary filter-button" disabled>
+          <Filter size={16} />
+          {sideFilter === "all" ? "All sides" : sideFilter}
+        </button>
+        <button on:click={openAddModal} disabled={!$projectPath || mutating}>
+          <Plus size={16} />
+          Add {contentFilter}
+        </button>
+        <button class="secondary" on:click={async () => {
+          loading = true;
+          try {
+            mods = await invoke("sync_mods_folder", { path: $projectPath });
+            hydrateInstalledIcons(mods);
+          } catch(e) {
+            error = String(e);
+          } finally {
+            loading = false;
+          }
+        }} disabled={!$projectPath || loading} title="Reload from mods folder">
+          <RotateCw size={16} /> Reload from mods/
+        </button>
+        <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
+          <RefreshCw size={16} class={loading ? "spin" : ""} />
+        </button>
+      </div>
     </div>
   </div>
 

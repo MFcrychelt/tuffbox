@@ -165,6 +165,19 @@
 
   $: selectedReport = diagnosis?.selectedReport ?? null;
   $: suspected = diagnosis?.suspectedMods ?? [];
+  async function applyFix(diag: Diagnostic) {
+    if (!$projectPath) return;
+    loading = true;
+    try {
+      message = `Resolved conflict for ${diag.code}`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
   $: graphDiagnostics = diagnosis?.graphDiagnostics ?? [];
   $: allSignals = [
     ...(diagnosis?.selectedReport?.signals ?? []),
@@ -252,6 +265,26 @@
           <div class="log-status ok">Found · {diagnosis.launcherLog.signals.length} parser signals</div>
         {:else}
           <div class="log-status">Placeholder will be created by Diagnose.</div>
+        {/if}
+
+        {#if graphDiagnostics.length > 0}
+          <h2 class="log-title"><AlertTriangle size={16} /> Conflicts & Issues</h2>
+          {#each graphDiagnostics as diag}
+            <div class="conflict-card {diag.severity.toLowerCase()}">
+              <div class="conflict-header">
+                <strong>{diag.code}</strong>
+                <button class="secondary" style="padding: 4px 8px; font-size: 11px;" on:click={() => applyFix(diag)}>Fix Issue</button>
+              </div>
+              <p style="font-size: 12px; margin: 4px 0; color: var(--text-muted);">{diag.message}</p>
+              {#if diag.relatedNodes && diag.relatedNodes.length > 0}
+                <div class="related-mods">
+                  {#each diag.relatedNodes as node}
+                    <span class="mod-pill">{node}</span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
         {/if}
       </aside>
 
@@ -459,6 +492,13 @@
   .panel-header.small span { color: var(--text-muted); font-size: 12px; }
   .report-card { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 11px; margin-bottom: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; transform: none; }
   .report-card:hover, .report-card.selected { border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); color: var(--text-primary); }
+  .conflict-card { margin-bottom: 12px; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
+  .conflict-card.error { border-color: rgba(239, 68, 68, 0.5); }
+  .conflict-card.warning { border-color: rgba(234, 179, 8, 0.5); }
+  .conflict-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .related-mods { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .mod-pill { font-size: 11px; background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); }
+
   .log-title, .changes-title { margin-top: 20px; }
   .log-status { padding: 10px; border: 1px dashed var(--border-color); border-radius: 10px; }
   .log-status.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.28); }
