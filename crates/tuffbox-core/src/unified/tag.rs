@@ -1,4 +1,4 @@
-﻿#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TagId {
     pub namespace: String,
     pub path: String,

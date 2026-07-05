@@ -19,6 +19,28 @@ impl ModrinthProvider {
         let url = format!("{BASE_URL}{path}");
         Ok(crate::http::get_json(&url)?)
     }
+
+    /// Looks up the Modrinth version that produced a given file, by SHA1 hash.
+    ///
+    /// This lets TuffBox recognize `.jar` files that were dropped into the
+    /// `mods/` folder manually (outside the IDE) and turn them into proper
+    /// tracked Modrinth-sourced entries instead of leaving them as opaque
+    /// "local" mods forever.
+    pub fn get_version_by_hash(&self, sha1: &str) -> Result<Option<VersionInfo>, ProviderError> {
+        let url = format!("{BASE_URL}/version_file/{sha1}?algorithm=sha1");
+        let version: Option<ModrinthVersion> = crate::http::get_json_optional(&url)?;
+        Ok(version.map(Into::into))
+    }
+
+    /// Resolves the parent project for a version obtained through
+    /// [`Self::get_version_by_hash`].
+    pub fn identify_local_jar(&self, sha1: &str) -> Result<Option<(ProjectInfo, VersionInfo)>, ProviderError> {
+        let Some(version) = self.get_version_by_hash(sha1)? else {
+            return Ok(None);
+        };
+        let project = self.get_project(&version.project_id)?;
+        Ok(Some((project, version)))
+    }
 }
 
 impl ContentProvider for ModrinthProvider {

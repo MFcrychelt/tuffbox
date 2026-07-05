@@ -144,6 +144,7 @@ fn main() -> anyhow::Result<()> {
                 let mut manifest = load_manifest(manifest_path.clone())?;
                 add_mod_from_modrinth(&mut manifest, &mod_id, side)?;
                 save_manifest(&manifest_path, &manifest)?;
+                download_project_mods(&manifest_path, &manifest);
                 println!(
                     "Added mod {} to {} (snapshot {})",
                     mod_id,
@@ -155,8 +156,16 @@ fn main() -> anyhow::Result<()> {
                 let manifest_path = manifest.clone();
                 let snapshot = auto_snapshot(&manifest_path, "remove-mod")?;
                 let mut manifest = load_manifest(manifest_path.clone())?;
+                let removed = manifest.mods.iter().find(|m| m.id == mod_id).cloned();
                 remove_mod(&mut manifest, &mod_id)?;
                 save_manifest(&manifest_path, &manifest)?;
+                if let Some(removed) = removed {
+                    if let Some(file_name) = removed.file_name {
+                        if let Some(mods_dir) = tuffbox_core::mods_dir_for_manifest(&manifest_path) {
+                            let _ = std::fs::remove_file(mods_dir.join(file_name));
+                        }
+                    }
+                }
                 println!(
                     "Removed mod {} from {} (snapshot {})",
                     mod_id,
@@ -170,6 +179,7 @@ fn main() -> anyhow::Result<()> {
                 let mut manifest = load_manifest(manifest_path.clone())?;
                 update_mod_from_modrinth(&mut manifest, &mod_id)?;
                 save_manifest(&manifest_path, &manifest)?;
+                download_project_mods(&manifest_path, &manifest);
                 println!(
                     "Updated mod {} in {} (snapshot {})",
                     mod_id,
@@ -296,6 +306,17 @@ fn main() -> anyhow::Result<()> {
             let progress = tuffbox_core::mc_install::InstallProgress {
                 log_path: game_dir.join("logs").join("latest.log"),
             };
+
+            // Same safety net as the desktop launcher: verify every
+            // manifest-declared mod actually has its jar on disk before we
+            // launch, so `tuffbox launch` never silently starts vanilla.
+            let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &game_dir.join("mods"));
+            if !sync_report.downloaded.is_empty() {
+                println!("Downloaded {} missing mod file(s).", sync_report.downloaded.len());
+            }
+            for failure in &sync_report.failed {
+                eprintln!("warning: failed to prepare mod '{}': {}", failure.mod_id, failure.error);
+            }
 
             let options = tuffbox_core::LaunchOptions {
                 profile_id: profile_id.clone(),
@@ -468,6 +489,19 @@ fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> 
     let updated = serde_json::to_string_pretty(manifest)?;
     std::fs::write(path, updated)?;
     Ok(())
+}
+
+/// Downloads every manifest-declared mod that isn't already present with a
+/// matching hash into the project's `mods/` folder. Best-effort: failures
+/// are printed but don't abort the CLI command, since the manifest write
+/// already succeeded and diagnostics/graph will still flag missing files.
+fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) {
+    let mods_dir = tuffbox_core::mods_dir_for_manifest(manifest_path)
+        .unwrap_or_else(|| manifest_path.with_file_name("mods"));
+    let report = tuffbox_core::ensure_project_mods_downloaded(manifest, &mods_dir);
+    for failure in &report.failed {
+        eprintln!("warning: failed to download mod {}: {}", failure.mod_id, failure.error);
+    }
 }
 
 fn loader_slug(kind: &tuffbox_core::LoaderKind) -> String {

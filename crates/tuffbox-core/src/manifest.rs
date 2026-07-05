@@ -158,7 +158,7 @@ pub struct LoaderSpec {
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LoaderKind {
     Vanilla,
@@ -194,6 +194,13 @@ pub struct ProfileSpec {
     pub jvm_args: Vec<String>,
     #[serde(default)]
     pub include_mods: Vec<String>,
+    /// Offline/test-launch player name. Defaults to "Player" if unset.
+    /// Used to derive a stable offline UUID so the same name always maps
+    /// to the same in-game identity across test runs (matching vanilla
+    /// offline-mode behavior), instead of every launch using a fixed
+    /// all-zero UUID for every player.
+    #[serde(default)]
+    pub player_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

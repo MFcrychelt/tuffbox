@@ -17,6 +17,31 @@ lazy_static::lazy_static! {
     static ref PROCESSES: Mutex<HashMap<u32, RunningProcess>> = Mutex::new(HashMap::new());
 }
 
+/// Reads newline-delimited output from a reader, tolerating non-UTF-8 bytes.
+///
+/// Minecraft/Java processes occasionally emit output that isn't valid UTF-8
+/// (e.g. platform-native paths or garbled native crash output). Using
+/// `BufRead::lines()` there would drop/terminate the stream on the first
+/// invalid byte sequence (it maps `InvalidData` to an `Err`, which
+/// `.flatten()`/`?` silently swallows), losing the rest of the log forever.
+/// This reads raw bytes and lossily decodes each line instead so the log
+/// capture never stalls or truncates on non-UTF-8 output.
+pub fn read_lines_lossy(mut reader: impl BufRead) -> impl Iterator<Item = String> {
+    std::iter::from_fn(move || {
+        let mut buf = Vec::new();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => None,
+            Ok(_) => {
+                while matches!(buf.last(), Some(b'\n') | Some(b'\r')) {
+                    buf.pop();
+                }
+                Some(String::from_utf8_lossy(&buf).into_owned())
+            }
+            Err(_) => None,
+        }
+    })
+}
+
 pub fn spawn_and_track(
     profile_id: String,
     mut cmd: Command,
@@ -46,7 +71,7 @@ pub fn spawn_and_track(
 
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
-        for line in reader.lines().flatten() {
+        for line in read_lines_lossy(reader) {
             let _ = writeln!(log_file_clone, "{line}");
         }
     });
@@ -54,7 +79,7 @@ pub fn spawn_and_track(
     let mut log_file_clone2 = log_file.try_clone()?;
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines().flatten() {
+        for line in read_lines_lossy(reader) {
             let _ = writeln!(log_file_clone2, "{line}");
         }
     });
@@ -88,7 +113,7 @@ pub fn read_log_tail(path: &Path, limit: usize) -> std::io::Result<String> {
     }
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
+    let lines: Vec<String> = read_lines_lossy(reader).collect();
     let start = lines.len().saturating_sub(limit);
     Ok(lines[start..].join("\n"))
 }

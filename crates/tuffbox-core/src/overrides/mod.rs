@@ -1,4 +1,4 @@
-﻿pub mod mekanism;
+pub mod mekanism;
 pub mod thermal;
 pub mod create;
 

@@ -1,4 +1,4 @@
-﻿use crate::environment::McVersion;
+use crate::environment::McVersion;
 
 #[derive(Debug, Clone)]
 pub struct UnifiedRecipe {
@@ -116,6 +116,245 @@ impl RecipeParser for ShapedRecipeParser121 {
             source_file: file_path.to_string(),
             is_conditional: json.get("neoforge:conditions").is_some(),
         })
+    }
+}
+
+impl RecipeParser for ShapelessRecipeParser {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        _mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let inputs = json
+            .get("ingredients")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(parse_ingredient_value).collect())
+            .unwrap_or_default();
+
+        let output = parse_result_value(json)?;
+
+        Ok(UnifiedRecipe {
+            id: recipe_id_from_path(file_path),
+            recipe_type: "minecraft:crafting_shapeless".to_string(),
+            inputs,
+            output,
+            source_file: file_path.to_string(),
+            is_conditional: json.get("conditions").is_some(),
+        })
+    }
+}
+
+impl RecipeParser for ShapelessRecipeParser121 {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        _mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let inputs = json
+            .get("ingredients")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|ingredient| {
+                        if let Some(s) = ingredient.as_str() {
+                            Some(if s.starts_with('#') {
+                                UnifiedIngredient::Tag(s.to_string())
+                            } else {
+                                UnifiedIngredient::Item(s.to_string())
+                            })
+                        } else {
+                            parse_ingredient_value(ingredient)
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let output = parse_result_121(json).or_else(|_| parse_result_value(json))?;
+
+        Ok(UnifiedRecipe {
+            id: recipe_id_from_path(file_path),
+            recipe_type: "minecraft:crafting_shapeless".to_string(),
+            inputs,
+            output,
+            source_file: file_path.to_string(),
+            is_conditional: json.get("neoforge:conditions").is_some(),
+        })
+    }
+}
+
+impl RecipeParser for CookingRecipeParser {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        _mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let recipe_type = json
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("minecraft:smelting")
+            .to_string();
+
+        let inputs = json
+            .get("ingredient")
+            .and_then(parse_ingredient_value)
+            .map(|ing| vec![ing])
+            .unwrap_or_default();
+
+        let output = parse_result_121(json).or_else(|_| parse_result_value(json))?;
+
+        Ok(UnifiedRecipe {
+            id: recipe_id_from_path(file_path),
+            recipe_type,
+            inputs,
+            output,
+            source_file: file_path.to_string(),
+            is_conditional: json.get("conditions").is_some()
+                || json.get("neoforge:conditions").is_some(),
+        })
+    }
+}
+
+impl RecipeParser for LegacySmithingParser {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        _mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let mut inputs = Vec::new();
+        if let Some(base) = json.get("base").and_then(parse_ingredient_value) {
+            inputs.push(base);
+        }
+        if let Some(addition) = json.get("addition").and_then(parse_ingredient_value) {
+            inputs.push(addition);
+        }
+
+        let output = match json.get("result") {
+            Some(result) => try_parse_output(result)?,
+            None => return Err(RecipeError::Parse("no result in legacy smithing recipe".to_string())),
+        };
+
+        Ok(UnifiedRecipe {
+            id: recipe_id_from_path(file_path),
+            recipe_type: "minecraft:smithing".to_string(),
+            inputs,
+            output,
+            source_file: file_path.to_string(),
+            is_conditional: json.get("conditions").is_some(),
+        })
+    }
+}
+
+impl RecipeParser for SmithingTransformParser {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        _mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let mut inputs = Vec::new();
+        for key in ["template", "base", "addition"] {
+            if let Some(ing) = json.get(key).and_then(parse_ingredient_value) {
+                inputs.push(ing);
+            }
+        }
+
+        let output = parse_result_121(json).or_else(|_| parse_result_value(json))?;
+
+        Ok(UnifiedRecipe {
+            id: recipe_id_from_path(file_path),
+            recipe_type: "minecraft:smithing_transform".to_string(),
+            inputs,
+            output,
+            source_file: file_path.to_string(),
+            is_conditional: json.get("conditions").is_some()
+                || json.get("neoforge:conditions").is_some(),
+        })
+    }
+}
+
+/// Resolves the first usable inner recipe for a conditional wrapper recipe
+/// (`forge:conditional` / `neoforge:conditional`). We can't evaluate mod-load
+/// conditions at parse time, so we prefer the entry that declares no
+/// conditions (the "default"/fallback branch), otherwise fall back to the
+/// first entry.
+pub fn resolve_conditional_entry(json: &serde_json::Value) -> Option<&serde_json::Value> {
+    let entries = json
+        .get("recipes")
+        .or_else(|| json.get("entries"))
+        .and_then(|v| v.as_array())?;
+
+    let unconditional = entries.iter().find(|entry| {
+        entry
+            .get("conditions")
+            .and_then(|c| c.as_array())
+            .map(|c| c.is_empty())
+            .unwrap_or(true)
+    });
+
+    unconditional
+        .or_else(|| entries.first())
+        .and_then(|entry| entry.get("recipe"))
+}
+
+impl RecipeParser for ForgeConditionalRecipeParser {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let inner = resolve_conditional_entry(json)
+            .ok_or_else(|| RecipeError::Parse("no usable forge:conditional entry".to_string()))?;
+        let inner_type = inner.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let mut recipe = parser_for_type(inner_type, mc_version).parse(inner, file_path, mc_version)?;
+        recipe.is_conditional = true;
+        Ok(recipe)
+    }
+}
+
+impl RecipeParser for NeoForgeConditionalParser {
+    fn parse(
+        &self,
+        json: &serde_json::Value,
+        file_path: &str,
+        mc_version: &McVersion,
+    ) -> Result<UnifiedRecipe, RecipeError> {
+        let inner = resolve_conditional_entry(json)
+            .ok_or_else(|| RecipeError::Parse("no usable neoforge:conditional entry".to_string()))?;
+        let inner_type = inner.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let mut recipe = parser_for_type(inner_type, mc_version).parse(inner, file_path, mc_version)?;
+        recipe.is_conditional = true;
+        Ok(recipe)
+    }
+}
+
+/// Central recipe-type dispatcher shared by all loader adapters so that the
+/// version/loader-specific parser selection rules live in one place instead
+/// of being duplicated (and drifting out of sync) across adapters.
+pub fn parser_for_type(recipe_type: &str, mc_version: &McVersion) -> Box<dyn RecipeParser> {
+    match recipe_type {
+        "minecraft:crafting_shaped" if mc_version.minor >= 21 => Box::new(ShapedRecipeParser121),
+        "minecraft:crafting_shaped" => Box::new(ShapedRecipeParser),
+        "minecraft:crafting_shapeless" if mc_version.minor >= 21 => {
+            Box::new(ShapelessRecipeParser121)
+        }
+        "minecraft:crafting_shapeless" => Box::new(ShapelessRecipeParser),
+        "minecraft:smelting"
+        | "minecraft:blasting"
+        | "minecraft:smoking"
+        | "minecraft:campfire_cooking" => Box::new(CookingRecipeParser),
+        "minecraft:smithing_transform" if mc_version.minor >= 20 => {
+            Box::new(SmithingTransformParser)
+        }
+        "minecraft:smithing" if mc_version.minor < 20 => Box::new(LegacySmithingParser),
+        "forge:conditional" => Box::new(ForgeConditionalRecipeParser),
+        "neoforge:conditional" => Box::new(NeoForgeConditionalParser),
+        _ => Box::new(GenericRecipeParser),
     }
 }
 

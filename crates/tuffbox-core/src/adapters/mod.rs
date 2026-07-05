@@ -1,9 +1,9 @@
-﻿pub mod forge;
+pub mod forge;
 pub mod fabric;
 pub mod neoforge;
 
 use crate::environment::{McVersion, LoaderKind};
-use crate::unified::{UnifiedRecipe, UnifiedTag, tag::TagId, tag::TagEntry, recipe::RecipeParser};
+use crate::unified::{UnifiedRecipe, UnifiedTag, tag::TagEntry};
 use std::io::Read;
 
 pub use forge::ForgeAdapter;

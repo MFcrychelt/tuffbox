@@ -277,12 +277,23 @@ fn slugify(name: &str) -> String {
         .to_string()
 }
 
+/// Returns the current UTC time as an RFC 3339 timestamp, e.g.
+/// `2026-06-29T12:34:56Z`.
+///
+/// Previously this returned a hardcoded fake date (`2026-06-29T00:00:00Z`)
+/// for *every* snapshot, which broke history ordering (snapshots sorted by
+/// `created_at` all compared equal) and, combined with
+/// [`rfc3339_now_compact`] feeding the same frozen timestamp into snapshot
+/// IDs, meant two snapshots created with the same name on the same "day"
+/// silently collided and overwrote each other on disk.
 fn rfc3339_now() -> String {
-    "2026-06-29T00:00:00Z".to_string()
+    crate::time_util::rfc3339_now()
 }
 
+/// Returns the current UTC time formatted for use inside a snapshot ID
+/// (`YYYYMMDDTHHMMSSZ`), safe to use as a path segment (no colons).
 fn rfc3339_now_compact() -> String {
-    "20260629T000000Z".to_string()
+    crate::time_util::compact_now()
 }
 
 #[cfg(test)]
@@ -342,5 +353,17 @@ mod tests {
 
         let restored = fs::read_to_string(&manifest_path).unwrap();
         assert!(restored.contains("schemaVersion"));
+    }
+
+    #[test]
+    fn snapshot_timestamps_are_not_hardcoded() {
+        // Regression test: `rfc3339_now`/`rfc3339_now_compact` used to
+        // return a frozen fake date, so every snapshot had an identical
+        // `created_at` and snapshots with the same name could collide by
+        // ID. Verify the timestamp actually reflects wall-clock time
+        // instead of a magic constant.
+        let now = rfc3339_now();
+        assert_ne!(now, "2026-06-29T00:00:00Z", "timestamp looks hardcoded: {now}");
+        assert!(now.ends_with('Z'));
     }
 }

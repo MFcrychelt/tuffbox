@@ -22,6 +22,7 @@
   let jvmArgs = ($projectInfo?.jvmArgs ?? ["-XX:+UseG1GC"]).join(" ");
   let javaPath = $projectInfo?.javaPath ?? "Auto-detect";
   let javaVersion = "";
+  let playerName = $projectInfo?.playerName ?? "Player";
 
   let mcVersion = $projectInfo?.minecraftVersion ?? "";
   let loader = $projectInfo?.loaderKind ?? "vanilla";
@@ -84,6 +85,7 @@
         javaPath: javaPath === "Auto-detect" ? null : javaPath,
         memoryMb: memory,
         jvmArgs: jvmArgs.split(/\s+/).filter(Boolean),
+        playerName: playerName.trim() || null,
       });
       const info = await invoke("validate_project", { path: $projectPath });
       projectInfo.set(info as any);
@@ -191,6 +193,22 @@
           {#if javaVersion}
             <div class="java-preview">{javaVersion}</div>
           {/if}
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title">
+          <Terminal size={18} />
+          <h3>Player</h3>
+        </div>
+        <div class="field">
+          <label for="player-name">Player name (offline test launches)</label>
+          <input id="player-name" bind:value={playerName} placeholder="Player" maxlength="16" />
+          <p class="field-hint">
+            Used for test runs. TuffBox derives a stable offline UUID from this name
+            (same algorithm vanilla uses), so the same name always maps to the same
+            in-game identity across launches.
+          </p>
         </div>
       </section>
 
@@ -394,6 +412,13 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-top: 4px;
+  }
+
+  .field-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 6px 0 0;
+    line-height: 1.4;
   }
 
   textarea {

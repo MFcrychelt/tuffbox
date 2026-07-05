@@ -181,6 +181,87 @@
   let positioned: PositionedNode[] = [];
   let simulation: d3.Simulation<PositionedNode, undefined> | null = null;
 
+  // --- Obsidian-style pan & zoom viewport state ---
+  // The canvas itself stays a fixed logical size; instead of resizing the
+  // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
+  // graph view: scroll to zoom (toward the cursor), drag empty space to
+  // pan, double-click / button to reset.
+  const BASE_WIDTH = 1120;
+  let viewportEl: SVGSVGElement;
+  let viewX = 0;
+  let viewY = 0;
+  let viewScale = 1;
+  let isPanning = false;
+  let panStart = { x: 0, y: 0, viewX: 0, viewY: 0 };
+  $: viewBoxHeight = canvasHeight / viewScale;
+  $: viewBoxWidth = BASE_WIDTH / viewScale;
+  $: viewBoxString = `${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`;
+
+  function clientToSvgPoint(clientX: number, clientY: number) {
+    const rect = viewportEl.getBoundingClientRect();
+    const relX = (clientX - rect.left) / rect.width;
+    const relY = (clientY - rect.top) / rect.height;
+    return {
+      x: viewX + relX * viewBoxWidth,
+      y: viewY + relY * viewBoxHeight,
+    };
+  }
+
+  function handleWheel(event: WheelEvent) {
+    event.preventDefault();
+    const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
+    const nextScale = Math.min(4, Math.max(0.25, viewScale / zoomFactor));
+    const cursor = clientToSvgPoint(event.clientX, event.clientY);
+    const nextWidth = BASE_WIDTH / nextScale;
+    const nextHeight = canvasHeight / nextScale;
+    // Keep the point under the cursor stationary while zooming.
+    const ratioX = (cursor.x - viewX) / viewBoxWidth;
+    const ratioY = (cursor.y - viewY) / viewBoxHeight;
+    viewX = cursor.x - ratioX * nextWidth;
+    viewY = cursor.y - ratioY * nextHeight;
+    viewScale = nextScale;
+  }
+
+  function handleBackgroundMouseDown(event: MouseEvent) {
+    if (event.button !== 0) return;
+    isPanning = true;
+    panStart = { x: event.clientX, y: event.clientY, viewX, viewY };
+    window.addEventListener("mousemove", handleBackgroundMouseMove);
+    window.addEventListener("mouseup", handleBackgroundMouseUp);
+  }
+
+  function handleBackgroundMouseMove(event: MouseEvent) {
+    if (!isPanning || !viewportEl) return;
+    const rect = viewportEl.getBoundingClientRect();
+    const dx = ((event.clientX - panStart.x) / rect.width) * viewBoxWidth;
+    const dy = ((event.clientY - panStart.y) / rect.height) * viewBoxHeight;
+    viewX = panStart.viewX - dx;
+    viewY = panStart.viewY - dy;
+  }
+
+  function handleBackgroundMouseUp() {
+    isPanning = false;
+    window.removeEventListener("mousemove", handleBackgroundMouseMove);
+    window.removeEventListener("mouseup", handleBackgroundMouseUp);
+  }
+
+  function resetView() {
+    viewX = 0;
+    viewY = 0;
+    viewScale = 1;
+  }
+
+  function zoomBy(factor: number) {
+    const centerX = viewX + viewBoxWidth / 2;
+    const centerY = viewY + viewBoxHeight / 2;
+    const nextScale = Math.min(4, Math.max(0.25, viewScale * factor));
+    const nextWidth = BASE_WIDTH / nextScale;
+    const nextHeight = canvasHeight / nextScale;
+    viewX = centerX - nextWidth / 2;
+    viewY = centerY - nextHeight / 2;
+    viewScale = nextScale;
+  }
+
   $: if (nodes && edges) {
     const initializedNodes = nodes.map((node) => {
       const group = node.kind === "Mod" ? "mod" : node.kind === "Profile" ? "profile" : "runtime";
@@ -195,16 +276,39 @@
     simulation = d3.forceSimulation<PositionedNode>(initializedNodes)
       .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(150))
       .force("charge", d3.forceManyBody().strength(-400))
-      .force("center", d3.forceCenter(560, 300))
-      .force("x", d3.forceX(560).strength(0.05))
-      .force("y", d3.forceY(300).strength(0.05))
+      .force("collide", d3.forceCollide().radius(46))
+      .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
+      .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
+      .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
       .on("tick", () => {
         positioned = [...initializedNodes];
       });
+    resetView();
   }
   $: positionById = new Map(positioned.map((node) => [node.id, node]));
 
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  function handleNodeMouseDown(event: MouseEvent, node: PositionedNode) {
+    event.stopPropagation();
+    selectedId = node.id;
+    if (!simulation) return;
+    node.fx = node.x;
+    node.fy = node.y;
+    const onMouseMove = (ev: MouseEvent) => {
+      const p = clientToSvgPoint(ev.clientX, ev.clientY);
+      node.fx = p.x;
+      node.fy = p.y;
+      simulation?.alpha(0.3).restart();
+    };
+    const onMouseUp = () => {
+      node.fx = null;
+      node.fy = null;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }
 </script>
 
 <div class="graph">
@@ -278,7 +382,21 @@
     {/if}
 
     <section class="graph-canvas" aria-label="Dependency graph canvas">
-      <svg viewBox={`0 0 1120 ${canvasHeight}`} role="img">
+      <div class="canvas-controls">
+        <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
+        <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
+        <button class="ghost mini" on:click={resetView} title="Reset view (fit)">⤢</button>
+        <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
+      </div>
+      <svg
+        bind:this={viewportEl}
+        viewBox={viewBoxString}
+        role="img"
+        class:panning={isPanning}
+        on:wheel={handleWheel}
+        on:mousedown={handleBackgroundMouseDown}
+        on:dblclick={resetView}
+      >
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="8" refX="22" refY="3" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
@@ -290,6 +408,7 @@
         {#each edges as edge}
           <line
             class:danger-edge={edgeDanger(edge)}
+            class:dimmed={selectedId && edge.from !== selectedId && edge.to !== selectedId}
             x1={point(edge.from)?.x ?? 0}
             y1={point(edge.from)?.y ?? 0}
             x2={point(edge.to)?.x ?? 1060}
@@ -301,30 +420,11 @@
           <g
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
+            class:dimmed={selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)}
             role="button"
             tabindex="0"
             transform={`translate(${node.x}, ${node.y})`}
-            on:mousedown={(e) => {
-              selectedId = node.id;
-              if (simulation) {
-                let isDragging = true;
-                node.fx = node.x;
-                node.fy = node.y;
-                const onMouseMove = (ev) => {
-                  node.fx = ev.offsetX;
-                  node.fy = ev.offsetY;
-                  simulation.alpha(0.3).restart();
-                };
-                const onMouseUp = () => {
-                  node.fx = null;
-                  node.fy = null;
-                  window.removeEventListener('mousemove', onMouseMove);
-                  window.removeEventListener('mouseup', onMouseUp);
-                };
-                window.addEventListener('mousemove', onMouseMove);
-                window.addEventListener('mouseup', onMouseUp);
-              }
-            }}
+            on:mousedown={(e) => handleNodeMouseDown(e, node)}
           >
             <circle r="6" />
             <text x="10" y="4">{node.label}</text>
@@ -527,25 +627,74 @@
   .mini { padding: 5px 8px; font-size: 11px; }
 
   .graph-canvas {
+    position: relative;
     margin-bottom: 18px;
     background:
       radial-gradient(circle at 78% 18%, rgba(27,217,106,.08), transparent 28%),
       #09090b;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
-    overflow: auto;
+    overflow: hidden;
   }
 
   .graph-canvas svg {
-    min-width: 980px;
     width: 100%;
-    height: auto;
+    height: 560px;
     display: block;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .graph-canvas svg.panning {
+    cursor: grabbing;
+  }
+
+  .canvas-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(9, 9, 11, 0.72);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 4px;
+    backdrop-filter: blur(6px);
+  }
+
+  .canvas-controls .mini {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    line-height: 1;
+  }
+
+  .zoom-readout {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 0 6px;
+    min-width: 38px;
+    text-align: center;
   }
 
   .graph-canvas line {
     stroke: rgba(161, 161, 170, 0.5);
     stroke-width: 1.6;
+    transition: opacity 120ms ease;
+  }
+
+  .graph-canvas line.dimmed {
+    opacity: 0.15;
+  }
+
+  .svg-node.dimmed {
+    opacity: 0.25;
   }
 
   .graph-canvas line.danger-edge {
@@ -555,37 +704,33 @@
 
   .svg-node {
     cursor: pointer;
+    transition: opacity 120ms ease;
   }
 
-  .svg-node rect {
+  .svg-node circle {
     fill: #18181b;
-    stroke: rgba(255,255,255,.11);
-    stroke-width: 1;
+    stroke: rgba(255,255,255,.28);
+    stroke-width: 1.4;
+    transition: stroke 120ms ease, fill 120ms ease;
   }
 
-  .svg-node.selected rect,
-  .svg-node:hover rect {
-    stroke: rgba(27,217,106,.72);
-    fill: rgba(27,217,106,.12);
+  .svg-node.selected circle,
+  .svg-node:hover circle {
+    stroke: rgba(27,217,106,.85);
+    fill: rgba(27,217,106,.18);
   }
 
-  .svg-node.tone-client rect { stroke: rgba(139,92,246,.45); }
-  .svg-node.tone-server rect { stroke: rgba(59,130,246,.45); }
-  .svg-node.tone-both rect { stroke: rgba(27,217,106,.38); }
-  .svg-node.tone-runtime rect { stroke: rgba(245,158,11,.42); }
-  .svg-node.tone-profile rect { stroke: rgba(96,165,250,.42); }
+  .svg-node.tone-client circle { stroke: rgba(139,92,246,.7); }
+  .svg-node.tone-server circle { stroke: rgba(59,130,246,.7); }
+  .svg-node.tone-both circle { stroke: rgba(27,217,106,.65); }
+  .svg-node.tone-runtime circle { stroke: rgba(245,158,11,.7); }
+  .svg-node.tone-profile circle { stroke: rgba(96,165,250,.7); }
 
   .svg-node text {
     fill: #e5e7eb;
     font-size: 12px;
     font-weight: 800;
     pointer-events: none;
-  }
-
-  .svg-node text.sub {
-    fill: #a1a1aa;
-    font-size: 10px;
-    font-weight: 600;
   }
 
   .stat-card {

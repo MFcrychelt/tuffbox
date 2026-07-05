@@ -193,6 +193,25 @@ npm run tauri:dev   # из apps/tuffbox-desktop
 2. Подключить schema status/migration controls в Project Settings UI и расширить миграции под будущие версии.
 3. Расширить Snapshot diff на manifest/lockfile и добавить side-by-side режим.
 4. Улучшить Config Editor: подсветка синтаксиса/форматирование JSON/TOML и поиск по содержимому.
-5. Улучшить Graph view: интерактивная раскладка/мини-карта и группировка по профилям.
+5. Добавить мини-карту графа и группировку по профилям поверх нового pan/zoom viewport.
 6. Добавить change plan preview перед add/update/remove модов в UI.
 7. Test Launcher: расширить установку Forge/NeoForge и улучшить захват логов/статуса процесса.
+
+## Аудит и исправления (2026-07-05)
+
+Проведён сквозной аудит кодовой базы (Rust workspace + Svelte/Tauri frontend) после первичного клонирования. Найденные и исправленные баги:
+
+- **Моды не скачивались физически.** `add_mod_from_modrinth`/`update_mod_from_modrinth`/bulk-install только писали метаданные в manifest — `.jar` никогда не попадал в `mods/`, поэтому Minecraft запускался без модов. Добавлен модуль `tuffbox-core/src/mod_files.rs` (`materialize_mod_file`, `ensure_project_mods_downloaded`) и подключён во все точки изменения манифеста (desktop commands, CLI, resolve/fix-plan actions) и как safety-net перед каждым test launch.
+- **Локальные jar в `mods/` не сверялись с Modrinth.** `sync_mods_folder` помечал любой неизвестный `.jar` как непрозрачный `local`-мод. Добавлен `ModrinthProvider::get_version_by_hash` (`/v2/version_file/{sha1}`) и `identify_local_jar_via_modrinth`, которые распознают дроп-ин моды по содержимому файла и заполняют полноценные Modrinth-метаданные (версия, зависимости, апдейты).
+- **Сборка не собиралась на Linux/macOS.** `winreg` был безусловной зависимостью `tuffbox-core`, хотя сам крейт компилируется только на Windows. Вынесен в `[target.'cfg(windows)'.dependencies]`.
+- **`unified::recipe` не компилировался.** 7 из 10 парсеров рецептов (`Shapeless`, `Cooking`, `Smithing*`, `*ConditionalParser`) были объявлены, но не имели `impl RecipeParser`. Реализованы все парсеры и вынесен общий диспетчер `parser_for_type`, устранивший дублирование версии/loader-специфичной логики выбора парсера между `forge.rs`/`fabric.rs`/`neoforge.rs`.
+- **Move-ошибки после введения `LoaderKind`.** `LoaderKind` не было `Copy`, что ломало `environment.rs`/`registry.rs`. Добавлены `Copy, PartialEq, Eq, Hash`.
+- **Приватный ре-экспорт `LoaderKind`** из `environment.rs` ломал компиляцию адаптеров — заменён на `pub use`.
+- **Снапшоты и lockfile использовали захардкоженную фейковую дату** (`2026-06-29T00:00:00Z`) вместо реального времени — все снапшоты имели одинаковый `created_at`, а два снапшота с одним именем в один "день" перезаписывали друг друга по ID. Добавлен `time_util.rs` с корректной конвертацией `SystemTime → RFC3339 UTC` (алгоритм `civil_from_days`), протестирован на известных эпохальных значениях, включая високосный год.
+- **Оффлайн-запуск всегда использовал фиксированное имя `"Player"` и нулевой UUID.** Добавлено поле `ProfileSpec.player_name` + вычисление детерминированного offline UUID (`MD5("OfflinePlayer:{name}")`, тот же алгоритм, что у ванильного лаунчера) — проверено на эталонном значении для `"Notch"`. Поле добавлено в Project Settings UI.
+- **`Mods.svelte` не компилировался.** Дублирующееся объявление `let contentFilter` с несовместимыми типами ломало сборку всего фронтенда (`vite build` падал). Удалён дубликат.
+- **Потенциальное зависание/потеря логов Test Launcher.** `reader.lines().flatten()` на stdout/stderr процесса Minecraft тихо обрывает поток при первом non-UTF8 байте. Заменено на побайтовое чтение с `String::from_utf8_lossy` (`process::read_lines_lossy`), также используется в `read_log_tail`.
+- **Граф зависимостей не был "как в Obsidian".** У `Graph.svelte` не было pan/zoom — фиксированный `viewBox`, узлы могли перекрываться. Добавлены: масштабирование колёсиком к курсору, перетаскивание фона, кнопки zoom in/out/fit, collision-force между узлами, затемнение несвязанных узлов/рёбер при выборе.
+- Мелкое: UTF-8 BOM убран из 8 файлов (`overrides/*`, `unified/*`, `tag_normalizer.rs`, `lib.rs`), потерянные JVM multi-value аргументы (`ArgValue::Many`) в `mc_install.rs` теперь разворачиваются полностью, а не берётся только первый элемент.
+
+Проверено end-to-end (реальная сеть, реальный Java 21): `tuffbox project add-mod ... sodium` скачивает настоящий `sodium-fabric-*.jar` в `mods/`; `tuffbox launch` полностью устанавливает vanilla/Fabric 1.21.1, запускает JVM, и Minecraft/Fabric Loader подтверждают `Loading 11 mods: - sodium ...` в логе (падение на GLFW/OpenGL ожидаемо — sandbox без дисплея).

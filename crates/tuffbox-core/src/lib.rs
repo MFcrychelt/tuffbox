@@ -1,4 +1,4 @@
-﻿//! TuffBox core.
+//! TuffBox core.
 //!
 //! This crate contains deterministic project, graph and resolver logic.
 //! AI must not be used inside this crate.
@@ -16,11 +16,13 @@ pub mod manifest;
 pub mod provider;
 pub mod resolver;
 pub mod snapshot;
+pub mod time_util;
 pub mod versions;
 pub mod mc_install;
 pub mod forge;
 pub mod jre;
 pub mod process;
+pub mod mod_files;
 
 pub mod environment;
 pub mod unified;
@@ -41,4 +43,5 @@ pub use manifest::*;
 pub use provider::*;
 pub use resolver::*;
 pub use snapshot::*;
+pub use mod_files::*;
 

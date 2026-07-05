@@ -1,12 +1,11 @@
-﻿use std::collections::HashMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use crate::environment::{ModpackEnvironment, DataEpoch};
 use crate::manifest::LoaderKind;
 use crate::adapters::{
-    LoaderAdapter, ModMetadata, AdapterError, ForgeAdapter, FabricAdapter, NeoForgeAdapter,
+    LoaderAdapter, ModMetadata, ForgeAdapter, FabricAdapter, NeoForgeAdapter,
 };
 use crate::unified::{UnifiedRecipe, UnifiedTag, tag::TagId, tag::TagEntry};
-use crate::unified::recipe::RecipeParser;
 use crate::tag_normalizer::TagNormalizer;
 use crate::overrides::{ModOverride, MekanismOverride, ThermalOverride, CreateOverride, OreConfigMapping};
 use std::io::Read;

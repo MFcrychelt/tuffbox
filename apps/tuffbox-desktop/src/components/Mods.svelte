@@ -55,8 +55,6 @@
   let error: string | null = null;
   let lastLoadedPath: string | null = null;
 
-  let contentFilter: "mods" | "resourcepacks" | "datapacks" | "shaderpacks" = "mods";
-
   let addOpen = false;
   let searchQuery = "";
   let searchResults: SearchResult[] = [];

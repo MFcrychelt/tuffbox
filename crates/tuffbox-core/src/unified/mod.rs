@@ -1,4 +1,4 @@
-﻿pub mod recipe;
+pub mod recipe;
 pub mod tag;
 
 pub use recipe::*;

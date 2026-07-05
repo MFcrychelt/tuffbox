@@ -1,6 +1,7 @@
 use crate::jre::JavaRuntime;
 use crate::manifest::{ProfileSpec, ProjectManifest};
 use crate::mc_install::{install_game, InstallProgress};
+use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -47,6 +48,35 @@ pub struct PreparedInstance {
 }
 
 pub struct TestLauncher;
+
+/// Computes a deterministic offline-mode UUID from a player name, the same
+/// way vanilla Minecraft/most launchers do for offline play: MD5 of
+/// `"OfflinePlayer:{name}"`, with the version/variant bits patched to make
+/// it a valid (version 3) UUID.
+///
+/// This matters because the previous implementation always launched with a
+/// fixed all-zero UUID regardless of player name: every test run looked
+/// like the exact same player to Minecraft, which breaks anything that
+/// keys per-player state by UUID (playerdata, permissions, whitelists,
+/// mods that store player-scoped data) and makes it impossible to test
+/// multiplayer-relevant behavior with different names.
+pub fn offline_uuid(player_name: &str) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(b"OfflinePlayer:");
+    hasher.update(player_name.as_bytes());
+    let mut bytes: [u8; 16] = hasher.finalize().into();
+
+    // Set version (3) and variant (RFC 4122) bits, matching Java's
+    // `UUID.nameUUIDFromBytes` used by vanilla for offline players.
+    bytes[6] = (bytes[6] & 0x0f) | 0x30;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    )
+}
 
 impl TestLauncher {
     pub fn find_java() -> Result<JavaRuntime, LauncherError> {
@@ -104,7 +134,7 @@ impl TestLauncher {
 
     pub fn build_command(
         manifest: &ProjectManifest,
-        _profile: &ProfileSpec,
+        profile: &ProfileSpec,
         options: &LaunchOptions,
         java: &JavaRuntime,
         launcher_dir: &Path,
@@ -128,8 +158,13 @@ impl TestLauncher {
         )
         .map_err(|e| LauncherError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-        let auth_player_name = "Player";
-        let auth_uuid = "00000000000000000000000000000000";
+        let auth_player_name = profile
+            .player_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or("Player")
+            .to_string();
+        let auth_uuid = offline_uuid(&auth_player_name);
         let auth_access_token = "0";
         let user_type = "msa";
         let version_type = "release";
@@ -178,8 +213,8 @@ impl TestLauncher {
 
         for arg in &game.game_args {
             let value = arg
-                .replace("${auth_player_name}", auth_player_name)
-                .replace("${auth_uuid}", auth_uuid)
+                .replace("${auth_player_name}", &auth_player_name)
+                .replace("${auth_uuid}", &auth_uuid)
                 .replace("${auth_access_token}", auth_access_token)
                 .replace("${user_type}", user_type)
                 .replace("${version_type}", version_type)
@@ -251,5 +286,20 @@ mod tests {
             assert!(PathBuf::from(&java.path).exists());
             assert!(java.major >= 8);
         }
+    }
+
+    #[test]
+    fn offline_uuid_matches_known_vanilla_value() {
+        // This is the well-known offline UUID vanilla Minecraft computes
+        // for the player name "Notch" (MD5("OfflinePlayer:Notch") with
+        // version/variant bits patched). Matching it exactly proves TuffBox
+        // computes offline identities the same way the game does.
+        assert_eq!(offline_uuid("Notch"), "b50ad385829d3141a2167e7d7539ba7f");
+    }
+
+    #[test]
+    fn offline_uuid_is_deterministic_per_name() {
+        assert_eq!(offline_uuid("Steve"), offline_uuid("Steve"));
+        assert_ne!(offline_uuid("Steve"), offline_uuid("Alex"));
     }
 }

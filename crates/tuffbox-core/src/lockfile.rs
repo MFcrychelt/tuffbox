@@ -155,9 +155,7 @@ pub fn migrate_lockfile_value(value: &mut serde_json::Value) -> Result<(), Lockf
 }
 
 fn rfc3339_now() -> String {
-    // Use a deterministic fallback if std::time is unavailable in tests.
-    // In production this should be replaced with chrono or time crate.
-    "2026-06-29T00:00:00Z".to_string()
+    crate::time_util::rfc3339_now()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

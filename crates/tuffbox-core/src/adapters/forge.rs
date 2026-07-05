@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 use crate::environment::LoaderKind;
 use crate::unified::tag::tag_id_from_path;
 use crate::unified::recipe::*;
@@ -77,21 +77,8 @@ impl LoaderAdapter for ForgeAdapter {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
-        let parser: Box<dyn RecipeParser> = match recipe_type {
-            "minecraft:crafting_shaped" => Box::new(ShapedRecipeParser),
-            "minecraft:crafting_shapeless" => Box::new(ShapelessRecipeParser),
-            "minecraft:smelting" | "minecraft:blasting" | "minecraft:smoking" => {
-                Box::new(CookingRecipeParser)
-            }
-            "minecraft:smithing_transform" if mc_version.minor >= 20 => {
-                Box::new(SmithingTransformParser)
-            }
-            "minecraft:smithing" if mc_version.minor < 20 => Box::new(LegacySmithingParser),
-            "forge:conditional" => Box::new(ForgeConditionalRecipeParser),
-            _ => Box::new(GenericRecipeParser),
-        };
-
-        parser.parse(json, file_path, mc_version)
+        parser_for_type(recipe_type, mc_version)
+            .parse(json, file_path, mc_version)
             .map_err(|e| AdapterError::Parse(e.to_string()))
     }
 

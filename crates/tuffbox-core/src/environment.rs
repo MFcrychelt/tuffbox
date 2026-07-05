@@ -1,4 +1,4 @@
-﻿use crate::manifest::LoaderKind;
+pub use crate::manifest::LoaderKind;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -155,9 +155,10 @@ impl EnvironmentDetector {
     fn jar_has_neoforge_marker(jar_path: &Path) -> Result<bool, DetectError> {
         let file = std::fs::File::open(jar_path)?;
         let archive = zip::ZipArchive::new(file)?;
-        Ok(archive.file_names().any(|name| {
-            name.contains("neoforge") || name == "META-INF/neoforge.mods.toml"
-        }))
+        let has_marker = archive
+            .file_names()
+            .any(|name| name.contains("neoforge") || name == "META-INF/neoforge.mods.toml");
+        Ok(has_marker)
     }
 
     fn detect_versions(

@@ -546,7 +546,7 @@ fn parse_maven_name(name: &str) -> Option<(String, String, String, Option<String
     ))
 }
 
-pub(crate) fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -> Result<(), InstallError> {
+pub fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -> Result<(), InstallError> {
     if path.exists() {
         if let Some(expected) = expected_sha1 {
             let existing = sha1_file(path)?;
@@ -576,7 +576,7 @@ pub(crate) fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&
     Ok(())
 }
 
-pub(crate) fn sha1_file(path: &Path) -> Result<String, InstallError> {
+pub fn sha1_file(path: &Path) -> Result<String, InstallError> {
     let bytes = fs::read(path)?;
     Ok(format!("{:x}", sha1::Sha1::digest(&bytes)))
 }
@@ -658,16 +658,16 @@ fn parse_arguments(args: &Option<Arguments>, legacy: &Option<String>) -> (Vec<St
     let jvm = args
         .jvm
         .iter()
-        .filter_map(|a| match a {
-            Argument::String(s) => Some(s.clone()),
+        .flat_map(|a| match a {
+            Argument::String(s) => vec![s.clone()],
             Argument::Object { rules, value } => {
                 if rule_matches(rules) {
                     match value {
-                        ArgValue::Single(s) => Some(s.clone()),
-                        ArgValue::Many(v) => v.first().cloned(),
+                        ArgValue::Single(s) => vec![s.clone()],
+                        ArgValue::Many(v) => v.clone(),
                     }
                 } else {
-                    None
+                    Vec::new()
                 }
             }
         })
@@ -675,16 +675,16 @@ fn parse_arguments(args: &Option<Arguments>, legacy: &Option<String>) -> (Vec<St
     let game = args
         .game
         .iter()
-        .filter_map(|a| match a {
-            Argument::String(s) => Some(s.clone()),
+        .flat_map(|a| match a {
+            Argument::String(s) => vec![s.clone()],
             Argument::Object { rules, value } => {
                 if rule_matches(rules) {
                     match value {
-                        ArgValue::Single(s) => Some(s.clone()),
-                        ArgValue::Many(v) => v.first().cloned(),
+                        ArgValue::Single(s) => vec![s.clone()],
+                        ArgValue::Many(v) => v.clone(),
                     }
                 } else {
-                    None
+                    Vec::new()
                 }
             }
         })

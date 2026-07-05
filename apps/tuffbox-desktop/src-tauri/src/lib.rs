@@ -16,6 +16,7 @@ struct ProjectSummary {
     java_path: Option<String>,
     memory_mb: u32,
     jvm_args: Vec<String>,
+    player_name: String,
 }
 
 #[derive(serde::Serialize)]
@@ -192,6 +193,7 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
         java_path: manifest.java.as_ref().and_then(|j| j.path.clone()),
         memory_mb: profile.memory_mb.unwrap_or(4096),
         jvm_args: profile.jvm_args.clone(),
+        player_name: profile.player_name.clone().unwrap_or_else(|| "Player".to_string()),
     })
 }
 
@@ -238,14 +240,36 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
         }
         let mods_dir = project_dir.join("mods");
         
-        if let Ok(entries) = std::fs::read_dir(mods_dir) {
+        if let Ok(entries) = std::fs::read_dir(&mods_dir) {
+            let provider = tuffbox_core::ModrinthProvider::new();
             for entry in entries.flatten() {
                 if let Ok(file_type) = entry.file_type() {
                     if file_type.is_file() && entry.path().extension().map_or(false, |e| e == "jar") {
                         let file_name = entry.file_name().to_string_lossy().to_string();
-                        if !manifest.mods.iter().any(|m| m.file_name.as_deref() == Some(&*file_name)) {
-                            manifest.mods.push(tuffbox_core::manifest::ModSpec {
-                                id: file_name.clone(),
+                        if manifest.mods.iter().any(|m| m.file_name.as_deref() == Some(&*file_name)) {
+                            continue;
+                        }
+
+                        // Try to identify this drop-in jar against Modrinth
+                        // by content hash first, so mods placed directly in
+                        // the folder (outside the IDE) get proper metadata,
+                        // version tracking and update support instead of
+                        // being stuck as an opaque "local" entry forever.
+                        let identified = tuffbox_core::identify_local_jar_via_modrinth(
+                            &provider,
+                            &entry.path(),
+                            tuffbox_core::manifest::Side::Both,
+                        )
+                        .ok()
+                        .flatten();
+
+                        let mod_spec = if let Some(mut identified) = identified {
+                            identified.file_name = Some(file_name.clone());
+                            identified
+                        } else {
+                            let id = file_name.trim_end_matches(".jar").to_string();
+                            tuffbox_core::manifest::ModSpec {
+                                id,
                                 name: file_name.clone(),
                                 version: "unknown".to_string(),
                                 side: tuffbox_core::manifest::Side::Both,
@@ -260,8 +284,10 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                                 hashes: None,
                                 dependencies: vec![],
                                 status: vec![],
-                            });
-                        }
+                            }
+                        };
+
+                        manifest.mods.push(mod_spec);
                     }
                 }
             }
@@ -386,7 +412,9 @@ async fn add_modrinth_mod(path: String, mod_id: String, side: String) -> Result<
         auto_snapshot(&PathBuf::from(&path), "add-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
-        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())
+        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&PathBuf::from(&path), &manifest);
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -404,6 +432,7 @@ async fn add_modrinth_mod_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
         Ok(installed)
     })
     .await
@@ -422,6 +451,7 @@ async fn add_modrinth_mods_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
         Ok(installed)
     })
     .await
@@ -433,11 +463,23 @@ fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
     auto_snapshot(&PathBuf::from(&path), "remove-mod").map_err(|e| e.to_string())?;
     let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let original_len = manifest.mods.len();
+    let removed_mod = manifest.mods.iter().find(|m| m.id == mod_id).cloned();
     manifest.mods.retain(|m| m.id != mod_id);
     if manifest.mods.len() == original_len {
         return Err(format!("mod {mod_id} not found in project"));
     }
-    save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())
+    save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
+
+    // Remove the physical jar too, so a removed mod doesn't linger in
+    // `mods/` and get loaded by Minecraft anyway on the next launch.
+    if let Some(removed_mod) = removed_mod {
+        if let Some(file_name) = removed_mod.file_name {
+            if let Some(mods_dir) = tuffbox_core::mods_dir_for_manifest(&PathBuf::from(&path)) {
+                let _ = std::fs::remove_file(mods_dir.join(file_name));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -446,7 +488,9 @@ async fn update_project_mod(path: String, mod_id: String) -> Result<(), String> 
         auto_snapshot(&PathBuf::from(&path), "update-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         update_mod_from_modrinth(&mut manifest, &mod_id).map_err(|e| e.to_string())?;
-        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())
+        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&PathBuf::from(&path), &manifest);
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -530,6 +574,7 @@ async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<S
         let mut applied = Vec::new();
         apply_change_action(&mut manifest, action, &mut applied)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
         Ok(applied)
     })
     .await
@@ -554,6 +599,7 @@ async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> 
             apply_change_action(&mut manifest, action, &mut applied)?;
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
         Ok(applied)
     })
     .await
@@ -590,6 +636,7 @@ async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, Strin
             }
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
         Ok(installed)
     })
     .await
@@ -1235,6 +1282,32 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 
     progress.log(&format!("# Game directory: {}", game_dir.display()));
     progress.log(&format!("# Launcher directory: {}", launcher_dir.display()));
+
+    // Safety net: make sure every mod declared in the manifest actually has
+    // its .jar on disk before we launch. Mods can end up missing here if
+    // they were added while offline, if a previous download failed, or if
+    // the manifest was hand-edited/imported without a download step.
+    // Without this, TuffBox would happily launch vanilla Minecraft while the
+    // UI still shows a full mod list.
+    progress.log("# Verifying mod files...");
+    let mods_dir = game_dir.join("mods");
+    let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &mods_dir);
+    if !sync_report.downloaded.is_empty() {
+        progress.log(&format!(
+            "# Downloaded {} missing mod file(s): {}",
+            sync_report.downloaded.len(),
+            sync_report.downloaded.join(", ")
+        ));
+    }
+    if !sync_report.failed.is_empty() {
+        for failure in &sync_report.failed {
+            progress.log(&format!(
+                "# WARNING: failed to prepare mod '{}': {}",
+                failure.mod_id, failure.error
+            ));
+        }
+    }
+
     progress.log("# Installing Minecraft (this may take a while)...");
 
     let options = LaunchOptions {
@@ -1431,6 +1504,7 @@ fn update_project_settings(
     java_path: Option<String>,
     memory_mb: u32,
     jvm_args: Vec<String>,
+    player_name: Option<String>,
 ) -> Result<(), String> {
     use tuffbox_core::manifest::{JavaSpec, LoaderKind, LoaderSpec, MinecraftSpec};
 
@@ -1460,6 +1534,7 @@ fn update_project_settings(
     if let Some(profile) = manifest.profiles.iter_mut().find(|p| p.id == "client") {
         profile.memory_mb = Some(memory_mb);
         profile.jvm_args = jvm_args;
+        profile.player_name = player_name.filter(|name| !name.trim().is_empty());
     }
 
     let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
@@ -1535,6 +1610,7 @@ fn create_instance(
             memory_mb: Some(4096),
             jvm_args: vec!["-XX:+UseG1GC".to_string()],
             include_mods: Vec::new(),
+            player_name: None,
         }],
         mods: Vec::new(),
         overrides: None,
@@ -2107,6 +2183,21 @@ fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> 
     let json = serde_json::to_string_pretty(manifest)?;
     std::fs::write(path, json)?;
     Ok(())
+}
+
+/// Downloads every manifest-declared mod that isn't already present with a
+/// matching hash into the project's `mods/` folder.
+///
+/// This is called right after any manifest mutation that adds/updates mods
+/// so the `.jar` files backing those entries actually exist before the next
+/// test launch, instead of only existing as metadata in the manifest.
+/// Failures are best-effort: a mod that fails to download still shows up in
+/// diagnostics/graph as missing rather than silently blocking the whole
+/// manifest write.
+fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) -> tuffbox_core::ModSyncReport {
+    let mods_dir = tuffbox_core::mods_dir_for_manifest(manifest_path)
+        .unwrap_or_else(|| manifest_path.with_file_name("mods"));
+    tuffbox_core::ensure_project_mods_downloaded(manifest, &mods_dir)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
