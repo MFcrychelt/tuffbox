@@ -49,16 +49,15 @@ jobs:
       working-directory: apps/tuffbox-desktop
       run: npm ci
 
-    - name: Build frontend (Svelte to static)
+    - name: Build Tauri (Windows .exe + installer)
       working-directory: apps/tuffbox-desktop
-      run: npm run build
+      run: npm run tauri:build
 
-    - name: Build Tauri (Windows .exe)
-      run: cargo build --release -p tuffbox-desktop
-
-    - name: Upload tuffbox-desktop.exe
+    - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: tuffbox-desktop-windows-exe
-        path: target/release/tuffbox-desktop.exe
+        name: tuffbox-desktop-windows
+        path: |
+          target/release/tuffbox-desktop.exe
+          target/release/bundle/
         if-no-files-found: error
