@@ -33,7 +33,7 @@
       </button>
     {/each}
 
-    <button class="nav-item add" title="New project">
+    <button class="nav-item add" title="New project" on:click={() => (currentView = "dashboard")}>
       <Plus size={26} />
     </button>
   </nav>

@@ -4,8 +4,10 @@
     Plus,
     Settings,
     MoreVertical,
+    Pin,
     Folder,
     Trash2,
+    Eraser,
     Copy,
     Link2,
     Wrench,
@@ -14,6 +16,7 @@
     FileArchive,
     Download,
     ExternalLink,
+    Globe,
     ShieldAlert,
     Terminal,
     Minus,
@@ -22,6 +25,7 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
+  import { toasts } from "../lib/toast";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LaunchLogModal from "./LaunchLogModal.svelte";
 
@@ -59,9 +63,10 @@
     launching = true;
     showLogModal = true;
     try {
+      await invoke("set_last_opened_project", { path: selectedPath });
       await invoke("launch_profile", { path: selectedPath, profile: "client" });
     } catch (e) {
-      alert(`Launch failed: ${e}`);
+      toasts.error(`Launch failed: ${e}`);
     } finally {
       launching = false;
     }
@@ -85,8 +90,51 @@
     activeMenuPath = null;
   }
 
+  let pinnedPaths: Record<string, boolean> = {};
   let actionBusy = false;
+
+  async function togglePin(event: MouseEvent, projectPath: string) {
+    event.stopPropagation();
+    const isPinned = !pinnedPaths[projectPath];
+    pinnedPaths[projectPath] = isPinned;
+    pinnedPaths = { ...pinnedPaths };
+    try {
+      await invoke("pin_project", { path: projectPath, pin: isPinned });
+    } catch {}
+  }
+
+  // Load pinned state for visible projects
+  $: if ($recentProjects.length > 0) {
+    for (const p of $recentProjects) {
+      if (pinnedPaths[p.path] === undefined) {
+        invoke("is_project_pinned", { path: p.path }).then((pinned: boolean) => {
+          pinnedPaths[p.path] = pinned;
+          pinnedPaths = { ...pinnedPaths };
+        }).catch(() => {});
+      }
+    }
+  }
   let actionError: string | null = null;
+  let instanceSizes: Record<string, string> = {};
+  let loadingSizes: Record<string, boolean> = {};
+
+  async function loadSize(projectPath: string) {
+    if (instanceSizes[projectPath] || loadingSizes[projectPath]) return;
+    loadingSizes[projectPath] = true;
+    try {
+      instanceSizes[projectPath] = await invoke("get_instance_size", { path: projectPath });
+      instanceSizes = { ...instanceSizes };
+    } catch {
+      instanceSizes[projectPath] = "?";
+    } finally {
+      loadingSizes[projectPath] = false;
+    }
+  }
+
+  // Load sizes on mount
+  $: if ($recentProjects.length > 0) {
+    for (const p of $recentProjects) loadSize(p.path);
+  }
 
   async function handleAction(action: string, project: RecentProject) {
     activeMenuPath = null;
@@ -99,17 +147,13 @@
         selectProject(project.path);
         break;
       case "desktop-shortcut":
-        alert(
-          "Desktop shortcuts aren't implemented yet — this needs a native OS integration " +
-          "(Start Menu / .desktop file / .app bundle) that differs per platform and isn't " +
-          "wired up in this build. Use \"Open Folder\" and create one manually for now."
-        );
+        toasts.info("Desktop shortcuts: Use Open Folder and create one manually for now.", 6000);
         break;
       case "server-pack":
         actionBusy = true;
         try {
           const result: any = await invoke("export_server_pack", { path: project.path, targetPath: null });
-          alert(`Server pack exported to:\n${result.path}`);
+          toasts.success(`Server pack exported.`);
         } catch (e) {
           actionError = String(e);
         } finally {
@@ -117,10 +161,27 @@
         }
         break;
       case "links":
-        alert(
-          "Links (Modrinth/CurseForge project pages) aren't implemented yet — this project " +
-          "isn't published anywhere, so there is nothing to link to."
-        );
+        toasts.info("Links: Project not published yet.", 4000);
+        break;
+      case "worlds":
+        actionBusy = true;
+        try {
+          const worlds: any[] = await invoke("list_worlds", { path: project.path });
+          if (worlds.length === 0) toasts.info("No worlds found in saves/ folder.");
+          else {
+            let detail = "";
+            for (const w of worlds.slice(0, 3)) {
+              try {
+                const info: any = await invoke("read_world_info", { path: project.path, worldName: w.name });
+                detail += `${w.name}: ${info.gameType}, seed ${info.seed}, ${info.sizeFormatted}
+`;
+              } catch { detail += `${w.name}: ${w.sizeFormatted}
+`; }
+            }
+            toasts.info(detail || `${worlds.length} world(s) found.`, 8000);
+          }
+        } catch (e) { actionError = String(e); }
+        finally { actionBusy = false; }
         break;
       case "open-folder":
         await invoke("open_project_folder", { path: project.path });
@@ -129,7 +190,7 @@
         actionBusy = true;
         try {
           const zipPath = await invoke("create_logs_zip", { path: project.path });
-          alert(`Logs archive created:\n${zipPath}`);
+          toasts.success(`Logs archive created.`);
         } catch (e) {
           actionError = String(e);
         } finally {
@@ -138,7 +199,7 @@
         break;
       case "copy-link":
         await navigator.clipboard.writeText(project.path);
-        alert("Modpack path copied to clipboard");
+        toasts.success("Modpack path copied to clipboard");
         break;
       case "profile-options":
         currentView = "project-settings";
@@ -152,7 +213,7 @@
           const clonedPath = await invoke<string>("clone_project", { path: project.path, newName });
           const info = await invoke("validate_project", { path: clonedPath });
           recentProjects.add({ path: clonedPath, info: info as any });
-          alert(`Cloned to:\n${clonedPath}`);
+          toasts.success(`Cloned to: ${clonedPath}`);
         } catch (e) {
           actionError = String(e);
         } finally {
@@ -161,10 +222,15 @@
         break;
       }
       case "share":
-        alert(
-          "Share Profile isn't implemented yet — cloud sharing requires a backend service " +
-          "that doesn't exist in this build (see roadmap P3: ecosystem)."
-        );
+        toasts.info("Share Profile: Cloud sharing requires backend service (roadmap P3).", 5000);
+        break;
+      case "cleanup":
+        actionBusy = true;
+        try {
+          const result: any = await invoke("cleanup_project", { path: project.path });
+          toasts.success(`Cleaned ${result.count} files: ${result.cleaned?.join(", ") || "none"}`);
+        } catch (e) { actionError = String(e); }
+        finally { actionBusy = false; }
         break;
       case "repair":
         actionBusy = true;
@@ -172,7 +238,7 @@
           const report: any = await invoke("repair_project", { path: project.path });
           const downloaded = report.downloaded?.length ?? 0;
           const failed = report.failed?.length ?? 0;
-          alert(
+          toasts.success(
             downloaded === 0 && failed === 0
               ? "All mod files were already present and valid."
               : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`
@@ -190,7 +256,7 @@
         await deleteProject(project);
         break;
     }
-    if (actionError) alert(`Action failed: ${actionError}`);
+    if (actionError) toasts.error(`Action failed: ${actionError}`);
   }
 
   function removeFromLauncher(project: RecentProject) {
@@ -217,7 +283,7 @@
         projectInfo.set($recentProjects[0]?.info ?? null);
       }
     } catch (e) {
-      alert(`Failed to delete profile: ${e}`);
+      toasts.error(`Failed to delete profile: ${e}`);
     }
   }
 
@@ -315,9 +381,12 @@
             <div class="tile-info">
               <span class="tile-name">{project.info.name}</span>
               <span class="tile-meta"
-                >{project.info.minecraftVersion} · {project.info.loaderKind}</span
+                >{project.info.minecraftVersion} · {project.info.loaderKind}{#if instanceSizes[project.path]} · {instanceSizes[project.path]}{/if}</span
               >
             </div>
+            <button class="tile-pin" class:pinned={pinnedPaths[project.path]} on:click={(e) => togglePin(e, project.path)} title={pinnedPaths[project.path] ? "Unpin" : "Pin"}>
+              <Pin size={14} />
+            </button>
             <button
               class="tile-menu"
               class:active={activeMenuPath === project.path}
@@ -345,6 +414,9 @@
                   <button on:click={() => handleAction("open-folder", project)}>
                     <Folder size={14} /> Open Folder
                   </button>
+                  <button on:click={() => handleAction("worlds", project)}>
+                    <Globe size={14} /> List Worlds
+                  </button>
                   <button on:click={() => handleAction("logs-zip", project)}>
                     <FileArchive size={14} /> Create logs.zip
                   </button>
@@ -359,6 +431,9 @@
                   </button>
                   <button on:click={() => handleAction("share", project)}>
                     <Share2 size={14} /> Share Profile
+                  </button>
+                  <button on:click={() => handleAction("cleanup", project)}>
+                    <Eraser size={14} /> Cleanup
                   </button>
                   <button on:click={() => handleAction("repair", project)}>
                     <Wrench size={14} /> Repair Profile
@@ -576,6 +651,16 @@
     color: var(--text-muted);
     text-transform: capitalize;
   }
+
+  .tile-pin {
+    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+    border-radius: 4px; background: transparent; border: none; color: var(--text-muted);
+    cursor: pointer; flex-shrink: 0; padding: 0; opacity: 0;
+    transition: opacity .15s, color .15s;
+  }
+  .project-tile:hover .tile-pin { opacity: 1; }
+  .tile-pin.pinned { opacity: 1; color: var(--accent-primary); }
+  .tile-pin:hover { color: var(--accent-primary) !important; }
 
   .tile-menu {
     width: 28px;

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { History, RefreshCw, Search, FileText, Maximize2, Save, X, RotateCcw, ChevronDown, ChevronRight } from "lucide-svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import { projectPath } from "../lib/store";
 
   type ChangeEntry = {
@@ -49,6 +50,23 @@
     Other: [],
   };
   let settingsLoadedPath: string | null = null;
+
+  let confirmOpen = false;
+  let confirmEntry: ChangeEntry | null = null;
+
+  function showRollbackConfirm(entry: ChangeEntry) { confirmEntry = entry; confirmOpen = true; }
+
+  async function doRollback() {
+    if (!$projectPath || !confirmEntry) return;
+    confirmOpen = false;
+    loading = true; error = null;
+    try {
+      await invoke("rollback_history_file", { path: $projectPath, snapshotId: confirmEntry.snapshotId, relativePath: confirmEntry.path });
+      message = `Rolled back ${confirmEntry.path}.`;
+      await load(true);
+    } catch(e) { error = String(e); }
+    finally { loading = false; confirmEntry = null; }
+  }
 
   async function loadHistorySettings() {
     if (!$projectPath || settingsLoadedPath === $projectPath) return;
@@ -149,9 +167,11 @@
   }
 
   async function rollbackEntry(entry: ChangeEntry) {
+    showRollbackConfirm(entry);
+    return;
+  }
+  async function _legacy_rollback(entry: ChangeEntry) {
     if (!$projectPath || entry.kind !== "file_changed") return;
-    const ok = window.confirm(`Rollback ${entry.path} from snapshot ${entry.snapshotId}?`);
-    if (!ok) return;
     loading = true;
     error = null;
     message = null;
@@ -274,7 +294,7 @@
                   <p>{entry.createdAt} · {entry.reason}</p>
                 </div>
                 <div class="preview-actions">
-                  <button class="secondary" on:click={() => rollbackEntry(entry)} disabled={entry.kind !== "file_changed"}>
+                  <button class="secondary" on:click={() => showRollbackConfirm(entry)} disabled={entry.kind !== "file_changed"}>
                     <RotateCcw size={16} /> Rollback
                   </button>
                   <button class="secondary" on:click={() => openFullFile(entry)} disabled={!entry.canOpen}>

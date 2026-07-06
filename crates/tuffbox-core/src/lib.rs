@@ -30,6 +30,11 @@ pub mod adapters;
 pub mod tag_normalizer;
 pub mod overrides;
 pub mod registry;
+pub mod knowledge;
+pub mod properties_parser;
+pub mod level_dat;
+pub mod crash_assistant;
+pub mod ai_explanation;
 
 pub use change_plan::*;
 pub use crash::*;

@@ -22,6 +22,27 @@
     { id: "curseforge", label: "CurseForge", state: "draft placeholder" },
     { id: "github", label: "GitHub Releases", state: "draft placeholder" },
   ];
+
+  let githubRelease: any = null;
+  let githubLoading = false;
+
+  async function generateGithubRelease() {
+    if (!$projectPath) return;
+    githubLoading = true;
+    try {
+      const tag = version.trim() ? `v${version.trim()}` : null;
+      githubRelease = await invoke("generate_github_release", { path: $projectPath, tag, target: null });
+      publishTargets = publishTargets.map(t => t.id === "github" ? { ...t, state: "prepared" } : t);
+      message = `GitHub release prepared: ${githubRelease.tagName}`;
+    } catch(e) { error = String(e); }
+    finally { githubLoading = false; }
+  }
+
+  async function copyReleaseBody() {
+    if (!githubRelease) return;
+    try { await navigator.clipboard.writeText(githubRelease.body); message = "Release body copied to clipboard."; }
+    catch { message = "Failed to copy."; }
+  }
   let loading = false;
   let error = "";
   let message = "";
@@ -170,7 +191,13 @@
           {#each publishTargets as target}
             <div class="publish-target">
               <div><strong>{target.label}</strong><span>{target.state}</span></div>
-              <button class="ghost mini" on:click={() => markPublishTarget(target.id)}>Mark prepared</button>
+              {#if target.id === "github"}
+                <button class="secondary mini" on:click={generateGithubRelease} disabled={githubLoading}>
+                  {githubLoading ? "..." : "Generate"}
+                </button>
+              {:else}
+                <button class="ghost mini" on:click={() => markPublishTarget(target.id)}>Mark prepared</button>
+              {/if}
             </div>
           {/each}
         </div>
@@ -204,6 +231,17 @@
             {/each}
           {/if}
         </div>
+
+        {#if githubRelease}
+          <div class="github-preview">
+            <h4>GitHub Release: {githubRelease.tagName}</h4>
+            <div class="github-actions">
+              <button class="secondary mini" on:click={copyReleaseBody}>Copy body</button>
+              <span class="gh-meta">{githubRelease.artifactCount} artifacts · release.json saved</span>
+            </div>
+            <pre class="gh-body-preview">{githubRelease.body?.slice(0, 2000)}{githubRelease.body?.length > 2000 ? "..." : ""}</pre>
+          </div>
+        {/if}
 
         <div class="release-actions">
           <button class="secondary" on:click={createReleaseDraft} disabled={loading || !changelog.trim()}>
@@ -271,6 +309,12 @@
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue.ok { color: var(--accent-primary); display: flex; align-items: center; gap: 8px; }
+  .github-preview { margin-top: 14px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.03); }
+  .github-preview h4 { color: var(--accent-secondary); margin: 0 0 8px; font-size: 14px; }
+  .github-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .gh-meta { color: var(--text-muted); font-size: 11px; }
+  .gh-body-preview { margin: 0; padding: 12px; border-radius: 8px; background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
+
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
   .changelog-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 680px; }

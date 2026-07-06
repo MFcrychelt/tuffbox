@@ -373,7 +373,29 @@ pub fn parse_crash_sections(text: &str) -> Vec<CrashReportSection> {
             .collect::<Vec<_>>()
             .join("
 ");
-        sections.push(CrashReportSection {
+        // Recognize Forge/NeoForge sections in addition to vanilla ones
+    let forge_section_names = [
+        ("Forge Mod List", "FORGE_MOD_LIST"),
+        ("FML Mod Loading", "FML_LOADING"),
+        ("NeoForge Mod List", "NEO_MOD_LIST"),
+        ("Memory", "MEMORY"),
+        ("JVM Flags", "JVM_FLAGS"),
+        ("CPU", "CPU_INFO"),
+        ("Processor", "CPU_INFO"),
+    ];
+    for (name, id) in &forge_section_names {
+        if let Some(pos) = text.find(name) {
+            let line_no = text[..pos].lines().count();
+            sections.push(CrashReportSection {
+                title: id.to_string(),
+                start_line: line_no.saturating_sub(1),
+                end_line: line_no + 30,
+                preview: text[pos..].lines().take(8).collect::<Vec<_>>().join("\n"),
+            });
+        }
+    }
+
+    sections.push(CrashReportSection {
             title: title.clone(),
             start_line: *start_line,
             end_line,
@@ -383,7 +405,90 @@ pub fn parse_crash_sections(text: &str) -> Vec<CrashReportSection> {
     sections
 }
 
+
+/// Parse Forge/NeoForge crash report mod table format.
+/// Forge crash reports often have one of two table formats:
+///   1. "| ID | Name | Version |" pipe-separated tables
+///   2. "Mod List:" followed by indented name-version pairs
+fn parse_forge_crash_mods(text: &str) -> Vec<CrashReportModEntry> {
+    let mut entries = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Pattern 1: pipe table
+    let mut in_pipe_table = false;
+    for (_line_no, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('|') && trimmed.contains(" ID ") {
+            in_pipe_table = true;
+            continue;
+        }
+        if in_pipe_table {
+            if !trimmed.starts_with('|') || trimmed.len() < 5 {
+                if !entries.is_empty() { break; }
+                in_pipe_table = false;
+                continue;
+            }
+            let cells: Vec<&str> = trimmed.trim_matches('|').split('|').map(|c| c.trim()).collect();
+            if cells.len() >= 2 && !cells[0].is_empty() && !cells[0].contains('-') {
+                entries.push(CrashReportModEntry {
+                    id: cells[0].to_string(),
+                    name: cells.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                    version: cells.get(2).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                    raw: trimmed.to_string(),
+                });
+                if entries.len() >= 200 { break; }
+            }
+        }
+    }
+
+    // Pattern 2: "Mod List:" followed by list
+    if entries.is_empty() {
+        let mut in_mod_list = false;
+        for line in lines {
+            let trimmed = line.trim();
+            if trimmed.eq_ignore_ascii_case("Mod List:") || trimmed.starts_with("Mod List:") {
+                in_mod_list = true;
+                continue;
+            }
+            if in_mod_list {
+                if trimmed.is_empty() || trimmed.starts_with("--") || trimmed.starts_with("[") {
+                    if !entries.is_empty() { break; }
+                    in_mod_list = false;
+                    continue;
+                }
+                // Format: "- modid" or "modid (version)"
+                let stripped = trimmed.trim_start_matches('-').trim();
+                if let Some((name, ver)) = stripped.rsplit_once('(') {
+                    let ver = ver.trim_end_matches(')').trim();
+                    entries.push(CrashReportModEntry {
+                        id: name.trim().to_string(),
+                        name: None,
+                        version: Some(ver.to_string()),
+                        raw: trimmed.to_string(),
+                    });
+                } else {
+                    entries.push(CrashReportModEntry {
+                        id: stripped.to_string(),
+                        name: None,
+                        version: None,
+                        raw: trimmed.to_string(),
+                    });
+                }
+                if entries.len() >= 200 { break; }
+            }
+        }
+    }
+
+    entries
+}
+
 pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> Vec<CrashReportModEntry> {
+    // Try Forge/NeoForge table format first
+    let forge_entries = parse_forge_crash_mods(text);
+    if !forge_entries.is_empty() {
+        return forge_entries;
+    }
+    // Fallback: vanilla crash report -- Mods -- section
     let lines = text.lines().collect::<Vec<_>>();
     let Some(section) = sections.iter().find(|section| section.title.eq_ignore_ascii_case("mods")) else {
         return Vec::new();
@@ -391,7 +496,21 @@ pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> V
     let mut entries = Vec::new();
     for line in lines.iter().skip(section.start_line).take(section.end_line.saturating_sub(section.start_line)) {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('|') || trimmed.starts_with("Mod") || trimmed.starts_with('-') {
+        if trimmed.is_empty() || trimmed.starts_with("Mod") || trimmed.starts_with('-') {
+            continue;
+        }
+        // Handle pipe-format lines inside the vanilla -- Mods -- section
+        // (some hybrid reports mix formats)
+        if trimmed.starts_with('|') {
+            let cells: Vec<&str> = trimmed.trim_matches('|').split('|').map(|c| c.trim()).collect();
+            if cells.len() >= 2 && !cells[0].is_empty() && !cells[0].contains('-') {
+                entries.push(CrashReportModEntry {
+                    id: cells[0].to_string(),
+                    name: cells.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                    version: cells.get(2).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                    raw: trimmed.to_string(),
+                });
+            }
             continue;
         }
         let normalized = trimmed.trim_matches(|c: char| c == '\t' || c == '|' || c == '[' || c == ']');

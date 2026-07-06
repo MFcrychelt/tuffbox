@@ -109,6 +109,7 @@ pub trait ContentProvider {
         id: &str,
         query: &ProviderSearchQuery,
     ) -> Result<Vec<VersionInfo>, ProviderError>;
+    fn get_version(&self, version_id: &str) -> Result<VersionInfo, ProviderError>;
     fn get_file(&self, version_id: &str, filename: &str)
         -> Result<ProviderFileInfo, ProviderError>;
     fn resolve_dependencies(

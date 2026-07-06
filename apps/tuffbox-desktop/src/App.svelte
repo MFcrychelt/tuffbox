@@ -8,6 +8,10 @@
   import Diagnostics from "./components/Diagnostics.svelte";
   import Snapshots from "./components/Snapshots.svelte";
   import ConfigEditor from "./components/ConfigEditor.svelte";
+  import OreGenVisualizer from "./components/OreGenVisualizer.svelte";
+  import RecipeBrowser from "./components/RecipeBrowser.svelte";
+  import QuestEditor from "./components/QuestEditor.svelte";
+  import ToastContainer from "./components/ToastContainer.svelte";
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
   import { projectPath, projectInfo } from "./lib/store";
@@ -21,7 +25,10 @@
     | "snapshots"
     | "configs"
     | "settings"
-    | "project-settings";
+    | "project-settings"
+    | "ore-gen"
+    | "recipes"
+    | "quests";
   let currentView: View = "dashboard";
 </script>
 
@@ -48,10 +55,34 @@
         <Settings />
       {:else if currentView === "project-settings"}
         <ProjectSettings onBack={() => (currentView = "dashboard")} />
+      {:else if currentView === "ore-gen"}
+        <OreGenVisualizer />
+      {:else if currentView === "recipes"}
+        <RecipeBrowser />
+      {:else if currentView === "quests"}
+        <QuestEditor />
       {/if}
     </main>
   </div>
 </div>
+
+{#key currentView}
+  <svelte:window
+    on:keydown={(e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        switch (e.key) {
+          case '1': currentView = 'dashboard'; e.preventDefault(); break;
+          case '2': currentView = 'ide'; e.preventDefault(); break;
+          case '3': currentView = 'mods'; e.preventDefault(); break;
+          case '4': currentView = 'graph'; e.preventDefault(); break;
+          case '5': currentView = 'configs'; e.preventDefault(); break;
+          case '6': currentView = 'diagnostics'; e.preventDefault(); break;
+          case '7': currentView = 'snapshots'; e.preventDefault(); break;
+        }
+      }
+    }}
+  />
+{/key}
 
 <style>
   .app-shell {

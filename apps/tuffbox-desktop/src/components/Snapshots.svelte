@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText } from "lucide-svelte";
+  import { History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText, Archive, Trash2 } from "lucide-svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import { projectPath } from "../lib/store";
 
   type Snapshot = {
@@ -37,6 +38,75 @@
   let selectedDiffPath = "";
   let fileDiff: FileDiff | null = null;
   let diffLoading = false;
+
+  // Confirm dialog state
+  let confirmOpen = false;
+  let confirmTitle = "";
+  let confirmMessage = "";
+  let confirmDanger = false;
+  let confirmAction: (() => void) | null = null;
+
+  function showConfirm(title: string, message: string, action: () => void, danger = false) {
+    confirmTitle = title; confirmMessage = message; confirmAction = action; confirmDanger = danger; confirmOpen = true;
+  }
+
+  function handleConfirm() {
+    if (confirmAction) confirmAction();
+    confirmOpen = false; confirmAction = null;
+  }
+  let manifestDiff: any = null;
+  let manifestDiffLoading = false;
+
+  // Backups
+  let backups: any[] = [];
+  let backupLoading = false;
+  let backupName = "";
+
+  async function loadBackups() {
+    if (!$projectPath) return;
+    backupLoading = true;
+    try { backups = await invoke("list_backups", { path: $projectPath }); }
+    catch { backups = []; }
+    finally { backupLoading = false; }
+  }
+
+  async function createBackup() {
+    if (!$projectPath) return;
+    loading = true;
+    try {
+      await invoke("create_project_backup", { path: $projectPath, name: backupName || null });
+      backupName = "";
+      await loadBackups();
+      message = "Backup created.";
+    } catch (e) { error = String(e); }
+    finally { loading = false; }
+  }
+
+  async function deleteBackup(id: string) {
+    if (!$projectPath) return;
+    await invoke("delete_backup", { path: $projectPath, backupId: id });
+    await loadBackups();
+  }
+
+  async function restoreBackup(id: string) {
+    if (!$projectPath) return;
+    showConfirm("Restore backup", "Restore this backup? A safety snapshot will be created first.", async () => {
+    loading = true; error = null;
+    try {
+      await invoke("restore_backup", { path: $projectPath, backupId: id });
+      message = "Backup restored. A safety snapshot was created.";
+      await load(true);
+    } catch (e) { error = String(e); }
+    finally { loading = false; }
+    }, true);
+  }
+
+  function formatBytes(b: number) {
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b/1024).toFixed(1) + " KB";
+    if (b < 1073741824) return (b/1048576).toFixed(1) + " MB";
+    return (b/1073741824).toFixed(1) + " GB";
+  }
 
   async function ensureProjectDir() {
     if (!$projectPath) return null;
@@ -92,8 +162,7 @@
 
   async function rollback(id: string) {
     if (!$projectPath) return;
-    const ok = window.confirm(`Rollback project to snapshot ${id}? This will restore saved manifest/changed files.`);
-    if (!ok) return;
+    showConfirm("Rollback snapshot", `Rollback project to snapshot ${id}? This will restore manifest and changed files.`, async () => {
     loading = true;
     error = null;
     message = null;
@@ -108,6 +177,7 @@
     } finally {
       loading = false;
     }
+    });
   }
 
   async function compare() {
@@ -126,6 +196,24 @@
       if (selectedDiffPath) await openFileDiff(selectedDiffPath);
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function loadManifestDiff() {
+    const dir = await ensureProjectDir();
+    if (!dir || !fromId || !toId) return;
+    manifestDiffLoading = true;
+    error = null;
+    try {
+      manifestDiff = await invoke("diff_manifest_snapshots", {
+        projectDir: dir,
+        fromId,
+        toId,
+      });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      manifestDiffLoading = false;
     }
   }
 
@@ -169,12 +257,19 @@
     </div>
     <div class="actions">
       <input bind:value={newName} placeholder="Snapshot name" />
+      <input bind:value={backupName} placeholder="Backup name" />
+      <button on:click={createBackup} disabled={!$projectPath || loading}>
+        <Archive size={16} /> Backup
+      </button>
       <button on:click={create} disabled={!$projectPath || loading}>
         <Plus size={16} />
         Create
       </button>
       <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
+      </button>
+      <button class="secondary" on:click={loadBackups} disabled={!$projectPath || backupLoading} title="Backups">
+        <Archive size={16} /> Backups
       </button>
     </div>
   </div>
@@ -198,8 +293,31 @@
         <select bind:value={toId}>
           {#each snapshots as s}<option value={s.id}>{s.name} · {s.id}</option>{/each}
         </select>
-        <button class="secondary" on:click={compare} disabled={fromId === toId}>Diff</button>
+        <button class="secondary" on:click={compare} disabled={fromId === toId}>Diff files</button>
+        <button class="secondary" on:click={loadManifestDiff} disabled={fromId === toId || manifestDiffLoading}>
+          {manifestDiffLoading ? 'Loading...' : 'Diff manifest'}
+        </button>
       </div>
+      {#if manifestDiff}
+        <div class="manifest-diff-panel">
+          <h3>Manifest changes</h3>
+          <div class="manifest-diff-stats">
+            {#if manifestDiff.mcVersionChanged}
+              <div class="diff-stat changed"><strong>MC version</strong><span>{manifestDiff.fromMcVersion} → {manifestDiff.toMcVersion}</span></div>
+            {/if}
+            {#if manifestDiff.loaderVersionChanged}
+              <div class="diff-stat changed"><strong>Loader</strong><span>{manifestDiff.fromLoaderVersion} → {manifestDiff.toLoaderVersion}</span></div>
+            {/if}
+            {#if manifestDiff.addedMods?.length}
+              <div class="diff-stat added"><strong>+{manifestDiff.addedMods.length} mods</strong><span>{manifestDiff.addedMods.join(", ")}</span></div>
+            {/if}
+            {#if manifestDiff.removedMods?.length}
+              <div class="diff-stat removed"><strong>-{manifestDiff.removedMods.length} mods</strong><span>{manifestDiff.removedMods.join(", ")}</span></div>
+            {/if}
+          </div>
+          <pre class="manifest-diff-text">{manifestDiff.diffText || 'No differences.'}</pre>
+        </div>
+      {/if}
       {#if diff}
         <div class="diff-panel">
           <div><strong>{diff.addedFiles.length}</strong><span>Added</span></div>
@@ -242,6 +360,28 @@
       {/if}
     {/if}
 
+    {#if backups.length > 0}
+      <div class="backup-section">
+        <h3>Project backups ({backups.length})</h3>
+        <div class="backup-list">
+          {#each backups.slice(0, 6) as b}
+            <div class="backup-row">
+              <div class="backup-info">
+                <strong>{b.name}</strong>
+                <span>{b.createdAt} · {formatBytes(b.sizeBytes)}</span>
+              </div>
+              <button class="ghost mini" on:click={() => restoreBackup(b.id)} title="Restore">
+                <RotateCcw size={14} />
+              </button>
+              <button class="ghost mini danger" on:click={() => deleteBackup(b.id)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     <div class="grid">
       {#each snapshots as s}
         <div class="card">
@@ -264,6 +404,10 @@
         </div>
       {/each}
     </div>
+  {/if}
+{#if confirmOpen}
+    <ConfirmDialog title={confirmTitle} message={confirmMessage} danger={confirmDanger}
+      on:confirm={handleConfirm} on:cancel={() => (confirmOpen = false, confirmAction = null)} />
   {/if}
 </div>
 
@@ -292,6 +436,16 @@
   .diff-files small { color: var(--text-muted); }
   .added-label { color: var(--accent-primary) !important; }
   .removed-label { color: #fca5a5 !important; }
+  .manifest-diff-panel { margin-top: 14px; padding: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .manifest-diff-panel h3 { font-size: 13px; margin: 0 0 10px; color: var(--text-secondary); }
+  .manifest-diff-stats { display: grid; gap: 6px; margin-bottom: 12px; }
+  .diff-stat { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+  .diff-stat strong { color: var(--text-primary); }
+  .diff-stat span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .diff-stat.changed { border-color: rgba(245,158,11,.30); }
+  .diff-stat.added { border-color: rgba(27,217,106,.30); }
+  .diff-stat.removed { border-color: rgba(239,68,68,.30); }
+  .manifest-diff-text { margin: 0; padding: 12px; border-radius: 10px; background: #0d0d10; color: #a1a1aa; font-family: ui-monospace,monospace; font-size: 11px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; }
   .inline-diff { min-width: 0; }
   .inline-diff-header { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 10px; color: var(--text-secondary); }
   .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
@@ -311,6 +465,14 @@
   .date { font-size: 12px; color: var(--text-muted); }
   .rollback { padding: 6px 10px; font-size: 12px; font-weight: 600; }
   .empty, .loading { color: var(--text-muted); padding: 80px; text-align: center; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .backup-section { margin-bottom: 18px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.03); }
+  .backup-section h3 { color: var(--text-secondary); font-size: 14px; margin: 0 0 10px; }
+  .backup-list { display: grid; gap: 6px; }
+  .backup-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .backup-info { display: grid; gap: 3px; }
+  .backup-info strong { color: var(--text-primary); font-size: 13px; }
+  .backup-info span { color: var(--text-muted); font-size: 11px; }
+
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 900px) { .compare-panel, .inline-diff-shell { grid-template-columns: 1fr; } .diff-files { border-right: 0; padding-right: 0; } }

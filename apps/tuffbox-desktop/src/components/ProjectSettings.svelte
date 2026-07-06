@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search } from "lucide-svelte";
+  import { ArrowLeft, Save, Cpu, Container, Coffee, Terminal, Search, Database, RefreshCw, AlertTriangle } from "lucide-svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
@@ -34,11 +34,45 @@
   let saving = false;
   let error = "";
 
+  // Schema status
+  let schemaVersion = "";
+  let schemaNeedsMigration = false;
+  let schemaLoading = false;
+
+  async function loadSchemaStatus() {
+    if (!$projectPath) return;
+    schemaLoading = true;
+    try {
+      const status: any = await invoke("get_project_schema_status", { path: $projectPath });
+      schemaVersion = status.detected ?? "?";
+      schemaNeedsMigration = status.needsMigration ?? false;
+    } catch {
+      schemaVersion = "?";
+    } finally {
+      schemaLoading = false;
+    }
+  }
+
+  async function migrateSchema() {
+    if (!$projectPath) return;
+    saving = true;
+    error = "";
+    try {
+      await invoke("migrate_project_schema", { path: $projectPath });
+      await loadSchemaStatus();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      saving = false;
+    }
+  }
+
   onMount(async () => {
     try {
       mcVersions = await invoke("get_minecraft_versions");
       await loadLoaderVersions();
       await detectJavaPreview();
+      await loadSchemaStatus();
     } catch (e) {
       error = `${e}`;
     }
@@ -248,6 +282,30 @@
         </div>
         <div class="field">
           <textarea bind:value={jvmArgs} rows={4}></textarea>
+        </div>
+      </section>
+      <section class="card wide">
+        <div class="card-title">
+          <Database size={18} />
+          <h3>Project schema</h3>
+        </div>
+        <div class="schema-info">
+          <div class="schema-row">
+            <span>Schema version</span>
+            <code>{schemaVersion || "..."}</code>
+          </div>
+          {#if schemaNeedsMigration}
+            <div class="schema-warning">
+              <AlertTriangle size={16} />
+              <span>Schema migration available. This will normalize your manifest to the current format.</span>
+            </div>
+            <button class="secondary" on:click={migrateSchema} disabled={saving}>
+              <RefreshCw size={16} />
+              {saving ? "Migrating..." : "Migrate schema"}
+            </button>
+          {:else if schemaVersion}
+            <div class="schema-ok">✓ Schema is up to date</div>
+          {/if}
         </div>
       </section>
     </div>
@@ -523,4 +581,11 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
   }
+
+  .schema-info { display: grid; gap: 12px; }
+  .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: 12px; border: 1px solid var(--border-color); }
+  .schema-row span { color: var(--text-muted); font-size: 13px; }
+  .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
+  .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }
+  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: rgba(27,217,106,0.06); border-radius: 10px; border: 1px solid rgba(27,217,106,0.20); }
 </style>

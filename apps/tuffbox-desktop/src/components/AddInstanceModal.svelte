@@ -19,6 +19,21 @@
   let loadingMc = true;
   let loadingLoader = false;
 
+  // Templates
+  let templates: any[] = [];
+  let templatesLoaded = false;
+  let useTemplate = false;
+
+  async function loadTemplates() {
+    try {
+      // Load templates from home dir TuffBox folder
+      const home = await invoke("get_home_dir");
+      const tuffboxDir = `${home}/TuffBox`;
+      templates = await invoke("list_templates", { path: `${tuffboxDir}/.templates` }).catch(() => []);
+    } catch { templates = []; }
+    templatesLoaded = true;
+  }
+
   const loaders = [
     { id: "vanilla", label: "Vanilla" },
     { id: "fabric", label: "Fabric" },
@@ -126,6 +141,32 @@
     <div class="modal-body">
       {#if error}
         <div class="error">{error}</div>
+      {/if}
+
+      <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
+        {useTemplate ? "Create from scratch" : "Use template"}
+      </button>
+
+      {#if useTemplate && templates.length > 0}
+        <div class="template-list">
+          {#each templates.slice(0, 5) as tpl}
+            <button class="template-row" on:click={() => {
+              name = tpl.name || "New Instance";
+              if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
+              if (tpl.manifest?.loader?.kind) {
+                const kind = String(tpl.manifest.loader.kind).toLowerCase();
+                if (["fabric","forge","neoforge","quilt","vanilla"].includes(kind)) loader = kind;
+              }
+              if (tpl.manifest?.loader?.version) loaderVersion = tpl.manifest.loader.version;
+              useTemplate = false;
+            }}>
+              <strong>{tpl.name}</strong>
+              <span>{tpl.modCount || 0} mods · {tpl.manifest?.minecraft?.version || "?"}</span>
+            </button>
+          {/each}
+        </div>
+      {:else if useTemplate}
+        <div class="muted">No templates found. Save a project as template first.</div>
       {/if}
 
       <div class="field">
@@ -328,6 +369,14 @@
       transform: rotate(360deg);
     }
   }
+
+  .template-btn { width: 100%; margin-bottom: 4px; }
+  .template-list { display: grid; gap: 4px; margin-bottom: 10px; }
+  .template-row { width: 100%; display: grid; gap: 2px; text-align: left; padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); transform: none; }
+  .template-row:hover { border-color: rgba(27,217,106,.3); }
+  .template-row strong { color: var(--text-primary); font-size: 13px; }
+  .template-row span { color: var(--text-muted); font-size: 11px; }
+  .muted { color: var(--text-muted); font-size: 12px; padding: 8px; }
 
   .error {
     background: rgba(239, 68, 68, 0.12);

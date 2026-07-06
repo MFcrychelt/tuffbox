@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, Loader2, RotateCcw } from "lucide-svelte";
+  import { X, Loader2, RotateCcw, FileText, Folder } from "lucide-svelte";
   import { createEventDispatcher, onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
 
@@ -10,11 +10,20 @@
   let log = "";
   let loading = true;
   let interval: ReturnType<typeof setInterval>;
+  let logFiles: { name: string; size: number; modified?: number | null }[] = [];
+  let selectedLog = "latest.log";
+  let loadingLogList = false;
+  let logListOpen = false;
 
   async function loadLog() {
     try {
-      const result = await invoke("get_launch_log", { path: projectPath });
-      log = result as string;
+      if (selectedLog === "latest.log") {
+        const result = await invoke("get_launch_log", { path: projectPath });
+        log = result as string;
+      } else {
+        const result = await invoke("read_instance_log", { path: projectPath, logName: selectedLog });
+        log = result as string;
+      }
     } catch (e) {
       log += `\n[error] ${e}`;
     } finally {
@@ -22,8 +31,27 @@
     }
   }
 
+  async function loadLogList() {
+    loadingLogList = true;
+    try {
+      logFiles = await invoke("list_instance_logs", { path: projectPath });
+    } catch {
+      logFiles = [];
+    } finally {
+      loadingLogList = false;
+    }
+  }
+
+  async function switchLog(name: string) {
+    selectedLog = name;
+    loading = true;
+    log = "";
+    await loadLog();
+  }
+
   onMount(() => {
     loadLog();
+    loadLogList();
     interval = setInterval(loadLog, 1000);
   });
 
@@ -35,7 +63,29 @@
 <div class="modal-backdrop" on:click={() => dispatch("close")} role="button" tabindex="-1" aria-label="Close">
   <div class="modal" role="dialog" aria-modal="true" on:click|stopPropagation>
     <div class="modal-header">
-      <h2>Launch Log</h2>
+      <div class="modal-header-left">
+        <h2>Launch Log</h2>
+        <div class="log-selector">
+          <button class="log-select-btn" class:active={selectedLog === "latest.log"} on:click={() => switchLog("latest.log")}>
+            <FileText size={13} /> latest.log
+          </button>
+          {#if logFiles.length > 0}
+            <button class="log-select-btn toggle" on:click={() => { logListOpen = !logListOpen; if (logListOpen) loadLogList(); }}>
+              <Folder size={13} /> {logFiles.length} logs
+            </button>
+          {/if}
+        </div>
+        {#if logListOpen}
+          <div class="log-dropdown">
+            {#each logFiles as f}
+              <button class="log-file-row" class:selected={selectedLog === f.name} on:click={() => { switchLog(f.name); logListOpen = false; }}>
+                <span>{f.name}</span>
+                <small>{f.size < 1024 ? f.size + ' B' : f.size < 1048576 ? (f.size/1024).toFixed(1)+' KB' : (f.size/1048576).toFixed(1)+' MB'}</small>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
       <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
         <X size={18} />
       </button>
@@ -155,6 +205,16 @@
     white-space: pre-wrap;
     overflow: auto;
   }
+
+  .modal-header-left { display: grid; gap: 8px; position: relative; }
+  .log-selector { display: flex; gap: 6px; }
+  .log-select-btn { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; background: var(--bg-tertiary); color: var(--text-muted); border: 1px solid var(--border-color); font-size: 11px; cursor: pointer; }
+  .log-select-btn.active { color: var(--accent-primary); border-color: rgba(27,217,106,.35); background: rgba(27,217,106,.08); }
+  .log-select-btn:hover { color: var(--text-primary); }
+  .log-dropdown { position: absolute; top: 100%; left: 0; z-index: 10; margin-top: 4px; min-width: 220px; max-height: 240px; overflow: auto; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  .log-file-row { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; background: transparent; color: var(--text-secondary); border: none; font-size: 12px; cursor: pointer; text-align: left; }
+  .log-file-row:hover, .log-file-row.selected { background: var(--bg-hover); color: var(--text-primary); }
+  .log-file-row small { color: var(--text-muted); font-size: 11px; }
 
   .modal-footer {
     display: flex;

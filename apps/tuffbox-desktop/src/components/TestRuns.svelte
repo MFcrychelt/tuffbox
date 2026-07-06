@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PlayCircle, RefreshCw, Terminal, TimerReset } from "lucide-svelte";
+  import { PlayCircle, RefreshCw, Terminal, TimerReset, CheckCircle2, AlertTriangle, XCircle, Shield, Server, FileText } from "lucide-svelte";
   import { onDestroy } from "svelte";
   import { projectPath } from "../lib/store";
 
@@ -22,6 +22,35 @@
   let startedAt: number | null = null;
   let lastLoadedPath: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let validationReport: any = null;
+  let validationLoading = false;
+  let validationError: string | null = null;
+
+  // Launch stats
+  let launchStats: any = null;
+  let statsLoading = false;
+
+  async function loadStats() {
+    if (!$projectPath) return;
+    statsLoading = true;
+    try {
+      launchStats = await invoke("get_launch_stats", { path: $projectPath });
+    } catch { launchStats = null; }
+    finally { statsLoading = false; }
+  }
+
+  async function runValidation() {
+    if (!$projectPath) return;
+    validationLoading = true;
+    validationError = null;
+    try {
+      validationReport = await invoke("run_project_validation", { path: $projectPath });
+    } catch (e) {
+      validationError = String(e);
+    } finally {
+      validationLoading = false;
+    }
+  }
   let runs: { id: string; profile: string; startedAt: string; status: string; logPath: string; durationSeconds?: number | null }[] = [];
   let capturedRunIds: Record<string, boolean> = {};
 
@@ -36,6 +65,7 @@
       lastLoadedPath = $projectPath;
       await refreshLog();
       await loadRuns();
+      await loadStats();
     } catch (e) {
       error = String(e);
     } finally {
@@ -51,7 +81,9 @@
     message = null;
     log = "";
     try {
+      await invoke("record_launch", { path: $projectPath });
       await invoke("launch_profile", { path: $projectPath, profile: selectedProfile });
+      await loadStats();
       message = `Started profile ${selectedProfile}. Watch latest.log below.`;
       await loadRuns();
       startPolling();
@@ -133,12 +165,40 @@
         Refresh
       </button>
       <button class="secondary" on:click={refreshLog} disabled={!$projectPath}>
-        <Terminal size={16} />
-        Tail log
+        <Terminal size={16} /> Tail log
+      </button>
+      <button class="secondary" on:click={runValidation} disabled={!$projectPath || validationLoading}>
+        <Shield size={16} />
+        {validationLoading ? "Checking..." : "Validate project"}
+      </button>
+      <button class="ghost" on:click={loadStats} disabled={!$projectPath} title="Refresh stats">
+        <RefreshCw size={16} />
       </button>
       <button on:click={launch} disabled={!$projectPath || running || !selectedProfile}>
         <PlayCircle size={16} />
         {running ? "Running..." : "Run profile"}
+      </button>
+      <button class="secondary" on:click={async () => {
+        if (!$projectPath) return;
+        try {
+          const props = await invoke("generate_server_properties", { path: $projectPath });
+          message = "server.properties generated.";
+        } catch(e) { error = String(e); }
+      }} disabled={!$projectPath} title="Generate server.properties">
+        <FileText size={16} />
+      </button>
+      <button class="secondary" on:click={async () => {
+        if (!$projectPath) return;
+        running = true; startedAt = Date.now(); error = null; message = null; log = "";
+        try {
+          await invoke("record_launch", { path: $projectPath });
+          await invoke("launch_server", { path: $projectPath });
+          message = "Server started. Watch log below.";
+          await loadStats();
+          startPolling();
+        } catch(e) { error = String(e); running = false; }
+      }} disabled={!$projectPath || running} title="Launch server">
+        <Server size={16} /> Server
       </button>
     </div>
   </div>
@@ -148,6 +208,57 @@
 
   {#if !$projectPath}
     <div class="empty">Open a project to run test profiles.</div>
+  {:else if validationReport}
+    <div class="validation-report">
+      <div class="val-header">
+        <h3><Shield size={18} /> Project health check</h3>
+        {#if validationReport.passed}
+          <span class="val-passed"><CheckCircle2 size={16} /> All checks passed</span>
+        {:else}
+          <span class="val-failed"><XCircle size={16} /> Issues found</span>
+        {/if}
+      </div>
+      <div class="val-stats">
+        <div class="val-stat"><strong>{validationReport.totalMods}</strong><span>mods</span></div>
+        <div class="val-stat" class:danger={validationReport.graphErrors > 0}>
+          <strong>{validationReport.graphErrors}</strong><span>graph errors</span>
+        </div>
+        <div class="val-stat" class:warning={validationReport.graphWarnings > 0}>
+          <strong>{validationReport.graphWarnings}</strong><span>graph warnings</span>
+        </div>
+        <div class="val-stat" class:danger={validationReport.jsonErrors?.length > 0}>
+          <strong>{validationReport.jsonErrors?.length ?? 0}</strong><span>JSON errors</span>
+        </div>
+        <div class="val-stat" class:danger={validationReport.circularDeps?.length > 0}>
+          <strong>{validationReport.circularDeps?.length ?? 0}</strong><span>circular deps</span>
+        </div>
+      </div>
+      {#if validationReport.graphErrorList?.length > 0}
+        <div class="val-section">
+          <h4><XCircle size={14} /> Graph errors</h4>
+          {#each validationReport.graphErrorList as err}
+            <div class="val-item error"><code>{err.code}</code> {err.message}</div>
+          {/each}
+        </div>
+      {/if}
+      {#if validationReport.jsonErrors?.length > 0}
+        <div class="val-section">
+          <h4><AlertTriangle size={14} /> Broken JSON configs</h4>
+          {#each validationReport.jsonErrors as je}
+            <div class="val-item warning"><code>{je.path}</code> {je.error}</div>
+          {/each}
+        </div>
+      {/if}
+      {#if validationReport.circularDeps?.length > 0}
+        <div class="val-section">
+          <h4><AlertTriangle size={14} /> Circular dependencies</h4>
+          {#each validationReport.circularDeps as pair}
+            <div class="val-item warning">{pair[0]} ⇄ {pair[1]}</div>
+          {/each}
+        </div>
+      {/if}
+      <button class="ghost" on:click={() => (validationReport = null)}>Close report</button>
+    </div>
   {:else}
     <div class="layout">
       <aside class="profiles">
@@ -166,6 +277,15 @@
               <small>{profile.memoryMb ?? 4096} MB · {profile.jvmArgs.length} JVM args</small>
             </button>
           {/each}
+        {/if}
+
+        {#if launchStats}
+          <div class="launch-stats-card">
+            <h3>Launch stats</h3>
+            <div class="ls-row"><span>Total launches</span><strong>{launchStats.totalLaunches}</strong></div>
+            <div class="ls-row"><span>Total crashes</span><strong class:danger={launchStats.totalCrashes > 0}>{launchStats.totalCrashes}</strong></div>
+            {#if launchStats.lastLaunch}<div class="ls-row"><span>Last launch</span><span>{launchStats.lastLaunch}</span></div>{/if}
+          </div>
         {/if}
 
         <h2 class="history-title">Run history</h2>
@@ -241,7 +361,35 @@
   .log { min-height: 560px; max-height: 680px; overflow: auto; margin: 0; padding: 18px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
   .stop { margin: 12px; }
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
+  .launch-stats-card { padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); margin-bottom: 14px; display: grid; gap: 6px; }
+  .launch-stats-card h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+  .ls-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .ls-row span { color: var(--text-muted); }
+  .ls-row strong { color: var(--text-primary); font-size: 16px; }
+  .ls-row strong.danger { color: #fca5a5; }
+  .ls-row span:last-child { font-size: 10px; color: var(--text-muted); }
+
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }
+
+  .validation-report { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 18px; margin-bottom: 16px; }
+  .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .val-header h3 { display: flex; align-items: center; gap: 8px; font-size: 16px; color: var(--text-primary); }
+  .val-passed { display: flex; align-items: center; gap: 6px; color: var(--accent-primary); font-weight: 700; font-size: 13px; }
+  .val-failed { display: flex; align-items: center; gap: 6px; color: #fca5a5; font-weight: 700; font-size: 13px; }
+  .val-stats { display: grid; grid-template-columns: repeat(5, minmax(80px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .val-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px; display: grid; gap: 3px; text-align: center; }
+  .val-stat strong { font-size: 22px; color: var(--text-primary); }
+  .val-stat span { font-size: 11px; color: var(--text-muted); }
+  .val-stat.danger { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
+  .val-stat.danger strong { color: #fca5a5; }
+  .val-stat.warning { border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.06); }
+  .val-stat.warning strong { color: #fbbf24; }
+  .val-section { margin-bottom: 14px; }
+  .val-section h4 { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .val-item { padding: 7px 10px; border-radius: 8px; font-size: 12px; border: 1px solid var(--border-color); margin-bottom: 4px; display: flex; gap: 6px; align-items: baseline; }
+  .val-item.error { border-color: rgba(239,68,68,.3); color: #fca5a5; background: rgba(239,68,68,.04); }
+  .val-item.warning { border-color: rgba(245,158,11,.3); color: #fde68a; background: rgba(245,158,11,.04); }
+  .val-item code { font-size: 11px; color: var(--accent-primary); }
 </style>

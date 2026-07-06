@@ -67,6 +67,11 @@ impl ContentProvider for ModrinthProvider {
         Ok(project.into())
     }
 
+    fn get_version(&self, version_id: &str) -> Result<VersionInfo, ProviderError> {
+        let version: ModrinthVersion = self.get_json(&format!("/version/{version_id}"))?;
+        Ok(version.into())
+    }
+
     fn get_versions(
         &self,
         id: &str,

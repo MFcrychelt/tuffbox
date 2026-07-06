@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import * as d3 from "d3-force";
   import { onMount } from "svelte";
@@ -84,6 +84,15 @@
     return edge.kind === "Requires" && !nodeById(edge.to);
   }
 
+  // Deterministic position from string hash (for ghost nodes)
+  function hashPos(s: string, baseX: number, baseY: number): {x: number, y: number} {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) - h) + s.charCodeAt(i);
+    const angle = ((h % 360) / 180) * Math.PI;
+    const dist = 100 + (Math.abs(h) % 80);
+    return { x: baseX + Math.cos(angle) * dist, y: baseY + Math.sin(angle) * dist };
+  }
+
   function modIdFromNode(nodeId: string) {
     return nodeId.startsWith("mod:") ? nodeId.slice(4) : nodeId;
   }
@@ -162,6 +171,42 @@
     }
   }
 
+  /// Installs a single missing dependency by its slug/id extracted from the
+  /// graph edge. The edge.to for a missing dep is the raw Modrinth slug.
+  async function installSingleMissingDep(edge: GraphEdge) {
+    if (!$projectPath) return;
+    const depId = edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to;
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      await invoke("add_modrinth_mod_with_dependencies", {
+        path: $projectPath,
+        modId: depId,
+        side: "auto",
+      });
+      message = `Installed ${depId} with its dependencies.`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
+  }
+
+  /// Heuristic: a mod node is a "dependency" (installed implicitly) if
+  /// every edge that points TO it is a "Requires" edge (i.e. it wasn't
+  /// explicitly added by the user, it was pulled in as a dep).
+  $: depNodeIds = new Set(
+    nodes
+      .filter((node) => node.kind === "Mod")
+      .filter((node) => {
+        const incoming = edges.filter((e) => e.to === node.id);
+        return incoming.length > 0 && incoming.every((e) => e.kind === "Requires");
+      })
+      .map((node) => node.id)
+  );
+
   $: nodes = graph?.nodes ?? [];
   $: edges = graph?.edges ?? [];
   $: selected = selectedId ? nodeById(selectedId) : null;
@@ -177,6 +222,26 @@
   $: modNodes = nodes.filter((node) => node.kind === "Mod");
   $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile");
   $: profileNodes = nodes.filter((node) => node.kind === "Profile");
+  /// Group mods by which profile includes them (via IncludedInProfile edges)
+  $: modsByProfile = (() => {
+    const map = new Map<string, GraphNode[]>();
+    const orphaned: GraphNode[] = [];
+    for (const mod of modNodes) {
+      const profiles = edges
+        .filter((e) => e.kind === "IncludedInProfile" && e.to === mod.id)
+        .map((e) => nodeById(e.from)?.label ?? e.from);
+      if (profiles.length === 0) {
+        orphaned.push(mod);
+      } else {
+        for (const prof of profiles) {
+          const list = map.get(prof) ?? [];
+          list.push(mod);
+          map.set(prof, list);
+        }
+      }
+    }
+    return { map, orphaned };
+  })();
   $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
   let positioned: PositionedNode[] = [];
   let simulation: d3.Simulation<PositionedNode, undefined> | null = null;
@@ -265,7 +330,11 @@
   $: if (nodes && edges) {
     const initializedNodes = nodes.map((node) => {
       const group = node.kind === "Mod" ? "mod" : node.kind === "Profile" ? "profile" : "runtime";
-      const tone = group === "runtime" ? "runtime" : group === "profile" ? "profile" : String(node.side ?? "unknown").toLowerCase();
+      let tone: string;
+      if (group === "runtime") tone = "runtime";
+      else if (group === "profile") tone = "profile";
+      else if (depNodeIds.has(node.id)) tone = "dep";
+      else tone = String(node.side ?? "unknown").toLowerCase();
       return { ...node, x: 500, y: 300, tone };
     });
 
@@ -453,18 +522,32 @@
       </section>
 
       <section class="node-column mods-column">
-        <h3><Box size={16} /> Mods</h3>
+        <h3><Box size={16} /> Mods by profile</h3>
         {#if modNodes.length === 0}
-          <div class="muted-box">No mod nodes yet. Add mods from the Mods tab.</div>
+          <div class="muted-box">No mod nodes yet.</div>
         {:else}
-          <div class="mod-grid">
-            {#each modNodes as node}
-              <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
-                <span class="node-label">{node.label}</span>
-                <span class="node-meta">{node.version ?? "unknown"} · {node.side}</span>
-              </button>
-            {/each}
-          </div>
+          {#each [...modsByProfile.map.entries()] as [profile, mods]}
+            <h4 class="profile-group-title">{profile} ({mods.length})</h4>
+            <div class="mod-grid">
+              {#each mods as node}
+                <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
+                  <span class="node-label">{node.label}</span>
+                  <span class="node-meta">{node.version ?? "unknown"} · {node.side}</span>
+                </button>
+              {/each}
+            </div>
+          {/each}
+          {#if modsByProfile.orphaned.length > 0}
+            <h4 class="profile-group-title orphaned">Unassigned ({modsByProfile.orphaned.length})</h4>
+            <div class="mod-grid">
+              {#each modsByProfile.orphaned as node}
+                <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
+                  <span class="node-label">{node.label}</span>
+                  <span class="node-meta">{node.version ?? "unknown"} · {node.side}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         {/if}
       </section>
 
@@ -539,11 +622,17 @@
     {#if missingEdges.length > 0}
       <div class="missing-panel">
         <h3><AlertTriangle size={16} /> Missing dependencies</h3>
+        <div class="missing-actions">
+          <button class="mini" on:click={installMissingDependencies} disabled={resolving}>
+            <Download size={14} /> Install all ({missingEdges.length})
+          </button>
+        </div>
         {#each missingEdges as edge}
-          <div class="missing-row">
+          <button class="missing-row" on:click={() => installSingleMissingDep(edge)} disabled={resolving}>
             <span>{nodeById(edge.from)?.label ?? edge.from}</span>
-            <code>{edge.to}</code>
-          </div>
+            <code class="dep-slug">{edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to}</code>
+            <Download size={14} class="dep-icon" />
+          </button>
         {/each}
       </div>
     {/if}
@@ -786,6 +875,31 @@
     min-height: 480px;
   }
 
+  .profile-group-title {
+    margin: 14px 0 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .profile-group-title::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+  }
+
+  .profile-group-title.orphaned::before {
+    background: var(--text-muted);
+  }
+
   .mod-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
@@ -962,11 +1076,83 @@
     color: #fca5a5;
   }
 
+  .missing-actions {
+    margin-bottom: 10px;
+  }
+
   .missing-row {
     display: flex;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
     margin-top: 8px;
+    width: 100%;
+    cursor: pointer;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 10px 12px;
+    color: var(--text-secondary);
+    text-align: left;
+    transform: none;
+    transition: border-color .15s;
+  }
+
+  .missing-row:hover:not(:disabled) {
+    border-color: rgba(27, 217, 106, 0.35);
+    background: rgba(27, 217, 106, 0.05);
+  }
+
+  .missing-row:disabled {
+    opacity: .5;
+    cursor: wait;
+  }
+
+  .dep-slug {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dep-icon {
+    flex-shrink: 0;
+    color: var(--accent-primary);
+    opacity: .7;
+  }
+
+  .missing-row:hover .dep-icon {
+    opacity: 1;
+  }
+
+  /* Dep-tone node: amber/orange for auto-installed dependency mods */
+  .svg-node.tone-dep circle {
+    stroke: rgba(245, 158, 11, 0.7);
+    fill: rgba(245, 158, 11, 0.08);
+  }
+
+  .ghost-node {
+    cursor: pointer;
+    transition: all .15s ease;
+    animation: ghost-pulse 2s ease-in-out infinite;
+  }
+  .ghost-node:hover {
+    fill: rgba(239,68,68,0.25);
+    stroke: rgba(239,68,68,0.9);
+    r: 16;
+  }
+  .ghost-label {
+    cursor: pointer;
+    transition: fill .15s;
+  }
+  .ghost-label:hover {
+    fill: #fca5a5;
+    font-size: 11px;
+  }
+  @keyframes ghost-pulse {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 1; }
   }
 
   .empty,

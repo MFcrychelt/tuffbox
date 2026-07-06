@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import {
+    MessageCircle,
     Stethoscope,
     RefreshCw,
     AlertCircle,
@@ -11,7 +12,16 @@
     History,
     Wrench,
     Bug,
+    Download,
+    Trash2,
+    GitMerge,
+    Database,
+    Zap,
+    Gauge,
+    Zap,
+    Gauge,
   } from "lucide-svelte";
+  import { Copy } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
   type Diagnostic = {
@@ -87,6 +97,7 @@
   let loading = false;
   let planning = false;
   let applying = false;
+  let fixingIdx: number | null = null;
   let error: string | null = null;
   let message: string | null = null;
   let plan: any | null = null;
@@ -106,6 +117,7 @@
       selectedReportId = data.selectedReport?.summary.id ?? data.reports[0]?.id ?? "";
       plan = null;
       lastLoadedPath = $projectPath;
+      detectWrongLoaderMods();
     } catch (e) {
       error = String(e);
     } finally {
@@ -131,6 +143,137 @@
       error = String(e);
     } finally {
       planning = false;
+    }
+  }
+
+  /// Per-diagnostic fix: install a missing mod dependency via Modrinth.
+  async function fixMissingDependency(modId: string, idx: number) {
+    if (!$projectPath) return;
+    fixingIdx = idx;
+    error = null;
+    message = null;
+    try {
+      await invoke("add_modrinth_mod_with_dependencies", {
+        path: $projectPath,
+        modId,
+        side: "auto",
+      });
+      message = `Installed ${modId} with dependencies. Reloading...`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      fixingIdx = null;
+    }
+  }
+
+  /// Per-diagnostic fix: remove a conflicting mod from the project.
+  async function fixRemoveMod(modId: string, idx: number) {
+    if (!$projectPath) return;
+    fixingIdx = idx;
+    error = null;
+    message = null;
+    try {
+      await invoke("remove_project_mod", { path: $projectPath, modId });
+      message = `Removed ${modId}. Reloading...`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      fixingIdx = null;
+    }
+  }
+
+  /// Per-diagnostic fix: handle duplicate mods by opening the graph view.
+  async function fixDeduplicate(idx: number) {
+    fixingIdx = idx;
+    message = "Duplicate mods found. Open the Dependency Graph (Resolve stage) to review and remove duplicates manually.";
+    fixingIdx = null;
+  }
+
+  // --- Wrong-loader jar detection ---
+  type WrongLoaderJar = {
+    fileName: string;
+    detectedLoader: string;
+    projectLoader: string;
+    recommendation: string;
+    reason: string;
+  };
+  let wrongLoaderJars: WrongLoaderJar[] = [];
+  let wrongLoaderLoading = false;
+  let wrongLoaderFixing: string | null = null;
+
+  // Performance audit state
+  let perfFindings: any[] = [];
+  let perfLoading = false;
+
+  // Ore generation scanner state
+  let oreFindings: any[] = [];
+  let oreLoading = false;
+
+  async function scanOreGen() {
+    if (!$projectPath) return;
+    oreLoading = true;
+    try {
+      oreFindings = await invoke("scan_ore_generation", { path: $projectPath });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      oreLoading = false;
+    }
+  }
+
+  async function runPerfAudit() {
+    if (!$projectPath) return;
+    perfLoading = true;
+    try {
+      perfFindings = await invoke("audit_performance", { path: $projectPath });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      perfLoading = false;
+    }
+  }
+
+  async function detectWrongLoaderMods() {
+    if (!$projectPath) return;
+    wrongLoaderLoading = true;
+    try {
+      wrongLoaderJars = await invoke("detect_wrong_loader_mods", { path: $projectPath });
+    } catch {
+      wrongLoaderJars = [];
+    } finally {
+      wrongLoaderLoading = false;
+    }
+  }
+
+  async function disableWrongJar(fileName: string) {
+    if (!$projectPath) return;
+    wrongLoaderFixing = fileName;
+    error = null;
+    try {
+      const result: string = await invoke("disable_wrong_loader_jar", { path: $projectPath, fileName });
+      message = result;
+      await detectWrongLoaderMods();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      wrongLoaderFixing = null;
+    }
+  }
+
+  async function removeWrongJar(fileName: string) {
+    if (!$projectPath) return;
+    wrongLoaderFixing = fileName;
+    error = null;
+    try {
+      const result: string = await invoke("remove_loose_jar", { path: $projectPath, fileName });
+      message = result;
+      await detectWrongLoaderMods();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      wrongLoaderFixing = null;
     }
   }
 
@@ -223,6 +366,22 @@
         <Wrench size={16} />
         {planning ? "Creating..." : "Create fix plan"}
       </button>
+      <button class="secondary" on:click={runPerfAudit} disabled={!$projectPath || perfLoading}>
+        <Gauge size={16} />
+        {perfLoading ? "Auditing..." : "Perf audit"}
+      </button>
+      <button class="secondary" on:click={scanOreGen} disabled={!$projectPath || oreLoading}>
+        <Database size={16} />
+        {oreLoading ? "Scanning..." : "Ore gen scan"}
+      </button>
+      <button class="secondary" on:click={runCrashAssistant} disabled={!$projectPath || crashLoading}>
+        <Zap size={16} />
+        {crashLoading ? "Analyzing..." : "Crash Assistant"}
+      </button>
+      <button class="secondary" on:click={buildAiContext} disabled={!$projectPath || aiLoading}>
+        <MessageCircle size={16} />
+        {aiLoading ? "Building..." : "AI explain"}
+      </button>
       <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
@@ -286,13 +445,15 @@
 
         {#if graphDiagnostics.length > 0}
           <h2 class="log-title"><AlertTriangle size={16} /> Conflicts & Issues</h2>
-          {#each graphDiagnostics as diag}
+          {#each graphDiagnostics as diag, idx}
             <div class="conflict-card {diag.severity.toLowerCase()}">
               <div class="conflict-header">
                 <strong>{diag.code}</strong>
+                {#if fixingIdx === idx}
+                  <span class="fixing-spinner">Fixing...</span>
+                {/if}
               </div>
               <p style="font-size: 12px; margin: 4px 0; color: var(--text-muted);">{diag.message}</p>
-              <p style="font-size: 11px; margin: 0; color: var(--text-muted);">Use "Create fix plan" below, then "Apply fix plan" to act on this.</p>
               {#if diag.relatedNodes && diag.relatedNodes.length > 0}
                 <div class="related-mods">
                   {#each diag.relatedNodes as node}
@@ -300,6 +461,31 @@
                   {/each}
                 </div>
               {/if}
+              <div class="conflict-actions">
+                {#if diag.code === "MISSING_DEPENDENCY" && diag.relatedNodes?.length >= 2}
+                  {@const missingModId = diag.relatedNodes[1].startsWith("mod:") ? diag.relatedNodes[1].slice(4) : diag.relatedNodes[1]}
+                  <button class="ghost mini" on:click={() => fixMissingDependency(missingModId, idx)} disabled={fixingIdx !== null}>
+                    <Download size={14} /> Install {missingModId}
+                  </button>
+                {:else if diag.code === "MOD_CONFLICT" && diag.relatedNodes?.length >= 2}
+                  {@const modA = diag.relatedNodes[0].startsWith("mod:") ? diag.relatedNodes[0].slice(4) : diag.relatedNodes[0]}
+                  {@const modB = diag.relatedNodes[1].startsWith("mod:") ? diag.relatedNodes[1].slice(4) : diag.relatedNodes[1]}
+                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modA, idx)} disabled={fixingIdx !== null}>
+                    <Trash2 size={14} /> Remove {modA}
+                  </button>
+                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modB, idx)} disabled={fixingIdx !== null}>
+                    <Trash2 size={14} /> Remove {modB}
+                  </button>
+                {:else if diag.code === "DUPLICATE_MOD"}
+                  <button class="ghost mini" on:click={() => fixDeduplicate(idx)} disabled={fixingIdx !== null}>
+                    <GitMerge size={14} /> Review duplicates
+                  </button>
+                {:else}
+                  <button class="ghost mini" on:click={() => createFixPlan()} disabled={fixingIdx !== null}>
+                    <Wrench size={14} /> Create fix plan
+                  </button>
+                {/if}
+              </div>
             </div>
           {/each}
         {/if}
@@ -456,6 +642,157 @@
       </aside>
     </div>
 
+    {#if aiContext}
+      <section class="ai-panel panel">
+        <h2><MessageCircle size={16} /> AI Crash Explanation</h2>
+        <div class="ai-stats">
+          <div class="ai-stat"><strong>{aiContext.findingsCount}</strong> findings</div>
+          <div class="ai-stat"><strong>{aiContext.promptLength}</strong> chars prompt</div>
+          <div class="ai-stat"><strong>{aiContext.context?.installedMods?.length ?? 0}</strong> mods</div>
+        </div>
+        <p class="ai-desc">Copy the prompt below and paste it into ChatGPT, Claude, or any LLM to get an AI explanation of the crash.</p>
+        <button class="secondary" on:click={() => (aiShowPrompt = !aiShowPrompt)}>
+          {aiShowPrompt ? "Hide" : "Show"} prompt
+        </button>
+        <button class="secondary" on:click={copyAiPrompt}>
+          <Copy size={14} /> Copy prompt
+        </button>
+        {#if aiShowPrompt}
+          <pre class="ai-prompt-text">{aiPrompt}</pre>
+        {/if}
+      </section>
+    {/if}
+
+    {#if crashFindings.length > 0}
+      <section class="crash-assistant panel">
+        <h2><Zap size={16} /> Crash Assistant ({crashFindings.length} finding{crashFindings.length > 1 ? "s" : ""})</h2>
+        <div class="crash-list">
+          {#each crashFindings as f}
+            <div class="crash-card {f.severity}">
+              <div class="crash-card-header">
+                <span class="crash-sev {f.severity}">{f.severity}</span>
+                <strong>{f.title}</strong>
+                <code class="crash-code">{f.code}</code>
+              </div>
+              <p>{f.description}</p>
+              {#if f.autoFix}
+                <div class="crash-fix">
+                  <strong>Auto-fix:</strong> {f.autoFix}
+                </div>
+              {/if}
+              {#if f.references?.length}
+                <div class="crash-refs">
+                  {#each f.references as ref}
+                    <a href={ref} target="_blank" class="crash-link">{ref}</a>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        {#if crashMcreator.length > 0}
+          <div class="crash-mcreator">
+            <strong>MCreator mods detected ({crashMcreator.length})</strong>
+            <p>These mods were built with MCreator and may have compatibility issues:</p>
+            <div class="crash-tags">{#each crashMcreator as m}<code>{m}</code>{/each}</div>
+          </div>
+        {/if}
+
+        {#if crashClassFinder.length > 0}
+          <div class="crash-classfinder">
+            <strong>Class finder results</strong>
+            <p>Missing classes found in crash logs and their owning mods:</p>
+            <div class="crash-tags">
+              {#each crashClassFinder as cf}
+                <div class="class-match"><code>{cf.className}</code> → <span>{cf.modId}</span></div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        {#if crashSupportMsg}
+          <div class="crash-support">
+            <button on:click={() => (crashShowSupport = !crashShowSupport)}>
+              {crashShowSupport ? "Hide" : "Show"} support message
+            </button>
+            <button on:click={copySupportMsg} class="secondary">Copy to clipboard</button>
+            {#if crashShowSupport}
+              <pre class="crash-support-msg">{crashSupportMsg}</pre>
+            {/if}
+          </div>
+        {/if}
+      </section>
+    {/if}
+
+    {#if oreFindings.length > 0}
+      <section class="ore-gen panel">
+        <h2><Database size={16} /> Ore generation scan ({oreFindings.length})</h2>
+        <div class="ore-list">
+          {#each oreFindings as ore}
+            <div class="ore-card">
+              <div class="ore-header">
+                <strong>{ore.resource}</strong>
+                <span class="ore-conf">{ore.confidence}</span>
+              </div>
+              <div class="ore-key">{ore.enabledKey} = {ore.enabledValue}</div>
+              <div class="ore-meta">
+                {#if ore.veinSize}<span>vein: {ore.veinSize[1]}</span>{/if}
+                {#if ore.minHeight}<span>y: {ore.minHeight[1]}–{ore.maxHeight?.[1] ?? "?"}</span>{/if}
+                {#if ore.spawnsPerChunk}<span>/chunk: {ore.spawnsPerChunk[1]}</span>{/if}
+              </div>
+              <code class="ore-file">{ore.configFile}</code>
+              {#if ore.knownMod}<small class="ore-known">known: {ore.knownMod}</small>{/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if perfFindings.length > 0}
+      <section class="perf-audit panel">
+        <h2><Gauge size={16} /> Performance audit ({perfFindings.length})</h2>
+        <div class="perf-list">
+          {#each perfFindings as finding}
+            <div class="perf-card {finding.severity}">
+              <div class="perf-card-header">
+                <strong>{finding.code}</strong>
+                <span class="perf-severity">{finding.severity}</span>
+              </div>
+              <p>{finding.message}</p>
+              {#if finding.file}<code class="perf-file">{finding.file}</code>{/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if wrongLoaderJars.length > 0}
+      <section class="wrong-loader panel">
+        <h2><AlertTriangle size={16} /> Wrong-loader jars in mods/</h2>
+        <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px;">
+          These .jar files were detected as built for a different mod loader than your project uses. They can cause crashes or silent failures.
+        </p>
+        <div class="wrong-loader-list">
+          {#each wrongLoaderJars as jar}
+            <div class="wrong-loader-card">
+              <div class="wrong-loader-main">
+                <strong>{jar.fileName}</strong>
+                <span class="wrong-reason">{jar.reason}</span>
+              </div>
+              <div class="wrong-loader-actions">
+                <button class="ghost mini" on:click={() => disableWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>
+                  {wrongLoaderFixing === jar.fileName ? "..." : "Disable (.jar.disabled)"}
+                </button>
+                <button class="ghost mini danger" on:click={() => removeWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>
+                  <Trash2 size={14} /> Remove
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
     <section class="graph-health panel">
       <h2><Stethoscope size={16} /> Graph diagnostics</h2>
       {#if graphDiagnostics.length === 0}
@@ -517,6 +854,11 @@
   .conflict-card.error { border-color: rgba(239, 68, 68, 0.5); }
   .conflict-card.warning { border-color: rgba(234, 179, 8, 0.5); }
   .conflict-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .fixing-spinner { font-size: 11px; color: var(--accent-primary); animation: pulse 1.2s ease-in-out infinite; }
+  .conflict-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .conflict-actions :global(.mini.danger) { color: #f87171; }
+  .conflict-actions :global(.mini.danger:hover) { background: rgba(239, 68, 68, 0.1); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .related-mods { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .mod-pill { font-size: 11px; background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); }
 
@@ -558,6 +900,71 @@
   .plan-meta { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 12px; margin: 10px 0; }
   .plan-card ul { margin: 8px 0 0 18px; color: var(--text-secondary); font-size: 12px; }
   .graph-health { margin-top: 16px; }
+  .wrong-loader { margin-top: 16px; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.04); }
+  .wrong-loader-list { display: grid; gap: 8px; }
+  .wrong-loader-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 12px; border: 1px solid rgba(245, 158, 11, 0.2); background: var(--bg-tertiary); }
+  .wrong-loader-main { display: grid; gap: 5px; min-width: 0; }
+  .wrong-loader-main strong { color: var(--text-primary); }
+  .wrong-reason { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+  .wrong-loader-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .perf-audit { margin-top: 16px; border-color: rgba(96,165,250,.3); background: rgba(96,165,250,.03); }
+  .perf-list { display: grid; gap: 8px; }
+  .perf-card { padding: 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 4px; }
+  .perf-card.warning { border-color: rgba(245,158,11,.3); }
+  .perf-card.info { border-color: rgba(96,165,250,.25); }
+  .perf-card-header { display: flex; justify-content: space-between; align-items: center; }
+  .perf-card strong { color: var(--text-primary); font-size: 13px; }
+  .perf-severity { font-size: 10px; text-transform: uppercase; font-weight: 800; color: var(--text-muted); padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); }
+  .perf-card p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.4; }
+  .perf-file { font-size: 11px; color: var(--accent-primary); word-break: break-all; }
+  .ore-gen { margin-top: 16px; border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.03); }
+  .ore-list { display: grid; gap: 6px; }
+  .ore-card { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 4px; }
+  .ore-header { display: flex; justify-content: space-between; align-items: center; }
+  .ore-header strong { color: var(--text-primary); text-transform: capitalize; }
+  .ore-conf { font-size: 10px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--accent-secondary); }
+  .ore-key { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent-primary); }
+  .ore-meta { display: flex; gap: 10px; flex-wrap: wrap; }
+  .ore-meta span { font-size: 11px; color: var(--text-muted); }
+  .ore-file { font-size: 10px; color: var(--text-muted); }
+  .ore-known { font-size: 10px; color: var(--accent-primary); }
+  .crash-assistant { margin-top: 16px; border-color: rgba(239,68,68,.3); background: rgba(239,68,68,.02); }
+  .crash-list { display: grid; gap: 8px; }
+  .crash-card { padding: 14px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 8px; }
+  .crash-card.critical { border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.06); }
+  .crash-card.error { border-color: rgba(239,68,68,.35); }
+  .crash-card.warning { border-color: rgba(245,158,11,.35); }
+  .crash-card-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .crash-card strong { color: var(--text-primary); font-size: 14px; }
+  .crash-sev { font-size: 10px; text-transform: uppercase; font-weight: 800; padding: 3px 7px; border-radius: 4px; }
+  .crash-sev.critical, .crash-sev.error { background: rgba(239,68,68,.15); color: #fca5a5; }
+  .crash-sev.warning { background: rgba(245,158,11,.15); color: #fde68a; }
+  .crash-sev.info { background: rgba(96,165,250,.15); color: #93c5fd; }
+  .crash-code { font-size: 11px; color: var(--text-muted); }
+  .crash-card p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
+  .crash-fix { padding: 8px 10px; border-radius: 8px; background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.2); font-size: 12px; color: var(--accent-primary); }
+  .crash-fix strong { color: var(--accent-primary); }
+  .crash-refs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .crash-link { font-size: 11px; color: var(--accent-secondary); text-decoration: none; }
+  .crash-support { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; align-items: center; }
+  .crash-mcreator { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.25); }
+  .crash-mcreator strong { color: #fde68a; font-size: 12px; display: block; margin-bottom: 4px; }
+  .crash-mcreator p { color: var(--text-muted); font-size: 11px; margin: 0 0 6px; }
+  .crash-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .crash-tags code { font-size: 11px; background: var(--bg-elevated); padding: 3px 7px; border-radius: 4px; }
+  .crash-classfinder { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(96,165,250,.06); border: 1px solid rgba(96,165,250,.2); }
+  .crash-classfinder strong { color: #93c5fd; font-size: 12px; display: block; margin-bottom: 4px; }
+  .crash-classfinder p { color: var(--text-muted); font-size: 11px; margin: 0 0 6px; }
+  .class-match { display: flex; gap: 8px; align-items: center; font-size: 11px; }
+  .class-match span { color: var(--accent-primary); font-weight: 700; }
+  .ai-panel { margin-top: 16px; border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.03); }
+  .ai-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 12px; }
+  .ai-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 10px; padding: 10px; text-align: center; }
+  .ai-stat strong { font-size: 20px; color: var(--accent-secondary); }
+  .ai-desc { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; line-height: 1.4; }
+  .ai-prompt-text { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
+
+  .crash-support-msg { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 12px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
   .diag-card { display: flex; gap: 12px; border-left: 4px solid var(--text-muted); }
   .diag-card.error { border-left-color: var(--accent-danger); }
   .diag-card.warning { border-left-color: var(--accent-warning); }

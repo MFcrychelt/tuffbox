@@ -67,7 +67,11 @@ impl ContentProvider for LocalJarProvider {
         _id: &str,
         _query: &ProviderSearchQuery,
     ) -> Result<Vec<VersionInfo>, ProviderError> {
-        Ok(vec![VersionInfo {
+        Ok(vec![self.get_version("")?])
+    }
+
+    fn get_version(&self, _version_id: &str) -> Result<VersionInfo, ProviderError> {
+        Ok(VersionInfo {
             id: self.mod_id(),
             project_id: self.mod_id(),
             version_number: "local".to_string(),
@@ -75,7 +79,7 @@ impl ContentProvider for LocalJarProvider {
             loaders: Vec::new(),
             files: vec![self.get_file("", &self.file_name())?],
             dependencies: Vec::new(),
-        }])
+        })
     }
 
     fn get_file(

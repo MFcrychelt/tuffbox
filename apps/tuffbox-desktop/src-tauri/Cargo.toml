@@ -26,3 +26,6 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tuffbox-core = { path = "../../../crates/tuffbox-core" }
+zip.workspace = true
+once_cell.workspace = true
+toml.workspace = true

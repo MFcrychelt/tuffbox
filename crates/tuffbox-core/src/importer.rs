@@ -174,6 +174,152 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
     })
 }
 
+
+/// ── CurseForge modpack import ────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CurseForgeManifest {
+    name: String,
+    version: Option<String>,
+    author: Option<String>,
+    #[serde(default)]
+    minecraft: CurseForgeMinecraft,
+    #[serde(default)]
+    manifest_type: Option<String>,
+    #[serde(default)]
+    files: Vec<CurseForgeFile>,
+    #[serde(default)]
+    overrides: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CurseForgeMinecraft {
+    version: Option<String>,
+    #[serde(default)]
+    mod_loaders: Vec<CurseForgeModLoader>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CurseForgeModLoader {
+    id: String,
+    primary: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CurseForgeFile {
+    #[serde(default)]
+    project_id: u64,
+    #[serde(default)]
+    file_id: u64,
+    required: Option<bool>,
+}
+
+/// Import a CurseForge modpack zip (manifest.json in root + overrides folder).
+pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportError> {
+    let file = fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+
+    let mut manifest_raw = String::new();
+    let manifest_name = if archive.by_name("manifest.json").is_ok() { "manifest.json" } else { "Manifest.json" };
+    let mut entry = archive.by_name(manifest_name).map_err(|_| ImportError::UnsupportedFormat("no manifest.json in CurseForge pack".into()))?;
+    entry.read_to_string(&mut manifest_raw)?;
+    let cf: CurseForgeManifest = serde_json::from_str(&manifest_raw)?;
+
+    let mc_version = cf.minecraft.version.unwrap_or_default();
+    let (loader_kind, loader_version) = detect_curseforge_loader(&cf.minecraft.mod_loaders);
+
+    let mods: Vec<crate::manifest::ModSpec> = cf
+        .files
+        .iter()
+        .map(|f| {
+            let id = format!("cf-{}", f.project_id);
+            crate::manifest::ModSpec {
+                id: id.clone(),
+                name: format!("CurseForge mod {}", f.project_id),
+                source: crate::manifest::ModSource {
+                    kind: crate::manifest::SourceKind::Modrinth,
+                    project_id: Some(f.project_id.to_string()),
+                    file_id: Some(f.file_id.to_string()),
+                    url: Some(format!("https://www.curseforge.com/minecraft/mc-mods/{}", f.project_id)),
+                    path: None,
+                },
+                version: "unknown".into(),
+                file_name: Some(format!("cf-{}.jar", f.project_id)),
+                hashes: None,
+                side: crate::manifest::Side::Both,
+                dependencies: vec![],
+                status: vec!["imported-curseforge".into()],
+                content_type: crate::manifest::ContentType::Mod,
+            }
+        })
+        .collect();
+
+    let project_id = crate::manifest::ProjectMetadata {
+        id: slugify(&cf.name),
+        name: cf.name,
+        version: cf.version.unwrap_or_else(|| "1.0.0".into()),
+        description: None,
+        authors: cf.author.map(|a| vec![a]).unwrap_or_default(),
+    };
+
+    Ok(ProjectManifest {
+        schema_version: crate::manifest::CURRENT_PROJECT_SCHEMA_VERSION.into(),
+        project: project_id,
+        minecraft: crate::manifest::MinecraftSpec { version: mc_version },
+        loader: crate::manifest::LoaderSpec { kind: loader_kind, version: loader_version },
+        brief: None,
+        java: None,
+        profiles: vec![crate::manifest::ProfileSpec {
+            id: "client".into(),
+            name: "Client".into(),
+            side: crate::manifest::Side::Both,
+            include_optional_mods: false,
+            include_shaders: false,
+            memory_mb: Some(4096),
+            jvm_args: vec!["-XX:+UseG1GC".into(), "-Xmx4G".into()],
+            include_mods: mods.iter().map(|m| m.id.clone()).collect(),
+            player_name: Some("Player".into()),
+        }],
+        mods,
+        overrides: None,
+    })
+}
+
+fn detect_curseforge_loader(loaders: &[CurseForgeModLoader]) -> (LoaderKind, String) {
+    for loader in loaders {
+        let id = loader.id.to_lowercase();
+        if id.contains("forge") && !id.contains("neo") {
+            let version = id.replace("forge-", "").replace("forge", "");
+            return (LoaderKind::Forge, if version.is_empty() { "latest".into() } else { version });
+        }
+        if id.contains("neoforge") {
+            let version = id.replace("neoforge-", "").replace("neoforge", "");
+            return (LoaderKind::Neoforge, if version.is_empty() { "latest".into() } else { version });
+        }
+        if id.contains("fabric") {
+            let version = id.replace("fabric-", "").replace("fabric", "");
+            return (LoaderKind::Fabric, if version.is_empty() { "latest".into() } else { version });
+        }
+        if id.contains("quilt") {
+            let version = id.replace("quilt-", "").replace("quilt", "");
+            return (LoaderKind::Quilt, if version.is_empty() { "latest".into() } else { version });
+        }
+    }
+    (LoaderKind::Vanilla, String::new())
+}
+
+fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+        .replace("--", "-")
+        .trim_matches('-')
+        .to_string()
+}
+
+
 pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportError> {
     let path = path.as_ref();
     if !path.is_dir() {
@@ -446,7 +592,7 @@ fn parse_env(env: &HashMap<String, String>) -> Side {
     }
 }
 
-fn slugify(name: &str) -> String {
+fn _slugify2(name: &str) -> String {
     name.to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-")
         .replace("--", "-")

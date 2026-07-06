@@ -4305,6 +4305,7 @@ dependencies = [
 name = "tuffbox-core"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "hex",
  "lazy_static",
  "md-5",
@@ -4327,6 +4328,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
+ "once_cell",
  "serde",
  "serde_json",
  "tauri",
@@ -4334,7 +4336,9 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-shell",
  "tokio",
+ "toml 0.8.2",
  "tuffbox-core",
+ "zip",
 ]
 
 [[package]]

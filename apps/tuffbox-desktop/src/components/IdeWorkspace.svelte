@@ -12,6 +12,9 @@
     UploadCloud,
     Rocket,
     CheckCircle2,
+    Mountain,
+    PackageOpen,
+    ScrollText,
     Circle,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
@@ -23,6 +26,9 @@
   import Snapshots from "./Snapshots.svelte";
   import TestRuns from "./TestRuns.svelte";
   import ChangeHistory from "./ChangeHistory.svelte";
+  import OreGenVisualizer from "./OreGenVisualizer.svelte";
+  import RecipeBrowser from "./RecipeBrowser.svelte";
+  import QuestEditor from "./QuestEditor.svelte";
   import ExportBuilder from "./ExportBuilder.svelte";
   import ReleaseRoom from "./ReleaseRoom.svelte";
 
@@ -30,6 +36,9 @@
     | "brief"
     | "setup"
     | "content"
+    | "ore-gen"
+    | "recipes"
+    | "quests"
     | "resolve"
     | "configs"
     | "history"
@@ -72,6 +81,30 @@
       icon: Package,
       goal: "Add, update and remove mods as managed dependencies, not loose files.",
       outputs: ["mod list", "source metadata", "auto snapshots"],
+    },
+    {
+      id: "quests",
+      label: "Quests",
+      short: "Lore",
+      icon: ScrollText,
+      goal: "Design FTB Quests chapters and quests visually without launching Minecraft.",
+      outputs: ["quest tree", "SNBT files", "validation report"],
+    },
+    {
+      id: "recipes",
+      label: "Recipes",
+      short: "Craft",
+      icon: PackageOpen,
+      goal: "Browse all recipes from installed mods, generate KubeJS disable scripts.",
+      outputs: ["recipe list", "disable scripts", "ingredient search"],
+    },
+    {
+      id: "ore-gen",
+      label: "World",
+      short: "Ores",
+      icon: Mountain,
+      goal: "Visualize ore generation heights, vein sizes and toggle worldgen from configs.",
+      outputs: ["ore layers", "generation config", "spawn rates"],
     },
     {
       id: "resolve",
@@ -234,6 +267,12 @@
             <p>Go to Home, create or open an instance, then return to the IDE workflow.</p>
           </div>
         {/if}
+      {:else if activeStage === "quests"}
+        <QuestEditor />
+      {:else if activeStage === "recipes"}
+        <RecipeBrowser />
+      {:else if activeStage === "ore-gen"}
+        <OreGenVisualizer />
       {:else if activeStage === "content"}
         <Mods />
       {:else if activeStage === "resolve"}
