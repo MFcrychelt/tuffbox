@@ -1,0 +1,62 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    name: Build Windows (.exe)
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: apps/tuffbox-desktop/package-lock.json
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-msvc
+
+    - name: Cache cargo registry and target
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          apps/tuffbox-desktop/src-tauri/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Install frontend dependencies
+      working-directory: apps/tuffbox-desktop
+      run: npm ci
+
+    - name: Build frontend (Svelte to static)
+      working-directory: apps/tuffbox-desktop
+      run: npm run build
+
+    - name: Build Tauri (Windows .exe)
+      working-directory: apps/tuffbox-desktop/src-tauri
+      run: cargo build --release
+
+    - name: Upload tuffbox-desktop.exe
+      uses: actions/upload-artifact@v4
+      with:
+        name: tuffbox-desktop-windows-exe
+        path: apps/tuffbox-desktop/src-tauri/target/release/tuffbox-desktop.exe
+        if-no-files-found: error
