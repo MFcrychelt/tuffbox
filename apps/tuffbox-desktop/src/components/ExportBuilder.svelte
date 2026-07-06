@@ -17,6 +17,7 @@
   let exporting = false;
   let result: ExportResult | null = null;
   let error: string | null = null;
+  let message: string | null = null;
   let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
   let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
 

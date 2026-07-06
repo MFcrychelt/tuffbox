@@ -92,10 +92,12 @@ pub fn migrate_project_manifest_value(value: &mut serde_json::Value) -> Result<(
     let version = value
         .get("schemaVersion")
         .and_then(|v| v.as_str())
-        .unwrap_or("0.1.0")
+        .unwrap_or("0.1")
         .to_string();
 
-    if !SUPPORTED_PROJECT_SCHEMA_VERSIONS.contains(&version.as_str()) {
+    let normalized = if version == "0.1" { "0.1.0".to_string() } else { version.clone() };
+
+    if !SUPPORTED_PROJECT_SCHEMA_VERSIONS.contains(&normalized.as_str()) {
         return Err(ManifestError::UnsupportedSchemaVersion {
             version,
             supported: SUPPORTED_PROJECT_SCHEMA_VERSIONS.join(", "),
@@ -168,6 +170,18 @@ pub enum LoaderKind {
     Quilt,
 }
 
+impl LoaderKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LoaderKind::Vanilla => "vanilla",
+            LoaderKind::Fabric => "fabric",
+            LoaderKind::Forge => "forge",
+            LoaderKind::Neoforge => "neoforge",
+            LoaderKind::Quilt => "quilt",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JavaSpec {
     #[serde(default)]
@@ -214,6 +228,16 @@ pub enum Side {
 }
 
 impl Side {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Side::Client => "client",
+            Side::Server => "server",
+            Side::Both => "both",
+            Side::Optional => "optional",
+            Side::Unknown => "unknown",
+        }
+    }
+
     pub fn is_compatible_with_profile(self, profile_side: Side) -> bool {
         match (self, profile_side) {
             (Side::Both, _) => true,
@@ -221,7 +245,7 @@ impl Side {
             (Side::Client, Side::Client) => true,
             (Side::Server, Side::Server) => true,
             (Side::Optional, _) => true,
-            (Side::Unknown, _) => true,
+            (Side::Unknown, _) => false,
             _ => false,
         }
     }
@@ -315,6 +339,18 @@ pub enum SourceKind {
     Github,
     Local,
     Direct,
+}
+
+impl SourceKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SourceKind::Modrinth => "modrinth",
+            SourceKind::Curseforge => "curseforge",
+            SourceKind::Github => "github",
+            SourceKind::Local => "local",
+            SourceKind::Direct => "direct",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

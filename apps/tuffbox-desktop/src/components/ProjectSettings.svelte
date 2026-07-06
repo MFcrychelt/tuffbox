@@ -100,9 +100,9 @@
 
   async function detectJavaPreview() {
     if (javaPath && javaPath !== "Auto-detect") {
-      javaVersion = await invoke("get_java_version", { path: javaPath }).catch(() => "");
+      javaVersion = (await invoke("get_java_version", { path: javaPath }).catch(() => "")) as string;
     } else {
-      javaVersion = await invoke("get_default_java_version").catch(() => "");
+      javaVersion = (await invoke("get_default_java_version").catch(() => "")) as string;
     }
   }
 

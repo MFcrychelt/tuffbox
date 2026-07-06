@@ -10,6 +10,7 @@ export interface ProjectInfo {
   javaPath: string | null;
   memoryMb: number;
   jvmArgs: string[];
+  playerName: string;
 }
 
 export interface RecentProject {

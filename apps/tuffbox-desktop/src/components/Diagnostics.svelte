@@ -18,8 +18,6 @@
     Database,
     Zap,
     Gauge,
-    Zap,
-    Gauge,
   } from "lucide-svelte";
   import { Copy } from "lucide-svelte";
   import { projectPath } from "../lib/store";
@@ -28,7 +26,7 @@
     severity: string;
     code: string;
     message: string;
-    relatedNodes?: any[];
+    relatedNodes: any[];
   };
 
   type Snapshot = {
@@ -211,6 +209,69 @@
   let oreFindings: any[] = [];
   let oreLoading = false;
 
+  // Duplicate items / unification state
+  let duplicateFindings: any[] = [];
+  let duplicateLoading = false;
+  let unifyConfigResult: any = null;
+  let unifyLoading = false;
+
+  // Crash Assistant state
+  let crashLoading = false;
+  let crashFindings: any[] = [];
+  let crashMcreator: string[] = [];
+  let crashClassFinder: any[] = [];
+  let crashSupportMsg: string | null = null;
+  let crashShowSupport = false;
+
+  async function runCrashAssistant() {
+    if (!$projectPath) return;
+    crashLoading = true;
+    try {
+      const result: any = await invoke("run_crash_assistant_full", { path: $projectPath });
+      crashFindings = result.findings ?? [];
+      crashMcreator = result.mcreatorMods ?? [];
+      crashClassFinder = result.classFinderResults ?? [];
+      crashSupportMsg = result.supportMessageDiscord || result.supportMessageGithub || null;
+      crashShowSupport = false;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      crashLoading = false;
+    }
+  }
+
+  async function copySupportMsg() {
+    const text = crashSupportMsg ?? "";
+    try { await navigator.clipboard.writeText(text); message = "Support message copied."; }
+    catch { message = "Failed to copy."; }
+  }
+
+  // AI context state
+  let aiLoading = false;
+  let aiContext: any = null;
+  let aiPrompt: string = "";
+  let aiShowPrompt = false;
+
+  async function buildAiContext() {
+    if (!$projectPath) return;
+    aiLoading = true;
+    try {
+      const result: any = await invoke("build_ai_crash_context", { path: $projectPath });
+      aiContext = result;
+      aiPrompt = result.prompt ?? "";
+      aiShowPrompt = false;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      aiLoading = false;
+    }
+  }
+
+  async function copyAiPrompt() {
+    try { await navigator.clipboard.writeText(aiPrompt); message = "AI prompt copied."; }
+    catch { message = "Failed to copy prompt."; }
+  }
+
   async function scanOreGen() {
     if (!$projectPath) return;
     oreLoading = true;
@@ -232,6 +293,31 @@
       error = String(e);
     } finally {
       perfLoading = false;
+    }
+  }
+
+  async function scanDuplicateItems() {
+    if (!$projectPath) return;
+    duplicateLoading = true;
+    try {
+      duplicateFindings = await invoke("detect_duplicate_items", { path: $projectPath });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      duplicateLoading = false;
+    }
+  }
+
+  async function generateUnify() {
+    if (!$projectPath) return;
+    unifyLoading = true;
+    try {
+      unifyConfigResult = await invoke("generate_unify_config", { path: $projectPath, save: true });
+      message = `Unify config saved with ${unifyConfigResult.materials?.length ?? 0} materials.`;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      unifyLoading = false;
     }
   }
 
@@ -377,6 +463,14 @@
       <button class="secondary" on:click={runCrashAssistant} disabled={!$projectPath || crashLoading}>
         <Zap size={16} />
         {crashLoading ? "Analyzing..." : "Crash Assistant"}
+      </button>
+      <button class="secondary" on:click={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>
+        <GitMerge size={16} />
+        {duplicateLoading ? "Scanning..." : "Find dupes"}
+      </button>
+      <button class="secondary" on:click={generateUnify} disabled={!$projectPath || unifyLoading}>
+        <Zap size={16} />
+        {unifyLoading ? "Generating..." : "Unify config"}
       </button>
       <button class="secondary" on:click={buildAiContext} disabled={!$projectPath || aiLoading}>
         <MessageCircle size={16} />
@@ -745,6 +839,42 @@
             </div>
           {/each}
         </div>
+      </section>
+    {/if}
+
+    {#if duplicateFindings.length > 0}
+      <section class="duplicates panel">
+        <h2><GitMerge size={16} /> Duplicate items ({duplicateFindings.length})</h2>
+        <div class="duplicate-list">
+          {#each duplicateFindings as dup}
+            <div class="duplicate-card">
+              <strong>{dup.material}</strong>
+              <span class="dup-type">{dup.itemType}</span>
+              {#if dup.dominantItem}
+                <code class="dup-dominant">{dup.dominantItem}</code>
+              {/if}
+              {#if dup.alternatives?.length}
+                <div class="dup-alts">
+                  {#each dup.alternatives as alt}
+                    <span class="dup-alt">{alt.itemId}</span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if unifyConfigResult}
+      <section class="unify-result panel">
+        <h2><Zap size={16} /> Unify config generated</h2>
+        <div class="unify-meta">
+          <p>Materials: {unifyConfigResult.materials?.length ?? 0}</p>
+          <p>Item types: {unifyConfigResult.itemTypes?.length ?? 0}</p>
+          <p>Scripts: {unifyConfigResult.scripts?.length ?? 0}</p>
+        </div>
+        <pre class="unify-preview">{JSON.stringify(unifyConfigResult, null, 2)}</pre>
       </section>
     {/if}
 

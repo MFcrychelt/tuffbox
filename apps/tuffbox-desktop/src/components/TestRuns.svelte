@@ -22,6 +22,7 @@
   let startedAt: number | null = null;
   let lastLoadedPath: string | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let now = Date.now();
   let validationReport: any = null;
   let validationLoading = false;
   let validationError: string | null = null;
@@ -138,7 +139,8 @@
 
   function startPolling() {
     if (timer) clearInterval(timer);
-    timer = setInterval(refreshLog, 1000);
+    now = Date.now();
+    timer = setInterval(() => { now = Date.now(); refreshLog(); }, 1000);
   }
 
   function stopPolling() {
@@ -148,7 +150,7 @@
   }
 
   $: selected = profiles.find((p) => p.id === selectedProfile);
-  $: elapsed = startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0;
+  $: elapsed = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
   $: if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
 
   onDestroy(() => {

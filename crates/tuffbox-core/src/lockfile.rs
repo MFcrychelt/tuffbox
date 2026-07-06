@@ -71,7 +71,7 @@ impl TuffboxLockfile {
                 name: module.name.clone(),
                 version: module.version.clone(),
                 source: LockedSource {
-                    kind: format!("{:?}", module.source.kind).to_lowercase(),
+                    kind: module.source.kind.as_str().to_string(),
                     project_id: module.source.project_id.clone(),
                     file_id: module.source.file_id.clone(),
                     url: module.source.url.clone(),
@@ -88,7 +88,7 @@ impl TuffboxLockfile {
                         .as_ref()
                         .and_then(|hashes| hashes.sha512.clone()),
                 },
-                side: format!("{:?}", module.side).to_lowercase(),
+                side: module.side.as_str().to_string(),
             })
             .collect();
 
@@ -100,7 +100,7 @@ impl TuffboxLockfile {
             .map(|edge| LockedEdge {
                 from: edge.from.0.clone(),
                 to: edge.to.0.clone(),
-                kind: format!("{:?}", edge.kind),
+                kind: edge.kind.as_str().to_string(),
                 constraint: edge.constraint.clone(),
                 reason: edge.reason.clone(),
             })
@@ -112,7 +112,7 @@ impl TuffboxLockfile {
             project_version: manifest.project.version.clone(),
             minecraft_version: manifest.minecraft.version.clone(),
             loader: LockedLoader {
-                kind: format!("{:?}", manifest.loader.kind).to_lowercase(),
+                kind: manifest.loader.kind.as_str().to_string(),
                 version: manifest.loader.version.clone(),
             },
             java_major: manifest.java.as_ref().and_then(|java| java.major),
@@ -131,10 +131,12 @@ pub fn migrate_lockfile_value(value: &mut serde_json::Value) -> Result<(), Lockf
     let version = value
         .get("schemaVersion")
         .and_then(|v| v.as_str())
-        .unwrap_or("0.1.0")
+        .unwrap_or("0.1")
         .to_string();
 
-    if !SUPPORTED_LOCKFILE_SCHEMA_VERSIONS.contains(&version.as_str()) {
+    let normalized = if version == "0.1" { "0.1.0".to_string() } else { version.clone() };
+
+    if !SUPPORTED_LOCKFILE_SCHEMA_VERSIONS.contains(&normalized.as_str()) {
         return Err(LockfileError::UnsupportedSchemaVersion {
             version,
             supported: SUPPORTED_LOCKFILE_SCHEMA_VERSIONS.join(", "),

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
   import { Palette, Info, Moon, Sun, Command } from "lucide-svelte";
 
   let theme = localStorage.getItem("tuffbox-theme") || "dark";
@@ -11,7 +13,6 @@
     try { updateCheck = await invoke("check_for_app_update"); } catch { updateCheck = null; }
   }
 
-  import { onMount } from "svelte";
   onMount(async () => {
     document.documentElement.setAttribute("data-theme", theme);
     try { shortcuts = await invoke("get_keyboard_shortcuts"); } catch {}
@@ -22,17 +23,6 @@
     localStorage.setItem("tuffbox-theme", theme);
     document.documentElement.setAttribute("data-theme", theme);
   }
-
-  function toggleTheme() {
-    theme = theme === "dark" ? "light" : "dark";
-    localStorage.setItem("tuffbox-theme", theme);
-    document.documentElement.setAttribute("data-theme", theme);
-  }
-
-  import { onMount } from "svelte";
-  onMount(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  });
 </script>
 
 <div class="settings">

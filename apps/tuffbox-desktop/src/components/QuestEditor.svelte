@@ -52,6 +52,15 @@
     q.dependencies = [...q.dependencies, depId.trim()]; chapters = [...chapters];
   }
 
+  let depInputValue = "";
+
+  function handleDepKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter" && selectedQuest) {
+      addDep(selectedQuest, depInputValue);
+      depInputValue = "";
+    }
+  }
+
   $: chapterQuests = chapters.find(c => c.id === selectedChapter)?.quests ?? [];
   $: if ($projectPath) load();
 </script>
@@ -88,7 +97,7 @@
         {:else}<div class="empty compact">Select a chapter.</div>{/if}</section>
       {#if selectedQuest}
         <aside class="qe-detail">
-          <div class="qe-det-h"><h3>Edit: {selectedQuest.title}</h3><button class="ico danger" on:click={() => removeQuest(selectedQuest)}><Trash2 size={14} /></button></div>
+          <div class="qe-det-h"><h3>Edit: {selectedQuest.title}</h3><button class="ico danger" on:click={() => { if (selectedQuest) removeQuest(selectedQuest); }}><Trash2 size={14} /></button></div>
           <div class="qe-det-fields">
             <label>Title<input bind:value={selectedQuest.title} on:input={()=>(chapters=[...chapters])} /></label>
             <label>Subtitle<input bind:value={selectedQuest.subtitle} on:input={()=>(chapters=[...chapters])} placeholder="Optional" /></label>
@@ -97,8 +106,8 @@
           <h4>Tasks ({selectedQuest.tasks.length})</h4>
           <div class="qe-tasks">{#each selectedQuest.tasks as task,i}<div class="qe-task-row"><code>{task.type||"item"}</code><span>{task.title||"Task "+(i+1)}</span></div>{/each}</div>
           <h4>Dependencies</h4>
-          <div class="qe-deps">{#each selectedQuest.dependencies as dep}<span class="dep-tag">{dep} <button class="dep-rm" on:click={() => { selectedQuest.dependencies = selectedQuest.dependencies.filter(d=>d!==dep); chapters=[...chapters]; }}>x</button></span>{/each}
-            <div class="dep-add"><input placeholder="Quest ID..." on:keydown={(e) => { if(e.key==="Enter"){ addDep(selectedQuest!, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ""; }}} /></div></div></aside>
+          <div class="qe-deps">{#each (selectedQuest?.dependencies ?? []) as dep}<span class="dep-tag">{dep} <button class="dep-rm" on:click={() => { if (selectedQuest) { selectedQuest.dependencies = selectedQuest.dependencies.filter(d=>d!==dep); chapters=[...chapters]; } }}>x</button></span>{/each}
+            <div class="dep-add"><input placeholder="Quest ID..." bind:value={depInputValue} on:keydown={handleDepKeydown} /></div></div></aside>
       {/if}</div>
     <div class="qe-footer">
       <p class="hint">Changes are tracked in-memory. Export to .snbt via File → Save Quest Book (coming soon).</p>

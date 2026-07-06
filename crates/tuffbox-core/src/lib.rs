@@ -19,7 +19,7 @@ pub mod snapshot;
 pub mod time_util;
 pub mod versions;
 pub mod mc_install;
-pub mod forge;
+pub mod forge_install;
 pub mod jre;
 pub mod process;
 pub mod mod_files;

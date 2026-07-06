@@ -26,14 +26,16 @@
   import { invoke } from "@tauri-apps/api/core";
   import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import { api } from "../lib/api";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LaunchLogModal from "./LaunchLogModal.svelte";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings";
+  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests";
 
   let selectedPath: string | null = $projectPath;
   let launching = false;
   let activeMenuPath: string | null = null;
+  let menuAnchor: HTMLElement | null = null;
   let showAddModal = false;
   let showLogModal = false;
 
@@ -99,7 +101,7 @@
     pinnedPaths[projectPath] = isPinned;
     pinnedPaths = { ...pinnedPaths };
     try {
-      await invoke("pin_project", { path: projectPath, pin: isPinned });
+      await api.session.pin(isPinned, projectPath);
     } catch {}
   }
 
@@ -107,7 +109,7 @@
   $: if ($recentProjects.length > 0) {
     for (const p of $recentProjects) {
       if (pinnedPaths[p.path] === undefined) {
-        invoke("is_project_pinned", { path: p.path }).then((pinned: boolean) => {
+        api.session.isPinned(p.path).then((pinned) => {
           pinnedPaths[p.path] = pinned;
           pinnedPaths = { ...pinnedPaths };
         }).catch(() => {});
@@ -122,7 +124,7 @@
     if (instanceSizes[projectPath] || loadingSizes[projectPath]) return;
     loadingSizes[projectPath] = true;
     try {
-      instanceSizes[projectPath] = await invoke("get_instance_size", { path: projectPath });
+      instanceSizes[projectPath] = await api.instance.getSize(projectPath);
       instanceSizes = { ...instanceSizes };
     } catch {
       instanceSizes[projectPath] = "?";
@@ -179,6 +181,20 @@
 `; }
             }
             toasts.info(detail || `${worlds.length} world(s) found.`, 8000);
+          }
+        } catch (e) { actionError = String(e); }
+        finally { actionBusy = false; }
+        break;
+      case "backup-world":
+        actionBusy = true;
+        try {
+          const worlds: any[] = await invoke("list_worlds", { path: project.path });
+          if (worlds.length === 0) { toasts.info("No worlds to backup."); break; }
+          const worldNames = worlds.map((w: any) => w.name).join("\n");
+          const chosen = window.prompt(`Worlds found:\n${worldNames}\n\nEnter world name to backup:`, worlds[0].name);
+          if (chosen) {
+            await invoke("backup_world", { path: project.path, worldName: chosen });
+            toasts.success(`World "${chosen}" backed up.`);
           }
         } catch (e) { actionError = String(e); }
         finally { actionBusy = false; }
@@ -416,6 +432,9 @@
                   </button>
                   <button on:click={() => handleAction("worlds", project)}>
                     <Globe size={14} /> List Worlds
+                  </button>
+                  <button on:click={() => handleAction("backup-world", project)}>
+                    <Download size={14} /> Backup World
                   </button>
                   <button on:click={() => handleAction("logs-zip", project)}>
                     <FileArchive size={14} /> Create logs.zip

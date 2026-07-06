@@ -29,7 +29,7 @@
       // Load templates from home dir TuffBox folder
       const home = await invoke("get_home_dir");
       const tuffboxDir = `${home}/TuffBox`;
-      templates = await invoke("list_templates", { path: `${tuffboxDir}/.templates` }).catch(() => []);
+      templates = (await invoke("list_templates", { path: `${tuffboxDir}/.templates` }).catch(() => [])) as any[];
     } catch { templates = []; }
     templatesLoaded = true;
   }

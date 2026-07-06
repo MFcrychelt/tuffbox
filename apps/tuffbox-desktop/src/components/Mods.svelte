@@ -460,20 +460,6 @@
   async function removeMod(mod: ModRow) {
     showRemoveConfirm(mod);
   }
-      `Remove ${mod.name}? TuffBox will create an auto snapshot before changing the manifest.`
-    );
-    if (!ok) return;
-    mutating = true;
-    error = null;
-    try {
-      await invoke("remove_project_mod", { path: $projectPath, modId: mod.id });
-      await load(true);
-    } catch (e) {
-      error = String(e);
-    } finally {
-      mutating = false;
-    }
-  }
 
   async function updateMod(mod: ModRow) {
     if (!$projectPath) return;
@@ -630,7 +616,7 @@
               mutating = true;
               try {
                 await invoke("add_modrinth_mod_with_dependencies", { path: $projectPath, modId: rec.slug, side: "auto" });
-                recommendations = recommendations.filter((r: any) => r.slug !== rec.slug);
+                recommendations = recommendations.filter((r) => r.slug !== rec.slug);
                 await load(true);
                 checkMissingDepsAfterInstall();
               } catch(e) { error = String(e); }
@@ -664,7 +650,7 @@
               mutating = true;
               try {
                 await invoke("update_project_mod", { path: $projectPath, modId: update.modId });
-                updateList = updateList.filter((u: any) => u.modId !== update.modId);
+                updateList = updateList.filter((u) => u.modId !== update.modId);
                 await load(true);
               } catch(e) { error = String(e); }
               finally { mutating = false; }
@@ -1062,7 +1048,7 @@
       {/if}
 
       <div class="plan-modal-actions">
-        <button class="ghost" on:click={() => { planPreviewOpen = false; startInstallPlan(planPreviewMod); }}>See raw details</button>
+        <button class="ghost" on:click={() => { planPreviewOpen = false; if (planPreviewMod) startInstallPlan(planPreviewMod); }}>See raw details</button>
         <button class="secondary" on:click={() => confirmFromPlan(false)} disabled={mutating}>
           <Download size={16} /> Install mod only
         </button>

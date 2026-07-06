@@ -80,9 +80,9 @@ pub fn install_game(
         merge_fabric_profile(&mut vanilla, fabric_profile, &libraries_dir, mc_version, progress)?;
     } else if loader_kind == "forge" {
         progress.log(&format!("# Fetching Forge {loader_version}..."));
-        let forge_profile = crate::forge::fetch_forge_profile(mc_version, loader_version)?;
-        crate::forge::download_forge_libraries(&forge_profile, &libraries_dir, progress)?;
-        crate::forge::run_forge_processors(
+        let forge_profile = crate::forge_install::fetch_forge_profile(mc_version, loader_version)?;
+        crate::forge_install::download_forge_libraries(&forge_profile, &libraries_dir, progress)?;
+        crate::forge_install::run_forge_processors(
             &forge_profile,
             &libraries_dir,
             launcher_dir,
@@ -95,9 +95,9 @@ pub fn install_game(
         merge_forge_profile(&mut vanilla, forge_profile, &libraries_dir)?;
     } else if loader_kind == "neoforge" {
         progress.log(&format!("# Fetching NeoForge {loader_version}..."));
-        let (neoforge_profile, installer_path) = crate::forge::fetch_neoforge_profile(loader_version, progress)?;
-        crate::forge::download_forge_libraries(&neoforge_profile, &libraries_dir, progress)?;
-        crate::forge::run_forge_processors(
+        let (neoforge_profile, installer_path) = crate::forge_install::fetch_neoforge_profile(loader_version, progress)?;
+        crate::forge_install::download_forge_libraries(&neoforge_profile, &libraries_dir, progress)?;
+        crate::forge_install::run_forge_processors(
             &neoforge_profile,
             &libraries_dir,
             launcher_dir,
@@ -302,7 +302,7 @@ fn fetch_fabric_profile(
 
 fn merge_forge_profile(
     vanilla: &mut InstalledVersion,
-    forge: crate::forge::ForgeProfile,
+    forge: crate::forge_install::ForgeProfile,
     libraries_dir: &Path,
 ) -> Result<(), InstallError> {
     if !forge.main_class.is_empty() {
@@ -312,12 +312,12 @@ fn merge_forge_profile(
         if !lib.include_in_classpath {
             continue;
         }
-        if let Some(artifact) = crate::forge::resolve_library(lib) {
+        if let Some(artifact) = crate::forge_install::resolve_library(lib) {
             vanilla.libraries.push(libraries_dir.join(&artifact.path));
         }
     }
     if let Some(args) = forge.arguments {
-        let (jvm, game) = crate::forge::flatten_arguments(&args);
+        let (jvm, game) = crate::forge_install::flatten_arguments(&args);
         if !jvm.is_empty() {
             vanilla.jvm_args = jvm;
         }

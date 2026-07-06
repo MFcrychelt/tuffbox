@@ -142,6 +142,6 @@
 
   button:disabled:hover {
     transform: none;
-    background: var(--accent-primary);
+    background: inherit;
   }
 </style>

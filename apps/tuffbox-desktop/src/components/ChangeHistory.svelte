@@ -97,7 +97,7 @@
     error = null;
     message = null;
     try {
-      let data = await invoke("list_project_change_history", { path: $projectPath });
+      let data: any[] = await invoke("list_project_change_history", { path: $projectPath }) as any[];
       entries = data.reverse();
       selectedId = entries[0]?.id ?? "";
       lastLoadedPath = $projectPath;

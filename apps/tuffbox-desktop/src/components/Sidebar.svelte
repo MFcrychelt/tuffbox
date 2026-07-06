@@ -6,7 +6,7 @@
     Plus,
   } from "lucide-svelte";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests";
   export let currentView: View;
 
   const items: { id: View; label: string; icon: any; featured?: boolean }[] = [

@@ -101,7 +101,7 @@
             <div><strong>Source</strong><span>{selectedRecipe.sourceFile}</span></div>
             <div><strong>Mod</strong><span>{selectedRecipe.modSource}</span></div>
           </div>
-          <div class="rb-act"><button class="secondary" on:click={()=>copyKubeJS(selectedRecipe)}><Copy size={14} /> Copy script</button></div>
+          <div class="rb-act"><button class="secondary" on:click={()=>{ if (selectedRecipe) copyKubeJS(selectedRecipe); }}><Copy size={14} /> Copy script</button></div>
         </div>
       {:else}<div class="rb-empty"><PackageOpen size={32} /><p>Select a recipe.</p></div>
       {/if}

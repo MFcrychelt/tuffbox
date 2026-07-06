@@ -54,6 +54,22 @@ pub enum EdgeKind {
     IncludedInProfile,
 }
 
+impl EdgeKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EdgeKind::Requires => "Requires",
+            EdgeKind::Optional => "Optional",
+            EdgeKind::Conflicts => "Conflicts",
+            EdgeKind::BreaksWith => "BreaksWith",
+            EdgeKind::Replaces => "Replaces",
+            EdgeKind::RequiresLoader => "RequiresLoader",
+            EdgeKind::RequiresMinecraft => "RequiresMinecraft",
+            EdgeKind::RequiresJava => "RequiresJava",
+            EdgeKind::IncludedInProfile => "IncludedInProfile",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: NodeId,
@@ -192,6 +208,8 @@ impl DependencyGraph {
             });
 
             for profile in &manifest.profiles {
+                // Если include_mods пуст — все совместимые моды включаются (режим "все").
+                // Если include_mods не пуст — только перечисленные моды (режим "белый список").
                 let explicitly_included = !profile.include_mods.is_empty()
                     && profile.include_mods.iter().any(|id| id == &module.id);
                 let implicitly_included = profile.include_mods.is_empty();

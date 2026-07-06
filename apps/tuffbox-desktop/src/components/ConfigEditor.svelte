@@ -144,7 +144,7 @@
 
   function openSearchHit(hit: SearchHit) {
     const file = files.find((f) => f.path === hit.path);
-    if (file) openFile(file);
+    if (file) tryOpenFile(file);
   }
 
   // Lightweight regex syntax highlighter for JSON, TOML, JS/ZS, YAML

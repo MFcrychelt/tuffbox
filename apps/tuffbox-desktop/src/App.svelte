@@ -14,7 +14,9 @@
   import ToastContainer from "./components/ToastContainer.svelte";
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
-  import { projectPath, projectInfo } from "./lib/store";
+  import { onMount } from "svelte";
+  import { projectPath, projectInfo, recentProjects } from "./lib/store";
+  import { api } from "./lib/api";
 
   type View =
     | "dashboard"
@@ -30,6 +32,20 @@
     | "recipes"
     | "quests";
   let currentView: View = "dashboard";
+
+  onMount(async () => {
+    try {
+      const lastPath = await api.session.getLastOpened();
+      if (lastPath) {
+        const info = await api.project.validate(lastPath);
+        recentProjects.add({ path: lastPath, info: info as any });
+        projectPath.set(lastPath);
+        projectInfo.set(info as any);
+      }
+    } catch {
+      // no last project — that's fine
+    }
+  });
 </script>
 
 <div class="app-shell">
@@ -66,23 +82,21 @@
   </div>
 </div>
 
-{#key currentView}
-  <svelte:window
-    on:keydown={(e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        switch (e.key) {
-          case '1': currentView = 'dashboard'; e.preventDefault(); break;
-          case '2': currentView = 'ide'; e.preventDefault(); break;
-          case '3': currentView = 'mods'; e.preventDefault(); break;
-          case '4': currentView = 'graph'; e.preventDefault(); break;
-          case '5': currentView = 'configs'; e.preventDefault(); break;
-          case '6': currentView = 'diagnostics'; e.preventDefault(); break;
-          case '7': currentView = 'snapshots'; e.preventDefault(); break;
-        }
+<svelte:window
+  on:keydown={(e) => {
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key) {
+        case '1': currentView = 'dashboard'; e.preventDefault(); break;
+        case '2': currentView = 'ide'; e.preventDefault(); break;
+        case '3': currentView = 'mods'; e.preventDefault(); break;
+        case '4': currentView = 'graph'; e.preventDefault(); break;
+        case '5': currentView = 'configs'; e.preventDefault(); break;
+        case '6': currentView = 'diagnostics'; e.preventDefault(); break;
+        case '7': currentView = 'snapshots'; e.preventDefault(); break;
       }
-    }}
-  />
-{/key}
+    }
+  }}
+/>
 
 <style>
   .app-shell {
