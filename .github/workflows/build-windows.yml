@@ -40,7 +40,7 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          apps/tuffbox-desktop/src-tauri/target
+          target
         key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-
@@ -54,12 +54,11 @@ jobs:
       run: npm run build
 
     - name: Build Tauri (Windows .exe)
-      working-directory: apps/tuffbox-desktop/src-tauri
-      run: cargo build --release
+      run: cargo build --release -p tuffbox-desktop
 
     - name: Upload tuffbox-desktop.exe
       uses: actions/upload-artifact@v4
       with:
         name: tuffbox-desktop-windows-exe
-        path: apps/tuffbox-desktop/src-tauri/target/release/tuffbox-desktop.exe
+        path: target/release/tuffbox-desktop.exe
         if-no-files-found: error
