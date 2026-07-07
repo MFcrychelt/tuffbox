@@ -337,6 +337,14 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 tuffbox_core::manifest::ContentType::Shaderpack => "shader",
                 tuffbox_core::manifest::ContentType::Datapack => "datapack",
             };
+            let icon_url: Option<String> = match &m.source.kind {
+                tuffbox_core::manifest::SourceKind::Modrinth => {
+                    m.source.project_id.as_ref().map(|pid| {
+                        format!("https://cdn.modrinth.com/data/{pid}/icon.png")
+                    })
+                }
+                _ => None,
+            };
             serde_json::json!({
                 "id": m.id,
                 "name": m.name,
@@ -345,7 +353,7 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 "source": format!("{:?}", m.source.kind).to_lowercase(),
                 "projectId": m.source.project_id,
                 "fileName": m.file_name,
-                "iconUrl": null,
+                "iconUrl": icon_url,
                 "contentType": content_type,
             })
         })

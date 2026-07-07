@@ -4,3 +4,5 @@ fix_mods.py
 patch_mods.sh
 
 .cargo/
+dist/
+share/

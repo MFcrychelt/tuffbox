@@ -6,7 +6,6 @@
     Filter,
     Plus,
     Trash2,
-    RefreshCw,
     RotateCw,
     Download,
     X,
@@ -69,7 +68,6 @@
   let searchResults: SearchResult[] = [];
   let searchLoading = false;
   let selectedSide = "auto";
-  let iconCache: Record<string, string | null> = {};
   let filterGameVersion = "";
   let filterLoader = "fabric";
   let filterCategory = "";
@@ -314,7 +312,6 @@
     try {
       mods = await invoke("list_mods", { path: $projectPath });
       lastLoadedPath = $projectPath;
-      hydrateInstalledIcons(mods);
     } catch (e) {
       error = String(e);
     } finally {
@@ -475,26 +472,8 @@
     }
   }
 
-  async function hydrateInstalledIcons(rows: ModRow[]) {
-    const targets = rows
-      .filter((mod) => mod.source === "modrinth" && mod.projectId && iconCache[mod.projectId] === undefined)
-      .map((mod) => mod.projectId as string);
-    const unique = Array.from(new Set(targets));
-    if (unique.length === 0) return;
-    await Promise.all(
-      unique.map(async (projectId) => {
-        try {
-          iconCache[projectId] = await invoke("get_modrinth_project_icon", { projectId });
-        } catch {
-          iconCache[projectId] = null;
-        }
-      })
-    );
-    iconCache = { ...iconCache };
-  }
-
   function modIconUrl(mod: ModRow) {
-    return mod.iconUrl ?? (mod.projectId ? iconCache[mod.projectId] : null);
+    return mod.iconUrl;
   }
 
   function isInstalled(result: SearchResult) {
@@ -569,7 +548,6 @@
           loading = true;
           try {
             mods = await invoke("sync_mods_folder", { path: $projectPath });
-            hydrateInstalledIcons(mods);
           } catch(e) {
             error = String(e);
           } finally {
@@ -585,9 +563,6 @@
         <button class="secondary" on:click={loadRecommendations} disabled={!$projectPath || recsLoading} title="Get mod recommendations">
           <Lightbulb size={16} />
           {recsLoading ? "..." : "Suggestions"}
-        </button>
-        <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
-          <RefreshCw size={16} class={loading ? "spin" : ""} />
         </button>
       </div>
     </div>

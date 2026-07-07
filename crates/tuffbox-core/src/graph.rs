@@ -100,6 +100,17 @@ impl DependencyGraph {
     pub fn from_manifest(manifest: &ProjectManifest) -> Self {
         let mut graph = Self::default();
 
+        let project_id_to_slug: HashMap<String, String> = manifest
+            .mods
+            .iter()
+            .filter_map(|m| {
+                m.source
+                    .project_id
+                    .as_ref()
+                    .map(|pid| (pid.clone(), m.id.clone()))
+            })
+            .collect();
+
         let minecraft_id = NodeId::minecraft(&manifest.minecraft.version);
         graph.nodes.push(GraphNode {
             id: minecraft_id.clone(),
@@ -226,9 +237,13 @@ impl DependencyGraph {
             }
 
             for dep in &module.dependencies {
+                let resolved_target = project_id_to_slug
+                    .get(&dep.target)
+                    .cloned()
+                    .unwrap_or_else(|| dep.target.clone());
                 graph.edges.push(GraphEdge {
                     from: mod_id.clone(),
-                    to: NodeId::module(&dep.target),
+                    to: NodeId::module(&resolved_target),
                     kind: dependency_kind_to_edge_kind(dep.kind),
                     constraint: dep.version_constraint.clone(),
                     reason: dep.reason.clone(),

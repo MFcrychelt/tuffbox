@@ -29,48 +29,48 @@ impl Resolver {
         graph: &DependencyGraph,
         diagnostics: &[Diagnostic],
     ) -> Option<ChangePlan> {
-        let error = diagnostics
+        let missing_deps: Vec<String> = diagnostics
             .iter()
-            .find(|d| d.severity == DiagnosticSeverity::Error)?;
+            .filter(|d| d.severity == DiagnosticSeverity::Error && d.code == "MISSING_DEPENDENCY")
+            .filter_map(|d| d.related_nodes.last())
+            .filter_map(|id| id.0.strip_prefix("mod:").map(|s| s.to_string()))
+            .collect();
 
-        match error.code.as_str() {
-            "MISSING_DEPENDENCY" => {
-                let missing = error
-                    .related_nodes
-                    .last()?
-                    .0
-                    .strip_prefix("mod:")?
-                    .to_string();
-                Some(ChangePlan {
-                    summary: format!("Install missing dependency: {missing}"),
-                    risk: ChangeRisk::Low,
-                    actions: vec![ChangeAction::InstallMod {
-                        project_id: missing,
-                        version: None,
-                    }],
-                    requires_snapshot: true,
+        if !missing_deps.is_empty() {
+            let actions: Vec<ChangeAction> = missing_deps
+                .iter()
+                .map(|slug| ChangeAction::InstallMod {
+                    project_id: slug.clone(),
+                    version: None,
                 })
-            }
-            "MOD_CONFLICT" => {
-                let removable = error.related_nodes.last()?.clone();
-                let label = graph
-                    .node(&removable)
-                    .map(|n| n.label.clone())
-                    .unwrap_or(removable.0.clone());
-                Some(ChangePlan {
-                    summary: format!("Disable conflicting mod: {label}"),
-                    risk: ChangeRisk::Medium,
-                    actions: vec![ChangeAction::DisableMod { node_id: removable }],
-                    requires_snapshot: true,
-                })
-            }
-            _ => Some(ChangePlan {
-                summary: format!("Review diagnostic: {}", error.code),
-                risk: ChangeRisk::Medium,
-                actions: vec![],
+                .collect();
+            let summary = if missing_deps.len() == 1 {
+                format!("Install missing dependency: {}", missing_deps[0])
+            } else {
+                format!("Install {} missing dependencies", missing_deps.len())
+            };
+            return Some(ChangePlan {
+                summary,
+                risk: ChangeRisk::Low,
+                actions,
                 requires_snapshot: true,
-            }),
+            });
         }
+
+        let conflict = diagnostics
+            .iter()
+            .find(|d| d.severity == DiagnosticSeverity::Error && d.code == "MOD_CONFLICT")?;
+        let removable = conflict.related_nodes.last()?.clone();
+        let label = graph
+            .node(&removable)
+            .map(|n| n.label.clone())
+            .unwrap_or(removable.0.clone());
+        Some(ChangePlan {
+            summary: format!("Disable conflicting mod: {label}"),
+            risk: ChangeRisk::Medium,
+            actions: vec![ChangeAction::DisableMod { node_id: removable }],
+            requires_snapshot: true,
+        })
     }
 
     fn find_missing_dependencies(graph: &DependencyGraph) -> Vec<Diagnostic> {

@@ -504,7 +504,7 @@ mod tests {
         cpu_name: "Intel i9-13900K".into(), gpu_names: vec!["Intel UHD".into(),"NVIDIA RTX 4090".into()],
         total_ram_mb: 32768, is_offline: false, win_events: vec![],
     }}
-    #[test] fn detects_mixin() { assert!(!check_mixins(&ctx(), &ctx().crash_content.join("\n")+"\n"+&ctx().latest_log).is_empty()); }
+    #[test] fn detects_mixin() { assert!(!check_mixins(&ctx(), &(ctx().crash_content.join("\n")+"\n"+&ctx().latest_log)).is_empty()); }
     #[test] fn detects_intel() { assert!(!check_intel_cpu(&ctx()).is_empty()); }
     #[test] fn detects_gpu() { assert!(!check_integrated_gpu(&ctx()).is_empty()); }
     #[test] fn detects_module() { assert!(!check_module_resolution(&ctx(), &ctx().crash_content.join("\n")).is_empty()); }

@@ -1,8 +1,15 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch, Eye, EyeOff } from "lucide-svelte";
+  import { FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch, ChevronRight, ChevronDown, File, Folder, FolderOpen } from "lucide-svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import { projectPath } from "../lib/store";
+  import CodeMirror from "svelte-codemirror-editor";
+  import { json } from "@codemirror/lang-json";
+  import { javascript } from "@codemirror/lang-javascript";
+  import { yaml } from "@codemirror/lang-yaml";
+  import { StreamLanguage } from "@codemirror/language";
+  import { toml } from "@codemirror/legacy-modes/mode/toml";
+  import { oneDark } from "@codemirror/theme-one-dark";
 
   type ConfigFile = {
     path: string;
@@ -18,6 +25,15 @@
     text: string;
   };
 
+  type FlatNode = {
+    name: string;
+    fullPath: string;
+    isDir: boolean;
+    depth: number;
+    expanded: boolean;
+    file?: ConfigFile;
+  };
+
   let files: ConfigFile[] = [];
   let selected: ConfigFile | null = null;
   let content = "";
@@ -29,14 +45,96 @@
   let message: string | null = null;
   let lastLoadedPath: string | null = null;
 
-  // Search across files
   let searchQuery = "";
   let searchResults: SearchHit[] = [];
   let searchLoading = false;
   let searchError: string | null = null;
 
-  // Syntax highlight toggle
-  let highlightMode = false;
+  let expandedDirs = new Set<string>();
+  let flatTree: FlatNode[] = [];
+
+  function buildFlatTree(fileList: ConfigFile[], filterQuery: string): FlatNode[] {
+    const dirs = new Map<string, { expanded: boolean; children: ConfigFile[] }>();
+    const q = filterQuery.toLowerCase().trim();
+
+    for (const file of fileList) {
+      const parts = file.path.split("/");
+      for (let i = 0; i < parts.length - 1; i++) {
+        const dirPath = parts.slice(0, i + 1).join("/");
+        if (!dirs.has(dirPath)) dirs.set(dirPath, { expanded: expandedDirs.has(dirPath), children: [] });
+      }
+      if (parts.length > 1) {
+        const parentPath = parts.slice(0, -1).join("/");
+        dirs.get(parentPath)?.children.push(file);
+      }
+    }
+
+    if (q) {
+      for (const [dirPath] of dirs) {
+        const dirParts = dirPath.split("/");
+        for (let i = 0; i < dirParts.length; i++) {
+          const ancestor = dirParts.slice(0, i + 1).join("/");
+          expandedDirs.add(ancestor);
+        }
+      }
+    }
+
+    const result: FlatNode[] = [];
+    function walk(dirPath: string, depth: number) {
+      const dir = dirs.get(dirPath);
+      if (!dir) return;
+      const name = dirPath.split("/").pop() ?? dirPath;
+      result.push({ name, fullPath: dirPath, isDir: true, depth, expanded: dir.expanded });
+      if (dir.expanded) {
+        for (const child of dir.children) {
+          const childName = child.path.split("/").pop() ?? child.path;
+          result.push({ name: childName, fullPath: child.path, isDir: false, depth: depth + 1, expanded: false, file: child });
+        }
+        const subDirs = [...dirs.keys()]
+          .filter((k) => k.startsWith(dirPath + "/") && !k.slice(dirPath.length + 1).includes("/"))
+          .sort();
+        for (const sub of subDirs) {
+          walk(sub, depth + 1);
+        }
+      }
+    }
+
+    const topDirs = [...dirs.keys()]
+      .filter((k) => !k.includes("/") || dirs.has(k.split("/").slice(0, -1).join("/")) === false)
+      .filter((k) => k.split("/").length === 1)
+      .sort();
+    for (const d of topDirs) walk(d, 0);
+
+    const topLevelFiles = fileList.filter((f) => !f.path.includes("/"));
+    for (const f of topLevelFiles) {
+      result.push({ name: f.path, fullPath: f.path, isDir: false, depth: 0, expanded: false, file: f });
+    }
+
+    return result;
+  }
+
+  function toggleDir(fullPath: string) {
+    if (expandedDirs.has(fullPath)) {
+      expandedDirs.delete(fullPath);
+    } else {
+      expandedDirs.add(fullPath);
+    }
+    flatTree = buildFlatTree(files, filter);
+  }
+
+  $: flatTree = buildFlatTree(files, filter);
+
+  function langForExt(ext: string) {
+    switch (ext) {
+      case "json": case "json5": return json();
+      case "js": case "zs": return javascript();
+      case "yaml": case "yml": return yaml();
+      case "toml": return StreamLanguage.define(toml);
+      default: return undefined;
+    }
+  }
+
+  $: currentLang = langForExt(selected?.extension?.toLowerCase() ?? "");
 
   async function loadFiles(force = false) {
     if (!$projectPath) return;
@@ -47,7 +145,7 @@
     try {
       files = await invoke("list_config_files", { path: $projectPath });
       lastLoadedPath = $projectPath;
-      if (selected && !files.some((file) => file.path === selected?.path)) {
+      if (selected && !files.some((f) => f.path === selected?.path)) {
         selected = null;
         content = "";
         originalContent = "";
@@ -100,7 +198,7 @@
       originalContent = content;
       message = `Saved ${selected.path}. Auto snapshot created.`;
       await loadFiles(true);
-      selected = files.find((file) => file.path === selected?.path) ?? selected;
+      selected = files.find((f) => f.path === selected?.path) ?? selected;
     } catch (e) {
       error = String(e);
     } finally {
@@ -147,44 +245,7 @@
     if (file) tryOpenFile(file);
   }
 
-  // Lightweight regex syntax highlighter for JSON, TOML, JS/ZS, YAML
-  function syntaxHighlight(code: string, ext: string): string {
-    let escaped = code
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-
-    if (ext === "json" || ext === "json5") {
-      escaped = escaped
-        .replace(/"([^"\\]|\\.)*"/g, '<span class="hl-string">$&</span>')
-        .replace(/\b(true|false|null)\b/g, '<span class="hl-bool">$1</span>')
-        .replace(/\b(-?\d+\.?\d*([eE][+-]?\d+)?)\b/g, '<span class="hl-number">$1</span>');
-    } else if (ext === "toml" || ext === "properties" || ext === "cfg") {
-      escaped = escaped
-        .replace(/^(\s*[A-Za-z0-9_.-]+)\s*=/gm, '<span class="hl-key">$1</span>=')
-        .replace(/^(\s*#.*)/gm, '<span class="hl-comment">$1</span>')
-        .replace(/"([^"\\]|\\.)*"/g, '<span class="hl-string">$&</span>')
-        .replace(/\b(true|false)\b/g, '<span class="hl-bool">$1</span>')
-        .replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-number">$1</span>');
-    } else if (ext === "js" || ext === "zs") {
-      escaped = escaped
-        .replace(/(\/\/.*)/g, '<span class="hl-comment">$1</span>')
-        .replace(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/g, '<span class="hl-string">$1</span>')
-        .replace(/\b(const|let|var|function|return|if|else|for|while|class|import|export|from|as|new|this|true|false|null|undefined|event|require|module)\b/g, '<span class="hl-keyword">$1</span>')
-        .replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-number">$1</span>');
-    } else if (ext === "yaml" || ext === "yml") {
-      escaped = escaped
-        .replace(/^(\s*[A-Za-z0-9_.-]+):/gm, '<span class="hl-key">$1</span>:')
-        .replace(/^(\s*#.*)/gm, '<span class="hl-comment">$1</span>')
-        .replace(/"([^"\\]|\\.)*"/g, '<span class="hl-string">$&</span>')
-        .replace(/\b(true|false|null)\b/g, '<span class="hl-bool">$1</span>')
-        .replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-number">$1</span>');
-    }
-    return escaped;
-  }
-
   $: canFormat = selected?.extension?.toLowerCase() === "json";
-  $: highlighted = highlightMode ? syntaxHighlight(content, selected?.extension?.toLowerCase() ?? "") : "";
 
   function formatSize(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
@@ -193,18 +254,7 @@
   }
 
   $: dirty = content !== originalContent;
-  $: filtered = files.filter((file) =>
-    file.path.toLowerCase().includes(filter.toLowerCase())
-  );
-  $: grouped = filtered.reduce<Record<string, ConfigFile[]>>((acc, file) => {
-    const root = file.path.split("/")[0] ?? "project";
-    acc[root] = acc[root] ?? [];
-    acc[root].push(file);
-    return acc;
-  }, {});
-  $: lineCount = content ? content.split("\n").length : 0;
 
-  // Config linter
   let lintIssues: any[] = [];
   let lintLoading = false;
 
@@ -215,14 +265,18 @@
     catch { lintIssues = []; }
     finally { lintLoading = false; }
   }
+
   $: if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
 
-  // Ctrl+S shortcut
   function handleKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
       e.preventDefault();
       if (dirty && selected) saveFile();
     }
+  }
+
+  function handleCmChange(e: any) {
+    content = e.detail;
   }
 </script>
 
@@ -242,9 +296,6 @@
       <button class="secondary" on:click={lintFile} disabled={!selected || lintLoading} title={lintIssues.length ? `Found ${lintIssues.length} issue(s)` : "Lint config"}>
         <AlertTriangle size={16} />
         {lintLoading ? "..." : lintIssues.length > 0 ? `${lintIssues.length} issues` : "Lint"}
-      </button>
-      <button class="secondary" on:click={() => (highlightMode = !highlightMode)} disabled={!selected} title={highlightMode ? "Edit mode" : "Syntax highlight preview"}>
-        {#if highlightMode}<EyeOff size={16} /> Edit{:else}<Eye size={16} /> Highlight{/if}
       </button>
       <button class="secondary" on:click={formatJson} disabled={!canFormat || saving} title={canFormat ? "Pretty-print JSON" : "Formatting is only available for .json files"}>
         <FileCode2 size={16} /> Format
@@ -273,10 +324,9 @@
       <aside class="file-panel">
         <div class="search">
           <Search size={16} />
-          <input bind:value={filter} placeholder="Search files..." />
+          <input bind:value={filter} placeholder="Filter files..." />
         </div>
 
-        <!-- Search across all configs -->
         <div class="search-across">
           <div class="search-across-row">
             <input bind:value={searchQuery} placeholder="Search in file contents..." on:keydown={(e) => e.key === "Enter" && doSearch()} />
@@ -306,25 +356,39 @@
 
         {#if loading && files.length === 0}
           <div class="muted">Scanning project...</div>
-        {:else if filtered.length === 0}
+        {:else if files.length === 0}
           <div class="muted">No editable config files found.</div>
         {:else}
-          <div class="groups">
-            {#each Object.entries(grouped) as [root, group]}
-              <section>
-                <h3>{root}</h3>
-                {#each group as file}
-                  <button
-                    class="file-row"
-                    class:selected={selected?.path === file.path}
-                    on:click={() => tryOpenFile(file)}
-                    title={file.path}
-                  >
-                    <span class="file-name">{file.path.replace(`${root}/`, "")}</span>
-                    <span class="file-meta">{file.extension || "file"} · {formatSize(file.size)}</span>
-                  </button>
-                {/each}
-              </section>
+          <div class="tree">
+            {#each flatTree as node}
+              {#if node.isDir}
+                <button
+                  class="tree-dir"
+                  style:padding-left="{12 + node.depth * 16}px"
+                  on:click={() => toggleDir(node.fullPath)}
+                >
+                  {#if node.expanded}
+                    <ChevronDown size={14} />
+                    <FolderOpen size={14} class="folder-icon" />
+                  {:else}
+                    <ChevronRight size={14} />
+                    <Folder size={14} class="folder-icon" />
+                  {/if}
+                  <span class="tree-dir-name">{node.name}</span>
+                </button>
+              {:else if node.file}
+                <button
+                  class="tree-file"
+                  class:selected={selected?.path === node.file.path}
+                  style:padding-left="{12 + node.depth * 16}px"
+                  on:click={() => tryOpenFile(node.file)}
+                  title={node.file.path}
+                >
+                  <File size={14} />
+                  <span class="tree-file-name">{node.name}</span>
+                  <span class="tree-file-meta">{formatSize(node.file.size)}</span>
+                </button>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -338,17 +402,20 @@
               <p>{selected.path}</p>
             </div>
             <div class="editor-stats">
-              <span>{lineCount} lines</span>
+              <span>{content.split("\n").length} lines</span>
               <span>{formatSize(content.length)}</span>
               {#if dirty}<strong>Unsaved</strong>{/if}
-              {#if highlightMode}<span class="hl-badge">Preview</span>{/if}
+              <span class="lang-badge">{selected.extension || "text"}</span>
             </div>
           </div>
-          {#if highlightMode}
-            <pre class="highlighted-code">{@html highlighted}</pre>
-          {:else}
-            <textarea bind:value={content} spellcheck="false" />
-          {/if}
+          <div class="cm-wrapper">
+            <CodeMirror
+              value={content}
+              lang={currentLang}
+              theme={oneDark}
+              on:change={handleCmChange}
+            />
+          </div>
 
           {#if lintIssues.length > 0}
             <div class="lint-panel">
@@ -365,19 +432,20 @@
 
         {:else}
           <div class="empty editor-empty">
-            Select a config file. Supported formats: JSON, JSON5, TOML, properties, CFG, JS, ZS, YAML, TXT.
-            <br /><small>Ctrl+S to save · Ctrl+click search result to open · Toggle "Highlight" for syntax preview</small>
+            Select a config file from the tree. Supported: JSON, TOML, JS, ZS, YAML, properties.
+            <br /><small>Ctrl+S to save · syntax highlighting is automatic</small>
           </div>
         {/if}
       </section>
     </div>
   {/if}
-{#if confirmOpen}
-    <ConfirmDialog title="Discard changes?" message="You have unsaved changes. Discard them?" danger={false}
-      confirmLabel="Discard" on:confirm={() => { confirmOpen = false; if (pendingFile) { openFileInternal(pendingFile); pendingFile = null; } }}
-      on:cancel={() => (confirmOpen = false, pendingFile = null)} />
-  {/if}
 </div>
+
+{#if confirmOpen}
+  <ConfirmDialog title="Discard changes?" message="You have unsaved changes. Discard them?" danger={false}
+    confirmLabel="Discard" on:confirm={() => { confirmOpen = false; if (pendingFile) { openFileInternal(pendingFile); pendingFile = null; } }}
+    on:cancel={() => (confirmOpen = false, pendingFile = null)} />
+{/if}
 
 <style>
   .config-editor { max-width: none; width: 100%; }
@@ -388,7 +456,7 @@
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
-  .layout { display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 16px; min-height: calc(100vh - 150px); }
+  .layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; min-height: calc(100vh - 150px); }
   .file-panel, .editor-panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .file-panel { padding: 14px; overflow: auto; max-height: calc(100vh - 150px); }
 
@@ -410,29 +478,36 @@
   .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
 
-  h3 { margin: 16px 6px 8px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
-  .file-row { width: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 3px; text-align: left; background: transparent; color: var(--text-secondary); padding: 10px 12px; margin-bottom: 4px; border: 1px solid transparent; }
-  .file-row:hover, .file-row.selected { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.35); color: var(--text-primary); transform: none; }
-  .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
-  .file-meta, .muted, .editor-header p, .editor-stats span { color: var(--text-muted); font-size: 12px; }
-  .muted { padding: 24px 10px; line-height: 1.5; }
+  .tree { display: flex; flex-direction: column; }
+  .tree-children { display: flex; flex-direction: column; }
+
+  .tree-dir, .tree-file {
+    width: 100%; display: flex; align-items: center; gap: 6px;
+    text-align: left; background: transparent; border: 1px solid transparent;
+    color: var(--text-secondary); padding: 6px 12px; font-size: 13px;
+    cursor: pointer; transform: none; border-radius: 6px;
+  }
+  .tree-dir { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .tree-dir:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+  .tree-file { padding-left: 12px; }
+  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.35); color: var(--text-primary); }
+  .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
+  .tree-dir-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .tree-file-meta { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+
+  .muted { padding: 24px 10px; line-height: 1.5; color: var(--text-muted); font-size: 13px; }
 
   .editor-panel { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
   .editor-header { justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border-color); }
   .editor-header h2 { margin: 0 0 3px; font-size: 18px; }
   .editor-stats { gap: 10px; white-space: nowrap; }
   .editor-stats strong { color: var(--accent-warning); font-size: 12px; }
-  .hl-badge { background: rgba(139,92,246,0.15); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; }
+  .lang-badge { background: rgba(139,92,246,0.15); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
 
-  textarea { flex: 1; width: 100%; min-height: 560px; resize: none; border: 0; outline: none; padding: 18px 20px; background: #0d0d10; color: #e5e7eb; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; font-size: 13px; line-height: 1.65; tab-size: 2; }
-
-  .highlighted-code { flex: 1; margin: 0; padding: 18px 20px; background: #0d0d10; color: #e5e7eb; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; font-size: 13px; line-height: 1.65; tab-size: 2; overflow: auto; white-space: pre-wrap; word-break: break-all; }
-  .highlighted-code :global(.hl-string) { color: #86efac; }
-  .highlighted-code :global(.hl-number) { color: #fbbf24; }
-  .highlighted-code :global(.hl-bool) { color: #c084fc; }
-  .highlighted-code :global(.hl-key) { color: #67e8f9; }
-  .highlighted-code :global(.hl-comment) { color: #6b7280; font-style: italic; }
-  .highlighted-code :global(.hl-keyword) { color: #f472b6; }
+  .cm-wrapper { flex: 1; min-height: 0; overflow: auto; }
+  .cm-wrapper :global(.cm-editor) { height: 100%; min-height: 500px; }
+  .cm-wrapper :global(.cm-scroller) { overflow: auto; }
 
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
   .editor-empty { margin: 16px; flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; }
@@ -441,7 +516,7 @@
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .lint-panel { margin-top: 10px; padding: 10px; border-top: 1px solid var(--border-color); max-height: 160px; overflow: auto; }
+  .lint-panel { padding: 10px; border-top: 1px solid var(--border-color); max-height: 160px; overflow: auto; }
   .lint-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 3px; }
   .lint-item.error { background: rgba(239,68,68,.08); color: #fca5a5; }
   .lint-item.warning { background: rgba(245,158,11,.08); color: #fde68a; }
