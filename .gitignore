@@ -6,3 +6,4 @@ patch_mods.sh
 .cargo/
 dist/
 share/
+*.zip
