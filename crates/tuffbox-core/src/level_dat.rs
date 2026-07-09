@@ -46,7 +46,9 @@ fn read_nbt(path: &std::path::Path) -> Result<NbtTag, String> {
 /// Minimal NBT binary parser — only handles the tag types used in level.dat.
 fn parse_nbt_binary(data: &[u8]) -> Result<NbtTag, String> {
     if data.is_empty() || data[0] != 10 { return Err("not a compound".into()); }
-    let mut pos = 3; // skip type(1) + name_len(2)
+    let mut pos = 1; // skip root type
+    let name_len = read_u16(data, &mut pos)? as usize;
+    pos += name_len; // skip root compound name
     let (tag, _) = parse_compound(data, &mut pos)?;
     Ok(tag)
 }
@@ -68,7 +70,7 @@ fn parse_compound(data: &[u8], pos: &mut usize) -> Result<(NbtTag, usize), Strin
 
 fn parse_payload(data: &[u8], pos: &mut usize, tag_type: u8) -> Result<NbtTag, String> {
     Ok(match tag_type {
-        1 => NbtTag::Byte(data[*pos] as i8), // advance handled below
+        1 => { let v = data[*pos] as i8; *pos += 1; NbtTag::Byte(v) }
         2 => { let v = read_i16(data, pos)?; NbtTag::Short(v) }
         3 => { let v = read_i32(data, pos)?; NbtTag::Int(v) }
         4 => { let v = read_i64(data, pos)?; NbtTag::Long(v) }

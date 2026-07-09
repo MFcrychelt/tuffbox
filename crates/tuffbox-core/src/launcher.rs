@@ -7,6 +7,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
 use thiserror::Error;
 
@@ -103,6 +104,12 @@ impl TestLauncher {
         crate::jre::find_runtime_for(&runtimes, required).ok_or(LauncherError::JavaNotFound)
     }
 
+    // Utility for launching into a dedicated instance folder (Prism-style),
+    // where mods/config are copied out of the shared project dir. Currently
+    // TuffBox launches directly inside the project dir, so this isn't on the
+    // hot path — but it's kept (with incremental copy) ready for when
+    // per-profile isolation is enabled.
+    #[allow(dead_code)]
     pub fn prepare_instance(
         manifest: &ProjectManifest,
         profile: &ProfileSpec,
@@ -124,8 +131,15 @@ impl TestLauncher {
             }
             if let Some(file_name) = &module.file_name {
                 let src = PathBuf::from("mods").join(file_name);
+                let dst = mods_dir.join(file_name);
                 if src.is_file() {
-                    fs::copy(&src, mods_dir.join(file_name))?;
+                    // Incremental copy: skip if the destination already exists
+                    // and is byte-identical (same size). Avoids re-copying
+                    // hundreds of MB of mods on every launch — only changed
+                    // mods get re-synced.
+                    if !is_same_file(&src, &dst) {
+                        fs::copy(&src, &dst)?;
+                    }
                 }
             }
         }
@@ -135,7 +149,7 @@ impl TestLauncher {
             if let Some(config_override) = &overrides.config {
                 let src = PathBuf::from(config_override);
                 if src.is_dir() {
-                    copy_dir_all(&src, &config_dir)?;
+                    copy_dir_incremental(&src, &config_dir)?;
                 }
             }
         }
@@ -282,19 +296,49 @@ fn classpath_string(paths: &[PathBuf]) -> String {
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, LauncherError> {
-    let path = fs::canonicalize(path)?;
-    Ok(PathBuf::from(path.to_string_lossy().trim_start_matches("\\\\?\\")))
+    // `fs::canonicalize` does a real filesystem lookup per call; with 100+
+    // library jars in a classpath that's 100+ syscalls every launch. Cache the
+    // result for the process lifetime (paths in the launcher dir don't move
+    // between launches), falling back to a fresh lookup on miss.
+    if let Some(cached) = CANON_CACHE.lock().unwrap().get(path) {
+        return Ok(cached.clone());
+    }
+    let resolved = fs::canonicalize(path)?;
+    let cleaned = PathBuf::from(resolved.to_string_lossy().trim_start_matches("\\\\?\\"));
+    CANON_CACHE.lock().unwrap().insert(path.to_path_buf(), cleaned.clone());
+    Ok(cleaned)
 }
 
-fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<(), LauncherError> {
+lazy_static::lazy_static! {
+    static ref CANON_CACHE: Mutex<std::collections::HashMap<PathBuf, PathBuf>> =
+        Mutex::new(std::collections::HashMap::new());
+}
+
+/// Returns true when `dst` already exists and is byte-identical to `src`
+/// (compared by file size; cheap and good enough to skip re-copying mods
+/// that haven't changed between launches).
+fn is_same_file(src: &Path, dst: &Path) -> bool {
+    if !dst.is_file() {
+        return false;
+    }
+    match (fs::metadata(src), fs::metadata(dst)) {
+        (Ok(s), Ok(d)) => s.len() == d.len(),
+        _ => false,
+    }
+}
+
+/// Like a recursive copy, but skips files whose destination already exists with
+/// the same size, so re-running a launch doesn't rewrite the whole config
+/// tree every time.
+fn copy_dir_incremental(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> Result<(), LauncherError> {
     fs::create_dir_all(&dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let path = entry.path();
         let dest = dst.as_ref().join(entry.file_name());
         if path.is_dir() {
-            copy_dir_all(&path, &dest)?;
-        } else {
+            copy_dir_incremental(&path, &dest)?;
+        } else if !is_same_file(&path, &dest) {
             fs::copy(&path, &dest)?;
         }
     }
@@ -328,5 +372,33 @@ mod tests {
     fn offline_uuid_is_deterministic_per_name() {
         assert_eq!(offline_uuid("Steve"), offline_uuid("Steve"));
         assert_ne!(offline_uuid("Steve"), offline_uuid("Alex"));
+    }
+
+    #[test]
+    fn incremental_copy_skips_identical_files() {
+        let dir = std::env::temp_dir().join("tuffbox_incr_copy_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("src");
+        let dst = dir.join("dst");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dst).unwrap();
+
+        let a = src.join("a.txt");
+        let b = src.join("b.txt");
+        fs::write(&a, b"same").unwrap();
+        fs::write(&b, b"diff").unwrap();
+        // Pre-populate dst with identical `a.txt` and a different `b.txt`.
+        fs::write(dst.join("a.txt"), b"same").unwrap();
+        fs::write(dst.join("b.txt"), b"OLD").unwrap();
+
+        copy_dir_incremental(&src, &dst).unwrap();
+
+        // a.txt unchanged -> not rewritten (still readable, content matches)
+        assert_eq!(fs::read_to_string(dst.join("a.txt")).unwrap(), "same");
+        // b.txt differed -> overwritten with source content
+        assert_eq!(fs::read_to_string(dst.join("b.txt")).unwrap(), "diff");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

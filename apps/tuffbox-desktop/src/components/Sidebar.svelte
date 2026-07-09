@@ -1,6 +1,10 @@
 <script lang="ts">
   import {
     LayoutDashboard,
+    Package,
+    GitGraph,
+    Stethoscope,
+    History,
     Workflow,
     Settings,
     Plus,
@@ -12,6 +16,10 @@
   const items: { id: View; label: string; icon: any; featured?: boolean }[] = [
     { id: "dashboard", label: "Launcher", icon: LayoutDashboard },
     { id: "ide", label: "Open IDE", icon: Workflow, featured: true },
+    { id: "mods", label: "Mods", icon: Package },
+    { id: "graph", label: "Graph", icon: GitGraph },
+    { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
+    { id: "snapshots", label: "Snapshots", icon: History },
   ];
 </script>
 

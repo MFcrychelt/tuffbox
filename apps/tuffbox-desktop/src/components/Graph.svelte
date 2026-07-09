@@ -343,9 +343,9 @@
     if (simulation) simulation.stop();
 
     simulation = d3.forceSimulation<PositionedNode>(initializedNodes)
-      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(150))
+      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(170))
       .force("charge", d3.forceManyBody().strength(-400))
-      .force("collide", d3.forceCollide().radius(46))
+      .force("collide", d3.forceCollide().radius(70))
       .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
       .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
       .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
@@ -496,7 +496,7 @@
             on:mousedown={(e) => handleNodeMouseDown(e, node)}
           >
             <circle r="6" />
-            <text x="10" y="4">{node.label}</text>
+            <text x="10" y="4">{node.label.length > 22 ? node.label.slice(0, 21) + "…" : node.label}</text>
           </g>
         {/each}
       </svg>

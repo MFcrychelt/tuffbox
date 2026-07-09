@@ -312,11 +312,35 @@
     try {
       mods = await invoke("list_mods", { path: $projectPath });
       lastLoadedPath = $projectPath;
+      await hydrateMissingIcons();
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  // Some mods (e.g. local jars with a known Modrinth project id, or entries
+  // whose CDN icon failed to resolve) have no iconUrl. Try to fetch a real
+  // icon so the list isn't all letter-avatars.
+  async function hydrateMissingIcons() {
+    if (!$projectPath) return;
+    const missing = mods.filter((m) => !m.iconUrl && m.projectId);
+    if (missing.length === 0) return;
+    await Promise.all(
+      missing.map(async (m) => {
+        try {
+          const url: string | null = await invoke("get_modrinth_project_icon", {
+            projectId: m.projectId,
+          });
+          if (url) {
+            mods = mods.map((x) => (x.id === m.id ? { ...x, iconUrl: url } : x));
+          }
+        } catch {
+          // leave the letter-avatar fallback in place
+        }
+      })
+    );
   }
 
   function contentTypeForFilter(filter: string): string {

@@ -58,6 +58,13 @@ pub fn spawn_and_track(
         .truncate(true)
         .open(&log_path)?;
 
+    // On Windows, hide the child console window (e.g. the launched game).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 

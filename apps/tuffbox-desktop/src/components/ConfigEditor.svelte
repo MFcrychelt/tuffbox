@@ -7,7 +7,7 @@
   import { json } from "@codemirror/lang-json";
   import { javascript } from "@codemirror/lang-javascript";
   import { yaml } from "@codemirror/lang-yaml";
-  import { StreamLanguage } from "@codemirror/language";
+  import { StreamLanguage, LanguageSupport } from "@codemirror/language";
   import { toml } from "@codemirror/legacy-modes/mode/toml";
   import { oneDark } from "@codemirror/theme-one-dark";
 
@@ -129,7 +129,7 @@
       case "json": case "json5": return json();
       case "js": case "zs": return javascript();
       case "yaml": case "yml": return yaml();
-      case "toml": return StreamLanguage.define(toml);
+      case "toml": return StreamLanguage.define(toml) as unknown as LanguageSupport;
       default: return undefined;
     }
   }
@@ -381,7 +381,7 @@
                   class="tree-file"
                   class:selected={selected?.path === node.file.path}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => tryOpenFile(node.file)}
+                  on:click={() => { if (node.file) tryOpenFile(node.file); }}
                   title={node.file.path}
                 >
                   <File size={14} />

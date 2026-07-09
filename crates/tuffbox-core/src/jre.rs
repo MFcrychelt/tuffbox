@@ -178,10 +178,16 @@ pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
         )));
     }
 
-    let output = Command::new(&java_bin)
-        .arg("-version")
-        .stderr(Stdio::piped())
-        .output()?;
+    let output = {
+        let mut c = Command::new(&java_bin);
+        c.arg("-version").stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        c.output()?
+    };
     let stderr = String::from_utf8_lossy(&output.stderr);
     let first_line = stderr.lines().next().unwrap_or("").to_string();
     let major = parse_java_major(&first_line).ok_or(JreError::InvalidVersion)?;

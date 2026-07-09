@@ -209,7 +209,9 @@ pub fn analyze_unification_full(
                 if !installed.contains(mid) { continue; }
                 for item in items {
                     let il = item.to_lowercase();
-                    if il.contains(&mat.to_lowercase()) && il.contains(&itype)
+                    let mat_l = mat.to_lowercase();
+                    let singular = if itype == "item" { itype.clone() } else { itype.trim_end_matches('s').to_string() };
+                    if il.contains(&mat_l) && (il.contains(&itype) || il.contains(singular.as_str()))
                         && !config.is_item_ignored(item) {
                         cands.push((mid.clone(), item.clone()));
                     }

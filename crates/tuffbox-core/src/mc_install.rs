@@ -6,8 +6,85 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
+    sync::Mutex,
 };
 use thiserror::Error;
+
+// In-process cache of resolved `InstalledVersion`s, keyed by the
+// (minecraft version, loader kind, loader version) triple. Rebuilding the
+// installed-version metadata (scanning every library jar, reading the asset
+// index, re-extracting natives, merging loader profiles) is pure overhead
+// when nothing has changed — which is the common case for repeated test
+// launches. We still re-validate that the on-disk files still exist before
+// trusting a cached entry, so a deleted/corrupted install falls through to
+// a real re-install instead of launching a broken game.
+lazy_static::lazy_static! {
+    static ref INSTALL_CACHE: Mutex<std::collections::HashMap<String, InstalledVersion>> =
+        Mutex::new(std::collections::HashMap::new());
+}
+
+fn install_cache_key(mc_version: &str, loader_kind: &str, loader_version: &str) -> String {
+    format!("{mc_version}|{loader_kind}|{loader_version}")
+}
+
+fn cached_install(key: &str) -> Option<InstalledVersion> {
+    let cache = INSTALL_CACHE.lock().unwrap();
+    let version = cache.get(key)?;
+    // Re-validate the critical files still exist; otherwise drop the cache.
+    let ok = version.client_jar.exists()
+        && version.libraries.iter().all(|p| p.exists())
+        && version.natives_dir.exists();
+    if ok {
+        Some(version.clone())
+    } else {
+        None
+    }
+}
+
+fn store_install(key: &str, version: InstalledVersion) {
+    let mut cache = INSTALL_CACHE.lock().unwrap();
+    cache.insert(key.to_string(), version);
+}
+
+/// On-disk mirror of `INSTALL_CACHE` so resolved install metadata survives a
+/// Tauri/process restart. Keyed the same way; stored as
+/// `<launcher_dir>/install-cache/<key>.json`. Paths inside are absolute, so
+/// the cache is only valid on the same machine — which is fine, the install
+/// dir itself is machine-local too.
+fn disk_cache_path(launcher_dir: &Path, key: &str) -> PathBuf {
+    launcher_dir
+        .join("install-cache")
+        .join(key.replace(['|', '/', '\\', ':'], "_"))
+        .with_extension("json")
+}
+
+fn load_disk_install(launcher_dir: &Path, key: &str) -> Option<InstalledVersion> {
+    let path = disk_cache_path(launcher_dir, key);
+    let text = fs::read_to_string(&path).ok()?;
+    let version: InstalledVersion = serde_json::from_str(&text).ok()?;
+    // Same validation as the in-process cache: if the install files are gone,
+    // drop the cached metadata and let a real install happen.
+    let ok = version.client_jar.exists()
+        && version.libraries.iter().all(|p| p.exists())
+        && version.natives_dir.exists();
+    if ok {
+        Some(version)
+    } else {
+        let _ = fs::remove_file(&path);
+        None
+    }
+}
+
+fn store_disk_install(launcher_dir: &Path, key: &str, version: &InstalledVersion) {
+    let cache_dir = launcher_dir.join("install-cache");
+    if fs::create_dir_all(&cache_dir).is_err() {
+        return;
+    }
+    let path = disk_cache_path(launcher_dir, key);
+    if let Ok(text) = serde_json::to_string_pretty(version) {
+        let _ = fs::write(&path, text);
+    }
+}
 
 const MOJANG_VERSION_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const RESOURCES_URL: &str = "https://resources.download.minecraft.net";
@@ -28,7 +105,7 @@ pub enum InstallError {
     UnsupportedLoader(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InstalledVersion {
     pub id: String,
     pub main_class: String,
@@ -66,6 +143,21 @@ pub fn install_game(
     let libraries_dir = launcher_dir.join("libraries");
     let assets_dir = launcher_dir.join("assets");
     let natives_base = launcher_dir.join("natives");
+
+    // Fast path: a previous launch (this process or a prior run, via the
+    // on-disk cache) already resolved this exact version + loader combo and
+    // the on-disk files are still present. Skip the whole
+    // re-scan/re-extract/re-merge work below.
+    let cache_key = install_cache_key(mc_version, loader_kind, loader_version);
+    if let Some(cached) = cached_install(&cache_key) {
+        progress.log("# Using in-process cached install metadata (files verified present).");
+        return Ok(cached);
+    }
+    if let Some(cached) = load_disk_install(launcher_dir, &cache_key) {
+        progress.log("# Using on-disk cached install metadata (files verified present).");
+        store_install(&cache_key, cached.clone());
+        return Ok(cached);
+    }
 
     fs::create_dir_all(&versions_dir)?;
     fs::create_dir_all(&libraries_dir)?;
@@ -113,6 +205,8 @@ pub fn install_game(
     }
 
     progress.log("# Installation complete.");
+    store_install(&cache_key, vanilla.clone());
+    store_disk_install(launcher_dir, &cache_key, &vanilla);
     Ok(vanilla)
 }
 
@@ -630,6 +724,19 @@ fn native_classifier() -> &'static str {
 
 fn extract_natives(archive_path: &Path, natives_dir: &Path) -> Result<(), InstallError> {
     fs::create_dir_all(natives_dir)?;
+
+    // Optimization: native libraries don't change between launches. If the
+    // target directory already contains extracted files, skip the (relatively
+    // expensive) re-read + re-write of every native on each startup. This
+    // cuts per-launch I/O significantly — extraction used to run on every
+    // single `build_command` call.
+    let already_extracted = fs::read_dir(natives_dir)
+        .map(|entries| entries.flatten().any(|e| e.path().is_file()))
+        .unwrap_or(false);
+    if already_extracted {
+        return Ok(());
+    }
+
     let file = fs::File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     for i in 0..archive.len() {

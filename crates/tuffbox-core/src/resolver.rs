@@ -57,20 +57,39 @@ impl Resolver {
             });
         }
 
-        let conflict = diagnostics
+        if let Some(conflict) = diagnostics
             .iter()
-            .find(|d| d.severity == DiagnosticSeverity::Error && d.code == "MOD_CONFLICT")?;
-        let removable = conflict.related_nodes.last()?.clone();
-        let label = graph
-            .node(&removable)
-            .map(|n| n.label.clone())
-            .unwrap_or(removable.0.clone());
-        Some(ChangePlan {
-            summary: format!("Disable conflicting mod: {label}"),
+            .find(|d| d.severity == DiagnosticSeverity::Error && d.code == "MOD_CONFLICT")
+        {
+            let removable = conflict.related_nodes.last()?.clone();
+            let label = graph
+                .node(&removable)
+                .map(|n| n.label.clone())
+                .unwrap_or(removable.0.clone());
+            return Some(ChangePlan {
+                summary: format!("Disable conflicting mod: {label}"),
+                risk: ChangeRisk::Medium,
+                actions: vec![ChangeAction::DisableMod { node_id: removable }],
+                requires_snapshot: true,
+            });
+        }
+
+    // Local fallback (kept from the older local version): for any other error
+    // diagnostic that has no specific handler above, still surface a review
+    // plan so callers always get *something* actionable instead of `None`.
+    if let Some(other) = diagnostics
+        .iter()
+        .find(|d| d.severity == DiagnosticSeverity::Error)
+    {
+        return Some(ChangePlan {
+            summary: format!("Review diagnostic: {}", other.code),
             risk: ChangeRisk::Medium,
-            actions: vec![ChangeAction::DisableMod { node_id: removable }],
+            actions: vec![],
             requires_snapshot: true,
-        })
+        });
+    }
+
+        None
     }
 
     fn find_missing_dependencies(graph: &DependencyGraph) -> Vec<Diagnostic> {

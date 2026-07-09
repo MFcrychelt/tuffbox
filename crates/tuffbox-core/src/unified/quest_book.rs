@@ -43,38 +43,199 @@ impl QuestBook {
 }
 
 fn snbt_to_json(text: &str) -> Result<serde_json::Value, String> {
-    let processed = snbt_preprocess(text);
-    serde_json::from_str(&processed).map_err(|e| format!("SNBT parse: {}", e))
+    parse_snbt(text)
 }
 
-fn snbt_preprocess(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + text.len() / 5);
+/// Recursive-descent SNBT (Stringified NBT) parser.
+/// SNBT uses the same structure as JSON but permits unquoted keys and
+/// optional (whitespace or comma) separators between values.
+fn parse_snbt(text: &str) -> Result<serde_json::Value, String> {
     let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '"' => { out.push('"'); i += 1; while i < chars.len() && chars[i] != '"' { if chars[i] == '\\' { out.push('\\'); i += 1; if i < chars.len() { out.push(chars[i]); }} else { out.push(chars[i]); } i += 1; } if i < chars.len() { out.push('"'); i += 1; } }
-            '[' => { if i + 3 < chars.len() && matches!(chars[i+1], 'I' | 'B' | 'L') { let mut j=i+2; while j<chars.len()&&chars[j].is_whitespace(){j+=1;} if j<chars.len()&&chars[j]==';'{out.push('[');i=j+1;continue;}} out.push('['); i+=1; }
-            _ if c.is_alphabetic() || c == '_' => {
-                let start = i;
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '.') { i += 1; }
-                let ident: String = chars[start..i].iter().collect();
-                let mut j = i;
-                while j < chars.len() && chars[j].is_whitespace() { j += 1; }
-                if j < chars.len() && chars[j] == ':' { out.push('"'); out.push_str(&ident); out.push('"'); out.extend(&chars[i..j+1]); i = j + 1; }
-                else { out.push_str(&ident); }
+    let mut p = SnbtParser { chars: &chars, pos: 0 };
+    p.skip_ws();
+    let v = p.parse_value()?;
+    p.skip_ws();
+    if p.pos != p.chars.len() {
+        return Err(format!("SNBT parse: trailing content at position {}", p.pos));
+    }
+    Ok(v)
+}
+
+struct SnbtParser<'a> {
+    chars: &'a [char],
+    pos: usize,
+}
+
+impl<'a> SnbtParser<'a> {
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.pos).copied()
+    }
+    fn skip_ws(&mut self) {
+        while let Some(c) = self.peek() {
+            if c.is_whitespace() {
+                self.pos += 1;
+            } else {
+                break;
             }
-            _ if c.is_ascii_digit() || (c == '-' && i + 1 < chars.len() && chars[i+1].is_ascii_digit()) => {
-                let start = i; i += 1;
-                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') { i += 1; }
-                if i < chars.len() && matches!(chars[i], 'b'|'s'|'L'|'f'|'d'|'B') && (i+1>=chars.len()||!chars[i+1].is_alphanumeric()) { out.extend(&chars[start..i]); i+=1; }
-                else { out.extend(&chars[start..i]); }
-            }
-            _ => { out.push(c); i += 1; }
         }
     }
-    out
+    fn parse_value(&mut self) -> Result<serde_json::Value, String> {
+        self.skip_ws();
+        match self.peek() {
+            Some('{') => self.parse_object(),
+            Some('[') => self.parse_array(),
+            Some('"') => Ok(serde_json::Value::String(self.parse_string()?)),
+            Some(c) if c.is_ascii_digit() || c == '-' => self.parse_number(),
+            Some(c) if c.is_alphabetic() || c == '_' => self.parse_ident_value(),
+            Some(other) => Err(format!("SNBT parse: unexpected char '{}' at {}", other, self.pos)),
+            None => Err("SNBT parse: unexpected end of input".into()),
+        }
+    }
+    fn parse_object(&mut self) -> Result<serde_json::Value, String> {
+        self.pos += 1; // consume '{'
+        let mut map = serde_json::Map::new();
+        self.skip_ws();
+        if self.peek() == Some('}') {
+            self.pos += 1;
+            return Ok(serde_json::Value::Object(map));
+        }
+        loop {
+            self.skip_ws();
+            let key = self.parse_key()?;
+            self.skip_ws();
+            if self.peek() != Some(':') {
+                return Err(format!("SNBT parse: expected ':' after key at {}", self.pos));
+            }
+            self.pos += 1; // consume ':'
+            let val = self.parse_value()?;
+            map.insert(key, val);
+            self.skip_ws();
+            match self.peek() {
+                Some(',') => {
+                    self.pos += 1;
+                    continue;
+                }
+                Some('}') => {
+                    self.pos += 1;
+                    break;
+                }
+                Some(_) => continue, // SNBT allows whitespace-only separators
+                None => return Err("SNBT parse: unexpected end of input in object".into()),
+            }
+        }
+        Ok(serde_json::Value::Object(map))
+    }
+    fn parse_array(&mut self) -> Result<serde_json::Value, String> {
+        self.pos += 1; // consume '['
+        let mut arr = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(']') {
+            self.pos += 1;
+            return Ok(serde_json::Value::Array(arr));
+        }
+        loop {
+            let v = self.parse_value()?;
+            arr.push(v);
+            self.skip_ws();
+            match self.peek() {
+                Some(',') => {
+                    self.pos += 1;
+                    continue;
+                }
+                Some(']') => {
+                    self.pos += 1;
+                    break;
+                }
+                Some(_) => continue,
+                None => return Err("SNBT parse: unexpected end of input in array".into()),
+            }
+        }
+        Ok(serde_json::Value::Array(arr))
+    }
+    fn parse_string(&mut self) -> Result<String, String> {
+        self.pos += 1; // consume opening quote
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            self.pos += 1;
+            match c {
+                '"' => return Ok(s),
+                '\\' => {
+                    if let Some(e) = self.peek() {
+                        self.pos += 1;
+                        s.push(match e {
+                            'n' => '\n',
+                            't' => '\t',
+                            'r' => '\r',
+                            '\\' => '\\',
+                            '"' => '"',
+                            '\'' => '\'',
+                            '/' => '/',
+                            'b' => '\u{08}',
+                            'f' => '\u{0C}',
+                            other => other,
+                        });
+                    }
+                }
+                _ => s.push(c),
+            }
+        }
+        Err("SNBT parse: unterminated string".into())
+    }
+    fn parse_key(&mut self) -> Result<String, String> {
+        match self.peek() {
+            Some('"') => self.parse_string(),
+            Some(c) if c.is_alphabetic() || c == '_' => {
+                let start = self.pos;
+                while let Some(ch) = self.peek() {
+                    if ch.is_alphanumeric() || ch == '_' || ch == '.' {
+                        self.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Ok(self.chars[start..self.pos].iter().collect())
+            }
+            _ => Err(format!("SNBT parse: expected key at {}", self.pos)),
+        }
+    }
+    fn parse_number(&mut self) -> Result<serde_json::Value, String> {
+        let start = self.pos;
+        if self.peek() == Some('-') {
+            self.pos += 1;
+        }
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let s: String = self.chars[start..self.pos].iter().collect();
+        if let Ok(i) = s.parse::<i64>() {
+            return Ok(serde_json::Value::from(i));
+        }
+        if let Ok(f) = s.parse::<f64>() {
+            return Ok(serde_json::Value::from(f));
+        }
+        Err(format!("SNBT parse: invalid number '{}'", s))
+    }
+    fn parse_ident_value(&mut self) -> Result<serde_json::Value, String> {
+        let start = self.pos;
+        while let Some(c) = self.peek() {
+            if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let s: String = self.chars[start..self.pos].iter().collect();
+        match s.as_str() {
+            "true" => Ok(serde_json::Value::Bool(true)),
+            "false" => Ok(serde_json::Value::Bool(false)),
+            "null" => Ok(serde_json::Value::Null),
+            _ => Ok(serde_json::Value::String(s)),
+        }
+    }
 }
 
 fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {

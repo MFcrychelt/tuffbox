@@ -500,12 +500,14 @@ pub fn run_forge_processors(
         )?;
 
         progress.log(&format!("# Running processor {}/{}: {main_class}", index + 1, total));
-        let output = Command::new(java_path)
-            .arg("-cp")
-            .arg(cp)
-            .arg(main_class)
-            .args(args)
-            .output()?;
+        let mut c = Command::new(java_path);
+        c.arg("-cp").arg(cp).arg(main_class).args(args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let output = c.output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

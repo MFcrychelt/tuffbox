@@ -49,4 +49,10 @@ pub use provider::*;
 pub use resolver::*;
 pub use snapshot::*;
 pub use mod_files::*;
+pub use versions::*;
+pub use mc_install::*;
+pub use jre::*;
+pub use process::*;
+pub use http::*;
+pub use forge_install::*;
 

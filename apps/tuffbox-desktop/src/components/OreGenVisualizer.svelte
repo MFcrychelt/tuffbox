@@ -16,10 +16,87 @@
     knownMod?: string | null;
   };
 
+  type WorldEntry = {
+    name: string;
+    size: number;
+    sizeFormatted: string;
+    hasLevelDat: boolean;
+  };
+
+  type WorldInfo = {
+    name: string;
+    seed?: string;
+    gameType?: string;
+    versionName?: string;
+    lastPlayed?: number;
+    time?: number;
+    spawnX?: number;
+    spawnY?: number;
+    spawnZ?: number;
+    difficulty?: string;
+    hardcore?: boolean;
+    cheatsEnabled?: boolean;
+    sizeFormatted?: string;
+  };
+
   let ores: OreEntry[] = [];
   let loading = false;
   let error: string | null = null;
   let selectedOre: string | null = null;
+
+  // World management section
+  let worlds: WorldEntry[] = [];
+  let worldsLoading = false;
+  let worldsError: string | null = null;
+  let selectedWorld: string | null = null;
+  let selectedWorldInfo: WorldInfo | null = null;
+  let backingUp = false;
+  let backupMessage: string | null = null;
+
+  async function loadWorlds() {
+    if (!$projectPath) return;
+    worldsLoading = true;
+    worldsError = null;
+    try {
+      worlds = (await invoke("list_worlds", { path: $projectPath })) as WorldEntry[];
+    } catch (e) {
+      worldsError = String(e);
+    } finally {
+      worldsLoading = false;
+    }
+  }
+
+  async function selectWorld(name: string) {
+    selectedWorld = name;
+    selectedWorldInfo = null;
+    if (!$projectPath) return;
+    try {
+      selectedWorldInfo = (await invoke("read_world_info", {
+        path: $projectPath,
+        worldName: name,
+      })) as WorldInfo;
+    } catch {
+      selectedWorldInfo = null;
+    }
+  }
+
+  async function backupSelectedWorld() {
+    if (!$projectPath || !selectedWorld) return;
+    backingUp = true;
+    backupMessage = null;
+    worldsError = null;
+    try {
+      const zip: string = await invoke("backup_world", {
+        path: $projectPath,
+        worldName: selectedWorld,
+      });
+      backupMessage = `Backed up to ${zip}`;
+    } catch (e) {
+      worldsError = String(e);
+    } finally {
+      backingUp = false;
+    }
+  }
 
   // Y-level constants: world goes from -64 to 320
   const WORLD_MIN = -64;
@@ -83,6 +160,7 @@
   }
 
   $: if ($projectPath && ores.length === 0) scan();
+  $: if ($projectPath && worlds.length === 0 && !worldsLoading) loadWorlds();
 </script>
 
 <div class="ore-visualizer">
@@ -162,6 +240,72 @@
       </div>
     </div>
   {/if}
+
+  <section class="worlds-section">
+    <div class="toolbar">
+      <div class="title"><Database size={18} /> Worlds ({worlds.length})</div>
+      <button class="ghost" on:click={loadWorlds} disabled={!$projectPath || worldsLoading}>
+        <RefreshCw size={16} class={worldsLoading ? "spin" : ""} />
+        {worldsLoading ? "Loading..." : "Refresh"}
+      </button>
+    </div>
+
+    {#if worldsError}<div class="notice error">{worldsError}</div>{/if}
+    {#if backupMessage}<div class="notice success">{backupMessage}</div>{/if}
+
+    {#if !$projectPath}
+      <div class="empty">Open a project to manage worlds.</div>
+    {:else if worlds.length === 0}
+      <div class="empty">
+        <Database size={32} />
+        <p>No worlds found in saves/. Test runs will create them automatically.</p>
+      </div>
+    {:else}
+      <div class="worlds-layout">
+        <div class="world-list">
+          {#each worlds as world}
+            <button
+              class="world-row"
+              class:selected={selectedWorld === world.name}
+              on:click={() => selectWorld(world.name)}
+            >
+              <div class="world-main">
+                <strong>{world.name}</strong>
+                <span>{world.sizeFormatted}{#if !world.hasLevelDat} · no level.dat{/if}</span>
+              </div>
+              {#if selectedWorld === world.name}
+                <button class="mini" on:click|stopPropagation={backupSelectedWorld} disabled={backingUp || !world.hasLevelDat}>
+                  <RefreshCw size={12} /> {backingUp ? "Backing up..." : "Backup"}
+                </button>
+              {/if}
+            </button>
+          {/each}
+        </div>
+
+        {#if selectedWorldInfo}
+          <div class="world-detail">
+            <h3>{selectedWorldInfo.name}</h3>
+            <div class="world-meta">
+              {#if selectedWorldInfo.seed}<div><span>Seed</span><code>{selectedWorldInfo.seed}</code></div>{/if}
+              {#if selectedWorldInfo.gameType}<div><span>Game type</span><code>{selectedWorldInfo.gameType}</code></div>{/if}
+              {#if selectedWorldInfo.versionName}<div><span>Version</span><code>{selectedWorldInfo.versionName}</code></div>{/if}
+              {#if selectedWorldInfo.difficulty}<div><span>Difficulty</span><code>{selectedWorldInfo.difficulty}</code></div>{/if}
+              {#if selectedWorldInfo.spawnX !== undefined}
+                <div><span>Spawn</span><code>X {selectedWorldInfo.spawnX} · Y {selectedWorldInfo.spawnY} · Z {selectedWorldInfo.spawnZ}</code></div>
+              {/if}
+              <div class="world-flags">
+                {#if selectedWorldInfo.hardcore}<span class="flag danger">hardcore</span>{/if}
+                {#if selectedWorldInfo.cheatsEnabled}<span class="flag">cheats on</span>{/if}
+                {#if selectedWorldInfo.sizeFormatted}<span class="flag">size {selectedWorldInfo.sizeFormatted}</span>{/if}
+              </div>
+            </div>
+          </div>
+        {:else}
+          <div class="world-detail empty-detail">Select a world to see level.dat details.</div>
+        {/if}
+      </div>
+    {/if}
+  </section>
 </div>
 
 <style>
@@ -195,4 +339,70 @@
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }
+
+  .worlds-section {
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border-color);
+  }
+  .worlds-layout {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    gap: 16px;
+  }
+  .world-list {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    padding: 14px;
+    max-height: 520px;
+    overflow: auto;
+  }
+  .world-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    text-align: left;
+    margin-bottom: 4px;
+    transform: none;
+  }
+  .world-row:hover, .world-row.selected {
+    background: var(--bg-tertiary);
+    border-color: rgba(27,217,106,.25);
+  }
+  .world-main { display: grid; gap: 2px; min-width: 0; }
+  .world-main strong { color: var(--text-primary); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .world-main span { color: var(--text-muted); font-size: 11px; }
+  .world-row .mini {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; font-size: 11px; flex-shrink: 0;
+  }
+  .world-detail {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    padding: 16px;
+    max-height: 520px;
+    overflow: auto;
+  }
+  .world-detail h3 { margin: 0 0 12px; color: var(--text-primary); font-size: 15px; word-break: break-all; }
+  .world-meta { display: grid; gap: 8px; }
+  .world-meta > div {
+    display: flex; justify-content: space-between; align-items: center; gap: 12px;
+    padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); border: 1px solid var(--border-color);
+  }
+  .world-meta span { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .world-meta code { color: var(--text-primary); font-size: 12px; font-family: ui-monospace, monospace; text-align: right; word-break: break-all; }
+  .world-flags { flex-wrap: wrap; background: transparent !important; border: none !important; padding: 0 !important; justify-content: flex-start !important; }
+  .flag { font-size: 9px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-muted); font-weight: 700; }
+  .flag.danger { background: rgba(239,68,68,.15); color: #fca5a5; }
+  .empty-detail { color: var(--text-muted); display: flex; align-items: center; justify-content: center; text-align: center; }
+  @media (max-width: 920px) { .worlds-layout { grid-template-columns: 1fr; } }
 </style>

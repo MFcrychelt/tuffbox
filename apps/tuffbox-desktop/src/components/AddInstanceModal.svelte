@@ -43,8 +43,13 @@
   ];
 
   onMount(async () => {
+    loadingMc = true;
     try {
-      mcVersions = await invoke("get_minecraft_versions");
+      const [versions] = await Promise.all([
+        invoke("get_minecraft_versions"),
+        pickDefaultLocation(),
+      ]);
+      mcVersions = versions as { id: string; popular: boolean }[];
       if (!mcVersions.some((v) => v.id === minecraftVersion)) {
         minecraftVersion = mcVersions[0]?.id ?? "";
       }
@@ -53,7 +58,6 @@
     } finally {
       loadingMc = false;
     }
-    await pickDefaultLocation();
     await loadLoaderVersions();
   });
 

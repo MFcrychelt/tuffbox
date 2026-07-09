@@ -32,6 +32,7 @@
   let loaderVersions: { id: string; stable: boolean }[] = [];
   let showJavaPicker = false;
   let saving = false;
+  let loading = false;
   let error = "";
 
   // Schema status
@@ -68,13 +69,22 @@
   }
 
   onMount(async () => {
+    loading = true;
+    error = "";
     try {
-      mcVersions = await invoke("get_minecraft_versions");
+      // Load independent data in parallel; only the loader version list
+      // depends on the selected MC version + loader, so resolve that last.
+      const [versions] = await Promise.all([
+        invoke("get_minecraft_versions"),
+        detectJavaPreview(),
+        loadSchemaStatus(),
+      ]);
+      mcVersions = versions as { id: string; popular: boolean }[];
       await loadLoaderVersions();
-      await detectJavaPreview();
-      await loadSchemaStatus();
     } catch (e) {
       error = `${e}`;
+    } finally {
+      loading = false;
     }
   });
 
@@ -170,8 +180,14 @@
     <h1>Instance Settings</h1>
   </header>
 
-  {#if $projectInfo}
-    <div class="settings-grid">
+  {#if $projectPath}
+    {#if loading}
+      <div class="loading">
+        <RefreshCw size={18} class="spin" />
+        Loading instance settings…
+      </div>
+    {/if}
+    <div class="settings-grid" class:dimmed={loading}>
       <section class="card">
         <div class="card-title">
           <Container size={18} />
@@ -363,6 +379,23 @@
     grid-template-columns: repeat(2, 1fr);
     gap: 20px;
     margin-bottom: 24px;
+  }
+
+  .settings-grid.dimmed {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
   }
 
   .card {

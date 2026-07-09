@@ -793,11 +793,161 @@ fn side_env(side: Side) -> HashMap<String, String> {
         Side::Optional => {
             env.insert("client".to_string(), "optional".to_string());
             env.insert("server".to_string(), "optional".to_string());
-        }
-        Side::Both | Side::Unknown => {
-            env.insert("client".to_string(), "required".to_string());
-            env.insert("server".to_string(), "required".to_string());
+    }
+    Side::Both | Side::Unknown => {
+        env.insert("client".to_string(), "required".to_string());
+        env.insert("server".to_string(), "required".to_string());
+    }
+}
+    env
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::{
+        ContentType, FileHashes, LoaderSpec, MinecraftSpec, ModSource, ModSpec, ProfileSpec,
+        ProjectMetadata, SourceKind,
+    };
+
+    fn fixture_manifest(_dir: &Path) -> ProjectManifest {
+        ProjectManifest {
+            schema_version: "1.0".to_string(),
+            project: ProjectMetadata {
+                id: "test-pack".to_string(),
+                name: "Test Pack".to_string(),
+                version: "1.0.0".to_string(),
+                description: Some("smoke test".to_string()),
+                authors: vec![],
+            },
+            minecraft: MinecraftSpec {
+                version: "1.20.1".to_string(),
+            },
+            loader: LoaderSpec {
+                kind: LoaderKind::Fabric,
+                version: "0.16.0".to_string(),
+            },
+            brief: None,
+            java: None,
+            profiles: vec![ProfileSpec {
+                id: "client".to_string(),
+                name: "Client".to_string(),
+                side: Side::Client,
+                include_optional_mods: false,
+                include_shaders: false,
+                memory_mb: None,
+                jvm_args: vec![],
+                include_mods: vec![],
+                player_name: None,
+            }],
+            mods: vec![
+                ModSpec {
+                    id: "sodium".to_string(),
+                    name: "Sodium".to_string(),
+                    source: ModSource {
+                        kind: SourceKind::Modrinth,
+                        project_id: Some("sodium".to_string()),
+                        file_id: None,
+                        url: Some("https://example.com/sodium.jar".to_string()),
+                        path: None,
+                    },
+                    version: "0.5.0".to_string(),
+                    file_name: Some("sodium.jar".to_string()),
+                    hashes: Some(FileHashes {
+                        sha1: Some("abc".to_string()),
+                        sha512: None,
+                    }),
+                    side: Side::Both,
+                    dependencies: vec![],
+                    status: vec![],
+                    content_type: ContentType::Mod,
+                },
+                ModSpec {
+                    id: "clientmod".to_string(),
+                    name: "Client Mod".to_string(),
+                    source: ModSource {
+                        kind: SourceKind::Modrinth,
+                        project_id: Some("clientmod".to_string()),
+                        file_id: None,
+                        url: Some("https://example.com/clientmod.jar".to_string()),
+                        path: None,
+                    },
+                    version: "1.0.0".to_string(),
+                    file_name: Some("clientmod.jar".to_string()),
+                    hashes: None,
+                    side: Side::Client,
+                    dependencies: vec![],
+                    status: vec![],
+                    content_type: ContentType::Mod,
+                },
+            ],
+            overrides: None,
         }
     }
-    env
+
+    fn write_manifest(dir: &Path) -> PathBuf {
+        let manifest_path = dir.join("tuffbox.json");
+        let manifest = fixture_manifest(dir);
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        // mods/ folder so the exporter can resolve files
+        fs::create_dir_all(dir.join("mods")).unwrap();
+        fs::write(dir.join("mods").join("sodium.jar"), b"dummy").unwrap();
+        fs::write(dir.join("mods").join("clientmod.jar"), b"dummy").unwrap();
+        manifest_path
+    }
+
+    #[test]
+    fn export_modrinth_pack_smoke() {
+        let dir = std::env::temp_dir().join("tuffbox_export_test_mr");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest_path = write_manifest(&dir);
+        let out = dir.join("pack.mrpack");
+        let result = export_modrinth_pack(&fixture_manifest(&dir), &manifest_path, &out);
+        assert!(result.is_ok(), "modrinth pack export failed: {:?}", result.err());
+        let res = result.unwrap();
+        assert!(out.exists(), "output mrpack not created");
+        // Both "both"-side and "client"-side mods get a download entry
+        assert_eq!(res.file_count, 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_server_pack_skips_client_mods() {
+        let dir = std::env::temp_dir().join("tuffbox_export_test_srv");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest_path = write_manifest(&dir);
+        let out = dir.join("server.zip");
+        let result = export_server_pack(&fixture_manifest(&dir), &manifest_path, &out);
+        assert!(result.is_ok(), "server pack export failed: {:?}", result.err());
+        assert!(out.exists(), "output server zip not created");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_prism_instance_smoke() {
+        let dir = std::env::temp_dir().join("tuffbox_export_test_prism");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest_path = write_manifest(&dir);
+        let out = dir.join("instance.zip");
+        let result = export_prism_instance(&fixture_manifest(&dir), &manifest_path, &out);
+        assert!(result.is_ok(), "prism instance export failed: {:?}", result.err());
+        assert!(out.exists(), "output prism zip not created");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_curseforge_pack_smoke() {
+        let dir = std::env::temp_dir().join("tuffbox_export_test_cf");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let manifest_path = write_manifest(&dir);
+        let out = dir.join("modpack.zip");
+        let result = export_curseforge_pack(&fixture_manifest(&dir), &manifest_path, &out);
+        assert!(result.is_ok(), "curseforge pack export failed: {:?}", result.err());
+        assert!(out.exists(), "output curseforge zip not created");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
