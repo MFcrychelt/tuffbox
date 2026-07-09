@@ -627,7 +627,10 @@
   }
 
   function requiredDeps(preview: InstallPreview | null | undefined) {
-    return (preview?.dependencies ?? []).filter((dep) => depKind(dep).includes("requires"));
+    return (preview?.dependencies ?? []).filter((dep) => {
+      const kind = depKind(dep);
+      return kind.includes("required") || kind.includes("requires");
+    });
   }
 
   function conflictDeps(preview: InstallPreview | null | undefined) {

@@ -210,7 +210,7 @@
         depsList.forEach((dep: any) => {
           const kind = (dep.type ?? "").toLowerCase();
           const entry = { target: dep.target, reason: dep.reason ?? null };
-          if (kind.includes("requires")) {
+          if (kind.includes("required") || kind.includes("requires")) {
             depPreviewRequired.push(entry);
           } else {
             depPreviewOptional.push(entry);
