@@ -298,7 +298,7 @@
     }
     return { map, orphaned };
   })();
-  $: canvasHeight = Math.max(500, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 160);
+  $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
   let positioned: PositionedNode[] = [];
   let simulation: d3.Simulation<PositionedNode, undefined> | null = null;
 
@@ -307,7 +307,7 @@
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
   // graph view: scroll to zoom (toward the cursor), drag empty space to
   // pan, double-click / button to reset.
-  const BASE_WIDTH = 1400;
+  const BASE_WIDTH = 1120;
   let viewportEl: SVGSVGElement;
   let viewX = 0;
   let viewY = 0;
@@ -399,9 +399,9 @@
     if (simulation) simulation.stop();
 
     simulation = d3.forceSimulation<PositionedNode>(initializedNodes)
-      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(200))
-      .force("charge", d3.forceManyBody().strength(-500))
-      .force("collide", d3.forceCollide().radius(85))
+      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(170))
+      .force("charge", d3.forceManyBody().strength(-400))
+      .force("collide", d3.forceCollide().radius(70))
       .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
       .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
       .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
@@ -842,7 +842,7 @@
 
   .graph-canvas svg {
     width: 100%;
-    height: 720px;
+    height: 560px;
     display: block;
     cursor: grab;
     touch-action: none;
