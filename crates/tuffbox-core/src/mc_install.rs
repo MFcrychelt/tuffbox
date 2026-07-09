@@ -28,7 +28,7 @@ fn install_cache_key(mc_version: &str, loader_kind: &str, loader_version: &str) 
 }
 
 fn cached_install(key: &str) -> Option<InstalledVersion> {
-    let cache = INSTALL_CACHE.lock().unwrap();
+    let cache = INSTALL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let version = cache.get(key)?;
     // Re-validate the critical files still exist; otherwise drop the cache.
     let ok = version.client_jar.exists()
@@ -42,7 +42,7 @@ fn cached_install(key: &str) -> Option<InstalledVersion> {
 }
 
 fn store_install(key: &str, version: InstalledVersion) {
-    let mut cache = INSTALL_CACHE.lock().unwrap();
+    let mut cache = INSTALL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.insert(key.to_string(), version);
 }
 
@@ -103,6 +103,8 @@ pub enum InstallError {
     MissingDownload(String),
     #[error("unsupported loader: {0}")]
     UnsupportedLoader(String),
+    #[error("path traversal in archive: {0}")]
+    PathTraversal(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -283,8 +285,10 @@ fn install_vanilla(
             .into_par_iter()
             .chain(native_tasks.into_par_iter())
             .filter_map(|(url, path, sha1)| {
-                if let Err(e) = fs::create_dir_all(path.parent().unwrap()) {
-                    return Some(format!("{url}: {e}"));
+                if let Some(parent) = path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        return Some(format!("{url}: {e}"));
+                    }
                 }
                 if let Err(e) = download_with_sha1(&url, &path, sha1.as_deref()) {
                     return Some(format!("{url}: {e}"));
@@ -322,7 +326,9 @@ fn install_vanilla(
         .join(format!("{}.json", version_json.asset_index.id));
     if !asset_index_path.exists() {
         progress.log("# Downloading asset index...");
-        fs::create_dir_all(asset_index_path.parent().unwrap())?;
+        if let Some(parent) = asset_index_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         download_with_sha1(&version_json.asset_index.url, &asset_index_path, Some(&version_json.asset_index.sha1))?;
     }
     let asset_index: AssetIndex = serde_json::from_str(&fs::read_to_string(&asset_index_path)?)?;
@@ -664,7 +670,9 @@ pub fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -
         }
     }
 
-    fs::create_dir_all(path.parent().unwrap())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut file = fs::File::create(path)?;
     file.write_all(&bytes)?;
     Ok(())
@@ -730,9 +738,11 @@ fn extract_natives(archive_path: &Path, natives_dir: &Path) -> Result<(), Instal
     // expensive) re-read + re-write of every native on each startup. This
     // cuts per-launch I/O significantly — extraction used to run on every
     // single `build_command` call.
-    let already_extracted = fs::read_dir(natives_dir)
-        .map(|entries| entries.flatten().any(|e| e.path().is_file()))
-        .unwrap_or(false);
+    let already_extracted = match fs::read_dir(natives_dir) {
+        Ok(entries) => entries.flatten().any(|e| e.path().is_file()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(e.into()),
+    };
     if already_extracted {
         return Ok(());
     }
@@ -742,8 +752,11 @@ fn extract_natives(archive_path: &Path, natives_dir: &Path) -> Result<(), Instal
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         if entry.is_file() {
-            let name = entry.name();
-            let out_path = natives_dir.join(name);
+            let name = entry.name().replace('\\', "/");
+            if name.contains("..") || name.starts_with('/') {
+                return Err(InstallError::PathTraversal(name.to_string()));
+            }
+            let out_path = natives_dir.join(&name);
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent)?;
             }

@@ -3821,9 +3821,8 @@ fn list_instance_logs(path: String) -> Result<Vec<serde_json::Value>, String> {
 fn read_instance_log(path: String, log_name: String) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     let log_path = project_dir.join("logs").join(&log_name);
-    // Validate: must be under logs/ and contain no path traversal
-    if log_path.parent().map(|p| !p.ends_with("logs")).unwrap_or(true) {
-        return Err("invalid log path".to_string());
+    if !log_path.exists() {
+        return Ok(String::new());
     }
     let resolved = std::fs::canonicalize(&log_path).map_err(|e| e.to_string())?;
     if !resolved.starts_with(&project_dir.join("logs")) {

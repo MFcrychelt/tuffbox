@@ -140,10 +140,6 @@
     font-weight: 600;
   }
 
-  select {
-    max-width: 200px;
-  }
-
   .about {
     display: flex;
     align-items: center;

@@ -187,6 +187,13 @@ fn urlencode(value: &str) -> String {
         .replace('"', "%22")
         .replace(':', "%3A")
         .replace(',', "%2C")
+        .replace('&', "%26")
+        .replace('+', "%2B")
+        .replace('#', "%23")
+        .replace('=', "%3D")
+        .replace('?', "%3F")
+        .replace('/', "%2F")
+        .replace('@', "%40")
 }
 
 #[derive(Debug, Clone, Deserialize)]

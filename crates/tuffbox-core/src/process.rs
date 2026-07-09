@@ -95,11 +95,11 @@ pub fn spawn_and_track(
         profile_id: profile_id.clone(),
         log_path: log_path.clone(),
     };
-    PROCESSES.lock().unwrap().insert(pid, info.clone());
+    PROCESSES.lock().unwrap_or_else(|e| e.into_inner()).insert(pid, info.clone());
 
     std::thread::spawn(move || {
         let _ = child.wait();
-        PROCESSES.lock().unwrap().remove(&pid);
+        PROCESSES.lock().unwrap_or_else(|e| e.into_inner()).remove(&pid);
     });
 
     Ok(info)

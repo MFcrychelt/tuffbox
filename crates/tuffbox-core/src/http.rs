@@ -25,9 +25,12 @@ fn fetch(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
         }
         match HTTP.get(url).send() {
             Ok(resp) => {
-                if resp.status().is_server_error() && attempt < MAX_RETRIES {
-                    last_err = Some(resp.error_for_status().unwrap_err());
-                    continue;
+                if resp.status().is_server_error() {
+                    if attempt < MAX_RETRIES {
+                        last_err = Some(resp.error_for_status().unwrap_err());
+                        continue;
+                    }
+                    return resp.error_for_status();
                 }
                 return Ok(resp);
             }
@@ -37,7 +40,7 @@ fn fetch(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
             Err(e) => return Err(e),
         }
     }
-    Err(last_err.unwrap())
+    Err(last_err.expect("retries exhausted with last_err set"))
 }
 
 pub fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, reqwest::Error> {

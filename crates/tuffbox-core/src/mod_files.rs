@@ -161,31 +161,10 @@ pub fn sync_mods_dir_to_manifest(
 ) -> Result<ModSyncReport, ModFileError> {
     std::fs::create_dir_all(mods_dir)?;
 
-    let expected_file_names: std::collections::HashSet<String> = manifest
-        .mods
-        .iter()
-        .filter(|m| m.content_type == ContentType::Mod)
-        .filter_map(|m| m.file_name.clone())
-        .collect();
-
-    if let Ok(entries) = std::fs::read_dir(mods_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().map(|e| e == "jar").unwrap_or(false) {
-                let file_name = entry.file_name().to_string_lossy().to_string();
-                // Only remove files that we recognize as belonging to a
-                // *tracked, non-local* mod that was removed from the
-                // manifest. Untracked/local jars are left alone so manual
-                // drop-ins are never deleted behind the user's back.
-                let is_orphaned_tracked_file = !expected_file_names.contains(&file_name)
-                    && manifest
-                        .mods
-                        .iter()
-                        .all(|m| m.file_name.as_deref() != Some(file_name.as_str()));
-                let _ = is_orphaned_tracked_file; // reserved for stricter cleanup modes later
-            }
-        }
-    }
+    // Orphan cleanup reserved for stricter modes later:
+    // let expected_file_names: std::collections::HashSet<String> = manifest.mods.iter()
+    //     .filter(|m| m.content_type == ContentType::Mod)
+    //     .filter_map(|m| m.file_name.clone()).collect();
 
     let instance_dir = mods_dir.parent().unwrap_or(mods_dir);
     Ok(ensure_project_mods_downloaded(manifest, instance_dir))

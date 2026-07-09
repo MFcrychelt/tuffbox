@@ -303,7 +303,14 @@
                 </div>
               </div>
 
-              <div class="summary-card" on:click={() => toggleExpanded(entry)} style="cursor: pointer;">
+              <div
+                class="summary-card"
+                role="button"
+                tabindex="0"
+                on:click={() => toggleExpanded(entry)}
+                on:keydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
+                style="cursor: pointer;"
+              >
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                   <strong>{entry.operation}</strong>
                   <span class="chev">{#if expanded[entry.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>

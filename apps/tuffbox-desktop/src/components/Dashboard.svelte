@@ -412,9 +412,9 @@
               <MoreVertical size={18} />
             </button>
 
-            {#if activeMenuPath === project.path}
-              <div class="actions-menu" role="menu" tabindex="-1" on:click|stopPropagation>
-                <div class="menu-group">
+              {#if activeMenuPath === project.path}
+                <div class="actions-menu" role="menu" tabindex="-1" aria-label="Project actions" on:keydown={() => {}}>
+                  <div class="menu-group">
                   <button on:click={() => handleAction("change-version", project)}>
                     <ShieldAlert size={14} /> Change Version
                   </button>

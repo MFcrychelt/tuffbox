@@ -39,8 +39,8 @@
   }
 </script>
 
-<div class="modal-backdrop" on:click={() => dispatch("close")} role="button" tabindex="-1" aria-label="Close">
-  <div class="modal" role="dialog" aria-modal="true" on:click|stopPropagation>
+<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === "Escape" && dispatch("close")}>
+  <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-header">
       <h2>
         <Search size={18} />

@@ -131,7 +131,7 @@
   .qe-det-fields{display:grid;gap:10px;margin-bottom:16px}.qe-det-fields label{display:grid;gap:4px;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:.03em}.qe-det-fields input{font-size:13px}
   .checkbox{display:flex;align-items:center;gap:8px;flex-direction:row!important;font-size:12px!important}.checkbox input{width:auto}.xy{display:grid;grid-template-columns:1fr 1fr;gap:6px}
   h4{color:var(--text-secondary);font-size:12px;margin:14px 0 8px;text-transform:uppercase;letter-spacing:.04em}
-  .qe-tasks{display:grid;gap:4px}.qe-task-row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;background:var(--bg-tertiary);font-size:11px}.qe-task-row code{font-size:10px;color:var(--accent-primary)}.muted{color:var(--text-muted);font-size:11px}
+  .qe-tasks{display:grid;gap:4px}.qe-task-row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:6px;background:var(--bg-tertiary);font-size:11px}.qe-task-row code{font-size:10px;color:var(--accent-primary)}
   .qe-deps{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.dep-tag{font-size:10px;padding:3px 6px;border-radius:4px;background:var(--bg-tertiary);color:var(--text-secondary);border:1px solid var(--border-color);display:flex;align-items:center;gap:4px}
   .dep-rm{background:transparent;border:none;color:var(--text-muted);cursor:pointer;font-size:10px;padding:0}.dep-rm:hover{color:#f87171}.dep-add{margin-top:4px}.dep-add input{font-size:11px;padding:4px 8px;width:140px}
   :global(.spin){animation:spin 900ms linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:1100px){.qe-lay{grid-template-columns:1fr}}

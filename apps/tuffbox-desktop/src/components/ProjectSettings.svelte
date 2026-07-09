@@ -72,15 +72,14 @@
     loading = true;
     error = "";
     try {
-      // Load independent data in parallel; only the loader version list
-      // depends on the selected MC version + loader, so resolve that last.
+      // All fetches are independent and run in parallel.
       const [versions] = await Promise.all([
         invoke("get_minecraft_versions"),
         detectJavaPreview(),
         loadSchemaStatus(),
+        loadLoaderVersions(),
       ]);
       mcVersions = versions as { id: string; popular: boolean }[];
-      await loadLoaderVersions();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -88,12 +87,15 @@
     }
   });
 
+  let loadingLoader = false;
   async function loadLoaderVersions() {
+    if (loadingLoader) return;
     if (loader === "vanilla") {
       loaderVersions = [];
       loaderVersion = "";
       return;
     }
+    loadingLoader = true;
     try {
       loaderVersions = await invoke("get_loader_versions", {
         loader,
@@ -105,6 +107,8 @@
     } catch (e) {
       loaderVersions = [];
       loaderVersion = "";
+    } finally {
+      loadingLoader = false;
     }
   }
 
@@ -542,6 +546,7 @@
 
   .memory-slider {
     -webkit-appearance: none;
+    appearance: none;
     width: 100%;
     height: 8px;
     background: var(--bg-elevated);
@@ -551,6 +556,7 @@
 
   .memory-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
+    appearance: none;
     width: 22px;
     height: 22px;
     background: var(--accent-primary);

@@ -48,6 +48,7 @@
       const [versions] = await Promise.all([
         invoke("get_minecraft_versions"),
         pickDefaultLocation(),
+        loadLoaderVersions(),
       ]);
       mcVersions = versions as { id: string; popular: boolean }[];
       if (!mcVersions.some((v) => v.id === minecraftVersion)) {
@@ -58,7 +59,6 @@
     } finally {
       loadingMc = false;
     }
-    await loadLoaderVersions();
   });
 
   async function pickDefaultLocation() {
@@ -67,6 +67,7 @@
   }
 
   async function loadLoaderVersions() {
+    if (loadingLoader) return;
     if (loader === "vanilla") {
       loaderVersions = [];
       loaderVersion = "";
@@ -132,9 +133,9 @@
   }
 </script>
 
-<div class="modal-backdrop" on:click={() => dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}
+<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}
 >
-  <div class="modal" role="dialog" aria-modal="true" on:click|stopPropagation>
+  <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-header">
       <h2>Add Instance</h2>
       <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">

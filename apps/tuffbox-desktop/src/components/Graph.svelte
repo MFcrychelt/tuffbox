@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2 } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import * as d3 from "d3-force";
   import { onMount } from "svelte";
@@ -37,6 +37,15 @@
   let resolving = false;
   let message: string | null = null;
   let changePlan: any | null = null;
+
+  // Dependency preview dialog
+  let depPreviewOpen = false;
+  let depPreviewLoading = false;
+  let depPreviewSlug = "";
+  let depPreviewName = "";
+  let depPreviewRequired: { target: string; reason?: string | null }[] = [];
+  let depPreviewOptional: { target: string; reason?: string | null }[] = [];
+  let depPreviewInstallWithOptional = true;
 
   function normalizeNode(node: any): GraphNode {
     return {
@@ -176,16 +185,63 @@
   async function installSingleMissingDep(edge: GraphEdge) {
     if (!$projectPath) return;
     const depId = edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to;
+    await previewModrinthDep(depId);
+  }
+
+  /// Fetches Modrinth dependency info and shows the preview dialog.
+  async function previewModrinthDep(depId: string) {
+    if (!$projectPath) return;
+    depPreviewSlug = depId;
+    depPreviewName = depId;
+    depPreviewRequired = [];
+    depPreviewOptional = [];
+    depPreviewOpen = true;
+    depPreviewLoading = true;
+    depPreviewInstallWithOptional = true;
+    try {
+      const preview: any = await invoke("preview_modrinth_install", { path: $projectPath, modId: depId });
+      if (preview) {
+        depPreviewName = preview.name ?? depId;
+        const depsList = preview.dependencies ?? [];
+        depsList.forEach((dep: any) => {
+          const kind = (dep.type ?? "").toLowerCase();
+          const entry = { target: dep.target, reason: dep.reason ?? null };
+          if (kind.includes("requires")) {
+            depPreviewRequired.push(entry);
+          } else {
+            depPreviewOptional.push(entry);
+          }
+        });
+      }
+    } catch {
+      // preview failed — install directly
+    } finally {
+      depPreviewLoading = false;
+    }
+  }
+
+  /// Actually install from the dep preview dialog.
+  async function confirmDepInstall() {
+    if (!$projectPath) return;
+    depPreviewOpen = false;
     resolving = true;
     error = null;
     message = null;
     try {
-      await invoke("add_modrinth_mod_with_dependencies", {
-        path: $projectPath,
-        modId: depId,
-        side: "auto",
-      });
-      message = `Installed ${depId} with its dependencies.`;
+      if (depPreviewInstallWithOptional) {
+        await invoke("add_modrinth_mod_with_dependencies", {
+          path: $projectPath,
+          modId: depPreviewSlug,
+          side: "auto",
+        });
+      } else {
+        await invoke("add_modrinth_mod", {
+          path: $projectPath,
+          modId: depPreviewSlug,
+          side: "auto",
+        });
+      }
+      message = `Installed ${depPreviewName}.`;
       await load(true);
     } catch (e) {
       error = String(e);
@@ -242,7 +298,7 @@
     }
     return { map, orphaned };
   })();
-  $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
+  $: canvasHeight = Math.max(500, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 160);
   let positioned: PositionedNode[] = [];
   let simulation: d3.Simulation<PositionedNode, undefined> | null = null;
 
@@ -251,7 +307,7 @@
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
   // graph view: scroll to zoom (toward the cursor), drag empty space to
   // pan, double-click / button to reset.
-  const BASE_WIDTH = 1120;
+  const BASE_WIDTH = 1400;
   let viewportEl: SVGSVGElement;
   let viewX = 0;
   let viewY = 0;
@@ -343,9 +399,9 @@
     if (simulation) simulation.stop();
 
     simulation = d3.forceSimulation<PositionedNode>(initializedNodes)
-      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(170))
-      .force("charge", d3.forceManyBody().strength(-400))
-      .force("collide", d3.forceCollide().radius(70))
+      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(200))
+      .force("charge", d3.forceManyBody().strength(-500))
+      .force("collide", d3.forceCollide().radius(85))
       .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
       .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
       .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
@@ -457,10 +513,12 @@
         <button class="ghost mini" on:click={resetView} title="Reset view (fit)">⤢</button>
         <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
       </div>
+      <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-missing-attribute -->
       <svg
         bind:this={viewportEl}
         viewBox={viewBoxString}
         role="img"
+        aria-label="Dependency graph"
         class:panning={isPanning}
         on:wheel={handleWheel}
         on:mousedown={handleBackgroundMouseDown}
@@ -641,6 +699,62 @@
   {/if}
 </div>
 
+{#if depPreviewOpen}
+  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={(e) => e.key === "Escape" && (depPreviewOpen = false)}>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <h2>Install dependency: {depPreviewName}</h2>
+          <p>This mod has dependencies on Modrinth. Choose what to install.</p>
+        </div>
+        <button class="icon-btn" on:click={() => (depPreviewOpen = false)}><X size={18} /></button>
+      </div>
+      <div class="modal-body">
+        {#if depPreviewLoading}
+          <div class="loading"><Loader2 size={16} class="spin" /> Loading dependency info from Modrinth...</div>
+        {:else}
+          <div class="dep-list">
+            <h4>Required ({depPreviewRequired.length})</h4>
+            {#if depPreviewRequired.length === 0}
+              <p class="muted">No hard dependencies — installing the mod alone should work.</p>
+            {:else}
+              {#each depPreviewRequired as dep}
+                <div class="dep-entry required">
+                  <span class="dep-target">{dep.target}</span>
+                  {#if dep.reason}<small>{dep.reason}</small>{/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+          <div class="dep-list">
+            <h4>Optional ({depPreviewOptional.length})</h4>
+            {#if depPreviewOptional.length === 0}
+              <p class="muted">No optional dependencies listed.</p>
+            {:else}
+              {#each depPreviewOptional as dep}
+                <div class="dep-entry optional">
+                  <span class="dep-target">{dep.target}</span>
+                  {#if dep.reason}<small>{dep.reason}</small>{/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" bind:checked={depPreviewInstallWithOptional} />
+            <span>Install optional dependencies too</span>
+          </label>
+        {/if}
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" on:click={() => (depPreviewOpen = false)}>Cancel</button>
+        <button on:click={confirmDepInstall} disabled={depPreviewLoading}>
+          <Download size={16} /> Install
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
    .graph {
     max-width: none;
@@ -728,7 +842,7 @@
 
   .graph-canvas svg {
     width: 100%;
-    height: 560px;
+    height: 720px;
     display: block;
     cursor: grab;
     touch-action: none;
@@ -1122,10 +1236,6 @@
     opacity: .7;
   }
 
-  .missing-row:hover .dep-icon {
-    opacity: 1;
-  }
-
   /* Dep-tone node: amber/orange for auto-installed dependency mods */
   .svg-node.tone-dep circle {
     stroke: rgba(245, 158, 11, 0.7);
@@ -1179,6 +1289,74 @@
       transform: rotate(360deg);
     }
   }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    max-width: 520px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 0;
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 20px 24px 12px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .modal-header h2 { margin: 0; font-size: 18px; }
+  .modal-header p { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); }
+  .modal-body { padding: 16px 24px; }
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 24px 20px;
+  }
+  .icon-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+  }
+  .icon-btn:hover { color: var(--text-primary); background: var(--bg-tertiary); }
+  .dep-list { margin-bottom: 14px; }
+  .dep-list h4 { font-size: 13px; margin: 0 0 8px; color: var(--text-secondary); }
+  .dep-entry {
+    padding: 8px 10px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+    font-size: 13px;
+    border-left: 3px solid;
+  }
+  .dep-entry.required { background: rgba(27,217,106,0.08); border-left-color: rgba(27,217,106,0.6); }
+  .dep-entry.optional { background: rgba(245,158,11,0.08); border-left-color: rgba(245,158,11,0.6); }
+  .dep-target { font-weight: 600; }
+  .dep-entry small { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .checkbox-row input { width: auto; }
+  .muted { color: var(--text-muted); font-size: 13px; }
 
   @media (max-width: 1180px) {
     .graph-layout {

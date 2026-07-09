@@ -62,6 +62,7 @@
   let contentFilter = "mod"; // mod, resourcepack, datapack, shader
   let error: string | null = null;
   let lastLoadedPath: string | null = null;
+  let brokenIcons = new Set<string>();
 
   let addOpen = false;
   let searchQuery = "";
@@ -312,6 +313,7 @@
     try {
       mods = await invoke("list_mods", { path: $projectPath });
       lastLoadedPath = $projectPath;
+      brokenIcons = new Set();
       await hydrateMissingIcons();
     } catch (e) {
       error = String(e);
@@ -680,8 +682,8 @@
       {#each filtered as mod}
         <article class="installed-card">
           <div class="mod-icon">
-            {#if modIconUrl(mod)}
-              <img src={modIconUrl(mod)} alt="" loading="lazy" />
+            {#if mod.iconUrl && !brokenIcons.has(mod.id)}
+              <img src={mod.iconUrl} alt="" loading="lazy" on:error={() => { brokenIcons.add(mod.id); brokenIcons = brokenIcons; }} />
             {:else}
               <span>{iconFallback(mod.name)}</span>
             {/if}
@@ -910,8 +912,8 @@
 
 <!-- Version picker modal -->
 {#if versionPickerMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={() => (versionPickerMod = null)} on:keydown={() => {}}>
-    <div class="modal version-modal" role="dialog" aria-modal="true" on:click|stopPropagation>
+  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (versionPickerMod = null)} on:keydown={() => {}}>
+    <div class="modal version-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
           <h2>Change version: {versionPickerMod.name}</h2>
@@ -952,8 +954,8 @@
 
 <!-- Post-bulk dependency resolution dialog -->
 {#if dependencyDialogOpen}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={() => (dependencyDialogOpen = false)} on:keydown={() => {}}>
-    <div class="modal dep-dialog" role="dialog" aria-modal="true" on:click|stopPropagation>
+  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} on:keydown={() => {}}>
+    <div class="modal dep-dialog" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
           <h2>Missing dependencies</h2>
@@ -981,8 +983,8 @@
 
 <!-- Change plan preview modal -->
 {#if planPreviewOpen && planPreviewMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={() => (planPreviewOpen = false)} on:keydown={() => {}}>
-    <div class="modal plan-modal" role="dialog" aria-modal="true" on:click|stopPropagation>
+  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (planPreviewOpen = false)} on:keydown={() => {}}>
+    <div class="modal plan-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
           <h2>Install plan: {planPreviewMod.name}</h2>

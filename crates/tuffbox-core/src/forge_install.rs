@@ -315,8 +315,10 @@ pub fn download_forge_libraries(
         let errs: Vec<String> = tasks
             .into_par_iter()
             .filter_map(|(artifact, path)| {
-                if let Err(e) = fs::create_dir_all(path.parent().unwrap()) {
-                    return Some(format!("{}: {e}", artifact.url));
+                if let Some(parent) = path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        return Some(format!("{}: {e}", artifact.url));
+                    }
                 }
                 if let Err(e) = download_with_sha1(&artifact.url, &path, artifact.sha1.as_deref()) {
                     return Some(format!("{}: {e}", artifact.url));

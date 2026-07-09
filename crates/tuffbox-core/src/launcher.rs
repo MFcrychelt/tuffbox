@@ -269,7 +269,9 @@ impl TestLauncher {
         }
 
         let log_path = options.instance_dir.join("logs").join("latest.log");
-        fs::create_dir_all(log_path.parent().unwrap())?;
+        if let Some(parent) = log_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
         cmd.current_dir(&options.instance_dir);
 
@@ -300,12 +302,12 @@ fn canonicalize(path: &Path) -> Result<PathBuf, LauncherError> {
     // library jars in a classpath that's 100+ syscalls every launch. Cache the
     // result for the process lifetime (paths in the launcher dir don't move
     // between launches), falling back to a fresh lookup on miss.
-    if let Some(cached) = CANON_CACHE.lock().unwrap().get(path) {
+    if let Some(cached) = CANON_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
         return Ok(cached.clone());
     }
     let resolved = fs::canonicalize(path)?;
     let cleaned = PathBuf::from(resolved.to_string_lossy().trim_start_matches("\\\\?\\"));
-    CANON_CACHE.lock().unwrap().insert(path.to_path_buf(), cleaned.clone());
+    CANON_CACHE.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_path_buf(), cleaned.clone());
     Ok(cleaned)
 }
 
