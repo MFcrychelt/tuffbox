@@ -16,6 +16,21 @@
     Lightbulb,
     ArrowUpCircle,
     Sparkles,
+    AlertTriangle,
+    ChevronDown,
+    ChevronRight,
+    Heart,
+    Bookmark,
+    Star,
+    LayoutGrid,
+    List,
+    ArrowRight,
+    ArrowDown,
+    Scroll,
+    Hammer,
+    Anvil,
+    Tag,
+    Clock,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
@@ -30,7 +45,8 @@
     iconUrl?: string | null;
     clientSide?: string | null;
     serverSide?: string | null;
-    contentType?: "mod" | "resourcepack" | "shader" | "datapack" | string;
+    contentType?: "mod" | "resourcepack" | "datapack" | "shader" | string;
+    updateAvailable?: boolean;
   };
 
   type SearchResult = {
@@ -42,6 +58,11 @@
     iconUrl?: string | null;
     clientSide?: string | null;
     serverSide?: string | null;
+    author?: string | null;
+    downloads?: number | null;
+    follows?: number | null;
+    dateModified?: string | null;
+    categories?: string[];
   };
 
   type InstallPreview = {
@@ -69,6 +90,7 @@
   let searchResults: SearchResult[] = [];
   let searchLoading = false;
   let selectedSide = "auto";
+  let pendingInstallOptional = true;
   let filterGameVersion = "";
   let filterLoader = "fabric";
   let filterCategory = "";
@@ -76,6 +98,79 @@
   let filterLicense = "";
   let sortBy = "relevance";
   let previewLoadingId = "";
+
+  // --- Add-mods browser chrome ---
+  let versionSearch = "";
+  let loaderExpanded = false;
+  let viewMode: "grid" | "list" = "grid";
+  let page = 1;
+  let pageSize = 20;
+  let accordionOpen: Record<string, boolean> = {
+    gameVersion: true,
+    loader: true,
+    category: true,
+  };
+
+  function toggleAccordion(key: string) {
+    accordionOpen[key] = !accordionOpen[key];
+  }
+
+  function formatCount(n: number | null | undefined): string {
+    if (n == null) return "0";
+    if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(2) + "B";
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + "M";
+    if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+    return String(n);
+  }
+
+  function formatRelative(iso: string | null | undefined): string {
+    if (!iso) return "unknown";
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return iso;
+    const days = Math.floor((Date.now() - then) / 86_400_000);
+    if (days <= 0) return "today";
+    if (days === 1) return "1 day ago";
+    if (days < 30) return `${days} days ago`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months} month${months > 1 ? "s" : ""} ago`;
+    return `${Math.floor(months / 12)} year${months >= 24 ? "s" : ""} ago`;
+  }
+
+  function humanize(s: string): string {
+    return s
+      .replace(/[-_]/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function resultBadges(result: SearchResult): { icon: string; label: string }[] {
+    const badges: { icon: string; label: string }[] = [];
+    const env =
+      result.clientSide === "required" || result.clientSide === "optional"
+        ? "client"
+        : result.serverSide === "required" || result.serverSide === "optional"
+          ? "server"
+          : result.clientSide ?? result.serverSide ?? null;
+    if (env) badges.push({ icon: "side", label: humanize(env) });
+    for (const c of result.categories ?? []) badges.push({ icon: "tag", label: humanize(c) });
+    return badges;
+  }
+
+  $: filteredVersions = gameVersions.filter((v) =>
+    v.toLowerCase().includes(versionSearch.trim().toLowerCase())
+  );
+
+  $: shownLoaders = loaderExpanded
+    ? loaders
+    : loaders.slice(0, 3);
+
+  $: totalPages = Math.max(1, Math.ceil(searchResults.length / pageSize));
+  $: pagedResults = searchResults.slice((page - 1) * pageSize, page * pageSize);
+  $: if (page > totalPages) page = totalPages;
+
+  function goToPage(p: number) {
+    page = Math.min(totalPages, Math.max(1, p));
+  }
+
   let previews: Record<string, InstallPreview | null> = {};
   let pendingInstall: SearchResult | null = null;
   let selectedResultIds: Record<string, boolean> = {};
@@ -170,6 +265,8 @@
     error = null;
     try {
       updateList = await invoke("check_mod_updates", { path: $projectPath });
+      const ids = new Set(updateList.map((u) => u.modId));
+      mods = mods.map((m) => ({ ...m, updateAvailable: ids.has(m.id) }));
     } catch (e) {
       error = String(e);
     } finally {
@@ -315,10 +412,25 @@
       lastLoadedPath = $projectPath;
       brokenIcons = new Set();
       await hydrateMissingIcons();
+      await refreshUpdateDots();
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
+    }
+  }
+
+  // Cross-references the latest available Modrinth versions with the installed
+  // ones and flags each mod row that has an update pending (drives the dot).
+  async function refreshUpdateDots() {
+    if (!$projectPath) return;
+    try {
+      const updates: any[] = await invoke("check_mod_updates", { path: $projectPath });
+      updateList = updates;
+      const ids = new Set(updates.map((u) => u.modId));
+      mods = mods.map((m) => ({ ...m, updateAvailable: ids.has(m.id) }));
+    } catch {
+      // leave existing flags in place
     }
   }
 
@@ -525,6 +637,10 @@
     });
   }
 
+  function optionalDeps(preview: InstallPreview | null | undefined) {
+    return (preview?.dependencies ?? []).filter((dep) => depKind(dep).includes("optional"));
+  }
+
   $: filtered = mods.filter((m) => {
     const q = filter.toLowerCase();
     const matchesText =
@@ -682,6 +798,9 @@
       {#each filtered as mod}
         <article class="installed-card">
           <div class="mod-icon">
+            {#if mod.updateAvailable}
+              <span class="update-dot" title="Update available"></span>
+            {/if}
             {#if mod.iconUrl && !brokenIcons.has(mod.id)}
               <img src={mod.iconUrl} alt="" loading="lazy" on:error={() => { brokenIcons.add(mod.id); brokenIcons = brokenIcons; }} />
             {:else}
@@ -731,89 +850,145 @@
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
-          <h2>Add Modrinth mod</h2>
-          <p>Search is filtered by the current Minecraft version and loader.</p>
+          <h2>Add Modrinth {contentFilter}</h2>
+          <p>
+            {contentFilter === "mod"
+              ? "Search is filtered by the current Minecraft version and loader."
+              : "Search is filtered by the current Minecraft version."}
+          </p>
         </div>
         <button class="icon-btn" on:click={() => (addOpen = false)}><X size={18} /></button>
       </div>
 
-      <div class="modal-search">
-        <div class="search wide">
-          <Search size={16} />
-          <input
-            bind:value={searchQuery}
-            placeholder="Sodium, Iris, JEI..."
-            on:keydown={(event) => event.key === "Enter" && searchMods()}
-          />
-        </div>
-        <select bind:value={selectedSide} title="Install side">
-          <option value="auto">Auto side</option>
-          <option value="both">Both</option>
-          <option value="client">Client</option>
-          <option value="server">Server</option>
-        </select>
-        <label class="sort-select">
-          Sort by:
-          <select bind:value={sortBy} on:change={() => searchMods()}>
-            {#each sortOptions as option}<option value={option.id}>{option.label}</option>{/each}
-          </select>
-        </label>
-        <button on:click={searchMods} disabled={searchLoading}>
-          <Search size={16} />
-          Search
-        </button>
+      <div class="modal-tabs">
+        <button class:active={contentFilter === "mod"} on:click={() => switchContentFilter("mod")}>Mods</button>
+        <button class:active={contentFilter === "resourcepack"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
+        <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
+        <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
       </div>
 
       <div class="browser-layout">
-        <aside class="filter-panel">
-          <h3>Game version</h3>
-          <button class:active={!filterGameVersion} on:click={() => { filterGameVersion = ""; searchMods(); }}>Current / all</button>
-          {#each gameVersions as version}
-            <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(); }}>{version}</button>
-          {/each}
-          <button class="muted-filter" on:click={() => { filterGameVersion = ""; searchMods(); }}>Show all versions</button>
+        <aside class="filter-sidebar">
+          <section class="filter-block" class:closed={!accordionOpen.gameVersion}>
+            <button class="filter-head" on:click={() => toggleAccordion("gameVersion")}>
+              <span>Game version</span>
+              <ChevronDown size={16} class={!accordionOpen.gameVersion ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.gameVersion}
+              <div class="filter-body">
+                <div class="search mini">
+                  <Search size={14} />
+                  <input bind:value={versionSearch} placeholder="Search version..." />
+                </div>
+                <div class="filter-list">
+                  {#each filteredVersions as version}
+                    <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(); }}>{version}</button>
+                  {/each}
+                </div>
+                <label class="check-row">
+                  <input type="checkbox" checked={filterGameVersion === ""} on:change={() => { filterGameVersion = ""; searchMods(); }} /> Show all versions
+                </label>
+              </div>
+            {/if}
+          </section>
 
-          {#if contentFilter === "mod"}
-            <h3>Loader</h3>
-            {#each loaders as loaderName}
-              <button class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>{loaderName}</button>
-            {/each}
-          {/if}
+          <section class="filter-block" class:closed={!accordionOpen.loader}>
+            <button class="filter-head" on:click={() => toggleAccordion("loader")}>
+              <span>Loader</span>
+              <ChevronDown size={16} class={!accordionOpen.loader ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.loader}
+              <div class="filter-body">
+                <div class="filter-list loader-list">
+                  {#each shownLoaders as loaderName}
+                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>
+                      <span class="loader-ic">{loaderName === "Fabric" ? Scroll : loaderName === "Forge" ? Hammer : Anvil} size={16} /></span>
+                      <span>{loaderName}</span>
+                    </button>
+                  {/each}
+                </div>
+                {#if loaders.length > 3}
+                  <button class="show-more" on:click={() => (loaderExpanded = !loaderExpanded)}>
+                    {loaderExpanded ? "Show less" : "Show more"} <ChevronDown size={14} class={loaderExpanded ? "rot" : ""} />
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </section>
 
-          <h3>Category</h3>
-          <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(); }}>All categories</button>
-          {#each categories as category}
-            <button class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(); }}>{category}</button>
-          {/each}
-
-          <h3>Environment</h3>
-          <button class:active={filterEnvironment === "client"} on:click={() => { filterEnvironment = filterEnvironment === "client" ? "" : "client"; searchMods(); }}>Client</button>
-          <button class:active={filterEnvironment === "server"} on:click={() => { filterEnvironment = filterEnvironment === "server" ? "" : "server"; searchMods(); }}>Server</button>
-
-          <h3>License</h3>
-          <label class="check-row"><input type="checkbox" checked={filterLicense === "open-source"} on:change={() => { filterLicense = filterLicense === "open-source" ? "" : "open-source"; searchMods(); }} /> Open source</label>
+          <section class="filter-block" class:closed={!accordionOpen.category}>
+            <button class="filter-head" on:click={() => toggleAccordion("category")}>
+              <span>Category</span>
+              <ChevronDown size={16} class={!accordionOpen.category ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.category}
+              <div class="filter-body">
+                <div class="filter-list">
+                  <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(); }}>All categories</button>
+                  {#each categories as category}
+                    <button class="cat-row" class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(); }}>
+                      <Tag size={14} />
+                      <span>{humanize(category)}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </section>
         </aside>
 
         <section class="browser-results">
+          <div class="browser-topbar">
+            <div class="search wide">
+              <Search size={16} />
+              <input bind:value={searchQuery} placeholder="Search mods..." on:keydown={(e) => e.key === "Enter" && searchMods()} />
+            </div>
+            <div class="topbar-controls">
+              <label class="sort-select">Sort by:
+                <select bind:value={sortBy} on:change={() => searchMods()}>
+                  {#each sortOptions as option}<option value={option.id}>{option.label}</option>{/each}
+                </select>
+              </label>
+              <label class="sort-select">View:
+                <select bind:value={pageSize} on:change={() => (page = 1)}>
+                  <option value={20}>20</option>
+                  <option value={40}>40</option>
+                  <option value={60}>60</option>
+                </select>
+              </label>
+              <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => (viewMode = "grid")} title="Grid view"><LayoutGrid size={16} /></button>
+              <button class="view-toggle" class:active={viewMode === "list"} on:click={() => (viewMode = "list")} title="List view"><List size={16} /></button>
+            </div>
+            <div class="pagination">
+              <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
+              {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p}
+                <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+              {/each}
+              {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+              <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
+            </div>
+          </div>
+
           <div class="bulk-bar">
             <div>
               <strong>{selectedResults.length}</strong>
               <span>selected for bulk install</span>
             </div>
             <div class="bulk-actions">
-              <button class="ghost" on:click={selectVisibleResults} disabled={searchResults.length === 0}>Select visible</button>
+              <button class="ghost" on:click={selectVisibleResults} disabled={pagedResults.length === 0}>Select visible</button>
               <button class="ghost" on:click={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
               <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating}>Install selected + dependencies</button>
             </div>
           </div>
+
           {#if searchLoading}
             <div class="loading compact">Loading Modrinth projects...</div>
-          {:else if searchResults.length === 0}
+          {:else if pagedResults.length === 0}
             <div class="empty compact">No projects found. Adjust filters or search text.</div>
           {:else}
-            <div class="results">
-          {#each searchResults as result}
-            <article class="result-card" class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} on:mouseenter={() => loadInstallPreview(result)} on:focusin={() => loadInstallPreview(result)}>
+            <div class="results {viewMode}">
+          {#each pagedResults as result}
+            <article class="result-card" class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"} on:mouseenter={() => loadInstallPreview(result)} on:focusin={() => loadInstallPreview(result)}>
               <label class="select-result" title="Select for bulk install">
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
               </label>
@@ -826,14 +1001,10 @@
               </div>
               <div class="result-main">
                 <div class="result-title">
-                  <span>{result.name}</span>
-                  <code>{result.slug}</code>
+                  <span class="result-name">{result.name}</span>
+                  {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                 </div>
-                <div class="env-row">
-                  <small>Client: {result.clientSide ?? "unknown"}</small>
-                  <small>Server: {result.serverSide ?? "unknown"}</small>
-                </div>
-                <p>{result.description}</p>
+                <p class="result-desc">{result.description}</p>
                 {#if previewLoadingId === result.id}
                   <div class="install-preview muted">Loading install preview...</div>
                 {:else if previews[result.id]}
@@ -841,20 +1012,29 @@
                     <span>Version: {previews[result.id]?.version}</span>
                     <span>Side: {previews[result.id]?.side}</span>
                     <span>Deps: {previews[result.id]?.dependencies.length ?? 0}</span>
-                    {#if previews[result.id]?.dependencies.length}
-                      <div class="deps">
-                        {#each previews[result.id]?.dependencies.slice(0, 4) ?? [] as dep}
-                          <code>{dep.type}:{dep.target}</code>
-                        {/each}
-                      </div>
-                    {/if}
                   </div>
                 {/if}
+                <div class="result-badges">
+                  {#each resultBadges(result) as b}
+                    <span class="badge"><Tag size={12} />{b.label}</span>
+                  {/each}
+                </div>
               </div>
-              <button on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
-                <Download size={16} />
-                {isInstalled(result) ? "Installed" : "Install plan"}
-              </button>
+              <div class="result-actions">
+                <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                  <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Download"}
+                </button>
+                <div class="quick-actions">
+                  <button class="qa" title="Favorite"><Heart size={15} /></button>
+                  <button class="qa" title="Save"><Bookmark size={15} /></button>
+                  <button class="qa" title="Rate"><Star size={15} /></button>
+                </div>
+              </div>
+              <div class="result-footer">
+                <span><ArrowDown size={13} />{formatCount(result.downloads)}</span>
+                <span><Heart size={13} />{formatCount(result.follows)}</span>
+                <span><Clock size={13} />{formatRelative(result.dateModified)}</span>
+              </div>
             </article>
           {/each}
             </div>
@@ -866,43 +1046,56 @@
         <div class="install-plan-panel">
           <div>
             <span class="plan-eyebrow">Install plan</span>
-            <h3>{pendingInstall.name}</h3>
+            <h3>{pendingInstall.name} ({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</h3>
             {#if previews[pendingInstall.id]}
-              <p>
-                Version {previews[pendingInstall.id]?.version} · side {previews[pendingInstall.id]?.side} ·
-                {previews[pendingInstall.id]?.dependencies.length ?? 0} dependencies
-              </p>
+              <div class="dep-list">
+                <h4>Required ({requiredDeps(previews[pendingInstall.id]).length})</h4>
+                {#if requiredDeps(previews[pendingInstall.id]).length === 0}
+                  <p class="muted">No hard dependencies.</p>
+                {:else}
+                  {#each requiredDeps(previews[pendingInstall.id]) as dep}
+                    <div class="dep-entry required">
+                      <span class="dep-target">{dep.target}</span>
+                      {#if dep.reason}<small>{dep.reason}</small>{/if}
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+              <div class="dep-list">
+                <h4>Optional ({optionalDeps(previews[pendingInstall.id]).length})</h4>
+                {#if optionalDeps(previews[pendingInstall.id]).length === 0}
+                  <p class="muted">No optional dependencies.</p>
+                {:else}
+                  {#each optionalDeps(previews[pendingInstall.id]) as dep}
+                    <div class="dep-entry optional">
+                      <span class="dep-target">{dep.target}</span>
+                      {#if dep.reason}<small>{dep.reason}</small>{/if}
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+              <label class="checkbox-row">
+                <input type="checkbox" bind:checked={pendingInstallOptional} />
+                <span>Install optional dependencies too</span>
+              </label>
               {#if conflictDeps(previews[pendingInstall.id]).length}
                 <div class="conflict-warning">
-                  <strong>Conflict warning</strong>
+                  <strong><AlertTriangle size={14} /> Conflict warning</strong>
                   <span>This project declares incompatible dependencies. Review before installing.</span>
-                  <div class="deps">
-                    {#each conflictDeps(previews[pendingInstall.id]) as dep}
-                      <code>{dep.type}:{dep.target}</code>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-              {#if previews[pendingInstall.id]?.dependencies.length}
-                <div class="dependency-tree">
-                  <strong>Dependency tree</strong>
-                  {#if requiredDeps(previews[pendingInstall.id]).length}
-                    {#each requiredDeps(previews[pendingInstall.id]) as dep}
-                      <div class="dep-node"><span>requires</span><code>{dep.target}</code></div>
-                    {/each}
-                  {:else}
-                    <div class="dep-node muted"><span>No required dependencies detected.</span></div>
-                  {/if}
+                  {#each conflictDeps(previews[pendingInstall.id]) as dep}
+                    <code>{dep.type}:{dep.target}</code>
+                  {/each}
                 </div>
               {/if}
             {:else}
-              <p>Preview unavailable; TuffBox will still create a snapshot before installing.</p>
+              <p class="muted">Preview unavailable; TuffBox will still create a snapshot before installing.</p>
             {/if}
           </div>
           <div class="plan-actions">
             <button class="ghost" on:click={() => (pendingInstall = null)}>Cancel</button>
-            <button class="secondary" on:click={() => confirmInstall(false)} disabled={mutating}>Install only this mod</button>
-            <button on:click={() => confirmInstall(true)} disabled={mutating}>Install with dependencies</button>
+            <button on:click={() => confirmInstall(pendingInstallOptional)} disabled={mutating}>
+              <Download size={16} /> Install{pendingInstallOptional ? " with dependencies" : ""}
+            </button>
           </div>
         </div>
       {/if}
@@ -1174,6 +1367,23 @@
     object-fit: cover;
   }
 
+  .update-dot {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent-warning, #f5a623);
+    border: 2px solid var(--bg-card, #1c1f2b);
+    box-shadow: 0 0 6px rgba(245, 166, 35, 0.8);
+    z-index: 2;
+  }
+
+  .mod-icon {
+    position: relative;
+  }
+
   .installed-main {
     min-width: 0;
   }
@@ -1349,6 +1559,29 @@
     padding: 22px;
   }
 
+  .modal-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 12px 24px 0;
+    flex-wrap: wrap;
+  }
+
+  .modal-tabs button {
+    padding: 8px 14px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .modal-tabs button.active {
+    border-color: rgba(27, 217, 106, 0.45);
+    background: rgba(27, 217, 106, 0.1);
+    color: var(--text-primary);
+  }
+
   .modal-header {
     display: flex;
     justify-content: space-between;
@@ -1387,77 +1620,176 @@
 
   .browser-layout {
     display: grid;
-    grid-template-columns: 250px minmax(0, 1fr);
+    grid-template-columns: 25% minmax(0, 1fr);
     gap: 16px;
     min-height: 650px;
+    align-items: start;
   }
 
-  .filter-panel {
+  /* ---- Left filter sidebar (accordions) ---- */
+  .filter-sidebar {
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - 170px);
     overflow: auto;
-    max-height: calc(100vh - 190px);
-    padding: 14px;
+    display: grid;
+    gap: 10px;
+    padding-right: 4px;
+  }
+
+  .filter-block {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     background: rgba(255,255,255,0.018);
+    overflow: hidden;
   }
 
-  .filter-panel h3 {
-    margin: 16px 0 8px;
-    color: var(--text-muted);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-  }
-
-  .filter-panel h3:first-child {
-    margin-top: 0;
-  }
-
-  .filter-panel button,
-  .check-row {
+  .filter-head {
     width: 100%;
-    justify-content: flex-start;
-    text-align: left;
-    padding: 7px 9px;
-    margin-bottom: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
     background: transparent;
     color: var(--text-secondary);
-    border: 1px solid transparent;
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .06em;
     transform: none;
   }
 
-  .filter-panel button:hover,
-  .filter-panel button.active {
+  .filter-head:hover { color: var(--text-primary); }
+  .filter-head :global(svg.rot) { transform: rotate(-90deg); transition: transform .15s; }
+
+  .filter-body {
+    display: grid;
+    gap: 6px;
+    padding: 4px 12px 14px;
+  }
+
+  .filter-list {
+    display: grid;
+    gap: 3px;
+    max-height: 280px;
+    overflow: auto;
+  }
+
+  .filter-list button,
+  .loader-row,
+  .cat-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-start;
+    text-align: left;
+    padding: 7px 9px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transform: none;
+    font-size: 13px;
+  }
+
+  .filter-list button:hover,
+  .loader-row:hover,
+  .cat-row:hover,
+  .filter-list button.active,
+  .loader-row.active,
+  .cat-row.active {
     background: var(--bg-tertiary);
     border-color: rgba(27,217,106,.28);
     color: var(--text-primary);
   }
 
-  .muted-filter {
-    color: var(--text-muted) !important;
-  }
-
-  .check-row {
+  .loader-ic { display: inline-flex; color: var(--accent-secondary); }
+  .show-more {
+    width: 100%;
+    text-align: left;
     display: flex;
     align-items: center;
-    gap: 8px;
-    cursor: pointer;
+    gap: 6px;
+    padding: 7px 9px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    transform: none;
+    font-size: 12px;
   }
+  .show-more:hover { color: var(--text-primary); }
 
-  .check-row input {
-    width: auto;
-  }
-
+  /* ---- Right content column ---- */
   .browser-results {
     min-width: 0;
+    display: grid;
+    gap: 14px;
   }
+
+  .browser-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .browser-topbar .search.wide {
+    flex: 1 1 240px;
+    min-width: 200px;
+  }
+
+  .topbar-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .view-toggle {
+    width: 36px; height: 36px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    transform: none;
+  }
+  .view-toggle:hover { color: var(--text-primary); }
+  .view-toggle.active { color: var(--accent-primary); border-color: rgba(27,217,106,.4); }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+  }
+
+  .page-btn {
+    min-width: 32px; height: 32px;
+    padding: 0 8px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    transform: none;
+    font-size: 13px;
+  }
+  .page-btn:hover:not(:disabled) { color: var(--text-primary); }
+  .page-btn.active {
+    background: var(--accent-primary);
+    color: #fff;
+    border-color: transparent;
+    font-weight: 800;
+  }
+  .page-ellipsis { color: var(--text-muted); padding: 0 2px; }
 
   .bulk-bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    margin-bottom: 12px;
     padding: 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
@@ -1470,22 +1802,28 @@
 
   .results {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 14px;
   }
+  .results.list { grid-template-columns: 1fr; }
 
   .result-card {
     position: relative;
-    min-height: 168px;
     display: grid;
     grid-template-columns: 64px minmax(0, 1fr);
-    grid-template-rows: 1fr auto;
-    gap: 12px;
+    grid-template-areas: "icon main" "icon actions" "footer footer";
+    gap: 10px 14px;
     align-items: start;
     padding: 16px;
     border-radius: var(--border-radius-lg);
-    background: var(--bg-tertiary);
+    background: #2d2d2d;
     border: 1px solid var(--border-color);
+  }
+
+  .results.list .result-card {
+    grid-template-columns: 64px minmax(0,1fr) auto;
+    grid-template-areas: "icon main actions" "footer footer footer";
+    align-items: center;
   }
 
   .result-card.installed {
@@ -1504,19 +1842,97 @@
     right: 12px;
     z-index: 2;
   }
-
   .select-result input { width: 16px; height: 16px; }
 
   .result-icon {
+    grid-area: icon;
     width: 64px;
     height: 64px;
-    border-radius: 18px;
+    border-radius: 16px;
+    overflow: hidden;
+    background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 900; font-size: 22px;
+  }
+  .result-icon img { width: 100%; height: 100%; object-fit: cover; }
+
+  .result-main { grid-area: main; min-width: 0; }
+
+  .result-title {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .result-name { color: var(--text-primary); font-weight: 800; font-size: 15px; }
+  .result-author { color: #60a5fa; font-size: 12px; cursor: pointer; }
+  .result-author:hover { text-decoration: underline; }
+  .result-desc {
+    margin: 6px 0 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.45;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .result-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
   }
 
-  .result-card button {
-    grid-column: 1 / -1;
-    width: 100%;
+  .result-actions {
+    grid-area: actions;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
   }
+  .download-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 16px;
+    border-radius: 10px;
+    background: var(--accent-primary);
+    color: #fff;
+    font-weight: 800;
+    border: none;
+    transform: none;
+  }
+  .download-btn:hover:not(:disabled) { filter: brightness(1.08); }
+  .download-btn:disabled { opacity: .5; cursor: default; }
+
+  .quick-actions { display: flex; gap: 4px; }
+  .qa {
+    width: 32px; height: 32px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    transform: none;
+  }
+  .qa:hover { color: var(--text-primary); border-color: rgba(27,217,106,.35); }
+
+  .result-footer {
+    grid-area: footer;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+  }
+  .result-footer span { display: inline-flex; align-items: center; gap: 5px; }
 
   .install-preview {
     display: flex;
@@ -1583,15 +1999,21 @@
   .install-plan-panel h3 { margin: 3px 0 4px; }
   .install-plan-panel p { margin: 0; color: var(--text-muted); }
   .plan-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .install-plan-panel .dep-list { margin-top: 10px; }
+  .install-plan-panel .dep-list h4 { color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin: 0 0 6px; }
+  .install-plan-panel .dep-entry { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; background: var(--bg-tertiary); margin-bottom: 4px; }
+  .install-plan-panel .dep-entry.required { border-left: 3px solid var(--accent-primary); }
+  .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
+  .install-plan-panel .dep-target { font-family: ui-monospace,monospace; font-size: 12px; }
+  .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
+  .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); cursor: pointer; }
+  .install-plan-panel .checkbox-row span { font-size: 13px; color: var(--text-primary); }
   .plan-deps { margin-top: 8px; max-height: 80px; overflow: auto; }
   .conflict-warning { margin-top: 10px; padding: 10px; border: 1px solid rgba(239,68,68,.32); border-radius: 12px; background: rgba(239,68,68,.08); display: grid; gap: 6px; }
   .conflict-warning strong { color: #fecaca; }
   .conflict-warning span { color: var(--text-muted); font-size: 12px; }
-  .dependency-tree { margin-top: 10px; display: grid; gap: 6px; max-height: 150px; overflow: auto; }
-  .dependency-tree > strong { color: var(--text-secondary); }
   .dep-node { position: relative; display: flex; gap: 8px; align-items: center; margin-left: 14px; padding-left: 14px; color: var(--text-muted); font-size: 12px; }
   .dep-node::before { content: ""; position: absolute; left: 0; top: -6px; bottom: 50%; width: 10px; border-left: 1px solid rgba(27,217,106,.35); border-bottom: 1px solid rgba(27,217,106,.35); }
-  .dep-node.muted::before { border-color: var(--border-color); }
 
   .plan-modal { max-width: 540px; }
   .plan-details { padding: 12px 0; display: grid; gap: 16px; }

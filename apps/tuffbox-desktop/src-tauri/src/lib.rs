@@ -317,6 +317,40 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             }
         }
 
+        // Re-identify mods already in the manifest that aren't linked to a
+        // Modrinth project yet (e.g. imported/custom-local entries). A sha1
+        // match against Modrinth upgrades them to full Modrinth sources, which
+        // gives them an icon, version switching and update support.
+        for idx in 0..manifest.mods.len() {
+            if manifest.mods[idx].source.project_id.is_some() {
+                continue;
+            }
+            let Some(file_name) = manifest.mods[idx].file_name.clone() else {
+                continue;
+            };
+            let file_path = tuffbox_core::content_dir_for(
+                &project_dir,
+                manifest.mods[idx].content_type,
+            )
+            .join(&file_name);
+            if !file_path.is_file() {
+                continue;
+            }
+            let identified = tuffbox_core::identify_local_jar_via_modrinth(
+                &provider,
+                &file_path,
+                manifest.mods[idx].side,
+            )
+            .ok()
+            .flatten();
+            if let Some(mut spec) = identified {
+                spec.file_name = Some(file_name);
+                spec.side = manifest.mods[idx].side;
+                manifest.mods[idx] = spec;
+                any_changes = true;
+            }
+        }
+
         if any_changes {
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         }
@@ -420,7 +454,7 @@ async fn preview_modrinth_install(path: String, mod_id: String) -> Result<ModIns
             .into_iter()
             .next()
             .ok_or_else(|| format!("no compatible version found for {mod_id}"))?;
-        let file_name = ProviderFileInfo::primary_file(&version).map(|file| file.filename.clone());
+        let file_name = ProviderFileInfo::select_file_for_loader(&version, &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind)).map(|file| file.filename.clone());
         let dependencies = provider.resolve_dependencies(&version.id).unwrap_or_default();
         let side = format!("{:?}", infer_project_side(Some(&project))).to_lowercase();
         Ok(ModInstallPreview {
@@ -596,9 +630,12 @@ async fn change_mod_version(
         let project = provider
             .get_project(&version_info.project_id)
             .map_err(|e| e.to_string())?;
-        let file = ProviderFileInfo::primary_file(&version_info)
-            .cloned()
-            .ok_or_else(|| format!("no primary file for version {}", version_info.id))?;
+        let file = ProviderFileInfo::select_file_for_loader(
+            &version_info,
+            &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+        )
+        .cloned()
+        .ok_or_else(|| format!("no primary file for version {}", version_info.id))?;
         let dependencies = provider
             .resolve_dependencies(&version_info.id)
             .unwrap_or_default();
@@ -1034,7 +1071,11 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
             let Some(latest) = latest else { continue; };
 
             if latest.version_number != m.version {
-                let file = ProviderFileInfo::primary_file(&latest).cloned();
+                let file = ProviderFileInfo::select_file_for_loader(
+                    &latest,
+                    &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+                )
+                .cloned();
                 updates.push(serde_json::json!({
                     "modId": m.id,
                     "name": m.name,
@@ -1081,7 +1122,11 @@ async fn update_all_mods(path: String) -> Result<Vec<String>, String> {
             let Some(latest) = latest else { continue; };
             if latest.version_number == current_version { continue; }
 
-            let file = ProviderFileInfo::primary_file(&latest).cloned();
+            let file = ProviderFileInfo::select_file_for_loader(
+                &latest,
+                &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+            )
+            .cloned();
             let Some(file) = file else { continue; };
 
             let project = provider.get_project(&project_id).map_err(|e| e.to_string())?;
@@ -4503,9 +4548,12 @@ fn add_mod_from_modrinth(
         .next()
         .ok_or_else(|| anyhow::anyhow!("no compatible version found for {mod_id}"))?;
 
-    let file = ProviderFileInfo::primary_file(&version)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
+    let file = ProviderFileInfo::select_file_for_loader(
+        &version,
+        &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+    )
+    .cloned()
+    .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
 
     let dependencies = provider.resolve_dependencies(&version.id)?;
     let mod_side = parse_side(side.as_deref(), Some(&project));
@@ -4541,9 +4589,12 @@ fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> any
         .next()
         .ok_or_else(|| anyhow::anyhow!("no compatible version found for {project_id}"))?;
 
-    let file = ProviderFileInfo::primary_file(&version)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
+    let file = ProviderFileInfo::select_file_for_loader(
+        &version,
+        &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+    )
+    .cloned()
+    .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
 
     let side = manifest.mods[index].side;
     let dependencies = provider.resolve_dependencies(&version.id)?;

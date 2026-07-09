@@ -57,6 +57,12 @@ impl ContentProvider for LocalJarProvider {
             description: String::new(),
             project_type: "mod".to_string(),
             icon_url: None,
+            author: None,
+            downloads: None,
+            follows: None,
+            date_modified: None,
+            categories: Vec::new(),
+            license: None,
             client_side: None,
             server_side: None,
         })

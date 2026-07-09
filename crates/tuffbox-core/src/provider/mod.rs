@@ -60,6 +60,18 @@ pub struct ProjectInfo {
     pub project_type: String,
     pub icon_url: Option<String>,
     #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub downloads: Option<u64>,
+    #[serde(default)]
+    pub follows: Option<u64>,
+    #[serde(default)]
+    pub date_modified: Option<String>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default)]
     pub client_side: Option<String>,
     #[serde(default)]
     pub server_side: Option<String>,
@@ -125,6 +137,60 @@ impl ProviderFileInfo {
             .iter()
             .find(|f| f.primary)
             .or(version.files.first())
+    }
+
+    /// Picks the file that actually matches the target loader, mirroring how
+    /// PrismLauncher's Modrinth integration (`ModIndex::getVersionFile`)
+    /// selects a jar instead of blindly trusting the `primary` flag. Multi-loader
+    /// mods often ship several jars in one version (e.g. a Forge jar
+    /// and a Fabric jar); the `primary` one is not guaranteed to be the
+    /// right loader. We first narrow to files whose name hints at the
+    /// loader, then prefer the `primary` one among those, falling back to
+    /// the plain primary file when nothing loader-specific matches.
+    pub fn select_file_for_loader<'a>(
+        version: &'a VersionInfo,
+        loader: &str,
+    ) -> Option<&'a ProviderFileInfo> {
+        if version.files.is_empty() {
+            return None;
+        }
+        // A version declaring a single loader only has one kind of file.
+        let single_loader = version.loaders.len() <= 1;
+        let keyword = loader_keyword(loader);
+        let mut candidates: Vec<&ProviderFileInfo> = version
+            .files
+            .iter()
+            .filter(|f| {
+                if single_loader {
+                    return true;
+                }
+                if let Some(kw) = &keyword {
+                    return f.filename.to_lowercase().contains(kw);
+                }
+                // Loaders without a name keyword (e.g. vanilla) accept any file.
+                true
+            })
+            .collect();
+        if candidates.is_empty() {
+            candidates = version.files.iter().collect();
+        }
+        candidates
+            .into_iter()
+            .find(|f| f.primary)
+            .or_else(|| version.files.first())
+    }
+}
+
+/// Maps a loader slug to the substring a Modrinth filename typically
+/// uses to mark that loader's artifact. `None` means "no specific
+/// keyword" — accept any file (used for vanilla/resourcepack/datapack/shader).
+fn loader_keyword(loader: &str) -> Option<&'static str> {
+    match loader.to_lowercase().as_str() {
+        "fabric" => Some("fabric"),
+        "quilt" => Some("quilt"),
+        "forge" => Some("forge"),
+        "neoforge" => Some("neoforge"),
+        _ => None,
     }
 }
 

@@ -27,7 +27,7 @@
     edges: GraphEdge[];
   };
 
-  type PositionedNode = GraphNode & { x: number; y: number; fx?: number | null; fy?: number | null; tone: string };
+  type PositionedNode = GraphNode & { x: number; y: number; fx?: number | null; fy?: number | null; tone: string; ghost?: boolean };
 
   let graph: GraphModel | null = null;
   let loading = false;
@@ -87,6 +87,10 @@
 
   function point(id: string) {
     return positionById.get(id);
+  }
+
+  function isGhost(id: string) {
+    return id.startsWith("__ghost__");
   }
 
   function edgeDanger(edge: GraphEdge) {
@@ -278,6 +282,31 @@
   $: modNodes = nodes.filter((node) => node.kind === "Mod");
   $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile");
   $: profileNodes = nodes.filter((node) => node.kind === "Profile");
+
+  // Synthesize ghost nodes for any edge endpoint that has no real node. This
+  // is the single most important fix: the Rust builder intentionally emits
+  // edges to *missing* dependencies, but d3's forceLink throws
+  // "missing: <id>" when a link references a node that isn't in the array,
+  // which aborted the whole simulation and left the canvas blank. Ghost
+  // nodes keep every link resolvable while still being visually distinct
+  // (and the missing-dependency panel operates on the real graph).
+  const nodeIdSet = (id: string) => nodes.some((n) => n.id === id);
+  $: ghostNodes = (() => {
+    const out: GraphNode[] = [];
+    const seen = new Set<string>();
+    for (const e of edges) {
+      for (const end of [e.from, e.to]) {
+        if (!nodeIdSet(end) && !seen.has(end)) {
+          seen.add(end);
+          const label = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
+          out.push({ id: end, kind: "Missing", label, version: null, side: "unknown", metadata: {} });
+        }
+      }
+    }
+    return out;
+  })();
+  $: displayNodes = [...nodes, ...ghostNodes];
+
   /// Group mods by which profile includes them (via IncludedInProfile edges)
   $: modsByProfile = (() => {
     const map = new Map<string, GraphNode[]>();
@@ -300,7 +329,7 @@
   })();
   $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
   let positioned: PositionedNode[] = [];
-  let simulation: d3.Simulation<PositionedNode, undefined> | null = null;
+  let simulation: any = null;
 
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
@@ -331,7 +360,7 @@
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
-    const nextScale = Math.min(4, Math.max(0.25, viewScale / zoomFactor));
+    const nextScale = Math.min(8, Math.max(0.2, viewScale / zoomFactor));
     const cursor = clientToSvgPoint(event.clientX, event.clientY);
     const nextWidth = BASE_WIDTH / nextScale;
     const nextHeight = canvasHeight / nextScale;
@@ -375,7 +404,7 @@
   function zoomBy(factor: number) {
     const centerX = viewX + viewBoxWidth / 2;
     const centerY = viewY + viewBoxHeight / 2;
-    const nextScale = Math.min(4, Math.max(0.25, viewScale * factor));
+    const nextScale = Math.min(8, Math.max(0.2, viewScale * factor));
     const nextWidth = BASE_WIDTH / nextScale;
     const nextHeight = canvasHeight / nextScale;
     viewX = centerX - nextWidth / 2;
@@ -383,22 +412,35 @@
     viewScale = nextScale;
   }
 
-  $: if (nodes && edges) {
-    const initializedNodes = nodes.map((node) => {
-      const group = node.kind === "Mod" ? "mod" : node.kind === "Profile" ? "profile" : "runtime";
+  $: if (displayNodes.length) {
+    const initializedNodes = displayNodes.map((node, i) => {
+      const isGhost = node.kind === "Missing";
       let tone: string;
-      if (group === "runtime") tone = "runtime";
-      else if (group === "profile") tone = "profile";
-      else if (depNodeIds.has(node.id)) tone = "dep";
-      else tone = String(node.side ?? "unknown").toLowerCase();
-      return { ...node, x: 500, y: 300, tone };
+      if (isGhost) tone = "ghost";
+      else if (node.kind === "Mod") tone = depNodeIds.has(node.id) ? "dep" : String(node.side ?? "both").toLowerCase();
+      else if (node.kind === "Profile") tone = "profile";
+      else tone = "runtime";
+      // Seed positions in a ring so the force layout has something to relax
+      // instead of every node stacked at (0,0).
+      const angle = (i / Math.max(1, displayNodes.length)) * Math.PI * 2;
+      const cx = BASE_WIDTH / 2;
+      const cy = canvasHeight / 2;
+      const r = Math.min(BASE_WIDTH, canvasHeight) / 3;
+      return {
+        ...node,
+        x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 40,
+        y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 40,
+        tone,
+        ghost: isGhost,
+      } as PositionedNode;
     });
 
-    const d3Links = edges.map(e => ({ source: e.from, target: e.to, ...e }));
+    const d3Links = edges.map((e) => ({ source: e.from, target: e.to, ...e }));
 
     if (simulation) simulation.stop();
 
-    simulation = d3.forceSimulation<PositionedNode>(initializedNodes)
+    simulation = d3
+      .forceSimulation<PositionedNode>(initializedNodes)
       .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(170))
       .force("charge", d3.forceManyBody().strength(-400))
       .force("collide", d3.forceCollide().radius(70))
@@ -928,6 +970,12 @@
   .svg-node.tone-both circle { stroke: rgba(27,217,106,.65); }
   .svg-node.tone-runtime circle { stroke: rgba(245,158,11,.7); }
   .svg-node.tone-profile circle { stroke: rgba(96,165,250,.7); }
+  .svg-node.tone-ghost circle {
+    stroke: rgba(239,68,68,.85);
+    stroke-dasharray: 3 3;
+    fill: rgba(239,68,68,.08);
+  }
+  .svg-node.tone-ghost text { fill: #fca5a5; }
 
   .svg-node text {
     fill: #e5e7eb;

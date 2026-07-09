@@ -210,6 +210,18 @@ struct ModrinthSearchHit {
     description: String,
     project_type: String,
     icon_url: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    downloads: Option<u64>,
+    #[serde(default)]
+    follows: Option<u64>,
+    #[serde(default)]
+    date_modified: Option<String>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    license: Option<String>,
     client_side: Option<String>,
     server_side: Option<String>,
 }
@@ -223,6 +235,12 @@ impl From<ModrinthSearchHit> for ProjectInfo {
             description: hit.description,
             project_type: hit.project_type,
             icon_url: hit.icon_url,
+            author: hit.author,
+            downloads: hit.downloads,
+            follows: hit.follows,
+            date_modified: hit.date_modified,
+            categories: hit.categories,
+            license: hit.license,
             client_side: hit.client_side,
             server_side: hit.server_side,
         }
@@ -238,6 +256,18 @@ struct ModrinthProject {
     description: String,
     project_type: String,
     icon_url: Option<String>,
+    #[serde(default)]
+    author: Option<String>,
+    #[serde(default)]
+    downloads: Option<u64>,
+    #[serde(default)]
+    follows: Option<u64>,
+    #[serde(default)]
+    date_modified: Option<String>,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    license: Option<String>,
     client_side: Option<String>,
     server_side: Option<String>,
 }
@@ -251,6 +281,12 @@ impl From<ModrinthProject> for ProjectInfo {
             description: project.description,
             project_type: project.project_type,
             icon_url: project.icon_url,
+            author: project.author,
+            downloads: project.downloads,
+            follows: project.follows,
+            date_modified: project.date_modified,
+            categories: project.categories,
+            license: project.license,
             client_side: project.client_side,
             server_side: project.server_side,
         }

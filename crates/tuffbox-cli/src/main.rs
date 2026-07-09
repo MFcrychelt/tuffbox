@@ -368,9 +368,12 @@ fn add_mod_from_modrinth(
         .next()
         .with_context(|| format!("no compatible version found for {mod_id}"))?;
 
-    let file = ProviderFileInfo::primary_file(&version)
-        .cloned()
-        .with_context(|| format!("no primary file for version {}", version.id))?;
+    let file = ProviderFileInfo::select_file_for_loader(
+        &version,
+        &loader_slug(&manifest.loader.kind),
+    )
+    .cloned()
+    .with_context(|| format!("no primary file for version {}", version.id))?;
 
     let dependencies = provider.resolve_dependencies(&version.id)?;
 
@@ -418,9 +421,12 @@ fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> any
         .next()
         .with_context(|| format!("no compatible version found for {project_id}"))?;
 
-    let file = ProviderFileInfo::primary_file(&version)
-        .cloned()
-        .with_context(|| format!("no primary file for version {}", version.id))?;
+    let file = ProviderFileInfo::select_file_for_loader(
+        &version,
+        &loader_slug(&manifest.loader.kind),
+    )
+    .cloned()
+    .with_context(|| format!("no primary file for version {}", version.id))?;
 
     let dependencies = provider.resolve_dependencies(&version.id)?;
     let side = manifest.mods[index].side;
