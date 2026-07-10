@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct NodeId(pub String);
 
 impl NodeId {
@@ -100,16 +101,16 @@ impl DependencyGraph {
     pub fn from_manifest(manifest: &ProjectManifest) -> Self {
         let mut graph = Self::default();
 
-        let project_id_to_slug: HashMap<String, String> = manifest
-            .mods
-            .iter()
-            .filter_map(|m| {
-                m.source
-                    .project_id
-                    .as_ref()
-                    .map(|pid| (pid.clone(), m.id.clone()))
-            })
-            .collect();
+        // Canonicalize dependency targets onto installed mod ids.
+        // Modrinth deps may use either project ids (AANobbMI) or slugs (sodium);
+        // installed mods use slug as `id` and store the project id on source.
+        let mut target_aliases: HashMap<String, String> = HashMap::new();
+        for module in &manifest.mods {
+            target_aliases.insert(module.id.clone(), module.id.clone());
+            if let Some(pid) = &module.source.project_id {
+                target_aliases.insert(pid.clone(), module.id.clone());
+            }
+        }
 
         let minecraft_id = NodeId::minecraft(&manifest.minecraft.version);
         graph.nodes.push(GraphNode {
@@ -240,10 +241,11 @@ impl DependencyGraph {
             }
 
             for dep in &module.dependencies {
-                let resolved_target = project_id_to_slug
-                    .get(&dep.target)
-                    .cloned()
-                    .unwrap_or_else(|| dep.target.clone());
+                let resolved_target = resolve_dependency_target(&dep.target, &target_aliases);
+                // Skip self-edges (a mod declaring itself as a dependency).
+                if resolved_target == module.id {
+                    continue;
+                }
                 graph.edges.push(GraphEdge {
                     from: mod_id.clone(),
                     to: NodeId::module(&resolved_target),
@@ -263,6 +265,58 @@ impl DependencyGraph {
 
     pub fn node(&self, id: &NodeId) -> Option<&GraphNode> {
         self.nodes.iter().find(|node| &node.id == id)
+    }
+}
+
+/// Map a Modrinth project id or slug onto the installed mod id when possible.
+fn resolve_dependency_target(target: &str, aliases: &HashMap<String, String>) -> String {
+    aliases
+        .get(target)
+        .cloned()
+        .unwrap_or_else(|| target.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::ProjectManifest;
+
+    #[test]
+    fn resolves_project_id_dep_onto_installed_slug_node() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.20.1" },
+          "loader": { "type": "fabric", "version": "0.15.11" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "iris",
+              "name": "Iris",
+              "source": { "type": "modrinth", "projectId": "YL57xq9U" },
+              "version": "1.0.0",
+              "side": "client",
+              "dependencies": [{ "type": "requires", "target": "AANobbMI" }]
+            },
+            {
+              "id": "sodium",
+              "name": "Sodium",
+              "source": { "type": "modrinth", "projectId": "AANobbMI" },
+              "version": "0.5.0",
+              "side": "client",
+              "dependencies": []
+            }
+          ]
+        }"#;
+        let manifest: ProjectManifest = serde_json::from_str(raw).unwrap();
+        let graph = DependencyGraph::from_manifest(&manifest);
+        let edge = graph
+            .edges
+            .iter()
+            .find(|e| e.from.0 == "mod:iris" && e.kind == EdgeKind::Requires)
+            .expect("iris requires edge");
+        assert_eq!(edge.to.0, "mod:sodium");
+        assert!(graph.has_node(&NodeId::module("sodium")));
     }
 }
 

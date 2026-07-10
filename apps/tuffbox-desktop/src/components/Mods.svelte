@@ -22,7 +22,6 @@
     ChevronRight,
     Heart,
     Bookmark,
-    Star,
     LayoutGrid,
     List,
     ArrowRight,
@@ -32,6 +31,8 @@
     Anvil,
     Tag,
     Clock,
+    Link,
+    Check,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
@@ -130,13 +131,19 @@
     if (!iso) return "unknown";
     const then = new Date(iso).getTime();
     if (Number.isNaN(then)) return iso;
-    const days = Math.floor((Date.now() - then) / 86_400_000);
-    if (days <= 0) return "today";
+    const diffMs = Date.now() - then;
+    const minutes = Math.floor(diffMs / 60_000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+    const days = Math.floor(hours / 24);
     if (days === 1) return "1 day ago";
     if (days < 30) return `${days} days ago`;
     const months = Math.floor(days / 30);
     if (months < 12) return `${months} month${months > 1 ? "s" : ""} ago`;
-    return `${Math.floor(months / 12)} year${months >= 24 ? "s" : ""} ago`;
+    const years = Math.floor(months / 12);
+    return `${years} year${years === 1 ? "" : "s"} ago`;
   }
 
   function projectToSearchResult(p: Record<string, unknown>): SearchResult {
@@ -422,10 +429,28 @@
     patchUserState(modId, { saved: !inDefault });
   }
 
-  function cycleRating(modId: string) {
-    const current = userState.ratings[modId] ?? 0;
-    const next = current >= 5 ? 0 : current + 1;
-    patchUserState(modId, { rating: next });
+  let copiedLinkId: string | null = null;
+  let copiedLinkTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function modrinthProjectUrl(result: SearchResult): string {
+    const type = result.projectType || "mod";
+    return `https://modrinth.com/${type}/${result.slug || result.id}`;
+  }
+
+  async function copyProjectLink(result: SearchResult) {
+    const url = modrinthProjectUrl(result);
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // Clipboard may be unavailable in some environments
+      return;
+    }
+    copiedLinkId = result.id;
+    if (copiedLinkTimer) clearTimeout(copiedLinkTimer);
+    copiedLinkTimer = setTimeout(() => {
+      copiedLinkId = null;
+      copiedLinkTimer = null;
+    }, 2000);
   }
 
   // Returns true if the mod is in at least one list
@@ -1118,7 +1143,9 @@
               <button on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
                 <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Install"}
               </button>
-              <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click={() => toggleFavorite(result.id)}><Heart size={15} /></button>
+              <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click={() => toggleFavorite(result.id)}>
+                <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
+              </button>
               {#if contentFilter.startsWith("list:")}
                 <button class="qa danger" title="Remove from list" on:click={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
               {/if}
@@ -1356,12 +1383,16 @@
                     </div>
                     <div class="result-actions">
                       <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
-                        <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Download"}
+                        <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                       </button>
                       <div class="quick-actions">
-                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}><Heart size={15} /></button>
+                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                          <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
+                        </button>
                         <div class="save-wrapper">
-                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}><Bookmark size={15} /></button>
+                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}>
+                            <Bookmark size={15} fill={modInAnyList(result.id) ? "currentColor" : "none"} />
+                          </button>
                           {#if saveDropdownFor === result.id}
                             <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
                               <div class="save-dropdown-header">Add to list</div>
@@ -1378,7 +1409,19 @@
                             </div>
                           {/if}
                         </div>
+                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy Modrinth link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                          {#if copiedLinkId === result.id}
+                            <Check size={15} />
+                          {:else}
+                            <Link size={15} />
+                          {/if}
+                        </button>
                       </div>
+                    </div>
+                    <div class="result-footer">
+                      <span><Download size={13} />{formatCount(result.downloads)}</span>
+                      <span><Heart size={13} />{formatCount(result.follows)}</span>
+                      <span class="footer-updated"><Clock size={13} />{formatRelative(result.dateModified)}</span>
                     </div>
                   </article>
                 {/each}
@@ -1423,12 +1466,16 @@
               </div>
               <div class="result-actions">
                 <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
-                  <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Download"}
+                  <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                 </button>
                 <div class="quick-actions">
-                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}><Heart size={15} /></button>
+                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                    <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
+                  </button>
                   <div class="save-wrapper">
-                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}><Bookmark size={15} /></button>
+                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}>
+                      <Bookmark size={15} fill={modInAnyList(result.id) ? "currentColor" : "none"} />
+                    </button>
                     {#if saveDropdownFor === result.id}
                       <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
                         <div class="save-dropdown-header">Add to list</div>
@@ -1445,13 +1492,19 @@
                       </div>
                     {/if}
                   </div>
-                  <button class="qa" class:active={(userState.ratings[result.id] ?? 0) > 0} title="Rate: {userState.ratings[result.id] ?? 0}/5" on:click|stopPropagation={() => cycleRating(result.id)}><Star size={15} />{#if (userState.ratings[result.id] ?? 0) > 0}<span class="rating-num">{userState.ratings[result.id]}</span>{/if}</button>
+                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy Modrinth link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                    {#if copiedLinkId === result.id}
+                      <Check size={15} />
+                    {:else}
+                      <Link size={15} />
+                    {/if}
+                  </button>
                 </div>
               </div>
               <div class="result-footer">
-                <span><ArrowDown size={13} />{formatCount(result.downloads)}</span>
+                <span><Download size={13} />{formatCount(result.downloads)}</span>
                 <span><Heart size={13} />{formatCount(result.follows)}</span>
-                <span><Clock size={13} />{formatRelative(result.dateModified)}</span>
+                <span class="footer-updated"><Clock size={13} />{formatRelative(result.dateModified)}</span>
               </div>
             </article>
           {/each}
@@ -2220,15 +2273,18 @@
 
   .view-toggle {
     width: 36px; height: 36px;
+    padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: 10px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     color: var(--text-muted);
     transform: none;
+    flex-shrink: 0;
   }
-  .view-toggle:hover { color: var(--text-primary); }
-  .view-toggle.active { color: var(--accent-primary); border-color: rgba(27,217,106,.4); }
+  .view-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .view-toggle.active { color: var(--accent-primary); border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.08); }
+  .view-toggle :global(svg) { width: 16px; height: 16px; flex-shrink: 0; }
 
   .pagination {
     display: flex;
@@ -2382,19 +2438,21 @@
   .download-btn:hover:not(:disabled) { filter: brightness(1.08); }
   .download-btn:disabled { opacity: .5; cursor: default; }
 
-  .quick-actions { display: flex; gap: 4px; }
+  .quick-actions { display: flex; gap: 6px; align-items: center; }
   .qa {
-    width: 32px; height: 32px;
+    width: 34px; height: 34px;
+    padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 8px;
+    border-radius: 999px;
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
     color: var(--text-muted);
     transform: none;
+    flex-shrink: 0;
   }
-  .qa:hover { color: var(--text-primary); border-color: rgba(27,217,106,.35); }
-  .qa.active { color: var(--accent-primary); border-color: rgba(27,217,106,.5); background: rgba(27,217,106,.08); }
-  .rating-num { font-size: 11px; font-weight: 700; margin-left: 2px; }
+  .qa:hover { color: var(--text-primary); border-color: rgba(27,217,106,.35); background: var(--bg-hover); }
+  .qa.active { color: var(--accent-primary); border-color: rgba(27,217,106,.5); background: rgba(27,217,106,.12); }
+  .qa :global(svg) { width: 15px; height: 15px; flex-shrink: 0; }
 
   .save-wrapper { position: relative; }
   .save-dropdown {
@@ -2428,6 +2486,8 @@
     border-top: 1px solid var(--border-color);
   }
   .result-footer span { display: inline-flex; align-items: center; gap: 5px; }
+  .result-footer .footer-updated { margin-left: auto; }
+  .result-footer :global(svg) { width: 13px; height: 13px; flex-shrink: 0; }
 
   .install-preview {
     display: flex;

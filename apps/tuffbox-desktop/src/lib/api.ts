@@ -224,6 +224,11 @@ export interface SearchResult {
   iconUrl?: string | null;
   clientSide?: string | null;
   serverSide?: string | null;
+  author?: string | null;
+  downloads?: number | null;
+  follows?: number | null;
+  dateModified?: string | null;
+  categories?: string[];
 }
 
 export interface CrashAnalysisFinding {

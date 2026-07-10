@@ -203,9 +203,12 @@ fn loader_keyword(loader: &str) -> Option<&'static str> {
 }
 
 pub fn provider_dependency_to_spec(dep: ProviderDependency) -> Option<ModDependencySpec> {
+    // Mirror modrinth-extras graph types: required/optional/embedded enter the
+    // graph; incompatible becomes a conflict edge. Embedded is treated as
+    // optional so bundled deps don't show up as hard MISSING_DEPENDENCY.
     let kind = match dep.dependency_type.as_str() {
         "required" => DependencyKind::Requires,
-        "optional" => DependencyKind::Optional,
+        "optional" | "embedded" => DependencyKind::Optional,
         "incompatible" => DependencyKind::Conflicts,
         _ => return None,
     };
@@ -235,11 +238,23 @@ mod tests {
     }
 
     #[test]
-    fn provider_dependency_to_spec_ignores_unknown() {
+    fn provider_dependency_to_spec_maps_embedded_as_optional() {
         let dep = ProviderDependency {
             project_id: Some("foo".to_string()),
             version_id: None,
             dependency_type: "embedded".to_string(),
+        };
+        let spec = provider_dependency_to_spec(dep).unwrap();
+        assert_eq!(spec.kind, DependencyKind::Optional);
+        assert_eq!(spec.target, "foo");
+    }
+
+    #[test]
+    fn provider_dependency_to_spec_ignores_unknown() {
+        let dep = ProviderDependency {
+            project_id: Some("foo".to_string()),
+            version_id: None,
+            dependency_type: "unknown-kind".to_string(),
         };
         assert!(provider_dependency_to_spec(dep).is_none());
     }

@@ -2903,9 +2903,9 @@ fn get_graph(path: String) -> Result<DependencyGraph, String> {
     Ok(DependencyGraph::from_manifest(&manifest))
 }
 
-/// Fills missing Modrinth dependency edges and icon URLs in-memory so the
-/// graph view shows real mod-to-mod links even for jars dropped into `mods/`
-/// manually (those entries often lack `dependencies` until enriched).
+/// Fills Modrinth dependency edges and icon URLs in-memory so the graph view
+/// shows real mod-to-mod links. Always refreshes dependency lists from Modrinth
+/// (project id → slug normalized) so edges resolve onto installed mod nodes.
 fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), String> {
     let provider = tuffbox_core::ModrinthProvider::new();
     let query = tuffbox_core::ProviderSearchQuery {
@@ -2931,19 +2931,17 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
             .clone()
             .unwrap_or_else(|| module.id.clone());
 
-        if module.dependencies.is_empty() {
-            let version_id = if let Some(file_id) = module.source.file_id.clone() {
-                Some(file_id)
-            } else if let Ok(versions) = provider.get_versions(&project_id, &query) {
-                versions.into_iter().next().map(|v| v.id)
-            } else {
-                None
-            };
+        let version_id = if let Some(file_id) = module.source.file_id.clone() {
+            Some(file_id)
+        } else if let Ok(versions) = provider.get_versions(&project_id, &query) {
+            versions.into_iter().next().map(|v| v.id)
+        } else {
+            None
+        };
 
-            if let Some(version_id) = version_id {
-                if let Ok(deps) = provider.resolve_dependencies(&version_id) {
-                    module.dependencies = deps;
-                }
+        if let Some(version_id) = version_id {
+            if let Ok(deps) = provider.resolve_dependencies(&version_id) {
+                module.dependencies = deps;
             }
         }
 
@@ -2958,14 +2956,16 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
 
 #[tauri::command]
 fn get_diagnostics(path: String) -> Result<Vec<tuffbox_core::Diagnostic>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    enrich_manifest_for_graph(&mut manifest)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     Ok(Resolver::analyze_project(&manifest, &graph))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    enrich_manifest_for_graph(&mut manifest)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     let diagnostics = Resolver::analyze_project(&manifest, &graph);
     Ok(Resolver::create_fix_plan(&graph, &diagnostics))
@@ -3027,6 +3027,9 @@ async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, Strin
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        // Use the same Modrinth-enriched dependency edges the graph view shows,
+        // otherwise Auto-install can miss deps that only appear after enrich.
+        enrich_manifest_for_graph(&mut manifest)?;
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let mut missing = diagnostics

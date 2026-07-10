@@ -322,9 +322,11 @@ struct ModrinthProject {
     author: Option<String>,
     #[serde(default)]
     downloads: Option<u64>,
-    #[serde(default)]
+    /// Search hits use `follows`; GET /project uses `followers`.
+    #[serde(default, alias = "followers")]
     follows: Option<u64>,
-    #[serde(default)]
+    /// Search hits use `date_modified`; GET /project uses `updated`.
+    #[serde(default, alias = "updated")]
     date_modified: Option<String>,
     #[serde(default)]
     categories: Vec<String>,

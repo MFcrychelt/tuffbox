@@ -66,6 +66,7 @@
     loading = true;
     error = null;
     brokenIcons = new Set();
+    ghostMeta = {};
     try {
       const raw: any = await invoke("get_graph", { path: $projectPath });
       graph = {
@@ -78,6 +79,8 @@
       await loadChangePlan();
       lastLoadedPath = $projectPath;
       hydrateMissingIcons().catch(() => {});
+      // Defer ghost hydration until after reactive ghostNodes rebuild.
+      queueMicrotask(() => hydrateGhostNodes().catch(() => {}));
     } catch (e) {
       error = String(e);
     } finally {
@@ -95,6 +98,8 @@
 
   // Track which nodes have a broken icon so we can fall back to a letter avatar
   let brokenIcons = new Set<string>();
+  /// Modrinth metadata for missing (ghost) dependency nodes: name + icon.
+  let ghostMeta: Record<string, { name: string; iconUrl?: string | null; projectId?: string }> = {};
 
   function markIconBroken(id: string) {
     if (!brokenIcons.has(id)) {
@@ -415,15 +420,17 @@
     }
   }
 
-  /// Heuristic: a mod node is a "dependency" (installed implicitly) if
-  /// every edge that points TO it is a "Requires" edge (i.e. it wasn't
-  /// explicitly added by the user, it was pulled in as a dep).
+  /// Installed mods that other mods require/optionally depend on.
+  /// These are "downloaded dependencies" and get the third (amber) tone.
+  /// Mods with no incoming dep edges are "main" and keep their side color.
   $: depNodeIds = new Set(
     nodes
       .filter((node) => node.kind === "Mod")
       .filter((node) => {
-        const incoming = displayEdges.filter((e) => e.to === node.id);
-        return incoming.length > 0 && incoming.every((e) => e.kind === "Requires");
+        const incoming = displayEdges.filter(
+          (e) => e.to === node.id && (e.kind === "Requires" || e.kind === "Optional")
+        );
+        return incoming.length > 0;
       })
       .map((node) => node.id)
   );
@@ -464,28 +471,62 @@
   $: ghostNodes = (() => {
     const out: GraphNode[] = [];
     const seen = new Set<string>();
-    const modEdgeEndpoints = new Set<string>();
-    for (const e of edges) {
-      if (e.kind === "RequiresLoader" || e.kind === "RequiresMinecraft" || e.kind === "RequiresJava" || e.kind === "IncludedInProfile") continue;
-      modEdgeEndpoints.add(e.from);
-      modEdgeEndpoints.add(e.to);
-    }
     for (const e of edges) {
       if (e.kind === "RequiresLoader" || e.kind === "RequiresMinecraft" || e.kind === "RequiresJava" || e.kind === "IncludedInProfile") continue;
       for (const end of [e.from, e.to]) {
         if (!nodeIdSet(end) && !seen.has(end)) {
           seen.add(end);
-          const label = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
-          out.push({ id: end, kind: "Missing", label, version: null, side: "unknown", metadata: {} });
+          const slug = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
+          const cached = ghostMeta[end];
+          out.push({
+            id: end,
+            kind: "Missing",
+            label: cached?.name ?? slug,
+            version: null,
+            side: "unknown",
+            metadata: {
+              ...(cached?.iconUrl ? { icon_url: cached.iconUrl } : {}),
+              ...(cached?.projectId ? { project_id: cached.projectId } : {}),
+              source: "modrinth",
+            },
+          });
         }
       }
     }
     return out;
   })();
   $: displayNodes = [...nodes.filter((n) => n.kind === "Mod"), ...ghostNodes];
+  // Mod-to-mod relations only (same set modrinth-extras puts on the canvas).
   $: displayEdges = edges.filter((e) =>
-    e.kind !== "RequiresLoader" && e.kind !== "RequiresMinecraft" && e.kind !== "RequiresJava" && e.kind !== "IncludedInProfile"
+    e.kind === "Requires" || e.kind === "Optional" || e.kind === "Conflicts" || e.kind === "BreaksWith" || e.kind === "Replaces"
   );
+
+  async function hydrateGhostNodes() {
+    if (!$projectPath || !graph) return;
+    const missing = ghostNodes.filter((n) => !ghostMeta[n.id]);
+    if (missing.length === 0) return;
+    const updates: Record<string, { name: string; iconUrl?: string | null; projectId?: string }> = {};
+    await Promise.all(
+      missing.map(async (node) => {
+        const key = modIdFromNode(node.id);
+        try {
+          const project: any = await invoke("get_modrinth_project", { projectId: key });
+          if (project) {
+            updates[node.id] = {
+              name: project.name ?? key,
+              iconUrl: project.iconUrl ?? null,
+              projectId: project.id ?? key,
+            };
+          }
+        } catch {
+          // keep slug label
+        }
+      })
+    );
+    if (Object.keys(updates).length > 0) {
+      ghostMeta = { ...ghostMeta, ...updates };
+    }
+  }
 
   /// Group mods by which profile includes them (via IncludedInProfile edges)
   $: modsByProfile = (() => {
@@ -748,7 +789,7 @@
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
           </marker>
           <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="30" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L7,3 z" fill="rgba(239,68,68,.85)" />
+            <path d="M0,0 L0,6 L7,3 z" fill="rgba(113,113,122,.95)" />
           </marker>
         </defs>
         {#each displayEdges as edge}
@@ -767,11 +808,12 @@
           {@const half = size / 2}
           {@const icon = nodeIconUrl(node)}
           {@const isGhost = node.kind === "Missing" || node.ghost}
-          {@const isClickableDep = isGhost || (node.kind === "Mod" && depNodeIds.has(node.id))}
+          {@const isInstalledDep = node.kind === "Mod" && depNodeIds.has(node.id)}
+          {@const isClickableDep = isGhost || isInstalledDep}
           <g
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
-            class:clickable-dep={isClickableDep}
+            class:clickable-dep={isInstalledDep}
             class:dimmed={selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)}
             role="button"
             tabindex="0"
@@ -1221,7 +1263,7 @@
   }
 
   .graph-canvas line.danger-edge {
-    stroke: rgba(239, 68, 68, 0.8);
+    stroke: rgba(82, 82, 91, 0.95);
     stroke-dasharray: 6 5;
   }
 
@@ -1230,9 +1272,7 @@
     transition: opacity 120ms ease;
   }
 
-  .svg-node.clickable-dep {
-    cursor: pointer;
-  }
+  /* Installed dependency — third color (amber) */
   .svg-node.clickable-dep rect {
     stroke: rgba(245,166,35,.7);
     stroke-dasharray: 4 3;
@@ -1261,12 +1301,12 @@
   .svg-node.tone-runtime rect { stroke: rgba(245,158,11,.7); }
   .svg-node.tone-profile rect { stroke: rgba(96,165,250,.7); }
   .svg-node.tone-ghost rect {
-    stroke: rgba(239,68,68,.85);
+    stroke: rgba(113, 113, 122, 0.9);
     stroke-dasharray: 4 3;
-    fill: rgba(239,68,68,.08);
+    fill: rgba(24, 24, 27, 0.95);
   }
-  .svg-node.tone-ghost .node-label-text { fill: #fca5a5; }
-  .svg-node.tone-ghost .fallback-letter { fill: #fca5a5; }
+  .svg-node.tone-ghost .node-label-text { fill: #a1a1aa; }
+  .svg-node.tone-ghost .fallback-letter { fill: #71717a; }
 
   .svg-node .fallback-letter {
     fill: #e5e7eb;
@@ -1283,7 +1323,7 @@
   }
 
   .svg-node .ghost-download {
-    fill: #fca5a5;
+    fill: #a1a1aa;
     font-size: 10px;
     font-weight: 700;
     pointer-events: none;
@@ -1393,16 +1433,16 @@
     font-style: italic;
   }
   .missing-card {
-    border-color: rgba(245,166,35,.35);
-    background: rgba(245,166,35,.04);
+    border-color: rgba(82, 82, 91, 0.65);
+    background: rgba(24, 24, 27, 0.85);
   }
   .missing-card:hover {
-    border-color: rgba(245,166,35,.7);
-    background: rgba(245,166,35,.1);
+    border-color: rgba(27, 217, 106, 0.55);
+    background: rgba(27, 217, 106, 0.08);
   }
   .missing-fallback {
-    background: linear-gradient(135deg, rgba(245,166,35,.6), rgba(239,68,68,.6));
-    color: white;
+    background: linear-gradient(135deg, #27272a, #18181b);
+    color: #a1a1aa;
     font-size: 18px;
     font-weight: 800;
   }
@@ -1460,8 +1500,10 @@
   }
 
   .node-card.is-dep {
-    opacity: 0.7;
+    opacity: 0.85;
     border-style: dashed;
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.06);
   }
 
   .card-icon {
@@ -1785,7 +1827,7 @@
     opacity: .7;
   }
 
-  /* Dep-tone node: amber/orange for auto-installed dependency mods */
+  /* Dep-tone node: amber for downloaded dependency mods */
   .svg-node.tone-dep rect {
     stroke: rgba(245, 158, 11, 0.7);
     fill: rgba(245, 158, 11, 0.08);
@@ -1797,8 +1839,8 @@
     animation: ghost-pulse 2s ease-in-out infinite;
   }
   .ghost-node:hover {
-    fill: rgba(239,68,68,0.25);
-    stroke: rgba(239,68,68,0.9);
+    fill: rgba(27,217,106,0.18);
+    stroke: rgba(27,217,106,0.85);
     r: 16;
   }
   .ghost-label {
@@ -1806,7 +1848,7 @@
     transition: fill .15s;
   }
   .ghost-label:hover {
-    fill: #fca5a5;
+    fill: #d4d4d8;
     font-size: 11px;
   }
   @keyframes ghost-pulse {
