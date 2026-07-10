@@ -472,14 +472,31 @@ export const api = {
     },
     previewInstall(modId: string, p?: string) { return cmd<ModInstallPreview>("preview_modrinth_install", { ...pathArg(p), modId }); },
     getIcon(projectId: string) { return cmd<string | null>("get_modrinth_project_icon", { projectId }); },
-    getUserState(p?: string) { return cmd<{ favorites: Record<string, boolean>; saved: Record<string, boolean>; ratings: Record<string, number> }>("get_mod_user_state", pathArg(p)); },
+    getUserState(p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("get_mod_user_state", pathArg(p));
+    },
     setUserState(modId: string, patch: { favorite?: boolean; saved?: boolean; rating?: number }, p?: string) {
-      return cmd<{ favorites: Record<string, boolean>; saved: Record<string, boolean>; ratings: Record<string, number> }>("set_mod_user_state", {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("set_mod_user_state", {
         ...pathArg(p), modId,
         favorite: patch.favorite ?? null,
         saved: patch.saved ?? null,
         rating: patch.rating ?? null,
       });
+    },
+    createList(name: string, p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("create_mod_list", { ...pathArg(p), name });
+    },
+    deleteList(name: string, p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("delete_mod_list", { ...pathArg(p), name });
+    },
+    renameList(oldName: string, newName: string, p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("rename_mod_list", { ...pathArg(p), oldName, newName });
+    },
+    addToList(name: string, modId: string, p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("add_to_mod_list", { ...pathArg(p), name, modId });
+    },
+    removeFromList(name: string, modId: string, p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("remove_from_mod_list", { ...pathArg(p), name, modId });
     },
   },
 

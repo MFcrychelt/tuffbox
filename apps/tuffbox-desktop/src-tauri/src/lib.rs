@@ -489,16 +489,20 @@ async fn get_modrinth_project_icon(project_id: String) -> Result<Option<String>,
     .map_err(|e| e.to_string())?
 }
 
-/// Per-project user state for mods found in the Add-Mod browser: favorites,
-/// saved items and star ratings. Stored as JSON under `.tuffbox/` so it
-/// survives restarts without polluting the manifest.
+/// Per-project user state for mods found in the Add-Mod browser.
+/// `favorites` is a single set of mod IDs the user liked.
+/// `lists` is a map of list_name -> ordered list of mod IDs, supporting
+/// multiple named build lists (e.g. "Performance", "PvP", "QoL").
+/// `ratings` stores per-mod star ratings (0–5).
+/// Stored as JSON under `.tuffbox/` so it survives restarts without
+/// polluting the manifest.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ModUserState {
     #[serde(default)]
     favorites: std::collections::HashMap<String, bool>,
     #[serde(default)]
-    saved: std::collections::HashMap<String, bool>,
+    lists: std::collections::HashMap<String, Vec<String>>,
     #[serde(default)]
     ratings: std::collections::HashMap<String, u8>,
 }
@@ -547,11 +551,21 @@ fn set_mod_user_state(
             state.favorites.remove(&mod_id);
         }
     }
+    // Legacy `saved` flag is kept for backward compat: adds/removes the mod
+    // from a default list named "Saved". New UI should use `add_to_list` /
+    // `remove_from_list` / `create_list` / `delete_list` instead.
     if let Some(s) = saved {
+        const DEFAULT_LIST: &str = "Saved";
+        let entry = state.lists.entry(DEFAULT_LIST.to_string()).or_default();
         if s {
-            state.saved.insert(mod_id.clone(), true);
+            if !entry.contains(&mod_id) {
+                entry.push(mod_id.clone());
+            }
         } else {
-            state.saved.remove(&mod_id);
+            entry.retain(|m| m != &mod_id);
+            if entry.is_empty() {
+                state.lists.remove(DEFAULT_LIST);
+            }
         }
     }
     if let Some(r) = rating {
@@ -560,6 +574,74 @@ fn set_mod_user_state(
         } else {
             state.ratings.insert(mod_id.clone(), r.min(5));
         }
+    }
+    save_mod_user_state(&project_dir, &state)?;
+    Ok(state)
+}
+
+/// Creates a new named build list (empty).
+#[tauri::command(rename_all = "camelCase")]
+fn create_mod_list(path: String, name: String) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut state = load_mod_user_state(&project_dir);
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("List name cannot be empty".to_string());
+    }
+    if !state.lists.contains_key(&trimmed) {
+        state.lists.insert(trimmed, Vec::new());
+    }
+    save_mod_user_state(&project_dir, &state)?;
+    Ok(state)
+}
+
+/// Deletes a named build list entirely.
+#[tauri::command(rename_all = "camelCase")]
+fn delete_mod_list(path: String, name: String) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut state = load_mod_user_state(&project_dir);
+    state.lists.remove(&name);
+    save_mod_user_state(&project_dir, &state)?;
+    Ok(state)
+}
+
+/// Renames a build list.
+#[tauri::command(rename_all = "camelCase")]
+fn rename_mod_list(path: String, old_name: String, new_name: String) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut state = load_mod_user_state(&project_dir);
+    let trimmed = new_name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("List name cannot be empty".to_string());
+    }
+    if let Some(mods) = state.lists.remove(&old_name) {
+        state.lists.insert(trimmed, mods);
+    }
+    save_mod_user_state(&project_dir, &state)?;
+    Ok(state)
+}
+
+/// Adds a mod to a named build list (creates the list if it doesn't exist).
+#[tauri::command(rename_all = "camelCase")]
+fn add_to_mod_list(path: String, name: String, mod_id: String) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut state = load_mod_user_state(&project_dir);
+    let entry = state.lists.entry(name).or_default();
+    if !entry.contains(&mod_id) {
+        entry.push(mod_id);
+    }
+    save_mod_user_state(&project_dir, &state)?;
+    Ok(state)
+}
+
+/// Removes a mod from a named build list. If the list becomes empty
+/// it is kept (user might want to add more mods later).
+#[tauri::command(rename_all = "camelCase")]
+fn remove_from_mod_list(path: String, name: String, mod_id: String) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut state = load_mod_user_state(&project_dir);
+    if let Some(entry) = state.lists.get_mut(&name) {
+        entry.retain(|m| m != &mod_id);
     }
     save_mod_user_state(&project_dir, &state)?;
     Ok(state)
@@ -4932,6 +5014,11 @@ pub fn run() {
             get_modrinth_project_icon,
             get_mod_user_state,
             set_mod_user_state,
+            create_mod_list,
+            delete_mod_list,
+            rename_mod_list,
+            add_to_mod_list,
+            remove_from_mod_list,
             add_modrinth_mod,
             add_modrinth_mod_with_dependencies,
             add_modrinth_mods_with_dependencies,

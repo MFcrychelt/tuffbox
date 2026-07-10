@@ -329,19 +329,26 @@
 
   let message: string | null = null;
 
-  // User state for mods (favorites, saved, ratings)
-  let userState: { favorites: Record<string, boolean>; saved: Record<string, boolean>; ratings: Record<string, number> } = {
+  // User state for mods (favorites, named build lists, ratings)
+  let userState: { favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> } = {
     favorites: {},
-    saved: {},
+    lists: {},
     ratings: {},
   };
+
+  // Which list the user is currently viewing in the Lists panel
+  let activeListName: string | null = null;
+  // Dropdown open state for the save button (per-mod)
+  let saveDropdownFor: string | null = null;
+  // New list name input
+  let newListName = "";
 
   async function loadUserState() {
     if (!$projectPath) return;
     try {
       userState = await api.mods.getUserState($projectPath);
     } catch {
-      userState = { favorites: {}, saved: {}, ratings: {} };
+      userState = { favorites: {}, lists: {}, ratings: {} };
     }
   }
 
@@ -360,14 +367,93 @@
   }
 
   function toggleSaved(modId: string) {
-    const current = userState.saved[modId] ?? false;
-    patchUserState(modId, { saved: !current });
+    // Quick toggle: add to / remove from a default "Saved" list
+    const inDefault = (userState.lists["Saved"] ?? []).includes(modId);
+    patchUserState(modId, { saved: !inDefault });
   }
 
   function cycleRating(modId: string) {
     const current = userState.ratings[modId] ?? 0;
     const next = current >= 5 ? 0 : current + 1;
     patchUserState(modId, { rating: next });
+  }
+
+  // Returns true if the mod is in at least one list
+  function modInAnyList(modId: string): boolean {
+    return Object.values(userState.lists).some((ids) => ids.includes(modId));
+  }
+
+  function modInList(modId: string, listName: string): boolean {
+    return (userState.lists[listName] ?? []).includes(modId);
+  }
+
+  async function createList(name: string) {
+    if (!$projectPath || !name.trim()) return;
+    try {
+      userState = await api.mods.createList(name.trim(), $projectPath);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function deleteList(name: string) {
+    if (!$projectPath) return;
+    try {
+      userState = await api.mods.deleteList(name, $projectPath);
+      if (activeListName === name) activeListName = null;
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function renameList(oldName: string, newName: string) {
+    if (!$projectPath || !newName.trim() || oldName === newName) return;
+    try {
+      userState = await api.mods.renameList(oldName, newName.trim(), $projectPath);
+      if (activeListName === oldName) activeListName = newName.trim();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function addToList(listName: string, modId: string) {
+    if (!$projectPath) return;
+    try {
+      userState = await api.mods.addToList(listName, modId, $projectPath);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function removeFromList(listName: string, modId: string) {
+    if (!$projectPath) return;
+    try {
+      userState = await api.mods.removeFromList(listName, modId, $projectPath);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  // Install all mods from a list (one click)
+  let installingFromList: string | null = null;
+  async function installList(listName: string) {
+    if (!$projectPath) return;
+    const modIds = userState.lists[listName] ?? [];
+    if (modIds.length === 0) return;
+    installingFromList = listName;
+    try {
+      await invoke("add_modrinth_mods_with_dependencies", {
+        path: $projectPath,
+        modIds,
+        side: "both",
+      });
+      message = `Installed ${modIds.length} mods from "${listName}"`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      installingFromList = null;
+    }
   }
 
   // Change plan preview before install
@@ -823,6 +909,56 @@
     </div>
   {/if}
 
+  <!-- Build Lists panel: manage named mod collections -->
+  <div class="lists-panel">
+    <div class="lists-header">
+      <h3><Bookmark size={16} /> Build Lists ({Object.keys(userState.lists).length})</h3>
+      <button class="secondary mini" on:click={() => createList(prompt("List name:") || "")} disabled={!$projectPath} title="Create a new build list">
+        <Plus size={12} /> New
+      </button>
+    </div>
+    {#if Object.keys(userState.lists).length === 0}
+      <p class="lists-empty">No build lists yet. Click the bookmark icon on any mod to add it to a list.</p>
+    {:else}
+      <div class="lists-list">
+        {#each Object.entries(userState.lists) as [listName, modIds]}
+          <div class="list-row" class:active={activeListName === listName}>
+            <button class="list-toggle" on:click={() => (activeListName = activeListName === listName ? null : listName)}>
+              <strong>{listName}</strong>
+              <span class="list-count">{modIds.length} mod{modIds.length === 1 ? '' : 's'}</span>
+            </button>
+            <div class="list-actions">
+              <button class="secondary mini" on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || modIds.length === 0} title="Install all mods from this list">
+                <ArrowDown size={12} /> {installingFromList === listName ? "..." : "Install"}
+              </button>
+              <button class="icon-btn mini" on:click={() => { const n = prompt("Rename list:", listName); if (n) renameList(listName, n); }} title="Rename">
+                <Filter size={12} />
+              </button>
+              <button class="icon-btn mini danger" on:click={() => { if (confirm(`Delete list "${listName}"?`)) deleteList(listName); }} title="Delete">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+          {#if activeListName === listName}
+            <div class="list-detail">
+              {#each modIds as mid}
+                <div class="list-mod-row">
+                  <span class="list-mod-id">{mid}</span>
+                  <button class="icon-btn mini danger" on:click={() => removeFromList(listName, mid)} title="Remove from list">
+                    <X size={12} />
+                  </button>
+                </div>
+              {/each}
+              {#if modIds.length === 0}
+                <p class="lists-empty">List is empty.</p>
+              {/if}
+            </div>
+          {/if}
+        {/each}
+      </div>
+    {/if}
+  </div>
+
   {#if updateList.length > 0}
     <div class="update-panel">
       <div class="update-panel-header">
@@ -1104,7 +1240,24 @@
                 </button>
                 <div class="quick-actions">
                   <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}><Heart size={15} /></button>
-                  <button class="qa" class:active={userState.saved[result.id]} title="Save" on:click|stopPropagation={() => toggleSaved(result.id)}><Bookmark size={15} /></button>
+                  <div class="save-wrapper">
+                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}><Bookmark size={15} /></button>
+                    {#if saveDropdownFor === result.id}
+                      <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                        <div class="save-dropdown-header">Add to list</div>
+                        {#each Object.keys(userState.lists) as listName}
+                          <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
+                            <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
+                            <span>{listName}</span>
+                          </button>
+                        {/each}
+                        <div class="save-dropdown-new">
+                          <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { createList(newListName); addToList(newListName.trim(), result.id); newListName = ''; saveDropdownFor = null; }}} />
+                          <button on:click={() => { createList(newListName); addToList(newListName.trim(), result.id); newListName = ''; saveDropdownFor = null; }} disabled={!newListName.trim()}>+ Create & add</button>
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
                   <button class="qa" class:active={(userState.ratings[result.id] ?? 0) > 0} title="Rate: {userState.ratings[result.id] ?? 0}/5" on:click|stopPropagation={() => cycleRating(result.id)}><Star size={15} />{#if (userState.ratings[result.id] ?? 0) > 0}<span class="rating-num">{userState.ratings[result.id]}</span>{/if}</button>
                 </div>
               </div>
@@ -2008,6 +2161,27 @@
   .qa.active { color: var(--accent-primary); border-color: rgba(27,217,106,.5); background: rgba(27,217,106,.08); }
   .rating-num { font-size: 11px; font-weight: 700; margin-left: 2px; }
 
+  .save-wrapper { position: relative; }
+  .save-dropdown {
+    position: absolute; right: 0; top: 100%; margin-top: 4px; z-index: 100;
+    min-width: 220px; max-height: 320px; overflow: auto;
+    background: var(--bg-card); border: 1px solid var(--border-color);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .save-dropdown-header { padding: 6px 10px; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .save-dropdown-item {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 8px 10px; border-radius: 6px; background: transparent; border: none;
+    color: var(--text-primary); text-align: left; font-size: 13px; cursor: pointer;
+  }
+  .save-dropdown-item:hover { background: rgba(27,217,106,0.08); }
+  .save-check { width: 16px; text-align: center; color: var(--accent-primary); font-weight: 700; }
+  .save-dropdown-new { display: flex; gap: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
+  .save-dropdown-new input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; }
+  .save-dropdown-new button { padding: 6px 10px; border-radius: 6px; background: var(--accent-primary); color: #0a0d14; border: none; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .save-dropdown-new button:disabled { opacity: 0.4; cursor: not-allowed; }
+
   .result-footer {
     grid-area: footer;
     display: flex;
@@ -2132,6 +2306,23 @@
   .recs-prio.high { background: rgba(27,217,106,.12); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }
   .recs-prio.low { background: var(--bg-elevated); color: var(--text-muted); }
+
+  .lists-panel { margin-bottom: 16px; padding: 14px; border: 1px solid rgba(245,166,35,.25); border-radius: var(--border-radius-lg); background: rgba(245,166,35,.02); }
+  .lists-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .lists-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-warning, #f5a623); margin: 0; font-size: 14px; }
+  .lists-empty { color: var(--text-muted); font-size: 12px; margin: 4px 0; font-style: italic; }
+  .lists-list { display: grid; gap: 6px; }
+  .list-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .list-row.active { border-color: rgba(245,166,35,.5); background: rgba(245,166,35,.04); }
+  .list-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: transparent; border: none; color: var(--text-primary); text-align: left; cursor: pointer; padding: 0; }
+  .list-toggle strong { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .list-count { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 8px; border-radius: 999px; }
+  .list-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .list-detail { display: grid; gap: 4px; padding: 8px 10px 4px 26px; border-left: 2px solid rgba(245,166,35,.3); margin-left: 14px; }
+  .list-mod-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; background: var(--bg-secondary); }
+  .list-mod-id { font-family: monospace; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .icon-btn.mini { padding: 4px; border-radius: 6px; }
+  .icon-btn.mini.danger:hover { background: rgba(239,68,68,.15); color: #fca5a5; }
 
   .update-panel { margin-bottom: 16px; padding: 16px; border: 1px solid rgba(27,217,106,.3); border-radius: var(--border-radius-lg); background: radial-gradient(circle at top right, rgba(27,217,106,.08), transparent 40%), var(--bg-secondary); }
   .update-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }

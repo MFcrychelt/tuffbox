@@ -3,9 +3,38 @@ use super::{
     ProviderDependency, ProviderError, ProviderFileHashes, ProviderFileInfo, ProviderSearchQuery,
     VersionInfo,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 const BASE_URL: &str = "https://api.modrinth.com/v2";
+
+/// Deserializes a field that can be either a string or an object.
+/// Modrinth returns `license` as either a string ID or an object
+/// `{"id": "MIT", "name": "MIT License", "url": "..."}`, and
+/// `client_side`/`server_side` as either a string or an object
+/// `{"client": "optional", "server": "required"}`.
+fn string_or_object<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde_json::Value;
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(s)),
+        Value::Object(map) => {
+            if let Some(id) = map.get("id").and_then(|v| v.as_str()) {
+                Ok(Some(id.to_string()))
+            } else if let Some(name) = map.get("name").and_then(|v| v.as_str()) {
+                Ok(Some(name.to_string()))
+            } else if let Some(client) = map.get("client").and_then(|v| v.as_str()) {
+                Ok(Some(client.to_string()))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
 
 pub struct ModrinthProvider;
 
@@ -246,9 +275,11 @@ struct ModrinthSearchHit {
     date_modified: Option<String>,
     #[serde(default)]
     categories: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_object")]
     license: Option<String>,
+    #[serde(default, deserialize_with = "string_or_object")]
     client_side: Option<String>,
+    #[serde(default, deserialize_with = "string_or_object")]
     server_side: Option<String>,
 }
 
@@ -292,9 +323,11 @@ struct ModrinthProject {
     date_modified: Option<String>,
     #[serde(default)]
     categories: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_object")]
     license: Option<String>,
+    #[serde(default, deserialize_with = "string_or_object")]
     client_side: Option<String>,
+    #[serde(default, deserialize_with = "string_or_object")]
     server_side: Option<String>,
 }
 
