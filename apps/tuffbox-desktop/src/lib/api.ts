@@ -472,6 +472,15 @@ export const api = {
     },
     previewInstall(modId: string, p?: string) { return cmd<ModInstallPreview>("preview_modrinth_install", { ...pathArg(p), modId }); },
     getIcon(projectId: string) { return cmd<string | null>("get_modrinth_project_icon", { projectId }); },
+    getUserState(p?: string) { return cmd<{ favorites: Record<string, boolean>; saved: Record<string, boolean>; ratings: Record<string, number> }>("get_mod_user_state", pathArg(p)); },
+    setUserState(modId: string, patch: { favorite?: boolean; saved?: boolean; rating?: number }, p?: string) {
+      return cmd<{ favorites: Record<string, boolean>; saved: Record<string, boolean>; ratings: Record<string, number> }>("set_mod_user_state", {
+        ...pathArg(p), modId,
+        favorite: patch.favorite ?? null,
+        saved: patch.saved ?? null,
+        rating: patch.rating ?? null,
+      });
+    },
   },
 
   // ── Config ────────────────────────────────────────────────────────

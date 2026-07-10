@@ -452,6 +452,7 @@ fn build_mod_spec(
             file_id: Some(version.id.clone()),
             url: Some(file.url),
             path: None,
+            icon_url: project.icon_url.clone(),
         },
         version: version.version_number.clone(),
         file_name: Some(file.filename),

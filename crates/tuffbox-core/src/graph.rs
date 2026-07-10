@@ -187,6 +187,9 @@ impl DependencyGraph {
             if let Some(file_id) = &module.source.file_id {
                 metadata.insert("file_id".to_string(), file_id.clone());
             }
+            if let Some(icon_url) = &module.source.icon_url {
+                metadata.insert("icon_url".to_string(), icon_url.clone());
+            }
 
             let mod_id = NodeId::module(&module.id);
             graph.nodes.push(GraphNode {

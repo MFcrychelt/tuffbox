@@ -230,7 +230,12 @@ impl TestLauncher {
         cmd.args(&options.jvm_args);
 
         for arg in &game.jvm_args {
+            // Replace spaces with a temporary character to prevent splitting
+            // multi-word arguments, then split on that character after substitution.
+            // This matches how Modrinth's launcher handles arguments like
+            // "-Dfml.ignoreInvalidMinecraftCertificates=true" which may contain spaces.
             let value = arg
+                .replace(' ', "\n")
                 .replace("${natives_directory}", &natives_dir_s)
                 .replace("${library_directory}", &library_dir_s)
                 .replace("${launcher_name}", "tuffbox")
@@ -238,7 +243,11 @@ impl TestLauncher {
                 .replace("${version_name}", &game.id)
                 .replace("${classpath_separator}", classpath_separator)
                 .replace("${classpath}", &classpath);
-            cmd.arg(value);
+            for part in value.split('\n') {
+                if !part.is_empty() {
+                    cmd.arg(part);
+                }
+            }
         }
 
         if let Some(log_config) = &game.log_config {
@@ -248,24 +257,46 @@ impl TestLauncher {
             }
         }
 
+        // Java 9+ requires --add-opens for module system access
+        if java.major >= 9 {
+            cmd.arg("--add-opens=java.base/java.lang.reflect=ALL-UNNAMED");
+            cmd.arg("--add-opens=java.base/java.lang=ALL-UNNAMED");
+        }
+
+        // Java 25+ needs additional opens for JEP 512
+        if java.major >= 25 {
+            cmd.arg("--add-opens=jdk.internal/jdk.internal.misc=ALL-UNNAMED");
+        }
+
         cmd.arg(format!("-Djava.library.path={}", natives_dir_s));
         cmd.arg("-cp").arg(classpath);
         cmd.arg(&game.main_class);
 
         for arg in &game.game_args {
             let value = arg
+                .replace(' ', "\n")
                 .replace("${auth_player_name}", &auth_player_name)
                 .replace("${auth_uuid}", &auth_uuid)
                 .replace("${auth_access_token}", auth_access_token)
+                .replace("${auth_session}", auth_access_token)
                 .replace("${user_type}", user_type)
+                .replace("${user_properties}", "{}")
                 .replace("${version_type}", version_type)
                 .replace("${assets_root}", &assets_dir_s)
                 .replace("${assets_index_name}", &game.asset_index_id)
                 .replace("${game_directory}", &game_dir_s)
+                .replace("${game_assets}", &assets_dir_s)
                 .replace("${version_name}", &game.id)
                 .replace("${natives_directory}", &natives_dir_s)
-                .replace("${client_jar}", &version_jar_s);
-            cmd.arg(value);
+                .replace("${client_jar}", &version_jar_s)
+                // Quick play placeholders — empty for now (no quick play support yet)
+                .replace("${quickPlaySingleplayer}", "")
+                .replace("${quickPlayMultiplayer}", "");
+            for part in value.split('\n') {
+                if !part.is_empty() {
+                    cmd.arg(part);
+                }
+            }
         }
 
         let log_path = options.instance_dir.join("logs").join("latest.log");

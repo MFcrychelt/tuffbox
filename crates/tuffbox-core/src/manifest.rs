@@ -329,6 +329,11 @@ pub struct ModSource {
     pub url: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    /// Cached Modrinth icon URL (only meaningful for Modrinth-sourced mods).
+    /// Lets the UI show the real icon without an extra network round-trip per
+    /// mod on every list load.
+    #[serde(default, rename = "iconUrl")]
+    pub icon_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

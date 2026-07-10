@@ -303,6 +303,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                             file_id: None,
                             url: None,
                             path: Some(format!("{}/{}", dir_name, file_name)),
+                            icon_url: None,
                         },
                         file_name: Some(file_name),
                         hashes: None,
@@ -372,11 +373,15 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 tuffbox_core::manifest::ContentType::Datapack => "datapack",
             };
             let icon_url: Option<String> = match &m.source.kind {
-                tuffbox_core::manifest::SourceKind::Modrinth => {
-                    m.source.project_id.as_ref().map(|pid| {
-                        format!("https://cdn.modrinth.com/data/{pid}/icon.png")
-                    })
-                }
+                tuffbox_core::manifest::SourceKind::Modrinth => m
+                    .source
+                    .icon_url
+                    .clone()
+                    .or_else(|| {
+                        m.source.project_id.as_ref().map(|pid| {
+                            format!("https://cdn.modrinth.com/data/{pid}/icon.png")
+                        })
+                    }),
                 _ => None,
             };
             serde_json::json!({
@@ -482,6 +487,82 @@ async fn get_modrinth_project_icon(project_id: String) -> Result<Option<String>,
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Per-project user state for mods found in the Add-Mod browser: favorites,
+/// saved items and star ratings. Stored as JSON under `.tuffbox/` so it
+/// survives restarts without polluting the manifest.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModUserState {
+    #[serde(default)]
+    favorites: std::collections::HashMap<String, bool>,
+    #[serde(default)]
+    saved: std::collections::HashMap<String, bool>,
+    #[serde(default)]
+    ratings: std::collections::HashMap<String, u8>,
+}
+
+fn mod_user_state_path(project_dir: &Path) -> PathBuf {
+    project_dir.join(".tuffbox").join("mods_user_state.json")
+}
+
+fn load_mod_user_state(project_dir: &Path) -> ModUserState {
+    let p = mod_user_state_path(project_dir);
+    std::fs::read_to_string(&p)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_mod_user_state(project_dir: &Path, state: &ModUserState) -> Result<(), String> {
+    let p = mod_user_state_path(project_dir);
+    if let Some(par) = p.parent() {
+        std::fs::create_dir_all(par).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&p, serde_json::to_string_pretty(state).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_mod_user_state(path: String) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    Ok(load_mod_user_state(&project_dir))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn set_mod_user_state(
+    path: String,
+    mod_id: String,
+    favorite: Option<bool>,
+    saved: Option<bool>,
+    rating: Option<u8>,
+) -> Result<ModUserState, String> {
+    let project_dir = manifest_parent(&path)?;
+    let mut state = load_mod_user_state(&project_dir);
+    if let Some(f) = favorite {
+        if f {
+            state.favorites.insert(mod_id.clone(), true);
+        } else {
+            state.favorites.remove(&mod_id);
+        }
+    }
+    if let Some(s) = saved {
+        if s {
+            state.saved.insert(mod_id.clone(), true);
+        } else {
+            state.saved.remove(&mod_id);
+        }
+    }
+    if let Some(r) = rating {
+        if r == 0 {
+            state.ratings.remove(&mod_id);
+        } else {
+            state.ratings.insert(mod_id.clone(), r.min(5));
+        }
+    }
+    save_mod_user_state(&project_dir, &state)?;
+    Ok(state)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -4618,6 +4699,7 @@ fn build_mod_spec(
             file_id: Some(version.id.clone()),
             url: Some(file.url),
             path: None,
+            icon_url: project.icon_url.clone(),
         },
         version: version.version_number.clone(),
         file_name: Some(file.filename),
@@ -4832,6 +4914,8 @@ pub fn run() {
             search_modrinth_mods,
             preview_modrinth_install,
             get_modrinth_project_icon,
+            get_mod_user_state,
+            set_mod_user_state,
             add_modrinth_mod,
             add_modrinth_mod_with_dependencies,
             add_modrinth_mods_with_dependencies,

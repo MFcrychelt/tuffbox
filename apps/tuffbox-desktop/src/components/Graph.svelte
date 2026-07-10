@@ -110,6 +110,17 @@
     return nodeId.startsWith("mod:") ? nodeId.slice(4) : nodeId;
   }
 
+  function nodeIconUrl(node: PositionedNode): string | null {
+    if (node.metadata?.icon_url) return node.metadata.icon_url;
+    if (node.metadata?.project_id) return `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon.png`;
+    return null;
+  }
+
+  function nodeSize(node: PositionedNode): number {
+    if (node.kind === "Missing") return 36;
+    return depNodeIds.has(node.id) ? 36 : 48;
+  }
+
   async function removeConflictNode(nodeId: string) {
     if (!$projectPath) return;
     const modId = modIdFromNode(nodeId);
@@ -118,12 +129,30 @@
     message = null;
     try {
       await invoke("remove_project_mod", { path: $projectPath, modId });
-      message = `Removed conflicting mod ${modId}. Auto snapshot created.`;
+      message = `Removed ${modId}.`;
       await load(true);
     } catch (e) {
       error = String(e);
     } finally {
       resolving = false;
+    }
+  }
+
+  async function removeModNode(event: MouseEvent | Event, nodeId: string) {
+    event.stopPropagation();
+    await removeConflictNode(nodeId);
+  }
+
+  async function installGhostNode(nodeId: string) {
+    if (!$projectPath) return;
+    const slug = modIdFromNode(nodeId);
+    await previewModrinthDep(slug);
+  }
+
+  function handleNodeClick(node: PositionedNode) {
+    selectedId = node.id;
+    if (node.kind === "Missing" || node.ghost) {
+      installGhostNode(node.id);
     }
   }
 
@@ -261,7 +290,7 @@
     nodes
       .filter((node) => node.kind === "Mod")
       .filter((node) => {
-        const incoming = edges.filter((e) => e.to === node.id);
+        const incoming = displayEdges.filter((e) => e.to === node.id);
         return incoming.length > 0 && incoming.every((e) => e.kind === "Requires");
       })
       .map((node) => node.id)
@@ -271,10 +300,10 @@
   $: edges = graph?.edges ?? [];
   $: selected = selectedId ? nodeById(selectedId) : null;
   $: selectedEdges = selectedId
-    ? edges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
+    ? displayEdges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
     : [];
-  $: missingEdges = edges.filter((edge) => edge.kind === "Requires" && !nodeById(edge.to));
-  $: conflictEdges = edges.filter((edge) => ["Conflicts", "BreaksWith"].includes(edge.kind) && nodeById(edge.from) && nodeById(edge.to));
+  $: missingEdges = displayEdges.filter((edge) => edge.kind === "Requires" && !nodeById(edge.to));
+  $: conflictEdges = displayEdges.filter((edge) => ["Conflicts", "BreaksWith"].includes(edge.kind) && nodeById(edge.from) && nodeById(edge.to));
   $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
     return acc;
@@ -294,7 +323,14 @@
   $: ghostNodes = (() => {
     const out: GraphNode[] = [];
     const seen = new Set<string>();
+    const modEdgeEndpoints = new Set<string>();
     for (const e of edges) {
+      if (e.kind === "RequiresLoader" || e.kind === "RequiresMinecraft" || e.kind === "RequiresJava" || e.kind === "IncludedInProfile") continue;
+      modEdgeEndpoints.add(e.from);
+      modEdgeEndpoints.add(e.to);
+    }
+    for (const e of edges) {
+      if (e.kind === "RequiresLoader" || e.kind === "RequiresMinecraft" || e.kind === "RequiresJava" || e.kind === "IncludedInProfile") continue;
       for (const end of [e.from, e.to]) {
         if (!nodeIdSet(end) && !seen.has(end)) {
           seen.add(end);
@@ -305,7 +341,10 @@
     }
     return out;
   })();
-  $: displayNodes = [...nodes, ...ghostNodes];
+  $: displayNodes = [...nodes.filter((n) => n.kind === "Mod"), ...ghostNodes];
+  $: displayEdges = edges.filter((e) =>
+    e.kind !== "RequiresLoader" && e.kind !== "RequiresMinecraft" && e.kind !== "RequiresJava" && e.kind !== "IncludedInProfile"
+  );
 
   /// Group mods by which profile includes them (via IncludedInProfile edges)
   $: modsByProfile = (() => {
@@ -327,7 +366,7 @@
     }
     return { map, orphaned };
   })();
-  $: canvasHeight = Math.max(360, Math.ceil(Math.max(modNodes.length, profileNodes.length, platformNodes.length) / 2) * 96 + 120);
+  $: canvasHeight = Math.max(420, Math.ceil(modNodes.length / 3) * 100 + 120);
   let positioned: PositionedNode[] = [];
   let simulation: any = null;
 
@@ -435,15 +474,15 @@
       } as PositionedNode;
     });
 
-    const d3Links = edges.map((e) => ({ source: e.from, target: e.to, ...e }));
+    const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
 
     if (simulation) simulation.stop();
 
     simulation = d3
       .forceSimulation<PositionedNode>(initializedNodes)
-      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(170))
-      .force("charge", d3.forceManyBody().strength(-400))
-      .force("collide", d3.forceCollide().radius(70))
+      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(140))
+      .force("charge", d3.forceManyBody().strength(-500))
+      .force("collide", d3.forceCollide().radius(55))
       .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
       .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
       .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
@@ -503,21 +542,17 @@
     <div class="empty error">{error}</div>
   {:else if graph}
     <div class="stats">
-      <div class="stat-card">
-        <span class="stat-value">{nodes.length}</span>
-        <span class="stat-label">Nodes</span>
+      <div class="stat-card accent">
+        <span class="stat-value">{modNodes.length}</span>
+        <span class="stat-label">Mods</span>
       </div>
       <div class="stat-card">
-        <span class="stat-value">{edges.length}</span>
-        <span class="stat-label">Edges</span>
+        <span class="stat-value">{displayEdges.length}</span>
+        <span class="stat-label">Dependencies</span>
       </div>
       <div class="stat-card" class:danger={missingEdges.length > 0}>
         <span class="stat-value">{missingEdges.length}</span>
-        <span class="stat-label">Missing deps</span>
-      </div>
-      <div class="stat-card accent">
-        <span class="stat-value">{byKind.Mod ?? 0}</span>
-        <span class="stat-label">Mods</span>
+        <span class="stat-label">Missing</span>
       </div>
       <div class="stat-card" class:danger={conflictEdges.length > 0}>
         <span class="stat-value">{conflictEdges.length}</span>
@@ -567,14 +602,14 @@
         on:dblclick={resetView}
       >
         <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="22" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="30" refY="3" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
           </marker>
-          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="22" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="30" refY="3" orient="auto" markerUnits="strokeWidth">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(239,68,68,.85)" />
           </marker>
         </defs>
-        {#each edges as edge}
+        {#each displayEdges as edge}
           <line
             class:danger-edge={edgeDanger(edge)}
             class:dimmed={selectedId && edge.from !== selectedId && edge.to !== selectedId}
@@ -586,6 +621,10 @@
           />
         {/each}
         {#each positioned as node}
+          {@const size = nodeSize(node)}
+          {@const half = size / 2}
+          {@const icon = nodeIconUrl(node)}
+          {@const isGhost = node.kind === "Missing" || node.ghost}
           <g
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
@@ -594,60 +633,65 @@
             tabindex="0"
             transform={`translate(${node.x}, ${node.y})`}
             on:mousedown={(e) => handleNodeMouseDown(e, node)}
+            on:click|stopPropagation={() => handleNodeClick(node)}
+            on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
           >
-            <circle r="6" />
-            <text x="10" y="4">{node.label.length > 22 ? node.label.slice(0, 21) + "…" : node.label}</text>
+            <rect x={-half} y={-half} width={size} height={size} rx="8" ry="8" />
+            {#if icon}
+              <clipPath id="clip-{node.id.replace(/[^a-zA-Z0-9]/g, '_')}">
+                <rect x={-half + 2} y={-half + 2} width={size - 4} height={size - 4} rx="6" ry="6" />
+              </clipPath>
+              <image
+                href={icon}
+                x={-half + 2}
+                y={-half + 2}
+                width={size - 4}
+                height={size - 4}
+                clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
+                preserveAspectRatio="xMidYMid slice"
+              />
+            {:else}
+              <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
+            {/if}
+            {#if isGhost}
+              <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
+            {:else}
+              <text class="node-label-text" y={half + 14} text-anchor="middle">{node.label.length > 18 ? node.label.slice(0, 17) + "…" : node.label}</text>
+              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" on:mousedown|stopPropagation={() => {}} on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+                <circle cx={half - 2} cy={-half + 2} r="8" />
+                <text x={half - 2} y={-half + 6} text-anchor="middle" class="remove-x">×</text>
+              </g>
+            {/if}
           </g>
         {/each}
       </svg>
     </section>
 
     <div class="graph-layout">
-      <section class="node-column">
-        <h3><Workflow size={16} /> Runtime</h3>
-        {#each platformNodes as node}
-          <button class="node-card kind-{node.kind}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
-            <span class="node-label">{node.label}</span>
-            <span class="node-meta">{node.kind}{node.version ? ` · ${node.version}` : ""}</span>
-          </button>
-        {/each}
-
-        <h3><Box size={16} /> Profiles</h3>
-        {#each profileNodes as node}
-          <button class="node-card kind-{node.kind}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
-            <span class="node-label">{node.label}</span>
-            <span class="node-meta">{node.id}</span>
-          </button>
-        {/each}
-      </section>
-
       <section class="node-column mods-column">
-        <h3><Box size={16} /> Mods by profile</h3>
+        <h3><Box size={16} /> Mods ({modNodes.length})</h3>
         {#if modNodes.length === 0}
           <div class="muted-box">No mod nodes yet.</div>
         {:else}
-          {#each [...modsByProfile.map.entries()] as [profile, mods]}
-            <h4 class="profile-group-title">{profile} ({mods.length})</h4>
-            <div class="mod-grid">
-              {#each mods as node}
-                <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
+          <div class="mod-grid">
+            {#each modNodes as node}
+              {@const icon = node.metadata?.icon_url ?? (node.metadata?.project_id ? `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon.png` : null)}
+              <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={depNodeIds.has(node.id)} on:click={() => (selectedId = node.id)}>
+                {#if icon}
+                  <img class="card-icon" src={icon} alt="" loading="lazy" />
+                {:else}
+                  <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                {/if}
+                <div class="card-text">
                   <span class="node-label">{node.label}</span>
-                  <span class="node-meta">{node.version ?? "unknown"} · {node.side}</span>
-                </button>
-              {/each}
-            </div>
-          {/each}
-          {#if modsByProfile.orphaned.length > 0}
-            <h4 class="profile-group-title orphaned">Unassigned ({modsByProfile.orphaned.length})</h4>
-            <div class="mod-grid">
-              {#each modsByProfile.orphaned as node}
-                <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} on:click={() => (selectedId = node.id)}>
-                  <span class="node-label">{node.label}</span>
-                  <span class="node-meta">{node.version ?? "unknown"} · {node.side}</span>
-                </button>
-              {/each}
-            </div>
-          {/if}
+                  <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}</span>
+                </div>
+                <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+                  <X size={14} />
+                </span>
+              </button>
+            {/each}
+          </div>
         {/if}
       </section>
 
@@ -660,6 +704,23 @@
             </div>
             <span class="tag">{selected.kind}</span>
           </div>
+
+          {#if selected.kind === "Missing"}
+            <div class="details-actions">
+              <button class="install-btn" on:click={() => installGhostNode(selected.id)} disabled={resolving}>
+                <Download size={16} />
+                {resolving ? "Installing..." : "Install from Modrinth"}
+              </button>
+            </div>
+          {:else}
+            <div class="details-actions">
+              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+                <X size={16} />
+                Remove mod
+              </button>
+            </div>
+          {/if}
+
           <div class="details-grid">
             <div><span>ID</span><code>{selected.id}</code></div>
             <div><span>Version</span><code>{selected.version ?? "—"}</code></div>
@@ -952,30 +1013,84 @@
     transition: opacity 120ms ease;
   }
 
-  .svg-node circle {
+  .svg-node rect {
     fill: #18181b;
     stroke: rgba(255,255,255,.28);
-    stroke-width: 1.4;
+    stroke-width: 1.6;
     transition: stroke 120ms ease, fill 120ms ease;
   }
 
-  .svg-node.selected circle,
-  .svg-node:hover circle {
+  .svg-node.selected rect,
+  .svg-node:hover rect {
     stroke: rgba(27,217,106,.85);
     fill: rgba(27,217,106,.18);
   }
 
-  .svg-node.tone-client circle { stroke: rgba(139,92,246,.7); }
-  .svg-node.tone-server circle { stroke: rgba(59,130,246,.7); }
-  .svg-node.tone-both circle { stroke: rgba(27,217,106,.65); }
-  .svg-node.tone-runtime circle { stroke: rgba(245,158,11,.7); }
-  .svg-node.tone-profile circle { stroke: rgba(96,165,250,.7); }
-  .svg-node.tone-ghost circle {
+  .svg-node.tone-client rect { stroke: rgba(139,92,246,.7); }
+  .svg-node.tone-server rect { stroke: rgba(59,130,246,.7); }
+  .svg-node.tone-both rect { stroke: rgba(27,217,106,.65); }
+  .svg-node.tone-runtime rect { stroke: rgba(245,158,11,.7); }
+  .svg-node.tone-profile rect { stroke: rgba(96,165,250,.7); }
+  .svg-node.tone-ghost rect {
     stroke: rgba(239,68,68,.85);
-    stroke-dasharray: 3 3;
+    stroke-dasharray: 4 3;
     fill: rgba(239,68,68,.08);
   }
-  .svg-node.tone-ghost text { fill: #fca5a5; }
+  .svg-node.tone-ghost .node-label-text { fill: #fca5a5; }
+  .svg-node.tone-ghost .fallback-letter { fill: #fca5a5; }
+
+  .svg-node .fallback-letter {
+    fill: #e5e7eb;
+    font-size: 16px;
+    font-weight: 900;
+    pointer-events: none;
+  }
+
+  .svg-node .node-label-text {
+    fill: #d1d5db;
+    font-size: 11px;
+    font-weight: 700;
+    pointer-events: none;
+  }
+
+  .svg-node .ghost-download {
+    fill: #fca5a5;
+    font-size: 10px;
+    font-weight: 700;
+    pointer-events: none;
+    cursor: pointer;
+  }
+
+  .svg-node.tone-ghost {
+    cursor: pointer;
+  }
+  .svg-node.tone-ghost:hover rect {
+    stroke: rgba(27,217,106,.85);
+    fill: rgba(27,217,106,.12);
+  }
+
+  .remove-btn {
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .svg-node:hover .remove-btn,
+  .svg-node.selected .remove-btn {
+    opacity: 1;
+  }
+  .remove-btn circle {
+    fill: rgba(239,68,68,.85);
+    stroke: none;
+  }
+  .remove-btn:hover circle {
+    fill: rgba(239,68,68,1);
+  }
+  .remove-btn .remove-x {
+    fill: #fff;
+    font-size: 13px;
+    font-weight: 900;
+    pointer-events: none;
+  }
 
   .svg-node text {
     fill: #e5e7eb;
@@ -1019,7 +1134,7 @@
 
   .graph-layout {
     display: grid;
-    grid-template-columns: 260px minmax(320px, 1fr) 360px;
+    grid-template-columns: minmax(320px, 1fr) 360px;
     gap: 16px;
     align-items: start;
   }
@@ -1084,6 +1199,67 @@
 
   .node-card.compact {
     margin-bottom: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .node-card.is-dep {
+    opacity: 0.7;
+    border-style: dashed;
+  }
+
+  .card-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: var(--bg-elevated);
+  }
+
+  .card-icon-fallback {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 900;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+
+  .card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .card-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    color: var(--text-muted);
+    opacity: 0;
+    transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .node-card:hover .card-remove,
+  .node-card.selected .card-remove {
+    opacity: 1;
+  }
+  .card-remove:hover {
+    color: #ef4444;
+    background: rgba(239,68,68,.12);
   }
 
   .node-card:hover,
@@ -1137,6 +1313,43 @@
     margin: 4px 0 0;
     font-size: 22px;
   }
+
+  .details-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .install-btn,
+  .remove-btn-panel {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-weight: 700;
+    font-size: 13px;
+    border: none;
+    cursor: pointer;
+    transition: filter 120ms ease;
+  }
+  .install-btn {
+    background: var(--accent-primary);
+    color: #fff;
+    flex: 1;
+  }
+  .install-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  .install-btn:disabled { opacity: .5; cursor: wait; }
+
+  .remove-btn-panel {
+    background: rgba(239,68,68,.12);
+    color: #ef4444;
+    border: 1px solid rgba(239,68,68,.3);
+  }
+  .remove-btn-panel:hover:not(:disabled) {
+    background: rgba(239,68,68,.2);
+  }
+  .remove-btn-panel:disabled { opacity: .5; cursor: wait; }
 
   .eyebrow {
     color: var(--text-muted);
@@ -1285,7 +1498,7 @@
   }
 
   /* Dep-tone node: amber/orange for auto-installed dependency mods */
-  .svg-node.tone-dep circle {
+  .svg-node.tone-dep rect {
     stroke: rgba(245, 158, 11, 0.7);
     fill: rgba(245, 158, 11, 0.08);
   }

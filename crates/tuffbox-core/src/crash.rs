@@ -1145,6 +1145,7 @@ mod tests {
                     file_id: None,
                     url: None,
                     path: None,
+                    icon_url: None,
                 },
                 version: "0.5.8".to_string(),
                 file_name: Some("sodium-fabric-mc1.20.1-0.5.8.jar".to_string()),

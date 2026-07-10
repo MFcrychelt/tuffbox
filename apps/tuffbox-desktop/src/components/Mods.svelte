@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { api } from "../lib/api";
   import {
     Search,
     Filter,
@@ -328,6 +329,47 @@
 
   let message: string | null = null;
 
+  // User state for mods (favorites, saved, ratings)
+  let userState: { favorites: Record<string, boolean>; saved: Record<string, boolean>; ratings: Record<string, number> } = {
+    favorites: {},
+    saved: {},
+    ratings: {},
+  };
+
+  async function loadUserState() {
+    if (!$projectPath) return;
+    try {
+      userState = await api.mods.getUserState($projectPath);
+    } catch {
+      userState = { favorites: {}, saved: {}, ratings: {} };
+    }
+  }
+
+  async function patchUserState(modId: string, patch: { favorite?: boolean; saved?: boolean; rating?: number }) {
+    if (!$projectPath) return;
+    try {
+      userState = await api.mods.setUserState(modId, patch, $projectPath);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function toggleFavorite(modId: string) {
+    const current = userState.favorites[modId] ?? false;
+    patchUserState(modId, { favorite: !current });
+  }
+
+  function toggleSaved(modId: string) {
+    const current = userState.saved[modId] ?? false;
+    patchUserState(modId, { saved: !current });
+  }
+
+  function cycleRating(modId: string) {
+    const current = userState.ratings[modId] ?? 0;
+    const next = current >= 5 ? 0 : current + 1;
+    patchUserState(modId, { rating: next });
+  }
+
   // Change plan preview before install
   let planPreviewOpen = false;
   let planPreviewMod: SearchResult | null = null;
@@ -375,7 +417,7 @@
   // instead of a hand-maintained list, so it never goes stale as new
   // Minecraft versions ship.
   let gameVersions: string[] = [];
-  const loaders = ["Fabric", "Forge", "NeoForge"];
+  const loaders = ["Fabric", "Forge", "NeoForge", "Quilt"];
   const categories = [
     "Adventure", "Cursed", "Decoration", "Economy", "Equipment", "Food", "Game Mechanics", "Library",
     "Magic", "Management", "Minigame", "Mobs", "Optimization", "Social", "Storage", "Technology",
@@ -411,13 +453,17 @@
       mods = await invoke("list_mods", { path: $projectPath });
       lastLoadedPath = $projectPath;
       brokenIcons = new Set();
-      await hydrateMissingIcons();
-      await refreshUpdateDots();
     } catch (e) {
       error = String(e);
-    } finally {
       loading = false;
+      return;
     }
+    // Render the list immediately. The Modrinth calls below (icon hydration +
+    // update checks) can be slow or fail offline, so they run in the
+    // background instead of blocking the spinner forever.
+    loading = false;
+    hydrateMissingIcons().catch(() => {});
+    refreshUpdateDots().catch(() => {});
   }
 
   // Cross-references the latest available Modrinth versions with the installed
@@ -474,6 +520,19 @@
   async function openAddModal() {
     addOpen = true;
     error = null;
+    await initAddFilters();
+  }
+
+  async function initAddFilters() {
+    if (!$projectPath) return;
+    try {
+      const info: any = await invoke("validate_project", { path: $projectPath });
+      filterLoader = info.loaderKind;
+      filterGameVersion = info.minecraftVersion;
+    } catch {
+      // keep defaults
+    }
+    await loadUserState();
     await searchMods();
   }
 
@@ -1028,9 +1087,9 @@
                   <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                 </button>
                 <div class="quick-actions">
-                  <button class="qa" title="Favorite"><Heart size={15} /></button>
-                  <button class="qa" title="Save"><Bookmark size={15} /></button>
-                  <button class="qa" title="Rate"><Star size={15} /></button>
+                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}><Heart size={15} /></button>
+                  <button class="qa" class:active={userState.saved[result.id]} title="Save" on:click|stopPropagation={() => toggleSaved(result.id)}><Bookmark size={15} /></button>
+                  <button class="qa" class:active={(userState.ratings[result.id] ?? 0) > 0} title="Rate: {userState.ratings[result.id] ?? 0}/5" on:click|stopPropagation={() => cycleRating(result.id)}><Star size={15} />{#if (userState.ratings[result.id] ?? 0) > 0}<span class="rating-num">{userState.ratings[result.id]}</span>{/if}</button>
                 </div>
               </div>
               <div class="result-footer">
@@ -1924,6 +1983,8 @@
     transform: none;
   }
   .qa:hover { color: var(--text-primary); border-color: rgba(27,217,106,.35); }
+  .qa.active { color: var(--accent-primary); border-color: rgba(27,217,106,.5); background: rgba(27,217,106,.08); }
+  .rating-num { font-size: 11px; font-weight: 700; margin-left: 2px; }
 
   .result-footer {
     grid-area: footer;
