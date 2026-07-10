@@ -65,6 +65,7 @@
     if (!force && lastLoadedPath === $projectPath && graph) return;
     loading = true;
     error = null;
+    brokenIcons = new Set();
     try {
       const raw: any = await invoke("get_graph", { path: $projectPath });
       graph = {
@@ -74,6 +75,9 @@
       selectedId = graph.nodes.find((n) => n.kind === "Mod")?.id ?? graph.nodes[0]?.id ?? null;
       await loadChangePlan();
       lastLoadedPath = $projectPath;
+      // Fire-and-forget: fill in any missing icon URLs from Modrinth
+      // without blocking the graph render. Improves over time.
+      hydrateMissingIcons().catch(() => {});
     } catch (e) {
       error = String(e);
     } finally {
@@ -83,6 +87,42 @@
 
   function nodeById(id: string) {
     return graph?.nodes.find((n) => n.id === id) ?? null;
+  }
+
+  // Track which nodes have a broken icon so we can fall back to a letter avatar
+  let brokenIcons = new Set<string>();
+
+  function markIconBroken(id: string) {
+    if (!brokenIcons.has(id)) {
+      brokenIcons = new Set([...brokenIcons, id]);
+    }
+  }
+
+  // Hydrate icons for Mod nodes that don't have icon_url in metadata.
+  // Some mods (e.g. local jars, older manifests) lack the cached icon URL
+  // even though we know their Modrinth project id. Ask the backend to
+  // fetch the real icon URL from Modrinth's project metadata.
+  async function hydrateMissingIcons() {
+    if (!graph) return;
+    const missing = graph.nodes.filter(
+      (n) => n.kind === "Mod" && !n.metadata?.icon_url && n.metadata?.project_id
+    );
+    if (missing.length === 0) return;
+    await Promise.all(
+      missing.map(async (n) => {
+        try {
+          const url: string | null = await invoke("get_modrinth_project_icon", {
+            projectId: n.metadata!.project_id,
+          });
+          if (url) {
+            n.metadata = { ...(n.metadata ?? {}), icon_url: url };
+            graph = graph ? { ...graph } : graph;
+          }
+        } catch {
+          // leave the letter-avatar fallback in place
+        }
+      })
+    );
   }
 
   function point(id: string) {
@@ -111,8 +151,14 @@
   }
 
   function nodeIconUrl(node: PositionedNode): string | null {
+    if (brokenIcons.has(node.id)) return null;
     if (node.metadata?.icon_url) return node.metadata.icon_url;
-    if (node.metadata?.project_id) return `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon.png`;
+    // Don't hardcode .png — Modrinth serves icons in whatever format the
+    // project uploaded (webp, jpeg, etc). Use the project endpoint via
+    // hydrateMissingIcons() to get the real URL.
+    if (node.metadata?.project_id) {
+      return `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon`;
+    }
     return null;
   }
 
@@ -146,7 +192,46 @@
   async function installGhostNode(nodeId: string) {
     if (!$projectPath) return;
     const slug = modIdFromNode(nodeId);
-    await previewModrinthDep(slug);
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      const installed: string[] = await invoke("install_graph_dep", {
+        path: $projectPath,
+        modId: slug,
+      });
+      if (installed.length > 0) {
+        message = `Installed ${slug}${installed.length > 1 ? ` (+${installed.length - 1} transitive deps)` : ""}`;
+      } else {
+        message = `${slug} is already installed.`;
+      }
+      await load(true);
+    } catch (e) {
+      // Fall back to the preview dialog if direct install fails
+      const slug2 = modIdFromNode(nodeId);
+      await previewModrinthDep(slug2);
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
+  }
+
+  async function downloadMissingFiles() {
+    if (!$projectPath) return;
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      const downloaded: string[] = await invoke("download_missing_files", { path: $projectPath });
+      message = downloaded.length
+        ? `Downloaded ${downloaded.length} file(s): ${downloaded.join(", ")}`
+        : "All mod files are already on disk.";
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      resolving = false;
+    }
   }
 
   function handleNodeClick(node: PositionedNode) {
@@ -649,6 +734,7 @@
                 height={size - 4}
                 clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                 preserveAspectRatio="xMidYMid slice"
+                on:error={() => markIconBroken(node.id)}
               />
             {:else}
               <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
@@ -675,10 +761,10 @@
         {:else}
           <div class="mod-grid">
             {#each modNodes as node}
-              {@const icon = node.metadata?.icon_url ?? (node.metadata?.project_id ? `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon.png` : null)}
+              {@const icon = !brokenIcons.has(node.id) ? (node.metadata?.icon_url ?? (node.metadata?.project_id ? `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon` : null)) : null}
               <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={depNodeIds.has(node.id)} on:click={() => (selectedId = node.id)}>
                 {#if icon}
-                  <img class="card-icon" src={icon} alt="" loading="lazy" />
+                  <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => markIconBroken(node.id)} />
                 {:else}
                   <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}

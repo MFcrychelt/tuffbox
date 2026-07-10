@@ -2985,6 +2985,47 @@ async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, Strin
     .map_err(|e| e.to_string())?
 }
 
+/// Installs a single missing dependency from the graph. The `mod_id` can be
+/// either a Modrinth project ID (e.g. "AANobbMI") or a slug (e.g. "malilib").
+/// Used by the graph "Install" button on ghost/missing nodes.
+#[tauri::command(rename_all = "camelCase")]
+async fn install_graph_dep(path: String, mod_id: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        // Skip if already installed (by slug or project_id)
+        if manifest.mods.iter().any(|m| m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id.as_str())) {
+            return Ok(Vec::new());
+        }
+        auto_snapshot(&manifest_path, "install-graph-dep").map_err(|e| e.to_string())?;
+        // Recursive: install the dep + all its transitive dependencies
+        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto");
+        if installed.is_empty() {
+            return Err(format!("Failed to install dependency: not found on Modrinth or already installed"));
+        }
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods(&manifest_path, &manifest);
+        Ok(installed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Downloads files for mods that are in the manifest but whose jar/resource
+/// file is missing from disk. Returns the list of mod IDs that were
+/// successfully downloaded.
+#[tauri::command(rename_all = "camelCase")]
+async fn download_missing_files(path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let report = download_project_mods(&manifest_path, &manifest);
+        Ok(report.downloaded)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_crash_diagnosis(
     path: String,
@@ -5084,6 +5125,8 @@ find_dependents_on_class,
             apply_resolve_action,
             apply_resolve_change_plan,
             resolve_missing_dependencies,
+            install_graph_dep,
+            download_missing_files,
             get_crash_diagnosis,
             create_crash_fix_plan,
             apply_crash_fix_plan,

@@ -185,6 +185,11 @@ impl ContentProvider for ModrinthProvider {
         // mod nodes use stable human-readable slugs (`mod:sodium`, `mod:fabric-api`).
         // Normalizing here keeps missing-dependency diagnostics consistent across
         // CLI, desktop UI and imported manifests.
+        //
+        // If the network is flaky and get_project fails, we keep the raw
+        // project_id as the target. The graph builder handles both: slugs
+        // match installed mods directly, raw project_ids are resolved via
+        // project_id_to_slug. Either way the edge still works.
         for dependency in &mut dependencies {
             if let Ok(project) = self.get_project(&dependency.target) {
                 dependency.target = project.slug;
