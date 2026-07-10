@@ -11,7 +11,7 @@
 //! manifest declares.
 
 use crate::manifest::{ContentType, ModSpec, ProjectManifest, SourceKind};
-use crate::mc_install::{download_with_sha1, sha1_file, InstallError};
+use crate::mc_install::{sha1_file, InstallError};
 use crate::provider::ModrinthProvider;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -70,6 +70,20 @@ pub fn materialize_mod_file(
     instance_dir: &Path,
     module: &ModSpec,
 ) -> Result<MaterializeOutcome, ModFileError> {
+    materialize_mod_file_with_progress(
+        instance_dir,
+        module,
+        &crate::mc_install::ProgressCallback::new(),
+    )
+}
+
+/// Like `materialize_mod_file`, but invokes `progress` with per-chunk
+/// byte progress as the file is downloaded.
+pub fn materialize_mod_file_with_progress(
+    instance_dir: &Path,
+    module: &ModSpec,
+    progress: &crate::mc_install::ProgressCallback,
+) -> Result<MaterializeOutcome, ModFileError> {
     // Local/"drop-in" mods are expected to already exist in the folder; we
     // don't have anywhere to download them from.
     if matches!(module.source.kind, SourceKind::Local) {
@@ -100,7 +114,8 @@ pub fn materialize_mod_file(
         }
     }
 
-    download_with_sha1(url, &target, expected_sha1)?;
+    crate::mc_install::download_with_progress(url, &target, expected_sha1, &module.id, progress)
+        .map_err(|e| ModFileError::Install(e))?;
     Ok(MaterializeOutcome::Downloaded)
 }
 
@@ -130,23 +145,53 @@ pub struct ModSyncFailure {
 /// was added to the manifest through some path that didn't already
 /// download it, the game will still see the right files before Java
 /// starts.
+///
+/// Downloads run in parallel via rayon (up to the global thread pool size)
+/// using the streaming downloader — each file is written to a `.part` temp
+/// file and atomically renamed on success, so a failed or interrupted
+/// download never leaves a half-written jar in the mods folder.
+///
+/// If `progress` is provided, it is invoked with `(mod_id, bytes_received,
+/// total_bytes)` as each chunk is received, enabling real-time UI progress
+/// bars without buffering whole files in memory.
 pub fn ensure_project_mods_downloaded(
     manifest: &ProjectManifest,
     instance_dir: &Path,
 ) -> ModSyncReport {
-    let mut report = ModSyncReport::default();
-    for module in &manifest.mods {
-        match materialize_mod_file(instance_dir, module) {
-            Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
-            Ok(MaterializeOutcome::AlreadyPresent) => report.already_present.push(module.id.clone()),
-            Ok(MaterializeOutcome::Skipped) => report.skipped.push(module.id.clone()),
-            Err(e) => report.failed.push(ModSyncFailure {
-                mod_id: module.id.clone(),
-                error: e.to_string(),
-            }),
-        }
-    }
-    report
+    ensure_project_mods_downloaded_with_progress(manifest, instance_dir, &crate::mc_install::ProgressCallback::new())
+}
+
+/// Same as `ensure_project_mods_downloaded`, but with a progress callback
+/// that fires per-chunk during each download.
+pub fn ensure_project_mods_downloaded_with_progress(
+    manifest: &ProjectManifest,
+    instance_dir: &Path,
+    progress: &crate::mc_install::ProgressCallback,
+) -> ModSyncReport {
+    use rayon::prelude::*;
+    use std::sync::Mutex;
+
+    let report = Mutex::new(ModSyncReport::default());
+    let progress = progress.clone();
+
+    manifest
+        .mods
+        .par_iter()
+        .for_each(|module| {
+            let outcome = materialize_mod_file_with_progress(instance_dir, module, &progress);
+            let mut report = report.lock().unwrap();
+            match outcome {
+                Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
+                Ok(MaterializeOutcome::AlreadyPresent) => report.already_present.push(module.id.clone()),
+                Ok(MaterializeOutcome::Skipped) => report.skipped.push(module.id.clone()),
+                Err(e) => report.failed.push(ModSyncFailure {
+                    mod_id: module.id.clone(),
+                    error: e.to_string(),
+                }),
+            }
+        });
+
+    report.into_inner().unwrap()
 }
 
 /// Removes mod files from `mods_dir` that are no longer declared for the

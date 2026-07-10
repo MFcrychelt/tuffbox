@@ -6,7 +6,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use thiserror::Error;
 
@@ -130,6 +130,44 @@ impl InstallProgress {
         if let Ok(mut f) = fs::OpenOptions::new().append(true).create(true).open(&self.log_path) {
             let _ = writeln!(f, "{msg}");
         }
+    }
+}
+
+/// Per-file byte progress callback: `(mod_or_file_id, bytes_received, total_bytes)`.
+/// Used by streaming downloads to report real-time progress to the UI without
+/// buffering the whole file in memory.
+pub type DownloadProgressFn = dyn Fn(&str, u64, u64) + Send + Sync;
+
+/// Thread-safe wrapper around an optional progress callback so it can be
+/// shared across rayon worker threads during parallel downloads.
+/// Internally wraps the closure in `Arc` so the outer `ProgressCallback`
+/// is cheaply cloneable.
+#[derive(Clone)]
+pub struct ProgressCallback(pub Arc<Option<Box<DownloadProgressFn>>>);
+
+impl std::fmt::Debug for ProgressCallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProgressCallback").finish()
+    }
+}
+
+impl ProgressCallback {
+    pub fn new() -> Self {
+        Self(Arc::new(None))
+    }
+
+    pub fn with<F: Fn(&str, u64, u64) + Send + Sync + 'static>(f: F) -> Self {
+        Self(Arc::new(Some(Box::new(f))))
+    }
+
+    pub fn call(&self, id: &str, received: u64, total: u64) {
+        if let Some(cb) = self.0.as_ref() {
+            cb(id, received, total);
+        }
+    }
+
+    pub fn is_some(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -646,6 +684,10 @@ fn parse_maven_name(name: &str) -> Option<(String, String, String, Option<String
     ))
 }
 
+/// Downloads a file to `path` and verifies its SHA1 if `expected_sha1` is
+/// provided. Uses streaming I/O (no full-file memory buffer) and atomic
+/// writes (downloads to `.part`, renames on success) so a failed or
+/// interrupted download never leaves a half-written file at `path`.
 pub fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -> Result<(), InstallError> {
     if path.exists() {
         if let Some(expected) = expected_sha1 {
@@ -658,23 +700,52 @@ pub fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -
         }
     }
 
-    let bytes = crate::http::get_bytes(url)?;
+    crate::http::download_streaming(url, path, expected_sha1, None::<Box<dyn FnMut(u64, u64) + Send>>)
+        .map_err(|e| InstallError::MissingDownload(format!("{} (url: {})", e, url)))?;
 
-    if let Some(expected) = expected_sha1 {
-        let actual = format!("{:x}", sha1::Sha1::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(InstallError::MissingDownload(format!(
-                "sha1 mismatch for {}",
-                path.display()
-            )));
+    Ok(())
+}
+
+/// Like `download_with_sha1`, but invokes `progress` with
+/// `(bytes_received, total_bytes)` as each chunk is received. The callback
+/// fires on the downloading thread, so the caller is responsible for any
+/// thread-safety (e.g. `Arc<AtomicU64>` or a channel).
+pub fn download_with_progress(
+    url: &str,
+    path: &Path,
+    expected_sha1: Option<&str>,
+    id: &str,
+    progress: &ProgressCallback,
+) -> Result<(), InstallError> {
+    if path.exists() {
+        if let Some(expected) = expected_sha1 {
+            let existing = sha1_file(path)?;
+            if existing.eq_ignore_ascii_case(expected) {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
         }
     }
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let id_owned = id.to_string();
+    let cb_arc = progress.0.clone();
+    let mut stream_cb: Option<Box<dyn FnMut(u64, u64) + Send>> = None;
+    if cb_arc.is_some() {
+        let id_for_cb = id_owned.clone();
+        // Arc<Box<dyn Fn + Send + Sync>> is itself Send + Sync. We
+        // move the Arc clone into the closure, then call the inner Fn
+        // through the Arc reference.
+        let c_arc_for_cb = cb_arc.clone();
+        stream_cb = Some(Box::new(move |received: u64, total: u64| {
+            if let Some(cb) = c_arc_for_cb.as_ref() {
+                cb(&id_for_cb, received, total);
+            }
+        }));
     }
-    let mut file = fs::File::create(path)?;
-    file.write_all(&bytes)?;
+
+    crate::http::download_streaming(url, path, expected_sha1, stream_cb)
+        .map_err(|e| InstallError::MissingDownload(format!("{} (url: {})", e, url)))?;
     Ok(())
 }
 
