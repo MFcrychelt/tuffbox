@@ -81,10 +81,12 @@
   let mutating = false;
   let filter = "";
   let sideFilter = "all";
-  let contentFilter = "mod"; // mod, resourcepack, datapack, shader
+  let contentFilter = "mod"; // mod, resourcepack, datapack, shader, favorites, list:<name>
   let error: string | null = null;
   let lastLoadedPath: string | null = null;
   let brokenIcons = new Set<string>();
+  let savedMods: SearchResult[] = [];
+  let savedModsLoading = false;
 
   let addOpen = false;
   let searchQuery = "";
@@ -135,6 +137,55 @@
     const months = Math.floor(days / 30);
     if (months < 12) return `${months} month${months > 1 ? "s" : ""} ago`;
     return `${Math.floor(months / 12)} year${months >= 24 ? "s" : ""} ago`;
+  }
+
+  function projectToSearchResult(p: Record<string, unknown>): SearchResult {
+    return {
+      id: String(p.id ?? ""),
+      slug: String(p.slug ?? ""),
+      name: String(p.name ?? ""),
+      description: String(p.description ?? ""),
+      projectType: String(p.projectType ?? "mod"),
+      iconUrl: (p.iconUrl as string | null | undefined) ?? null,
+      clientSide: (p.clientSide as string | null | undefined) ?? null,
+      serverSide: (p.serverSide as string | null | undefined) ?? null,
+      author: (p.author as string | null | undefined) ?? null,
+      downloads: (p.downloads as number | null | undefined) ?? null,
+      follows: (p.follows as number | null | undefined) ?? null,
+      dateModified: (p.dateModified as string | null | undefined) ?? null,
+      categories: (p.categories as string[] | undefined) ?? [],
+    };
+  }
+
+  function isSavedViewFilter(filter: string): boolean {
+    return filter === "favorites" || filter.startsWith("list:");
+  }
+
+  function modIconLookupKey(mod: ModRow): string | null {
+    if (mod.projectId) return mod.projectId;
+    if (mod.source === "modrinth" && mod.id) return mod.id;
+    return null;
+  }
+
+  async function resolveIconForMod(mod: ModRow) {
+    const key = modIconLookupKey(mod);
+    if (!key) return;
+    try {
+      const url: string | null = await invoke("get_modrinth_project_icon", { projectId: key });
+      if (url) {
+        mods = mods.map((x) => (x.id === mod.id ? { ...x, iconUrl: url } : x));
+        brokenIcons.delete(mod.id);
+        brokenIcons = brokenIcons;
+      }
+    } catch {
+      // keep letter-avatar fallback
+    }
+  }
+
+  async function handleIconError(mod: ModRow) {
+    brokenIcons.add(mod.id);
+    brokenIcons = brokenIcons;
+    await resolveIconForMod(mod);
   }
 
   function humanize(s: string): string {
@@ -337,7 +388,6 @@
   };
 
   // Which list the user is currently viewing in the Lists panel
-  let activeListName: string | null = null;
   // Dropdown open state for the save button (per-mod)
   let saveDropdownFor: string | null = null;
   // New list name input
@@ -361,9 +411,9 @@
     }
   }
 
-  function toggleFavorite(modId: string) {
+  async function toggleFavorite(modId: string) {
     const current = userState.favorites[modId] ?? false;
-    patchUserState(modId, { favorite: !current });
+    await patchUserState(modId, { favorite: !current });
   }
 
   function toggleSaved(modId: string) {
@@ -400,7 +450,9 @@
     if (!$projectPath) return;
     try {
       userState = await api.mods.deleteList(name, $projectPath);
-      if (activeListName === name) activeListName = null;
+      if (contentFilter === `list:${name}`) {
+        contentFilter = "mod";
+      }
     } catch (e) {
       error = String(e);
     }
@@ -410,7 +462,22 @@
     if (!$projectPath || !newName.trim() || oldName === newName) return;
     try {
       userState = await api.mods.renameList(oldName, newName.trim(), $projectPath);
-      if (activeListName === oldName) activeListName = newName.trim();
+      if (contentFilter === `list:${oldName}`) {
+        contentFilter = `list:${newName.trim()}`;
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function createListAndAdd(name: string, modId: string) {
+    const trimmed = name.trim();
+    if (!$projectPath || !trimmed) return;
+    try {
+      userState = await api.mods.createList(trimmed, $projectPath);
+      userState = await api.mods.addToList(trimmed, modId, $projectPath);
+      newListName = "";
+      saveDropdownFor = null;
     } catch (e) {
       error = String(e);
     }
@@ -536,9 +603,12 @@
     loading = true;
     error = null;
     try {
-      mods = await invoke("list_mods", { path: $projectPath });
+      // Sync folders first so manually dropped jars get identified via Modrinth
+      // hash lookup and receive projectId/icon metadata before we render.
+      mods = await invoke("sync_mods_folder", { path: $projectPath });
       lastLoadedPath = $projectPath;
       brokenIcons = new Set();
+      await loadUserState();
     } catch (e) {
       error = String(e);
       loading = false;
@@ -550,6 +620,9 @@
     loading = false;
     hydrateMissingIcons().catch(() => {});
     refreshUpdateDots().catch(() => {});
+    if (isSavedViewFilter(contentFilter)) {
+      loadSavedModsView().catch(() => {});
+    }
   }
 
   // Cross-references the latest available Modrinth versions with the installed
@@ -571,22 +644,45 @@
   // icon so the list isn't all letter-avatars.
   async function hydrateMissingIcons() {
     if (!$projectPath) return;
-    const missing = mods.filter((m) => !m.iconUrl && m.projectId);
+    const missing = mods.filter((m) => {
+      if (brokenIcons.has(m.id)) return !!modIconLookupKey(m);
+      if (m.iconUrl) return false;
+      return !!modIconLookupKey(m);
+    });
     if (missing.length === 0) return;
-    await Promise.all(
-      missing.map(async (m) => {
-        try {
-          const url: string | null = await invoke("get_modrinth_project_icon", {
-            projectId: m.projectId,
-          });
-          if (url) {
-            mods = mods.map((x) => (x.id === m.id ? { ...x, iconUrl: url } : x));
+    await Promise.all(missing.map((m) => resolveIconForMod(m)));
+  }
+
+  async function loadSavedModsView() {
+    const ids =
+      contentFilter === "favorites"
+        ? Object.entries(userState.favorites)
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+        : contentFilter.startsWith("list:")
+          ? (userState.lists[contentFilter.slice(5)] ?? [])
+          : [];
+    if (ids.length === 0) {
+      savedMods = [];
+      savedModsLoading = false;
+      return;
+    }
+    savedModsLoading = true;
+    try {
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const project = await invoke<Record<string, unknown>>("get_modrinth_project", { projectId: id });
+            return projectToSearchResult(project);
+          } catch {
+            return null;
           }
-        } catch {
-          // leave the letter-avatar fallback in place
-        }
-      })
-    );
+        })
+      );
+      savedMods = results.filter((r): r is SearchResult => r !== null);
+    } finally {
+      savedModsLoading = false;
+    }
   }
 
   function contentTypeForFilter(filter: string): string {
@@ -601,6 +697,9 @@
   function switchContentFilter(next: string) {
     contentFilter = next;
     if (addOpen) searchMods();
+    if (isSavedViewFilter(next)) {
+      loadSavedModsView().catch(() => {});
+    }
   }
 
   async function openAddModal() {
@@ -803,16 +902,24 @@
     return (preview?.dependencies ?? []).filter((dep) => depKind(dep).includes("optional"));
   }
 
-  $: filtered = mods.filter((m) => {
-    const q = filter.toLowerCase();
-    const matchesText =
-      m.name.toLowerCase().includes(q) ||
-      m.id.toLowerCase().includes(q) ||
-      m.version.toLowerCase().includes(q);
-    const matchesSide = sideFilter === "all" || m.side === sideFilter;
-    const matchesContentType = (m.contentType ?? "mod") === contentFilter;
-    return matchesText && matchesSide && matchesContentType;
-  });
+  $: filtered = isSavedViewFilter(contentFilter)
+    ? []
+    : mods.filter((m) => {
+        const q = filter.toLowerCase();
+        const matchesText =
+          m.name.toLowerCase().includes(q) ||
+          m.id.toLowerCase().includes(q) ||
+          m.version.toLowerCase().includes(q);
+        const matchesSide = sideFilter === "all" || m.side === sideFilter;
+        const matchesContentType = (m.contentType ?? "mod") === contentFilter;
+        return matchesText && matchesSide && matchesContentType;
+      });
+
+  $: listTabNames = Object.keys(userState.lists).sort((a, b) => a.localeCompare(b));
+
+  $: if (isSavedViewFilter(contentFilter)) {
+    void loadSavedModsView();
+  }
 
   $: selectedResults = searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result));
 
@@ -833,6 +940,15 @@
       <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
       <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
       <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => switchContentFilter("shader")}>Shaders</button>
+      <button class={contentFilter === "favorites" ? "primary" : "secondary"} on:click={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
+        <Heart size={14} /> Favorites
+      </button>
+      {#each listTabNames as listName}
+        <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} on:click={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
+          <Bookmark size={14} /> {listName}
+          <span class="tab-count">{userState.lists[listName]?.length ?? 0}</span>
+        </button>
+      {/each}
     </div>
     <div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
       <div class="search" style="flex: 1;">
@@ -846,12 +962,14 @@
         </button>
         <button on:click={openAddModal} disabled={!$projectPath || mutating}>
           <Plus size={16} />
-          Add {contentFilter}
+          Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
         </button>
         <button class="secondary" on:click={async () => {
           loading = true;
           try {
             mods = await invoke("sync_mods_folder", { path: $projectPath });
+            brokenIcons = new Set();
+            hydrateMissingIcons().catch(() => {});
           } catch(e) {
             error = String(e);
           } finally {
@@ -873,10 +991,12 @@
   </div>
 
   <div class="quick-filters" aria-label="Side filters">
+    {#if !isSavedViewFilter(contentFilter)}
     <button class:active={sideFilter === "all"} on:click={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
     <button class:active={sideFilter === "both"} on:click={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
     <button class:active={sideFilter === "client"} on:click={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
     <button class:active={sideFilter === "server"} on:click={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+    {/if}
   </div>
 
   {#if recommendations.length > 0}
@@ -909,55 +1029,7 @@
     </div>
   {/if}
 
-  <!-- Build Lists panel: manage named mod collections -->
-  <div class="lists-panel">
-    <div class="lists-header">
-      <h3><Bookmark size={16} /> Build Lists ({Object.keys(userState.lists).length})</h3>
-      <button class="secondary mini" on:click={() => createList(prompt("List name:") || "")} disabled={!$projectPath} title="Create a new build list">
-        <Plus size={12} /> New
-      </button>
-    </div>
-    {#if Object.keys(userState.lists).length === 0}
-      <p class="lists-empty">No build lists yet. Click the bookmark icon on any mod to add it to a list.</p>
-    {:else}
-      <div class="lists-list">
-        {#each Object.entries(userState.lists) as [listName, modIds]}
-          <div class="list-row" class:active={activeListName === listName}>
-            <button class="list-toggle" on:click={() => (activeListName = activeListName === listName ? null : listName)}>
-              <strong>{listName}</strong>
-              <span class="list-count">{modIds.length} mod{modIds.length === 1 ? '' : 's'}</span>
-            </button>
-            <div class="list-actions">
-              <button class="secondary mini" on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || modIds.length === 0} title="Install all mods from this list">
-                <ArrowDown size={12} /> {installingFromList === listName ? "..." : "Install"}
-              </button>
-              <button class="icon-btn mini" on:click={() => { const n = prompt("Rename list:", listName); if (n) renameList(listName, n); }} title="Rename">
-                <Filter size={12} />
-              </button>
-              <button class="icon-btn mini danger" on:click={() => { if (confirm(`Delete list "${listName}"?`)) deleteList(listName); }} title="Delete">
-                <Trash2 size={12} />
-              </button>
-            </div>
-          </div>
-          {#if activeListName === listName}
-            <div class="list-detail">
-              {#each modIds as mid}
-                <div class="list-mod-row">
-                  <span class="list-mod-id">{mid}</span>
-                  <button class="icon-btn mini danger" on:click={() => removeFromList(listName, mid)} title="Remove from list">
-                    <X size={12} />
-                  </button>
-                </div>
-              {/each}
-              {#if modIds.length === 0}
-                <p class="lists-empty">List is empty.</p>
-              {/if}
-            </div>
-          {/if}
-        {/each}
-      </div>
-    {/if}
-  </div>
+  <!-- Build Lists panel removed: lists now appear as tabs next to Shaders -->
 
   {#if updateList.length > 0}
     <div class="update-panel">
@@ -1003,6 +1075,58 @@
     <div class="loading">Loading mods...</div>
   {:else if !$projectPath}
     <div class="empty">Open a project to manage mods.</div>
+  {:else if isSavedViewFilter(contentFilter)}
+    {#if savedModsLoading}
+      <div class="loading">Loading saved projects...</div>
+    {:else if savedMods.length === 0}
+      <div class="empty">
+        {#if contentFilter === "favorites"}
+          No favorites yet. Use the heart icon in Add Modrinth to save projects here.
+        {:else}
+          This list is empty. Use the bookmark icon in Add Modrinth to add projects.
+        {/if}
+      </div>
+    {:else}
+      <div class="saved-toolbar">
+        {#if contentFilter.startsWith("list:")}
+          {@const listName = contentFilter.slice(5)}
+          <button on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
+            <ArrowDown size={16} /> {installingFromList === listName ? "Installing..." : `Install all from "${listName}"`}
+          </button>
+          <button class="secondary" on:click={() => { const n = prompt("Rename list:", listName); if (n) renameList(listName, n); }}>Rename</button>
+          <button class="secondary danger" on:click={() => { if (confirm(`Delete list "${listName}"?`)) deleteList(listName); }}>Delete list</button>
+        {/if}
+      </div>
+      <div class="saved-list">
+        {#each savedMods as result}
+          <article class="saved-card" class:installed={isInstalled(result)}>
+            <div class="result-icon">
+              {#if result.iconUrl}
+                <img src={result.iconUrl} alt="" loading="lazy" />
+              {:else}
+                <span>{iconFallback(result.name)}</span>
+              {/if}
+            </div>
+            <div class="saved-main">
+              <div class="installed-title">
+                <strong>{result.name}</strong>
+                <code>{result.slug}</code>
+              </div>
+              <p class="result-desc">{result.description}</p>
+            </div>
+            <div class="saved-actions">
+              <button on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Install"}
+              </button>
+              <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click={() => toggleFavorite(result.id)}><Heart size={15} /></button>
+              {#if contentFilter.startsWith("list:")}
+                <button class="qa danger" title="Remove from list" on:click={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
+              {/if}
+            </div>
+          </article>
+        {/each}
+      </div>
+    {/if}
   {:else if filtered.length === 0}
     <div class="empty">No mods found.</div>
   {:else}
@@ -1014,7 +1138,7 @@
               <span class="update-dot" title="Update available"></span>
             {/if}
             {#if mod.iconUrl && !brokenIcons.has(mod.id)}
-              <img src={mod.iconUrl} alt="" loading="lazy" on:error={() => { brokenIcons.add(mod.id); brokenIcons = brokenIcons; }} />
+              <img src={mod.iconUrl} alt="" loading="lazy" on:error={() => handleIconError(mod)} />
             {:else}
               <span>{iconFallback(mod.name)}</span>
             {/if}
@@ -1077,6 +1201,10 @@
         <button class:active={contentFilter === "resourcepack"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
         <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
         <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
+        <button class:active={contentFilter === "favorites"} on:click={() => switchContentFilter("favorites")}>Favorites</button>
+        {#each listTabNames as listName}
+          <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
+        {/each}
       </div>
 
       <div class="browser-layout">
@@ -1197,6 +1325,65 @@
 
           {#if searchLoading}
             <div class="loading compact">Loading Modrinth projects...</div>
+          {:else if isSavedViewFilter(contentFilter)}
+            {#if savedModsLoading}
+              <div class="loading compact">Loading saved projects...</div>
+            {:else if savedMods.length === 0}
+              <div class="empty compact">
+                {#if contentFilter === "favorites"}
+                  No favorites yet.
+                {:else}
+                  This list is empty.
+                {/if}
+              </div>
+            {:else}
+              <div class="results {viewMode}">
+                {#each savedMods as result}
+                  <article class="result-card" class:installed={isInstalled(result)} class:list={viewMode === "list"}>
+                    <div class="result-icon">
+                      {#if result.iconUrl}
+                        <img src={result.iconUrl} alt="" loading="lazy" />
+                      {:else}
+                        <span>{iconFallback(result.name)}</span>
+                      {/if}
+                    </div>
+                    <div class="result-main">
+                      <div class="result-title">
+                        <span class="result-name">{result.name}</span>
+                        {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                      </div>
+                      <p class="result-desc">{result.description}</p>
+                    </div>
+                    <div class="result-actions">
+                      <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                        <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Download"}
+                      </button>
+                      <div class="quick-actions">
+                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}><Heart size={15} /></button>
+                        <div class="save-wrapper">
+                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}><Bookmark size={15} /></button>
+                          {#if saveDropdownFor === result.id}
+                            <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                              <div class="save-dropdown-header">Add to list</div>
+                              {#each listTabNames as listName}
+                                <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
+                                  <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
+                                  <span>{listName}</span>
+                                </button>
+                              {/each}
+                              <div class="save-dropdown-new">
+                                <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
+                                <button on:click={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
+                              </div>
+                            </div>
+                          {/if}
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                {/each}
+              </div>
+            {/if}
           {:else if pagedResults.length === 0}
             <div class="empty compact">No projects found. Adjust filters or search text.</div>
           {:else}
@@ -1252,8 +1439,8 @@
                           </button>
                         {/each}
                         <div class="save-dropdown-new">
-                          <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { createList(newListName); addToList(newListName.trim(), result.id); newListName = ''; saveDropdownFor = null; }}} />
-                          <button on:click={() => { createList(newListName); addToList(newListName.trim(), result.id); newListName = ''; saveDropdownFor = null; }} disabled={!newListName.trim()}>+ Create & add</button>
+                          <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
+                          <button on:click={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
                         </div>
                       </div>
                     {/if}
@@ -1557,6 +1744,54 @@
   .quick-filters span {
     margin-left: 6px;
     color: var(--text-muted);
+  }
+
+  .tabs .tab-count {
+    margin-left: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+    padding: 1px 6px;
+    border-radius: 999px;
+  }
+
+  .saved-toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+  }
+
+  .saved-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .saved-card {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+    padding: 12px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+  }
+
+  .saved-card.installed {
+    border-color: rgba(27, 217, 106, 0.35);
+    background: rgba(27, 217, 106, 0.07);
+  }
+
+  .saved-main {
+    min-width: 0;
+  }
+
+  .saved-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
   }
 
   .installed-list {

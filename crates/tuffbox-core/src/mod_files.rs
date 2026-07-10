@@ -12,7 +12,7 @@
 
 use crate::manifest::{ContentType, ModSpec, ProjectManifest, SourceKind};
 use crate::mc_install::{sha1_file, InstallError};
-use crate::provider::ModrinthProvider;
+use crate::provider::{ContentProvider, ModrinthProvider};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -239,6 +239,10 @@ pub fn identify_local_jar_via_modrinth(
 
     let content_type = ContentType::from_modrinth_project_type(&project.project_type);
 
+    let dependencies = provider
+        .resolve_dependencies(&version.id)
+        .unwrap_or_default();
+
     Ok(Some(ModSpec {
         id: project.slug.clone(),
         name: project.name,
@@ -257,7 +261,7 @@ pub fn identify_local_jar_via_modrinth(
             sha512: file.and_then(|f| f.hashes.sha512),
         }),
         side,
-        dependencies: Vec::new(),
+        dependencies,
         status: vec!["ok".to_string()],
         content_type,
     }))

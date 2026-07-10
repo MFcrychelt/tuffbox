@@ -72,11 +72,11 @@
         nodes: (raw.nodes ?? []).map(normalizeNode),
         edges: (raw.edges ?? []).map(normalizeEdge),
       };
-      selectedId = graph.nodes.find((n) => n.kind === "Mod")?.id ?? graph.nodes[0]?.id ?? null;
+      // Don't pre-select a node — otherwise every unrelated edge is dimmed
+      // to near-invisible and the graph looks disconnected.
+      selectedId = null;
       await loadChangePlan();
       lastLoadedPath = $projectPath;
-      // Fire-and-forget: fill in any missing icon URLs from Modrinth
-      // without blocking the graph render. Improves over time.
       hydrateMissingIcons().catch(() => {});
     } catch (e) {
       error = String(e);
@@ -89,6 +89,10 @@
     return graph?.nodes.find((n) => n.id === id) ?? null;
   }
 
+  function resolveNodeLabel(id: string): string {
+    return nodeById(id)?.label ?? ghostNodes.find((n) => n.id === id)?.label ?? id.replace(/^mod:/, "");
+  }
+
   // Track which nodes have a broken icon so we can fall back to a letter avatar
   let brokenIcons = new Set<string>();
 
@@ -98,31 +102,46 @@
     }
   }
 
+  function modIconLookupKey(node: GraphNode): string | null {
+    if (node.metadata?.project_id) return node.metadata.project_id;
+    if (node.metadata?.source === "modrinth" && node.id.startsWith("mod:")) {
+      return node.id.slice(4);
+    }
+    return null;
+  }
+
+  async function resolveIconForNode(node: GraphNode) {
+    const key = modIconLookupKey(node);
+    if (!key || !graph) return;
+    try {
+      const url: string | null = await invoke("get_modrinth_project_icon", { projectId: key });
+      if (url) {
+        node.metadata = { ...(node.metadata ?? {}), icon_url: url };
+        graph = { ...graph };
+        brokenIcons.delete(node.id);
+        brokenIcons = brokenIcons;
+      }
+    } catch {
+      // keep letter-avatar fallback
+    }
+  }
+
+  async function handleIconError(node: GraphNode) {
+    markIconBroken(node.id);
+    await resolveIconForNode(node);
+  }
+
   // Hydrate icons for Mod nodes that don't have icon_url in metadata.
-  // Some mods (e.g. local jars, older manifests) lack the cached icon URL
-  // even though we know their Modrinth project id. Ask the backend to
-  // fetch the real icon URL from Modrinth's project metadata.
   async function hydrateMissingIcons() {
     if (!graph) return;
-    const missing = graph.nodes.filter(
-      (n) => n.kind === "Mod" && !n.metadata?.icon_url && n.metadata?.project_id
-    );
+    const missing = graph.nodes.filter((n) => {
+      if (n.kind !== "Mod") return false;
+      if (brokenIcons.has(n.id)) return !!modIconLookupKey(n);
+      if (n.metadata?.icon_url) return false;
+      return !!modIconLookupKey(n);
+    });
     if (missing.length === 0) return;
-    await Promise.all(
-      missing.map(async (n) => {
-        try {
-          const url: string | null = await invoke("get_modrinth_project_icon", {
-            projectId: n.metadata!.project_id,
-          });
-          if (url) {
-            n.metadata = { ...(n.metadata ?? {}), icon_url: url };
-            graph = graph ? { ...graph } : graph;
-          }
-        } catch {
-          // leave the letter-avatar fallback in place
-        }
-      })
-    );
+    await Promise.all(missing.map((n) => resolveIconForNode(n)));
   }
 
   function point(id: string) {
@@ -153,12 +172,6 @@
   function nodeIconUrl(node: PositionedNode): string | null {
     if (brokenIcons.has(node.id)) return null;
     if (node.metadata?.icon_url) return node.metadata.icon_url;
-    // Don't hardcode .png — Modrinth serves icons in whatever format the
-    // project uploaded (webp, jpeg, etc). Use the project endpoint via
-    // hydrateMissingIcons() to get the real URL.
-    if (node.metadata?.project_id) {
-      return `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon`;
-    }
     return null;
   }
 
@@ -318,7 +331,26 @@
   async function installSingleMissingDep(edge: GraphEdge) {
     if (!$projectPath) return;
     const depId = edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to;
-    await previewModrinthDep(depId);
+    resolving = true;
+    error = null;
+    message = null;
+    try {
+      const installed: string[] = await invoke("install_graph_dep", {
+        path: $projectPath,
+        modId: depId,
+      });
+      if (installed.length > 0) {
+        message = `Installed ${depId}${installed.length > 1 ? ` (+${installed.length - 1} transitive)` : ""}`;
+        await load(true);
+      } else {
+        await previewModrinthDep(depId);
+      }
+    } catch (e) {
+      error = String(e);
+      await previewModrinthDep(depId);
+    } finally {
+      resolving = false;
+    }
   }
 
   /// Fetches Modrinth dependency info and shows the preview dialog.
@@ -403,6 +435,15 @@
     ? displayEdges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
     : [];
   $: missingEdges = displayEdges.filter((edge) => edge.kind === "Requires" && !nodeById(edge.to));
+  $: missingDepsByMod = (() => {
+    const map = new Map<string, GraphEdge[]>();
+    for (const edge of missingEdges) {
+      const list = map.get(edge.from) ?? [];
+      list.push(edge);
+      map.set(edge.from, list);
+    }
+    return map;
+  })();
   $: conflictEdges = displayEdges.filter((edge) => ["Conflicts", "BreaksWith"].includes(edge.kind) && nodeById(edge.from) && nodeById(edge.to));
   $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
@@ -589,6 +630,7 @@
       .on("tick", () => {
         positioned = [...initializedNodes];
       });
+    positioned = [...initializedNodes];
     resetView();
   }
   $: positionById = new Map(positioned.map((node) => [node.id, node]));
@@ -759,7 +801,7 @@
                 clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                 preserveAspectRatio="xMidYMid slice"
                 on:click|stopPropagation={() => handleDepIconClick(node)}
-                on:error={() => markIconBroken(node.id)}
+                on:error={() => handleIconError(node)}
               />
             {:else}
               <text
@@ -793,8 +835,9 @@
         {:else}
           <div class="mod-grid">
             {#each modNodes as node}
-              {@const icon = !brokenIcons.has(node.id) ? (node.metadata?.icon_url ?? (node.metadata?.project_id ? `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon` : null)) : null}
+              {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
               {@const isClickableDep = depNodeIds.has(node.id)}
+              {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
               <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={isClickableDep} on:click={() => (selectedId = node.id)}>
                 {#if icon}
                   <img
@@ -805,15 +848,29 @@
                     loading="lazy"
                     title={isClickableDep ? "Click to re-download this dependency" : ""}
                     on:click|stopPropagation={() => isClickableDep && downloadMissingFiles()}
-                    on:error={() => markIconBroken(node.id)}
+                    on:error={() => handleIconError(node)}
                   />
                 {:else}
                   <span class="card-icon-fallback" class:clickable={isClickableDep} on:click|stopPropagation={() => isClickableDep && downloadMissingFiles()}>{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}
                 <div class="card-text">
                   <span class="node-label">{node.label}</span>
-                  <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}</span>
+                  <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
                 </div>
+                {#if missingDeps.length > 0}
+                  <button
+                    class="card-install-deps"
+                    title="Install missing dependencies"
+                    on:click|stopPropagation={async () => {
+                      for (const edge of missingDeps) {
+                        await installSingleMissingDep(edge);
+                      }
+                    }}
+                    disabled={resolving}
+                  >
+                    <Download size={14} />
+                  </button>
+                {/if}
                 <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
                   <X size={14} />
                 </span>
@@ -896,13 +953,20 @@
           {:else}
             <div class="relations">
               {#each selectedEdges as edge}
+                {@const otherId = edge.from === selectedId ? edge.to : edge.from}
+                {@const isMissingDep = edge.kind === "Requires" && !nodeById(otherId)}
                 <div class="relation" class:incoming={edge.to === selectedId}>
                   <span class="relation-kind">{edge.kind}</span>
                   <span class="relation-text">
-                    {edge.from === selectedId ? "to" : "from"}
-                    <strong>{nodeById(edge.from === selectedId ? edge.to : edge.from)?.label ?? (edge.from === selectedId ? edge.to : edge.from)}</strong>
+                    {edge.from === selectedId ? "requires" : "required by"}
+                    <strong>{resolveNodeLabel(otherId)}</strong>
                   </span>
                   {#if edge.reason}<small>{edge.reason}</small>{/if}
+                  {#if isMissingDep}
+                    <button class="secondary mini" on:click={() => installGhostNode(otherId)} disabled={resolving}>
+                      <Download size={12} /> Install
+                    </button>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -1143,13 +1207,13 @@
   }
 
   .graph-canvas line {
-    stroke: rgba(161, 161, 170, 0.5);
-    stroke-width: 1.6;
+    stroke: rgba(161, 161, 170, 0.72);
+    stroke-width: 2;
     transition: opacity 120ms ease;
   }
 
   .graph-canvas line.dimmed {
-    opacity: 0.15;
+    opacity: 0.35;
   }
 
   .svg-node.dimmed {
@@ -1467,6 +1531,23 @@
   .card-remove:hover {
     color: #ef4444;
     background: rgba(239,68,68,.12);
+  }
+
+  .card-install-deps {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid rgba(27, 217, 106, 0.35);
+    background: rgba(27, 217, 106, 0.1);
+    color: var(--accent-primary);
+    flex-shrink: 0;
+  }
+
+  .card-install-deps:hover:not(:disabled) {
+    background: rgba(27, 217, 106, 0.18);
   }
 
   .node-card:hover,

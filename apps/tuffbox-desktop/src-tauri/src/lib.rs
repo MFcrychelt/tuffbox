@@ -489,6 +489,18 @@ async fn get_modrinth_project_icon(project_id: String) -> Result<Option<String>,
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn get_modrinth_project(project_id: String) -> Result<tuffbox_core::ProjectInfo, String> {
+    tokio::task::spawn_blocking(move || {
+        let provider = tuffbox_core::ModrinthProvider::new();
+        provider
+            .get_project(&project_id)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Per-project user state for mods found in the Add-Mod browser.
 /// `favorites` is a single set of mod IDs the user liked.
 /// `lists` is a map of list_name -> ordered list of mod IDs, supporting
@@ -2886,8 +2898,62 @@ fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_graph(path: String) -> Result<DependencyGraph, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    enrich_manifest_for_graph(&mut manifest)?;
     Ok(DependencyGraph::from_manifest(&manifest))
+}
+
+/// Fills missing Modrinth dependency edges and icon URLs in-memory so the
+/// graph view shows real mod-to-mod links even for jars dropped into `mods/`
+/// manually (those entries often lack `dependencies` until enriched).
+fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), String> {
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let query = tuffbox_core::ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(tuffbox_core::graph::loader_kind_slug(
+            &manifest.loader.kind,
+        )
+        .to_string()),
+        ..Default::default()
+    };
+
+    for module in &mut manifest.mods {
+        if !matches!(
+            module.source.kind,
+            tuffbox_core::manifest::SourceKind::Modrinth
+        ) {
+            continue;
+        }
+        let project_id = module
+            .source
+            .project_id
+            .clone()
+            .unwrap_or_else(|| module.id.clone());
+
+        if module.dependencies.is_empty() {
+            let version_id = if let Some(file_id) = module.source.file_id.clone() {
+                Some(file_id)
+            } else if let Ok(versions) = provider.get_versions(&project_id, &query) {
+                versions.into_iter().next().map(|v| v.id)
+            } else {
+                None
+            };
+
+            if let Some(version_id) = version_id {
+                if let Ok(deps) = provider.resolve_dependencies(&version_id) {
+                    module.dependencies = deps;
+                }
+            }
+        }
+
+        if module.source.icon_url.is_none() {
+            if let Ok(project) = provider.get_project(&project_id) {
+                module.source.icon_url = project.icon_url;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -5053,6 +5119,7 @@ pub fn run() {
             search_modrinth_mods,
             preview_modrinth_install,
             get_modrinth_project_icon,
+            get_modrinth_project,
             get_mod_user_state,
             set_mod_user_state,
             create_mod_list,
