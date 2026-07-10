@@ -2,6 +2,7 @@ use crate::graph::NodeId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ChangeAction {
     InstallMod {
         project_id: String,
@@ -31,6 +32,7 @@ pub enum ChangeRisk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangePlan {
     pub summary: String,
     pub risk: ChangeRisk,

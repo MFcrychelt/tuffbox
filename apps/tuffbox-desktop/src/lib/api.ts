@@ -32,6 +32,85 @@ export interface ConfigFileSummary {
   modified: number | null;
 }
 
+export interface QuestTask {
+  id: string;
+  type: string;
+  title?: string | null;
+  value?: unknown;
+  properties?: Record<string, unknown>;
+}
+
+export interface QuestReward {
+  id: string;
+  type: string;
+  title?: string | null;
+  properties?: Record<string, unknown>;
+}
+
+export interface QuestData {
+  id: string;
+  title: string;
+  subtitle?: string | null;
+  description: string[];
+  x: number;
+  y: number;
+  icon?: string | null;
+  dependencies: string[];
+  tasks: QuestTask[];
+  rewards: QuestReward[];
+  optional: boolean;
+  shape?: string | null;
+  size?: number | null;
+}
+
+export interface QuestChapter {
+  id: string;
+  title: string;
+  icon?: string | null;
+  quests: QuestData[];
+  group?: string | null;
+  sourceFile?: string | null;
+}
+
+export interface QuestBook {
+  chapters: QuestChapter[];
+  title?: string | null;
+  subtitle?: string | null;
+}
+
+export interface QuestValidationIssue {
+  questId: string;
+  message: string;
+}
+
+export interface IngredientDisplay {
+  id: string;
+  kind: string;
+  alts?: IngredientDisplay[];
+}
+
+export interface RecipeLayout {
+  category: string;
+  shapeless: boolean;
+  grid: (IngredientDisplay | null)[];
+  output: IngredientDisplay;
+  outputCount: number;
+  cookTime?: number;
+  experience?: number;
+}
+
+export interface ScannedRecipe {
+  id: string;
+  recipeType: string;
+  category: string;
+  modSource: string;
+  sourceFile: string;
+  layout: RecipeLayout;
+  inputIds: string[];
+  outputId: string;
+  isConditional: boolean;
+}
+
 export interface ProfileSummary {
   id: string;
   name: string;
@@ -89,22 +168,25 @@ export interface DependencyGraph {
 }
 
 export interface Diagnostic {
-  severity: "error" | "warning" | "info";
+  severity: "Info" | "Warning" | "Error" | string;
   code: string;
   message: string;
   relatedNodes: string[];
 }
 
 export interface ChangePlan {
+  summary: string;
+  risk: string;
   actions: ChangeAction[];
+  requiresSnapshot: boolean;
 }
 
 export interface ChangeAction {
-  kind: string;
-  description: string;
-  modId?: string;
-  versionId?: string;
-  side?: string;
+  InstallMod?: { projectId: string; version?: string | null };
+  RemoveMod?: { nodeId: string };
+  DisableMod?: { nodeId: string };
+  UpdateMod?: { nodeId: string; targetVersion: string };
+  EditConfig?: { path: string; patch: string };
 }
 
 export interface HistorySettings {
@@ -257,10 +339,16 @@ export interface ClassMatch {
   modName: string;
 }
 
+export interface ModSyncFailure {
+  modId: string;
+  error: string;
+}
+
 export interface ModSyncReport {
-  restored: number;
-  removed: number;
-  errors: string[];
+  downloaded: string[];
+  alreadyPresent: string[];
+  skipped: string[];
+  failed: ModSyncFailure[];
 }
 
 export interface TuffboxLockfile {
@@ -454,11 +542,19 @@ export const api = {
     addWithDeps(modId: string, side: string, p?: string) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side }); },
     addManyWithDeps(modIds: string[], side: string, p?: string) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side }); },
     remove(modId: string, p?: string) { return cmd<void>("remove_project_mod", { ...pathArg(p), modId }); },
-    update(modId: string, p?: string) { return cmd<void>("update_project_mod", { ...pathArg(p), modId }); },
+    update(modId: string, p?: string, versionId?: string | null) {
+      return cmd<Record<string, unknown>>("update_project_mod", {
+        ...pathArg(p),
+        modId,
+        versionId: versionId ?? null,
+      });
+    },
     changeVersion(modId: string, newVersionId: string, p?: string) { return cmd<Record<string, unknown>>("change_mod_version", { ...pathArg(p), modId, newVersionId }); },
     getVersions(modId: string, minecraftVersion: string, loader?: string | null) { return cmd<Record<string, unknown>[]>("get_mod_versions", { modId, minecraftVersion, loader }); },
     checkUpdates(p?: string) { return cmd<Record<string, unknown>[]>("check_mod_updates", pathArg(p)); },
-    updateAll(p?: string) { return cmd<string[]>("update_all_mods", pathArg(p)); },
+    updateAll(p?: string) {
+      return cmd<{ updated: string[]; errors?: string[]; download?: Record<string, unknown> }>("update_all_mods", pathArg(p));
+    },
     recommend(p?: string) { return cmd<Record<string, unknown>[]>("recommend_mods", pathArg(p)); },
     detectWrongLoader(p?: string) { return cmd<Record<string, unknown>[]>("detect_wrong_loader_mods", pathArg(p)); },
     disableJar(fileName: string, p?: string) { return cmd<string>("disable_wrong_loader_jar", { ...pathArg(p), fileName }); },
@@ -473,7 +569,8 @@ export const api = {
       environment?: string; license?: string; sort?: string; contentType?: string;
       p?: string;
     }) {
-      return cmd<SearchResult[]>("search_modrinth_mods", { ...pathArg(opts?.p), query, ...opts });
+      const { p, ...rest } = opts ?? {};
+      return cmd<SearchResult[]>("search_modrinth_mods", { ...pathArg(p), query, ...rest });
     },
     previewInstall(modId: string, p?: string) { return cmd<ModInstallPreview>("preview_modrinth_install", { ...pathArg(p), modId }); },
     getIcon(projectId: string) { return cmd<string | null>("get_modrinth_project_icon", { projectId }); },
@@ -577,6 +674,11 @@ export const api = {
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
   },
 
+  // ── Recipes (JEI-style browser) ─────────────────────────────────
+  recipes: {
+    scan(p?: string) { return cmd<ScannedRecipe[]>("scan_mod_recipes", pathArg(p)); },
+  },
+
   // ── Diagnostics & Crash ───────────────────────────────────────────
   diagnostics: {
     scanOre(p?: string) { return cmd<Record<string, unknown>[]>("scan_ore_generation", pathArg(p)); },
@@ -591,9 +693,21 @@ export const api = {
     applyCrashFixPlan(reportId?: string | null, p?: string) { return cmd<string[]>("apply_crash_fix_plan", { ...pathArg(p), reportId }); },
     runCrashAssistantFull(p?: string) { return cmd<CrashAnalysisReport>("run_crash_assistant_full", pathArg(p)); },
     buildAiContext(p?: string) { return cmd<Record<string, unknown>>("build_ai_crash_context", pathArg(p)); },
-    scanRecipes(p?: string) { return cmd<Record<string, unknown>[]>("scan_mod_recipes", pathArg(p)); },
     saveProblematicModsConfig(entries: Record<string, unknown>[], p?: string) { return cmd<void>("save_problematic_mods_config", { ...pathArg(p), entries }); },
     getProblematicModsConfig(p?: string) { return cmd<Record<string, unknown>[]>("get_problematic_mods_config", pathArg(p)); },
+  },
+
+  // ── Quests (FTB Quests SNBT) ─────────────────────────────────────
+  quests: {
+    load(p?: string) { return cmd<QuestBook>("load_quest_book", pathArg(p)); },
+    saveChapter(chapter: QuestChapter, relativePath?: string | null, p?: string) {
+      return cmd<{ relativePath: string; questCount: number }>("save_quest_chapter", {
+        ...pathArg(p),
+        chapter,
+        relativePath: relativePath ?? null,
+      });
+    },
+    validate(p?: string) { return cmd<QuestValidationIssue[]>("validate_quest_book", pathArg(p)); },
   },
 
   // ── Export ────────────────────────────────────────────────────────

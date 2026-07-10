@@ -722,7 +722,6 @@ pub fn create_crash_fix_plan(
                 node_id: node_id.clone(),
                 target_version: "latest-compatible".to_string(),
             });
-            actions.push(ChangeAction::DisableMod { node_id });
         }
         return ChangePlan {
             summary: if top.known_in_manifest {

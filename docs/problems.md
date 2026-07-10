@@ -35,7 +35,8 @@
   обойдён локально), но сама вкладка при открытии ничего не делает.
 - **UI:** вкладка выглядит ужасно (плохая вёрстка).
 - **Референс:** см. реализацию загрузки модов в `U:\TuffBox\AstralRinth-AR-0.10.2701\astralrinth`.
-- **Статус:** в работе (основной функционал есть)
+- **Статус:** исправлено (2026-07-10) — обновления модов, update-all, UI Content,
+  окно прогресса скачивания с реальными шкалами.
 - **Что сделано:** `Mods.svelte` грузит `list_mods` при активации вкладки
   (реактивный блок `Mods.svelte:522` + `load()` в `:522`), есть фильтры по
   контенту (mod/resourcepack/datapack/shader), кнопка Add Mods, sync, update,
@@ -43,31 +44,42 @@
   (`list_mods` строит `https://cdn.modrinth.com/data/{pid}/icon.png`, lib.rs:343)
   с корректным fallback-плейсхолдером (`Mods.svelte:483-485`). CSP в tauri = null,
   так что CDN-иконки грузятся.
-- **Осталось:** для модов без `project_id` иконка всегда плейсхолдер — опционально
-  докачивать через `get_modrinth_project_icon` (lib.rs:441) по slug; уточнить,
-  "ничего не грузится" воспроизводится ли на пустом manifest (mods пусты).
 - **Сделано (2026-07-09):** в `Mods.svelte` после `list_mods` запускается
   `hydrateMissingIcons()` — для модов с `projectId`, у которых `iconUrl` пуст
   (локальные jar'ы с известным Modrinth-id, или сбой CDN), иконка
   докачивается через `get_modrinth_project_icon` (lib.rs:441) параллельно
   (`Promise.all`), при ошибке остаётся letter-avatar fallback. `svelte-check`:
   0 errors.
+- **Сделано (2026-07-10):**
+  1. Update / Update all: применяют `versionId` из batch-check, удаляют старый
+     jar при смене имени файла, не валят весь batch из‑за одного failed
+     `get_project`.
+  2. `download_project_mods_tracked` пишет реальный byte-progress в
+     `DOWNLOAD_PROGRESS` и эмитит `mod-download-progress` /
+     `mod-download-batch`.
+  3. Content UI: hero, update panel, карточки с badge/анимацией; модалка
+     прогресса со шкалами на каждый мод.
+  4. `svelte-check`: 0 errors; `cargo check -p tuffbox-desktop`: ok.
 
 ## 3. Вкладка Recipes — непонятный парсинг, знаки вопроса
 - **Симптом:** Не ясно, как парсится содержимое; весь текст покрыт знаками
   вопроса (����).
 - **Причина (предпол.):** неверная кодировка при чтении/выводе (UTF-8 vs системная
   кодировка, особенно на Windows — cp1251), либо парсер выводит нечитаемые данные.
-- **Статус:** в работе (кодировка корректна)
-- **Что сделано:** `scan_mod_recipes` (lib.rs:2108) читает JAR-записи рецептов
-  через `std::io::read_to_string` (UTF-8), парсит JSON и вытаскивает `type`,
-  `result.item`, ингредиенты. Бинарные NBT не выводятся как текст — берутся
-  только строковые поля `item`/`tag`. `RecipeBrowser.svelte` отображает
-  результат, при пустом скане падает на `knownRecipes`-фоллбэк.
-- **Осталось:** если знаки `?` появляются — проверить, что в `modSource`/`output`
-  не попадают не-UTF8 байты из имён файлов в zip (использовать
-  `zf.name()` как есть — он уже строка). Вероятно проблема была в старой
-  версии с `String::from_utf8_lossy` на сырых байтах.
+- **Статус:** исправлено (JEI-style UI, 2026-07-10)
+- **Что сделано:** `recipe_layout.rs` — раскладка 3×3 по алгоритму JEI
+  (`CraftingGridHelper.getCraftingIndex`), печь, кузня. `recipe_scan.rs` —
+  полный парсинг через `AdapterRegistry` (до 5000 рецептов). `RecipeBrowser.svelte` —
+  сетка предметов, Recipes/Uses (R/U), JEI-поиск (@mod #tag &id), категории,
+  навигация по слотам.
+
+## 3b. Quest Editor — заглушка без сохранения
+- **Симптом:** Quest editor парсил только заголовки глав, квесты не загружались,
+  сохранение «coming soon».
+- **Статус:** исправлено (2026-07-10)
+- **Что сделано:** `quest_book.rs` — SNBT parser/serializer, `load_quest_book` /
+  `save_quest_chapter` / `validate_quest_book`. `QuestEditor.svelte` — загрузка
+  квестов, карта зависимостей, валидация, сохранение в SNBT с auto-snapshot.
 
 ## 4. Вкладка World — плохой UI, нет функционала
 - **Симптом:** UI некрасивый, функционал отсутствует (по сути заглушка).

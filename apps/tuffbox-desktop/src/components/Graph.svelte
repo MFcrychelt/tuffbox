@@ -67,6 +67,8 @@
     error = null;
     brokenIcons = new Set();
     ghostMeta = {};
+    simulationLayoutKey = "";
+    resetViewOnNextLayout = true;
     try {
       const raw: any = await invoke("get_graph", { path: $projectPath });
       graph = {
@@ -174,10 +176,16 @@
     return nodeId.startsWith("mod:") ? nodeId.slice(4) : nodeId;
   }
 
-  function nodeIconUrl(node: PositionedNode): string | null {
+  function nodeIconUrl(node: GraphNode | PositionedNode): string | null {
     if (brokenIcons.has(node.id)) return null;
     if (node.metadata?.icon_url) return node.metadata.icon_url;
+    const ghost = ghostMeta[node.id];
+    if (ghost?.iconUrl) return ghost.iconUrl;
     return null;
+  }
+
+  function displayLabel(node: GraphNode | PositionedNode): string {
+    return ghostMeta[node.id]?.name ?? node.label;
   }
 
   function nodeSize(node: PositionedNode): number {
@@ -549,15 +557,84 @@
     return { map, orphaned };
   })();
   $: canvasHeight = Math.max(420, Math.ceil(modNodes.length / 3) * 100 + 120);
+  const BASE_WIDTH = 1120;
   let positioned: PositionedNode[] = [];
   let simulation: any = null;
+  let simulationLayoutKey = "";
+  let resetViewOnNextLayout = true;
+
+  $: layoutKey = [
+    ...displayNodes.map((n) => n.id).sort(),
+    ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
+  ].join("|");
+
+  function startSimulation() {
+    if (!displayNodes.length) return;
+
+    const initializedNodes = displayNodes.map((node, i) => {
+      const isGhost = node.kind === "Missing";
+      let tone: string;
+      if (isGhost) tone = "ghost";
+      else if (node.kind === "Mod") tone = depNodeIds.has(node.id) ? "dep" : String(node.side ?? "both").toLowerCase();
+      else if (node.kind === "Profile") tone = "profile";
+      else tone = "runtime";
+      const existing = positioned.find((p) => p.id === node.id);
+      const angle = (i / Math.max(1, displayNodes.length)) * Math.PI * 2;
+      const cx = BASE_WIDTH / 2;
+      const cy = canvasHeight / 2;
+      const r = Math.min(BASE_WIDTH, canvasHeight) / 3;
+      return {
+        ...node,
+        label: displayLabel(node),
+        x: existing?.x ?? cx + Math.cos(angle) * r + (Math.random() - 0.5) * 40,
+        y: existing?.y ?? cy + Math.sin(angle) * r + (Math.random() - 0.5) * 40,
+        tone,
+        ghost: isGhost,
+      } as PositionedNode;
+    });
+
+    const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
+
+    if (simulation) simulation.stop();
+
+    simulation = d3
+      .forceSimulation<PositionedNode>(initializedNodes)
+      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(140))
+      .force("charge", d3.forceManyBody().strength(-500))
+      .force("collide", d3.forceCollide().radius(55))
+      .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
+      .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
+      .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
+      .on("tick", () => {
+        positioned = [...initializedNodes];
+      });
+    positioned = [...initializedNodes];
+    if (resetViewOnNextLayout) {
+      resetView();
+      resetViewOnNextLayout = false;
+    }
+  }
+
+  $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
+    simulationLayoutKey = layoutKey;
+    startSimulation();
+  }
+
+  // Refresh labels when Modrinth metadata arrives without restarting layout.
+  $: if (positioned.length && Object.keys(ghostMeta).length > 0) {
+    positioned = positioned.map((node) => ({
+      ...node,
+      label: displayLabel(node),
+    }));
+  }
+
+  $: positionById = new Map(positioned.map((node) => [node.id, node]));
 
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
   // graph view: scroll to zoom (toward the cursor), drag empty space to
   // pan, double-click / button to reset.
-  const BASE_WIDTH = 1120;
   let viewportEl: SVGSVGElement;
   let viewX = 0;
   let viewY = 0;
@@ -632,49 +709,6 @@
     viewY = centerY - nextHeight / 2;
     viewScale = nextScale;
   }
-
-  $: if (displayNodes.length) {
-    const initializedNodes = displayNodes.map((node, i) => {
-      const isGhost = node.kind === "Missing";
-      let tone: string;
-      if (isGhost) tone = "ghost";
-      else if (node.kind === "Mod") tone = depNodeIds.has(node.id) ? "dep" : String(node.side ?? "both").toLowerCase();
-      else if (node.kind === "Profile") tone = "profile";
-      else tone = "runtime";
-      // Seed positions in a ring so the force layout has something to relax
-      // instead of every node stacked at (0,0).
-      const angle = (i / Math.max(1, displayNodes.length)) * Math.PI * 2;
-      const cx = BASE_WIDTH / 2;
-      const cy = canvasHeight / 2;
-      const r = Math.min(BASE_WIDTH, canvasHeight) / 3;
-      return {
-        ...node,
-        x: cx + Math.cos(angle) * r + (Math.random() - 0.5) * 40,
-        y: cy + Math.sin(angle) * r + (Math.random() - 0.5) * 40,
-        tone,
-        ghost: isGhost,
-      } as PositionedNode;
-    });
-
-    const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
-
-    if (simulation) simulation.stop();
-
-    simulation = d3
-      .forceSimulation<PositionedNode>(initializedNodes)
-      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(140))
-      .force("charge", d3.forceManyBody().strength(-500))
-      .force("collide", d3.forceCollide().radius(55))
-      .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
-      .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
-      .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
-      .on("tick", () => {
-        positioned = [...initializedNodes];
-      });
-    positioned = [...initializedNodes];
-    resetView();
-  }
-  $: positionById = new Map(positioned.map((node) => [node.id, node]));
 
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
   function handleNodeMouseDown(event: MouseEvent, node: PositionedNode) {

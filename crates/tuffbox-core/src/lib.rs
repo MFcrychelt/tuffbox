@@ -35,6 +35,8 @@ pub mod properties_parser;
 pub mod level_dat;
 pub mod crash_assistant;
 pub mod ai_explanation;
+pub mod recipe_layout;
+pub mod recipe_scan;
 
 pub use change_plan::*;
 pub use crash::*;

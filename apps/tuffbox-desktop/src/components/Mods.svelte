@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { api } from "../lib/api";
   import {
     Search,
-    Filter,
     Plus,
     Trash2,
     RotateCw,
@@ -33,6 +33,7 @@
     Clock,
     Link,
     Check,
+    Package,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
@@ -77,6 +78,15 @@
     dependencies: { type: string; target: string; versionConstraint?: string | null; reason?: string | null }[];
   };
 
+  type DownloadItem = {
+    id: string;
+    name: string;
+    downloaded: number;
+    total: number;
+    percent: number;
+    status: "queued" | "downloading" | "done" | "failed" | "skipped" | string;
+  };
+
   let mods: ModRow[] = [];
   let loading = false;
   let mutating = false;
@@ -88,6 +98,112 @@
   let brokenIcons = new Set<string>();
   let savedMods: SearchResult[] = [];
   let savedModsLoading = false;
+
+  // Download progress overlay
+  let downloadOpen = false;
+  let downloadTitle = "Downloading content";
+  let downloadItems: DownloadItem[] = [];
+  let downloadDone = false;
+  let unlistenProgress: UnlistenFn | null = null;
+  let unlistenBatch: UnlistenFn | null = null;
+
+  function formatBytes(n: number): string {
+    if (!n || n <= 0) return "0 B";
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  $: downloadActiveCount = downloadItems.filter((i) => i.status === "downloading" || i.status === "queued").length;
+  $: downloadDoneCount = downloadItems.filter((i) => i.status === "done" || i.status === "skipped").length;
+  $: downloadFailedCount = downloadItems.filter((i) => i.status === "failed").length;
+  $: downloadOverallPercent = downloadItems.length === 0
+    ? 0
+    : Math.round(downloadItems.reduce((sum, i) => sum + (i.percent || 0), 0) / downloadItems.length);
+
+  function upsertDownloadItem(payload: Partial<DownloadItem> & { id: string }) {
+    const idx = downloadItems.findIndex((i) => i.id === payload.id);
+    if (idx >= 0) {
+      downloadItems[idx] = { ...downloadItems[idx], ...payload };
+      downloadItems = downloadItems;
+    } else {
+      downloadItems = [
+        ...downloadItems,
+        {
+          id: payload.id,
+          name: payload.name ?? payload.id,
+          downloaded: payload.downloaded ?? 0,
+          total: payload.total ?? 0,
+          percent: payload.percent ?? 0,
+          status: payload.status ?? "queued",
+        },
+      ];
+    }
+  }
+
+  function openDownloadOverlay(title: string) {
+    downloadTitle = title;
+    downloadItems = [];
+    downloadDone = false;
+    downloadOpen = true;
+  }
+
+  function closeDownloadOverlay() {
+    if (!downloadDone && downloadActiveCount > 0) return;
+    downloadOpen = false;
+  }
+
+  onMount(async () => {
+    unlistenBatch = await listen<{ phase: string; items?: DownloadItem[]; failed?: { modId: string; error: string }[] }>(
+      "mod-download-batch",
+      (event) => {
+        const payload = event.payload;
+        if (payload.phase === "start") {
+          downloadOpen = true;
+          downloadDone = false;
+          downloadItems = (payload.items ?? []).map((item) => ({
+            id: item.id,
+            name: item.name,
+            downloaded: 0,
+            total: 0,
+            percent: 0,
+            status: "queued",
+          }));
+        } else if (payload.phase === "done") {
+          downloadDone = true;
+          // Auto-close shortly after success if nothing failed
+          const failed = payload.failed?.length ?? downloadFailedCount;
+          if (failed === 0) {
+            setTimeout(() => {
+              if (downloadDone) downloadOpen = false;
+            }, 900);
+          }
+        }
+      },
+    );
+
+    unlistenProgress = await listen<DownloadItem>("mod-download-progress", (event) => {
+      upsertDownloadItem(event.payload);
+      if (!downloadOpen) {
+        downloadOpen = true;
+        downloadDone = false;
+      }
+    });
+
+    try {
+      const versions: { id: string; popular: boolean }[] = await invoke("get_minecraft_versions");
+      const popular = versions.filter((v) => v.popular).map((v) => v.id);
+      const latest = versions.filter((v) => !v.popular).slice(0, 8).map((v) => v.id);
+      gameVersions = [...new Set([...latest, ...popular])];
+    } catch {
+      // Network unavailable at startup — filter list stays empty.
+    }
+  });
+
+  onDestroy(() => {
+    unlistenProgress?.();
+    unlistenBatch?.();
+  });
 
   let addOpen = false;
   let searchQuery = "";
@@ -266,6 +382,7 @@
     if (!$projectPath || !versionPickerMod) return;
     versionPickerChanging = true;
     versionPickerError = null;
+    openDownloadOverlay(`Switching ${versionPickerMod.name}`);
     try {
       await invoke("change_mod_version", {
         path: $projectPath,
@@ -277,6 +394,7 @@
       await load(true);
     } catch (e) {
       versionPickerError = String(e);
+      downloadDone = true;
     } finally {
       versionPickerChanging = false;
     }
@@ -337,13 +455,25 @@
     if (!$projectPath || updateList.length === 0) return;
     updateApplying = true;
     error = null;
+    openDownloadOverlay(`Updating ${updateList.length} mod${updateList.length > 1 ? "s" : ""}`);
     try {
-      const updated: string[] = await invoke("update_all_mods", { path: $projectPath });
-      message = `Updated ${updated.length} mods: ${updated.join(", ")}`;
+      const result: any = await invoke("update_all_mods", { path: $projectPath });
+      const updated: string[] = Array.isArray(result) ? result : (result?.updated ?? []);
+      const errs: string[] = result?.errors ?? [];
+      const failedDownloads = result?.download?.failed?.length ?? 0;
+      message = updated.length
+        ? `Updated ${updated.length} mods: ${updated.join(", ")}`
+        : "No mods were updated.";
+      if (errs.length) {
+        error = errs.slice(0, 3).join("; ");
+      } else if (failedDownloads > 0) {
+        error = `${failedDownloads} download(s) failed — check the progress window.`;
+      }
       updateList = [];
       await load(true);
     } catch (e) {
       error = String(e);
+      downloadDone = true;
     } finally {
       updateApplying = false;
     }
@@ -533,6 +663,7 @@
     const modIds = userState.lists[listName] ?? [];
     if (modIds.length === 0) return;
     installingFromList = listName;
+    openDownloadOverlay(`Installing list "${listName}"`);
     try {
       await invoke("add_modrinth_mods_with_dependencies", {
         path: $projectPath,
@@ -543,6 +674,7 @@
       await load(true);
     } catch (e) {
       error = String(e);
+      downloadDone = true;
     } finally {
       installingFromList = null;
     }
@@ -572,6 +704,7 @@
     planPreviewOpen = false;
     mutating = true;
     error = null;
+    openDownloadOverlay(withDeps ? `Installing ${planPreviewMod.name} + deps` : `Installing ${planPreviewMod.name}`);
     try {
       if (withDeps) {
         await invoke("add_modrinth_mod_with_dependencies", { path: $projectPath, modId: planPreviewMod.id, side: selectedSide });
@@ -586,6 +719,7 @@
       checkMissingDepsAfterInstall();
     } catch (e) {
       error = String(e);
+      downloadDone = true;
     } finally {
       mutating = false;
     }
@@ -608,19 +742,6 @@
     { id: "newest", label: "Date published" },
     { id: "updated", label: "Date updated" },
   ];
-
-  onMount(async () => {
-    try {
-      const versions: { id: string; popular: boolean }[] = await invoke("get_minecraft_versions");
-      // Show the curated "popular" set plus a handful of the newest
-      // releases, so the filter stays short but current.
-      const popular = versions.filter((v) => v.popular).map((v) => v.id);
-      const latest = versions.filter((v) => !v.popular).slice(0, 8).map((v) => v.id);
-      gameVersions = [...new Set([...latest, ...popular])];
-    } catch {
-      // Network unavailable at startup — filter list stays empty, "Current / all" still works.
-    }
-  });
 
   async function load(force = false) {
     if (!$projectPath) return;
@@ -812,6 +933,7 @@
     if (!$projectPath || selectedResults.length === 0) return;
     mutating = true;
     error = null;
+    openDownloadOverlay(`Installing ${selectedResults.length} projects`);
     try {
       await invoke("add_modrinth_mods_with_dependencies", {
         path: $projectPath,
@@ -826,6 +948,7 @@
       checkMissingDepsAfterInstall();
     } catch (e) {
       error = String(e);
+      downloadDone = true;
     } finally {
       mutating = false;
     }
@@ -835,6 +958,11 @@
     if (!$projectPath || !pendingInstall) return;
     mutating = true;
     error = null;
+    openDownloadOverlay(
+      withDependencies
+        ? `Installing ${pendingInstall.name} + deps`
+        : `Installing ${pendingInstall.name}`,
+    );
     try {
       if (withDependencies) {
         await invoke("add_modrinth_mod_with_dependencies", {
@@ -856,6 +984,7 @@
       await load(true);
     } catch (e) {
       error = String(e);
+      downloadDone = true;
     } finally {
       mutating = false;
     }
@@ -865,15 +994,43 @@
     showRemoveConfirm(mod);
   }
 
-  async function updateMod(mod: ModRow) {
+  async function updateMod(mod: ModRow, versionId?: string | null) {
     if (!$projectPath) return;
     mutating = true;
     error = null;
+    openDownloadOverlay(`Updating ${mod.name}`);
     try {
-      await invoke("update_project_mod", { path: $projectPath, modId: mod.id });
+      await invoke("update_project_mod", {
+        path: $projectPath,
+        modId: mod.id,
+        versionId: versionId ?? null,
+      });
+      updateList = updateList.filter((u) => u.modId !== mod.id);
       await load(true);
     } catch (e) {
       error = String(e);
+      downloadDone = true;
+    } finally {
+      mutating = false;
+    }
+  }
+
+  async function updateFromPanel(update: any) {
+    if (!$projectPath) return;
+    mutating = true;
+    error = null;
+    openDownloadOverlay(`Updating ${update.name}`);
+    try {
+      await invoke("update_project_mod", {
+        path: $projectPath,
+        modId: update.modId,
+        versionId: update.versionId ?? null,
+      });
+      updateList = updateList.filter((u) => u.modId !== update.modId);
+      await load(true);
+    } catch (e) {
+      error = String(e);
+      downloadDone = true;
     } finally {
       mutating = false;
     }
@@ -959,8 +1116,30 @@
 </script>
 
 <div class="mods">
+  <header class="content-hero">
+    <div class="content-hero-copy">
+      <div class="content-kicker"><Package size={14} /> Content library</div>
+      <h1>Your pack, sharpened</h1>
+      <p>Install, update and curate mods with live download feedback — no guessing, no orphan jars.</p>
+    </div>
+    <div class="content-hero-stats">
+      <div class="stat-pill">
+        <strong>{filtered.length}</strong>
+        <span>shown</span>
+      </div>
+      <div class="stat-pill accent" class:pulse={updateList.length > 0}>
+        <strong>{updateList.length}</strong>
+        <span>updates</span>
+      </div>
+      <div class="stat-pill">
+        <strong>{counts.all}</strong>
+        <span>total</span>
+      </div>
+    </div>
+  </header>
+
   <div class="toolbar">
-    <div class="tabs" style="display: flex; gap: 8px; margin-bottom: 12px; overflow-x: auto;">
+    <div class="tabs content-tabs">
       <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods</button>
       <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
       <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
@@ -975,16 +1154,12 @@
         </button>
       {/each}
     </div>
-    <div style="display: flex; justify-content: space-between; gap: 16px; align-items: center;">
-      <div class="search" style="flex: 1;">
+    <div class="toolbar-row">
+      <div class="search wide">
         <Search size={16} />
         <input bind:value={filter} placeholder="Search {contentFilter}s..." />
       </div>
       <div class="actions">
-        <button class="secondary filter-button" disabled>
-          <Filter size={16} />
-          {sideFilter === "all" ? "All sides" : sideFilter}
-        </button>
         <button on:click={openAddModal} disabled={!$projectPath || mutating}>
           <Plus size={16} />
           Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
@@ -1001,9 +1176,9 @@
             loading = false;
           }
         }} disabled={!$projectPath || loading} title="Scan all content folders (mods/, resourcepacks/, shaderpacks/, datapacks/)">
-          <RotateCw size={16} /> Sync folders
+          <RotateCw size={16} /> Sync
         </button>
-        <button class="secondary" on:click={checkForUpdates} disabled={!$projectPath || updateCheckLoading} title="Check all mods for updates">
+        <button class="secondary glow-btn" on:click={checkForUpdates} disabled={!$projectPath || updateCheckLoading} title="Check all mods for updates">
           <Sparkles size={16} />
           {updateCheckLoading ? "Checking..." : updateList.length > 0 ? `${updateList.length} updates` : "Check updates"}
         </button>
@@ -1038,12 +1213,13 @@
             <button class="secondary mini" on:click={async () => {
               if (!$projectPath) return;
               mutating = true;
+              openDownloadOverlay(`Installing ${rec.name}`);
               try {
                 await invoke("add_modrinth_mod_with_dependencies", { path: $projectPath, modId: rec.slug, side: "auto" });
                 recommendations = recommendations.filter((r) => r.slug !== rec.slug);
                 await load(true);
                 checkMissingDepsAfterInstall();
-              } catch(e) { error = String(e); }
+              } catch(e) { error = String(e); downloadDone = true; }
               finally { mutating = false; }
             }} disabled={mutating}>
               <Plus size={12} /> Install
@@ -1059,28 +1235,30 @@
   {#if updateList.length > 0}
     <div class="update-panel">
       <div class="update-panel-header">
-        <h3><ArrowUpCircle size={16} /> {updateList.length} mod update{updateList.length > 1 ? "s" : ""} available</h3>
-        <button on:click={applyAllUpdates} disabled={updateApplying}>
+        <h3><ArrowUpCircle size={18} /> {updateList.length} update{updateList.length > 1 ? "s" : ""} ready</h3>
+        <button class="update-all-btn" on:click={applyAllUpdates} disabled={updateApplying}>
           <Sparkles size={16} /> {updateApplying ? "Updating..." : "Update all"}
         </button>
       </div>
       <div class="update-list">
         {#each updateList as update}
           <div class="update-row">
+            <div class="update-icon">
+              {#if update.iconUrl}
+                <img src={update.iconUrl} alt="" loading="lazy" />
+              {:else}
+                <span>{iconFallback(update.name)}</span>
+              {/if}
+            </div>
             <div class="update-main">
               <strong>{update.name}</strong>
-              <span>{update.currentVersion} → <code>{update.latestVersion}</code></span>
+              <span class="update-versions">
+                <code class="ver-old">{update.currentVersion}</code>
+                <ArrowRight size={12} />
+                <code class="ver-new">{update.latestVersion}</code>
+              </span>
             </div>
-            <button class="secondary mini" on:click={async () => {
-              if (!$projectPath) return;
-              mutating = true;
-              try {
-                await invoke("update_project_mod", { path: $projectPath, modId: update.modId });
-                updateList = updateList.filter((u) => u.modId !== update.modId);
-                await load(true);
-              } catch(e) { error = String(e); }
-              finally { mutating = false; }
-            }} disabled={mutating}>
+            <button class="secondary mini" on:click={() => updateFromPanel(update)} disabled={mutating}>
               <RotateCw size={12} /> Update
             </button>
           </div>
@@ -1158,8 +1336,8 @@
     <div class="empty">No mods found.</div>
   {:else}
     <div class="installed-list">
-      {#each filtered as mod}
-        <article class="installed-card">
+      {#each filtered as mod, i}
+        <article class="installed-card" class:has-update={mod.updateAvailable} style="--i: {i}">
           <div class="mod-icon">
             {#if mod.updateAvailable}
               <span class="update-dot" title="Update available"></span>
@@ -1173,11 +1351,14 @@
           <div class="installed-main">
             <div class="installed-title">
               <strong>{mod.name}</strong>
+              {#if mod.updateAvailable}
+                <span class="update-badge">Update</span>
+              {/if}
               <code>{mod.id}</code>
             </div>
             <div class="installed-meta">
               <span class="version">{mod.version}</span>
-              {#if mod.fileName}<span>{mod.fileName}</span>{/if}
+              {#if mod.fileName}<span class="filename">{mod.fileName}</span>{/if}
             </div>
           </div>
           <div class="installed-tags">
@@ -1188,7 +1369,10 @@
             <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || mod.source !== "modrinth"} title="Change version">
               <ArrowUpDown size={16} />
             </button>
-            <button class="icon-btn" on:click={() => updateMod(mod)} disabled={mutating || mod.source !== "modrinth"} title="Update to latest from Modrinth">
+            <button class="icon-btn" class:hot={mod.updateAvailable} on:click={() => {
+              const pending = updateList.find((u) => u.modId === mod.id);
+              updateMod(mod, pending?.versionId ?? null);
+            }} disabled={mutating || mod.source !== "modrinth"} title="Update to latest from Modrinth">
               <RotateCw size={16} />
             </button>
             <button class="icon-btn danger" on:click={() => showRemoveConfirm(mod)} disabled={mutating} title="Remove with snapshot">
@@ -1200,6 +1384,80 @@
     </div>
   {/if}
 </div>
+
+{#if downloadOpen}
+  <div
+    class="modal-backdrop download-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Download progress"
+  >
+    <div class="download-modal">
+      <div class="download-modal-header">
+        <div>
+          <div class="content-kicker"><Download size={14} /> Live transfer</div>
+          <h2>{downloadTitle}</h2>
+          <p>
+            {#if downloadDone}
+              {downloadFailedCount > 0
+                ? `Finished with ${downloadFailedCount} failure${downloadFailedCount > 1 ? "s" : ""}.`
+                : "All transfers complete."}
+            {:else}
+              {downloadDoneCount}/{downloadItems.length || "…"} finished · {downloadOverallPercent}%
+            {/if}
+          </p>
+        </div>
+        {#if downloadDone}
+          <button class="icon-btn" on:click={closeDownloadOverlay} title="Close"><X size={18} /></button>
+        {:else}
+          <span class="spin-wrap"><Loader2 size={22} /></span>
+        {/if}
+      </div>
+
+      <div class="download-overall">
+        <div class="download-overall-bar">
+          <div class="download-overall-fill" style="width: {downloadOverallPercent}%"></div>
+        </div>
+      </div>
+
+      <div class="download-list">
+        {#if downloadItems.length === 0}
+          <div class="download-empty">Preparing downloads…</div>
+        {:else}
+          {#each downloadItems as item}
+            <div class="download-row" class:done={item.status === "done" || item.status === "skipped"} class:failed={item.status === "failed"} class:active={item.status === "downloading"}>
+              <div class="download-row-top">
+                <strong>{item.name}</strong>
+                <span class="download-status">{item.status}</span>
+              </div>
+              <div class="download-bar">
+                <div class="download-fill" style="width: {item.percent || 0}%"></div>
+              </div>
+              <div class="download-row-meta">
+                {#if item.total > 0}
+                  <span>{formatBytes(item.downloaded)} / {formatBytes(item.total)}</span>
+                  <span>{item.percent}%</span>
+                {:else if item.status === "queued"}
+                  <span>Waiting…</span>
+                {:else if item.status === "failed"}
+                  <span>Failed</span>
+                {:else}
+                  <span>{formatBytes(item.downloaded)}</span>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        {/if}
+      </div>
+
+      {#if downloadDone}
+        <div class="download-modal-actions">
+          <button on:click={closeDownloadOverlay}>Done</button>
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 {#if addOpen}
   <div
@@ -1735,14 +1993,131 @@
   .mods {
     max-width: none;
     width: 100%;
+    position: relative;
+  }
+
+  .content-hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: 24px;
+    margin-bottom: 22px;
+    padding: 22px 24px;
+    border-radius: 20px;
+    border: 1px solid rgba(27, 217, 106, 0.18);
+    background:
+      radial-gradient(ellipse 80% 120% at 0% 0%, rgba(27, 217, 106, 0.16), transparent 55%),
+      radial-gradient(ellipse 60% 100% at 100% 0%, rgba(139, 92, 246, 0.12), transparent 50%),
+      linear-gradient(180deg, rgba(255,255,255,0.03), transparent),
+      var(--bg-secondary);
+    overflow: hidden;
+    animation: hero-in 0.45s ease both;
+  }
+
+  @keyframes hero-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .content-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .content-hero h1 {
+    margin: 0 0 6px;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    background: linear-gradient(120deg, #fff 30%, var(--accent-primary));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .content-hero-copy p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 14px;
+    max-width: 420px;
+    line-height: 1.45;
+  }
+
+  .content-hero-stats {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .stat-pill {
+    min-width: 72px;
+    padding: 10px 14px;
+    border-radius: 14px;
+    background: rgba(0,0,0,0.28);
+    border: 1px solid var(--border-color);
+    text-align: center;
+  }
+
+  .stat-pill strong {
+    display: block;
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--text-primary);
+  }
+
+  .stat-pill span {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .stat-pill.accent {
+    border-color: rgba(27, 217, 106, 0.4);
+    background: rgba(27, 217, 106, 0.1);
+  }
+
+  .stat-pill.accent strong { color: var(--accent-primary); }
+
+  .stat-pill.pulse {
+    animation: pulse-glow 1.6s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0); }
+    50% { box-shadow: 0 0 18px 2px rgba(27, 217, 106, 0.25); }
   }
 
   .toolbar {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 16px;
+    flex-direction: column;
+    gap: 12px;
     margin-bottom: 14px;
+  }
+
+  .content-tabs {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .toolbar-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .glow-btn {
+    border-color: rgba(27, 217, 106, 0.35) !important;
   }
 
   .search {
@@ -1773,6 +2148,7 @@
     display: flex;
     gap: 10px;
     align-items: center;
+    flex-wrap: wrap;
   }
 
   .quick-filters {
@@ -1786,6 +2162,11 @@
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
     padding: 8px 12px;
+    transition: border-color .15s, background .15s, transform .15s;
+  }
+
+  .quick-filters button:hover {
+    transform: translateY(-1px);
   }
 
   .quick-filters button.active {
@@ -1853,21 +2234,37 @@
   }
 
   .installed-card {
-    min-height: 72px;
+    min-height: 76px;
     display: grid;
-    grid-template-columns: 52px minmax(0, 1fr) auto auto;
+    grid-template-columns: 56px minmax(0, 1fr) auto auto;
     gap: 14px;
     align-items: center;
     padding: 12px 14px;
-    background: var(--bg-secondary);
+    background: linear-gradient(135deg, rgba(255,255,255,0.02), transparent 40%), var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    transition: border-color .15s ease, background .15s ease;
+    border-radius: 16px;
+    transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
+    animation: card-in 0.35s ease both;
+    animation-delay: calc(var(--i, 0) * 18ms);
+  }
+
+  @keyframes card-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
   }
 
   .installed-card:hover {
-    border-color: rgba(27, 217, 106, 0.28);
-    background: rgba(255,255,255,0.025);
+    border-color: rgba(27, 217, 106, 0.35);
+    background: rgba(255,255,255,0.03);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+  }
+
+  .installed-card.has-update {
+    border-color: rgba(245, 166, 35, 0.35);
+    background:
+      linear-gradient(90deg, rgba(245, 166, 35, 0.08), transparent 28%),
+      var(--bg-secondary);
   }
 
   .mod-icon,
@@ -1883,6 +2280,7 @@
     color: #fff;
     font-weight: 900;
     flex-shrink: 0;
+    box-shadow: 0 4px 14px rgba(27, 217, 106, 0.15);
   }
 
   .mod-icon img,
@@ -1903,6 +2301,7 @@
     border: 2px solid var(--bg-card, #1c1f2b);
     box-shadow: 0 0 6px rgba(245, 166, 35, 0.8);
     z-index: 2;
+    animation: pulse-glow 1.4s ease-in-out infinite;
   }
 
   .mod-icon {
@@ -1928,6 +2327,18 @@
     white-space: nowrap;
   }
 
+  .update-badge {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(245, 166, 35, 0.18);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 166, 35, 0.35);
+  }
+
   .installed-meta,
   .installed-tags,
   .card-actions {
@@ -1941,6 +2352,205 @@
     color: var(--text-muted);
     font-size: 12px;
     min-width: 0;
+  }
+
+  .installed-meta .filename {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 280px;
+  }
+
+  .icon-btn.hot {
+    color: #fbbf24;
+    background: rgba(245, 166, 35, 0.12);
+  }
+
+  /* Download progress modal */
+  .download-backdrop {
+    z-index: 80;
+  }
+
+  .download-modal {
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(720px, calc(100vh - 40px));
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background:
+      radial-gradient(ellipse 90% 60% at 50% -10%, rgba(27, 217, 106, 0.18), transparent 55%),
+      var(--bg-secondary);
+    border: 1px solid rgba(27, 217, 106, 0.28);
+    border-radius: 20px;
+    box-shadow: 0 30px 100px rgba(0, 0, 0, 0.55);
+    padding: 22px;
+    animation: hero-in 0.25s ease both;
+  }
+
+  .download-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .download-modal-header h2 {
+    margin: 0 0 4px;
+    font-size: 20px;
+  }
+
+  .download-modal-header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .download-modal-header .spin-wrap {
+    display: inline-flex;
+    color: var(--accent-primary);
+    animation: spin 0.9s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .download-overall {
+    margin-bottom: 14px;
+  }
+
+  .download-overall-bar,
+  .download-bar {
+    height: 8px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.06);
+    overflow: hidden;
+  }
+
+  .download-overall-fill,
+  .download-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent-primary), #6ee7a8);
+    box-shadow: 0 0 12px rgba(27, 217, 106, 0.45);
+    transition: width 0.12s linear;
+  }
+
+  .download-list {
+    display: grid;
+    gap: 10px;
+    overflow: auto;
+    padding-right: 4px;
+    max-height: 420px;
+  }
+
+  .download-empty {
+    padding: 28px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+
+  .download-row {
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border-color);
+    background: rgba(255,255,255,0.02);
+    transition: border-color .15s, background .15s;
+  }
+
+  .download-row.active {
+    border-color: rgba(27, 217, 106, 0.4);
+    background: rgba(27, 217, 106, 0.06);
+  }
+
+  .download-row.done {
+    border-color: rgba(27, 217, 106, 0.25);
+    opacity: 0.85;
+  }
+
+  .download-row.failed {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.06);
+  }
+
+  .download-row-top {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .download-row-top strong {
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .download-status {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .download-row.active .download-status { color: var(--accent-primary); }
+  .download-row.failed .download-status { color: #fca5a5; }
+  .download-row.done .download-status { color: var(--accent-primary); }
+
+  .download-row-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .download-modal-actions {
+    margin-top: 16px;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .update-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+
+  .update-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .update-versions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .ver-old { opacity: 0.7; }
+  .ver-new {
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.1);
+  }
+
+  .update-all-btn {
+    background: linear-gradient(135deg, var(--accent-primary), #14b355) !important;
+    box-shadow: 0 6px 20px rgba(27, 217, 106, 0.3);
   }
 
   .installed-meta span:last-child {
@@ -2619,15 +3229,39 @@
   .icon-btn.mini { padding: 4px; border-radius: 6px; }
   .icon-btn.mini.danger:hover { background: rgba(239,68,68,.15); color: #fca5a5; }
 
-  .update-panel { margin-bottom: 16px; padding: 16px; border: 1px solid rgba(27,217,106,.3); border-radius: var(--border-radius-lg); background: radial-gradient(circle at top right, rgba(27,217,106,.08), transparent 40%), var(--bg-secondary); }
-  .update-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .update-panel-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-primary); margin: 0; font-size: 15px; }
-  .update-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; }
-  .update-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .update-main { display: grid; gap: 2px; }
+  .update-panel {
+    margin-bottom: 16px;
+    padding: 18px;
+    border: 1px solid rgba(27,217,106,.35);
+    border-radius: 18px;
+    background:
+      radial-gradient(circle at top right, rgba(27,217,106,.14), transparent 42%),
+      radial-gradient(circle at bottom left, rgba(139,92,246,.08), transparent 40%),
+      var(--bg-secondary);
+    animation: hero-in 0.35s ease both;
+  }
+  .update-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; }
+  .update-panel-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-primary); margin: 0; font-size: 16px; font-weight: 800; }
+  .update-list { display: grid; gap: 8px; max-height: 280px; overflow: auto; }
+  .update-row {
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border-color);
+    transition: border-color .15s, transform .15s;
+  }
+  .update-row:hover {
+    border-color: rgba(27,217,106,.35);
+    transform: translateX(2px);
+  }
+  .update-main { display: grid; gap: 4px; min-width: 0; }
   .update-main strong { color: var(--text-primary); font-size: 13px; }
   .update-main span { color: var(--text-muted); font-size: 12px; }
-  .update-main code { color: var(--accent-primary); font-size: 12px; font-weight: 700; }
+  .update-main code { font-size: 12px; font-weight: 700; }
 
   :global(.spin) {
     animation: spin 900ms linear infinite;

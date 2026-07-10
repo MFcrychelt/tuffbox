@@ -3,6 +3,7 @@
   import { createEventDispatcher, onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
+  import { projectPath } from "../lib/store";
 
   const dispatch = createEventDispatcher<{ close: void; created: string }>();
 
@@ -25,11 +26,13 @@
   let useTemplate = false;
 
   async function loadTemplates() {
+    if (!$projectPath) {
+      templates = [];
+      templatesLoaded = true;
+      return;
+    }
     try {
-      // Load templates from home dir TuffBox folder
-      const home = await invoke("get_home_dir");
-      const tuffboxDir = `${home}/TuffBox`;
-      templates = (await invoke("list_templates", { path: `${tuffboxDir}/.templates` }).catch(() => [])) as any[];
+      templates = (await invoke("list_templates", { path: $projectPath }).catch(() => [])) as any[];
     } catch { templates = []; }
     templatesLoaded = true;
   }

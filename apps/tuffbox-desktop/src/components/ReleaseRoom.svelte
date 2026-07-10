@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Rocket, RefreshCw, Save, Tag, AlertTriangle, CheckCircle2, Camera } from "lucide-svelte";
+  import { Rocket, RefreshCw, Save, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen } from "lucide-svelte";
+  import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
@@ -18,10 +19,12 @@
     snapshot: false,
   };
   let publishTargets = [
-    { id: "modrinth", label: "Modrinth", state: "draft placeholder" },
-    { id: "curseforge", label: "CurseForge", state: "draft placeholder" },
-    { id: "github", label: "GitHub Releases", state: "draft placeholder" },
+    { id: "modrinth", label: "Modrinth", state: "not exported", artifactKind: "mrpack" },
+    { id: "curseforge", label: "CurseForge", state: "not exported", artifactKind: "curseforge" },
+    { id: "github", label: "GitHub Releases", state: "not prepared", artifactKind: null },
   ];
+
+  let exportLoading: string | null = null;
 
   let githubRelease: any = null;
   let githubLoading = false;
@@ -58,11 +61,55 @@
       changelog = await invoke("generate_release_changelog", { path: $projectPath });
       artifacts = await invoke("list_release_artifacts", { path: $projectPath });
       version = $projectInfo?.version ?? version;
+      syncPublishTargets();
       lastLoadedPath = $projectPath;
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
+    }
+  }
+
+  function syncPublishTargets() {
+    publishTargets = publishTargets.map((target) => {
+      if (target.id === "github") {
+        return { ...target, state: githubRelease ? "prepared" : "not prepared" };
+      }
+      const kind = target.artifactKind;
+      const found = kind ? artifacts.find((a) => a.kind === kind) : null;
+      return {
+        ...target,
+        state: found ? `exported · ${found.fileCount} files` : "not exported",
+      };
+    });
+  }
+
+  async function exportArtifact(kind: "mrpack" | "server" | "prism" | "curseforge") {
+    if (!$projectPath) return;
+    exportLoading = kind;
+    error = "";
+    message = "";
+    try {
+      let result: { path: string; fileCount: number };
+      if (kind === "mrpack") result = await api.export.modrinthPack(null, $projectPath);
+      else if (kind === "server") result = await api.export.serverPack(null, $projectPath);
+      else if (kind === "prism") result = await api.export.prismInstance(null, $projectPath);
+      else result = await api.export.curseforgePack(null, $projectPath);
+      message = `Exported ${kind}: ${result.path}`;
+      await refresh();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      exportLoading = null;
+    }
+  }
+
+  async function openProjectFolder() {
+    if (!$projectPath) return;
+    try {
+      await invoke("open_project_folder", { path: $projectPath });
+    } catch (e) {
+      error = String(e);
     }
   }
 
@@ -95,9 +142,9 @@
 
   function markPublishTarget(id: string) {
     publishTargets = publishTargets.map((target) =>
-      target.id === id ? { ...target, state: "prepared locally" } : target
+      target.id === id ? { ...target, state: "marked ready (manual upload)" } : target
     );
-    message = `${publishTargets.find((target) => target.id === id)?.label} draft marked as prepared locally.`;
+    message = `${publishTargets.find((target) => target.id === id)?.label} marked for manual upload.`;
   }
 
   async function createReleaseDraft() {
@@ -187,19 +234,45 @@
         </div>
 
         <div class="publish-targets">
-          <h3>Publish targets</h3>
+          <h3>Export & publish</h3>
           {#each publishTargets as target}
             <div class="publish-target">
               <div><strong>{target.label}</strong><span>{target.state}</span></div>
-              {#if target.id === "github"}
-                <button class="secondary mini" on:click={generateGithubRelease} disabled={githubLoading}>
-                  {githubLoading ? "..." : "Generate"}
-                </button>
-              {:else}
-                <button class="ghost mini" on:click={() => markPublishTarget(target.id)}>Mark prepared</button>
-              {/if}
+              <div class="target-actions">
+                {#if target.id === "modrinth"}
+                  <button class="secondary mini" on:click={() => exportArtifact("mrpack")} disabled={!!exportLoading || errorCount > 0}>
+                    {exportLoading === "mrpack" ? "…" : "Export .mrpack"}
+                  </button>
+                {:else if target.id === "curseforge"}
+                  <button class="secondary mini" on:click={() => exportArtifact("curseforge")} disabled={!!exportLoading || errorCount > 0}>
+                    {exportLoading === "curseforge" ? "…" : "Export zip"}
+                  </button>
+                {:else if target.id === "github"}
+                  <button class="secondary mini" on:click={generateGithubRelease} disabled={githubLoading}>
+                    {githubLoading ? "…" : "Generate"}
+                  </button>
+                {/if}
+                {#if target.id !== "github"}
+                  <button class="ghost mini" on:click={() => markPublishTarget(target.id)}>Mark ready</button>
+                {/if}
+              </div>
             </div>
           {/each}
+        </div>
+
+        <div class="quick-exports">
+          <h3>Quick exports</h3>
+          <div class="export-btns">
+            <button class="secondary mini" on:click={() => exportArtifact("server")} disabled={!!exportLoading}>
+              <Server size={12} /> {exportLoading === "server" ? "…" : "Server pack"}
+            </button>
+            <button class="secondary mini" on:click={() => exportArtifact("prism")} disabled={!!exportLoading}>
+              <Package size={12} /> {exportLoading === "prism" ? "…" : "Prism zip"}
+            </button>
+            <button class="ghost mini" on:click={openProjectFolder}>
+              <FolderOpen size={12} /> Open folder
+            </button>
+          </div>
         </div>
 
         <div class="artifact-list">
@@ -296,6 +369,9 @@
   .ready { padding: 9px 10px; border-radius: 12px; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .ready.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, .35); }
   .publish-target { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .target-actions, .export-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+  .quick-exports { display: grid; gap: 8px; }
+  .quick-exports h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
   .publish-target div { display: grid; gap: 3px; }
   .publish-target strong { color: var(--text-primary); }
   .publish-target span { color: var(--text-muted); font-size: 12px; }

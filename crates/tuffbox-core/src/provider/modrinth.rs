@@ -177,8 +177,22 @@ impl ContentProvider for ModrinthProvider {
         let mut dependencies: Vec<ModDependencySpec> = version
             .dependencies
             .into_iter()
-            .map(ProviderDependency::from)
-            .filter_map(provider_dependency_to_spec)
+            .filter_map(|dep| {
+                let raw = ProviderDependency::from(dep);
+                if raw.project_id.is_none() {
+                    if let Some(version_id) = &raw.version_id {
+                        if let Ok(v) = self.get_version(version_id) {
+                            return provider_dependency_to_spec(ProviderDependency {
+                                project_id: Some(v.project_id),
+                                version_id: Some(version_id.clone()),
+                                dependency_type: raw.dependency_type,
+                            });
+                        }
+                    }
+                    return None;
+                }
+                provider_dependency_to_spec(raw)
+            })
             .collect();
 
         // Modrinth dependency payloads use immutable project IDs, while TuffBox

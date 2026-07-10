@@ -182,10 +182,8 @@ impl ProviderFileInfo {
         if candidates.is_empty() {
             candidates = version.files.iter().collect();
         }
-        candidates
-            .into_iter()
-            .find(|f| f.primary)
-            .or_else(|| version.files.first())
+        let primary = candidates.iter().find(|f| f.primary).copied();
+        primary.or_else(|| candidates.first().copied())
     }
 }
 

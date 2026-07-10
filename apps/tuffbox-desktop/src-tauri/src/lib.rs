@@ -660,13 +660,18 @@ fn remove_from_mod_list(path: String, name: String, mod_id: String) -> Result<Mo
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn add_modrinth_mod(path: String, mod_id: String, side: String) -> Result<(), String> {
+async fn add_modrinth_mod(
+    app: tauri::AppHandle,
+    path: String,
+    mod_id: String,
+    side: String,
+) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         auto_snapshot(&PathBuf::from(&path), "add-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
         save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&PathBuf::from(&path), &manifest);
+        download_project_mods_tracked(&app, &PathBuf::from(&path), &manifest);
         Ok(())
     })
     .await
@@ -675,6 +680,7 @@ async fn add_modrinth_mod(path: String, mod_id: String, side: String) -> Result<
 
 #[tauri::command(rename_all = "camelCase")]
 async fn add_modrinth_mod_with_dependencies(
+    app: tauri::AppHandle,
     path: String,
     mod_id: String,
     side: String,
@@ -685,7 +691,7 @@ async fn add_modrinth_mod_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        download_project_mods_tracked(&app, &manifest_path, &manifest);
         Ok(installed)
     })
     .await
@@ -694,6 +700,7 @@ async fn add_modrinth_mod_with_dependencies(
 
 #[tauri::command(rename_all = "camelCase")]
 async fn add_modrinth_mods_with_dependencies(
+    app: tauri::AppHandle,
     path: String,
     mod_ids: Vec<String>,
     side: String,
@@ -704,7 +711,7 @@ async fn add_modrinth_mods_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        download_project_mods_tracked(&app, &manifest_path, &manifest);
         Ok(installed)
     })
     .await
@@ -739,14 +746,29 @@ fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn update_project_mod(path: String, mod_id: String) -> Result<(), String> {
+async fn update_project_mod(
+    app: tauri::AppHandle,
+    path: String,
+    mod_id: String,
+    version_id: Option<String>,
+) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
-        auto_snapshot(&PathBuf::from(&path), "update-mod").map_err(|e| e.to_string())?;
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "update-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        update_mod_from_modrinth(&mut manifest, &mod_id).map_err(|e| e.to_string())?;
-        save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&PathBuf::from(&path), &manifest);
-        Ok(())
+        update_mod_from_modrinth(
+            &manifest_path,
+            &mut manifest,
+            &mod_id,
+            version_id.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        let report = download_project_mods_tracked(&app, &manifest_path, &manifest);
+        Ok(serde_json::json!({
+            "modId": mod_id,
+            "download": report,
+        }))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -792,6 +814,7 @@ async fn get_mod_versions(
 /// manifest.
 #[tauri::command(rename_all = "camelCase")]
 async fn change_mod_version(
+    app: tauri::AppHandle,
     path: String,
     mod_id: String,
     new_version_id: String,
@@ -814,25 +837,31 @@ async fn change_mod_version(
         )
         .cloned()
         .ok_or_else(|| format!("no primary file for version {}", version_info.id))?;
-        let dependencies = provider
-            .resolve_dependencies(&version_info.id)
-            .unwrap_or_default();
-
         let idx = manifest
             .mods
             .iter()
             .position(|m| m.id == mod_id)
             .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
 
-        let side = manifest.mods[idx].side;
-        manifest.mods[idx] = build_mod_spec(&project, &version_info, file, dependencies, side);
+        let old_mod = manifest.mods[idx].clone();
+        let side = old_mod.side;
+        let previous_deps = old_mod.dependencies.clone();
+        let dependencies = provider
+            .resolve_dependencies(&version_info.id)
+            .unwrap_or(previous_deps);
+        let new_spec = build_mod_spec(&project, &version_info, file, dependencies, side);
+        if old_mod.file_name != new_spec.file_name {
+            remove_mod_file_from_disk(&manifest_path, &old_mod);
+        }
+        manifest.mods[idx] = new_spec;
 
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        let report = download_project_mods_tracked(&app, &manifest_path, &manifest);
 
         Ok(serde_json::json!({
             "version": version_info.version_number,
             "id": version_info.id,
+            "download": report,
         }))
     })
     .await
@@ -1139,7 +1168,8 @@ fn get_manifest_schema(path: String) -> Result<serde_json::Value, String> {
 /// circular dependency warnings, and a generated testing checklist.
 #[tauri::command(rename_all = "camelCase")]
 fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    enrich_manifest_for_graph(&mut manifest)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     let diagnostics = Resolver::analyze_project(&manifest, &graph);
     let project_dir = manifest_parent(&path)?;
@@ -1257,9 +1287,16 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
         for (hash, latest) in &latest_map {
             let Some(&idx) = hash_to_mod.get(hash) else { continue; };
             let m = &manifest.mods[idx];
-            if latest.version_number == m.version { continue; }
+            // Prefer file_id comparison — version_number strings can diverge
+            // from what Modrinth considers "the same" release.
+            if m.source.file_id.as_deref() == Some(latest.id.as_str()) {
+                continue;
+            }
+            if latest.version_number == m.version {
+                continue;
+            }
 
-            let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
+            let file = ProviderFileInfo::select_file_for_loader(latest, &loader_slug).cloned();
             updates.push(serde_json::json!({
                 "modId": m.id,
                 "name": m.name,
@@ -1271,6 +1308,7 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
                 "loaders": latest.loaders,
                 "changelog": latest.changelog,
                 "datePublished": latest.date_published,
+                "iconUrl": m.source.icon_url,
             }));
         }
         Ok(updates)
@@ -1281,12 +1319,13 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
 /// a single auto-snapshot before the changes. Uses Modrinth's batch
 /// update API to resolve all updates in one request.
 #[tauri::command(rename_all = "camelCase")]
-async fn update_all_mods(path: String) -> Result<Vec<String>, String> {
+async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "batch-update-all").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let mut updated = Vec::new();
+        let mut skipped_errors: Vec<String> = Vec::new();
 
         let provider = tuffbox_core::ModrinthProvider::new();
         let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
@@ -1305,33 +1344,74 @@ async fn update_all_mods(path: String) -> Result<Vec<String>, String> {
         }
 
         if hashes.is_empty() {
-            return Ok(updated);
+            return Ok(serde_json::json!({ "updated": updated, "errors": skipped_errors }));
         }
 
         let latest_map = provider
             .get_latest_versions(&hashes, &loaders, &game_versions)
             .map_err(|e| e.to_string())?;
 
-        for (hash, latest) in &latest_map {
-            let Some(&idx) = hash_to_idx.get(hash) else { continue; };
-            if latest.version_number == manifest.mods[idx].version { continue; }
-
-            let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
-            let Some(file) = file else { continue; };
-
-            let project_id = manifest.mods[idx].source.project_id.clone().unwrap_or_default();
-            let project = provider.get_project(&project_id).map_err(|e| e.to_string())?;
-            let dependencies = provider.resolve_dependencies(&latest.id).unwrap_or_default();
-            let side = manifest.mods[idx].side;
-            manifest.mods[idx] = build_mod_spec(&project, &latest, file, dependencies, side);
-            updated.push(manifest.mods[idx].name.clone());
+        // Collect (idx, latest) first so we can mutate without borrow issues
+        // and so a single failed project lookup doesn't abort the whole batch.
+        let mut pending: Vec<(usize, tuffbox_core::VersionInfo)> = Vec::new();
+        for (hash, latest) in latest_map {
+            let Some(&idx) = hash_to_idx.get(&hash) else { continue; };
+            let m = &manifest.mods[idx];
+            if m.source.file_id.as_deref() == Some(latest.id.as_str()) {
+                continue;
+            }
+            if latest.version_number == m.version {
+                continue;
+            }
+            pending.push((idx, latest));
         }
 
+        for (idx, latest) in pending {
+            let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
+            let Some(file) = file else {
+                skipped_errors.push(format!(
+                    "{}: no compatible file for loader {loader_slug}",
+                    manifest.mods[idx].name
+                ));
+                continue;
+            };
+
+            let old_mod = manifest.mods[idx].clone();
+            let project_id = latest
+                .project_id
+                .clone();
+            let project = match provider.get_project(&project_id) {
+                Ok(p) => p,
+                Err(e) => {
+                    // Fall back to metadata already in the manifest so one
+                    // failed lookup doesn't kill the entire update-all pass.
+                    skipped_errors.push(format!("{}: project lookup failed ({e}), using cached metadata", old_mod.name));
+                    project_info_from_mod(&old_mod)
+                }
+            };
+            let previous_deps = old_mod.dependencies.clone();
+            let dependencies = provider
+                .resolve_dependencies(&latest.id)
+                .unwrap_or(previous_deps);
+            let new_spec = build_mod_spec(&project, &latest, file, dependencies, old_mod.side);
+            if old_mod.file_name != new_spec.file_name {
+                remove_mod_file_from_disk(&manifest_path, &old_mod);
+            }
+            let name = new_spec.name.clone();
+            manifest.mods[idx] = new_spec;
+            updated.push(name);
+        }
+
+        let mut download = tuffbox_core::ModSyncReport::default();
         if !updated.is_empty() {
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-            download_project_mods(&manifest_path, &manifest);
+            download = download_project_mods_tracked(&app, &manifest_path, &manifest);
         }
-        Ok(updated)
+        Ok(serde_json::json!({
+            "updated": updated,
+            "errors": skipped_errors,
+            "download": download,
+        }))
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -2337,79 +2417,53 @@ fn generate_server_properties(path: String) -> Result<String, String> {
 
 /// ── Recipe scanner from actual JARs ──────────────────────────────
 
-/// Scans all mod JARs in the mods/ folder for recipe JSON files and
-/// returns a structured list. This gives real recipe data instead of
-/// the hardcoded examples in the RecipeBrowser.
+/// Scans mod JAR recipes with JEI-style layouts (3×3 grid, cooking slots, etc.).
 #[tauri::command(rename_all = "camelCase")]
 fn scan_mod_recipes(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let project_dir = manifest_parent(&path)?;
-    let mods_dir = project_dir.join("mods");
-    let mut recipes = Vec::new();
-
-    if !mods_dir.is_dir() { return Ok(recipes); }
-
-    for entry in std::fs::read_dir(&mods_dir).into_iter().flatten().flatten() {
-        let p = entry.path();
-        if p.extension().map_or(true, |e| e != "jar") { continue; }
-        let mod_name = entry.file_name().to_string_lossy().trim_end_matches(".jar").to_string();
-
-        if let Ok(f) = std::fs::File::open(&p) {
-            if let Ok(mut zip) = zip::ZipArchive::new(f) {
-                for i in 0..zip.len() {
-                    if let Ok(zf) = zip.by_index(i) {
-                        let name = zf.name().to_string();
-                        if name.starts_with("data/") && name.ends_with(".json") && name.contains("recipe") {
-                            if let Ok(raw) = std::io::read_to_string(zf) {
-                                if raw.len() < 128 * 1024 {
-                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
-                                        let recipe_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("crafting");
-                                        let result = parsed.get("result");
-                                        let output = if let Some(r) = result.and_then(|r| r.as_str()) { r.to_string() }
-                                            else if let Some(r) = result.and_then(|r| r.get("item")).and_then(|i| i.as_str()) { r.to_string() }
-                                            else { "?".into() };
-                                        let ingredients = extract_ingredients(&parsed);
-                                        recipes.push(serde_json::json!({
-                                            "id": name.trim_end_matches(".json"),
-                                            "type": recipe_type,
-                                            "output": output,
-                                            "input": ingredients.join(", "),
-                                            "sourceFile": name,
-                                            "modSource": mod_name,
-                                        }));
-                                        if recipes.len() >= 200 { break; }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if recipes.len() >= 200 { break; }
-    }
-
-    Ok(recipes)
+    let recipes = tuffbox_core::recipe_scan::scan_project_recipes(Path::new(&path))?;
+    recipes
+        .into_iter()
+        .map(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+        .collect()
 }
 
-fn extract_ingredients(v: &serde_json::Value) -> Vec<String> {
-    let mut items = Vec::new();
-    if let Some(key) = v.get("key").and_then(|k| k.as_object()) {
-        for (_, val) in key {
-            if let Some(item) = val.get("item").and_then(|i| i.as_str()) { items.push(item.to_string()); }
-            else if let Some(tag) = val.get("tag").and_then(|t| t.as_str()) { items.push(format!("#{}", tag)); }
-        }
-    }
-    if let Some(ings) = v.get("ingredients").and_then(|i| i.as_array()) {
-        for ing in ings {
-            if let Some(item) = ing.get("item").and_then(|i| i.as_str()) { items.push(item.to_string()); }
-            else if let Some(tag) = ing.get("tag").and_then(|t| t.as_str()) { items.push(format!("#{}", tag)); }
-            else if let Some(list) = ing.as_array() {
-                for l in list { if let Some(s) = l.get("item").and_then(|i| i.as_str()) { items.push(s.to_string()); } }
-            }
-        }
-    }
-    items.truncate(8);
-    items
+/// Load FTB Quests chapters from project config via the SNBT parser.
+#[tauri::command(rename_all = "camelCase")]
+fn load_quest_book(path: String) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    serde_json::to_value(book).map_err(|e| e.to_string())
+}
+
+/// Save a single quest chapter back to disk as SNBT.
+#[tauri::command(rename_all = "camelCase")]
+fn save_quest_chapter(
+    path: String,
+    chapter: tuffbox_core::unified::Chapter,
+    relative_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let rel = tuffbox_core::unified::QuestBook::save_chapter(
+        &project_dir,
+        &chapter,
+        relative_path.as_deref(),
+    )?;
+    auto_snapshot_with_changed_files(&manifest_path, "save-quest-chapter", &[PathBuf::from(&rel)])
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "relativePath": rel, "questCount": chapter.quests.len() }))
+}
+
+/// Validate quest book integrity (missing deps, empty tasks).
+#[tauri::command(rename_all = "camelCase")]
+fn validate_quest_book(path: String) -> Result<Vec<serde_json::Value>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    Ok(book
+        .validate()
+        .into_iter()
+        .map(|e| serde_json::json!({ "questId": e.quest_id, "message": e.message }))
+        .collect())
 }
 
 
@@ -2976,6 +3030,7 @@ async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<S
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        enrich_manifest_for_graph(&mut manifest)?;
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
@@ -2988,7 +3043,7 @@ async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<S
             auto_snapshot(&manifest_path, "apply-resolve-action").map_err(|e| e.to_string())?;
         }
         let mut applied = Vec::new();
-        apply_change_action(&mut manifest, action, &mut applied)?;
+        apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods(&manifest_path, &manifest);
         Ok(applied)
@@ -3002,6 +3057,7 @@ async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> 
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        enrich_manifest_for_graph(&mut manifest)?;
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
@@ -3012,7 +3068,7 @@ async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> 
         }
         let mut applied = Vec::new();
         for action in plan.actions {
-            apply_change_action(&mut manifest, action, &mut applied)?;
+            apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods(&manifest_path, &manifest);
@@ -3151,7 +3207,7 @@ async fn apply_crash_fix_plan(path: String, report_id: Option<String>) -> Result
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let mut applied = Vec::new();
         for action in plan.actions {
-            apply_change_action(&mut manifest, action, &mut applied)?;
+            apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods(&manifest_path, &manifest);
@@ -4727,7 +4783,17 @@ fn diff_preview(diff: &str) -> String {
     }
 }
 
+fn remove_mod_file_from_disk(manifest_path: &Path, removed_mod: &ModSpec) {
+    if let Some(file_name) = &removed_mod.file_name {
+        if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) {
+            let content_dir = tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
+            let _ = std::fs::remove_file(content_dir.join(file_name));
+        }
+    }
+}
+
 fn apply_change_action(
+    manifest_path: &Path,
     manifest: &mut ProjectManifest,
     action: tuffbox_core::ChangeAction,
     applied: &mut Vec<String>,
@@ -4741,15 +4807,25 @@ fn apply_change_action(
         tuffbox_core::ChangeAction::RemoveMod { node_id }
         | tuffbox_core::ChangeAction::DisableMod { node_id } => {
             let mod_id = node_id.0.strip_prefix("mod:").unwrap_or(&node_id.0).to_string();
+            let removed_mod = manifest.mods.iter().find(|m| m.id == mod_id).cloned();
             let before = manifest.mods.len();
             manifest.mods.retain(|m| m.id != mod_id);
             if manifest.mods.len() != before {
+                if let Some(removed_mod) = removed_mod {
+                    remove_mod_file_from_disk(manifest_path, &removed_mod);
+                }
                 applied.push(format!("removed {mod_id}"));
             }
         }
-        tuffbox_core::ChangeAction::UpdateMod { node_id, .. } => {
+        tuffbox_core::ChangeAction::UpdateMod { node_id, target_version } => {
             let mod_id = node_id.0.strip_prefix("mod:").unwrap_or(&node_id.0).to_string();
-            update_mod_from_modrinth(manifest, &mod_id).map_err(|e| e.to_string())?;
+            let version_id = if target_version.trim().is_empty() {
+                None
+            } else {
+                Some(target_version.as_str())
+            };
+            update_mod_from_modrinth(manifest_path, manifest, &mod_id, version_id)
+                .map_err(|e| e.to_string())?;
             applied.push(format!("updated {mod_id}"));
         }
         tuffbox_core::ChangeAction::EditConfig { path, .. } => {
@@ -4851,7 +4927,12 @@ fn add_mod_from_modrinth(
     Ok(())
 }
 
-fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> anyhow::Result<()> {
+fn update_mod_from_modrinth(
+    manifest_path: &Path,
+    manifest: &mut ProjectManifest,
+    mod_id: &str,
+    version_id: Option<&str>,
+) -> anyhow::Result<()> {
     let provider = tuffbox_core::ModrinthProvider::new();
     let index = manifest
         .mods
@@ -4859,24 +4940,46 @@ fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> any
         .position(|m| m.id == mod_id)
         .ok_or_else(|| anyhow::anyhow!("mod {mod_id} not found in project"))?;
 
-    let project_id = manifest.mods[index]
+    let old_mod = manifest.mods[index].clone();
+    let project_id = old_mod
         .source
         .project_id
         .clone()
         .unwrap_or_else(|| mod_id.to_string());
     let project = provider.get_project(&project_id)?;
 
-    let query = ProviderSearchQuery {
-        query: None,
-        minecraft_version: Some(manifest.minecraft.version.clone()),
-        loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
-        ..Default::default()
+    let version = if let Some(vid) = version_id.filter(|v| !v.trim().is_empty()) {
+        // Prefer the exact version from the update check / change plan.
+        match provider.get_version(vid) {
+            Ok(v) => v,
+            Err(_) => {
+                // `target_version` may be a version_number rather than an id.
+                let query = ProviderSearchQuery {
+                    query: None,
+                    minecraft_version: Some(manifest.minecraft.version.clone()),
+                    loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+                    ..Default::default()
+                };
+                provider
+                    .get_versions(&project_id, &query)?
+                    .into_iter()
+                    .find(|v| v.version_number == vid || v.id == vid)
+                    .ok_or_else(|| anyhow::anyhow!("version {vid} not found for {project_id}"))?
+            }
+        }
+    } else {
+        let query = ProviderSearchQuery {
+            query: None,
+            minecraft_version: Some(manifest.minecraft.version.clone()),
+            loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+            ..Default::default()
+        };
+        provider
+            .get_versions(&project_id, &query)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("no compatible version found for {project_id}"))?
     };
-    let versions = provider.get_versions(&project_id, &query)?;
-    let version = versions
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("no compatible version found for {project_id}"))?;
 
     let file = ProviderFileInfo::select_file_for_loader(
         &version,
@@ -4885,10 +4988,50 @@ fn update_mod_from_modrinth(manifest: &mut ProjectManifest, mod_id: &str) -> any
     .cloned()
     .ok_or_else(|| anyhow::anyhow!("no primary file for version {}", version.id))?;
 
-    let side = manifest.mods[index].side;
-    let dependencies = provider.resolve_dependencies(&version.id)?;
-    manifest.mods[index] = build_mod_spec(&project, &version, file, dependencies, side);
+    let dependencies = provider
+        .resolve_dependencies(&version.id)
+        .unwrap_or_else(|_| old_mod.dependencies.clone());
+    let new_spec = build_mod_spec(&project, &version, file, dependencies, old_mod.side);
+
+    // Drop the previous jar when the filename changes so Minecraft doesn't
+    // load both the old and new versions side-by-side.
+    if old_mod.file_name != new_spec.file_name {
+        remove_mod_file_from_disk(manifest_path, &old_mod);
+    }
+
+    manifest.mods[index] = new_spec;
     Ok(())
+}
+
+/// Builds a minimal ProjectInfo from an existing ModSpec — used as a
+/// fallback when Modrinth project lookup fails during batch updates.
+fn project_info_from_mod(module: &ModSpec) -> tuffbox_core::ProjectInfo {
+    let project_type = match module.content_type {
+        tuffbox_core::manifest::ContentType::Resourcepack => "resourcepack",
+        tuffbox_core::manifest::ContentType::Shaderpack => "shader",
+        tuffbox_core::manifest::ContentType::Datapack => "datapack",
+        tuffbox_core::manifest::ContentType::Mod => "mod",
+    };
+    tuffbox_core::ProjectInfo {
+        id: module
+            .source
+            .project_id
+            .clone()
+            .unwrap_or_else(|| module.id.clone()),
+        slug: module.id.clone(),
+        name: module.name.clone(),
+        description: String::new(),
+        project_type: project_type.to_string(),
+        icon_url: module.source.icon_url.clone(),
+        author: None,
+        downloads: None,
+        follows: None,
+        date_modified: None,
+        categories: Vec::new(),
+        license: None,
+        client_side: None,
+        server_side: None,
+    }
 }
 
 fn build_mod_spec(
@@ -5098,11 +5241,235 @@ fn register_running_instance(instance_id: &str, child: std::process::Child) {
     }
 }
 
+/// Returns true when the mod's jar is missing or its on-disk SHA1 does not
+/// match the manifest — i.e. a download is required.
+fn mod_needs_download(instance_dir: &Path, module: &ModSpec) -> bool {
+    if module.source.kind == SourceKind::Local {
+        return false;
+    }
+    let Some(file_name) = &module.file_name else {
+        return false;
+    };
+    if module.source.url.is_none() {
+        return false;
+    }
+    let target = tuffbox_core::content_dir_for(instance_dir, module.content_type).join(file_name);
+    if !target.is_file() {
+        return true;
+    }
+    match module.hashes.as_ref().and_then(|h| h.sha1.as_deref()) {
+        Some(expected) => tuffbox_core::sha1_file(&target)
+            .map(|actual| !actual.eq_ignore_ascii_case(expected))
+            .unwrap_or(true),
+        None => false,
+    }
+}
+
 /// ────────────────────────────────────────────────────────────────────
 fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) -> tuffbox_core::ModSyncReport {
     let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
         .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
     tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir)
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModDownloadProgressPayload {
+    id: String,
+    name: String,
+    downloaded: u64,
+    total: u64,
+    percent: u32,
+    status: String,
+}
+
+/// Downloads missing mod files while streaming per-mod byte progress to the
+/// frontend via `mod-download-progress` / `mod-download-batch` events and the
+/// `DOWNLOAD_PROGRESS` snapshot map.
+fn download_project_mods_tracked(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> tuffbox_core::ModSyncReport {
+    use tauri::Emitter;
+
+    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
+        .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+
+    if let Ok(mut map) = DOWNLOAD_PROGRESS.lock() {
+        map.clear();
+    }
+
+    let name_map: std::collections::HashMap<String, String> = manifest
+        .mods
+        .iter()
+        .map(|m| (m.id.clone(), m.name.clone()))
+        .collect();
+
+    // Only surface mods that actually need a network fetch — already-present
+    // jars would otherwise flood the progress UI on every update/install.
+    let queue: Vec<ModDownloadProgressPayload> = manifest
+        .mods
+        .iter()
+        .filter(|m| mod_needs_download(&instance_dir, m))
+        .map(|m| ModDownloadProgressPayload {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            downloaded: 0,
+            total: 0,
+            percent: 0,
+            status: "queued".to_string(),
+        })
+        .collect();
+
+    // Nothing to fetch — still emit a quick start/done so any UI overlay can settle.
+    if queue.is_empty() {
+        let report = tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir);
+        let _ = app.emit(
+            "mod-download-batch",
+            serde_json::json!({
+                "phase": "start",
+                "items": Vec::<ModDownloadProgressPayload>::new(),
+            }),
+        );
+        let _ = app.emit(
+            "mod-download-batch",
+            serde_json::json!({
+                "phase": "done",
+                "downloaded": report.downloaded,
+                "failed": report.failed,
+                "alreadyPresent": report.already_present,
+                "skipped": report.skipped,
+            }),
+        );
+        return report;
+    }
+
+    let _ = app.emit(
+        "mod-download-batch",
+        serde_json::json!({
+            "phase": "start",
+            "items": queue,
+        }),
+    );
+
+    let app_for_cb = app.clone();
+    let names_for_cb = name_map.clone();
+    // Throttle: only emit when percent changes by >= 1 to avoid flooding the UI.
+    let last_emitted: std::sync::Mutex<std::collections::HashMap<String, u32>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
+
+    let progress = tuffbox_core::ProgressCallback::with(move |id, done, total| {
+        if let Ok(mut map) = DOWNLOAD_PROGRESS.lock() {
+            map.insert(id.to_string(), (done, total));
+        }
+        let percent = if total > 0 {
+            ((done as f64 / total as f64) * 100.0).round() as u32
+        } else {
+            0
+        };
+        let status = if total > 0 && done >= total {
+            "done"
+        } else {
+            "downloading"
+        };
+
+        let should_emit = {
+            let mut last = last_emitted.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = last.get(id).copied().unwrap_or(u32::MAX);
+            if status == "done" || prev == u32::MAX || percent.abs_diff(prev) >= 1 {
+                last.insert(id.to_string(), percent);
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_emit {
+            let name = names_for_cb
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| id.to_string());
+            let _ = app_for_cb.emit(
+                "mod-download-progress",
+                ModDownloadProgressPayload {
+                    id: id.to_string(),
+                    name,
+                    downloaded: done,
+                    total,
+                    percent,
+                    status: status.to_string(),
+                },
+            );
+        }
+    });
+
+    let report =
+        tuffbox_core::ensure_project_mods_downloaded_with_progress(manifest, &instance_dir, &progress);
+
+    // Mark completed / failed items explicitly so the UI can settle bars.
+    for id in &report.downloaded {
+        let name = name_map.get(id).cloned().unwrap_or_else(|| id.clone());
+        let _ = app.emit(
+            "mod-download-progress",
+            ModDownloadProgressPayload {
+                id: id.clone(),
+                name,
+                downloaded: 1,
+                total: 1,
+                percent: 100,
+                status: "done".to_string(),
+            },
+        );
+    }
+    for id in &report.already_present {
+        let name = name_map.get(id).cloned().unwrap_or_else(|| id.clone());
+        let _ = app.emit(
+            "mod-download-progress",
+            ModDownloadProgressPayload {
+                id: id.clone(),
+                name,
+                downloaded: 1,
+                total: 1,
+                percent: 100,
+                status: "skipped".to_string(),
+            },
+        );
+    }
+    for fail in &report.failed {
+        let name = name_map
+            .get(&fail.mod_id)
+            .cloned()
+            .unwrap_or_else(|| fail.mod_id.clone());
+        let _ = app.emit(
+            "mod-download-progress",
+            ModDownloadProgressPayload {
+                id: fail.mod_id.clone(),
+                name,
+                downloaded: 0,
+                total: 0,
+                percent: 0,
+                status: "failed".to_string(),
+            },
+        );
+    }
+
+    let _ = app.emit(
+        "mod-download-batch",
+        serde_json::json!({
+            "phase": "done",
+            "downloaded": report.downloaded,
+            "failed": report.failed,
+            "alreadyPresent": report.already_present,
+            "skipped": report.skipped,
+        }),
+    );
+
+    if let Ok(mut map) = DOWNLOAD_PROGRESS.lock() {
+        map.clear();
+    }
+
+    report
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -5167,6 +5534,9 @@ pub fn run() {
             launch_server,
             generate_server_properties,
             scan_mod_recipes,
+            load_quest_book,
+            save_quest_chapter,
+            validate_quest_book,
             list_worlds,
             backup_world,
             save_as_template,

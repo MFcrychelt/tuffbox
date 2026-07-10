@@ -33,18 +33,29 @@
     | "quests";
   let currentView: View = "dashboard";
 
-  onMount(async () => {
-    try {
-      const lastPath = await api.session.getLastOpened();
-      if (lastPath) {
-        const info = await api.project.validate(lastPath);
-        recentProjects.add({ path: lastPath, info: info as any });
-        projectPath.set(lastPath);
-        projectInfo.set(info as any);
+  onMount(() => {
+    const onOpenGraph = () => {
+      currentView = "graph";
+    };
+    window.addEventListener("tuffbox:open-graph", onOpenGraph);
+
+    void (async () => {
+      try {
+        const lastPath = await api.session.getLastOpened();
+        if (lastPath) {
+          const info = await api.project.validate(lastPath);
+          recentProjects.add({ path: lastPath, info: info as any });
+          projectPath.set(lastPath);
+          projectInfo.set(info as any);
+        }
+      } catch {
+        // no last project — that's fine
       }
-    } catch {
-      // no last project — that's fine
-    }
+    })();
+
+    return () => {
+      window.removeEventListener("tuffbox:open-graph", onOpenGraph);
+    };
   });
 </script>
 

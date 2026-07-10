@@ -43,11 +43,13 @@
   let loading = false;
   let error: string | null = null;
   let selectedOre: string | null = null;
+  let lastOreScanPath: string | null = null;
 
   // World management section
   let worlds: WorldEntry[] = [];
   let worldsLoading = false;
   let worldsError: string | null = null;
+  let lastWorldsPath: string | null = null;
   let selectedWorld: string | null = null;
   let selectedWorldInfo: WorldInfo | null = null;
   let backingUp = false;
@@ -59,6 +61,7 @@
     worldsError = null;
     try {
       worlds = (await invoke("list_worlds", { path: $projectPath })) as WorldEntry[];
+      lastWorldsPath = $projectPath;
     } catch (e) {
       worldsError = String(e);
     } finally {
@@ -114,6 +117,7 @@
     loading = true; error = null;
     try {
       ores = await invoke("scan_ore_generation", { path: $projectPath });
+      lastOreScanPath = $projectPath;
     } catch (e) { error = String(e); }
     finally { loading = false; }
   }
@@ -159,8 +163,8 @@
     return "#7c7c8a";
   }
 
-  $: if ($projectPath && ores.length === 0) scan();
-  $: if ($projectPath && worlds.length === 0 && !worldsLoading) loadWorlds();
+  $: if ($projectPath && $projectPath !== lastOreScanPath) scan();
+  $: if ($projectPath && $projectPath !== lastWorldsPath && !worldsLoading) loadWorlds();
 </script>
 
 <div class="ore-visualizer">
