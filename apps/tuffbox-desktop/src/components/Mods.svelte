@@ -1000,11 +1000,15 @@
     error = null;
     openDownloadOverlay(`Updating ${mod.name}`);
     try {
-      await invoke("update_project_mod", {
+      const result: any = await invoke("update_project_mod", {
         path: $projectPath,
         modId: mod.id,
         versionId: versionId ?? null,
       });
+      const failures = result?.download?.failed ?? [];
+      if (failures.length) {
+        throw new Error(failures.map((failure: any) => failure.error).join("; "));
+      }
       updateList = updateList.filter((u) => u.modId !== mod.id);
       await load(true);
     } catch (e) {
@@ -1021,11 +1025,15 @@
     error = null;
     openDownloadOverlay(`Updating ${update.name}`);
     try {
-      await invoke("update_project_mod", {
+      const result: any = await invoke("update_project_mod", {
         path: $projectPath,
         modId: update.modId,
         versionId: update.versionId ?? null,
       });
+      const failures = result?.download?.failed ?? [];
+      if (failures.length) {
+        throw new Error(failures.map((failure: any) => failure.error).join("; "));
+      }
       updateList = updateList.filter((u) => u.modId !== update.modId);
       await load(true);
     } catch (e) {

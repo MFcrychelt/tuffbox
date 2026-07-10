@@ -29,3 +29,5 @@ tuffbox-core = { path = "../../../crates/tuffbox-core" }
 zip.workspace = true
 once_cell.workspace = true
 toml.workspace = true
+tempfile.workspace = true
+rayon.workspace = true

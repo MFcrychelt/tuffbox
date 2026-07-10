@@ -7,3 +7,10 @@ patch_mods.sh
 dist/
 share/
 *.zip
+
+# JEI companion bridge build output
+bridges/jei-runtime/.gradle/
+bridges/jei-runtime/.vscode/
+bridges/jei-runtime/**/build/
+bridges/jei-runtime/prebuilt/*.jar
+!bridges/jei-runtime/gradle/wrapper/gradle-wrapper.jar

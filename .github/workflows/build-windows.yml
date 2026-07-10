@@ -31,6 +31,12 @@ jobs:
       with:
         targets: x86_64-pc-windows-msvc
 
+    - name: Setup Java 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '21'
+
     - name: Remove local cargo config (CI uses default linker)
       run: Remove-Item -Force .cargo/config.toml -ErrorAction SilentlyContinue
 
@@ -48,6 +54,10 @@ jobs:
     - name: Install frontend dependencies
       working-directory: apps/tuffbox-desktop
       run: npm ci
+
+    - name: Build JEI runtime bridges
+      working-directory: bridges/jei-runtime
+      run: .\gradlew.bat syncDesktopResources --no-daemon
 
     - name: Build Tauri (Windows .exe + installer)
       working-directory: apps/tuffbox-desktop

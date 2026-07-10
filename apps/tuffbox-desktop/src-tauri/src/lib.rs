@@ -2,8 +2,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tuffbox_core::{
-    ContentProvider, DependencyGraph, ModSource, ModSpec, PackBrief, ProjectManifest, ProviderFileInfo,
-    ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind, TuffboxLockfile,
+    ContentProvider, DependencyGraph, ModSource, ModSpec, PackBrief, ProjectManifest,
+    ProviderFileInfo, ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind,
+    TuffboxLockfile,
 };
 
 #[derive(serde::Serialize)]
@@ -49,7 +50,6 @@ struct ProfileSummary {
     memory_mb: Option<u32>,
     jvm_args: Vec<String>,
 }
-
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -195,7 +195,10 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
         java_path: manifest.java.as_ref().and_then(|j| j.path.clone()),
         memory_mb: profile.memory_mb.unwrap_or(4096),
         jvm_args: profile.jvm_args.clone(),
-        player_name: profile.player_name.clone().unwrap_or_else(|| "Player".to_string()),
+        player_name: profile
+            .player_name
+            .clone()
+            .unwrap_or_else(|| "Player".to_string()),
     })
 }
 
@@ -234,7 +237,8 @@ fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
 async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = std::path::PathBuf::from(&path);
-        let mut manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+        let mut manifest =
+            ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
 
         let mut project_dir = manifest_path.clone();
         if manifest_path.is_file() {
@@ -244,9 +248,21 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
         // Scan all content folders: mods/, resourcepacks/, shaderpacks/, datapacks/
         let content_dirs: &[(&str, &str, tuffbox_core::manifest::ContentType)] = &[
             ("mods", "jar", tuffbox_core::manifest::ContentType::Mod),
-            ("resourcepacks", "zip", tuffbox_core::manifest::ContentType::Resourcepack),
-            ("shaderpacks", "zip", tuffbox_core::manifest::ContentType::Shaderpack),
-            ("datapacks", "zip", tuffbox_core::manifest::ContentType::Datapack),
+            (
+                "resourcepacks",
+                "zip",
+                tuffbox_core::manifest::ContentType::Resourcepack,
+            ),
+            (
+                "shaderpacks",
+                "zip",
+                tuffbox_core::manifest::ContentType::Shaderpack,
+            ),
+            (
+                "datapacks",
+                "zip",
+                tuffbox_core::manifest::ContentType::Datapack,
+            ),
         ];
 
         let provider = tuffbox_core::ModrinthProvider::new();
@@ -272,7 +288,11 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                 }
 
                 let file_name = entry.file_name().to_string_lossy().to_string();
-                if manifest.mods.iter().any(|m| m.file_name.as_deref() == Some(&*file_name)) {
+                if manifest
+                    .mods
+                    .iter()
+                    .any(|m| m.file_name.as_deref() == Some(&*file_name))
+                {
                     continue;
                 }
 
@@ -289,9 +309,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     identified.file_name = Some(file_name.clone());
                     identified
                 } else {
-                    let id = file_name
-                        .trim_end_matches(&format!(".{}", ext))
-                        .to_string();
+                    let id = file_name.trim_end_matches(&format!(".{}", ext)).to_string();
                     tuffbox_core::manifest::ModSpec {
                         id,
                         name: file_name.clone(),
@@ -329,11 +347,9 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             let Some(file_name) = manifest.mods[idx].file_name.clone() else {
                 continue;
             };
-            let file_path = tuffbox_core::content_dir_for(
-                &project_dir,
-                manifest.mods[idx].content_type,
-            )
-            .join(&file_name);
+            let file_path =
+                tuffbox_core::content_dir_for(&project_dir, manifest.mods[idx].content_type)
+                    .join(&file_name);
             if !file_path.is_file() {
                 continue;
             }
@@ -357,7 +373,9 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
         }
 
         list_mods_impl(&path)
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -373,15 +391,14 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 tuffbox_core::manifest::ContentType::Datapack => "datapack",
             };
             let icon_url: Option<String> = match &m.source.kind {
-                tuffbox_core::manifest::SourceKind::Modrinth => m
-                    .source
-                    .icon_url
-                    .clone()
-                    .or_else(|| {
-                        m.source.project_id.as_ref().map(|pid| {
-                            format!("https://cdn.modrinth.com/data/{pid}/icon.png")
-                        })
-                    }),
+                tuffbox_core::manifest::SourceKind::Modrinth => {
+                    m.source.icon_url.clone().or_else(|| {
+                        m.source
+                            .project_id
+                            .as_ref()
+                            .map(|pid| format!("https://cdn.modrinth.com/data/{pid}/icon.png"))
+                    })
+                }
                 _ => None,
             };
             serde_json::json!({
@@ -402,9 +419,9 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 async fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
-    tokio::task::spawn_blocking(move || {
-        list_mods_impl(&path)
-    }).await.map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || list_mods_impl(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -422,11 +439,13 @@ async fn search_modrinth_mods(
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::ModrinthProvider::new();
-        let default_loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+        let default_loader =
+            tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
         provider
             .search(&ProviderSearchQuery {
                 query: Some(query),
-                minecraft_version: game_version.or_else(|| Some(manifest.minecraft.version.clone())),
+                minecraft_version: game_version
+                    .or_else(|| Some(manifest.minecraft.version.clone())),
                 loader: loader.or_else(|| Some(default_loader)),
                 category,
                 environment,
@@ -442,7 +461,10 @@ async fn search_modrinth_mods(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn preview_modrinth_install(path: String, mod_id: String) -> Result<ModInstallPreview, String> {
+async fn preview_modrinth_install(
+    path: String,
+    mod_id: String,
+) -> Result<ModInstallPreview, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::ModrinthProvider::new();
@@ -459,8 +481,14 @@ async fn preview_modrinth_install(path: String, mod_id: String) -> Result<ModIns
             .into_iter()
             .next()
             .ok_or_else(|| format!("no compatible version found for {mod_id}"))?;
-        let file_name = ProviderFileInfo::select_file_for_loader(&version, &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind)).map(|file| file.filename.clone());
-        let dependencies = provider.resolve_dependencies(&version.id).unwrap_or_default();
+        let file_name = ProviderFileInfo::select_file_for_loader(
+            &version,
+            &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+        )
+        .map(|file| file.filename.clone());
+        let dependencies = provider
+            .resolve_dependencies(&version.id)
+            .unwrap_or_default();
         let side = format!("{:?}", infer_project_side(Some(&project))).to_lowercase();
         Ok(ModInstallPreview {
             project_id: project.id,
@@ -493,9 +521,7 @@ async fn get_modrinth_project_icon(project_id: String) -> Result<Option<String>,
 async fn get_modrinth_project(project_id: String) -> Result<tuffbox_core::ProjectInfo, String> {
     tokio::task::spawn_blocking(move || {
         let provider = tuffbox_core::ModrinthProvider::new();
-        provider
-            .get_project(&project_id)
-            .map_err(|e| e.to_string())
+        provider.get_project(&project_id).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -536,8 +562,11 @@ fn save_mod_user_state(project_dir: &Path, state: &ModUserState) -> Result<(), S
     if let Some(par) = p.parent() {
         std::fs::create_dir_all(par).map_err(|e| e.to_string())?;
     }
-    std::fs::write(&p, serde_json::to_string_pretty(state).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    std::fs::write(
+        &p,
+        serde_json::to_string_pretty(state).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -619,7 +648,11 @@ fn delete_mod_list(path: String, name: String) -> Result<ModUserState, String> {
 
 /// Renames a build list.
 #[tauri::command(rename_all = "camelCase")]
-fn rename_mod_list(path: String, old_name: String, new_name: String) -> Result<ModUserState, String> {
+fn rename_mod_list(
+    path: String,
+    old_name: String,
+    new_name: String,
+) -> Result<ModUserState, String> {
     let project_dir = manifest_parent(&path)?;
     let mut state = load_mod_user_state(&project_dir);
     let trimmed = new_name.trim().to_string();
@@ -649,7 +682,11 @@ fn add_to_mod_list(path: String, name: String, mod_id: String) -> Result<ModUser
 /// Removes a mod from a named build list. If the list becomes empty
 /// it is kept (user might want to add more mods later).
 #[tauri::command(rename_all = "camelCase")]
-fn remove_from_mod_list(path: String, name: String, mod_id: String) -> Result<ModUserState, String> {
+fn remove_from_mod_list(
+    path: String,
+    name: String,
+    mod_id: String,
+) -> Result<ModUserState, String> {
     let project_dir = manifest_parent(&path)?;
     let mut state = load_mod_user_state(&project_dir);
     if let Some(entry) = state.lists.get_mut(&name) {
@@ -707,7 +744,8 @@ async fn add_modrinth_mods_with_dependencies(
 ) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "bulk-add-mods-with-dependencies").map_err(|e| e.to_string())?;
+        auto_snapshot(&manifest_path, "bulk-add-mods-with-dependencies")
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
@@ -736,8 +774,11 @@ fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
     // are removed from the right folder, not `mods/`.
     if let Some(removed_mod) = removed_mod {
         if let Some(file_name) = removed_mod.file_name {
-            if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path)) {
-                let content_dir = tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
+            if let Some(instance_dir) =
+                tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
+            {
+                let content_dir =
+                    tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
                 let _ = std::fs::remove_file(content_dir.join(file_name));
             }
         }
@@ -756,6 +797,12 @@ async fn update_project_mod(
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "update-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let old_mod = manifest
+            .mods
+            .iter()
+            .find(|module| module.id == mod_id)
+            .cloned()
+            .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
         update_mod_from_modrinth(
             &manifest_path,
             &mut manifest,
@@ -763,8 +810,7 @@ async fn update_project_mod(
             version_id.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        let report = download_project_mods_tracked(&app, &manifest_path, &manifest);
+        let report = commit_single_mod_update(&app, &manifest_path, &manifest, &old_mod)?;
         Ok(serde_json::json!({
             "modId": mod_id,
             "download": report,
@@ -791,18 +837,22 @@ async fn get_mod_versions(
             loader,
             ..Default::default()
         };
-        let versions = provider.get_versions(&mod_id, &query).map_err(|e| e.to_string())?;
+        let versions = provider
+            .get_versions(&mod_id, &query)
+            .map_err(|e| e.to_string())?;
         Ok(versions
             .into_iter()
-            .map(|v| serde_json::json!({
-                "id": v.id,
-                "versionNumber": v.version_number,
-                "gameVersions": v.game_versions,
-                "loaders": v.loaders,
-                "name": v.name,
-                "changelog": v.changelog,
-                "datePublished": v.date_published,
-            }))
+            .map(|v| {
+                serde_json::json!({
+                    "id": v.id,
+                    "versionNumber": v.version_number,
+                    "gameVersions": v.game_versions,
+                    "loaders": v.loaders,
+                    "name": v.name,
+                    "changelog": v.changelog,
+                    "datePublished": v.date_published,
+                })
+            })
             .collect())
     })
     .await
@@ -850,13 +900,9 @@ async fn change_mod_version(
             .resolve_dependencies(&version_info.id)
             .unwrap_or(previous_deps);
         let new_spec = build_mod_spec(&project, &version_info, file, dependencies, side);
-        if old_mod.file_name != new_spec.file_name {
-            remove_mod_file_from_disk(&manifest_path, &old_mod);
-        }
         manifest.mods[idx] = new_spec;
 
-        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        let report = download_project_mods_tracked(&app, &manifest_path, &manifest);
+        let report = commit_single_mod_update(&app, &manifest_path, &manifest, &old_mod)?;
 
         Ok(serde_json::json!({
             "version": version_info.version_number,
@@ -873,9 +919,7 @@ async fn change_mod_version(
 /// Fabric project), and returns a list of suggestions with the file name
 /// and a recommendation.
 #[tauri::command(rename_all = "camelCase")]
-async fn detect_wrong_loader_mods(
-    path: String,
-) -> Result<Vec<serde_json::Value>, String> {
+async fn detect_wrong_loader_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let project_dir = PathBuf::from(&path)
@@ -942,17 +986,16 @@ async fn detect_wrong_loader_mods(
 
 /// Renames a .jar file in mods/ to .jar.disabled so Minecraft won't load it.
 #[tauri::command(rename_all = "camelCase")]
-async fn disable_wrong_loader_jar(
-    path: String,
-    file_name: String,
-) -> Result<String, String> {
+async fn disable_wrong_loader_jar(path: String, file_name: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let project_dir = PathBuf::from(&path)
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_default();
         let src = project_dir.join("mods").join(&file_name);
-        let dst = project_dir.join("mods").join(format!("{}.disabled", file_name));
+        let dst = project_dir
+            .join("mods")
+            .join(format!("{}.disabled", file_name));
         if !src.is_file() {
             return Err(format!("{} not found in mods/", file_name));
         }
@@ -965,10 +1008,7 @@ async fn disable_wrong_loader_jar(
 
 /// Removes a specific file from mods/ (used for wrong-loader jar cleanup).
 #[tauri::command(rename_all = "camelCase")]
-async fn remove_loose_jar(
-    path: String,
-    file_name: String,
-) -> Result<String, String> {
+async fn remove_loose_jar(path: String, file_name: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let project_dir = PathBuf::from(&path)
             .parent()
@@ -1018,8 +1058,12 @@ fn write_config_file(path: String, relative_path: String, content: String) -> Re
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let target = safe_project_file(&project_dir, &relative_path)?;
-    auto_snapshot_with_changed_files(&manifest_path, "edit-config", &[PathBuf::from(&relative_path)])
-        .map_err(|e| e.to_string())?;
+    auto_snapshot_with_changed_files(
+        &manifest_path,
+        "edit-config",
+        &[PathBuf::from(&relative_path)],
+    )
+    .map_err(|e| e.to_string())?;
     std::fs::write(target, content).map_err(|e| e.to_string())
 }
 
@@ -1028,27 +1072,59 @@ fn write_config_file(path: String, relative_path: String, content: String) -> Re
 fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let roots = ["config", "defaultconfigs", "kubejs", "scripts"];
-    let whitelist: &[&str] = &["json","json5","toml","properties","cfg","yaml","yml","js","zs","txt","md","html","css","sh"];
+    let whitelist: &[&str] = &[
+        "json",
+        "json5",
+        "toml",
+        "properties",
+        "cfg",
+        "yaml",
+        "yml",
+        "js",
+        "zs",
+        "txt",
+        "md",
+        "html",
+        "css",
+        "sh",
+    ];
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
     fn walk(dir: &Path, cb: &mut dyn FnMut(&Path)) {
-        let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.is_dir() { walk(&p, cb); } else { cb(&p); }
+            if p.is_dir() {
+                walk(&p, cb);
+            } else {
+                cb(&p);
+            }
         }
     }
 
     for root in &roots {
         let root_dir = project_dir.join(root);
-        if !root_dir.is_dir() { continue; }
+        if !root_dir.is_dir() {
+            continue;
+        }
         walk(&root_dir, &mut |file_path: &Path| {
-            if results.len() >= 200 { return; }
+            if results.len() >= 200 {
+                return;
+            }
             let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !whitelist.contains(&ext) { return; }
-            let Ok(content) = std::fs::read_to_string(file_path) else { return };
-            if content.len() > 1024 * 1024 { return; }
+            if !whitelist.contains(&ext) {
+                return;
+            }
+            let Ok(content) = std::fs::read_to_string(file_path) else {
+                return;
+            };
+            if content.len() > 1024 * 1024 {
+                return;
+            }
             for (line_no, line) in content.lines().enumerate() {
                 if line.to_lowercase().contains(&query_lower) {
                     if let Ok(rel) = file_path.strip_prefix(&project_dir) {
@@ -1058,11 +1134,15 @@ fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Valu
                             "text": line.trim().chars().take(200).collect::<String>(),
                         }));
                     }
-                    if results.len() >= 200 { return; }
+                    if results.len() >= 200 {
+                        return;
+                    }
                 }
             }
         });
-        if results.len() >= 200 { break; }
+        if results.len() >= 200 {
+            break;
+        }
     }
     Ok(results)
 }
@@ -1093,15 +1173,22 @@ fn stats_path(project_dir: &std::path::Path) -> std::path::PathBuf {
 
 fn load_stats(project_dir: &std::path::Path) -> ProjectStats {
     let p = stats_path(project_dir);
-    std::fs::read_to_string(&p).ok()
+    std::fs::read_to_string(&p)
+        .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
 fn save_stats(project_dir: &std::path::Path, stats: &ProjectStats) -> Result<(), String> {
     let p = stats_path(project_dir);
-    if let Some(par) = p.parent() { std::fs::create_dir_all(par).map_err(|e| e.to_string())?; }
-    std::fs::write(&p, serde_json::to_string_pretty(stats).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    if let Some(par) = p.parent() {
+        std::fs::create_dir_all(par).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(
+        &p,
+        serde_json::to_string_pretty(stats).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Records a launch event in the project stats.
@@ -1136,7 +1223,9 @@ fn get_launch_stats(path: String) -> Result<serde_json::Value, String> {
     for (_id, inst) in &stats.instances {
         all_launches += inst.launches;
         all_crashes += inst.crashes;
-        if inst.last_launch.is_some() { last = inst.last_launch.clone(); }
+        if inst.last_launch.is_some() {
+            last = inst.last_launch.clone();
+        }
     }
     Ok(serde_json::json!({
         "totalLaunches": all_launches,
@@ -1148,7 +1237,6 @@ fn get_launch_stats(path: String) -> Result<serde_json::Value, String> {
         })).collect::<Vec<_>>(),
     }))
 }
-
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_manifest_schema(path: String) -> Result<serde_json::Value, String> {
@@ -1168,8 +1256,7 @@ fn get_manifest_schema(path: String) -> Result<serde_json::Value, String> {
 /// circular dependency warnings, and a generated testing checklist.
 #[tauri::command(rename_all = "camelCase")]
 fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
-    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    enrich_manifest_for_graph(&mut manifest)?;
+    let manifest = manifest_for_graph(&path)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     let diagnostics = Resolver::analyze_project(&manifest, &graph);
     let project_dir = manifest_parent(&path)?;
@@ -1179,12 +1266,20 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
     let roots = ["config", "defaultconfigs", "kubejs", "scripts"];
     for root in &roots {
         let dir = project_dir.join(root);
-        if !dir.is_dir() { continue; }
+        if !dir.is_dir() {
+            continue;
+        }
         fn walk_json(dir: &Path, acc: &mut Vec<serde_json::Value>) {
-            let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+            let entries = match std::fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(_) => return,
+            };
             for entry in entries.flatten() {
                 let p = entry.path();
-                if p.is_dir() { walk_json(&p, acc); continue; }
+                if p.is_dir() {
+                    walk_json(&p, acc);
+                    continue;
+                }
                 if p.extension().map_or(false, |e| e == "json") {
                     if let Ok(content) = std::fs::read_to_string(&p) {
                         if content.len() < 512 * 1024 {
@@ -1197,7 +1292,9 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
                         }
                     }
                 }
-                if acc.len() >= 50 { return; }
+                if acc.len() >= 50 {
+                    return;
+                }
             }
         }
         walk_json(&dir, &mut json_errors);
@@ -1214,7 +1311,11 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
                     if let Some(target_mod) = manifest.mods.iter().find(|t| t.id == *target) {
                         if target_mod.dependencies.iter().any(|d| d.target == m.id) {
                             let pair = vec![m.id.clone(), target.clone()];
-                            let key = if m.id < *target { (m.id.clone(), target.clone()) } else { (target.clone(), m.id.clone()) };
+                            let key = if m.id < *target {
+                                (m.id.clone(), target.clone())
+                            } else {
+                                (target.clone(), m.id.clone())
+                            };
                             let key_str = format!("{}<=>{}", key.0, key.1);
                             if seen.insert(key_str) {
                                 circular.push(pair);
@@ -1226,10 +1327,24 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
         }
     }
 
-    let error_diags: Vec<_> = diagnostics.iter().filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Error).collect();
-    let warning_diags: Vec<_> = diagnostics.iter().filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Warning).collect();
-    let mods_without_source = manifest.mods.iter().filter(|m| m.source.url.is_none()).count();
-    let mods_without_hash = manifest.mods.iter().filter(|m| m.hashes.as_ref().and_then(|h| h.sha1.as_ref()).is_none()).count();
+    let error_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Error)
+        .collect();
+    let warning_diags: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Warning)
+        .collect();
+    let mods_without_source = manifest
+        .mods
+        .iter()
+        .filter(|m| m.source.url.is_none())
+        .count();
+    let mods_without_hash = manifest
+        .mods
+        .iter()
+        .filter(|m| m.hashes.as_ref().and_then(|h| h.sha1.as_ref()).is_none())
+        .count();
 
     Ok(serde_json::json!({
         "passed": error_diags.is_empty() && json_errors.is_empty() && circular.is_empty(),
@@ -1245,8 +1360,6 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
         "totalProfiles": manifest.profiles.len(),
     }))
 }
-
-
 
 /// ── Batch update manager ────────────────────────────────────────────
 
@@ -1264,11 +1377,14 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
         let loaders = vec![loader_slug.clone()];
         let game_versions = vec![manifest.minecraft.version.clone()];
 
-        let mut hash_to_mod: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut hash_to_mod: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut hashes: Vec<String> = Vec::new();
 
         for (idx, m) in manifest.mods.iter().enumerate() {
-            if m.source.kind != SourceKind::Modrinth { continue; }
+            if m.source.kind != SourceKind::Modrinth {
+                continue;
+            }
             if let Some(h) = m.hashes.as_ref().and_then(|h| h.sha1.clone()) {
                 hash_to_mod.insert(h.clone(), idx);
                 hashes.push(h);
@@ -1285,7 +1401,9 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
 
         let mut updates = Vec::new();
         for (hash, latest) in &latest_map {
-            let Some(&idx) = hash_to_mod.get(hash) else { continue; };
+            let Some(&idx) = hash_to_mod.get(hash) else {
+                continue;
+            };
             let m = &manifest.mods[idx];
             // Prefer file_id comparison — version_number strings can diverge
             // from what Modrinth considers "the same" release.
@@ -1312,7 +1430,9 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
             }));
         }
         Ok(updates)
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Applies all available mod updates at once (batch update), creating
@@ -1332,11 +1452,14 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         let loaders = vec![loader_slug.clone()];
         let game_versions = vec![manifest.minecraft.version.clone()];
 
-        let mut hash_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut hash_to_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut hashes: Vec<String> = Vec::new();
 
         for (idx, m) in manifest.mods.iter().enumerate() {
-            if m.source.kind != SourceKind::Modrinth { continue; }
+            if m.source.kind != SourceKind::Modrinth {
+                continue;
+            }
             if let Some(h) = m.hashes.as_ref().and_then(|h| h.sha1.clone()) {
                 hash_to_idx.insert(h.clone(), idx);
                 hashes.push(h);
@@ -1355,7 +1478,9 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         // and so a single failed project lookup doesn't abort the whole batch.
         let mut pending: Vec<(usize, tuffbox_core::VersionInfo)> = Vec::new();
         for (hash, latest) in latest_map {
-            let Some(&idx) = hash_to_idx.get(&hash) else { continue; };
+            let Some(&idx) = hash_to_idx.get(&hash) else {
+                continue;
+            };
             let m = &manifest.mods[idx];
             if m.source.file_id.as_deref() == Some(latest.id.as_str()) {
                 continue;
@@ -1377,15 +1502,16 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             };
 
             let old_mod = manifest.mods[idx].clone();
-            let project_id = latest
-                .project_id
-                .clone();
+            let project_id = latest.project_id.clone();
             let project = match provider.get_project(&project_id) {
                 Ok(p) => p,
                 Err(e) => {
                     // Fall back to metadata already in the manifest so one
                     // failed lookup doesn't kill the entire update-all pass.
-                    skipped_errors.push(format!("{}: project lookup failed ({e}), using cached metadata", old_mod.name));
+                    skipped_errors.push(format!(
+                        "{}: project lookup failed ({e}), using cached metadata",
+                        old_mod.name
+                    ));
                     project_info_from_mod(&old_mod)
                 }
             };
@@ -1412,10 +1538,10 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             "errors": skipped_errors,
             "download": download,
         }))
-    }).await.map_err(|e| e.to_string())?
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
-
-
 
 /// ── Performance audit ────────────────────────────────────────────────
 
@@ -1434,7 +1560,9 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
         // Check sodium-options.json for common issues
         for (filename, check_fn) in SODIUM_CHECKS {
             let fp = config_dir.join(filename);
-            if !fp.is_file() { continue; }
+            if !fp.is_file() {
+                continue;
+            }
             if let Ok(content) = std::fs::read_to_string(&fp) {
                 check_fn(&content, &mut findings);
             }
@@ -1455,8 +1583,19 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
     }
 
     // Check if performance mods are missing
-    let mod_slugs: std::collections::HashSet<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
-    let perf_mods = ["sodium", "embeddium", "lithium", "ferrite-core", "immediatelyfast", "modernfix", "memoryleakfix", "smoothboot", "entityculling"];
+    let mod_slugs: std::collections::HashSet<String> =
+        manifest.mods.iter().map(|m| m.id.clone()).collect();
+    let perf_mods = [
+        "sodium",
+        "embeddium",
+        "lithium",
+        "ferrite-core",
+        "immediatelyfast",
+        "modernfix",
+        "memoryleakfix",
+        "smoothboot",
+        "entityculling",
+    ];
     let mut missing_perf = Vec::new();
     for pm in perf_mods {
         if !mod_slugs.contains(pm) {
@@ -1473,11 +1612,17 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
     }
 
     // Check JVM args
-    let profile = manifest.profiles.iter().find(|p| p.id == "client")
+    let profile = manifest
+        .profiles
+        .iter()
+        .find(|p| p.id == "client")
         .or_else(|| manifest.profiles.first());
     if let Some(profile) = profile {
         let jvm = profile.jvm_args.join(" ");
-        if !jvm.contains("-XX:+UseG1GC") && !jvm.contains("-XX:+UseZGC") && !jvm.contains("-XX:+UseShenandoahGC") {
+        if !jvm.contains("-XX:+UseG1GC")
+            && !jvm.contains("-XX:+UseZGC")
+            && !jvm.contains("-XX:+UseShenandoahGC")
+        {
             findings.push(serde_json::json!({
                 "severity": "info",
                 "code": "NO_GC_SETTING",
@@ -1499,25 +1644,41 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
 }
 
 /// Sodium config checks: (filename, fn(&content, &mut findings))
-const SODIUM_CHECKS: &[(&str, fn(&str, &mut Vec<serde_json::Value>))] = &[
-    ("sodium-options.json", |c: &str, f: &mut Vec<serde_json::Value>| {
+const SODIUM_CHECKS: &[(&str, fn(&str, &mut Vec<serde_json::Value>))] = &[(
+    "sodium-options.json",
+    |c: &str, f: &mut Vec<serde_json::Value>| {
         // Check if vsync is enabled (can cap FPS)
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(c) {
-            if v.get("quality").and_then(|q| q.get("use_block_face_culling")).and_then(|x| x.as_str()) == Some("1") { return; }
-            if v.get("advanced").and_then(|a| a.get("use_chunk_multidraw")).and_then(|x| x.as_bool()) == Some(false) {
+            if v.get("quality")
+                .and_then(|q| q.get("use_block_face_culling"))
+                .and_then(|x| x.as_str())
+                == Some("1")
+            {
+                return;
+            }
+            if v.get("advanced")
+                .and_then(|a| a.get("use_chunk_multidraw"))
+                .and_then(|x| x.as_bool())
+                == Some(false)
+            {
                 f.push(serde_json::json!({"severity":"info","code":"CHUNK_MULTIDRAW_OFF","message":"Chunk multidraw is disabled in Sodium; enable it for better FPS.","file":"config/sodium-options.json"}));
             }
-            let render_dist = v.get("quality").and_then(|q| q.get("render_distance")).and_then(|x| x.as_str()).unwrap_or("16");
+            let render_dist = v
+                .get("quality")
+                .and_then(|q| q.get("render_distance"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("16");
             if render_dist.parse::<u32>().unwrap_or(16) > 16 {
                 f.push(serde_json::json!({"severity":"warning","code":"HIGH_RENDER_DISTANCE","message":format!("Render distance is {render_dist} — consider lowering to 12-16 for modded."),"file":"config/sodium-options.json"}));
             }
         }
-    }),
-];
+    },
+)];
 
 /// Forge/NeoForge config checks: (filename_pattern, fn(&content, &filename, &mut findings))
-const FORGE_PERF_CHECKS: &[(&str, fn(&str, &str, &mut Vec<serde_json::Value>))] = &[
-    ("forge-server", |c: &str, name: &str, f: &mut Vec<serde_json::Value>| {
+const FORGE_PERF_CHECKS: &[(&str, fn(&str, &str, &mut Vec<serde_json::Value>))] = &[(
+    "forge-server",
+    |c: &str, name: &str, f: &mut Vec<serde_json::Value>| {
         if c.contains("max-tick-time") {
             for line in c.lines() {
                 if line.contains("max-tick-time") {
@@ -1529,15 +1690,18 @@ const FORGE_PERF_CHECKS: &[(&str, fn(&str, &str, &mut Vec<serde_json::Value>))] 
             }
         }
         // Check entity spawning limits
-        for search in &["max-entity-collisions", "spawn-limits", "max-breed", "despawn-ranges"] {
+        for search in &[
+            "max-entity-collisions",
+            "spawn-limits",
+            "max-breed",
+            "despawn-ranges",
+        ] {
             if c.contains(search) {
                 f.push(serde_json::json!({"severity":"info","code":"SERVER_PERF_CONFIG_PRESENT","message":format!("Server performance config detected: {search}. Review limits for your player count."),"file":format!("config/{name}")}));
             }
         }
-    }),
-];
-
-
+    },
+)];
 
 /// ── Ore generation scanner ──────────────────────────────────────────
 
@@ -1553,11 +1717,16 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
     // Gather all config files
     for root in &["config", "defaultconfigs"] {
         let dir = project_dir.join(root);
-        if !dir.is_dir() { continue; }
+        if !dir.is_dir() {
+            continue;
+        }
         fn walk(dir: &std::path::Path, acc: &mut Vec<(String, String)>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let p = entry.path();
-                if p.is_dir() { walk(&p, acc); continue; }
+                if p.is_dir() {
+                    walk(&p, acc);
+                    continue;
+                }
                 if let Some(ext) = p.extension() {
                     if ext == "toml" || ext == "json" || ext == "cfg" || ext == "json5" {
                         if let Ok(content) = std::fs::read_to_string(&p) {
@@ -1575,13 +1744,15 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
     }
 
     // Run heuristics scan
-    let heuristic_hits = tuffbox_core::knowledge::heuristics::scan_configs_for_ore_gen(&config_contents);
-    
+    let heuristic_hits =
+        tuffbox_core::knowledge::heuristics::scan_configs_for_ore_gen(&config_contents);
+
     // Cross-reference with builtin knowledge base
     let mut results = Vec::new();
     for hit in &heuristic_hits {
         // Check if knowledge base has this mod
-        let kb_hint = tuffbox_core::knowledge::builtin::ModKnowledgeEntry::lookup(&hit.resource_name);
+        let kb_hint =
+            tuffbox_core::knowledge::builtin::ModKnowledgeEntry::lookup(&hit.resource_name);
         let confidence = match (hit.confidence, kb_hint.is_some()) {
             (_, true) => "high",
             (tuffbox_core::knowledge::heuristics::HeuristicConfidence::Medium, _) => "medium",
@@ -1613,12 +1784,13 @@ fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
-    
+
     // Build mod→items mapping from what we can extract
     let mut mod_items: Vec<(String, Vec<String>)> = Vec::new();
     // Use knowledge base programmatic items as a starting point
     for entry in tuffbox_core::knowledge::builtin::ModKnowledgeEntry::builtin() {
-        if manifest.mods.iter().any(|m| m.id == entry.slug) && !entry.programmatic_items.is_empty() {
+        if manifest.mods.iter().any(|m| m.id == entry.slug) && !entry.programmatic_items.is_empty()
+        {
             mod_items.push((entry.slug.clone(), entry.programmatic_items.clone()));
         }
     }
@@ -1627,7 +1799,9 @@ fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String
     if mods_dir.is_dir() {
         for entry in std::fs::read_dir(&mods_dir).into_iter().flatten().flatten() {
             let p = entry.path();
-            if p.extension().map_or(true, |e| e != "jar") { continue; }
+            if p.extension().map_or(true, |e| e != "jar") {
+                continue;
+            }
             // Quick pattern-match from jar filename
             let name = entry.file_name().to_string_lossy().to_string();
             let id = name.trim_end_matches(".jar").to_string();
@@ -1664,8 +1838,6 @@ fn detect_duplicate_items(path: String) -> Result<Vec<serde_json::Value>, String
     Ok(results)
 }
 
-
-
 /// ── Almost Unified config generator ────────────────────────────────
 
 /// Generates an Almost Unified config (unify.json) tailored for the
@@ -1678,7 +1850,10 @@ fn generate_unify_config(path: String, save: Option<bool>) -> Result<serde_json:
 
     if save.unwrap_or(false) {
         let project_dir = manifest_parent(&path)?;
-        let config_path = project_dir.join("config").join("almostunified").join("unify.json");
+        let config_path = project_dir
+            .join("config")
+            .join("almostunified")
+            .join("unify.json");
         config.save_to(&config_path).map_err(|e| e.to_string())?;
     }
 
@@ -1711,7 +1886,11 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
     // Read crash reports
     let crash_dir = project_dir.join("crash-reports");
     if crash_dir.is_dir() {
-        for entry in std::fs::read_dir(&crash_dir).into_iter().flatten().flatten() {
+        for entry in std::fs::read_dir(&crash_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             if entry.path().extension().map_or(false, |e| e == "txt") {
                 if let Ok(content) = std::fs::read_to_string(entry.path()) {
                     if content.len() < 4 * 1024 * 1024 {
@@ -1735,13 +1914,21 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
     }
 
     // Gather system info
-    let java_path = manifest.java.as_ref().and_then(|j| j.path.clone()).unwrap_or_default();
+    let java_path = manifest
+        .java
+        .as_ref()
+        .and_then(|j| j.path.clone())
+        .unwrap_or_default();
     let java_version = if !java_path.is_empty() {
         tuffbox_core::jre::check_java_at_path(&std::path::PathBuf::from(&java_path))
-            .map(|r| r.version).unwrap_or_default()
+            .map(|r| r.version)
+            .unwrap_or_default()
     } else {
-        tuffbox_core::jre::find_all_runtimes().ok().and_then(|r| r.into_iter().next())
-            .map(|r| r.version).unwrap_or_default()
+        tuffbox_core::jre::find_all_runtimes()
+            .ok()
+            .and_then(|r| r.into_iter().next())
+            .map(|r| r.version)
+            .unwrap_or_default()
     };
 
     let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
@@ -1783,8 +1970,6 @@ fn run_crash_assistant(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
-
-
 /// ── Package/Class Finder + Jdeps (Crash Assistant tools) ──────────
 
 /// Searches all mod JARs to find which one contains a given Java class.
@@ -1794,27 +1979,44 @@ fn find_class_in_mods(path: String, class_name: String) -> Result<Vec<serde_json
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
     let results = tuffbox_core::crash_assistant::find_class_in_mods(&class_name, &mods_dir);
-    Ok(results.into_iter().map(|r| serde_json::json!({
-        "className": r.class_name,
-        "modId": r.mod_id,
-        "modName": r.mod_name,
-    })).collect())
+    Ok(results
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "className": r.class_name,
+                "modId": r.mod_id,
+                "modName": r.mod_name,
+            })
+        })
+        .collect())
 }
 
 /// Searches all mod JARs to find which mods depend on a given class
 /// (Jdeps analysis tool from Crash Assistant).
 #[tauri::command(rename_all = "camelCase")]
-fn find_dependents_on_class(path: String, class_name: String) -> Result<Vec<serde_json::Value>, String> {
+fn find_dependents_on_class(
+    path: String,
+    class_name: String,
+) -> Result<Vec<serde_json::Value>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
     let installed: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
-    let results = tuffbox_core::crash_assistant::find_mods_depending_on_class(&class_name, &mods_dir, &installed);
-    Ok(results.into_iter().map(|r| serde_json::json!({
-        "className": r.class_name,
-        "modId": r.mod_id,
-        "modName": r.mod_name,
-    })).collect())
+    let results = tuffbox_core::crash_assistant::find_mods_depending_on_class(
+        &class_name,
+        &mods_dir,
+        &installed,
+    );
+    Ok(results
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "className": r.class_name,
+                "modId": r.mod_id,
+                "modName": r.mod_name,
+            })
+        })
+        .collect())
 }
 
 /// Runs the full Crash Assistant analysis and also includes MCreator
@@ -1833,47 +2035,81 @@ fn run_crash_assistant_full(path: String) -> Result<serde_json::Value, String> {
     let cd = project_dir.join("crash-reports");
     if cd.is_dir() {
         for e in std::fs::read_dir(&cd).into_iter().flatten().flatten() {
-            if e.path().extension().map_or(false, |e| e=="txt") {
+            if e.path().extension().map_or(false, |e| e == "txt") {
                 if let Ok(ct) = std::fs::read_to_string(e.path()) {
-                    if ct.len() < 4*1024*1024 { crash_content.push(ct); }
+                    if ct.len() < 4 * 1024 * 1024 {
+                        crash_content.push(ct);
+                    }
                 }
             }
         }
     }
     let lp = project_dir.join("logs").join("latest.log");
-    if lp.is_file() { latest_log = tuffbox_core::process::read_log_tail(&lp,900).unwrap_or_default(); }
+    if lp.is_file() {
+        latest_log = tuffbox_core::process::read_log_tail(&lp, 900).unwrap_or_default();
+    }
     let la = project_dir.join("logs").join("launcher.log");
-    if la.is_file() { launcher_log = std::fs::read_to_string(&la).unwrap_or_default(); }
+    if la.is_file() {
+        launcher_log = std::fs::read_to_string(&la).unwrap_or_default();
+    }
 
-    let jv = manifest.java.as_ref().and_then(|j| j.path.clone()).unwrap_or_default();
+    let jv = manifest
+        .java
+        .as_ref()
+        .and_then(|j| j.path.clone())
+        .unwrap_or_default();
     let java_version = if !jv.is_empty() {
-        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&jv)).map(|r|r.version).unwrap_or_default()
-    } else { tuffbox_core::jre::find_all_runtimes().ok().and_then(|r|r.into_iter().next()).map(|r|r.version).unwrap_or_default() };
+        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&jv))
+            .map(|r| r.version)
+            .unwrap_or_default()
+    } else {
+        tuffbox_core::jre::find_all_runtimes()
+            .ok()
+            .and_then(|r| r.into_iter().next())
+            .map(|r| r.version)
+            .unwrap_or_default()
+    };
 
     let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
-        crash_content, latest_log, launcher_log,
-        installed_mods: installed.clone(), previous_mods: Vec::new(),
-        java_version, java_vendor: String::new(), os_name: std::env::consts::OS.to_string(),
+        crash_content,
+        latest_log,
+        launcher_log,
+        installed_mods: installed.clone(),
+        previous_mods: Vec::new(),
+        java_version,
+        java_vendor: String::new(),
+        os_name: std::env::consts::OS.to_string(),
         mc_version: manifest.minecraft.version.clone(),
         loader: format!("{:?}", manifest.loader.kind).to_lowercase(),
         loader_version: manifest.loader.version.clone(),
-        cpu_name: String::new(), gpu_names: Vec::new(), total_ram_mb: 0,
-        is_offline: false, win_events: Vec::new(),
+        cpu_name: String::new(),
+        gpu_names: Vec::new(),
+        total_ram_mb: 0,
+        is_offline: false,
+        win_events: Vec::new(),
     };
 
     let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
 
     // Also run class finder on any NoClassDefFoundError classes found
     let mut class_finder = Vec::new();
-    let combined = ctx.crash_content.join("
-") + "
+    let combined = ctx.crash_content.join(
+        "
+",
+    ) + "
 " + &ctx.latest_log;
     for line in combined.lines() {
-        if line.contains("NoClassDefFoundError")||line.contains("ClassNotFoundException") {
-            if let Some(cls) = line.split(": ").nth(1).and_then(|s| s.split_whitespace().next()) {
-                if cls.len()>5 && cls.len()<200 && cls.contains('.') {
+        if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
+            if let Some(cls) = line
+                .split(": ")
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+            {
+                if cls.len() > 5 && cls.len() < 200 && cls.contains('.') {
                     let matches = tuffbox_core::crash_assistant::find_class_in_mods(cls, &mods_dir);
-                    for m in matches { class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name})); }
+                    for m in matches {
+                        class_finder.push(serde_json::json!({"className":m.class_name,"modId":m.mod_id,"modName":m.mod_name}));
+                    }
                 }
             }
         }
@@ -1894,8 +2130,6 @@ fn run_crash_assistant_full(path: String) -> Result<serde_json::Value, String> {
         "findingsCount": report.findings.len(),
     }))
 }
-
-
 
 /// ── Mod compatibility checker ──────────────────────────────────────
 
@@ -1932,7 +2166,9 @@ fn check_mod_compatibility(path: String) -> Result<Vec<serde_json::Value>, Strin
     if mods_dir.is_dir() {
         for entry in std::fs::read_dir(&mods_dir).into_iter().flatten().flatten() {
             let p = entry.path();
-            if p.extension().map_or(true, |e| e != "jar") { continue; }
+            if p.extension().map_or(true, |e| e != "jar") {
+                continue;
+            }
             if let Ok(sha1) = tuffbox_core::mc_install::sha1_file(&p) {
                 if let Ok(Some((_proj, ver))) = provider.identify_local_jar(&sha1) {
                     let loaders: Vec<&str> = ver.loaders.iter().map(|s| s.as_str()).collect();
@@ -1965,10 +2201,7 @@ fn check_mod_compatibility(path: String) -> Result<Vec<serde_json::Value>, Strin
 
 /// Compares two modpacks and returns a diff of mods, versions, and settings.
 #[tauri::command(rename_all = "camelCase")]
-fn compare_modpacks(
-    path_a: String,
-    path_b: String,
-) -> Result<serde_json::Value, String> {
+fn compare_modpacks(path_a: String, path_b: String) -> Result<serde_json::Value, String> {
     let ma = ProjectManifest::load_from_path(&path_a).map_err(|e| e.to_string())?;
     let mb = ProjectManifest::load_from_path(&path_b).map_err(|e| e.to_string())?;
 
@@ -1982,8 +2215,16 @@ fn compare_modpacks(
     // Version differences for common mods
     let mut version_diffs = Vec::new();
     for id in &common {
-        let va = ma.mods.iter().find(|m| m.id == **id).map(|m| m.version.clone());
-        let vb = mb.mods.iter().find(|m| m.id == **id).map(|m| m.version.clone());
+        let va = ma
+            .mods
+            .iter()
+            .find(|m| m.id == **id)
+            .map(|m| m.version.clone());
+        let vb = mb
+            .mods
+            .iter()
+            .find(|m| m.id == **id)
+            .map(|m| m.version.clone());
         if va != vb {
             version_diffs.push(serde_json::json!({"id": id, "versionA": va, "versionB": vb}));
         }
@@ -2004,7 +2245,6 @@ fn compare_modpacks(
         "totalModsB": mods_b.len(),
     }))
 }
-
 
 /// ── Backup system (like NitroLaunch backup plugin) ──────────────
 
@@ -2029,16 +2269,23 @@ fn backup_dir(project_dir: &Path) -> PathBuf {
 
 fn load_backup_index(project_dir: &Path) -> BackupIndex {
     let p = backup_dir(project_dir).join("index.json");
-    std::fs::read_to_string(&p).ok()
+    std::fs::read_to_string(&p)
+        .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(BackupIndex { backups: vec![], max_count: 20 })
+        .unwrap_or(BackupIndex {
+            backups: vec![],
+            max_count: 20,
+        })
 }
 
 fn save_backup_index(project_dir: &Path, idx: &BackupIndex) -> Result<(), String> {
     let d = backup_dir(project_dir);
     std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    std::fs::write(d.join("index.json"), serde_json::to_string_pretty(idx).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    std::fs::write(
+        d.join("index.json"),
+        serde_json::to_string_pretty(idx).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Creates a full backup of the project (mods, configs, resourcepacks,
@@ -2050,27 +2297,55 @@ fn create_project_backup(path: String, name: Option<String>) -> Result<serde_jso
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let backup_name = name.unwrap_or_else(|| "manual-backup".into());
-    let id = format!("{}-{}", backup_name.replace(' ', "-"), tuffbox_core::time_util::compact_now());
+    let id = format!(
+        "{}-{}",
+        backup_name.replace(' ', "-"),
+        tuffbox_core::time_util::compact_now()
+    );
     let zip_path = dir.join(format!("{}.zip", id));
 
     let output = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(output);
-    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
 
     let mut total_size: u64 = 0;
-    for folder in &["mods", "config", "defaultconfigs", "kubejs", "scripts", "resourcepacks", "shaderpacks", "datapacks"] {
+    for folder in &[
+        "mods",
+        "config",
+        "defaultconfigs",
+        "kubejs",
+        "scripts",
+        "resourcepacks",
+        "shaderpacks",
+        "datapacks",
+    ] {
         let d = project_dir.join(folder);
         if d.is_dir() {
-            fn add_dir(zip: &mut zip::ZipWriter<std::fs::File>, opts: zip::write::SimpleFileOptions, base: &Path, dir: &Path, size: &mut u64) -> Result<(), String> {
+            fn add_dir(
+                zip: &mut zip::ZipWriter<std::fs::File>,
+                opts: zip::write::SimpleFileOptions,
+                base: &Path,
+                dir: &Path,
+                size: &mut u64,
+            ) -> Result<(), String> {
                 for e in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
                     let e = e.map_err(|e| e.to_string())?;
                     let p = e.path();
-                    if p.is_dir() { add_dir(zip, opts, base, &p, size)?; }
-                    else if p.is_file() {
-                        if let Ok(meta) = p.metadata() { *size += meta.len(); }
-                        let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                    if p.is_dir() {
+                        add_dir(zip, opts, base, &p, size)?;
+                    } else if p.is_file() {
+                        if let Ok(meta) = p.metadata() {
+                            *size += meta.len();
+                        }
+                        let rel = p
+                            .strip_prefix(base)
+                            .unwrap_or(&p)
+                            .to_string_lossy()
+                            .replace('\\', "/");
                         zip.start_file(rel, opts).map_err(|e| e.to_string())?;
-                        zip.write_all(&std::fs::read(&p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                        zip.write_all(&std::fs::read(&p).map_err(|e| e.to_string())?)
+                            .map_err(|e| e.to_string())?;
                     }
                 }
                 Ok(())
@@ -2082,8 +2357,10 @@ fn create_project_backup(path: String, name: Option<String>) -> Result<serde_jso
     // Also backup manifest and lockfile
     let mainfest = project_dir.join("project.tuffbox.json");
     if mainfest.is_file() {
-        zip.start_file("project.tuffbox.json", opts).map_err(|e| e.to_string())?;
-        zip.write_all(&std::fs::read(&mainfest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        zip.start_file("project.tuffbox.json", opts)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(&std::fs::read(&mainfest).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
     }
 
     zip.finish().map_err(|e| e.to_string())?;
@@ -2091,9 +2368,11 @@ fn create_project_backup(path: String, name: Option<String>) -> Result<serde_jso
     // Update index
     let mut idx = load_backup_index(&project_dir);
     idx.backups.push(BackupEntry {
-        id: id.clone(), name: backup_name.clone(),
+        id: id.clone(),
+        name: backup_name.clone(),
         created_at: tuffbox_core::time_util::rfc3339_now(),
-        size_bytes: total_size, manifest_snapshot: true,
+        size_bytes: total_size,
+        manifest_snapshot: true,
     });
     // Trim old backups
     while idx.backups.len() > idx.max_count as usize {
@@ -2113,10 +2392,17 @@ fn create_project_backup(path: String, name: Option<String>) -> Result<serde_jso
 fn list_backups(path: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let idx = load_backup_index(&project_dir);
-    Ok(idx.backups.into_iter().rev().map(|b| serde_json::json!({
-        "id": b.id, "name": b.name, "createdAt": b.created_at,
-        "sizeBytes": b.size_bytes, "manifestSnapshot": b.manifest_snapshot,
-    })).collect())
+    Ok(idx
+        .backups
+        .into_iter()
+        .rev()
+        .map(|b| {
+            serde_json::json!({
+                "id": b.id, "name": b.name, "createdAt": b.created_at,
+                "sizeBytes": b.size_bytes, "manifestSnapshot": b.manifest_snapshot,
+            })
+        })
+        .collect())
 }
 
 /// Deletes a specific backup.
@@ -2125,7 +2411,9 @@ fn delete_backup(path: String, backup_id: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
     let dir = backup_dir(&project_dir);
     let zip_path = dir.join(format!("{}.zip", backup_id));
-    if zip_path.is_file() { std::fs::remove_file(&zip_path).map_err(|e| e.to_string())?; }
+    if zip_path.is_file() {
+        std::fs::remove_file(&zip_path).map_err(|e| e.to_string())?;
+    }
     let mut idx = load_backup_index(&project_dir);
     idx.backups.retain(|b| b.id != backup_id);
     save_backup_index(&project_dir, &idx)
@@ -2144,20 +2432,35 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
     let cd = project_dir.join("crash-reports");
     if cd.is_dir() {
         for e in std::fs::read_dir(&cd).into_iter().flatten().flatten() {
-            if e.path().extension().map_or(false, |e| e=="txt") {
+            if e.path().extension().map_or(false, |e| e == "txt") {
                 if let Ok(ct) = std::fs::read_to_string(e.path()) {
-                    if ct.len() < 4*1024*1024 { crash_content = ct; break; }
+                    if ct.len() < 4 * 1024 * 1024 {
+                        crash_content = ct;
+                        break;
+                    }
                 }
             }
         }
     }
     let latest = project_dir.join("logs").join("latest.log");
-    let latest_log = if latest.is_file() { tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default() } else { String::new() };
+    let latest_log = if latest.is_file() {
+        tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
+    } else {
+        String::new()
+    };
 
-    let jv = manifest.java.as_ref().and_then(|j|j.path.clone()).unwrap_or_default();
+    let jv = manifest
+        .java
+        .as_ref()
+        .and_then(|j| j.path.clone())
+        .unwrap_or_default();
     let java_version = if !jv.is_empty() {
-        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&jv)).map(|r|r.version).unwrap_or_default()
-    } else { "unknown".into() };
+        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&jv))
+            .map(|r| r.version)
+            .unwrap_or_default()
+    } else {
+        "unknown".into()
+    };
 
     // Get crash assistant findings
     let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
@@ -2165,13 +2468,18 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
         latest_log: latest_log.clone(),
         launcher_log: String::new(),
         installed_mods: manifest.mods.iter().map(|m| m.id.clone()).collect(),
-        previous_mods: Vec::new(), java_version: java_version.clone(), java_vendor: String::new(),
+        previous_mods: Vec::new(),
+        java_version: java_version.clone(),
+        java_vendor: String::new(),
         os_name: std::env::consts::OS.to_string(),
         mc_version: manifest.minecraft.version.clone(),
         loader: format!("{:?}", manifest.loader.kind).to_lowercase(),
         loader_version: manifest.loader.version.clone(),
-        cpu_name: String::new(), gpu_names: Vec::new(), total_ram_mb: 0,
-        is_offline: false, win_events: Vec::new(),
+        cpu_name: String::new(),
+        gpu_names: Vec::new(),
+        total_ram_mb: 0,
+        is_offline: false,
+        win_events: Vec::new(),
     };
     let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
 
@@ -2209,25 +2517,68 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
 #[tauri::command(rename_all = "camelCase")]
 fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let installed: std::collections::HashSet<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
+    let installed: std::collections::HashSet<String> =
+        manifest.mods.iter().map(|m| m.id.clone()).collect();
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
     let mut recommendations = Vec::new();
 
     // Performance mods recommendation
     let perf_mods = [
-        ("sodium", "Sodium", "Massive FPS boost via modern rendering engine", "optimization"),
-        ("lithium", "Lithium", "Server-side optimization for tick performance", "optimization"),
-        ("ferrite-core", "FerriteCore", "Reduces memory usage by optimizing game state", "optimization"),
-        ("immediatelyfast", "ImmediatelyFast", "Immediate mode rendering optimization", "optimization"),
-        ("modernfix", "ModernFix", "Fixes hundreds of performance bugs", "optimization"),
-        ("entityculling", "EntityCulling", "Skips rendering of invisible entities", "optimization"),
-        ("memoryleakfix", "MemoryLeakFix", "Fixes memory leaks in Minecraft/mod code", "optimization"),
-        ("smoothboot", "Smooth Boot", "Makes game startup less CPU-intensive", "optimization"),
+        (
+            "sodium",
+            "Sodium",
+            "Massive FPS boost via modern rendering engine",
+            "optimization",
+        ),
+        (
+            "lithium",
+            "Lithium",
+            "Server-side optimization for tick performance",
+            "optimization",
+        ),
+        (
+            "ferrite-core",
+            "FerriteCore",
+            "Reduces memory usage by optimizing game state",
+            "optimization",
+        ),
+        (
+            "immediatelyfast",
+            "ImmediatelyFast",
+            "Immediate mode rendering optimization",
+            "optimization",
+        ),
+        (
+            "modernfix",
+            "ModernFix",
+            "Fixes hundreds of performance bugs",
+            "optimization",
+        ),
+        (
+            "entityculling",
+            "EntityCulling",
+            "Skips rendering of invisible entities",
+            "optimization",
+        ),
+        (
+            "memoryleakfix",
+            "MemoryLeakFix",
+            "Fixes memory leaks in Minecraft/mod code",
+            "optimization",
+        ),
+        (
+            "smoothboot",
+            "Smooth Boot",
+            "Makes game startup less CPU-intensive",
+            "optimization",
+        ),
     ];
 
     let mut missing_perf = Vec::new();
     for (slug, name, desc, _cat) in &perf_mods {
-        if !installed.contains(*slug) { missing_perf.push((*slug, *name, *desc)); }
+        if !installed.contains(*slug) {
+            missing_perf.push((*slug, *name, *desc));
+        }
     }
     if !missing_perf.is_empty() {
         for (slug, name, desc) in missing_perf.iter().take(4) {
@@ -2240,11 +2591,36 @@ fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
 
     // QoL mods
     let qol_mods = [
-        ("jei", "JEI", "Recipe viewer — essential for modded Minecraft", "qol"),
-        ("jade", "Jade", "Shows what block/entity you're looking at", "qol"),
-        ("appleskin", "AppleSkin", "Shows hunger/saturation values of food", "qol"),
-        ("controlling", "Controlling", "Search for keybinds easily", "qol"),
-        ("mouse-tweaks", "Mouse Tweaks", "Better inventory mouse handling", "qol"),
+        (
+            "jei",
+            "JEI",
+            "Recipe viewer — essential for modded Minecraft",
+            "qol",
+        ),
+        (
+            "jade",
+            "Jade",
+            "Shows what block/entity you're looking at",
+            "qol",
+        ),
+        (
+            "appleskin",
+            "AppleSkin",
+            "Shows hunger/saturation values of food",
+            "qol",
+        ),
+        (
+            "controlling",
+            "Controlling",
+            "Search for keybinds easily",
+            "qol",
+        ),
+        (
+            "mouse-tweaks",
+            "Mouse Tweaks",
+            "Better inventory mouse handling",
+            "qol",
+        ),
     ];
     for (slug, name, desc, _cat) in &qol_mods {
         if !installed.contains(*slug) {
@@ -2266,9 +2642,21 @@ fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
     // If Create is installed, suggest Create addons
     if installed.contains("create") {
         let create_addons = [
-            ("create_enchantment_industry", "Create: Enchantment Industry", "Automated enchanting with Create"),
-            ("create_steam_n_rails", "Create: Steam n Rails", "Trains and rail systems"),
-            ("create_confectionery", "Create: Confectionery", "Food and sweets automation"),
+            (
+                "create_enchantment_industry",
+                "Create: Enchantment Industry",
+                "Automated enchanting with Create",
+            ),
+            (
+                "create_steam_n_rails",
+                "Create: Steam n Rails",
+                "Trains and rail systems",
+            ),
+            (
+                "create_confectionery",
+                "Create: Confectionery",
+                "Food and sweets automation",
+            ),
         ];
         for (slug, name, desc) in &create_addons {
             if !installed.contains(*slug) {
@@ -2301,14 +2689,18 @@ fn get_mod_info(slug: String) -> Result<Option<serde_json::Value>, String> {
     }
 }
 
-
 /// Restores a project backup zip, extracting it over the current project.
 /// Creates a snapshot before restoring as a safety net.
 #[tauri::command(rename_all = "camelCase")]
 fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
-    let zip_path = project_dir.join(".tuffbox").join("backups").join(format!("{}.zip", backup_id));
-    if !zip_path.is_file() { return Err("backup not found".into()); }
+    let zip_path = project_dir
+        .join(".tuffbox")
+        .join("backups")
+        .join(format!("{}.zip", backup_id));
+    if !zip_path.is_file() {
+        return Err("backup not found".into());
+    }
 
     // Safety: snapshot before restore
     let manifest_path = PathBuf::from(&path);
@@ -2320,9 +2712,13 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_string();
-        if name.ends_with('/') { continue; }
+        if name.ends_with('/') {
+            continue;
+        }
         let target = project_dir.join(&name);
-        if let Some(parent) = target.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
         let mut dest = std::fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(&mut entry, &mut dest).map_err(|e| e.to_string())?;
     }
@@ -2335,11 +2731,19 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
 /// Writes a problematic-mods.json config for mods known to cause crashes.
 /// Compatible with Crash Assistant's problematic_mods_config.json format.
 #[tauri::command(rename_all = "camelCase")]
-fn save_problematic_mods_config(path: String, entries: Vec<serde_json::Value>) -> Result<(), String> {
+fn save_problematic_mods_config(
+    path: String,
+    entries: Vec<serde_json::Value>,
+) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
-    let p = project_dir.join("config").join("problematic_mods_config.json");
-    if let Some(par) = p.parent() { std::fs::create_dir_all(par).map_err(|e| e.to_string())?; }
-    let json = serde_json::to_string_pretty(&serde_json::json!({ "mods": entries })).map_err(|e| e.to_string())?;
+    let p = project_dir
+        .join("config")
+        .join("problematic_mods_config.json");
+    if let Some(par) = p.parent() {
+        std::fs::create_dir_all(par).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(&serde_json::json!({ "mods": entries }))
+        .map_err(|e| e.to_string())?;
     std::fs::write(&p, json).map_err(|e| e.to_string())
 }
 
@@ -2347,11 +2751,18 @@ fn save_problematic_mods_config(path: String, entries: Vec<serde_json::Value>) -
 #[tauri::command(rename_all = "camelCase")]
 fn get_problematic_mods_config(path: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
-    let p = project_dir.join("config").join("problematic_mods_config.json");
-    if !p.is_file() { return Ok(vec![]); }
+    let p = project_dir
+        .join("config")
+        .join("problematic_mods_config.json");
+    if !p.is_file() {
+        return Ok(vec![]);
+    }
     let raw = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    Ok(v.get("mods").and_then(|m| m.as_array()).cloned().unwrap_or_default())
+    Ok(v.get("mods")
+        .and_then(|m| m.as_array())
+        .cloned()
+        .unwrap_or_default())
 }
 
 /// ── Server launch ────────────────────────────────────────────────
@@ -2368,44 +2779,81 @@ async fn launch_server(path: String) -> Result<tuffbox_core::LaunchResult, Strin
 #[tauri::command(rename_all = "camelCase")]
 fn generate_server_properties(path: String) -> Result<String, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let profile = manifest.profiles.iter().find(|p| p.id == "server")
+    let profile = manifest
+        .profiles
+        .iter()
+        .find(|p| p.id == "server")
         .or_else(|| manifest.profiles.first());
 
     let mut props = String::new();
-    props.push_str("# TuffBox generated server.properties
-");
-    props.push_str(&format!("server-port=25565
-"));
-    props.push_str(&format!("max-players=20
-"));
-    props.push_str(&format!("view-distance=10
-"));
-    props.push_str(&format!("simulation-distance=10
-"));
-    props.push_str(&format!("max-world-size=29999984
-"));
-    props.push_str(&format!("allow-flight=false
-"));
-    props.push_str(&format!("online-mode=true
-"));
-    props.push_str(&format!("difficulty=normal
-"));
-    props.push_str(&format!("gamemode=survival
-"));
-    props.push_str(&format!("enable-command-block=false
-"));
-    props.push_str(&format!("spawn-protection=16
-"));
-    props.push_str(&format!("max-tick-time=60000
-"));
-    props.push_str(&format!("level-name=world
-"));
-    props.push_str(&format!("motd=A TuffBox {} Server\n", manifest.project.name));
+    props.push_str(
+        "# TuffBox generated server.properties
+",
+    );
+    props.push_str(&format!(
+        "server-port=25565
+"
+    ));
+    props.push_str(&format!(
+        "max-players=20
+"
+    ));
+    props.push_str(&format!(
+        "view-distance=10
+"
+    ));
+    props.push_str(&format!(
+        "simulation-distance=10
+"
+    ));
+    props.push_str(&format!(
+        "max-world-size=29999984
+"
+    ));
+    props.push_str(&format!(
+        "allow-flight=false
+"
+    ));
+    props.push_str(&format!(
+        "online-mode=true
+"
+    ));
+    props.push_str(&format!(
+        "difficulty=normal
+"
+    ));
+    props.push_str(&format!(
+        "gamemode=survival
+"
+    ));
+    props.push_str(&format!(
+        "enable-command-block=false
+"
+    ));
+    props.push_str(&format!(
+        "spawn-protection=16
+"
+    ));
+    props.push_str(&format!(
+        "max-tick-time=60000
+"
+    ));
+    props.push_str(&format!(
+        "level-name=world
+"
+    ));
+    props.push_str(&format!(
+        "motd=A TuffBox {} Server\n",
+        manifest.project.name
+    ));
 
     if let Some(profile) = profile {
         if let Some(mem) = profile.memory_mb {
-            props.push_str(&format!("# Memory: {} MB
-", mem));
+            props.push_str(&format!(
+                "# Memory: {} MB
+",
+                mem
+            ));
         }
     }
 
@@ -2417,14 +2865,54 @@ fn generate_server_properties(path: String) -> Result<String, String> {
 
 /// ── Recipe scanner from actual JARs ──────────────────────────────
 
-/// Scans mod JAR recipes with JEI-style layouts (3×3 grid, cooking slots, etc.).
+/// Scans mod JAR / datapack / KubeJS recipes with JEI-style layouts.
 #[tauri::command(rename_all = "camelCase")]
-fn scan_mod_recipes(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let recipes = tuffbox_core::recipe_scan::scan_project_recipes(Path::new(&path))?;
-    recipes
-        .into_iter()
-        .map(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
-        .collect()
+fn scan_mod_recipes(path: String) -> Result<serde_json::Value, String> {
+    let result = tuffbox_core::recipe_scan::scan_project_recipes(Path::new(&path))?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_recipe_runtime_status(path: String) -> tuffbox_core::RecipeRuntimeStatus {
+    tuffbox_core::recipe_runtime_status(Path::new(&path))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn get_recipe_runtime_snapshot(path: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        tuffbox_core::fetch_recipe_runtime_snapshot(Path::new(&path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Append recipe remove lines to kubejs/server_scripts/tuffbox_recipe_removes.js
+#[tauri::command(rename_all = "camelCase")]
+fn write_kubejs_recipe_removes(path: String, recipe_ids: Vec<String>) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::recipe_scan::write_kubejs_remove(&project_dir, &recipe_ids)
+}
+
+/// Generate a KubeJS snippet (does not write to disk).
+#[tauri::command(rename_all = "camelCase")]
+fn generate_kubejs_recipe_script(
+    kind: String,
+    recipe_ids: Vec<String>,
+    new_item: Option<String>,
+    count: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    let script = match kind.as_str() {
+        "remove" => tuffbox_core::recipe_scan::kubejs_remove_script(&recipe_ids),
+        "replace_output" => {
+            let id = recipe_ids
+                .first()
+                .ok_or_else(|| "recipe id required".to_string())?;
+            let item = new_item.unwrap_or_else(|| "minecraft:air".into());
+            tuffbox_core::recipe_scan::kubejs_replace_output(id, &item, count.unwrap_or(1))
+        }
+        other => return Err(format!("unknown script kind: {other}")),
+    };
+    serde_json::to_value(script).map_err(|e| e.to_string())
 }
 
 /// Load FTB Quests chapters from project config via the SNBT parser.
@@ -2466,7 +2954,6 @@ fn validate_quest_book(path: String) -> Result<Vec<serde_json::Value>, String> {
         .collect())
 }
 
-
 /// ── World management ────────────────────────────────────────────
 
 /// Lists Minecraft worlds in the project's saves/ folder.
@@ -2474,9 +2961,15 @@ fn validate_quest_book(path: String) -> Result<Vec<serde_json::Value>, String> {
 fn list_worlds(path: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let saves_dir = project_dir.join("saves");
-    if !saves_dir.is_dir() { return Ok(vec![]); }
+    if !saves_dir.is_dir() {
+        return Ok(vec![]);
+    }
     let mut worlds = Vec::new();
-    for entry in std::fs::read_dir(&saves_dir).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(&saves_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         let p = entry.path();
         if p.is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -2485,15 +2978,22 @@ fn list_worlds(path: String) -> Result<Vec<serde_json::Value>, String> {
             fn dir_size(d: &std::path::Path, s: &mut u64) {
                 for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
                     let p = e.path();
-                    if p.is_dir() { dir_size(&p, s); }
-                    else if let Ok(m) = p.metadata() { *s += m.len(); }
+                    if p.is_dir() {
+                        dir_size(&p, s);
+                    } else if let Ok(m) = p.metadata() {
+                        *s += m.len();
+                    }
                 }
             }
             dir_size(&p, &mut size);
             let has_level = level_dat.is_file();
-            let size_str = if size < 1048576 { format!("{:.1} KB", size as f64 / 1024.0) }
-                else if size < 1073741824 { format!("{:.1} MB", size as f64 / 1048576.0) }
-                else { format!("{:.1} GB", size as f64 / 1073741824.0) };
+            let size_str = if size < 1048576 {
+                format!("{:.1} KB", size as f64 / 1024.0)
+            } else if size < 1073741824 {
+                format!("{:.1} MB", size as f64 / 1048576.0)
+            } else {
+                format!("{:.1} GB", size as f64 / 1073741824.0)
+            };
             worlds.push(serde_json::json!({"name": name, "size": size, "sizeFormatted": size_str, "hasLevelDat": has_level}));
         }
     }
@@ -2506,23 +3006,41 @@ fn list_worlds(path: String) -> Result<Vec<serde_json::Value>, String> {
 fn backup_world(path: String, world_name: String) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     let world_dir = project_dir.join("saves").join(&world_name);
-    if !world_dir.is_dir() { return Err("world not found".into()); }
+    if !world_dir.is_dir() {
+        return Err("world not found".into());
+    }
     let backup_dir = project_dir.join(".tuffbox").join("world-backups");
     std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
-    let zip_name = format!("{}-{}.zip", world_name, tuffbox_core::time_util::compact_now());
+    let zip_name = format!(
+        "{}-{}.zip",
+        world_name,
+        tuffbox_core::time_util::compact_now()
+    );
     let zip_path = backup_dir.join(&zip_name);
     let out = std::fs::File::create(&zip_path).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(out);
-    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    fn add_world(zip: &mut zip::ZipWriter<std::fs::File>, opts: zip::write::SimpleFileOptions, base: &std::path::Path, dir: &std::path::Path) -> Result<(), String> {
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    fn add_world(
+        zip: &mut zip::ZipWriter<std::fs::File>,
+        opts: zip::write::SimpleFileOptions,
+        base: &std::path::Path,
+        dir: &std::path::Path,
+    ) -> Result<(), String> {
         for e in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
             let e = e.map_err(|e| e.to_string())?;
             let p = e.path();
-            if p.is_dir() { add_world(zip, opts, base, &p)?; }
-            else if p.is_file() {
-                let rel = p.strip_prefix(base).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+            if p.is_dir() {
+                add_world(zip, opts, base, &p)?;
+            } else if p.is_file() {
+                let rel = p
+                    .strip_prefix(base)
+                    .unwrap_or(&p)
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 zip.start_file(rel, opts).map_err(|e| e.to_string())?;
-                zip.write_all(&std::fs::read(&p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+                zip.write_all(&std::fs::read(&p).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?;
             }
         }
         Ok(())
@@ -2549,7 +3067,11 @@ fn save_as_template(path: String, template_name: String) -> Result<(), String> {
     });
     let fname = template_name.to_lowercase().replace(' ', "-");
     let p = template_dir.join(format!("{}.json", fname));
-    std::fs::write(&p, serde_json::to_string_pretty(&template).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    std::fs::write(
+        &p,
+        serde_json::to_string_pretty(&template).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Lists saved modpack templates.
@@ -2557,9 +3079,15 @@ fn save_as_template(path: String, template_name: String) -> Result<(), String> {
 fn list_templates(path: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
     let template_dir = project_dir.join(".tuffbox").join("templates");
-    if !template_dir.is_dir() { return Ok(vec![]); }
+    if !template_dir.is_dir() {
+        return Ok(vec![]);
+    }
     let mut templates = Vec::new();
-    for entry in std::fs::read_dir(&template_dir).into_iter().flatten().flatten() {
+    for entry in std::fs::read_dir(&template_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
         if entry.path().extension().map_or(false, |e| e == "json") {
             if let Ok(raw) = std::fs::read_to_string(entry.path()) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -2573,8 +3101,9 @@ fn list_templates(path: String) -> Result<Vec<serde_json::Value>, String> {
 
 /// ── Download progress tracking ──────────────────────────────────
 
-static DOWNLOAD_PROGRESS: once_cell::sync::Lazy<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> =
-    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+static DOWNLOAD_PROGRESS: once_cell::sync::Lazy<
+    std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>,
+> = once_cell::sync::Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 /// Returns the current download progress for active mod downloads.
 #[tauri::command(rename_all = "camelCase")]
@@ -2606,7 +3135,6 @@ fn get_keyboard_shortcuts() -> Result<Vec<serde_json::Value>, String> {
     ])
 }
 
-
 /// ── Config linter ────────────────────────────────────────────────
 
 /// Lints a config file for common Minecraft issues: syntax errors,
@@ -2617,27 +3145,43 @@ fn lint_config(path: String, relative_path: String) -> Result<Vec<serde_json::Va
     let target = project_dir.join(&relative_path);
     let content = std::fs::read_to_string(&target).map_err(|e| e.to_string())?;
     let mut issues = Vec::new();
-    let ext = std::path::Path::new(&relative_path).extension().and_then(|e| e.to_str()).unwrap_or("");
+    let ext = std::path::Path::new(&relative_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
 
     match ext {
-        "json" => { if let Err(e) = serde_json::from_str::<serde_json::Value>(&content) { issues.push(serde_json::json!({"severity":"error","code":"JSON_SYNTAX","message":format!("JSON syntax error: {}", e),"line":null})); } },
+        "json" => {
+            if let Err(e) = serde_json::from_str::<serde_json::Value>(&content) {
+                issues.push(serde_json::json!({"severity":"error","code":"JSON_SYNTAX","message":format!("JSON syntax error: {}", e),"line":null}));
+            }
+        }
         "properties" | "txt" => {
             let mut seen_keys = std::collections::HashSet::new();
             for (line_no, line) in content.lines().enumerate() {
                 let t = line.trim();
-                if t.is_empty() || t.starts_with('#') { continue; }
+                if t.is_empty() || t.starts_with('#') {
+                    continue;
+                }
                 if !t.contains('=') && t.len() > 2 {
                     issues.push(serde_json::json!({"severity":"warning","code":"PROPERTY_NO_EQ","message":"Line without = sign","line":line_no+1}));
                     continue;
                 }
                 if let Some(eq) = t.find('=') {
                     let key = t[..eq].trim();
-                    if key.is_empty() { issues.push(serde_json::json!({"severity":"warning","code":"EMPTY_KEY","message":"Empty key","line":line_no+1})); }
-                    else if !seen_keys.insert(key.to_string()) { issues.push(serde_json::json!({"severity":"warning","code":"DUPLICATE_KEY","message":format!("Duplicate key: {}", key),"line":line_no+1})); }
+                    if key.is_empty() {
+                        issues.push(serde_json::json!({"severity":"warning","code":"EMPTY_KEY","message":"Empty key","line":line_no+1}));
+                    } else if !seen_keys.insert(key.to_string()) {
+                        issues.push(serde_json::json!({"severity":"warning","code":"DUPLICATE_KEY","message":format!("Duplicate key: {}", key),"line":line_no+1}));
+                    }
                 }
             }
         }
-        "toml" => { if let Err(e) = toml::from_str::<toml::Value>(&content) { issues.push(serde_json::json!({"severity":"error","code":"TOML_SYNTAX","message":format!("TOML syntax error: {}", e),"line":null})); } }
+        "toml" => {
+            if let Err(e) = toml::from_str::<toml::Value>(&content) {
+                issues.push(serde_json::json!({"severity":"error","code":"TOML_SYNTAX","message":format!("TOML syntax error: {}", e),"line":null}));
+            }
+        }
         _ => {}
     }
 
@@ -2646,7 +3190,18 @@ fn lint_config(path: String, relative_path: String) -> Result<Vec<serde_json::Va
         issues.push(serde_json::json!({"severity":"warning","code":"MAX_TICK_TIME_DISABLED","message":"max-tick-time is -1 (off). Server won't crash on overload but may freeze indefinitely.","line":null}));
     }
     if content.contains("view-distance=") {
-        for line in content.lines() { if line.contains("view-distance=") { if let Some(v) = line.split('=').last() { if let Ok(n) = v.trim().parse::<u32>() { if n > 16 { issues.push(serde_json::json!({"severity":"warning","code":"HIGH_VIEW_DISTANCE","message":format!("View distance {} may cause lag on modded servers.", n),"line":null})); }}} break; } }
+        for line in content.lines() {
+            if line.contains("view-distance=") {
+                if let Some(v) = line.split('=').last() {
+                    if let Ok(n) = v.trim().parse::<u32>() {
+                        if n > 16 {
+                            issues.push(serde_json::json!({"severity":"warning","code":"HIGH_VIEW_DISTANCE","message":format!("View distance {} may cause lag on modded servers.", n),"line":null}));
+                        }
+                    }
+                }
+                break;
+            }
+        }
     }
 
     Ok(issues)
@@ -2664,11 +3219,17 @@ fn cleanup_project(path: String) -> Result<serde_json::Value, String> {
 
     // Remove mods not in manifest (orphaned jars)
     let mods_dir = project_dir.join("mods");
-    let known_files: std::collections::HashSet<String> = manifest.mods.iter().filter_map(|m| m.file_name.clone()).collect();
+    let known_files: std::collections::HashSet<String> = manifest
+        .mods
+        .iter()
+        .filter_map(|m| m.file_name.clone())
+        .collect();
     if mods_dir.is_dir() {
         for entry in std::fs::read_dir(&mods_dir).into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if entry.path().extension().map_or(false, |e| e == "jar") && !known_files.contains(&name) {
+            if entry.path().extension().map_or(false, |e| e == "jar")
+                && !known_files.contains(&name)
+            {
                 let _ = std::fs::remove_file(entry.path());
                 cleaned.push(format!("mods/{}", name));
             }
@@ -2679,13 +3240,18 @@ fn cleanup_project(path: String) -> Result<serde_json::Value, String> {
     let test_runs = project_dir.join(".tuffbox").join("test-runs");
     if test_runs.is_dir() {
         let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86400);
-        for entry in std::fs::read_dir(&test_runs).into_iter().flatten().flatten() {
+        for entry in std::fs::read_dir(&test_runs)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             if entry.path().is_dir() {
                 if let Ok(meta) = entry.metadata() {
                     if let Ok(mod_time) = meta.modified() {
                         if mod_time < cutoff {
                             let _ = std::fs::remove_dir_all(entry.path());
-                            cleaned.push(format!("test-runs/{}", entry.file_name().to_string_lossy()));
+                            cleaned
+                                .push(format!("test-runs/{}", entry.file_name().to_string_lossy()));
                         }
                     }
                 }
@@ -2715,7 +3281,6 @@ fn check_for_app_update() -> Result<serde_json::Value, String> {
     }))
 }
 
-
 /// ── World preview (level.dat reader) ────────────────────────────
 
 /// Reads a Minecraft world's metadata from saves/<name>/level.dat
@@ -2740,12 +3305,21 @@ fn read_world_info(path: String, world_name: String) -> Result<serde_json::Value
 
 /// Generates GitHub Release-compatible changelog and asset manifest.
 #[tauri::command(rename_all = "camelCase")]
-fn generate_github_release(path: String, tag: Option<String>, target: Option<String>) -> Result<serde_json::Value, String> {
+fn generate_github_release(
+    path: String,
+    tag: Option<String>,
+    target: Option<String>,
+) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let version = tag.unwrap_or_else(|| manifest.project.version.clone());
     let tag_name = format!("v{}", version);
-    let changelog = format!("# {} {}\n\n{}", manifest.project.name, manifest.project.version, manifest.project.description.as_deref().unwrap_or(""));
+    let changelog = format!(
+        "# {} {}\n\n{}",
+        manifest.project.name,
+        manifest.project.version,
+        manifest.project.description.as_deref().unwrap_or("")
+    );
 
     // List export artifacts
     let mut artifacts = Vec::new();
@@ -2771,15 +3345,27 @@ fn generate_github_release(path: String, tag: Option<String>, target: Option<Str
 ### Installed Mods ({})
 
 {}",
-        manifest.project.name, version,
+        manifest.project.name,
+        version,
         manifest.minecraft.version,
-        format!("{:?}", manifest.loader.kind).to_lowercase(), manifest.loader.version,
+        format!("{:?}", manifest.loader.kind).to_lowercase(),
+        manifest.loader.version,
         changelog,
         manifest.mods.len(),
-        manifest.mods.iter().map(|m| format!("- {} {}", m.name, m.version)).take(50).collect::<Vec<_>>().join("\n")
+        manifest
+            .mods
+            .iter()
+            .map(|m| format!("- {} {}", m.name, m.version))
+            .take(50)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
-    let release_dir = if let Some(t) = target { std::path::PathBuf::from(&t) } else { project_dir.join("release") };
+    let release_dir = if let Some(t) = target {
+        std::path::PathBuf::from(&t)
+    } else {
+        project_dir.join("release")
+    };
     std::fs::create_dir_all(&release_dir).map_err(|e| e.to_string())?;
     let release_json = release_dir.join("github-release.json");
     let payload = serde_json::json!({
@@ -2787,7 +3373,11 @@ fn generate_github_release(path: String, tag: Option<String>, target: Option<Str
         "body": body, "draft": true, "prerelease": version.contains("alpha") || version.contains("beta"),
         "artifacts": artifacts,
     });
-    std::fs::write(&release_json, serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::write(
+        &release_json,
+        serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({
         "tagName": tag_name, "body": body,
@@ -2798,37 +3388,38 @@ fn generate_github_release(path: String, tag: Option<String>, target: Option<Str
 
 /// ── Localization helper ──────────────────────────────────────────
 
-static L10N: once_cell::sync::Lazy<std::collections::HashMap<&str, &str>> = once_cell::sync::Lazy::new(|| {
-    let mut m = std::collections::HashMap::new();
-    // Common UI strings
-    m.insert("dashboard", "Панель / Dashboard");
-    m.insert("mods", "Моды");
-    m.insert("graph", "Граф зависимостей");
-    m.insert("settings", "Настройки");
-    m.insert("launch", "Запустить / Launch");
-    m.insert("open_ide", "Открыть IDE");
-    m.insert("snapshots", "Снапшоты");
-    m.insert("export", "Экспорт");
-    m.insert("release", "Релиз");
-    m.insert("diagnostics", "Диагностика");
-    m.insert("configs", "Конфигурации");
-    m.insert("test", "Тестовые запуски");
-    m.insert("history", "История изменений");
-    m.insert("back", "Назад");
-    m.insert("save", "Сохранить");
-    m.insert("cancel", "Отмена");
-    m.insert("delete", "Удалить");
-    m.insert("remove", "Убрать");
-    m.insert("add", "Добавить");
-    m.insert("search", "Поиск");
-    m.insert("refresh", "Обновить");
-    m.insert("loading", "Загрузка...");
-    m.insert("error", "Ошибка");
-    m.insert("success", "Успешно");
-    m.insert("warning", "Предупреждение");
-    m.insert("no_project", "Откройте проект");
-    m
-});
+static L10N: once_cell::sync::Lazy<std::collections::HashMap<&str, &str>> =
+    once_cell::sync::Lazy::new(|| {
+        let mut m = std::collections::HashMap::new();
+        // Common UI strings
+        m.insert("dashboard", "Панель / Dashboard");
+        m.insert("mods", "Моды");
+        m.insert("graph", "Граф зависимостей");
+        m.insert("settings", "Настройки");
+        m.insert("launch", "Запустить / Launch");
+        m.insert("open_ide", "Открыть IDE");
+        m.insert("snapshots", "Снапшоты");
+        m.insert("export", "Экспорт");
+        m.insert("release", "Релиз");
+        m.insert("diagnostics", "Диагностика");
+        m.insert("configs", "Конфигурации");
+        m.insert("test", "Тестовые запуски");
+        m.insert("history", "История изменений");
+        m.insert("back", "Назад");
+        m.insert("save", "Сохранить");
+        m.insert("cancel", "Отмена");
+        m.insert("delete", "Удалить");
+        m.insert("remove", "Убрать");
+        m.insert("add", "Добавить");
+        m.insert("search", "Поиск");
+        m.insert("refresh", "Обновить");
+        m.insert("loading", "Загрузка...");
+        m.insert("error", "Ошибка");
+        m.insert("success", "Успешно");
+        m.insert("warning", "Предупреждение");
+        m.insert("no_project", "Откройте проект");
+        m
+    });
 
 /// Returns a localized string (RU/EN). Falls back to the key itself.
 #[tauri::command(rename_all = "camelCase")]
@@ -2839,9 +3430,11 @@ fn localize(key: String) -> Result<String, String> {
 /// Returns all localization keys (for UI reference).
 #[tauri::command(rename_all = "camelCase")]
 fn list_localizations() -> Result<Vec<serde_json::Value>, String> {
-    Ok(L10N.iter().map(|(k, v)| serde_json::json!({"key": k, "ru": v.split(" / ").next().unwrap_or(v)})).collect())
+    Ok(L10N
+        .iter()
+        .map(|(k, v)| serde_json::json!({"key": k, "ru": v.split(" / ").next().unwrap_or(v)}))
+        .collect())
 }
-
 
 /// ── Batch operations for CLI/scripting ────────────────────────────
 
@@ -2851,14 +3444,20 @@ fn list_localizations() -> Result<Vec<serde_json::Value>, String> {
 fn export_graph_dot(path: String) -> Result<String, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let graph = DependencyGraph::from_manifest(&manifest);
-    let mut dot = String::from("digraph TuffBox {
-");
-    dot.push_str("  rankdir=LR;
+    let mut dot = String::from(
+        "digraph TuffBox {
+",
+    );
+    dot.push_str(
+        "  rankdir=LR;
   node [shape=box, style=filled, fillcolor=\"#18181b\", fontcolor=\"#e5e7eb\", color=\"#27272a\"];
-");
-    dot.push_str("  edge [color=\"#3f3f46\", fontcolor=\"#71717a\"];
+",
+    );
+    dot.push_str(
+        "  edge [color=\"#3f3f46\", fontcolor=\"#71717a\"];
 
-");
+",
+    );
 
     for node in &graph.nodes {
         let color = match node.kind {
@@ -2866,24 +3465,41 @@ fn export_graph_dot(path: String) -> Result<String, String> {
             tuffbox_core::graph::NodeKind::Profile => "#8b5cf622",
             _ => "#f59e0b22",
         };
-        let shape = if node.kind == tuffbox_core::graph::NodeKind::Profile { "ellipse" } else { "box" };
-        dot.push_str(&format!("  \"{}\" [label=\"{}\", shape={}, fillcolor=\"{}\", color=\"{}\"];
+        let shape = if node.kind == tuffbox_core::graph::NodeKind::Profile {
+            "ellipse"
+        } else {
+            "box"
+        };
+        dot.push_str(&format!(
+            "  \"{}\" [label=\"{}\", shape={}, fillcolor=\"{}\", color=\"{}\"];
 ",
-            node.id.0, node.label, shape, color,
-            if color.len() > 9 { &color[..7] } else { color }));
+            node.id.0,
+            node.label,
+            shape,
+            color,
+            if color.len() > 9 { &color[..7] } else { color }
+        ));
     }
 
     for edge in &graph.edges {
-        let style = if edge.kind == tuffbox_core::graph::EdgeKind::Requires { "solid" }
-            else if edge.kind == tuffbox_core::graph::EdgeKind::Conflicts { "dashed, color=\"#ef4444\"" }
-            else { "dotted" };
-        dot.push_str(&format!("  \"{}\" -> \"{}\" [label=\"{:?}\", style={}];
+        let style = if edge.kind == tuffbox_core::graph::EdgeKind::Requires {
+            "solid"
+        } else if edge.kind == tuffbox_core::graph::EdgeKind::Conflicts {
+            "dashed, color=\"#ef4444\""
+        } else {
+            "dotted"
+        };
+        dot.push_str(&format!(
+            "  \"{}\" -> \"{}\" [label=\"{:?}\", style={}];
 ",
-            edge.from.0, edge.to.0, edge.kind, style));
+            edge.from.0, edge.to.0, edge.kind, style
+        ));
     }
 
-    dot.push_str("}
-");
+    dot.push_str(
+        "}
+",
+    );
     Ok(dot)
 }
 
@@ -2932,10 +3548,22 @@ fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut results = Vec::new();
 
-    type ExportFn = Box<dyn Fn(&ProjectManifest, &std::path::Path, &std::path::Path) -> Result<tuffbox_core::ExportResult, tuffbox_core::ExportError>>;
+    type ExportFn = Box<
+        dyn Fn(
+            &ProjectManifest,
+            &std::path::Path,
+            &std::path::Path,
+        ) -> Result<tuffbox_core::ExportResult, tuffbox_core::ExportError>,
+    >;
     let exports: Vec<(&str, ExportFn)> = vec![
-        ("mrpack", Box::new(|m, p, o| tuffbox_core::exporter::export_modrinth_pack(m, p, o))),
-        ("server-pack", Box::new(|m, p, o| tuffbox_core::exporter::export_server_pack(m, p, o))),
+        (
+            "mrpack",
+            Box::new(|m, p, o| tuffbox_core::exporter::export_modrinth_pack(m, p, o)),
+        ),
+        (
+            "server-pack",
+            Box::new(|m, p, o| tuffbox_core::exporter::export_server_pack(m, p, o)),
+        ),
     ];
 
     for (kind, export_fn) in &exports {
@@ -2949,36 +3577,114 @@ fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
     Ok(results)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+fn get_graph(path: String) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    match tuffbox_core::GraphCache::load_if_current(&manifest_path, &manifest) {
+        Ok(Some(cache)) => Ok(graph_payload(
+            cache.graph,
+            "cache",
+            Some(cache.generated_at),
+        )),
+        _ => {
+            let mut local = manifest;
+            tuffbox_core::enrich_manifest_from_installed_jars(&manifest_path, &mut local);
+            Ok(graph_payload(
+                DependencyGraph::from_manifest(&local),
+                "local",
+                None,
+            ))
+        }
+    }
+}
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_graph(path: String) -> Result<DependencyGraph, String> {
-    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    enrich_manifest_for_graph(&mut manifest)?;
-    Ok(DependencyGraph::from_manifest(&manifest))
+async fn refresh_graph(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
+    use tauri::Emitter;
+
+    let _ = app.emit(
+        "graph-refresh-progress",
+        serde_json::json!({"phase": "start", "message": "Refreshing dependency metadata"}),
+    );
+    let app_done = app.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let base = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let mut enriched = base.clone();
+        tuffbox_core::enrich_manifest_from_installed_jars(&manifest_path, &mut enriched);
+        enrich_manifest_for_graph(&mut enriched)?;
+        let cache = tuffbox_core::GraphCache::new(&base, enriched);
+        cache.save(&manifest_path)?;
+        Ok::<_, String>(graph_payload(
+            cache.graph,
+            "network",
+            Some(cache.generated_at),
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let _ = app_done.emit(
+        "graph-refresh-progress",
+        match &result {
+            Ok(_) => serde_json::json!({"phase": "done", "message": "Dependency graph is current"}),
+            Err(error) => serde_json::json!({"phase": "error", "message": error}),
+        },
+    );
+    result
+}
+
+fn graph_payload(
+    graph: DependencyGraph,
+    source: &str,
+    generated_at: Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "nodes": graph.nodes,
+        "edges": graph.edges,
+        "source": source,
+        "generatedAt": generated_at,
+    })
+}
+
+fn manifest_for_graph(path: &str) -> Result<ProjectManifest, String> {
+    let manifest_path = PathBuf::from(path);
+    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    Ok(
+        tuffbox_core::GraphCache::load_if_current(&manifest_path, &manifest)
+            .ok()
+            .flatten()
+            .map(|cache| cache.enriched_manifest)
+            .unwrap_or_else(|| {
+                let mut local = manifest;
+                tuffbox_core::enrich_manifest_from_installed_jars(&manifest_path, &mut local);
+                local
+            }),
+    )
 }
 
 /// Fills Modrinth dependency edges and icon URLs in-memory so the graph view
 /// shows real mod-to-mod links. Always refreshes dependency lists from Modrinth
 /// (project id → slug normalized) so edges resolve onto installed mod nodes.
 fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), String> {
-    let provider = tuffbox_core::ModrinthProvider::new();
+    use rayon::prelude::*;
+
     let query = tuffbox_core::ProviderSearchQuery {
         query: None,
         minecraft_version: Some(manifest.minecraft.version.clone()),
-        loader: Some(tuffbox_core::graph::loader_kind_slug(
-            &manifest.loader.kind,
-        )
-        .to_string()),
+        loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
         ..Default::default()
     };
 
-    for module in &mut manifest.mods {
+    manifest.mods.par_iter_mut().for_each(|module| {
         if !matches!(
             module.source.kind,
             tuffbox_core::manifest::SourceKind::Modrinth
         ) {
-            continue;
+            return;
         }
+        let provider = tuffbox_core::ModrinthProvider::new();
         let project_id = module
             .source
             .project_id
@@ -3004,22 +3710,20 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
                 module.source.icon_url = project.icon_url;
             }
         }
-    }
+    });
     Ok(())
 }
 
 #[tauri::command]
 fn get_diagnostics(path: String) -> Result<Vec<tuffbox_core::Diagnostic>, String> {
-    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    enrich_manifest_for_graph(&mut manifest)?;
+    let manifest = manifest_for_graph(&path)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     Ok(Resolver::analyze_project(&manifest, &graph))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
-    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    enrich_manifest_for_graph(&mut manifest)?;
+    let manifest = manifest_for_graph(&path)?;
     let graph = DependencyGraph::from_manifest(&manifest);
     let diagnostics = Resolver::analyze_project(&manifest, &graph);
     Ok(Resolver::create_fix_plan(&graph, &diagnostics))
@@ -3029,8 +3733,7 @@ fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePl
 async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        enrich_manifest_for_graph(&mut manifest)?;
+        let mut manifest = manifest_for_graph(&path)?;
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
@@ -3056,8 +3759,7 @@ async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<S
 async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        enrich_manifest_for_graph(&mut manifest)?;
+        let mut manifest = manifest_for_graph(&path)?;
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let Some(plan) = Resolver::create_fix_plan(&graph, &diagnostics) else {
@@ -3082,10 +3784,8 @@ async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> 
 async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        // Use the same Modrinth-enriched dependency edges the graph view shows,
-        // otherwise Auto-install can miss deps that only appear after enrich.
-        enrich_manifest_for_graph(&mut manifest)?;
+        // Use the same cached dependency edges the graph view shows.
+        let mut manifest = manifest_for_graph(&path)?;
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let mut missing = diagnostics
@@ -3119,14 +3819,20 @@ async fn install_graph_dep(path: String, mod_id: String) -> Result<Vec<String>, 
         let manifest_path = PathBuf::from(&path);
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         // Skip if already installed (by slug or project_id)
-        if manifest.mods.iter().any(|m| m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id.as_str())) {
+        if manifest
+            .mods
+            .iter()
+            .any(|m| m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id.as_str()))
+        {
             return Ok(Vec::new());
         }
         auto_snapshot(&manifest_path, "install-graph-dep").map_err(|e| e.to_string())?;
         // Recursive: install the dep + all its transitive dependencies
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto");
         if installed.is_empty() {
-            return Err(format!("Failed to install dependency: not found on Modrinth or already installed"));
+            return Err(format!(
+                "Failed to install dependency: not found on Modrinth or already installed"
+            ));
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods(&manifest_path, &manifest);
@@ -3190,7 +3896,10 @@ fn create_crash_fix_plan(
 /// first when the plan calls for it, and returns what was actually done so
 /// the UI can report a truthful result instead of an assumed one.
 #[tauri::command(rename_all = "camelCase")]
-async fn apply_crash_fix_plan(path: String, report_id: Option<String>) -> Result<Vec<String>, String> {
+async fn apply_crash_fix_plan(
+    path: String,
+    report_id: Option<String>,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let diagnosis = get_crash_diagnosis(path.clone(), report_id)?;
@@ -3230,7 +3939,10 @@ fn get_history_settings(path: String) -> Result<HistorySettings, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn update_history_settings(path: String, settings: HistorySettings) -> Result<HistorySettings, String> {
+fn update_history_settings(
+    path: String,
+    settings: HistorySettings,
+) -> Result<HistorySettings, String> {
     let project_dir = manifest_parent(&path)?;
     let settings_dir = project_dir.join(".tuffbox");
     std::fs::create_dir_all(&settings_dir).map_err(|e| e.to_string())?;
@@ -3288,12 +4000,19 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
         }
     }
 
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at).then_with(|| a.path.cmp(&b.path)));
+    entries.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.path.cmp(&b.path))
+    });
     Ok(entries)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn read_project_history_file(path: String, relative_path: String) -> Result<HistoryFileContent, String> {
+fn read_project_history_file(
+    path: String,
+    relative_path: String,
+) -> Result<HistoryFileContent, String> {
     let project_dir = manifest_parent(&path)?;
     let target = safe_project_file(&project_dir, &relative_path)?;
     let metadata = std::fs::metadata(&target).map_err(|e| e.to_string())?;
@@ -3307,7 +4026,10 @@ fn read_project_history_file(path: String, relative_path: String) -> Result<Hist
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn create_tracked_history_snapshot(path: String, roots: Vec<String>) -> Result<tuffbox_core::Snapshot, String> {
+fn create_tracked_history_snapshot(
+    path: String,
+    roots: Vec<String>,
+) -> Result<tuffbox_core::Snapshot, String> {
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let mut changed_files = Vec::new();
@@ -3322,18 +4044,24 @@ fn create_tracked_history_snapshot(path: String, roots: Vec<String>) -> Result<t
             _ => {
                 let dir = project_dir.join(&root);
                 if dir.is_dir() {
-                    collect_tracked_project_files(&project_dir, &dir, &mut changed_files).map_err(|e| e.to_string())?;
+                    collect_tracked_project_files(&project_dir, &dir, &mut changed_files)
+                        .map_err(|e| e.to_string())?;
                 }
             }
         }
     }
     changed_files.sort();
     changed_files.dedup();
-    auto_snapshot_with_changed_files(&manifest_path, "track-history", &changed_files).map_err(|e| e.to_string())
+    auto_snapshot_with_changed_files(&manifest_path, "track-history", &changed_files)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn rollback_history_file(path: String, snapshot_id: String, relative_path: String) -> Result<(), String> {
+fn rollback_history_file(
+    path: String,
+    snapshot_id: String,
+    relative_path: String,
+) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
     let relative = validate_relative_snapshot_path(&relative_path)?;
     let src = project_dir
@@ -3350,7 +4078,8 @@ fn rollback_history_file(path: String, snapshot_id: String, relative_path: Strin
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let canonical_parent = std::fs::canonicalize(dst.parent().unwrap_or(&project_dir)).map_err(|e| e.to_string())?;
+    let canonical_parent =
+        std::fs::canonicalize(dst.parent().unwrap_or(&project_dir)).map_err(|e| e.to_string())?;
     if !canonical_parent.starts_with(&canonical_project) {
         return Err("file is outside project directory".to_string());
     }
@@ -3398,7 +4127,11 @@ fn create_snapshot(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn diff_snapshots(project_dir: String, from: String, to: String) -> Result<tuffbox_core::SnapshotDiff, String> {
+fn diff_snapshots(
+    project_dir: String,
+    from: String,
+    to: String,
+) -> Result<tuffbox_core::SnapshotDiff, String> {
     let store = SnapshotStore::new(&project_dir);
     store.diff(from, to).map_err(|e| e.to_string())
 }
@@ -3417,7 +4150,9 @@ fn get_snapshot_file_diff(
     relative_path: String,
 ) -> Result<SnapshotFileDiff, String> {
     let relative = validate_relative_snapshot_path(&relative_path)?;
-    let base = PathBuf::from(project_dir).join(".tuffbox").join("snapshots");
+    let base = PathBuf::from(project_dir)
+        .join(".tuffbox")
+        .join("snapshots");
     let from_path = base.join(&from).join("changed_files").join(&relative);
     let to_path = base.join(&to).join("changed_files").join(&relative);
     let from_exists = from_path.is_file();
@@ -3446,7 +4181,10 @@ fn generate_release_changelog(path: String) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     let snapshots = SnapshotStore::new(&project_dir).list().unwrap_or_default();
     let mut out = String::new();
-    out.push_str(&format!("# {} {}\n\n", manifest.project.name, manifest.project.version));
+    out.push_str(&format!(
+        "# {} {}\n\n",
+        manifest.project.name, manifest.project.version
+    ));
     if let Some(description) = &manifest.project.description {
         out.push_str(description);
         out.push_str("\n\n");
@@ -3458,23 +4196,35 @@ fn generate_release_changelog(path: String) -> Result<String, String> {
     }
     out.push_str("## Platform\n\n");
     out.push_str(&format!("- Minecraft: {}\n", manifest.minecraft.version));
-    out.push_str(&format!("- Loader: {:?} {}\n", manifest.loader.kind, manifest.loader.version));
+    out.push_str(&format!(
+        "- Loader: {:?} {}\n",
+        manifest.loader.kind, manifest.loader.version
+    ));
     out.push_str(&format!("- Mods: {}\n\n", manifest.mods.len()));
     out.push_str("## Included mods\n\n");
     for module in &manifest.mods {
-        out.push_str(&format!("- {} `{}` ({:?})\n", module.name, module.version, module.side));
+        out.push_str(&format!(
+            "- {} `{}` ({:?})\n",
+            module.name, module.version, module.side
+        ));
     }
     out.push_str("\n## Diagnostics\n\n");
     if diagnostics.is_empty() {
         out.push_str("- No current diagnostics.\n");
     } else {
         for diagnostic in diagnostics {
-            out.push_str(&format!("- {:?}: {} — {}\n", diagnostic.severity, diagnostic.code, diagnostic.message));
+            out.push_str(&format!(
+                "- {:?}: {} — {}\n",
+                diagnostic.severity, diagnostic.code, diagnostic.message
+            ));
         }
     }
     out.push_str("\n## Recent snapshots\n\n");
     for snapshot in snapshots.iter().rev().take(5) {
-        out.push_str(&format!("- {} — {} ({})\n", snapshot.created_at, snapshot.name, snapshot.reason));
+        out.push_str(&format!(
+            "- {} — {} ({})\n",
+            snapshot.created_at, snapshot.name, snapshot.reason
+        ));
     }
     Ok(out)
 }
@@ -3493,7 +4243,10 @@ fn update_project_version(path: String, version: String) -> Result<ProjectSummar
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn create_release_snapshot(path: String, changelog: String) -> Result<ReleaseSnapshotResult, String> {
+fn create_release_snapshot(
+    path: String,
+    changelog: String,
+) -> Result<ReleaseSnapshotResult, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
@@ -3514,65 +4267,85 @@ fn create_release_snapshot(path: String, changelog: String) -> Result<ReleaseSna
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_modrinth_pack(path: String, target_path: Option<String>) -> Result<tuffbox_core::ExportResult, String> {
+fn export_modrinth_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(&path)
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(format!("{}-{}.mrpack", manifest.project.id, manifest.project.version))
-        });
-    let result = tuffbox_core::export_modrinth_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
+    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(&path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!(
+                "{}-{}.mrpack",
+                manifest.project.id, manifest.project.version
+            ))
+    });
+    let result =
+        tuffbox_core::export_modrinth_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
     append_release_artifact(&path, "mrpack", &result).map_err(|e| e.to_string())?;
     Ok(result)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_server_pack(path: String, target_path: Option<String>) -> Result<tuffbox_core::ExportResult, String> {
+fn export_server_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(&path)
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(format!("{}-{}-server.zip", manifest.project.id, manifest.project.version))
-        });
-    let result = tuffbox_core::export_server_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
+    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(&path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!(
+                "{}-{}-server.zip",
+                manifest.project.id, manifest.project.version
+            ))
+    });
+    let result =
+        tuffbox_core::export_server_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
     append_release_artifact(&path, "server", &result).map_err(|e| e.to_string())?;
     Ok(result)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_prism_instance(path: String, target_path: Option<String>) -> Result<tuffbox_core::ExportResult, String> {
+fn export_prism_instance(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(&path)
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(format!("{}-{}-prism.zip", manifest.project.id, manifest.project.version))
-        });
-    let result = tuffbox_core::export_prism_instance(&manifest, &path, &output).map_err(|e| e.to_string())?;
+    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(&path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!(
+                "{}-{}-prism.zip",
+                manifest.project.id, manifest.project.version
+            ))
+    });
+    let result = tuffbox_core::export_prism_instance(&manifest, &path, &output)
+        .map_err(|e| e.to_string())?;
     append_release_artifact(&path, "prism", &result).map_err(|e| e.to_string())?;
     Ok(result)
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn export_curseforge_pack(path: String, target_path: Option<String>) -> Result<tuffbox_core::ExportResult, String> {
+fn export_curseforge_pack(
+    path: String,
+    target_path: Option<String>,
+) -> Result<tuffbox_core::ExportResult, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(&path)
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(format!("{}-{}-curseforge.zip", manifest.project.id, manifest.project.version))
-        });
-    let result = tuffbox_core::export_curseforge_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
+    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(&path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!(
+                "{}-{}-curseforge.zip",
+                manifest.project.id, manifest.project.version
+            ))
+    });
+    let result = tuffbox_core::export_curseforge_pack(&manifest, &path, &output)
+        .map_err(|e| e.to_string())?;
     append_release_artifact(&path, "curseforge", &result).map_err(|e| e.to_string())?;
     Ok(result)
 }
@@ -3603,21 +4376,30 @@ fn create_release_draft(path: String, changelog: String) -> Result<ReleaseDraftR
     let metadata_path = metadata_dir.join("release-draft.json");
 
     let mut markdown = String::new();
-    markdown.push_str(&format!("# {} {} release draft
+    markdown.push_str(&format!(
+        "# {} {} release draft
 
-", manifest.project.name, manifest.project.version));
-    markdown.push_str("## Changelog
+",
+        manifest.project.name, manifest.project.version
+    ));
+    markdown.push_str(
+        "## Changelog
 
-");
+",
+    );
     markdown.push_str(changelog.trim());
-    markdown.push_str("
+    markdown.push_str(
+        "
 
 ## Artifacts
 
-");
+",
+    );
     if artifacts.is_empty() {
-        markdown.push_str("- No artifacts exported yet.
-");
+        markdown.push_str(
+            "- No artifacts exported yet.
+",
+        );
     } else {
         for artifact in &artifacts {
             markdown.push_str(&format!(
@@ -3627,18 +4409,28 @@ fn create_release_draft(path: String, changelog: String) -> Result<ReleaseDraftR
             ));
         }
     }
-    markdown.push_str("
+    markdown.push_str(
+        "
 ## Publish checklist
 
-");
-    markdown.push_str("- [ ] Upload artifacts to target platform
-");
-    markdown.push_str("- [ ] Verify game/loader versions
-");
-    markdown.push_str("- [ ] Verify server pack starts
-");
-    markdown.push_str("- [ ] Announce known issues
-");
+",
+    );
+    markdown.push_str(
+        "- [ ] Upload artifacts to target platform
+",
+    );
+    markdown.push_str(
+        "- [ ] Verify game/loader versions
+",
+    );
+    markdown.push_str(
+        "- [ ] Verify server pack starts
+",
+    );
+    markdown.push_str(
+        "- [ ] Announce known issues
+",
+    );
     std::fs::write(&draft_path, markdown).map_err(|e| e.to_string())?;
 
     let artifact_count = artifacts.len();
@@ -3658,8 +4450,11 @@ fn create_release_draft(path: String, changelog: String) -> Result<ReleaseDraftR
             "githubReleases": "draft-placeholder"
         }
     });
-    std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    std::fs::write(
+        &metadata_path,
+        serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
 
     Ok(ReleaseDraftResult {
         draft_path: draft_path.to_string_lossy().to_string(),
@@ -3684,8 +4479,14 @@ fn capture_test_run_logs(path: String, run_id: String) -> Result<String, String>
         (project_dir.join("logs").join("latest.log"), "latest.log"),
         (project_dir.join("launcher.log"), "launcher.log"),
         (project_dir.join("launcher_log.txt"), "launcher_log.txt"),
-        (project_dir.join("logs").join("launcher.log"), "logs-launcher.log"),
-        (project_dir.join("logs").join("launcher_log.txt"), "logs-launcher_log.txt"),
+        (
+            project_dir.join("logs").join("launcher.log"),
+            "logs-launcher.log",
+        ),
+        (
+            project_dir.join("logs").join("launcher_log.txt"),
+            "logs-launcher_log.txt",
+        ),
     ];
     let mut copied = 0usize;
     for (src, name) in candidates {
@@ -3739,7 +4540,10 @@ fn has_crashed(path: String) -> Result<bool, String> {
     let crash_dir = project_dir.join("crash-reports");
     if crash_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&crash_dir) {
-            if entries.filter_map(|e| e.ok()).any(|e| e.path().extension().map_or(false, |x| x == "txt")) {
+            if entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().map_or(false, |x| x == "txt"))
+            {
                 return Ok(true);
             }
         }
@@ -3749,14 +4553,19 @@ fn has_crashed(path: String) -> Result<bool, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 async fn launch_with_quick_play(
-    path: String, profile: String,
-    _quick_play_type: Option<String>, _quick_play_value: Option<String>,
+    path: String,
+    profile: String,
+    _quick_play_type: Option<String>,
+    _quick_play_value: Option<String>,
 ) -> Result<tuffbox_core::LaunchResult, String> {
     launch_profile(path, profile).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn launch_profile(path: String, profile: String) -> Result<tuffbox_core::LaunchResult, String> {
+async fn launch_profile(
+    path: String,
+    profile: String,
+) -> Result<tuffbox_core::LaunchResult, String> {
     let log_path = PathBuf::from(&path)
         .parent()
         .map(|p| p.join("logs").join("latest.log"))
@@ -3783,7 +4592,10 @@ async fn launch_profile(path: String, profile: String) -> Result<tuffbox_core::L
                 .map_err(|e| e.to_string())?;
             writeln!(launcher, "# TuffBox launching profile {profile}").ok();
             if let Some(logs_dir) = log_path.parent() {
-                let _ = std::fs::write(logs_dir.join("launcher_log.txt"), format!("# TuffBox launching profile {profile}\n"));
+                let _ = std::fs::write(
+                    logs_dir.join("launcher_log.txt"),
+                    format!("# TuffBox launching profile {profile}\n"),
+                );
             }
         }
     }
@@ -3792,8 +4604,8 @@ async fn launch_profile(path: String, profile: String) -> Result<tuffbox_core::L
 
     let log_path_clone = log_path.clone();
     let log_path_err = log_path.clone();
-    tokio::task::spawn_blocking(move || {
-        match build_and_spawn(path, profile, log_path_clone) {
+    tokio::task::spawn_blocking(
+        move || match build_and_spawn(path, profile, log_path_clone) {
             Ok(()) => {}
             Err(e) => {
                 use std::io::Write;
@@ -3801,8 +4613,8 @@ async fn launch_profile(path: String, profile: String) -> Result<tuffbox_core::L
                     let _ = writeln!(log, "# Launch error: {e}");
                 }
             }
-        }
-    });
+        },
+    );
 
     Ok(tuffbox_core::LaunchResult {
         exit_code: None,
@@ -3824,14 +4636,16 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 
     let java_path = manifest.java.as_ref().and_then(|j| j.path.clone());
     let java = if let Some(java_path) = java_path {
-        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| e.to_string())?
+        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path))
+            .map_err(|e| e.to_string())?
     } else {
         // Auto-detect the best Java for this Minecraft version instead of
         // always grabbing whatever JVM happens to be newest on the system
         // — using e.g. Java 21 for Forge 1.20.1 (which needs Java 17)
         // fails deep inside Forge's bootstrap launcher with a confusing
         // module-system error instead of launching at all.
-        TestLauncher::find_java_for_minecraft(&manifest.minecraft.version).map_err(|e| e.to_string())?
+        TestLauncher::find_java_for_minecraft(&manifest.minecraft.version)
+            .map_err(|e| e.to_string())?
     };
 
     let progress = tuffbox_core::mc_install::InstallProgress {
@@ -3893,19 +4707,42 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 
     progress.log("# Installing Minecraft (this may take a while)...");
 
+    let bridge = match tuffbox_core::prepare_recipe_bridge(&manifest, &game_dir) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            progress.log(&format!("# WARNING: JEI live bridge unavailable: {error}"));
+            None
+        }
+    };
+    let mut launch_jvm_args = project_profile.jvm_args.clone();
+    let cleanup_paths = if let Some(bridge) = bridge {
+        progress.log("# JEI live recipe bridge enabled.");
+        launch_jvm_args.extend(bridge.jvm_args);
+        bridge.cleanup_paths
+    } else {
+        Vec::new()
+    };
+
     let options = LaunchOptions {
         profile_id: profile.clone(),
         instance_dir: game_dir,
         memory_mb: project_profile.memory_mb.unwrap_or(4096),
-        jvm_args: project_profile.jvm_args.clone(),
+        jvm_args: launch_jvm_args,
     };
 
-    let (cmd, _) = TestLauncher::build_command(&manifest, &project_profile, &options, &java, &launcher_dir, &progress)
-        .map_err(|e| e.to_string())?;
+    let (cmd, _) = TestLauncher::build_command(
+        &manifest,
+        &project_profile,
+        &options,
+        &java,
+        &launcher_dir,
+        &progress,
+    )
+    .map_err(|e| e.to_string())?;
 
     progress.log("# Starting Java process...");
 
-    tuffbox_core::process::spawn_and_track(profile, cmd, &log_path)
+    tuffbox_core::process::spawn_and_track_with_cleanup(profile, cmd, &log_path, cleanup_paths)
         .map_err(|e| e.to_string())?;
 
     Ok(())
@@ -3957,9 +4794,7 @@ fn open_project_folder(app: tauri::AppHandle, path: String) -> Result<(), String
         .map(|p| p.to_string_lossy().to_string())
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
     use tauri_plugin_shell::ShellExt;
-    app.shell()
-        .open(dir, None)
-        .map_err(|e| e.to_string())
+    app.shell().open(dir, None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3995,11 +4830,20 @@ fn clone_project(path: String, new_name: String) -> Result<String, String> {
         .map(|p| p.join(&new_slug))
         .ok_or_else(|| "project has no parent directory".to_string())?;
     if target_dir.exists() {
-        return Err(format!("a folder named '{new_slug}' already exists next to this project"));
+        return Err(format!(
+            "a folder named '{new_slug}' already exists next to this project"
+        ));
     }
     std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
 
-    for entry_name in ["mods", "config", "defaultconfigs", "kubejs", "scripts", "overrides"] {
+    for entry_name in [
+        "mods",
+        "config",
+        "defaultconfigs",
+        "kubejs",
+        "scripts",
+        "overrides",
+    ] {
         let src = source_dir.join(entry_name);
         if src.is_dir() {
             copy_dir_recursive(&src, &target_dir.join(entry_name)).map_err(|e| e.to_string())?;
@@ -4055,7 +4899,10 @@ async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, Str
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
             .ok_or_else(|| "manifest has no parent directory".to_string())?;
-        Ok(tuffbox_core::ensure_project_mods_downloaded(&manifest, &instance_dir))
+        Ok(tuffbox_core::ensure_project_mods_downloaded(
+            &manifest,
+            &instance_dir,
+        ))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4074,10 +4921,12 @@ async fn get_loader_versions(
     loader: String,
     minecraft_version: String,
 ) -> Result<Vec<tuffbox_core::versions::LoaderVersion>, String> {
-    tokio::task::spawn_blocking(move || tuffbox_core::versions::fetch_loader_versions(&loader, &minecraft_version))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        tuffbox_core::versions::fetch_loader_versions(&loader, &minecraft_version)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -4090,7 +4939,8 @@ async fn find_java_runtimes() -> Result<Vec<tuffbox_core::jre::JavaRuntime>, Str
 
 #[tauri::command]
 fn get_java_version(path: String) -> Result<String, String> {
-    let runtime = tuffbox_core::jre::check_java_at_path(&PathBuf::from(path)).map_err(|e| e.to_string())?;
+    let runtime =
+        tuffbox_core::jre::check_java_at_path(&PathBuf::from(path)).map_err(|e| e.to_string())?;
     Ok(runtime.version)
 }
 
@@ -4141,7 +4991,11 @@ fn append_release_artifact(
     Ok(())
 }
 
-fn append_test_run_record(manifest_path: &str, profile: &str, log_path: &Path) -> anyhow::Result<()> {
+fn append_test_run_record(
+    manifest_path: &str,
+    profile: &str,
+    log_path: &Path,
+) -> anyhow::Result<()> {
     let project_dir = PathBuf::from(manifest_path)
         .parent()
         .map(|p| p.to_path_buf())
@@ -4188,9 +5042,13 @@ fn list_instance_logs(path: String) -> Result<Vec<serde_json::Value>, String> {
         .flatten()
         .filter_map(|entry| {
             let p = entry.path();
-            if !p.is_file() { return None; }
+            if !p.is_file() {
+                return None;
+            }
             let meta = p.metadata().ok()?;
-            let modified = meta.modified().ok()
+            let modified = meta
+                .modified()
+                .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs());
             Some(serde_json::json!({
@@ -4200,9 +5058,7 @@ fn list_instance_logs(path: String) -> Result<Vec<serde_json::Value>, String> {
             }))
         })
         .collect();
-    entries.sort_by_key(|e| {
-        -(e["modified"].as_u64().unwrap_or(0) as i64)
-    });
+    entries.sort_by_key(|e| -(e["modified"].as_u64().unwrap_or(0) as i64));
     Ok(entries)
 }
 
@@ -4228,21 +5084,40 @@ fn get_instance_size(path: String) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     let mut total: u64 = 0;
     fn walk(dir: &std::path::Path, total: &mut u64) {
-        let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return };
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
         for entry in entries.flatten() {
             let p = entry.path();
-            if p.is_dir() { walk(&p, total); }
-            else if let Ok(meta) = p.metadata() { *total += meta.len(); }
+            if p.is_dir() {
+                walk(&p, total);
+            } else if let Ok(meta) = p.metadata() {
+                *total += meta.len();
+            }
         }
     }
-    for sub in &["mods", "config", "resourcepacks", "shaderpacks", "datapacks", "scripts", "logs"] {
+    for sub in &[
+        "mods",
+        "config",
+        "resourcepacks",
+        "shaderpacks",
+        "datapacks",
+        "scripts",
+        "logs",
+    ] {
         walk(&project_dir.join(sub), &mut total);
     }
     // Human-readable size
-    if total < 1024 { Ok(format!("{} B", total)) }
-    else if total < 1024 * 1024 { Ok(format!("{:.1} KB", total as f64 / 1024.0)) }
-    else if total < 1024 * 1024 * 1024 { Ok(format!("{:.1} MB", total as f64 / 1024.0 / 1024.0)) }
-    else { Ok(format!("{:.1} GB", total as f64 / 1024.0 / 1024.0 / 1024.0)) }
+    if total < 1024 {
+        Ok(format!("{} B", total))
+    } else if total < 1024 * 1024 {
+        Ok(format!("{:.1} KB", total as f64 / 1024.0))
+    } else if total < 1024 * 1024 * 1024 {
+        Ok(format!("{:.1} MB", total as f64 / 1024.0 / 1024.0))
+    } else {
+        Ok(format!("{:.1} GB", total as f64 / 1024.0 / 1024.0 / 1024.0))
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -4379,7 +5254,6 @@ fn get_last_opened_project() -> Result<Option<String>, String> {
     Ok(None)
 }
 
-
 #[tauri::command(rename_all = "camelCase")]
 fn get_home_dir() -> Result<String, String> {
     dirs::home_dir()
@@ -4507,7 +5381,10 @@ fn collect_tracked_project_files(
         if !path.is_file() {
             continue;
         }
-        let relative = path.strip_prefix(project_dir).unwrap_or(&path).to_path_buf();
+        let relative = path
+            .strip_prefix(project_dir)
+            .unwrap_or(&path)
+            .to_path_buf();
         files.push(relative);
     }
     Ok(())
@@ -4592,7 +5469,18 @@ fn is_editable_config_path(path: &Path) -> bool {
             .unwrap_or("")
             .to_lowercase()
             .as_str(),
-        "json" | "json5" | "toml" | "properties" | "cfg" | "conf" | "txt" | "js" | "zs" | "yaml" | "yml" | "md"
+        "json"
+            | "json5"
+            | "toml"
+            | "properties"
+            | "cfg"
+            | "conf"
+            | "txt"
+            | "js"
+            | "zs"
+            | "yaml"
+            | "yml"
+            | "md"
     )
 }
 
@@ -4619,7 +5507,8 @@ fn read_small_text_file(path: &Path) -> Result<String, String> {
             metadata.len()
         ));
     }
-    std::fs::read_to_string(path).map_err(|_| "# Binary or non-UTF8 file; inline diff unavailable.\n".to_string())
+    std::fs::read_to_string(path)
+        .map_err(|_| "# Binary or non-UTF8 file; inline diff unavailable.\n".to_string())
 }
 
 fn unified_text_diff(before: &str, after: &str) -> String {
@@ -4676,15 +5565,16 @@ fn unified_text_diff(before: &str, after: &str) -> String {
     out
 }
 
-
 fn mod_change_entries(
     snapshot: &tuffbox_core::Snapshot,
     before: &ProjectManifest,
     after: &ProjectManifest,
 ) -> Vec<ProjectChangeEntry> {
     let mut entries = Vec::new();
-    let before_mods: std::collections::HashMap<_, _> = before.mods.iter().map(|m| (m.id.as_str(), m)).collect();
-    let after_mods: std::collections::HashMap<_, _> = after.mods.iter().map(|m| (m.id.as_str(), m)).collect();
+    let before_mods: std::collections::HashMap<_, _> =
+        before.mods.iter().map(|m| (m.id.as_str(), m)).collect();
+    let after_mods: std::collections::HashMap<_, _> =
+        after.mods.iter().map(|m| (m.id.as_str(), m)).collect();
 
     for (id, module) in &after_mods {
         if !before_mods.contains_key(*id) {
@@ -4697,7 +5587,10 @@ fn mod_change_entries(
                 path: "project.tuffbox.json".to_string(),
                 category: "Mods".to_string(),
                 kind: "mod_added".to_string(),
-                preview: format!("Added {} {} ({:?})", module.name, module.version, module.side),
+                preview: format!(
+                    "Added {} {} ({:?})",
+                    module.name, module.version, module.side
+                ),
                 diff: format!("+ {} {} ({:?})", module.name, module.version, module.side),
                 can_open: false,
             });
@@ -4715,7 +5608,10 @@ fn mod_change_entries(
                 path: "project.tuffbox.json".to_string(),
                 category: "Mods".to_string(),
                 kind: "mod_removed".to_string(),
-                preview: format!("Removed {} {} ({:?})", module.name, module.version, module.side),
+                preview: format!(
+                    "Removed {} {} ({:?})",
+                    module.name, module.version, module.side
+                ),
                 diff: format!("- {} {} ({:?})", module.name, module.version, module.side),
                 can_open: false,
             });
@@ -4723,8 +5619,13 @@ fn mod_change_entries(
     }
 
     for (id, before_module) in &before_mods {
-        let Some(after_module) = after_mods.get(*id) else { continue; };
-        if before_module.version != after_module.version || before_module.file_name != after_module.file_name || before_module.side != after_module.side {
+        let Some(after_module) = after_mods.get(*id) else {
+            continue;
+        };
+        if before_module.version != after_module.version
+            || before_module.file_name != after_module.file_name
+            || before_module.side != after_module.side
+        {
             entries.push(ProjectChangeEntry {
                 id: format!("{}:mod-updated:{id}", snapshot.id),
                 snapshot_id: snapshot.id.clone(),
@@ -4734,8 +5635,19 @@ fn mod_change_entries(
                 path: "project.tuffbox.json".to_string(),
                 category: "Mods".to_string(),
                 kind: "mod_updated".to_string(),
-                preview: format!("Updated {}: {} → {}", after_module.name, before_module.version, after_module.version),
-                diff: format!("- {} {} ({:?})\n+ {} {} ({:?})", before_module.name, before_module.version, before_module.side, after_module.name, after_module.version, after_module.side),
+                preview: format!(
+                    "Updated {}: {} → {}",
+                    after_module.name, before_module.version, after_module.version
+                ),
+                diff: format!(
+                    "- {} {} ({:?})\n+ {} {} ({:?})",
+                    before_module.name,
+                    before_module.version,
+                    before_module.side,
+                    after_module.name,
+                    after_module.version,
+                    after_module.side
+                ),
                 can_open: false,
             });
         }
@@ -4786,10 +5698,103 @@ fn diff_preview(diff: &str) -> String {
 fn remove_mod_file_from_disk(manifest_path: &Path, removed_mod: &ModSpec) {
     if let Some(file_name) = &removed_mod.file_name {
         if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) {
-            let content_dir = tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
+            let content_dir =
+                tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
             let _ = std::fs::remove_file(content_dir.join(file_name));
+            let _ = std::fs::remove_file(content_dir.join(format!("{file_name}.disabled")));
         }
     }
+}
+
+fn mod_file_path(manifest_path: &Path, module: &ModSpec) -> Option<PathBuf> {
+    let file_name = module.file_name.as_ref()?;
+    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)?;
+    Some(tuffbox_core::content_dir_for(&instance_dir, module.content_type).join(file_name))
+}
+
+fn existing_mod_file_path(manifest_path: &Path, module: &ModSpec) -> Option<PathBuf> {
+    let normal = mod_file_path(manifest_path, module)?;
+    if normal.is_file() {
+        return Some(normal);
+    }
+    let file_name = normal.file_name()?.to_string_lossy();
+    let disabled = normal.with_file_name(format!("{file_name}.disabled"));
+    disabled.is_file().then_some(disabled)
+}
+
+/// Downloads and verifies a single replacement before publishing its
+/// manifest entry. The previous file is kept until both operations succeed,
+/// so a network/hash/manifest error cannot leave metadata pointing at bytes
+/// that were never installed.
+fn commit_single_mod_update(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    updated_manifest: &ProjectManifest,
+    old_mod: &ModSpec,
+) -> Result<tuffbox_core::ModSyncReport, String> {
+    let project_id = old_mod.source.project_id.as_deref();
+    let new_mod = updated_manifest
+        .mods
+        .iter()
+        .find(|module| {
+            module.id == old_mod.id
+                || (project_id.is_some() && module.source.project_id.as_deref() == project_id)
+        })
+        .ok_or_else(|| format!("updated mod {} disappeared from manifest", old_mod.id))?;
+    let old_path = existing_mod_file_path(manifest_path, old_mod);
+    let new_path = mod_file_path(manifest_path, new_mod)
+        .ok_or_else(|| format!("updated mod {} has no destination file", new_mod.id))?;
+
+    let backup = if let Some(path) = old_path.as_ref() {
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("invalid mod path {}", path.display()))?;
+        let staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+        std::fs::copy(path, staged.path())
+            .map_err(|e| format!("failed to preserve {} before update: {e}", path.display()))?;
+        Some(staged)
+    } else {
+        None
+    };
+
+    let restore = || {
+        if old_path.as_ref() != Some(&new_path) {
+            let _ = std::fs::remove_file(&new_path);
+        }
+        if let (Some(path), Some(staged)) = (old_path.as_ref(), backup.as_ref()) {
+            let _ = std::fs::copy(staged.path(), path);
+        }
+    };
+
+    let mut download_manifest = updated_manifest.clone();
+    download_manifest.mods = vec![new_mod.clone()];
+    let report = download_project_mods_tracked(app, manifest_path, &download_manifest);
+    if let Some(failure) = report
+        .failed
+        .iter()
+        .find(|failure| failure.mod_id == new_mod.id)
+    {
+        restore();
+        return Err(format!(
+            "failed to update {}: {}",
+            new_mod.name, failure.error
+        ));
+    }
+
+    if let Err(error) = save_manifest(manifest_path, updated_manifest) {
+        restore();
+        return Err(format!(
+            "downloaded {}, but could not save manifest: {error}",
+            new_mod.name
+        ));
+    }
+
+    if let Some(path) = old_path {
+        if path != new_path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    Ok(report)
 }
 
 fn apply_change_action(
@@ -4806,7 +5811,11 @@ fn apply_change_action(
         }
         tuffbox_core::ChangeAction::RemoveMod { node_id }
         | tuffbox_core::ChangeAction::DisableMod { node_id } => {
-            let mod_id = node_id.0.strip_prefix("mod:").unwrap_or(&node_id.0).to_string();
+            let mod_id = node_id
+                .0
+                .strip_prefix("mod:")
+                .unwrap_or(&node_id.0)
+                .to_string();
             let removed_mod = manifest.mods.iter().find(|m| m.id == mod_id).cloned();
             let before = manifest.mods.len();
             manifest.mods.retain(|m| m.id != mod_id);
@@ -4817,8 +5826,15 @@ fn apply_change_action(
                 applied.push(format!("removed {mod_id}"));
             }
         }
-        tuffbox_core::ChangeAction::UpdateMod { node_id, target_version } => {
-            let mod_id = node_id.0.strip_prefix("mod:").unwrap_or(&node_id.0).to_string();
+        tuffbox_core::ChangeAction::UpdateMod {
+            node_id,
+            target_version,
+        } => {
+            let mod_id = node_id
+                .0
+                .strip_prefix("mod:")
+                .unwrap_or(&node_id.0)
+                .to_string();
             let version_id = if target_version.trim().is_empty() {
                 None
             } else {
@@ -4863,8 +5879,9 @@ fn install_modrinth_with_dependencies(
             .filter(|dep| dep.kind == tuffbox_core::DependencyKind::Requires)
             .map(|dep| dep.target.clone())
             .filter(|target| {
-                !manifest.mods.iter().any(|m| m.id == *target || m.source.project_id.as_deref() == Some(target.as_str()))
-                    && !failed.contains(target)
+                !manifest.mods.iter().any(|m| {
+                    m.id == *target || m.source.project_id.as_deref() == Some(target.as_str())
+                }) && !failed.contains(target)
             })
             .collect::<Vec<_>>();
 
@@ -4893,11 +5910,9 @@ fn add_mod_from_modrinth(
     let provider = tuffbox_core::ModrinthProvider::new();
     let project = provider.get_project(mod_id)?;
 
-    if manifest
-        .mods
-        .iter()
-        .any(|m| m.id == project.slug || m.source.project_id.as_deref() == Some(project.id.as_str()))
-    {
+    if manifest.mods.iter().any(|m| {
+        m.id == project.slug || m.source.project_id.as_deref() == Some(project.id.as_str())
+    }) {
         anyhow::bail!("mod {} is already in the project", project.slug);
     }
 
@@ -4928,7 +5943,7 @@ fn add_mod_from_modrinth(
 }
 
 fn update_mod_from_modrinth(
-    manifest_path: &Path,
+    _manifest_path: &Path,
     manifest: &mut ProjectManifest,
     mod_id: &str,
     version_id: Option<&str>,
@@ -4957,7 +5972,9 @@ fn update_mod_from_modrinth(
                 let query = ProviderSearchQuery {
                     query: None,
                     minecraft_version: Some(manifest.minecraft.version.clone()),
-                    loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
+                    loader: Some(
+                        tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string(),
+                    ),
                     ..Default::default()
                 };
                 provider
@@ -4992,12 +6009,6 @@ fn update_mod_from_modrinth(
         .resolve_dependencies(&version.id)
         .unwrap_or_else(|_| old_mod.dependencies.clone());
     let new_spec = build_mod_spec(&project, &version, file, dependencies, old_mod.side);
-
-    // Drop the previous jar when the filename changes so Minecraft doesn't
-    // load both the old and new versions side-by-side.
-    if old_mod.file_name != new_spec.file_name {
-        remove_mod_file_from_disk(manifest_path, &old_mod);
-    }
 
     manifest.mods[index] = new_spec;
     Ok(())
@@ -5065,7 +6076,9 @@ fn build_mod_spec(
         // resourcepacks/, shaderpacks/, datapacks/) based on what Modrinth
         // actually says this project is, instead of always treating it as
         // a mod jar.
-        content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(&project.project_type),
+        content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(
+            &project.project_type,
+        ),
     }
 }
 
@@ -5080,7 +6093,9 @@ fn parse_side(side: Option<&str>, project: Option<&tuffbox_core::ProjectInfo>) -
 }
 
 fn infer_project_side(project: Option<&tuffbox_core::ProjectInfo>) -> Side {
-    let Some(project) = project else { return Side::Both; };
+    let Some(project) = project else {
+        return Side::Both;
+    };
     let client = project.client_side.as_deref().unwrap_or("unknown");
     let server = project.server_side.as_deref().unwrap_or("unknown");
     match (client, server) {
@@ -5100,11 +6115,15 @@ fn auto_snapshot_with_changed_files(
     operation: &str,
     changed_files: &[PathBuf],
 ) -> anyhow::Result<Snapshot> {
-    let project_dir = manifest_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display()))?;
+    let project_dir = manifest_path.parent().ok_or_else(|| {
+        anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display())
+    })?;
     let lockfile_path = manifest_path.with_extension("lock.json");
-    let lockfile_path = if lockfile_path.exists() { Some(lockfile_path) } else { None };
+    let lockfile_path = if lockfile_path.exists() {
+        Some(lockfile_path)
+    } else {
+        None
+    };
     let store = SnapshotStore::new(project_dir);
     let name = format!("auto-before-{operation}");
     let reason = format!("Auto snapshot before {operation}");
@@ -5119,7 +6138,20 @@ fn auto_snapshot_with_changed_files(
 
 fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(manifest)?;
-    std::fs::write(path, json)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent)?;
+    let mut staged = tempfile::Builder::new()
+        .prefix(".tuffbox-manifest-")
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    staged.write_all(json.as_bytes())?;
+    staged.flush()?;
+    staged.as_file().sync_all()?;
+    staged
+        .persist(path)
+        .map_err(|error| anyhow::Error::new(error.error))?;
     Ok(())
 }
 
@@ -5144,9 +6176,13 @@ fn diff_manifest_snapshots(
     to_id: String,
 ) -> Result<serde_json::Value, String> {
     let store = SnapshotStore::new(&project_dir);
-    let from_snapshot = store.get(&from_id).map_err(|e| e.to_string())?
+    let from_snapshot = store
+        .get(&from_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("snapshot {from_id} not found"))?;
-    let to_snapshot = store.get(&to_id).map_err(|e| e.to_string())?
+    let to_snapshot = store
+        .get(&to_id)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("snapshot {to_id} not found"))?;
 
     let from_text = std::fs::read_to_string(&from_snapshot.manifest_path).unwrap_or_default();
@@ -5155,19 +6191,41 @@ fn diff_manifest_snapshots(
     let to_json: serde_json::Value = serde_json::from_str(&to_text).unwrap_or_default();
 
     let from_mods: std::collections::HashSet<String> = from_json
-        .get("mods").and_then(|m| m.as_array()).into_iter().flatten()
+        .get("mods")
+        .and_then(|m| m.as_array())
+        .into_iter()
+        .flatten()
         .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
         .collect();
     let to_mods: std::collections::HashSet<String> = to_json
-        .get("mods").and_then(|m| m.as_array()).into_iter().flatten()
+        .get("mods")
+        .and_then(|m| m.as_array())
+        .into_iter()
+        .flatten()
         .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(String::from))
         .collect();
     let added_mods: Vec<_> = to_mods.difference(&from_mods).collect();
     let removed_mods: Vec<_> = from_mods.difference(&to_mods).collect();
-    let from_ver = from_json.get("minecraft").and_then(|m| m.get("version")).and_then(|v| v.as_str()).unwrap_or("");
-    let to_ver = to_json.get("minecraft").and_then(|m| m.get("version")).and_then(|v| v.as_str()).unwrap_or("");
-    let from_loader = from_json.get("loader").and_then(|l| l.get("version")).and_then(|v| v.as_str()).unwrap_or("");
-    let to_loader = to_json.get("loader").and_then(|l| l.get("version")).and_then(|v| v.as_str()).unwrap_or("");
+    let from_ver = from_json
+        .get("minecraft")
+        .and_then(|m| m.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let to_ver = to_json
+        .get("minecraft")
+        .and_then(|m| m.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let from_loader = from_json
+        .get("loader")
+        .and_then(|l| l.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let to_loader = to_json
+        .get("loader")
+        .and_then(|l| l.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     Ok(serde_json::json!({
         "diffText": unified_text_diff(&from_text, &to_text),
@@ -5181,7 +6239,6 @@ fn diff_manifest_snapshots(
         "toLoaderVersion": to_loader,
     }))
 }
-
 
 /// ── Running instance tracking ──────────────────────────────────────
 use std::sync::Mutex as StdMutex;
@@ -5203,10 +6260,12 @@ fn list_running_instances() -> Result<Vec<serde_json::Value>, String> {
     let games = RUNNING_GAMES.lock().map_err(|e| e.to_string())?;
     Ok(games
         .iter()
-        .map(|g| serde_json::json!({
-            "instanceId": g.instance_id,
-            "startedAt": g.started_at,
-        }))
+        .map(|g| {
+            serde_json::json!({
+                "instanceId": g.instance_id,
+                "startedAt": g.started_at,
+            })
+        })
         .collect())
 }
 
@@ -5266,9 +6325,17 @@ fn mod_needs_download(instance_dir: &Path, module: &ModSpec) -> bool {
 }
 
 /// ────────────────────────────────────────────────────────────────────
-fn download_project_mods(manifest_path: &Path, manifest: &ProjectManifest) -> tuffbox_core::ModSyncReport {
-    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
-        .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+fn download_project_mods(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+) -> tuffbox_core::ModSyncReport {
+    let instance_dir =
+        tuffbox_core::instance_dir_for_manifest(manifest_path).unwrap_or_else(|| {
+            manifest_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default()
+        });
     tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir)
 }
 
@@ -5293,8 +6360,13 @@ fn download_project_mods_tracked(
 ) -> tuffbox_core::ModSyncReport {
     use tauri::Emitter;
 
-    let instance_dir = tuffbox_core::instance_dir_for_manifest(manifest_path)
-        .unwrap_or_else(|| manifest_path.parent().map(|p| p.to_path_buf()).unwrap_or_default());
+    let instance_dir =
+        tuffbox_core::instance_dir_for_manifest(manifest_path).unwrap_or_else(|| {
+            manifest_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default()
+        });
 
     if let Ok(mut map) = DOWNLOAD_PROGRESS.lock() {
         map.clear();
@@ -5404,8 +6476,11 @@ fn download_project_mods_tracked(
         }
     });
 
-    let report =
-        tuffbox_core::ensure_project_mods_downloaded_with_progress(manifest, &instance_dir, &progress);
+    let report = tuffbox_core::ensure_project_mods_downloaded_with_progress(
+        manifest,
+        &instance_dir,
+        &progress,
+    );
 
     // Mark completed / failed items explicitly so the UI can settle bars.
     for id in &report.downloaded {
@@ -5477,6 +6552,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(resources) = app.path().resource_dir() {
+                std::env::set_var("TUFFBOX_JEI_BRIDGE_DIR", resources.join("jei-bridge"));
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_project_schema_status,
             migrate_project_schema,
@@ -5518,6 +6600,7 @@ pub fn run() {
             record_crash,
             get_launch_stats,
             get_graph,
+            refresh_graph,
             get_diagnostics,
             run_project_validation,
             check_mod_compatibility,
@@ -5534,6 +6617,10 @@ pub fn run() {
             launch_server,
             generate_server_properties,
             scan_mod_recipes,
+            get_recipe_runtime_status,
+            get_recipe_runtime_snapshot,
+            write_kubejs_recipe_removes,
+            generate_kubejs_recipe_script,
             load_quest_book,
             save_quest_chapter,
             validate_quest_book,
@@ -5559,8 +6646,8 @@ pub fn run() {
             detect_duplicate_items,
             generate_unify_config,
             run_crash_assistant_full,
-find_class_in_mods,
-find_dependents_on_class,
+            find_class_in_mods,
+            find_dependents_on_class,
             get_resolve_change_plan,
             apply_resolve_action,
             apply_resolve_change_plan,
@@ -5600,7 +6687,6 @@ find_dependents_on_class,
             launch_with_quick_play,
             import_project,
             import_curseforge_project,
-
             has_crashed,
             open_project_folder,
             delete_project,

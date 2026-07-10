@@ -44,8 +44,17 @@ pub fn read_lines_lossy(mut reader: impl BufRead) -> impl Iterator<Item = String
 
 pub fn spawn_and_track(
     profile_id: String,
+    cmd: Command,
+    log_path: impl AsRef<Path>,
+) -> std::io::Result<RunningProcess> {
+    spawn_and_track_with_cleanup(profile_id, cmd, log_path, Vec::new())
+}
+
+pub fn spawn_and_track_with_cleanup(
+    profile_id: String,
     mut cmd: Command,
     log_path: impl AsRef<Path>,
+    cleanup_paths: Vec<PathBuf>,
 ) -> std::io::Result<RunningProcess> {
     let log_path = log_path.as_ref().to_path_buf();
     if let Some(parent) = log_path.parent() {
@@ -95,23 +104,27 @@ pub fn spawn_and_track(
         profile_id: profile_id.clone(),
         log_path: log_path.clone(),
     };
-    PROCESSES.lock().unwrap_or_else(|e| e.into_inner()).insert(pid, info.clone());
+    PROCESSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(pid, info.clone());
 
     std::thread::spawn(move || {
         let _ = child.wait();
-        PROCESSES.lock().unwrap_or_else(|e| e.into_inner()).remove(&pid);
+        PROCESSES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&pid);
+        for path in cleanup_paths {
+            let _ = std::fs::remove_file(path);
+        }
     });
 
     Ok(info)
 }
 
 pub fn list_running() -> Vec<RunningProcess> {
-    PROCESSES
-        .lock()
-        .unwrap()
-        .values()
-        .cloned()
-        .collect()
+    PROCESSES.lock().unwrap().values().cloned().collect()
 }
 
 pub fn read_log_tail(path: &Path, limit: usize) -> std::io::Result<String> {

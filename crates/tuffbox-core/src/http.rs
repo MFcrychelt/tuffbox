@@ -179,7 +179,9 @@ pub fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, reqwest:
 pub fn get_json_with_context<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
     let response = fetch(url).map_err(|e| format!("HTTP request failed: {}", e))?;
     let status = response.status();
-    let body = response.text().map_err(|e| format!("Failed to read response body: {}", e))?;
+    let body = response
+        .text()
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
 
     serde_json::from_str(&body).map_err(|e| {
         let preview = if body.len() > 300 {
@@ -187,7 +189,10 @@ pub fn get_json_with_context<T: serde::de::DeserializeOwned>(url: &str) -> Resul
         } else {
             body.clone()
         };
-        format!("JSON decode error for {} (status {}): {}. Response: {}", url, status, e, preview)
+        format!(
+            "JSON decode error for {} (status {}): {}. Response: {}",
+            url, status, e, preview
+        )
     })
 }
 
@@ -238,44 +243,52 @@ pub fn download_streaming(
 
     let response = fetch_with_redirects(url).map_err(StreamingDownloadError::Http)?;
     if !response.status().is_success() {
-        return Err(StreamingDownloadError::Http(response.error_for_status().unwrap_err()));
+        return Err(StreamingDownloadError::Http(
+            response.error_for_status().unwrap_err(),
+        ));
     }
 
     let total_size = response.content_length().unwrap_or(0);
     let mut hasher = Sha1::new();
     let mut received: u64 = 0;
 
-    // Write to a .part file in the same directory so the rename is atomic
-    let part_path = dest.with_extension(format!(
-        "{}.part",
-        dest.extension().and_then(|e| e.to_str()).unwrap_or("")
-    ));
-    if let Some(parent) = part_path.parent() {
-        std::fs::create_dir_all(parent).map_err(StreamingDownloadError::Io)?;
-    }
-    let mut file = std::fs::File::create(&part_path).map_err(StreamingDownloadError::Io)?;
+    // Keep the temporary file in the destination directory. `NamedTempFile`
+    // uses the platform replace primitive when persisted, unlike
+    // `std::fs::rename`, which refuses to replace an existing file on
+    // Windows. A failed download therefore leaves the previous jar intact.
+    let parent = dest.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent).map_err(StreamingDownloadError::Io)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".tuffbox-download-")
+        .suffix(".part")
+        .tempfile_in(parent)
+        .map_err(StreamingDownloadError::Io)?;
 
     let mut stream = response;
     let mut buffer = vec![0u8; 64 * 1024]; // 64KB chunks
     loop {
-        let n = stream.read(&mut buffer).map_err(StreamingDownloadError::Io)?;
+        let n = stream
+            .read(&mut buffer)
+            .map_err(StreamingDownloadError::Io)?;
         if n == 0 {
             break;
         }
         hasher.update(&buffer[..n]);
-        file.write_all(&buffer[..n]).map_err(StreamingDownloadError::Io)?;
+        file.write_all(&buffer[..n])
+            .map_err(StreamingDownloadError::Io)?;
         received += n as u64;
         if let Some(ref mut cb) = progress {
             cb(received, total_size);
         }
     }
-    drop(file);
+    file.flush().map_err(StreamingDownloadError::Io)?;
+    file.as_file()
+        .sync_all()
+        .map_err(StreamingDownloadError::Io)?;
 
     let actual = format!("{:x}", hasher.finalize());
     if let Some(expected) = expected_sha1 {
         if !actual.eq_ignore_ascii_case(expected) {
-            // Clean up the partial file so it doesn't pollute the mods folder
-            let _ = std::fs::remove_file(&part_path);
             return Err(StreamingDownloadError::ChecksumMismatch {
                 expected: expected.to_string(),
                 actual,
@@ -283,9 +296,17 @@ pub fn download_streaming(
         }
     }
 
-    // Atomic rename: .part -> final destination
-    std::fs::rename(&part_path, dest).map_err(StreamingDownloadError::Io)?;
+    persist_replacing(file, dest)?;
     Ok(())
+}
+
+fn persist_replacing(
+    file: tempfile::NamedTempFile,
+    dest: &std::path::Path,
+) -> Result<(), StreamingDownloadError> {
+    file.persist(dest)
+        .map(|_| ())
+        .map_err(|error| StreamingDownloadError::Io(error.error))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -296,6 +317,26 @@ pub enum StreamingDownloadError {
     Io(#[from] std::io::Error),
     #[error("sha1 mismatch: expected {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::persist_replacing;
+    use std::io::Write;
+
+    #[test]
+    fn persisted_download_replaces_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("same-name.jar");
+        std::fs::write(&destination, b"old bytes").unwrap();
+
+        let mut staged = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+        staged.write_all(b"new bytes").unwrap();
+        staged.flush().unwrap();
+        persist_replacing(staged, &destination).unwrap();
+
+        assert_eq!(std::fs::read(destination).unwrap(), b"new bytes");
+    }
 }
 
 pub fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(

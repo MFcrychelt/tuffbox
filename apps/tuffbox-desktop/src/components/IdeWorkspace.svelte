@@ -95,7 +95,7 @@
       label: "Recipes",
       short: "Craft",
       icon: PackageOpen,
-      goal: "Browse all recipes from installed mods, generate KubeJS disable scripts.",
+      goal: "JEI-style recipe browser: search, Recipes/Uses, KubeJS remove scripts.",
       outputs: ["recipe list", "disable scripts", "ingredient search"],
     },
     {

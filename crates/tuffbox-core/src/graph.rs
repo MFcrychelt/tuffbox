@@ -1,6 +1,6 @@
 use crate::manifest::{DependencyKind, LoaderKind, ProjectManifest, Side};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -34,6 +34,7 @@ pub enum NodeKind {
     Loader,
     JavaRuntime,
     Mod,
+    Missing,
     Library,
     ConfigFile,
     ScriptFile,
@@ -254,6 +255,27 @@ impl DependencyGraph {
                     reason: dep.reason.clone(),
                 });
             }
+        }
+
+        // Missing dependencies are real graph nodes rather than a UI-only
+        // invention. This keeps the resolver, CLI, DOT export and desktop
+        // view consistent and guarantees every edge endpoint exists.
+        let existing: HashSet<NodeId> = graph.nodes.iter().map(|node| node.id.clone()).collect();
+        let missing: HashSet<NodeId> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.to.0.starts_with("mod:") && !existing.contains(&edge.to))
+            .map(|edge| edge.to.clone())
+            .collect();
+        for id in missing {
+            graph.nodes.push(GraphNode {
+                label: id.0.strip_prefix("mod:").unwrap_or(&id.0).to_string(),
+                id,
+                kind: NodeKind::Missing,
+                version: None,
+                side: Side::Unknown,
+                metadata: HashMap::new(),
+            });
         }
 
         graph

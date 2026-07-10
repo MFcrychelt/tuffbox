@@ -60,18 +60,34 @@
   3. Content UI: hero, update panel, карточки с badge/анимацией; модалка
      прогресса со шкалами на каждый мод.
   4. `svelte-check`: 0 errors; `cargo check -p tuffbox-desktop`: ok.
+- **Сделано (2026-07-10, Windows update transaction):** streaming download
+  теперь заменяет одноимённый jar через platform-aware atomic persist, а
+  single-mod update скачивает и проверяет файл до записи manifest. При ошибке
+  восстанавливается предыдущий jar; учитывается суффикс `.disabled`, UI больше
+  не скрывает `download.failed`.
 
 ## 3. Вкладка Recipes — непонятный парсинг, знаки вопроса
 - **Симптом:** Не ясно, как парсится содержимое; весь текст покрыт знаками
   вопроса (����).
 - **Причина (предпол.):** неверная кодировка при чтении/выводе (UTF-8 vs системная
   кодировка, особенно на Windows — cp1251), либо парсер выводит нечитаемые данные.
-- **Статус:** исправлено (JEI-style UI, 2026-07-10)
-- **Что сделано:** `recipe_layout.rs` — раскладка 3×3 по алгоритму JEI
-  (`CraftingGridHelper.getCraftingIndex`), печь, кузня. `recipe_scan.rs` —
-  полный парсинг через `AdapterRegistry` (до 5000 рецептов). `RecipeBrowser.svelte` —
-  сетка предметов, Recipes/Uses (R/U), JEI-поиск (@mod #tag &id), категории,
-  навигация по слотам.
+- **Статус:** исправлено (полноценный JEI UI, 2026-07-10)
+- **Что сделано:**
+  1. `recipe_layout.rs` — раскладка 3×3 по алгоритму JEI
+     (`CraftingGridHelper.getCraftingIndex`), печь, кузня (горизонтально),
+     камнерез; циклическая смена `one_of`/тегов.
+  2. `recipe_scan.rs` — JAR + `datapacks/` + world datapacks + `kubejs/data`,
+     лимит 8000, `RecipeScanResult` со статистикой; генерация/запись KubeJS
+     remove-скриптов в `kubejs/server_scripts/tuffbox_recipe_removes.js`.
+  3. `RecipeBrowser.svelte` — layout как JEI: category rail, MC-style панель
+     крафта, ingredient list с пагинацией, bookmarks, history, поиск
+     `@mod #tag &id $ $ -exclude`, R/U/B/←→/Backspace, Queue remove → disk.
+  4. Forge/Fabric/NeoForge: пути `recipes` и `recipe`.
+- **Live JEI (2026-07-10):** добавлен companion plugin для Fabric/NeoForge
+  1.21.1. При запущенном клиенте Recipes получает реальные runtime categories,
+  crafting stations, slot layouts, alternatives и локализованные имена через
+  token-authenticated localhost bridge. После выхода UI автоматически
+  возвращается к offline snapshot.
 
 ## 3b. Quest Editor — заглушка без сохранения
 - **Симптом:** Quest editor парсил только заголовки глав, квесты не загружались,
@@ -99,7 +115,7 @@
 ## 5. Вкладка Resolve полностью сломана
 - **Симптом:** нельзя взаимодействовать с графом (не кликабелен/не рендерится),
   надписи в карточках выезжают за пределы, неудобный UI.
-- **Статус:** в работе (рендер и интерактивность есть, overflow сделан)
+- **Статус:** исправлено (быстрый offline/cache render + background refresh)
 - **Что сделано:** `Graph.svelte` полноценно использует `d3-force` для
   раскладки, перетаскивание узлов (`handleNodeMouseDown`, Graph.svelte:360),
   пан/зум (`zoomBy`/`resetView`), клик по узлу выделяет, auto-install missing
@@ -115,6 +131,12 @@
   узлов на больших графах; подписи в SVG-узлах обрезаются до 22 символов с
   многоточием (Graph.svelte:499), чтобы длинные label не налезали друг на
   друга. `svelte-check`: 0 errors.
+- **Сделано (2026-07-10):** `get_graph` больше не выполняет синхронный N+1
+  Modrinth-enrich. Сначала возвращается локальный или валидный cached graph,
+  сеть обновляет `.tuffbox/cache/dependency-graph.json` в фоне. Resolve plan и
+  diagnostics используют тот же snapshot. Missing dependency теперь
+  полноценный core-узел, поэтому все edge endpoints существуют и d3 layout не
+  падает.
 
 ## 6. Вкладка History — надписи не помещаются в шкалу изменений
 - **Симптом:** текст описания изменений выходит за границы таймлайна/шкалы.

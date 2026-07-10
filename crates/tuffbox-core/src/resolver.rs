@@ -74,20 +74,20 @@ impl Resolver {
             });
         }
 
-    // Local fallback (kept from the older local version): for any other error
-    // diagnostic that has no specific handler above, still surface a review
-    // plan so callers always get *something* actionable instead of `None`.
-    if let Some(other) = diagnostics
-        .iter()
-        .find(|d| d.severity == DiagnosticSeverity::Error)
-    {
-        return Some(ChangePlan {
-            summary: format!("Review diagnostic: {}", other.code),
-            risk: ChangeRisk::Medium,
-            actions: vec![],
-            requires_snapshot: true,
-        });
-    }
+        // Local fallback (kept from the older local version): for any other error
+        // diagnostic that has no specific handler above, still surface a review
+        // plan so callers always get *something* actionable instead of `None`.
+        if let Some(other) = diagnostics
+            .iter()
+            .find(|d| d.severity == DiagnosticSeverity::Error)
+        {
+            return Some(ChangePlan {
+                summary: format!("Review diagnostic: {}", other.code),
+                risk: ChangeRisk::Medium,
+                actions: vec![],
+                requires_snapshot: true,
+            });
+        }
 
         None
     }
@@ -97,7 +97,12 @@ impl Resolver {
             .edges
             .iter()
             .filter(|edge| edge.kind == EdgeKind::Requires)
-            .filter(|edge| !graph.has_node(&edge.to))
+            .filter(|edge| {
+                graph
+                    .node(&edge.to)
+                    .map(|node| node.kind == NodeKind::Missing)
+                    .unwrap_or(true)
+            })
             .map(|edge| {
                 let from = graph
                     .node(&edge.from)
@@ -117,7 +122,14 @@ impl Resolver {
             .edges
             .iter()
             .filter(|edge| matches!(edge.kind, EdgeKind::Conflicts | EdgeKind::BreaksWith))
-            .filter(|edge| graph.has_node(&edge.from) && graph.has_node(&edge.to))
+            .filter(|edge| {
+                graph
+                    .node(&edge.from)
+                    .is_some_and(|node| node.kind != NodeKind::Missing)
+                    && graph
+                        .node(&edge.to)
+                        .is_some_and(|node| node.kind != NodeKind::Missing)
+            })
             .map(|edge| {
                 let from = graph
                     .node(&edge.from)

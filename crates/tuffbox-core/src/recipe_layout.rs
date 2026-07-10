@@ -138,10 +138,20 @@ pub fn category_for_type(recipe_type: &str) -> &'static str {
         | "minecraft:blasting"
         | "minecraft:smoking"
         | "minecraft:campfire_cooking" => "cooking",
-        "minecraft:smithing" | "minecraft:smithing_transform" => "smithing",
+        "minecraft:smithing" | "minecraft:smithing_transform" | "minecraft:smithing_trim" => {
+            "smithing"
+        }
         "minecraft:stonecutting" => "stonecutting",
         t if t.contains("crafting") => "crafting",
-        t if t.contains("smelt") || t.contains("blast") || t.contains("cook") => "cooking",
+        t if t.contains("smelt")
+            || t.contains("blast")
+            || t.contains("cook")
+            || t.contains("furnace") =>
+        {
+            "cooking"
+        }
+        t if t.contains("smith") => "smithing",
+        t if t.contains("stonecut") || t.contains("cutting") => "stonecutting",
         _ => "other",
     }
 }
@@ -167,14 +177,19 @@ pub fn layout_from_json(json: &serde_json::Value, recipe_type: &str) -> RecipeLa
 
     match recipe_type {
         "minecraft:crafting_shaped" => build_shaped_layout(json, category, output, output_count),
-        "minecraft:crafting_shapeless" => build_shapeless_layout(json, category, output, output_count),
+        "minecraft:crafting_shapeless" => {
+            build_shapeless_layout(json, category, output, output_count)
+        }
         "minecraft:smelting"
         | "minecraft:blasting"
         | "minecraft:smoking"
-        | "minecraft:campfire_cooking" => build_cooking_layout(json, category, output, output_count),
-        "minecraft:smithing_transform" | "minecraft:smithing" => {
+        | "minecraft:campfire_cooking" => {
+            build_cooking_layout(json, category, output, output_count)
+        }
+        "minecraft:smithing_transform" | "minecraft:smithing" | "minecraft:smithing_trim" => {
             build_smithing_layout(json, category, output, output_count)
         }
+        "minecraft:stonecutting" => build_stonecutting_layout(json, category, output, output_count),
         _ => build_generic_layout(json, category, output, output_count),
     }
 }
@@ -268,14 +283,18 @@ fn build_cooking_layout(
     output: IngredientDisplay,
     output_count: u32,
 ) -> RecipeLayout {
-    let input = json
-        .get("ingredient")
-        .and_then(json_ingredient_to_display);
+    let input = json.get("ingredient").and_then(json_ingredient_to_display);
     let mut grid = empty_grid();
     grid[4] = input; // centered input like JEI furnace slot
 
-    let cook_time = json.get("cookingtime").and_then(|v| v.as_u64()).map(|v| v as u32);
-    let experience = json.get("experience").and_then(|v| v.as_f64()).map(|v| v as f32);
+    let cook_time = json
+        .get("cookingtime")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    let experience = json
+        .get("experience")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32);
 
     RecipeLayout {
         category,
@@ -294,13 +313,43 @@ fn build_smithing_layout(
     output: IngredientDisplay,
     output_count: u32,
 ) -> RecipeLayout {
+    // JEI smithing: template | base | addition  (horizontal middle row)
     let mut grid = empty_grid();
     let keys = ["template", "base", "addition"];
     for (i, key) in keys.iter().enumerate() {
         if let Some(ing) = json.get(*key).and_then(json_ingredient_to_display) {
-            grid[i * 3 + 1] = Some(ing);
+            grid[3 + i] = Some(ing);
         }
     }
+    // Legacy smithing used base + addition only
+    if grid[3].is_none() && grid[4].is_none() {
+        if let Some(ing) = json.get("base").and_then(json_ingredient_to_display) {
+            grid[3] = Some(ing);
+        }
+        if let Some(ing) = json.get("addition").and_then(json_ingredient_to_display) {
+            grid[5] = Some(ing);
+        }
+    }
+    RecipeLayout {
+        category,
+        shapeless: false,
+        grid,
+        output,
+        output_count,
+        cook_time: None,
+        experience: None,
+    }
+}
+
+fn build_stonecutting_layout(
+    json: &serde_json::Value,
+    category: String,
+    output: IngredientDisplay,
+    output_count: u32,
+) -> RecipeLayout {
+    let input = json.get("ingredient").and_then(json_ingredient_to_display);
+    let mut grid = empty_grid();
+    grid[4] = input;
     RecipeLayout {
         category,
         shapeless: false,
@@ -396,6 +445,9 @@ mod tests {
         let layout = layout_from_json(&json, "minecraft:crafting_shaped");
         assert!(!layout.shapeless);
         assert_eq!(layout.output.id, "minecraft:wooden_pickaxe");
-        assert!(layout.grid.iter().any(|s| s.as_ref().is_some_and(|i| i.id.contains("stick"))));
+        assert!(layout
+            .grid
+            .iter()
+            .any(|s| s.as_ref().is_some_and(|i| i.id.contains("stick"))));
     }
 }

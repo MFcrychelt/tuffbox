@@ -37,6 +37,10 @@
   let resolving = false;
   let message: string | null = null;
   let changePlan: any | null = null;
+  let graphSource = "local";
+  let graphGeneratedAt: string | null = null;
+  let graphRefreshing = false;
+  let refreshError: string | null = null;
 
   // Dependency preview dialog
   let depPreviewOpen = false;
@@ -60,6 +64,36 @@
     return { ...edge, from, to };
   }
 
+  function applyGraph(raw: any, resetSelection = false) {
+    graph = {
+      nodes: (raw.nodes ?? []).map(normalizeNode),
+      edges: (raw.edges ?? []).map(normalizeEdge),
+    };
+    graphSource = raw.source ?? "local";
+    graphGeneratedAt = raw.generatedAt ?? null;
+    simulationLayoutKey = "";
+    if (resetSelection) selectedId = null;
+    hydrateMissingIcons().catch(() => {});
+    queueMicrotask(() => hydrateGhostNodes().catch(() => {}));
+  }
+
+  async function refreshGraph(manual = true) {
+    if (!$projectPath || graphRefreshing) return;
+    graphRefreshing = true;
+    refreshError = null;
+    try {
+      const raw: any = await invoke("refresh_graph", { path: $projectPath });
+      applyGraph(raw);
+      await loadChangePlan();
+      if (manual) message = "Dependency metadata refreshed.";
+    } catch (e) {
+      refreshError = String(e);
+      if (!graph) error = refreshError;
+    } finally {
+      graphRefreshing = false;
+    }
+  }
+
   async function load(force = false) {
     if (!$projectPath) return;
     if (!force && lastLoadedPath === $projectPath && graph) return;
@@ -71,18 +105,14 @@
     resetViewOnNextLayout = true;
     try {
       const raw: any = await invoke("get_graph", { path: $projectPath });
-      graph = {
-        nodes: (raw.nodes ?? []).map(normalizeNode),
-        edges: (raw.edges ?? []).map(normalizeEdge),
-      };
+      applyGraph(raw, true);
       // Don't pre-select a node — otherwise every unrelated edge is dimmed
       // to near-invisible and the graph looks disconnected.
-      selectedId = null;
       await loadChangePlan();
       lastLoadedPath = $projectPath;
-      hydrateMissingIcons().catch(() => {});
-      // Defer ghost hydration until after reactive ghostNodes rebuild.
-      queueMicrotask(() => hydrateGhostNodes().catch(() => {}));
+      if (raw.source !== "network") {
+        queueMicrotask(() => refreshGraph(false));
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -449,7 +479,9 @@
   $: selectedEdges = selectedId
     ? displayEdges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
     : [];
-  $: missingEdges = displayEdges.filter((edge) => edge.kind === "Requires" && !nodeById(edge.to));
+  $: missingEdges = displayEdges.filter(
+    (edge) => edge.kind === "Requires" && (!nodeById(edge.to) || nodeById(edge.to)?.kind === "Missing")
+  );
   $: missingDepsByMod = (() => {
     const map = new Map<string, GraphEdge[]>();
     for (const edge of missingEdges) {
@@ -459,13 +491,17 @@
     }
     return map;
   })();
-  $: conflictEdges = displayEdges.filter((edge) => ["Conflicts", "BreaksWith"].includes(edge.kind) && nodeById(edge.from) && nodeById(edge.to));
+  $: conflictEdges = displayEdges.filter(
+    (edge) => ["Conflicts", "BreaksWith"].includes(edge.kind)
+      && nodeById(edge.from)?.kind !== "Missing"
+      && nodeById(edge.to)?.kind !== "Missing"
+  );
   $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
     return acc;
   }, {});
   $: modNodes = nodes.filter((node) => node.kind === "Mod");
-  $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile");
+  $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing");
   $: profileNodes = nodes.filter((node) => node.kind === "Profile");
 
   // Synthesize ghost nodes for any edge endpoint that has no real node. This
@@ -477,8 +513,19 @@
   // (and the missing-dependency panel operates on the real graph).
   const nodeIdSet = (id: string) => nodes.some((n) => n.id === id);
   $: ghostNodes = (() => {
-    const out: GraphNode[] = [];
-    const seen = new Set<string>();
+    const out: GraphNode[] = nodes
+      .filter((node) => node.kind === "Missing")
+      .map((node) => ({
+        ...node,
+        label: ghostMeta[node.id]?.name ?? node.label,
+        metadata: {
+          ...(node.metadata ?? {}),
+          ...(ghostMeta[node.id]?.iconUrl ? { icon_url: ghostMeta[node.id].iconUrl! } : {}),
+          ...(ghostMeta[node.id]?.projectId ? { project_id: ghostMeta[node.id].projectId! } : {}),
+          source: "modrinth",
+        },
+      }));
+    const seen = new Set(out.map((node) => node.id));
     for (const e of edges) {
       if (e.kind === "RequiresLoader" || e.kind === "RequiresMinecraft" || e.kind === "RequiresJava" || e.kind === "IncludedInProfile") continue;
       for (const end of [e.from, e.to]) {
@@ -745,15 +792,29 @@
         <Workflow size={16} />
         {resolving ? "Resolving..." : "Auto-install dependencies"}
       </button>
-      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
+      <button class="ghost" on:click={() => refreshGraph(true)} title="Refresh dependency metadata" disabled={!$projectPath || loading || graphRefreshing}>
+        <RefreshCw size={16} class={graphRefreshing ? "spin" : ""} />
       </button>
     </div>
   </div>
 
   {#if message}<div class="notice success">{message}</div>{/if}
+  {#if graph}
+    <div class="graph-status" class:stale={graphSource === "local"} class:error={!!refreshError}>
+      {#if graphRefreshing}
+        <Loader2 size={13} class="spin" /> Updating dependencies in the background…
+      {:else if refreshError}
+        Offline graph shown. Refresh failed: {refreshError}
+      {:else if graphSource === "local"}
+        Local graph shown; network metadata has not been cached yet.
+      {:else}
+        {graphSource === "cache" ? "Cached dependency graph" : "Current dependency graph"}
+        {graphGeneratedAt ? ` · ${new Date(graphGeneratedAt).toLocaleString()}` : ""}
+      {/if}
+    </div>
+  {/if}
 
-  {#if loading}
+  {#if loading && !graph}
     <div class="loading">Loading graph...</div>
   {:else if error}
     <div class="empty error">{error}</div>
@@ -1184,6 +1245,18 @@
     background: rgba(27, 217, 106, 0.08);
     border-color: rgba(27, 217, 106, 0.25);
   }
+
+  .graph-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: -10px 0 14px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .graph-status.stale { color: #fbbf24; }
+  .graph-status.error { color: #fca5a5; }
 
   .title,
   h3 {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::environment::LoaderKind;
-use crate::unified::tag::tag_id_from_path;
 use crate::unified::recipe::*;
+use crate::unified::tag::tag_id_from_path;
 
 pub struct FabricAdapter;
 
@@ -60,10 +60,22 @@ impl LoaderAdapter for FabricAdapter {
 
     fn config_file_patterns(&self) -> Vec<ConfigPattern> {
         vec![
-            ConfigPattern { path_pattern: "config/*.json".to_string(), format: ConfigFileFormat::Json },
-            ConfigPattern { path_pattern: "config/*.json5".to_string(), format: ConfigFileFormat::Json5 },
-            ConfigPattern { path_pattern: "config/*/*.json".to_string(), format: ConfigFileFormat::Json },
-            ConfigPattern { path_pattern: "config/*.toml".to_string(), format: ConfigFileFormat::Toml },
+            ConfigPattern {
+                path_pattern: "config/*.json".to_string(),
+                format: ConfigFileFormat::Json,
+            },
+            ConfigPattern {
+                path_pattern: "config/*.json5".to_string(),
+                format: ConfigFileFormat::Json5,
+            },
+            ConfigPattern {
+                path_pattern: "config/*/*.json".to_string(),
+                format: ConfigFileFormat::Json,
+            },
+            ConfigPattern {
+                path_pattern: "config/*.toml".to_string(),
+                format: ConfigFileFormat::Toml,
+            },
         ]
     }
 
@@ -88,7 +100,10 @@ impl LoaderAdapter for FabricAdapter {
         json: &serde_json::Value,
         file_path: &str,
     ) -> Result<UnifiedTag, AdapterError> {
-        let replace = json.get("replace").and_then(|v| v.as_bool()).unwrap_or(false);
+        let replace = json
+            .get("replace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let values: Vec<TagEntry> = json
             .get("values")
@@ -96,7 +111,10 @@ impl LoaderAdapter for FabricAdapter {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| {
-                        v.as_str().map(|s| TagEntry { id: s.to_string(), required: true })
+                        v.as_str().map(|s| TagEntry {
+                            id: s.to_string(),
+                            required: true,
+                        })
                     })
                     .collect()
             })
@@ -105,28 +123,58 @@ impl LoaderAdapter for FabricAdapter {
         let tag_id = tag_id_from_path(file_path)
             .ok_or_else(|| AdapterError::InvalidPath(file_path.to_string()))?;
 
-        Ok(UnifiedTag { id: tag_id, entries: values, replace })
+        Ok(UnifiedTag {
+            id: tag_id,
+            entries: values,
+            replace,
+        })
     }
 }
 
 impl FabricAdapter {
     pub fn parse_fabric_mod_json(content: &str) -> Result<ModMetadata, AdapterError> {
-        let json: serde_json::Value = serde_json::from_str(content)
-            .map_err(|e| AdapterError::Parse(e.to_string()))?;
+        let json: serde_json::Value =
+            serde_json::from_str(content).map_err(|e| AdapterError::Parse(e.to_string()))?;
 
-        let mod_id = json.get("id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-        let display_name = json.get("name").and_then(|v| v.as_str()).unwrap_or(&mod_id).to_string();
-        let version = json.get("version").and_then(|v| v.as_str()).unwrap_or("0.0.0").to_string();
+        let mod_id = json
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let display_name = json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&mod_id)
+            .to_string();
+        let version = json
+            .get("version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.0")
+            .to_string();
 
-        let dependencies = json
+        let mut dependencies: Vec<ModDependency> = json
             .get("depends")
             .and_then(|v| v.as_object())
-            .map(|deps| {
-                deps.keys()
-                    .map(|k| ModDependency { mod_id: k.clone(), required: true })
-                    .collect()
+            .into_iter()
+            .flat_map(|deps| deps.keys())
+            .filter(|id| !matches!(id.as_str(), "minecraft" | "fabricloader" | "java"))
+            .map(|id| ModDependency {
+                mod_id: id.clone(),
+                required: true,
             })
-            .unwrap_or_default();
+            .collect();
+        for section in ["recommends", "suggests"] {
+            dependencies.extend(
+                json.get(section)
+                    .and_then(|value| value.as_object())
+                    .into_iter()
+                    .flat_map(|deps| deps.keys())
+                    .map(|id| ModDependency {
+                        mod_id: id.clone(),
+                        required: false,
+                    }),
+            );
+        }
 
         Ok(ModMetadata {
             namespace: mod_id.clone(),
@@ -138,12 +186,16 @@ impl FabricAdapter {
     }
 
     pub fn parse_quilt_mod_json(content: &str) -> Result<ModMetadata, AdapterError> {
-        let json: serde_json::Value = serde_json::from_str(content)
-            .map_err(|e| AdapterError::Parse(e.to_string()))?;
+        let json: serde_json::Value =
+            serde_json::from_str(content).map_err(|e| AdapterError::Parse(e.to_string()))?;
 
         let loader = json.get("quilt_loader").ok_or(AdapterError::NoMetadata)?;
 
-        let mod_id = loader.get("id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        let mod_id = loader
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
         let metadata = loader.get("metadata");
         let display_name = metadata
             .and_then(|m| m.get("name"))
@@ -155,7 +207,11 @@ impl FabricAdapter {
             namespace: mod_id.clone(),
             mod_id,
             display_name,
-            version: loader.get("version").and_then(|v| v.as_str()).unwrap_or("0.0.0").to_string(),
+            version: loader
+                .get("version")
+                .and_then(|v| v.as_str())
+                .unwrap_or("0.0.0")
+                .to_string(),
             dependencies: Vec::new(),
         })
     }

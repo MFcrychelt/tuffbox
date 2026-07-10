@@ -85,8 +85,22 @@ export interface QuestValidationIssue {
 
 export interface IngredientDisplay {
   id: string;
-  kind: string;
+  kind?: string;
+  name?: string;
+  count?: number;
+  tooltip?: string[];
+  iconUrl?: string | null;
   alts?: IngredientDisplay[];
+}
+
+export interface RuntimeRecipeSlot {
+  role: string;
+  name?: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  ingredients: IngredientDisplay[];
 }
 
 export interface RecipeLayout {
@@ -97,6 +111,7 @@ export interface RecipeLayout {
   outputCount: number;
   cookTime?: number;
   experience?: number;
+  slots?: RuntimeRecipeSlot[];
 }
 
 export interface ScannedRecipe {
@@ -109,6 +124,43 @@ export interface ScannedRecipe {
   inputIds: string[];
   outputId: string;
   isConditional: boolean;
+}
+
+export interface RecipeScanResult {
+  recipes: ScannedRecipe[];
+  jarCount: number;
+  datapackFiles: number;
+  truncated: boolean;
+  totalScanned: number;
+}
+
+export interface RecipeRuntimeStatus {
+  connected: boolean;
+  supported: boolean;
+  message: string;
+  minecraftVersion?: string | null;
+  pid?: number | null;
+}
+
+export interface RuntimeRecipeCategory {
+  id: string;
+  title: string;
+  width: number;
+  height: number;
+  stations: IngredientDisplay[];
+}
+
+export interface RecipeRuntimeSnapshot extends RecipeScanResult {
+  source: "runtime";
+  generatedAt: string;
+  protocolVersion: number;
+  categories: RuntimeRecipeCategory[];
+}
+
+export interface KubeJsScript {
+  kind: string;
+  filename: string;
+  content: string;
 }
 
 export interface ProfileSummary {
@@ -165,6 +217,8 @@ export interface GraphEdge {
 export interface DependencyGraph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  source?: "local" | "cache" | "network" | string;
+  generatedAt?: string | null;
 }
 
 export interface Diagnostic {
@@ -615,6 +669,7 @@ export const api = {
   // ── Graph & Resolve ───────────────────────────────────────────────
   graph: {
     get(p?: string) { return cmd<DependencyGraph>("get_graph", pathArg(p)); },
+    refresh(p?: string) { return cmd<DependencyGraph>("refresh_graph", pathArg(p)); },
     getResolvePlan(p?: string) { return cmd<ChangePlan | null>("get_resolve_change_plan", pathArg(p)); },
     applyAction(actionIndex: number, p?: string) { return cmd<string[]>("apply_resolve_action", { ...pathArg(p), actionIndex }); },
     applyPlan(p?: string) { return cmd<string[]>("apply_resolve_change_plan", pathArg(p)); },
@@ -676,7 +731,20 @@ export const api = {
 
   // ── Recipes (JEI-style browser) ─────────────────────────────────
   recipes: {
-    scan(p?: string) { return cmd<ScannedRecipe[]>("scan_mod_recipes", pathArg(p)); },
+    scan(p?: string) { return cmd<RecipeScanResult>("scan_mod_recipes", pathArg(p)); },
+    runtimeStatus(p?: string) { return cmd<RecipeRuntimeStatus>("get_recipe_runtime_status", pathArg(p)); },
+    runtimeSnapshot(p?: string) { return cmd<RecipeRuntimeSnapshot>("get_recipe_runtime_snapshot", pathArg(p)); },
+    writeRemoves(recipeIds: string[], p?: string) {
+      return cmd<string>("write_kubejs_recipe_removes", { ...pathArg(p), recipeIds });
+    },
+    generateScript(kind: string, recipeIds: string[], newItem?: string | null, count?: number | null) {
+      return cmd<KubeJsScript>("generate_kubejs_recipe_script", {
+        kind,
+        recipeIds,
+        newItem: newItem ?? null,
+        count: count ?? null,
+      });
+    },
   },
 
   // ── Diagnostics & Crash ───────────────────────────────────────────
