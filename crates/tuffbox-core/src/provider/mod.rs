@@ -12,11 +12,8 @@ use thiserror::Error;
 pub enum ProviderError {
     #[error("network request failed: {0}")]
     Network(#[from] reqwest::Error),
-    #[error("network request failed for {url}: {source}")]
-    NetworkWithContext {
-        source: reqwest::Error,
-        url: String,
-    },
+    #[error("{0}")]
+    NetworkContext(String),
     #[error("failed to parse response: {0}")]
     Parse(#[source] serde_json::Error),
     #[error("provider returned status {status}: {message}")]

@@ -47,6 +47,21 @@ pub fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, reqwest:
     fetch(url)?.json()
 }
 
+pub fn get_json_with_context<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+    let response = fetch(url).map_err(|e| format!("HTTP request failed: {}", e))?;
+    let status = response.status();
+    let body = response.text().map_err(|e| format!("Failed to read response body: {}", e))?;
+    
+    serde_json::from_str(&body).map_err(|e| {
+        let preview = if body.len() > 300 {
+            format!("{}... ({} bytes total)", &body[..300], body.len())
+        } else {
+            body.clone()
+        };
+        format!("JSON decode error for {} (status {}): {}. Response: {}", url, status, e, preview)
+    })
+}
+
 /// Like [`get_json`], but treats a `404 Not Found` response as `Ok(None)`
 /// instead of an error, which is the normal "no match" response for
 /// lookup-style endpoints (e.g. Modrinth's hash lookup).

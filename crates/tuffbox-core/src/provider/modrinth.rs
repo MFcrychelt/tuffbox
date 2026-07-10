@@ -17,12 +17,7 @@ impl ModrinthProvider {
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ProviderError> {
         let url = format!("{BASE_URL}{path}");
-        crate::http::get_json(&url).map_err(|e| {
-            ProviderError::NetworkWithContext {
-                source: e,
-                url: url.clone(),
-            }
-        })
+        crate::http::get_json_with_context(&url).map_err(ProviderError::NetworkContext)
     }
 
     /// Looks up the Modrinth version that produced a given file, by SHA1 hash.
