@@ -978,7 +978,9 @@
                 <div class="filter-list loader-list">
                   {#each shownLoaders as loaderName}
                     <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>
-                      <span class="loader-ic">{loaderName === "Fabric" ? Scroll : loaderName === "Forge" ? Hammer : Anvil} size={16} /></span>
+                      <span class="loader-ic">
+                        {#if loaderName === "Fabric"}<Scroll size={16} />{:else if loaderName === "Forge"}<Hammer size={16} />{:else}<Anvil size={16} />{/if}
+                      </span>
                       <span>{loaderName}</span>
                     </button>
                   {/each}
