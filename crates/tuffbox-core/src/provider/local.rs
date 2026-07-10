@@ -85,6 +85,9 @@ impl ContentProvider for LocalJarProvider {
             loaders: Vec::new(),
             files: vec![self.get_file("", &self.file_name())?],
             dependencies: Vec::new(),
+            name: None,
+            changelog: None,
+            date_published: None,
         })
     }
 

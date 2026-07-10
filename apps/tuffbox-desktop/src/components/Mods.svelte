@@ -177,7 +177,7 @@
   let selectedResultIds: Record<string, boolean> = {};
 
   // --- Version picker (change mod version) ---
-  type ModVersion = { id: string; versionNumber: string; gameVersions: string[]; loaders: string[] };
+  type ModVersion = { id: string; versionNumber: string; gameVersions: string[]; loaders: string[]; name?: string; changelog?: string; datePublished?: string };
   let versionPickerMod: ModRow | null = null;
   let availableVersions: ModVersion[] = [];
   let versionPickerLoading = false;
@@ -679,6 +679,20 @@
 
   function iconFallback(name: string) {
     return name?.[0]?.toUpperCase() ?? "?";
+  }
+
+  function stripHtml(html: string) {
+    return html?.replace(/<[^>]*>/g, "").replace(/&[a-z]+;/gi, " ").trim() ?? "";
+  }
+
+  function formatDate(iso: string) {
+    if (!iso) return "";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    } catch {
+      return iso.slice(0, 10);
+    }
   }
 
   function depKind(dep: { type: string }) {
@@ -1192,7 +1206,13 @@
             >
               <div class="version-main">
                 <strong>{v.versionNumber}</strong>
-                <span class="version-loaders">{v.loaders.join(", ")} · MC {v.gameVersions.slice(0, 3).join(", ")}</span>
+                {#if v.name && v.name !== v.versionNumber}
+                  <span class="version-name">{v.name}</span>
+                {/if}
+                <span class="version-loaders">{v.loaders.join(", ")} · MC {v.gameVersions.slice(0, 3).join(", ")}{#if v.datePublished} · {formatDate(v.datePublished)}{/if}</span>
+                {#if v.changelog}
+                  <span class="version-changelog">{stripHtml(v.changelog).slice(0, 120)}{stripHtml(v.changelog).length > 120 ? '...' : ''}</span>
+                {/if}
               </div>
               {#if v.versionNumber === versionPickerMod?.version}
                 <span class="current-badge">Current</span>
@@ -2140,8 +2160,8 @@
     background: rgba(27, 217, 106, 0.08);
   }
 
-  .version-modal { max-width: 520px; }
-  .version-list { display: grid; gap: 6px; max-height: 460px; overflow: auto; padding: 8px 0; }
+  .version-modal { max-width: 600px; }
+  .version-list { display: grid; gap: 6px; max-height: 70vh; overflow: auto; padding: 8px 0; }
   .version-row {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color);
@@ -2150,11 +2170,13 @@
   }
   .version-row:hover, .version-row.current { border-color: rgba(27,217,106,.35); background: rgba(27,217,106,.06); }
   .version-row:disabled { opacity: .5; cursor: wait; }
-  .version-main { display: grid; gap: 4px; }
+  .version-main { display: grid; gap: 3px; min-width: 0; flex: 1; }
   .version-main strong { color: var(--text-primary); }
+  .version-name { color: var(--text-secondary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .version-loaders { color: var(--text-muted); font-size: 12px; }
-  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: rgba(27,217,106,.15); padding: 4px 10px; border-radius: 999px; }
-  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: rgba(139,92,246,.12); padding: 4px 10px; border-radius: 999px; }
+  .version-changelog { color: var(--text-muted); font-size: 11px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: rgba(27,217,106,.15); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: rgba(139,92,246,.12); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
 
   .dep-dialog { max-width: 520px; }
   .dep-dialog-actions { display: grid; gap: 14px; padding: 8px 0 18px; }

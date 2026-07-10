@@ -68,3 +68,37 @@ pub fn get_bytes(url: &str) -> Result<Vec<u8>, reqwest::Error> {
 pub fn get_text(url: &str) -> Result<String, reqwest::Error> {
     fetch(url)?.text()
 }
+
+pub fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
+    url: &str,
+    body: &B,
+) -> Result<T, reqwest::Error> {
+    let mut last_err = None;
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_secs(2u64.pow(attempt)));
+        }
+        let resp = HTTP
+            .post(url)
+            .header("Content-Type", "application/json")
+            .json(body)
+            .send();
+        match resp {
+            Ok(r) => {
+                if r.status().is_server_error() {
+                    if attempt < MAX_RETRIES {
+                        last_err = Some(r.error_for_status().unwrap_err());
+                        continue;
+                    }
+                    return r.error_for_status()?.json();
+                }
+                return r.error_for_status()?.json();
+            }
+            Err(e) if retryable(&e) && attempt < MAX_RETRIES => {
+                last_err = Some(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("retries exhausted with last_err set"))
+}

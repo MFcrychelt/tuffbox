@@ -12,6 +12,11 @@ use thiserror::Error;
 pub enum ProviderError {
     #[error("network request failed: {0}")]
     Network(#[from] reqwest::Error),
+    #[error("network request failed for {url}: {source}")]
+    NetworkWithContext {
+        source: reqwest::Error,
+        url: String,
+    },
     #[error("failed to parse response: {0}")]
     Parse(#[source] serde_json::Error),
     #[error("provider returned status {status}: {message}")]
@@ -87,6 +92,12 @@ pub struct VersionInfo {
     pub loaders: Vec<String>,
     pub files: Vec<ProviderFileInfo>,
     pub dependencies: Vec<ProviderDependency>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub changelog: Option<String>,
+    #[serde(default)]
+    pub date_published: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

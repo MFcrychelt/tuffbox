@@ -17,7 +17,12 @@ impl ModrinthProvider {
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ProviderError> {
         let url = format!("{BASE_URL}{path}");
-        Ok(crate::http::get_json(&url)?)
+        crate::http::get_json(&url).map_err(|e| {
+            ProviderError::NetworkWithContext {
+                source: e,
+                url: url.clone(),
+            }
+        })
     }
 
     /// Looks up the Modrinth version that produced a given file, by SHA1 hash.
@@ -40,6 +45,32 @@ impl ModrinthProvider {
         };
         let project = self.get_project(&version.project_id)?;
         Ok(Some((project, version)))
+    }
+
+    /// Batch-resolves the latest compatible version for a set of file hashes
+    /// using Modrinth's `POST /v2/version_files/update` endpoint.
+    ///
+    /// Returns a map of `sha1 -> latest VersionInfo` for every hash that has
+    /// an update available.
+    pub fn get_latest_versions(
+        &self,
+        hashes: &[String],
+        loaders: &[String],
+        game_versions: &[String],
+    ) -> Result<std::collections::HashMap<String, VersionInfo>, ProviderError> {
+        if hashes.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let url = format!("{BASE_URL}/version_files/update");
+        let body = serde_json::json!({
+            "hashes": hashes,
+            "algorithm": "sha1",
+            "loaders": loaders,
+            "game_versions": game_versions,
+        });
+        let raw: std::collections::HashMap<String, ModrinthVersion> =
+            crate::http::post_json(&url, &body)?;
+        Ok(raw.into_iter().map(|(k, v)| (k, v.into())).collect())
     }
 }
 
@@ -303,6 +334,12 @@ struct ModrinthVersion {
     loaders: Vec<String>,
     files: Vec<ModrinthFile>,
     dependencies: Vec<ModrinthDependency>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    changelog: Option<String>,
+    #[serde(default)]
+    date_published: Option<String>,
 }
 
 impl From<ModrinthVersion> for VersionInfo {
@@ -319,6 +356,9 @@ impl From<ModrinthVersion> for VersionInfo {
                 .into_iter()
                 .map(ProviderDependency::from)
                 .collect(),
+            name: version.name,
+            changelog: version.changelog,
+            date_published: version.date_published,
         }
     }
 }

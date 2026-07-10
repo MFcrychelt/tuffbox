@@ -683,6 +683,9 @@ async fn get_mod_versions(
                 "versionNumber": v.version_number,
                 "gameVersions": v.game_versions,
                 "loaders": v.loaders,
+                "name": v.name,
+                "changelog": v.changelog,
+                "datePublished": v.date_published,
             }))
             .collect())
     })
@@ -1125,56 +1128,64 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
 
 /// Checks every Modrinth-sourced mod in the project for available updates,
 /// comparing the installed version against the latest compatible version.
+/// Uses Modrinth's batch update API for a single request instead of N.
 /// Returns a list with update info for each mod that could be updated.
 #[tauri::command(rename_all = "camelCase")]
 async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::ModrinthProvider::new();
-        let mut updates = Vec::new();
 
-        let query = ProviderSearchQuery {
-            query: None,
-            minecraft_version: Some(manifest.minecraft.version.clone()),
-            loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
-            ..Default::default()
-        };
+        let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+        let loaders = vec![loader_slug.clone()];
+        let game_versions = vec![manifest.minecraft.version.clone()];
 
-        for m in &manifest.mods {
+        let mut hash_to_mod: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut hashes: Vec<String> = Vec::new();
+
+        for (idx, m) in manifest.mods.iter().enumerate() {
             if m.source.kind != SourceKind::Modrinth { continue; }
-            let Some(project_id) = &m.source.project_id else { continue; };
-
-            // Get latest compatible version
-            let latest = match provider.get_versions(project_id, &query) {
-                Ok(versions) => versions.into_iter().next(),
-                Err(_) => None,
-            };
-            let Some(latest) = latest else { continue; };
-
-            if latest.version_number != m.version {
-                let file = ProviderFileInfo::select_file_for_loader(
-                    &latest,
-                    &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
-                )
-                .cloned();
-                updates.push(serde_json::json!({
-                    "modId": m.id,
-                    "name": m.name,
-                    "currentVersion": m.version,
-                    "latestVersion": latest.version_number,
-                    "versionId": latest.id,
-                    "fileName": file.as_ref().map(|f| &f.filename),
-                    "gameVersions": latest.game_versions,
-                    "loaders": latest.loaders,
-                }));
+            if let Some(h) = m.hashes.as_ref().and_then(|h| h.sha1.clone()) {
+                hash_to_mod.insert(h.clone(), idx);
+                hashes.push(h);
             }
+        }
+
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let latest_map = provider
+            .get_latest_versions(&hashes, &loaders, &game_versions)
+            .map_err(|e| e.to_string())?;
+
+        let mut updates = Vec::new();
+        for (hash, latest) in &latest_map {
+            let Some(&idx) = hash_to_mod.get(hash) else { continue; };
+            let m = &manifest.mods[idx];
+            if latest.version_number == m.version { continue; }
+
+            let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
+            updates.push(serde_json::json!({
+                "modId": m.id,
+                "name": m.name,
+                "currentVersion": m.version,
+                "latestVersion": latest.version_number,
+                "versionId": latest.id,
+                "fileName": file.as_ref().map(|f| &f.filename),
+                "gameVersions": latest.game_versions,
+                "loaders": latest.loaders,
+                "changelog": latest.changelog,
+                "datePublished": latest.date_published,
+            }));
         }
         Ok(updates)
     }).await.map_err(|e| e.to_string())?
 }
 
 /// Applies all available mod updates at once (batch update), creating
-/// a single auto-snapshot before the changes.
+/// a single auto-snapshot before the changes. Uses Modrinth's batch
+/// update API to resolve all updates in one request.
 #[tauri::command(rename_all = "camelCase")]
 async fn update_all_mods(path: String) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
@@ -1184,32 +1195,37 @@ async fn update_all_mods(path: String) -> Result<Vec<String>, String> {
         let mut updated = Vec::new();
 
         let provider = tuffbox_core::ModrinthProvider::new();
-        let query = ProviderSearchQuery {
-            query: None,
-            minecraft_version: Some(manifest.minecraft.version.clone()),
-            loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
-            ..Default::default()
-        };
+        let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+        let loaders = vec![loader_slug.clone()];
+        let game_versions = vec![manifest.minecraft.version.clone()];
 
-        for idx in 0..manifest.mods.len() {
-            if manifest.mods[idx].source.kind != SourceKind::Modrinth { continue; }
-            let Some(project_id) = manifest.mods[idx].source.project_id.clone() else { continue; };
-            let current_version = manifest.mods[idx].version.clone();
+        let mut hash_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut hashes: Vec<String> = Vec::new();
 
-            let latest = match provider.get_versions(&project_id, &query) {
-                Ok(versions) => versions.into_iter().next(),
-                Err(_) => None,
-            };
-            let Some(latest) = latest else { continue; };
-            if latest.version_number == current_version { continue; }
+        for (idx, m) in manifest.mods.iter().enumerate() {
+            if m.source.kind != SourceKind::Modrinth { continue; }
+            if let Some(h) = m.hashes.as_ref().and_then(|h| h.sha1.clone()) {
+                hash_to_idx.insert(h.clone(), idx);
+                hashes.push(h);
+            }
+        }
 
-            let file = ProviderFileInfo::select_file_for_loader(
-                &latest,
-                &tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
-            )
-            .cloned();
+        if hashes.is_empty() {
+            return Ok(updated);
+        }
+
+        let latest_map = provider
+            .get_latest_versions(&hashes, &loaders, &game_versions)
+            .map_err(|e| e.to_string())?;
+
+        for (hash, latest) in &latest_map {
+            let Some(&idx) = hash_to_idx.get(hash) else { continue; };
+            if latest.version_number == manifest.mods[idx].version { continue; }
+
+            let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
             let Some(file) = file else { continue; };
 
+            let project_id = manifest.mods[idx].source.project_id.clone().unwrap_or_default();
             let project = provider.get_project(&project_id).map_err(|e| e.to_string())?;
             let dependencies = provider.resolve_dependencies(&latest.id).unwrap_or_default();
             let side = manifest.mods[idx].side;
