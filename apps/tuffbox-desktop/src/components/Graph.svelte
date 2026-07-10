@@ -241,6 +241,21 @@
     }
   }
 
+  /// Click on a dependency icon (SVG node or card icon). For missing/ghost
+  /// nodes this installs the dep. For installed dep nodes that were pulled
+  /// in implicitly (not added by the user), clicking the icon re-installs /
+  /// re-downloads the file to make sure it's on disk.
+  function handleDepIconClick(node: PositionedNode, event?: MouseEvent) {
+    event?.stopPropagation();
+    selectedId = node.id;
+    if (node.kind === "Missing" || node.ghost) {
+      installGhostNode(node.id);
+    } else if (node.kind === "Mod" && depNodeIds.has(node.id)) {
+      // Already installed as a dep — re-download the file in case it's missing
+      downloadMissingFiles();
+    }
+  }
+
   async function loadChangePlan() {
     if (!$projectPath) return;
     try {
@@ -710,9 +725,11 @@
           {@const half = size / 2}
           {@const icon = nodeIconUrl(node)}
           {@const isGhost = node.kind === "Missing" || node.ghost}
+          {@const isClickableDep = isGhost || (node.kind === "Mod" && depNodeIds.has(node.id))}
           <g
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
+            class:clickable-dep={isClickableDep}
             class:dimmed={selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)}
             role="button"
             tabindex="0"
@@ -721,7 +738,14 @@
             on:click|stopPropagation={() => handleNodeClick(node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
           >
-            <rect x={-half} y={-half} width={size} height={size} rx="8" ry="8" />
+            <rect
+              x={-half} y={-half} width={size} height={size} rx="8" ry="8"
+              on:click|stopPropagation={() => handleDepIconClick(node)}
+              role={isClickableDep ? "button" : undefined}
+              tabindex={isClickableDep ? 0 : undefined}
+              on:keydown={(e) => isClickableDep && e.key === "Enter" && handleDepIconClick(node)}
+              aria-label={isGhost ? `Install ${node.label}` : isClickableDep ? `Re-download ${node.label}` : undefined}
+            />
             {#if icon}
               <clipPath id="clip-{node.id.replace(/[^a-zA-Z0-9]/g, '_')}">
                 <rect x={-half + 2} y={-half + 2} width={size - 4} height={size - 4} rx="6" ry="6" />
@@ -734,10 +758,18 @@
                 height={size - 4}
                 clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                 preserveAspectRatio="xMidYMid slice"
+                on:click|stopPropagation={() => handleDepIconClick(node)}
                 on:error={() => markIconBroken(node.id)}
               />
             {:else}
-              <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
+              <text
+                class="fallback-letter"
+                y="5"
+                text-anchor="middle"
+                on:click|stopPropagation={() => handleDepIconClick(node)}
+                role={isClickableDep ? "button" : undefined}
+                tabindex={isClickableDep ? 0 : undefined}
+              >{node.label?.[0]?.toUpperCase() ?? "?"}</text>
             {/if}
             {#if isGhost}
               <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
@@ -762,11 +794,21 @@
           <div class="mod-grid">
             {#each modNodes as node}
               {@const icon = !brokenIcons.has(node.id) ? (node.metadata?.icon_url ?? (node.metadata?.project_id ? `https://cdn.modrinth.com/data/${node.metadata.project_id}/icon` : null)) : null}
-              <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={depNodeIds.has(node.id)} on:click={() => (selectedId = node.id)}>
+              {@const isClickableDep = depNodeIds.has(node.id)}
+              <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={isClickableDep} on:click={() => (selectedId = node.id)}>
                 {#if icon}
-                  <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => markIconBroken(node.id)} />
+                  <img
+                    class="card-icon"
+                    class:clickable={isClickableDep}
+                    src={icon}
+                    alt=""
+                    loading="lazy"
+                    title={isClickableDep ? "Click to re-download this dependency" : ""}
+                    on:click|stopPropagation={() => isClickableDep && downloadMissingFiles()}
+                    on:error={() => markIconBroken(node.id)}
+                  />
                 {:else}
-                  <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                  <span class="card-icon-fallback" class:clickable={isClickableDep} on:click|stopPropagation={() => isClickableDep && downloadMissingFiles()}>{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}
                 <div class="card-text">
                   <span class="node-label">{node.label}</span>
@@ -780,6 +822,31 @@
           </div>
         {/if}
       </section>
+
+      {#if ghostNodes.length > 0}
+        <section class="node-column missing-column">
+          <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
+          <p class="column-hint">Click an icon to install.</p>
+          <div class="mod-grid">
+            {#each ghostNodes as node}
+              <button
+                class="node-card compact missing-card"
+                class:selected={selectedId === node.id}
+                on:click={() => installGhostNode(node.id)}
+                disabled={resolving}
+                title="Click to install {node.label}"
+              >
+                <span class="card-icon-fallback missing-fallback">⬇</span>
+                <div class="card-text">
+                  <span class="node-label">{node.label}</span>
+                  <span class="node-meta">not installed</span>
+                </div>
+                <Download size={14} />
+              </button>
+            {/each}
+          </div>
+        </section>
+      {/if}
 
       <aside class="details">
         {#if selected}
@@ -1099,6 +1166,18 @@
     transition: opacity 120ms ease;
   }
 
+  .svg-node.clickable-dep {
+    cursor: pointer;
+  }
+  .svg-node.clickable-dep rect {
+    stroke: rgba(245,166,35,.7);
+    stroke-dasharray: 4 3;
+  }
+  .svg-node.clickable-dep:hover rect {
+    stroke: rgba(245,166,35,1);
+    fill: rgba(245,166,35,.08);
+  }
+
   .svg-node rect {
     fill: #18181b;
     stroke: rgba(255,255,255,.28);
@@ -1238,6 +1317,32 @@
     min-height: 480px;
   }
 
+  .missing-column {
+    border-top: 1px solid var(--border-color);
+    padding-top: 14px;
+    margin-top: 14px;
+  }
+  .column-hint {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin: 0 0 8px;
+    font-style: italic;
+  }
+  .missing-card {
+    border-color: rgba(245,166,35,.35);
+    background: rgba(245,166,35,.04);
+  }
+  .missing-card:hover {
+    border-color: rgba(245,166,35,.7);
+    background: rgba(245,166,35,.1);
+  }
+  .missing-fallback {
+    background: linear-gradient(135deg, rgba(245,166,35,.6), rgba(239,68,68,.6));
+    color: white;
+    font-size: 18px;
+    font-weight: 800;
+  }
+
   .profile-group-title {
     margin: 14px 0 8px;
     font-size: 12px;
@@ -1302,6 +1407,22 @@
     object-fit: cover;
     flex-shrink: 0;
     background: var(--bg-elevated);
+  }
+  .card-icon.clickable {
+    cursor: pointer;
+    transition: transform 100ms ease, box-shadow 100ms ease;
+  }
+  .card-icon.clickable:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 2px rgba(245,166,35,.6);
+  }
+  .card-icon-fallback.clickable {
+    cursor: pointer;
+    transition: transform 100ms ease, box-shadow 100ms ease;
+  }
+  .card-icon-fallback.clickable:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 2px rgba(245,166,35,.6);
   }
 
   .card-icon-fallback {
