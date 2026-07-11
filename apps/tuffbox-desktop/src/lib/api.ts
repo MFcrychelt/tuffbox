@@ -732,6 +732,9 @@ export const api = {
   // ── Recipes (JEI-style browser) ─────────────────────────────────
   recipes: {
     scan(p?: string) { return cmd<RecipeScanResult>("scan_mod_recipes", pathArg(p)); },
+    itemIcon(itemId: string, p?: string) {
+      return cmd<string | null>("get_item_icon", { ...pathArg(p), itemId });
+    },
     runtimeStatus(p?: string) { return cmd<RecipeRuntimeStatus>("get_recipe_runtime_status", pathArg(p)); },
     runtimeSnapshot(p?: string) { return cmd<RecipeRuntimeSnapshot>("get_recipe_runtime_snapshot", pathArg(p)); },
     writeRemoves(recipeIds: string[], p?: string) {

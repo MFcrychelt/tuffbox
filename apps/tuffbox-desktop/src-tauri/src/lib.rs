@@ -2875,6 +2875,30 @@ fn scan_mod_recipes(path: String) -> Result<serde_json::Value, String> {
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
+/// Returns a cached PNG path for a Minecraft item id (`namespace:path`), extracted
+/// from the project mods and the installed vanilla client jar when available.
+#[tauri::command(rename_all = "camelCase")]
+fn get_item_icon(path: String, item_id: String) -> Result<Option<String>, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let mut extra_jars = Vec::new();
+    let launcher_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox");
+    let client_jar = launcher_dir
+        .join("versions")
+        .join(&manifest.minecraft.version)
+        .join(format!("{}.jar", manifest.minecraft.version));
+    if client_jar.is_file() {
+        extra_jars.push(client_jar);
+    }
+    let icon = tuffbox_core::resolve_item_icon_path(project_dir, &item_id, &extra_jars)?;
+    Ok(icon.map(|file| file.to_string_lossy().to_string()))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_recipe_runtime_status(path: String) -> tuffbox_core::RecipeRuntimeStatus {
     tuffbox_core::recipe_runtime_status(Path::new(&path))
@@ -6710,6 +6734,7 @@ pub fn run() {
             launch_server,
             generate_server_properties,
             scan_mod_recipes,
+            get_item_icon,
             get_recipe_runtime_status,
             get_recipe_runtime_snapshot,
             write_kubejs_recipe_removes,

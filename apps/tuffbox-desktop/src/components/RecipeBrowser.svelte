@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { convertFileSrc } from "@tauri-apps/api/core";
   import {
     api,
     type ScannedRecipe,
@@ -69,6 +70,38 @@
   let runtimeStatus: RecipeRuntimeStatus | null = null;
   let runtimeCategories: RuntimeRecipeCategory[] = [];
   let runtimePoller: ReturnType<typeof setInterval> | null = null;
+
+  type IconState = "loading" | "missing" | string;
+  let iconCache: Record<string, IconState> = {};
+  const iconInFlight = new Set<string>();
+
+  async function ensureItemIcon(itemId: string | null | undefined) {
+    if (!itemId || !$projectPath || itemId.startsWith("#")) return;
+    if (iconCache[itemId] !== undefined || iconInFlight.has(itemId)) return;
+    iconInFlight.add(itemId);
+    iconCache[itemId] = "loading";
+    iconCache = iconCache;
+    try {
+      const file = await api.recipes.itemIcon(itemId, $projectPath);
+      iconCache[itemId] = file ? convertFileSrc(file) : "missing";
+    } catch {
+      iconCache[itemId] = "missing";
+    } finally {
+      iconInFlight.delete(itemId);
+      iconCache = { ...iconCache };
+    }
+  }
+
+  function iconSrc(itemId: string | null | undefined, explicit?: string | null): string | null {
+    if (explicit) return explicit;
+    if (!itemId) return null;
+    const state = iconCache[itemId];
+    return typeof state === "string" && state !== "loading" && state !== "missing" ? state : null;
+  }
+
+  function preloadIcons(ids: Array<string | null | undefined>) {
+    for (const id of ids) ensureItemIcon(id);
+  }
 
   const CATEGORY_META: Record<string, { label: string; icon: "craft" | "cook" | "smith" | "cut" | "other" }> = {
     all: { label: "All", icon: "other" },
@@ -148,6 +181,7 @@
         applyOfflineResult(result);
       }
       lastLoadedPath = $projectPath;
+      if (!preserveSelection) categoryFilter = "all";
       selectedItem = previousSelection && recipes.some(
         (recipe) => recipe.outputId === previousSelection || recipe.inputIds.includes(previousSelection)
       ) ? previousSelection : "";
@@ -392,6 +426,40 @@
     return runtimeCategories.find((category) => category.id === id);
   }
 
+  function buildCategories(): string[] {
+    const ids = new Set(recipes.map((recipe) => recipe.category));
+    if (recipeSource === "runtime" && runtimeCategories.length > 0) {
+      const ordered = runtimeCategories.map((category) => category.id).filter((id) => ids.has(id));
+      const extras = [...ids].filter((id) => !ordered.includes(id)).sort((a, b) => a.localeCompare(b));
+      return ["all", ...ordered, ...extras];
+    }
+    const buckets = ["crafting", "cooking", "smithing", "stonecutting", "other"];
+    return ["all", ...buckets.filter((bucket) => ids.has(bucket))];
+  }
+
+  function categoryLabel(cat: string): string {
+    if (cat === "all") return CATEGORY_META.all.label;
+    return CATEGORY_META[cat]?.label ?? runtimeCategory(cat)?.title ?? prettifyItem(cat);
+  }
+
+  function categoryIcon(cat: string): "craft" | "cook" | "smith" | "cut" | "other" {
+    if (CATEGORY_META[cat]?.icon) return CATEGORY_META[cat].icon;
+    const hay = `${cat} ${runtimeCategory(cat)?.title ?? ""}`.toLowerCase();
+    if ((hay.includes("craft") || hay.includes("workbench")) && !hay.includes("smith")) return "craft";
+    if (hay.includes("smelt") || hay.includes("furnace") || hay.includes("blast") || hay.includes("cook")) return "cook";
+    if (hay.includes("smith")) return "smith";
+    if (hay.includes("stonecut") || hay.includes("cutting") || hay.includes("saw")) return "cut";
+    return "other";
+  }
+
+  function itemInCategory(itemId: string, category: string): boolean {
+    if (category === "all") return true;
+    return recipes.some(
+      (recipe) =>
+        recipe.category === category && (recipe.outputId === itemId || recipe.inputIds.includes(itemId))
+    );
+  }
+
   function prevRecipe() {
     if (recipeIndex > 0) recipeIndex--;
   }
@@ -403,20 +471,33 @@
   $: modNamespaces = ["all", ...new Set(items.map((i) => i.modNs).filter(Boolean))].sort();
   $: filteredItems = items.filter((i) => {
     if (modFilter !== "all" && i.modNs !== modFilter) return false;
+    if (!itemInCategory(i.id, categoryFilter)) return false;
     return matchesJeiSearch(i.id, filter, i.name);
   });
   $: totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
   $: if (itemPage >= totalItemPages) itemPage = Math.max(0, totalItemPages - 1);
   $: pageItems = filteredItems.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE);
   $: activeRecipes = recipesForItem(selectedItem, focusMode);
+  $: categories = buildCategories();
+  $: if (!categories.includes(categoryFilter)) categoryFilter = "all";
+  $: if (activeRecipes.length === 0) recipeIndex = 0;
+  else if (recipeIndex >= activeRecipes.length) recipeIndex = activeRecipes.length - 1;
   $: currentRecipe = activeRecipes[recipeIndex] ?? null;
-  $: categories = ["all", ...new Set(recipes.map((r) => r.category))].sort((a, b) => {
-    const order = ["all", "crafting", "cooking", "smithing", "stonecutting", "other"];
-    return order.indexOf(a) - order.indexOf(b);
-  });
   $: bookmarkItems = bookmarks
     .map((id) => items.find((i) => i.id === id) ?? { id, name: prettifyItem(id), modNs: itemNamespace(id), recipeCount: 0, useCount: 0 })
     .filter(Boolean);
+  $: preloadIcons(pageItems.map((item) => item.id));
+  $: preloadIcons(bookmarkItems.map((item) => item.id));
+  $: if (selectedItem) ensureItemIcon(selectedItem);
+  $: if (currentRecipe) {
+    preloadIcons([
+      currentRecipe.outputId,
+      currentRecipe.layout.output?.id,
+      ...currentRecipe.layout.grid.map((slot) => resolveSlot(slot)?.id),
+      ...(currentRecipe.layout.slots ?? []).flatMap((slot) => slot.ingredients.map((ingredient) => ingredient.id)),
+      ...(runtimeCategory(currentRecipe.category)?.stations ?? []).map((station) => station.id),
+    ]);
+  }
   $: if ($projectPath && $projectPath !== lastLoadedPath) loadRecipes();
   $: if (filter) itemPage = 0;
 </script>
@@ -521,26 +602,28 @@
       <nav class="cat-rail" aria-label="Recipe categories">
         {#each categories as cat}
           <button
+            type="button"
             class="cat-tab"
             class:active={categoryFilter === cat}
-            title={CATEGORY_META[cat]?.label ?? runtimeCategory(cat)?.title ?? cat}
+            title={categoryLabel(cat)}
             on:click={() => {
               categoryFilter = cat;
               recipeIndex = 0;
+              itemPage = 0;
             }}
           >
-            {#if (CATEGORY_META[cat]?.icon ?? "other") === "craft"}
+            {#if categoryIcon(cat) === "craft"}
               <Grid3x3 size={18} />
-            {:else if (CATEGORY_META[cat]?.icon ?? "other") === "cook"}
+            {:else if categoryIcon(cat) === "cook"}
               <Flame size={18} />
-            {:else if (CATEGORY_META[cat]?.icon ?? "other") === "smith"}
+            {:else if categoryIcon(cat) === "smith"}
               <Anvil size={18} />
-            {:else if (CATEGORY_META[cat]?.icon ?? "other") === "cut"}
+            {:else if categoryIcon(cat) === "cut"}
               <Scissors size={18} />
             {:else}
               <Hammer size={18} />
             {/if}
-            <span>{CATEGORY_META[cat]?.label ?? runtimeCategory(cat)?.title ?? cat}</span>
+            <span>{categoryLabel(cat)}</span>
           </button>
         {/each}
       </nav>
@@ -568,16 +651,28 @@
               <History size={16} />
             </button>
             <div class="focus-tabs">
-              <button class:active={focusMode === "recipes"} on:click={() => { focusMode = "recipes"; recipeIndex = 0; }}>
+              <button
+                type="button"
+                class:active={focusMode === "recipes"}
+                on:click={() => { focusMode = "recipes"; recipeIndex = 0; }}
+              >
                 Recipes <em>{recipesForItem(selectedItem, "recipes").length}</em>
               </button>
-              <button class:active={focusMode === "uses"} on:click={() => { focusMode = "uses"; recipeIndex = 0; }}>
+              <button
+                type="button"
+                class:active={focusMode === "uses"}
+                on:click={() => { focusMode = "uses"; recipeIndex = 0; }}
+              >
                 Uses <em>{recipesForItem(selectedItem, "uses").length}</em>
               </button>
             </div>
             <div class="focus-item">
               <span class="mc-slot mini" style="--hue: {itemHue(selectedItem)}">
-                <span class="letter">{prettifyItem(selectedItem).slice(0, 2)}</span>
+                {#if iconSrc(selectedItem)}
+                  <img src={iconSrc(selectedItem)} alt="" class="slot-icon" />
+                {:else}
+                  <span class="letter">{prettifyItem(selectedItem).slice(0, 2)}</span>
+                {/if}
               </span>
               <div>
                 <strong>{prettifyItem(selectedItem)}</strong>
@@ -596,7 +691,7 @@
 
           {#if activeRecipes.length === 0}
             <div class="gui-empty compact">
-              <p>No {focusMode} for this item{categoryFilter !== "all" ? ` in ${categoryFilter}` : ""}.</p>
+              <p>No {focusMode} for this item{categoryFilter !== "all" ? ` in ${categoryLabel(categoryFilter)}` : ""}.</p>
             </div>
           {:else if currentRecipe}
             <div class="recipe-stage">
@@ -635,7 +730,11 @@
                         on:contextmenu|preventDefault={() => navigateSlot(ingredient, "recipes")}
                       >
                         {#if ingredient}
-                          <span class="letter">{(ingredient.name || prettifyItem(ingredient.id)).slice(0, 3)}</span>
+                          {#if iconSrc(ingredient.id, ingredient.iconUrl)}
+                            <img src={iconSrc(ingredient.id, ingredient.iconUrl)} alt="" class="slot-icon" />
+                          {:else}
+                            <span class="letter">{(ingredient.name || prettifyItem(ingredient.id)).slice(0, 3)}</span>
+                          {/if}
                           {#if (ingredient.count ?? 1) > 1}<em class="stack">{ingredient.count}</em>{/if}
                           {#if slot.ingredients.length > 1}<span class="cycle-dot"></span>{/if}
                         {/if}
@@ -652,7 +751,11 @@
                           style={`--hue:${itemHue(station.id)}`}
                           on:click={() => navigateSlot(station, "recipes")}
                         >
-                          <span class="letter">{(station.name || prettifyItem(station.id)).slice(0, 2)}</span>
+                          {#if iconSrc(station.id, station.iconUrl)}
+                            <img src={iconSrc(station.id, station.iconUrl)} alt="" class="slot-icon" />
+                          {:else}
+                            <span class="letter">{(station.name || prettifyItem(station.id)).slice(0, 2)}</span>
+                          {/if}
                         </button>
                       {/each}
                     </div>
@@ -672,7 +775,12 @@
                           on:contextmenu|preventDefault={() => navigateSlot(slot, "recipes")}
                         >
                           {#if slot}
-                            <span class="letter">{slotLabel(slot)}</span>
+                            {@const resolved = resolveSlot(slot)}
+                            {#if iconSrc(resolved?.id, resolved?.iconUrl)}
+                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
+                            {:else}
+                              <span class="letter">{slotLabel(slot)}</span>
+                            {/if}
                             {#if slot.kind === "one_of" && slot.alts && slot.alts.length > 1}
                               <span class="cycle-dot"></span>
                             {/if}
@@ -688,7 +796,11 @@
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                       on:contextmenu|preventDefault={() => navigateSlot(currentRecipe.layout.output, "uses")}
                     >
-                      <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                      {:else}
+                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {/if}
                       {#if currentRecipe.layout.outputCount > 1}
                         <em class="stack">{currentRecipe.layout.outputCount}</em>
                       {/if}
@@ -702,7 +814,12 @@
                       title={slotTitle(currentRecipe.layout.grid[4])}
                       on:click={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
                     >
-                      <span class="letter">{slotLabel(currentRecipe.layout.grid[4])}</span>
+                      {@const input = resolveSlot(currentRecipe.layout.grid[4])}
+                      {#if iconSrc(input?.id, input?.iconUrl)}
+                        <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" />
+                      {:else}
+                        <span class="letter">{slotLabel(currentRecipe.layout.grid[4])}</span>
+                      {/if}
                     </button>
                     <div class="flame-col">
                       <Flame size={26} class="flame" />
@@ -719,7 +836,11 @@
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
-                      <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                      {:else}
+                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {/if}
                       {#if currentRecipe.layout.outputCount > 1}
                         <em class="stack">{currentRecipe.layout.outputCount}</em>
                       {/if}
@@ -737,7 +858,14 @@
                         disabled={!slot}
                         on:click={() => navigateSlot(slot, "uses")}
                       >
-                        {#if slot}<span class="letter">{slotLabel(slot)}</span>{/if}
+                        {#if slot}
+                          {@const resolved = resolveSlot(slot)}
+                          {#if iconSrc(resolved?.id, resolved?.iconUrl)}
+                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
+                          {:else}
+                            <span class="letter">{slotLabel(slot)}</span>
+                          {/if}
+                        {/if}
                       </button>
                       {#if i < 2}<span class="plus">+</span>{/if}
                     {/each}
@@ -747,7 +875,11 @@
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
-                      <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                      {:else}
+                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {/if}
                     </button>
                   </div>
                 {:else}
@@ -760,7 +892,12 @@
                           title={slotTitle(slot)}
                           on:click={() => navigateSlot(slot, "uses")}
                         >
-                          <span class="letter">{slotLabel(slot)}</span>
+                          {@const resolved = resolveSlot(slot)}
+                          {#if iconSrc(resolved?.id, resolved?.iconUrl)}
+                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
+                          {:else}
+                            <span class="letter">{slotLabel(slot)}</span>
+                          {/if}
                         </button>
                       {/each}
                     </div>
@@ -770,7 +907,11 @@
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
-                      <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                      {:else}
+                        <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
+                      {/if}
                       {#if currentRecipe.layout.outputCount > 1}
                         <em class="stack">{currentRecipe.layout.outputCount}</em>
                       {/if}
@@ -821,7 +962,11 @@
                   on:click={() => selectItem(item.id, "recipes")}
                   on:contextmenu|preventDefault={() => selectItem(item.id, "uses")}
                 >
-                  <span class="item-letter">{item.name.slice(0, 2)}</span>
+                  {#if iconSrc(item.id)}
+                    <img src={iconSrc(item.id)} alt="" class="item-icon" />
+                  {:else}
+                    <span class="item-letter">{item.name.slice(0, 2)}</span>
+                  {/if}
                 </button>
               {/each}
             </div>
@@ -839,7 +984,7 @@
               class:sel={selectedItem === item.id}
               class:bookmarked={bookmarks.includes(item.id)}
               style="--hue: {itemHue(item.id)}"
-              title="{item.id}\nR: {item.recipeCount} · U: {item.useCount}"
+              title="{item.id}\nR: {recipesForItem(item.id, 'recipes').length} · U: {recipesForItem(item.id, 'uses').length}"
               on:click={() => selectItem(item.id, "recipes")}
               on:contextmenu|preventDefault={() => selectItem(item.id, "uses")}
               on:auxclick={(e) => {
@@ -849,9 +994,13 @@
                 }
               }}
             >
-              <span class="item-letter">{item.name.slice(0, 2)}</span>
-              {#if item.recipeCount > 0}
-                <span class="item-count">{item.recipeCount}</span>
+              {#if iconSrc(item.id)}
+                <img src={iconSrc(item.id)} alt="" class="item-icon" />
+              {:else}
+                <span class="item-letter">{item.name.slice(0, 2)}</span>
+              {/if}
+              {#if recipesForItem(item.id, focusMode).length > 0}
+                <span class="item-count">{recipesForItem(item.id, focusMode).length}</span>
               {/if}
             </button>
           {/each}
@@ -881,7 +1030,11 @@
                   title={id}
                   on:click={() => selectItem(id, focusMode, false)}
                 >
-                  <span class="item-letter">{prettifyItem(id).slice(0, 2)}</span>
+                  {#if iconSrc(id)}
+                    <img src={iconSrc(id)} alt="" class="item-icon" />
+                  {:else}
+                    <span class="item-letter">{prettifyItem(id).slice(0, 2)}</span>
+                  {/if}
                 </button>
               {/each}
             </div>
@@ -900,6 +1053,7 @@
     --jei-slot-in: #373737;
     --jei-gold: #fbbf24;
     width: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -984,8 +1138,9 @@
     display: grid;
     grid-template-columns: 72px minmax(0, 1fr) 300px;
     gap: 10px;
-    min-height: 640px;
     flex: 1;
+    min-height: 0;
+    align-items: stretch;
   }
   .jei-body:not(.with-bookmarks) { grid-template-columns: 72px minmax(0, 1fr) 280px; }
 
@@ -993,14 +1148,28 @@
     display: flex; flex-direction: column; gap: 4px;
     background: var(--bg-secondary); border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg); padding: 8px 6px;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
   }
   .cat-tab {
     display: flex; flex-direction: column; align-items: center; gap: 4px;
+    flex: 0 0 auto;
     padding: 10px 4px; border-radius: 10px; border: 1px solid transparent;
     background: transparent; color: var(--text-muted); cursor: pointer; font-size: 9px;
     text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+    transform: none;
   }
-  .cat-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
+  .cat-tab span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+  }
+  .cat-tab:hover { background: var(--bg-hover); color: var(--text-secondary); transform: none; }
   .cat-tab.active {
     background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.35); color: var(--jei-gold);
   }
@@ -1028,11 +1197,18 @@
     padding: 8px 14px; font-size: 12px; border-radius: 8px;
     background: var(--bg-tertiary); border: 1px solid var(--border-color);
     color: var(--text-muted); cursor: pointer;
+    transform: none;
+    font-weight: 600;
   }
+  .focus-tabs button:hover { transform: none; background: var(--bg-hover); color: var(--text-secondary); }
   .focus-tabs button em { font-style: normal; opacity: 0.7; margin-left: 4px; }
   .focus-tabs button.active {
     background: rgba(27, 217, 106, 0.1); border-color: rgba(27, 217, 106, 0.35);
-    color: var(--accent-primary); font-weight: 600;
+    color: var(--accent-primary); font-weight: 700;
+  }
+  .focus-tabs button.active:hover {
+    background: rgba(27, 217, 106, 0.14);
+    color: var(--accent-primary);
   }
   .focus-item { display: flex; align-items: center; gap: 10px; margin-left: auto; }
   .focus-item strong { display: block; font-size: 14px; }
@@ -1115,6 +1291,13 @@
     text-shadow: 0 1px 2px #000, 1px 1px 0 #000; text-align: center; line-height: 1.1;
     text-transform: uppercase; pointer-events: none;
   }
+  .slot-icon {
+    width: calc(100% - 4px);
+    height: calc(100% - 4px);
+    object-fit: contain;
+    image-rendering: pixelated;
+    pointer-events: none;
+  }
   .stack {
     position: absolute; bottom: 1px; right: 3px; font-style: normal;
     font-size: 12px; font-weight: 900; color: #fff; text-shadow: 1px 1px 0 #000;
@@ -1187,6 +1370,13 @@
   .item-letter {
     font-size: 9px; font-weight: 800; color: #e8e8ec; text-transform: uppercase;
     text-shadow: 0 1px 1px #000;
+  }
+  .item-icon {
+    width: calc(100% - 4px);
+    height: calc(100% - 4px);
+    object-fit: contain;
+    image-rendering: pixelated;
+    pointer-events: none;
   }
   .item-count {
     position: absolute; bottom: 0; right: 2px;

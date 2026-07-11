@@ -2761,10 +2761,6 @@
     margin-bottom: 16px;
   }
 
-  .modal-search select {
-    min-width: 120px;
-  }
-
   .sort-select {
     display: flex;
     align-items: center;
@@ -3232,23 +3228,6 @@
   .recs-prio.high { background: rgba(27,217,106,.12); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }
   .recs-prio.low { background: var(--bg-elevated); color: var(--text-muted); }
-
-  .lists-panel { margin-bottom: 16px; padding: 14px; border: 1px solid rgba(245,166,35,.25); border-radius: var(--border-radius-lg); background: rgba(245,166,35,.02); }
-  .lists-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-  .lists-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-warning, #f5a623); margin: 0; font-size: 14px; }
-  .lists-empty { color: var(--text-muted); font-size: 12px; margin: 4px 0; font-style: italic; }
-  .lists-list { display: grid; gap: 6px; }
-  .list-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .list-row.active { border-color: rgba(245,166,35,.5); background: rgba(245,166,35,.04); }
-  .list-toggle { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; background: transparent; border: none; color: var(--text-primary); text-align: left; cursor: pointer; padding: 0; }
-  .list-toggle strong { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .list-count { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 2px 8px; border-radius: 999px; }
-  .list-actions { display: flex; gap: 4px; flex-shrink: 0; }
-  .list-detail { display: grid; gap: 4px; padding: 8px 10px 4px 26px; border-left: 2px solid rgba(245,166,35,.3); margin-left: 14px; }
-  .list-mod-row { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 6px; background: var(--bg-secondary); }
-  .list-mod-id { font-family: monospace; font-size: 11px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-  .icon-btn.mini { padding: 4px; border-radius: 6px; }
-  .icon-btn.mini.danger:hover { background: rgba(239,68,68,.15); color: #fca5a5; }
 
   .update-panel {
     margin-bottom: 16px;

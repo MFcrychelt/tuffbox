@@ -918,39 +918,55 @@
             on:mousedown={(e) => handleNodeMouseDown(e, node)}
             on:click|stopPropagation={() => handleNodeClick(node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
+            aria-label={node.label}
           >
-            <rect
-              x={-half} y={-half} width={size} height={size} rx="8" ry="8"
-              on:click|stopPropagation={() => handleDepIconClick(node)}
-              role={isClickableDep ? "button" : undefined}
-              tabindex={isClickableDep ? 0 : undefined}
-              on:keydown={(e) => isClickableDep && e.key === "Enter" && handleDepIconClick(node)}
-              aria-label={isGhost ? `Install ${node.label}` : isClickableDep ? `Re-download ${node.label}` : undefined}
-            />
-            {#if icon}
-              <clipPath id="clip-{node.id.replace(/[^a-zA-Z0-9]/g, '_')}">
-                <rect x={-half + 2} y={-half + 2} width={size - 4} height={size - 4} rx="6" ry="6" />
-              </clipPath>
-              <image
-                href={icon}
-                x={-half + 2}
-                y={-half + 2}
-                width={size - 4}
-                height={size - 4}
-                clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
-                preserveAspectRatio="xMidYMid slice"
+            {#if isClickableDep}
+              <g
+                class="dep-icon-hit"
+                role="button"
+                tabindex="0"
                 on:click|stopPropagation={() => handleDepIconClick(node)}
-                on:error={() => handleIconError(node)}
-              />
+                on:keydown={(e) => e.key === "Enter" && handleDepIconClick(node)}
+                aria-label={isGhost ? `Install ${node.label}` : `Re-download ${node.label}`}
+              >
+                <rect x={-half} y={-half} width={size} height={size} rx="8" ry="8" />
+                {#if icon}
+                  <clipPath id="clip-{node.id.replace(/[^a-zA-Z0-9]/g, '_')}">
+                    <rect x={-half + 2} y={-half + 2} width={size - 4} height={size - 4} rx="6" ry="6" />
+                  </clipPath>
+                  <image
+                    href={icon}
+                    x={-half + 2}
+                    y={-half + 2}
+                    width={size - 4}
+                    height={size - 4}
+                    clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
+                    preserveAspectRatio="xMidYMid slice"
+                    on:error={() => handleIconError(node)}
+                  />
+                {:else}
+                  <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
+                {/if}
+              </g>
             {:else}
-              <text
-                class="fallback-letter"
-                y="5"
-                text-anchor="middle"
-                on:click|stopPropagation={() => handleDepIconClick(node)}
-                role={isClickableDep ? "button" : undefined}
-                tabindex={isClickableDep ? 0 : undefined}
-              >{node.label?.[0]?.toUpperCase() ?? "?"}</text>
+              <rect x={-half} y={-half} width={size} height={size} rx="8" ry="8" />
+              {#if icon}
+                <clipPath id="clip-{node.id.replace(/[^a-zA-Z0-9]/g, '_')}">
+                  <rect x={-half + 2} y={-half + 2} width={size - 4} height={size - 4} rx="6" ry="6" />
+                </clipPath>
+                <image
+                  href={icon}
+                  x={-half + 2}
+                  y={-half + 2}
+                  width={size - 4}
+                  height={size - 4}
+                  clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
+                  preserveAspectRatio="xMidYMid slice"
+                  on:error={() => handleIconError(node)}
+                />
+              {:else}
+                <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
+              {/if}
             {/if}
             {#if isGhost}
               <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
@@ -979,18 +995,27 @@
               {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
               <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={isClickableDep} on:click={() => (selectedId = node.id)}>
                 {#if icon}
-                  <img
-                    class="card-icon"
-                    class:clickable={isClickableDep}
-                    src={icon}
-                    alt=""
-                    loading="lazy"
-                    title={isClickableDep ? "Click to re-download this dependency" : ""}
-                    on:click|stopPropagation={() => isClickableDep && downloadMissingFiles()}
-                    on:error={() => handleIconError(node)}
-                  />
+                  {#if isClickableDep}
+                    <button
+                      class="card-icon-btn"
+                      title="Click to re-download this dependency"
+                      on:click|stopPropagation={downloadMissingFiles}
+                    >
+                      <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                    </button>
+                  {:else}
+                    <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                  {/if}
+                {:else if isClickableDep}
+                  <button
+                    class="card-icon-btn"
+                    title="Click to re-download this dependency"
+                    on:click|stopPropagation={downloadMissingFiles}
+                  >
+                    <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                  </button>
                 {:else}
-                  <span class="card-icon-fallback" class:clickable={isClickableDep} on:click|stopPropagation={() => isClickableDep && downloadMissingFiles()}>{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                  <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}
                 <div class="card-text">
                   <span class="node-label">{node.label}</span>
@@ -1623,19 +1648,16 @@
     flex-shrink: 0;
     background: var(--bg-elevated);
   }
-  .card-icon.clickable {
+  .card-icon-btn {
+    padding: 0;
+    border: none;
+    background: transparent;
     cursor: pointer;
+    border-radius: 8px;
+    line-height: 0;
     transition: transform 100ms ease, box-shadow 100ms ease;
   }
-  .card-icon.clickable:hover {
-    transform: scale(1.08);
-    box-shadow: 0 0 0 2px rgba(245,166,35,.6);
-  }
-  .card-icon-fallback.clickable {
-    cursor: pointer;
-    transition: transform 100ms ease, box-shadow 100ms ease;
-  }
-  .card-icon-fallback.clickable:hover {
+  .card-icon-btn:hover {
     transform: scale(1.08);
     box-shadow: 0 0 0 2px rgba(245,166,35,.6);
   }
