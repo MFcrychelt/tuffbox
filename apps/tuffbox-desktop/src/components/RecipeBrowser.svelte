@@ -807,6 +807,7 @@
                     </button>
                   </div>
                 {:else if currentRecipe.layout.category === "cooking"}
+                  {@const input = resolveSlot(currentRecipe.layout.grid[4])}
                   <div class="panel-body cook">
                     <button
                       class="mc-slot large"
@@ -814,7 +815,6 @@
                       title={slotTitle(currentRecipe.layout.grid[4])}
                       on:click={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
                     >
-                      {@const input = resolveSlot(currentRecipe.layout.grid[4])}
                       {#if iconSrc(input?.id, input?.iconUrl)}
                         <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" />
                       {:else}
@@ -886,13 +886,13 @@
                   <div class="panel-body cook">
                     <div class="craft-grid loose">
                       {#each currentRecipe.layout.grid.filter(Boolean) as slot}
+                        {@const resolved = resolveSlot(slot)}
                         <button
                           class="mc-slot"
-                          style="--hue: {itemHue(resolveSlot(slot)?.id ?? '')}"
+                          style="--hue: {itemHue(resolved?.id ?? '')}"
                           title={slotTitle(slot)}
                           on:click={() => navigateSlot(slot, "uses")}
                         >
-                          {@const resolved = resolveSlot(slot)}
                           {#if iconSrc(resolved?.id, resolved?.iconUrl)}
                             <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
                           {:else}
