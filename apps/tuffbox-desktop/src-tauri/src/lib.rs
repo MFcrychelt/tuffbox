@@ -708,7 +708,7 @@ async fn add_modrinth_mod(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
         save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
-        download_project_mods_tracked(&app, &PathBuf::from(&path), &manifest);
+        download_project_mods_tracked(&app, &PathBuf::from(&path), &manifest, None);
         Ok(())
     })
     .await
@@ -728,7 +728,7 @@ async fn add_modrinth_mod_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods_tracked(&app, &manifest_path, &manifest);
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None);
         Ok(installed)
     })
     .await
@@ -749,7 +749,7 @@ async fn add_modrinth_mods_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods_tracked(&app, &manifest_path, &manifest);
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None);
         Ok(installed)
     })
     .await
@@ -810,7 +810,7 @@ async fn update_project_mod(
             version_id.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-        let report = commit_single_mod_update(&app, &manifest_path, &manifest, &old_mod)?;
+        let report = commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod)?;
         Ok(serde_json::json!({
             "modId": mod_id,
             "download": report,
@@ -902,7 +902,7 @@ async fn change_mod_version(
         let new_spec = build_mod_spec(&project, &version_info, file, dependencies, side);
         manifest.mods[idx] = new_spec;
 
-        let report = commit_single_mod_update(&app, &manifest_path, &manifest, &old_mod)?;
+        let report = commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod)?;
 
         Ok(serde_json::json!({
             "version": version_info.version_number,
@@ -1491,6 +1491,7 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             pending.push((idx, latest));
         }
 
+        let mut download = tuffbox_core::ModSyncReport::default();
         for (idx, latest) in pending {
             let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
             let Some(file) = file else {
@@ -1506,8 +1507,6 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             let project = match provider.get_project(&project_id) {
                 Ok(p) => p,
                 Err(e) => {
-                    // Fall back to metadata already in the manifest so one
-                    // failed lookup doesn't kill the entire update-all pass.
                     skipped_errors.push(format!(
                         "{}: project lookup failed ({e}), using cached metadata",
                         old_mod.name
@@ -1520,19 +1519,23 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
                 .resolve_dependencies(&latest.id)
                 .unwrap_or(previous_deps);
             let new_spec = build_mod_spec(&project, &latest, file, dependencies, old_mod.side);
-            if old_mod.file_name != new_spec.file_name {
-                remove_mod_file_from_disk(&manifest_path, &old_mod);
-            }
             let name = new_spec.name.clone();
             manifest.mods[idx] = new_spec;
-            updated.push(name);
+            match commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod) {
+                Ok(report) => {
+                    download.downloaded.extend(report.downloaded);
+                    download.already_present.extend(report.already_present);
+                    download.skipped.extend(report.skipped);
+                    download.failed.extend(report.failed);
+                    updated.push(name);
+                }
+                Err(error) => {
+                    manifest.mods[idx] = old_mod;
+                    skipped_errors.push(format!("{name}: {error}"));
+                }
+            }
         }
 
-        let mut download = tuffbox_core::ModSyncReport::default();
-        if !updated.is_empty() {
-            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-            download = download_project_mods_tracked(&app, &manifest_path, &manifest);
-        }
         Ok(serde_json::json!({
             "updated": updated,
             "errors": skipped_errors,
@@ -5722,6 +5725,58 @@ fn existing_mod_file_path(manifest_path: &Path, module: &ModSpec) -> Option<Path
     disabled.is_file().then_some(disabled)
 }
 
+fn refresh_modrinth_file_metadata(
+    manifest: &ProjectManifest,
+    module: &mut ModSpec,
+) -> Result<(), String> {
+    if module.source.kind != SourceKind::Modrinth {
+        return Ok(());
+    }
+    let Some(version_id) = module.source.file_id.clone() else {
+        return Ok(());
+    };
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let version = provider
+        .get_version(&version_id)
+        .map_err(|e| format!("failed to refresh {} from Modrinth: {e}", module.name))?;
+    let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mc = &manifest.minecraft.version;
+    if !version.game_versions.iter().any(|gv| gv == mc) {
+        return Err(format!(
+            "{} update targets Minecraft {} but the selected release supports [{}]",
+            module.name,
+            mc,
+            version.game_versions.join(", ")
+        ));
+    }
+    if !version
+        .loaders
+        .iter()
+        .any(|loader| loader == loader_slug)
+    {
+        return Err(format!(
+            "{} update has no build for loader {loader_slug} (supports [{}])",
+            module.name,
+            version.loaders.join(", ")
+        ));
+    }
+    let file = ProviderFileInfo::select_file_for_loader(&version, loader_slug)
+        .ok_or_else(|| {
+            format!(
+                "{} update has no downloadable file for loader {loader_slug}",
+                module.name
+            )
+        })?;
+    module.source.url = Some(file.url.clone());
+    module.file_name = Some(file.filename.clone());
+    module.version = version.version_number.clone();
+    module.hashes = Some(tuffbox_core::FileHashes {
+        sha1: file.hashes.sha1.clone(),
+        sha512: file.hashes.sha512.clone(),
+    });
+    Ok(())
+}
+
 /// Downloads and verifies a single replacement before publishing its
 /// manifest entry. The previous file is kept until both operations succeed,
 /// so a network/hash/manifest error cannot leave metadata pointing at bytes
@@ -5729,20 +5784,29 @@ fn existing_mod_file_path(manifest_path: &Path, module: &ModSpec) -> Option<Path
 fn commit_single_mod_update(
     app: &tauri::AppHandle,
     manifest_path: &Path,
-    updated_manifest: &ProjectManifest,
+    updated_manifest: &mut ProjectManifest,
     old_mod: &ModSpec,
 ) -> Result<tuffbox_core::ModSyncReport, String> {
     let project_id = old_mod.source.project_id.as_deref();
-    let new_mod = updated_manifest
+    let mut new_mod = updated_manifest
         .mods
         .iter()
         .find(|module| {
             module.id == old_mod.id
                 || (project_id.is_some() && module.source.project_id.as_deref() == project_id)
         })
-        .ok_or_else(|| format!("updated mod {} disappeared from manifest", old_mod.id))?;
+        .ok_or_else(|| format!("updated mod {} disappeared from manifest", old_mod.id))?
+        .clone();
+    refresh_modrinth_file_metadata(updated_manifest, &mut new_mod)?;
+    if let Some(idx) = updated_manifest
+        .mods
+        .iter()
+        .position(|module| module.id == new_mod.id)
+    {
+        updated_manifest.mods[idx] = new_mod.clone();
+    }
     let old_path = existing_mod_file_path(manifest_path, old_mod);
-    let new_path = mod_file_path(manifest_path, new_mod)
+    let new_path = mod_file_path(manifest_path, &new_mod)
         .ok_or_else(|| format!("updated mod {} has no destination file", new_mod.id))?;
 
     let backup = if let Some(path) = old_path.as_ref() {
@@ -5768,7 +5832,13 @@ fn commit_single_mod_update(
 
     let mut download_manifest = updated_manifest.clone();
     download_manifest.mods = vec![new_mod.clone()];
-    let report = download_project_mods_tracked(app, manifest_path, &download_manifest);
+    let only_mod = std::collections::HashSet::from([new_mod.id.clone()]);
+    let report = download_project_mods_tracked(
+        app,
+        manifest_path,
+        &download_manifest,
+        Some(&only_mod),
+    );
     if let Some(failure) = report
         .failed
         .iter()
@@ -6357,6 +6427,7 @@ fn download_project_mods_tracked(
     app: &tauri::AppHandle,
     manifest_path: &Path,
     manifest: &ProjectManifest,
+    only_mod_ids: Option<&std::collections::HashSet<String>>,
 ) -> tuffbox_core::ModSyncReport {
     use tauri::Emitter;
 
@@ -6383,7 +6454,12 @@ fn download_project_mods_tracked(
     let queue: Vec<ModDownloadProgressPayload> = manifest
         .mods
         .iter()
-        .filter(|m| mod_needs_download(&instance_dir, m))
+        .filter(|m| {
+            only_mod_ids
+                .map(|ids| ids.contains(&m.id))
+                .unwrap_or(true)
+                && mod_needs_download(&instance_dir, m)
+        })
         .map(|m| ModDownloadProgressPayload {
             id: m.id.clone(),
             name: m.name.clone(),
@@ -6394,14 +6470,27 @@ fn download_project_mods_tracked(
         })
         .collect();
 
+    let scope_mod_ids: Option<Vec<String>> =
+        only_mod_ids.map(|ids| ids.iter().cloned().collect());
+
     // Nothing to fetch — still emit a quick start/done so any UI overlay can settle.
     if queue.is_empty() {
-        let report = tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir);
+        let report = if let Some(ids) = only_mod_ids {
+            tuffbox_core::ensure_project_mods_downloaded_with_progress_filtered(
+                manifest,
+                &instance_dir,
+                &tuffbox_core::ProgressCallback::new(),
+                Some(ids),
+            )
+        } else {
+            tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir)
+        };
         let _ = app.emit(
             "mod-download-batch",
             serde_json::json!({
                 "phase": "start",
                 "items": Vec::<ModDownloadProgressPayload>::new(),
+                "scopeModIds": scope_mod_ids,
             }),
         );
         let _ = app.emit(
@@ -6412,6 +6501,7 @@ fn download_project_mods_tracked(
                 "failed": report.failed,
                 "alreadyPresent": report.already_present,
                 "skipped": report.skipped,
+                "scopeModIds": scope_mod_ids,
             }),
         );
         return report;
@@ -6422,6 +6512,7 @@ fn download_project_mods_tracked(
         serde_json::json!({
             "phase": "start",
             "items": queue,
+            "scopeModIds": scope_mod_ids,
         }),
     );
 
@@ -6476,10 +6567,11 @@ fn download_project_mods_tracked(
         }
     });
 
-    let report = tuffbox_core::ensure_project_mods_downloaded_with_progress(
+    let report = tuffbox_core::ensure_project_mods_downloaded_with_progress_filtered(
         manifest,
         &instance_dir,
         &progress,
+        only_mod_ids,
     );
 
     // Mark completed / failed items explicitly so the UI can settle bars.
@@ -6537,6 +6629,7 @@ fn download_project_mods_tracked(
             "failed": report.failed,
             "alreadyPresent": report.already_present,
             "skipped": report.skipped,
+            "scopeModIds": scope_mod_ids,
         }),
     );
 

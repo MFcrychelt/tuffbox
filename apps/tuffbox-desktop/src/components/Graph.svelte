@@ -552,8 +552,10 @@
   })();
   $: displayNodes = [...nodes.filter((n) => n.kind === "Mod"), ...ghostNodes];
   // Mod-to-mod relations only (same set modrinth-extras puts on the canvas).
+  // Optional/recommended edges are hidden here — they point outward from hub
+  // mods and read like inverted dependencies in a dense pack graph.
   $: displayEdges = edges.filter((e) =>
-    e.kind === "Requires" || e.kind === "Optional" || e.kind === "Conflicts" || e.kind === "BreaksWith" || e.kind === "Replaces"
+    e.kind === "Requires" || e.kind === "Conflicts" || e.kind === "BreaksWith" || e.kind === "Replaces"
   );
 
   async function hydrateGhostNodes() {
@@ -880,10 +882,10 @@
         on:dblclick={resetView}
       >
         <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="30" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
           </marker>
-          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="30" refY="3" orient="auto" markerUnits="strokeWidth">
+          <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(113,113,122,.95)" />
           </marker>
         </defs>

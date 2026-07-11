@@ -106,6 +106,7 @@
   let downloadDone = false;
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenBatch: UnlistenFn | null = null;
+  let downloadScopeModIds: Set<string> | null = null;
 
   function formatBytes(n: number): string {
     if (!n || n <= 0) return "0 B";
@@ -141,10 +142,11 @@
     }
   }
 
-  function openDownloadOverlay(title: string) {
+  function openDownloadOverlay(title: string, scopeModIds: string[] | null = null) {
     downloadTitle = title;
     downloadItems = [];
     downloadDone = false;
+    downloadScopeModIds = scopeModIds?.length ? new Set(scopeModIds) : null;
     downloadOpen = true;
   }
 
@@ -154,13 +156,17 @@
   }
 
   onMount(async () => {
-    unlistenBatch = await listen<{ phase: string; items?: DownloadItem[]; failed?: { modId: string; error: string }[] }>(
+    unlistenBatch = await listen<{ phase: string; items?: DownloadItem[]; failed?: { modId: string; error: string }[]; scopeModIds?: string[] }>(
       "mod-download-batch",
       (event) => {
         const payload = event.payload;
         if (payload.phase === "start") {
           downloadOpen = true;
           downloadDone = false;
+          const scoped = payload.scopeModIds?.length ? new Set(payload.scopeModIds) : null;
+          if (scoped) {
+            downloadScopeModIds = scoped;
+          }
           downloadItems = (payload.items ?? []).map((item) => ({
             id: item.id,
             name: item.name,
@@ -183,6 +189,9 @@
     );
 
     unlistenProgress = await listen<DownloadItem>("mod-download-progress", (event) => {
+      if (downloadScopeModIds && !downloadScopeModIds.has(event.payload.id)) {
+        return;
+      }
       upsertDownloadItem(event.payload);
       if (!downloadOpen) {
         downloadOpen = true;
@@ -998,7 +1007,7 @@
     if (!$projectPath) return;
     mutating = true;
     error = null;
-    openDownloadOverlay(`Updating ${mod.name}`);
+    openDownloadOverlay(`Updating ${mod.name}`, [mod.id]);
     try {
       const result: any = await invoke("update_project_mod", {
         path: $projectPath,
@@ -1016,6 +1025,8 @@
       downloadDone = true;
     } finally {
       mutating = false;
+      downloadDone = true;
+      downloadScopeModIds = null;
     }
   }
 
@@ -1023,7 +1034,7 @@
     if (!$projectPath) return;
     mutating = true;
     error = null;
-    openDownloadOverlay(`Updating ${update.name}`);
+    openDownloadOverlay(`Updating ${update.name}`, [update.modId]);
     try {
       const result: any = await invoke("update_project_mod", {
         path: $projectPath,
@@ -1041,6 +1052,8 @@
       downloadDone = true;
     } finally {
       mutating = false;
+      downloadDone = true;
+      downloadScopeModIds = null;
     }
   }
 

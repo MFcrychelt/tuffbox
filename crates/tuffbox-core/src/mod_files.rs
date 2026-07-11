@@ -114,9 +114,38 @@ pub fn materialize_mod_file_with_progress(
         }
     }
 
-    crate::mc_install::download_with_progress(url, &target, expected_sha1, &module.id, progress)
-        .map_err(|e| ModFileError::Install(e))?;
-    Ok(MaterializeOutcome::Downloaded)
+    match crate::mc_install::download_with_progress(url, &target, expected_sha1, &module.id, progress)
+    {
+        Ok(()) => return Ok(MaterializeOutcome::Downloaded),
+        Err(primary_error) => {
+            let Some(sha1) = expected_sha1 else {
+                return Err(ModFileError::Install(primary_error));
+            };
+            let mut api_url = format!(
+                "https://api.modrinth.com/v2/version_file/{}/download?algorithm=sha1",
+                sha1
+            );
+            if let Some(version_id) = module.source.file_id.as_deref() {
+                api_url.push_str("&version_id=");
+                api_url.push_str(version_id);
+            }
+            crate::mc_install::download_with_progress(
+                &api_url,
+                &target,
+                Some(sha1),
+                &module.id,
+                progress,
+            )
+            .map_err(|fallback_error| {
+                ModFileError::Install(crate::mc_install::InstallError::MissingDownload(
+                    format!(
+                        "cdn failed ({primary_error}); modrinth redirect failed ({fallback_error})"
+                    ),
+                ))
+            })?;
+            Ok(MaterializeOutcome::Downloaded)
+        }
+    }
 }
 
 /// Report for a full mods-folder sync pass.
@@ -168,6 +197,22 @@ pub fn ensure_project_mods_downloaded_with_progress(
     instance_dir: &Path,
     progress: &crate::mc_install::ProgressCallback,
 ) -> ModSyncReport {
+    ensure_project_mods_downloaded_with_progress_filtered(
+        manifest,
+        instance_dir,
+        progress,
+        None,
+    )
+}
+
+/// Like [`ensure_project_mods_downloaded_with_progress`], but only materializes
+/// mods whose ids appear in `only_mod_ids` when that set is provided.
+pub fn ensure_project_mods_downloaded_with_progress_filtered(
+    manifest: &ProjectManifest,
+    instance_dir: &Path,
+    progress: &crate::mc_install::ProgressCallback,
+    only_mod_ids: Option<&std::collections::HashSet<String>>,
+) -> ModSyncReport {
     use rayon::prelude::*;
     use std::sync::Mutex;
 
@@ -177,6 +222,11 @@ pub fn ensure_project_mods_downloaded_with_progress(
     manifest
         .mods
         .par_iter()
+        .filter(|module| {
+            only_mod_ids
+                .map(|ids| ids.contains(&module.id))
+                .unwrap_or(true)
+        })
         .for_each(|module| {
             let outcome = materialize_mod_file_with_progress(instance_dir, module, &progress);
             let mut report = report.lock().unwrap();
