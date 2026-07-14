@@ -406,7 +406,7 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 "name": m.name,
                 "version": m.version,
                 "side": format!("{:?}", m.side).to_lowercase(),
-                "source": format!("{:?}", m.source.kind).to_lowercase(),
+                "source": m.source.kind.as_str(),
                 "projectId": m.source.project_id,
                 "fileName": m.file_name,
                 "iconUrl": icon_url,
@@ -708,7 +708,7 @@ async fn add_modrinth_mod(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
         save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
-        download_project_mods_tracked(&app, &PathBuf::from(&path), &manifest, None);
+        download_project_mods_tracked(&app, &PathBuf::from(&path), &manifest, None, true);
         Ok(())
     })
     .await
@@ -728,7 +728,7 @@ async fn add_modrinth_mod_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods_tracked(&app, &manifest_path, &manifest, None);
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(installed)
     })
     .await
@@ -749,7 +749,7 @@ async fn add_modrinth_mods_with_dependencies(
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods_tracked(&app, &manifest_path, &manifest, None);
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(installed)
     })
     .await
@@ -800,7 +800,10 @@ async fn update_project_mod(
         let old_mod = manifest
             .mods
             .iter()
-            .find(|module| module.id == mod_id)
+            .find(|module| {
+                module.id == mod_id
+                    || module.source.project_id.as_deref() == Some(mod_id.as_str())
+            })
             .cloned()
             .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
         update_mod_from_modrinth(
@@ -810,7 +813,8 @@ async fn update_project_mod(
             version_id.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-        let report = commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod)?;
+        let report =
+            commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, true)?;
         Ok(serde_json::json!({
             "modId": mod_id,
             "download": report,
@@ -962,7 +966,8 @@ async fn change_mod_version(
         let new_spec = build_mod_spec(&project, &version_info, file, dependencies, side);
         manifest.mods[idx] = new_spec;
 
-        let report = commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod)?;
+        let report =
+            commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, true)?;
 
         Ok(serde_json::json!({
             "version": version_info.version_number,
@@ -1596,6 +1601,8 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
 #[tauri::command(rename_all = "camelCase")]
 async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
+        use tauri::Emitter;
+
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "batch-update-all").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -1605,6 +1612,35 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         let provider = tuffbox_core::ModrinthProvider::new();
         let (loader_slug, pending) =
             resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
+
+        let scope_mod_ids: Vec<String> = pending
+            .iter()
+            .map(|(idx, _)| manifest.mods[*idx].id.clone())
+            .collect();
+        if !pending.is_empty() {
+            let queue: Vec<ModDownloadProgressPayload> = pending
+                .iter()
+                .map(|(idx, _)| {
+                    let module = &manifest.mods[*idx];
+                    ModDownloadProgressPayload {
+                        id: module.id.clone(),
+                        name: module.name.clone(),
+                        downloaded: 0,
+                        total: 0,
+                        percent: 0,
+                        status: "queued".to_string(),
+                    }
+                })
+                .collect();
+            let _ = app.emit(
+                "mod-download-batch",
+                serde_json::json!({
+                    "phase": "start",
+                    "items": queue,
+                    "scopeModIds": scope_mod_ids,
+                }),
+            );
+        }
 
         let mut download = tuffbox_core::ModSyncReport::default();
         for (idx, latest) in pending {
@@ -1636,7 +1672,7 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             let new_spec = build_mod_spec(&project, &latest, file, dependencies, old_mod.side);
             let name = new_spec.name.clone();
             manifest.mods[idx] = new_spec;
-            match commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod) {
+            match commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, false) {
                 Ok(report) => {
                     download.downloaded.extend(report.downloaded);
                     download.already_present.extend(report.already_present);
@@ -1649,6 +1685,21 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
                     skipped_errors.push(format!("{name}: {error}"));
                 }
             }
+        }
+
+        if !scope_mod_ids.is_empty() {
+            let _ = app.emit(
+                "mod-download-batch",
+                serde_json::json!({
+                    "phase": "done",
+                    "downloaded": download.downloaded,
+                    "failed": download.failed,
+                    "alreadyPresent": download.already_present,
+                    "skipped": download.skipped,
+                    "scopeModIds": scope_mod_ids,
+                    "batchComplete": true,
+                }),
+            );
         }
 
         Ok(serde_json::json!({
@@ -3020,8 +3071,8 @@ async fn get_item_icon(path: String, item_id: String) -> Result<Option<String>, 
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let (project_dir, extra_jars) = recipe_icon_extra_jars(&manifest_path)?;
-        let icon = tuffbox_core::resolve_item_icon_path(&project_dir, &item_id, &extra_jars)?;
-        Ok(icon.map(|file| file.to_string_lossy().to_string()))
+        let icon = tuffbox_core::resolve_item_icon_data_url(&project_dir, &item_id, &extra_jars)?;
+        Ok(icon)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3037,11 +3088,8 @@ async fn get_item_icons_batch(
         let manifest_path = PathBuf::from(&path);
         let (project_dir, extra_jars) = recipe_icon_extra_jars(&manifest_path)?;
         let icons =
-            tuffbox_core::resolve_item_icons_batch(&project_dir, &item_ids, &extra_jars)?;
-        Ok(icons
-            .into_iter()
-            .map(|(id, path)| (id, path.map(|file| file.to_string_lossy().to_string())))
-            .collect())
+            tuffbox_core::resolve_item_icons_data_urls(&project_dir, &item_ids, &extra_jars)?;
+        Ok(icons)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5204,7 +5252,7 @@ async fn install_modpack(
                 "message": format!("Downloading {} content files…", manifest.mods.len())
             }),
         );
-        let report = download_project_mods_tracked(&app, &manifest_path, &manifest, None);
+        let report = download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
 
         let _ = app.emit(
             "modpack-install-progress",
@@ -5250,7 +5298,7 @@ async fn retry_failed_mod_downloads(
         }
         let only: std::collections::HashSet<String> = mod_ids.into_iter().collect();
         let report =
-            download_project_mods_tracked(&app, &manifest_path, &manifest, Some(&only));
+            download_project_mods_tracked(&app, &manifest_path, &manifest, Some(&only), true);
         Ok(serde_json::json!({ "download": report }))
     })
     .await
@@ -6197,7 +6245,7 @@ fn refresh_modrinth_file_metadata(
     manifest: &ProjectManifest,
     module: &mut ModSpec,
 ) -> Result<(), String> {
-    if module.source.kind != SourceKind::Modrinth {
+    if module.source.kind != SourceKind::Modrinth && module.source.project_id.is_none() {
         return Ok(());
     }
     let Some(version_id) = module.source.file_id.clone() else {
@@ -6246,6 +6294,7 @@ fn commit_single_mod_update(
     manifest_path: &Path,
     updated_manifest: &mut ProjectManifest,
     old_mod: &ModSpec,
+    emit_lifecycle: bool,
 ) -> Result<tuffbox_core::ModSyncReport, String> {
     let project_id = old_mod.source.project_id.as_deref();
     let mut new_mod = updated_manifest
@@ -6298,6 +6347,7 @@ fn commit_single_mod_update(
         manifest_path,
         &download_manifest,
         Some(&only_mod),
+        emit_lifecycle,
     );
     if let Some(failure) = report
         .failed
@@ -6482,7 +6532,9 @@ fn update_mod_from_modrinth(
     let index = manifest
         .mods
         .iter()
-        .position(|m| m.id == mod_id)
+        .position(|m| {
+            m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id)
+        })
         .ok_or_else(|| anyhow::anyhow!("mod {mod_id} not found in project"))?;
 
     let old_mod = manifest.mods[index].clone();
@@ -6888,6 +6940,7 @@ fn download_project_mods_tracked(
     manifest_path: &Path,
     manifest: &ProjectManifest,
     only_mod_ids: Option<&std::collections::HashSet<String>>,
+    emit_lifecycle: bool,
 ) -> tuffbox_core::ModSyncReport {
     use tauri::Emitter;
 
@@ -6945,36 +6998,41 @@ fn download_project_mods_tracked(
         } else {
             tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir)
         };
+        if emit_lifecycle {
+            let _ = app.emit(
+                "mod-download-batch",
+                serde_json::json!({
+                    "phase": "start",
+                    "items": Vec::<ModDownloadProgressPayload>::new(),
+                    "scopeModIds": scope_mod_ids,
+                }),
+            );
+            let _ = app.emit(
+                "mod-download-batch",
+                serde_json::json!({
+                    "phase": "done",
+                    "downloaded": report.downloaded,
+                    "failed": report.failed,
+                    "alreadyPresent": report.already_present,
+                    "skipped": report.skipped,
+                    "scopeModIds": scope_mod_ids,
+                    "batchComplete": true,
+                }),
+            );
+        }
+        return report;
+    }
+
+    if emit_lifecycle {
         let _ = app.emit(
             "mod-download-batch",
             serde_json::json!({
                 "phase": "start",
-                "items": Vec::<ModDownloadProgressPayload>::new(),
+                "items": queue,
                 "scopeModIds": scope_mod_ids,
             }),
         );
-        let _ = app.emit(
-            "mod-download-batch",
-            serde_json::json!({
-                "phase": "done",
-                "downloaded": report.downloaded,
-                "failed": report.failed,
-                "alreadyPresent": report.already_present,
-                "skipped": report.skipped,
-                "scopeModIds": scope_mod_ids,
-            }),
-        );
-        return report;
     }
-
-    let _ = app.emit(
-        "mod-download-batch",
-        serde_json::json!({
-            "phase": "start",
-            "items": queue,
-            "scopeModIds": scope_mod_ids,
-        }),
-    );
 
     let app_for_cb = app.clone();
     let names_for_cb = name_map.clone();
@@ -7081,17 +7139,20 @@ fn download_project_mods_tracked(
         );
     }
 
-    let _ = app.emit(
-        "mod-download-batch",
-        serde_json::json!({
-            "phase": "done",
-            "downloaded": report.downloaded,
-            "failed": report.failed,
-            "alreadyPresent": report.already_present,
-            "skipped": report.skipped,
-            "scopeModIds": scope_mod_ids,
-        }),
-    );
+    if emit_lifecycle {
+        let _ = app.emit(
+            "mod-download-batch",
+            serde_json::json!({
+                "phase": "done",
+                "downloaded": report.downloaded,
+                "failed": report.failed,
+                "alreadyPresent": report.already_present,
+                "skipped": report.skipped,
+                "scopeModIds": scope_mod_ids,
+                "batchComplete": true,
+            }),
+        );
+    }
 
     if let Ok(mut map) = DOWNLOAD_PROGRESS.lock() {
         map.clear();

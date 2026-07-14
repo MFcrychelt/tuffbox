@@ -206,7 +206,7 @@
   }
 
   onMount(async () => {
-    unlistenBatch = await listen<{ phase: string; items?: DownloadItem[]; failed?: { modId: string; error: string }[]; scopeModIds?: string[] }>(
+    unlistenBatch = await listen<{ phase: string; items?: DownloadItem[]; failed?: { modId: string; error: string }[]; scopeModIds?: string[]; batchComplete?: boolean }>(
       "mod-download-batch",
       (event) => {
         const payload = event.payload;
@@ -226,13 +226,14 @@
             status: "queued",
           }));
         } else if (payload.phase === "done") {
-          downloadDone = true;
-          // Auto-close shortly after success if nothing failed
-          const failed = payload.failed?.length ?? downloadFailedCount;
-          if (failed === 0) {
-            setTimeout(() => {
-              if (downloadDone) downloadOpen = false;
-            }, 900);
+          if (payload.batchComplete !== false) {
+            downloadDone = true;
+            const failed = payload.failed?.length ?? downloadFailedCount;
+            if (failed === 0) {
+              setTimeout(() => {
+                if (downloadDone) downloadOpen = false;
+              }, 900);
+            }
           }
         }
       },
@@ -341,6 +342,16 @@
 
   function isSavedViewFilter(filter: string): boolean {
     return filter === "favorites" || filter.startsWith("list:");
+  }
+
+  function canUpdateMod(mod: ModRow): boolean {
+    return mod.source === "modrinth" || !!mod.projectId;
+  }
+
+  function savedViewLabel(filter: string): string {
+    if (filter === "favorites") return "Favorites";
+    if (filter.startsWith("list:")) return filter.slice(5);
+    return "Saved";
   }
 
   function modIconLookupKey(mod: ModRow): string | null {
@@ -575,14 +586,18 @@
       updateApplying = false;
       return;
     }
-    openDownloadOverlay(`Updating ${updateList.length} mod${updateList.length > 1 ? "s" : ""}`);
+    const pendingIds = updateList.map((u) => u.modId);
+    openDownloadOverlay(
+      `Updating ${updateList.length} mod${updateList.length > 1 ? "s" : ""}`,
+      pendingIds
+    );
     try {
       const result: any = await invoke("update_all_mods", { path: $projectPath });
       const updated: string[] = Array.isArray(result) ? result : (result?.updated ?? []);
       const errs: string[] = result?.errors ?? [];
       const failedDownloads = result?.download?.failed?.length ?? 0;
       message = updated.length
-        ? `Updated ${updated.length} mods: ${updated.join(", ")}`
+        ? `Updated ${updated.length} mod${updated.length > 1 ? "s" : ""}: ${updated.join(", ")}`
         : "No mods were updated.";
       if (errs.length) {
         error = errs.slice(0, 3).join("; ");
@@ -596,6 +611,7 @@
       downloadDone = true;
     } finally {
       updateApplying = false;
+      downloadDone = true;
     }
   }
 
@@ -663,6 +679,9 @@
     if (!$projectPath) return;
     try {
       userState = await api.mods.setUserState(modId, patch, $projectPath);
+      if (isSavedViewFilter(contentFilter)) {
+        await loadSavedModsView();
+      }
     } catch (e) {
       error = String(e);
     }
@@ -753,6 +772,7 @@
       userState = await api.mods.addToList(trimmed, modId, $projectPath);
       newListName = "";
       saveDropdownFor = null;
+      await refreshSavedViewIfActive();
     } catch (e) {
       error = String(e);
     }
@@ -762,6 +782,9 @@
     if (!$projectPath) return;
     try {
       userState = await api.mods.addToList(listName, modId, $projectPath);
+      if (contentFilter === `list:${listName}`) {
+        await loadSavedModsView();
+      }
     } catch (e) {
       error = String(e);
     }
@@ -771,6 +794,9 @@
     if (!$projectPath) return;
     try {
       userState = await api.mods.removeFromList(listName, modId, $projectPath);
+      if (contentFilter === `list:${listName}`) {
+        await loadSavedModsView();
+      }
     } catch (e) {
       error = String(e);
     }
@@ -951,6 +977,12 @@
     }
   }
 
+  async function refreshSavedViewIfActive() {
+    if (isSavedViewFilter(contentFilter)) {
+      await loadSavedModsView();
+    }
+  }
+
   function contentTypeForFilter(filter: string): string {
     switch (filter) {
       case "resourcepack": return "resourcepack";
@@ -962,9 +994,10 @@
 
   function switchContentFilter(next: string) {
     contentFilter = next;
+    filter = "";
     if (addOpen) searchMods();
     if (isSavedViewFilter(next)) {
-      loadSavedModsView().catch(() => {});
+      loadUserState().then(() => loadSavedModsView()).catch(() => {});
     }
   }
 
@@ -1115,21 +1148,28 @@
   }
 
   async function updateMod(mod: ModRow, versionId?: string | null) {
-    if (!$projectPath) return;
+    if (!$projectPath || !canUpdateMod(mod)) return;
     mutating = true;
     error = null;
+    message = null;
     openDownloadOverlay(`Updating ${mod.name}`, [mod.id]);
     try {
+      let targetVersionId = versionId ?? null;
+      if (!targetVersionId) {
+        const pending = updateList.find((u) => u.modId === mod.id);
+        targetVersionId = pending?.versionId ?? null;
+      }
       const result: any = await invoke("update_project_mod", {
         path: $projectPath,
         modId: mod.id,
-        versionId: versionId ?? null,
+        versionId: targetVersionId,
       });
       const failures = result?.download?.failed ?? [];
       if (failures.length) {
         throw new Error(failures.map((failure: any) => failure.error).join("; "));
       }
       updateList = updateList.filter((u) => u.modId !== mod.id);
+      message = `Updated ${mod.name}.`;
       await load(true);
     } catch (e) {
       error = String(e);
@@ -1204,9 +1244,27 @@
 
   $: listTabNames = Object.keys(userState.lists).sort((a, b) => a.localeCompare(b));
 
-  $: if (isSavedViewFilter(contentFilter)) {
+  $: savedViewKey = isSavedViewFilter(contentFilter)
+    ? `${contentFilter}:${Object.keys(userState.favorites).length}:${JSON.stringify(userState.lists)}`
+    : "";
+  $: if (savedViewKey) {
     void loadSavedModsView();
   }
+
+  $: filteredSavedMods = savedMods.filter((result) => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      result.name.toLowerCase().includes(q) ||
+      result.slug.toLowerCase().includes(q) ||
+      result.id.toLowerCase().includes(q) ||
+      (result.description ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  $: searchPlaceholder = isSavedViewFilter(contentFilter)
+    ? `Filter ${savedViewLabel(contentFilter).toLowerCase()}...`
+    : `Search ${contentFilter}s...`;
 
   $: selectedResults = searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result));
 
@@ -1262,7 +1320,7 @@
     <div class="toolbar-row">
       <div class="search wide">
         <Search size={16} />
-        <input bind:value={filter} placeholder="Search {contentFilter}s..." />
+        <input bind:value={filter} placeholder={searchPlaceholder} />
       </div>
       <div class="actions">
         <button on:click={openAddModal} disabled={!$projectPath || mutating}>
@@ -1358,17 +1416,23 @@
     <div class="empty">Open a project to manage mods.</div>
   {:else if isSavedViewFilter(contentFilter)}
     {#if savedModsLoading}
-      <div class="loading">Loading saved projects...</div>
+      <div class="loading">Loading {savedViewLabel(contentFilter).toLowerCase()}...</div>
     {:else if savedMods.length === 0}
       <div class="empty">
         {#if contentFilter === "favorites"}
-          No favorites yet. Use the heart icon in Add Modrinth to save projects here.
+          No favorites yet. Open <strong>Add mod</strong> and use the heart icon on Modrinth projects.
         {:else}
-          This list is empty. Use the bookmark icon in Add Modrinth to add projects.
+          List <strong>{savedViewLabel(contentFilter)}</strong> is empty. Bookmark projects from the Modrinth browser.
         {/if}
+        <button class="secondary" style="margin-top: 12px" on:click={openAddModal} disabled={!$projectPath}>
+          <Plus size={16} /> Browse Modrinth
+        </button>
       </div>
+    {:else if filteredSavedMods.length === 0}
+      <div class="empty">No projects match your filter.</div>
     {:else}
       <div class="saved-toolbar">
+        <span class="saved-count">{filteredSavedMods.length} of {savedMods.length} saved</span>
         {#if contentFilter.startsWith("list:")}
           {@const listName = contentFilter.slice(5)}
           <button on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
@@ -1377,10 +1441,11 @@
           <button class="secondary" on:click={() => { const n = prompt("Rename list:", listName); if (n) renameList(listName, n); }}>Rename</button>
           <button class="secondary danger" on:click={() => { if (confirm(`Delete list "${listName}"?`)) deleteList(listName); }}>Delete list</button>
         {/if}
+        <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse Modrinth</button>
       </div>
-      <div class="saved-list">
-        {#each savedMods as result}
-          <article class="saved-card" class:installed={isInstalled(result)}>
+      <div class="results list saved-results">
+        {#each filteredSavedMods as result (result.id)}
+          <article class="result-card" class:installed={isInstalled(result)} class:list={true}>
             <div class="result-icon">
               {#if result.iconUrl}
                 <img src={result.iconUrl} alt="" loading="lazy" />
@@ -1388,23 +1453,37 @@
                 <span>{iconFallback(result.name)}</span>
               {/if}
             </div>
-            <div class="saved-main">
-              <div class="installed-title">
-                <strong>{result.name}</strong>
-                <code>{result.slug}</code>
+            <div class="result-main">
+              <div class="result-title">
+                <span class="result-name">{result.name}</span>
+                {#if result.author}<span class="result-author">by {result.author}</span>{/if}
+                {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
               </div>
               <p class="result-desc">{result.description}</p>
             </div>
-            <div class="saved-actions">
-              <button on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
-                <ArrowDown size={16} /> {isInstalled(result) ? "Installed" : "Install"}
+            <div class="result-actions">
+              <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                <Download size={16} /> {isInstalled(result) ? "Installed" : "Install"}
               </button>
-              <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click={() => toggleFavorite(result.id)}>
-                <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
-              </button>
-              {#if contentFilter.startsWith("list:")}
-                <button class="qa danger" title="Remove from list" on:click={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
-              {/if}
+              <div class="quick-actions">
+                <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                  <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
+                </button>
+                {#if contentFilter.startsWith("list:")}
+                  <button class="qa danger" title="Remove from list" on:click|stopPropagation={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
+                {/if}
+                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy Modrinth link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                  {#if copiedLinkId === result.id}
+                    <Check size={15} />
+                  {:else}
+                    <Link size={15} />
+                  {/if}
+                </button>
+              </div>
+            </div>
+            <div class="result-footer">
+              <span><Download size={13} />{formatCount(result.downloads)}</span>
+              <span class="footer-updated"><Clock size={13} />{formatRelative(result.dateModified)}</span>
             </div>
           </article>
         {/each}
@@ -1444,13 +1523,10 @@
             <span class="tag source">{mod.source}</span>
           </div>
           <div class="card-actions">
-            <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || mod.source !== "modrinth"} title="Change version">
+            <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || !canUpdateMod(mod)} title="Change version">
               <ArrowUpDown size={16} />
             </button>
-            <button class="icon-btn" class:hot={mod.updateAvailable} on:click={() => {
-              const pending = updateList.find((u) => u.modId === mod.id);
-              updateMod(mod, pending?.versionId ?? null);
-            }} disabled={mutating || mod.source !== "modrinth"} title="Update to latest from Modrinth">
+            <button class="icon-btn" class:hot={mod.updateAvailable} on:click={() => updateMod(mod)} disabled={mutating || !canUpdateMod(mod)} title="Update to latest from Modrinth">
               <RotateCw size={16} />
             </button>
             <button class="icon-btn danger" on:click={() => showRemoveConfirm(mod)} disabled={mutating} title="Remove with snapshot">
@@ -2349,39 +2425,27 @@
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
+    align-items: center;
     margin-bottom: 14px;
   }
 
-  .saved-list {
-    display: grid;
-    gap: 10px;
+  .saved-count {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-right: auto;
   }
 
-  .saved-card {
-    display: grid;
-    grid-template-columns: 52px minmax(0, 1fr) auto;
-    gap: 14px;
-    align-items: center;
-    padding: 12px 14px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
+  .saved-results {
+    margin-top: 4px;
   }
 
-  .saved-card.installed {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.07);
-  }
-
-  .saved-main {
-    min-width: 0;
-  }
-
-  .saved-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
+  .installed-pill {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(27, 217, 106, 0.15);
+    color: #1bd96a;
+    border: 1px solid rgba(27, 217, 106, 0.35);
   }
 
   .installed-list {

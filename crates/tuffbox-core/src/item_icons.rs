@@ -242,6 +242,39 @@ pub fn resolve_item_icons_batch(
     Ok(out)
 }
 
+/// Reads a cached PNG and returns a `data:image/png;base64,...` URL for the WebView.
+pub fn png_path_to_data_url(path: &Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    if !is_png(&bytes) {
+        return None;
+    }
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    Some(format!("data:image/png;base64,{}", STANDARD.encode(bytes)))
+}
+
+/// Resolves an item icon and returns an embeddable data URL (no asset protocol needed).
+pub fn resolve_item_icon_data_url(
+    project_dir: &Path,
+    item_id: &str,
+    extra_jars: &[PathBuf],
+) -> Result<Option<String>, String> {
+    let path = resolve_item_icon_path(project_dir, item_id, extra_jars)?;
+    Ok(path.and_then(|file| png_path_to_data_url(&file)))
+}
+
+/// Batch variant of [`resolve_item_icon_data_url`].
+pub fn resolve_item_icons_data_urls(
+    project_dir: &Path,
+    item_ids: &[String],
+    extra_jars: &[PathBuf],
+) -> Result<HashMap<String, Option<String>>, String> {
+    let paths = resolve_item_icons_batch(project_dir, item_ids, extra_jars)?;
+    Ok(paths
+        .into_iter()
+        .map(|(id, path)| (id, path.and_then(|file| png_path_to_data_url(&file))))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

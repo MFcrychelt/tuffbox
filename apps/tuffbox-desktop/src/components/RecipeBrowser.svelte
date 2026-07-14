@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { convertFileSrc } from "@tauri-apps/api/core";
   import {
     api,
     type ScannedRecipe,
@@ -101,7 +100,7 @@
       const result = await api.recipes.itemIconsBatch(pending, $projectPath);
       for (const id of pending) {
         const file = result[id];
-        iconCache[id] = file ? convertFileSrc(file) : "missing";
+        iconCache[id] = file ?? "missing";
         iconInFlight.delete(id);
       }
     } catch {
@@ -147,11 +146,26 @@
     await preloadIconsBatch([itemId]);
   }
 
+  function normalizeIconUrl(url: string | null | undefined): string | null {
+    if (!url) return null;
+    if (url.startsWith("data:") || url.startsWith("http://") || url.startsWith("https://") || url.startsWith("blob:")) {
+      return url;
+    }
+    return null;
+  }
+
   function iconSrc(itemId: string | null | undefined, explicit?: string | null): string | null {
-    if (explicit) return explicit;
+    const normalized = normalizeIconUrl(explicit);
+    if (normalized) return normalized;
     if (!itemId) return null;
     const state = iconCache[itemId];
     return typeof state === "string" && state !== "loading" && state !== "missing" ? state : null;
+  }
+
+  function onIconError(itemId: string | null | undefined) {
+    if (!itemId) return;
+    iconCache[itemId] = "missing";
+    iconCache = { ...iconCache };
   }
 
   function preloadIcons(ids: Array<string | null | undefined>) {
@@ -812,7 +826,7 @@
             <div class="focus-item">
               <span class="mc-slot mini" style="--hue: {itemHue(selectedItem)}">
                 {#if iconSrc(selectedItem)}
-                  <img src={iconSrc(selectedItem)} alt="" class="slot-icon" />
+                  <img src={iconSrc(selectedItem)} alt="" class="slot-icon" on:error={() => onIconError(selectedItem)} />
                 {:else}
                   <span class="letter">{prettifyItem(selectedItem).slice(0, 2)}</span>
                 {/if}
@@ -874,7 +888,7 @@
                       >
                         {#if ingredient}
                           {#if iconSrc(ingredient.id, ingredient.iconUrl)}
-                            <img src={iconSrc(ingredient.id, ingredient.iconUrl)} alt="" class="slot-icon" />
+                            <img src={iconSrc(ingredient.id, ingredient.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(ingredient.id)} />
                           {:else}
                             <span class="letter">{(ingredient.name || prettifyItem(ingredient.id)).slice(0, 3)}</span>
                           {/if}
@@ -895,7 +909,7 @@
                           on:click={() => navigateSlot(station, "recipes")}
                         >
                           {#if iconSrc(station.id, station.iconUrl)}
-                            <img src={iconSrc(station.id, station.iconUrl)} alt="" class="slot-icon" />
+                            <img src={iconSrc(station.id, station.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(station.id)} />
                           {:else}
                             <span class="letter">{(station.name || prettifyItem(station.id)).slice(0, 2)}</span>
                           {/if}
@@ -920,7 +934,7 @@
                           {#if slot}
                             {@const resolved = resolveSlot(slot)}
                             {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
+                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(resolved?.id)} />
                             {:else}
                               <span class="letter">{slotLabel(slot)}</span>
                             {/if}
@@ -940,7 +954,7 @@
                       on:contextmenu|preventDefault={() => navigateSlot(currentRecipe.layout.output, "uses")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -959,7 +973,7 @@
                       on:click={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
                     >
                       {#if iconSrc(input?.id, input?.iconUrl)}
-                        <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" />
+                        <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(input?.id)} />
                       {:else}
                         <span class="letter">{slotLabel(currentRecipe.layout.grid[4])}</span>
                       {/if}
@@ -980,7 +994,7 @@
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1004,7 +1018,7 @@
                         {#if slot}
                           {@const resolved = resolveSlot(slot)}
                           {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
+                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(resolved?.id)} />
                           {:else}
                             <span class="letter">{slotLabel(slot)}</span>
                           {/if}
@@ -1019,7 +1033,7 @@
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1037,7 +1051,7 @@
                           on:click={() => navigateSlot(slot, "uses")}
                         >
                           {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" />
+                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(resolved?.id)} />
                           {:else}
                             <span class="letter">{slotLabel(slot)}</span>
                           {/if}
@@ -1051,7 +1065,7 @@
                       on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1106,7 +1120,7 @@
                   on:contextmenu|preventDefault={() => selectItem(item.id, "uses")}
                 >
                   {#if iconSrc(item.id)}
-                    <img src={iconSrc(item.id)} alt="" class="item-icon" />
+                    <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
                   {:else if iconCache[item.id] === "loading"}
                     <span class="item-letter icon-pending"></span>
                   {:else}
@@ -1140,7 +1154,7 @@
               }}
             >
               {#if iconSrc(item.id)}
-                <img src={iconSrc(item.id)} alt="" class="item-icon" />
+                <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
               {:else if iconCache[item.id] === "loading"}
                 <span class="item-letter icon-pending"></span>
               {:else}
@@ -1178,7 +1192,7 @@
                   on:click={() => selectItem(id, focusMode, false)}
                 >
                   {#if iconSrc(id)}
-                    <img src={iconSrc(id)} alt="" class="item-icon" />
+                    <img src={iconSrc(id)} alt="" class="item-icon" on:error={() => onIconError(id)} />
                   {:else if iconCache[id] === "loading"}
                     <span class="item-letter icon-pending"></span>
                   {:else}
