@@ -246,6 +246,11 @@
     }
   }
 
+  function onCfFileChange(e: Event) {
+    const v = (e.currentTarget as HTMLSelectElement).value;
+    cfFileId = v ? Number(v) : null;
+  }
+
   async function installFromCurseForge() {
     if (!cfSelected || !cfFileId) {
       error = "Select a modpack file version.";
@@ -427,10 +432,7 @@
                 <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
               {:else}
                 <label for="cf-file">Pack version</label>
-                <select id="cf-file" value={cfFileId ?? ""} on:change={(e) => {
-                  const v = (e.currentTarget as HTMLSelectElement).value;
-                  cfFileId = v ? Number(v) : null;
-                }}>
+                <select id="cf-file" value={cfFileId ?? ""} on:change={onCfFileChange}>
                   {#each cfFiles as f}
                     <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
                   {/each}
