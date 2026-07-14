@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import {
     api,
@@ -42,11 +42,17 @@
     recipeCount: number;
     useCount: number;
   };
+  type ItemFocusCounts = { recipes: number; uses: number };
 
   const ITEMS_PER_PAGE = 60;
+  const ICON_BATCH_SIZE = 48;
   const BOOKMARK_KEY = "tuffbox.jei.bookmarks";
 
   let recipes: ScannedRecipe[] = [];
+  let items: ItemEntry[] = [];
+  let itemCategorySets = new Map<string, Set<string>>();
+  let filteredCounts = new Map<string, ItemFocusCounts>();
+  let catalogReady = false;
   let scanMeta: Omit<RecipeScanResult, "recipes"> | null = null;
   let loading = false;
   let error: string | null = null;
@@ -74,22 +80,71 @@
   type IconState = "loading" | "missing" | string;
   let iconCache: Record<string, IconState> = {};
   const iconInFlight = new Set<string>();
+  let iconPreloadQueue: string[] = [];
+  let iconPreloadTimer: ReturnType<typeof setTimeout> | null = null;
+  let iconBatchRunning = false;
+
+  async function preloadIconsBatch(ids: string[]) {
+    if (!ids.length || !$projectPath) return;
+    const pending = [...new Set(ids)].filter(
+      (id) => id && !id.startsWith("#") && iconCache[id] === undefined && !iconInFlight.has(id)
+    );
+    if (!pending.length) return;
+
+    for (const id of pending) {
+      iconInFlight.add(id);
+      iconCache[id] = "loading";
+    }
+    iconCache = { ...iconCache };
+
+    try {
+      const result = await api.recipes.itemIconsBatch(pending, $projectPath);
+      for (const id of pending) {
+        const file = result[id];
+        iconCache[id] = file ? convertFileSrc(file) : "missing";
+        iconInFlight.delete(id);
+      }
+    } catch {
+      for (const id of pending) {
+        iconCache[id] = "missing";
+        iconInFlight.delete(id);
+      }
+    }
+    iconCache = { ...iconCache };
+  }
+
+  async function flushIconPreload() {
+    if (iconBatchRunning || iconPreloadQueue.length === 0 || !$projectPath) return;
+    iconBatchRunning = true;
+    try {
+      while (iconPreloadQueue.length > 0) {
+        const chunk = iconPreloadQueue.splice(0, ICON_BATCH_SIZE);
+        await preloadIconsBatch(chunk);
+        await tick();
+      }
+    } finally {
+      iconBatchRunning = false;
+      if (iconPreloadQueue.length > 0) scheduleIconPreload();
+    }
+  }
+
+  function scheduleIconPreload(ids: Array<string | null | undefined>) {
+    for (const id of ids) {
+      if (!id || id.startsWith("#")) continue;
+      if (iconCache[id] !== undefined || iconInFlight.has(id)) continue;
+      if (!iconPreloadQueue.includes(id)) iconPreloadQueue.push(id);
+    }
+    if (iconPreloadTimer) clearTimeout(iconPreloadTimer);
+    iconPreloadTimer = setTimeout(() => {
+      iconPreloadTimer = null;
+      void flushIconPreload();
+    }, 32);
+  }
 
   async function ensureItemIcon(itemId: string | null | undefined) {
     if (!itemId || !$projectPath || itemId.startsWith("#")) return;
     if (iconCache[itemId] !== undefined || iconInFlight.has(itemId)) return;
-    iconInFlight.add(itemId);
-    iconCache[itemId] = "loading";
-    iconCache = iconCache;
-    try {
-      const file = await api.recipes.itemIcon(itemId, $projectPath);
-      iconCache[itemId] = file ? convertFileSrc(file) : "missing";
-    } catch {
-      iconCache[itemId] = "missing";
-    } finally {
-      iconInFlight.delete(itemId);
-      iconCache = { ...iconCache };
-    }
+    await preloadIconsBatch([itemId]);
   }
 
   function iconSrc(itemId: string | null | undefined, explicit?: string | null): string | null {
@@ -100,7 +155,7 @@
   }
 
   function preloadIcons(ids: Array<string | null | undefined>) {
-    for (const id of ids) ensureItemIcon(id);
+    scheduleIconPreload(ids);
   }
 
   const CATEGORY_META: Record<string, { label: string; icon: "craft" | "cook" | "smith" | "cut" | "other" }> = {
@@ -128,6 +183,7 @@
   onDestroy(() => {
     if (cycleTimer) clearInterval(cycleTimer);
     if (runtimePoller) clearInterval(runtimePoller);
+    if (iconPreloadTimer) clearTimeout(iconPreloadTimer);
     window.removeEventListener("keydown", onKey);
   });
 
@@ -159,6 +215,7 @@
   async function loadRecipes(preferLive = true, preserveSelection = false) {
     if (!$projectPath) return;
     loading = true;
+    catalogReady = false;
     error = null;
     message = null;
     const previousSelection = preserveSelection ? selectedItem : "";
@@ -178,8 +235,24 @@
         message = `Connected to live JEI: ${recipes.length} runtime recipes in ${runtimeCategories.length} categories.`;
       } else {
         const result = await api.recipes.scan($projectPath);
-        applyOfflineResult(result);
+        recipes = result.recipes ?? [];
+        runtimeCategories = [];
+        recipeSource = "offline";
+        scanMeta = {
+          jarCount: result.jarCount,
+          datapackFiles: result.datapackFiles,
+          truncated: result.truncated,
+          totalScanned: result.totalScanned,
+        };
+        if (result.truncated) {
+          message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
+        } else {
+          message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
+            (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
+        }
       }
+      await tick();
+      rebuildIndexes(recipes);
       lastLoadedPath = $projectPath;
       if (!preserveSelection) categoryFilter = "all";
       selectedItem = previousSelection && recipes.some(
@@ -192,7 +265,17 @@
       if (preferLive && runtimeStatus?.connected) {
         try {
           const fallback = await api.recipes.scan($projectPath);
-          applyOfflineResult(fallback);
+          recipes = fallback.recipes ?? [];
+          runtimeCategories = [];
+          recipeSource = "offline";
+          scanMeta = {
+            jarCount: fallback.jarCount,
+            datapackFiles: fallback.datapackFiles,
+            truncated: fallback.truncated,
+            totalScanned: fallback.totalScanned,
+          };
+          await tick();
+          rebuildIndexes(recipes);
           message = `Live JEI disconnected; showing offline recipes. ${String(e)}`;
         } catch (fallbackError) {
           error = String(fallbackError);
@@ -206,22 +289,23 @@
   }
 
   function applyOfflineResult(result: RecipeScanResult) {
-      recipes = result.recipes ?? [];
-      runtimeCategories = [];
-      recipeSource = "offline";
-      scanMeta = {
-        jarCount: result.jarCount,
-        datapackFiles: result.datapackFiles,
-        truncated: result.truncated,
-        totalScanned: result.totalScanned,
-      };
-      if (result.truncated) {
-        message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
-      } else {
-        message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
-          (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
-      }
+    recipes = result.recipes ?? [];
+    runtimeCategories = [];
+    recipeSource = "offline";
+    scanMeta = {
+      jarCount: result.jarCount,
+      datapackFiles: result.datapackFiles,
+      truncated: result.truncated,
+      totalScanned: result.totalScanned,
+    };
+    if (result.truncated) {
+      message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
+    } else {
+      message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
+        (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
     }
+    void tick().then(() => rebuildIndexes(recipes));
+  }
 
   async function checkRuntimeTransition() {
     if (!$projectPath || loading) return;
@@ -452,12 +536,67 @@
     return "other";
   }
 
+  function buildItemCategorySets(list: ScannedRecipe[]): Map<string, Set<string>> {
+    const map = new Map<string, Set<string>>();
+    const touch = (id: string, category: string) => {
+      if (!id || id === "unknown:unknown") return;
+      let set = map.get(id);
+      if (!set) {
+        set = new Set();
+        map.set(id, set);
+      }
+      set.add(category);
+    };
+    for (const recipe of list) {
+      touch(recipe.outputId, recipe.category);
+      for (const inp of recipe.inputIds) touch(inp, recipe.category);
+    }
+    return map;
+  }
+
+  function buildFilteredCounts(
+    list: ScannedRecipe[],
+    category: string,
+    modNs: string
+  ): Map<string, ItemFocusCounts> {
+    const map = new Map<string, ItemFocusCounts>();
+    const touch = (id: string, field: "recipes" | "uses") => {
+      if (!id || id === "unknown:unknown") return;
+      const existing = map.get(id) ?? { recipes: 0, uses: 0 };
+      existing[field]++;
+      map.set(id, existing);
+    };
+    for (const recipe of list) {
+      if (category !== "all" && recipe.category !== category) continue;
+      if (modNs !== "all") {
+        const outputNs = itemNamespace(recipe.outputId);
+        if (outputNs !== modNs && !recipe.modSource.includes(modNs)) continue;
+      }
+      touch(recipe.outputId, "recipes");
+      for (const inp of recipe.inputIds) touch(inp, "uses");
+    }
+    return map;
+  }
+
+  function rebuildIndexes(list: ScannedRecipe[]) {
+    items = buildItemCatalog(list);
+    itemCategorySets = buildItemCategorySets(list);
+    filteredCounts = buildFilteredCounts(list, categoryFilter, modFilter);
+    catalogReady = true;
+  }
+
   function itemInCategory(itemId: string, category: string): boolean {
     if (category === "all") return true;
-    return recipes.some(
-      (recipe) =>
-        recipe.category === category && (recipe.outputId === itemId || recipe.inputIds.includes(itemId))
-    );
+    return itemCategorySets.get(itemId)?.has(category) ?? false;
+  }
+
+  function focusCountForItem(item: ItemEntry): number {
+    if (categoryFilter === "all" && modFilter === "all") {
+      return focusMode === "recipes" ? item.recipeCount : item.useCount;
+    }
+    const counts = filteredCounts.get(item.id);
+    if (!counts) return 0;
+    return focusMode === "recipes" ? counts.recipes : counts.uses;
   }
 
   function prevRecipe() {
@@ -467,13 +606,17 @@
     if (recipeIndex < activeRecipes.length - 1) recipeIndex++;
   }
 
-  $: items = buildItemCatalog(recipes);
+  $: if (recipes.length && categoryFilter && modFilter) {
+    filteredCounts = buildFilteredCounts(recipes, categoryFilter, modFilter);
+  }
   $: modNamespaces = ["all", ...new Set(items.map((i) => i.modNs).filter(Boolean))].sort();
-  $: filteredItems = items.filter((i) => {
-    if (modFilter !== "all" && i.modNs !== modFilter) return false;
-    if (!itemInCategory(i.id, categoryFilter)) return false;
-    return matchesJeiSearch(i.id, filter, i.name);
-  });
+  $: filteredItems = catalogReady
+    ? items.filter((i) => {
+        if (modFilter !== "all" && i.modNs !== modFilter) return false;
+        if (!itemInCategory(i.id, categoryFilter)) return false;
+        return matchesJeiSearch(i.id, filter, i.name);
+      })
+    : [];
   $: totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
   $: if (itemPage >= totalItemPages) itemPage = Math.max(0, totalItemPages - 1);
   $: pageItems = filteredItems.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE);
@@ -583,7 +726,7 @@
       <h3>Open a project</h3>
       <p>Scan mod JARs, datapacks and KubeJS data like JEI.</p>
     </div>
-  {:else if loading && recipes.length === 0}
+  {:else if loading || !catalogReady}
     <div class="empty">
       <RefreshCw size={40} class="spin" />
       <h3>Indexing recipes…</h3>
@@ -964,6 +1107,8 @@
                 >
                   {#if iconSrc(item.id)}
                     <img src={iconSrc(item.id)} alt="" class="item-icon" />
+                  {:else if iconCache[item.id] === "loading"}
+                    <span class="item-letter icon-pending"></span>
                   {:else}
                     <span class="item-letter">{item.name.slice(0, 2)}</span>
                   {/if}
@@ -984,7 +1129,7 @@
               class:sel={selectedItem === item.id}
               class:bookmarked={bookmarks.includes(item.id)}
               style="--hue: {itemHue(item.id)}"
-              title="{item.id}\nR: {recipesForItem(item.id, 'recipes').length} · U: {recipesForItem(item.id, 'uses').length}"
+              title="{item.id}\nR: {item.recipeCount} · U: {item.useCount}"
               on:click={() => selectItem(item.id, "recipes")}
               on:contextmenu|preventDefault={() => selectItem(item.id, "uses")}
               on:auxclick={(e) => {
@@ -996,11 +1141,13 @@
             >
               {#if iconSrc(item.id)}
                 <img src={iconSrc(item.id)} alt="" class="item-icon" />
+              {:else if iconCache[item.id] === "loading"}
+                <span class="item-letter icon-pending"></span>
               {:else}
                 <span class="item-letter">{item.name.slice(0, 2)}</span>
               {/if}
-              {#if recipesForItem(item.id, focusMode).length > 0}
-                <span class="item-count">{recipesForItem(item.id, focusMode).length}</span>
+              {#if focusCountForItem(item) > 0}
+                <span class="item-count">{focusCountForItem(item)}</span>
               {/if}
             </button>
           {/each}
@@ -1032,6 +1179,8 @@
                 >
                   {#if iconSrc(id)}
                     <img src={iconSrc(id)} alt="" class="item-icon" />
+                  {:else if iconCache[id] === "loading"}
+                    <span class="item-letter icon-pending"></span>
                   {:else}
                     <span class="item-letter">{prettifyItem(id).slice(0, 2)}</span>
                   {/if}
@@ -1370,6 +1519,18 @@
   .item-letter {
     font-size: 9px; font-weight: 800; color: #e8e8ec; text-transform: uppercase;
     text-shadow: 0 1px 1px #000;
+  }
+  .item-letter.icon-pending {
+    width: 60%;
+    height: 60%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, rgba(255,255,255,0.06) 25%, rgba(255,255,255,0.14) 50%, rgba(255,255,255,0.06) 75%);
+    background-size: 200% 100%;
+    animation: icon-shimmer 1.1s linear infinite;
+  }
+  @keyframes icon-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
   .item-icon {
     width: calc(100% - 4px);

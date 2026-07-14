@@ -4,13 +4,15 @@ use crate::environment::{McVersion, ModpackEnvironment};
 use crate::manifest::{LoaderKind, ProjectManifest};
 use crate::recipe_layout::{collect_item_ids, layout_from_json, ScannedRecipe};
 use crate::registry::AdapterRegistry;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_RECIPES: usize = 8000;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecipeScanResult {
     pub recipes: Vec<ScannedRecipe>,
@@ -28,7 +30,116 @@ pub struct KubeJsScript {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecipeScanCacheFile {
+    fingerprint: String,
+    #[serde(flatten)]
+    result: RecipeScanResult,
+}
+
+fn recipe_scan_cache_path(project_dir: &Path) -> PathBuf {
+    project_dir
+        .join(".tuffbox")
+        .join("cache")
+        .join("recipe-scan-v1.json")
+}
+
+fn hash_path_entry(hasher: &mut DefaultHasher, path: &Path) {
+    path.file_name().hash(hasher);
+    if let Ok(meta) = std::fs::metadata(path) {
+        meta.modified().ok().hash(hasher);
+        meta.len().hash(hasher);
+    }
+}
+
+fn hash_json_tree(hasher: &mut DefaultHasher, root: &Path) {
+    if !root.is_dir() {
+        return;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+                hash_path_entry(hasher, &path);
+            }
+        }
+    }
+}
+
+fn recipe_scan_fingerprint(manifest_path: &Path, project_dir: &Path) -> String {
+    let mut hasher = DefaultHasher::new();
+    hash_path_entry(&mut hasher, manifest_path);
+
+    let mods_dir = project_dir.join("mods");
+    if mods_dir.is_dir() {
+        let mut jars: Vec<PathBuf> = std::fs::read_dir(&mods_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jar"))
+            .collect();
+        jars.sort();
+        for jar in jars {
+            hash_path_entry(&mut hasher, &jar);
+        }
+    }
+
+    hash_json_tree(&mut hasher, &project_dir.join("datapacks"));
+    hash_json_tree(&mut hasher, &project_dir.join("kubejs").join("data"));
+    let saves = project_dir.join("saves");
+    if saves.is_dir() {
+        if let Ok(worlds) = std::fs::read_dir(&saves) {
+            for world in worlds.flatten() {
+                hash_json_tree(&mut hasher, &world.path().join("datapacks"));
+            }
+        }
+    }
+
+    format!("{:016x}", hasher.finish())
+}
+
 pub fn scan_project_recipes(manifest_path: &Path) -> Result<RecipeScanResult, String> {
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest has no parent".to_string())?;
+    let fingerprint = recipe_scan_fingerprint(manifest_path, project_dir);
+    let cache_path = recipe_scan_cache_path(project_dir);
+
+    if let Ok(raw) = std::fs::read_to_string(&cache_path) {
+        if let Ok(cached) = serde_json::from_str::<RecipeScanCacheFile>(&raw) {
+            if cached.fingerprint == fingerprint {
+                return Ok(cached.result);
+            }
+        }
+    }
+
+    let result = scan_project_recipes_uncached(manifest_path)?;
+
+    if let Some(parent) = cache_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+        if let Ok(raw) = serde_json::to_string(&RecipeScanCacheFile {
+            fingerprint,
+            result: result.clone(),
+        }) {
+            let _ = std::fs::write(&cache_path, raw);
+        }
+    }
+
+    Ok(result)
+}
+
+fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResult, String> {
     let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
     let project_dir = manifest_path
         .parent()

@@ -186,8 +186,10 @@ struct CurseForgeManifest {
     author: Option<String>,
     #[serde(default)]
     minecraft: CurseForgeMinecraft,
-    #[serde(default)]
+    #[serde(default, rename = "manifestType")]
     manifest_type: Option<String>,
+    #[serde(default, rename = "manifestVersion")]
+    manifest_version: Option<i32>,
     #[serde(default)]
     files: Vec<CurseForgeFile>,
     #[serde(default)]
@@ -197,7 +199,7 @@ struct CurseForgeManifest {
 #[derive(Debug, Deserialize, Default)]
 struct CurseForgeMinecraft {
     version: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "modLoaders")]
     mod_loaders: Vec<CurseForgeModLoader>,
 }
 
@@ -208,26 +210,65 @@ struct CurseForgeModLoader {
     primary: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 struct CurseForgeFile {
-    #[serde(default)]
+    #[serde(default, rename = "projectID")]
     project_id: u64,
-    #[serde(default)]
+    #[serde(default, rename = "fileID")]
     file_id: u64,
     required: Option<bool>,
 }
 
+/// Returns true if the zip looks like a CurseForge Minecraft modpack
+/// (`manifest.json` with `manifestType == minecraftModpack`).
+pub fn is_curseforge_pack(path: impl AsRef<Path>) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    let mut raw = String::new();
+    for name in ["manifest.json", "Manifest.json"] {
+        if let Ok(mut entry) = archive.by_name(name) {
+            if entry.read_to_string(&mut raw).is_ok() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    return v
+                        .get("manifestType")
+                        .and_then(|t| t.as_str())
+                        == Some("minecraftModpack");
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Import a CurseForge modpack zip (manifest.json in root + overrides folder).
+/// File download URLs are left empty until [`resolve_curseforge_pack_files`] runs.
 pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportError> {
     let file = fs::File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
     let mut manifest_raw = String::new();
-    let manifest_name = if archive.by_name("manifest.json").is_ok() { "manifest.json" } else { "Manifest.json" };
-    let mut entry = archive.by_name(manifest_name).map_err(|_| ImportError::UnsupportedFormat("no manifest.json in CurseForge pack".into()))?;
+    let manifest_name = if archive.by_name("manifest.json").is_ok() {
+        "manifest.json"
+    } else {
+        "Manifest.json"
+    };
+    let mut entry = archive
+        .by_name(manifest_name)
+        .map_err(|_| ImportError::UnsupportedFormat("no manifest.json in CurseForge pack".into()))?;
     entry.read_to_string(&mut manifest_raw)?;
     let cf: CurseForgeManifest = serde_json::from_str(&manifest_raw)?;
+
+    if cf.manifest_type.as_deref().unwrap_or("minecraftModpack") != "minecraftModpack" {
+        return Err(ImportError::UnsupportedFormat(format!(
+            "unexpected CurseForge manifestType {:?}",
+            cf.manifest_type
+        )));
+    }
 
     let mc_version = cf.minecraft.version.unwrap_or_default();
     let (loader_kind, loader_version) = detect_curseforge_loader(&cf.minecraft.mod_loaders);
@@ -235,23 +276,28 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
     let mods: Vec<crate::manifest::ModSpec> = cf
         .files
         .iter()
+        .filter(|f| f.project_id != 0 && f.file_id != 0)
         .map(|f| {
-            let id = format!("cf-{}", f.project_id);
+            let id = format!("cf-{}-{}", f.project_id, f.file_id);
             crate::manifest::ModSpec {
                 id: id.clone(),
-                name: format!("CurseForge mod {}", f.project_id),
+                name: format!("CurseForge {}", f.project_id),
                 source: crate::manifest::ModSource {
-                    kind: crate::manifest::SourceKind::Modrinth,
+                    kind: SourceKind::Curseforge,
                     project_id: Some(f.project_id.to_string()),
                     file_id: Some(f.file_id.to_string()),
-                    url: Some(format!("https://www.curseforge.com/minecraft/mc-mods/{}", f.project_id)),
+                    url: None,
                     path: None,
                     icon_url: None,
                 },
-                version: "unknown".into(),
-                file_name: Some(format!("cf-{}.jar", f.project_id)),
+                version: f.file_id.to_string(),
+                file_name: Some(format!("cf-{}.jar", f.file_id)),
                 hashes: None,
-                side: crate::manifest::Side::Both,
+                side: if f.required.unwrap_or(true) {
+                    Side::Both
+                } else {
+                    Side::Optional
+                },
                 dependencies: vec![],
                 status: vec!["imported-curseforge".into()],
                 content_type: crate::manifest::ContentType::Mod,
@@ -259,7 +305,7 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
         })
         .collect();
 
-    let project_id = crate::manifest::ProjectMetadata {
+    let project_id = ProjectMetadata {
         id: slugify(&cf.name),
         name: cf.name,
         version: cf.version.unwrap_or_else(|| "1.0.0".into()),
@@ -270,44 +316,243 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
     Ok(ProjectManifest {
         schema_version: crate::manifest::CURRENT_PROJECT_SCHEMA_VERSION.into(),
         project: project_id,
-        minecraft: crate::manifest::MinecraftSpec { version: mc_version },
-        loader: crate::manifest::LoaderSpec { kind: loader_kind, version: loader_version },
+        minecraft: MinecraftSpec { version: mc_version },
+        loader: LoaderSpec {
+            kind: loader_kind,
+            version: loader_version,
+        },
         brief: None,
-        java: None,
-        profiles: vec![crate::manifest::ProfileSpec {
-            id: "client".into(),
-            name: "Client".into(),
-            side: crate::manifest::Side::Both,
-            include_optional_mods: false,
-            include_shaders: false,
-            memory_mb: Some(4096),
-            jvm_args: vec!["-XX:+UseG1GC".into(), "-Xmx4G".into()],
-            include_mods: mods.iter().map(|m| m.id.clone()).collect(),
-            player_name: Some("Player".into()),
-        }],
+        java: Some(JavaSpec {
+            major: Some(17),
+            distribution: None,
+            path: None,
+        }),
+        profiles: vec![
+            ProfileSpec {
+                id: "client".into(),
+                name: "Client".into(),
+                side: Side::Client,
+                include_optional_mods: true,
+                include_shaders: true,
+                memory_mb: Some(4096),
+                jvm_args: vec!["-XX:+UseG1GC".into()],
+                include_mods: Vec::new(),
+                player_name: Some("Player".into()),
+            },
+            ProfileSpec {
+                id: "server".into(),
+                name: "Server".into(),
+                side: Side::Server,
+                include_optional_mods: false,
+                include_shaders: false,
+                memory_mb: Some(4096),
+                jvm_args: vec!["-XX:+UseG1GC".into()],
+                include_mods: Vec::new(),
+                player_name: None,
+            },
+        ],
         mods,
         overrides: None,
     })
 }
 
+/// Resolve CurseForge `projectID`/`fileID` entries into downloadable URLs
+/// (batch `POST /mods/files` + optional Modrinth SHA1 fallback).
+pub fn resolve_curseforge_pack_files(
+    manifest: &mut ProjectManifest,
+) -> Result<usize, crate::provider::ProviderError> {
+    use crate::provider::CurseForgeProvider;
+
+    let provider = CurseForgeProvider::new();
+    let mut file_ids = Vec::new();
+    let mut file_to_project: HashMap<u64, u64> = HashMap::new();
+    for m in &manifest.mods {
+        if m.source.kind != SourceKind::Curseforge {
+            continue;
+        }
+        let (Some(pid), Some(fid)) = (
+            m.source.project_id.as_ref().and_then(|s| s.parse().ok()),
+            m.source.file_id.as_ref().and_then(|s| s.parse().ok()),
+        ) else {
+            continue;
+        };
+        file_ids.push(fid);
+        file_to_project.insert(fid, pid);
+    }
+    if file_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut files = provider.get_files(&file_ids)?;
+    let _ = provider.apply_modrinth_fallback(&mut files);
+
+    let project_ids: Vec<u64> = file_to_project.values().copied().collect();
+    let projects = provider.get_mods(&project_ids).unwrap_or_default();
+
+    let mut resolved = 0usize;
+    for module in &mut manifest.mods {
+        if module.source.kind != SourceKind::Curseforge {
+            continue;
+        }
+        let Some(fid) = module
+            .source
+            .file_id
+            .as_ref()
+            .and_then(|s| s.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let Some(info) = files.get(&fid) else {
+            continue;
+        };
+        let project_id = file_to_project.get(&fid).copied().unwrap_or(info.mod_id);
+        if let Some(proj) = projects.get(&project_id) {
+            module.name = proj.name.clone();
+            module.source.icon_url = proj.icon_url.clone();
+        }
+        module.file_name = Some(info.file_name.clone());
+        module.version = info.display_name.clone();
+        module.source.url = info.download_url.clone();
+        module.hashes = Some(FileHashes {
+            sha1: info.hashes.sha1.clone(),
+            sha512: info.hashes.sha512.clone(),
+        });
+        module.content_type = match info.content_folder() {
+            "resourcepacks" => crate::manifest::ContentType::Resourcepack,
+            "shaderpacks" => crate::manifest::ContentType::Shaderpack,
+            "datapacks" => crate::manifest::ContentType::Datapack,
+            _ => crate::manifest::ContentType::Mod,
+        };
+        if info.download_url.is_some() {
+            resolved += 1;
+            module.status = vec!["ok".into()];
+        } else {
+            module.status = vec!["blocked-download".into()];
+        }
+    }
+    Ok(resolved)
+}
+
+/// Extract the CurseForge `overrides/` folder into `instance_dir` (→ minecraft root).
+pub fn extract_curseforge_overrides(
+    pack_zip: impl AsRef<Path>,
+    instance_dir: impl AsRef<Path>,
+    overrides_folder: &str,
+) -> Result<usize, ImportError> {
+    let file = fs::File::open(pack_zip)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let prefix = format!("{}/", overrides_folder.trim_matches('/'));
+    let mut count = 0usize;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().replace('\\', "/");
+        if !name.starts_with(&prefix) || name.ends_with('/') {
+            continue;
+        }
+        let rel = &name[prefix.len()..];
+        if rel.is_empty() {
+            continue;
+        }
+        let dest = instance_dir.as_ref().join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut out = fs::File::create(&dest)?;
+        std::io::copy(&mut entry, &mut out)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+/// Read the overrides folder name from a CurseForge pack (`"overrides"` by default).
+pub fn curseforge_overrides_folder(pack_zip: impl AsRef<Path>) -> Result<String, ImportError> {
+    let file = fs::File::open(pack_zip)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut raw = String::new();
+    let manifest_name = if archive.by_name("manifest.json").is_ok() {
+        "manifest.json"
+    } else if archive.by_name("Manifest.json").is_ok() {
+        "Manifest.json"
+    } else {
+        return Err(ImportError::UnsupportedFormat("no manifest.json".into()));
+    };
+    let mut entry = archive.by_name(manifest_name)?;
+    entry.read_to_string(&mut raw)?;
+    let cf: CurseForgeManifest = serde_json::from_str(&raw)?;
+    Ok(cf
+        .overrides
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "overrides".into()))
+}
+
+/// Copy `manifest.json` into `instance_dir/curseforge/manifest.json` for future updates.
+pub fn stash_curseforge_manifest(
+    pack_zip: impl AsRef<Path>,
+    instance_dir: impl AsRef<Path>,
+) -> Result<(), ImportError> {
+    let file = fs::File::open(pack_zip)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let mut raw = String::new();
+    let manifest_name = if archive.by_name("manifest.json").is_ok() {
+        "manifest.json"
+    } else if archive.by_name("Manifest.json").is_ok() {
+        "Manifest.json"
+    } else {
+        return Err(ImportError::UnsupportedFormat("no manifest.json".into()));
+    };
+    let mut entry = archive.by_name(manifest_name)?;
+    entry.read_to_string(&mut raw)?;
+    let dir = instance_dir.as_ref().join("curseforge");
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join("manifest.json"), raw)?;
+    Ok(())
+}
+
 fn detect_curseforge_loader(loaders: &[CurseForgeModLoader]) -> (LoaderKind, String) {
-    for loader in loaders {
+    // Prefer primary loader when flagged.
+    let mut ordered: Vec<&CurseForgeModLoader> = loaders.iter().collect();
+    ordered.sort_by_key(|l| !l.primary.unwrap_or(false));
+    for loader in ordered {
         let id = loader.id.to_lowercase();
-        if id.contains("forge") && !id.contains("neo") {
-            let version = id.replace("forge-", "").replace("forge", "");
-            return (LoaderKind::Forge, if version.is_empty() { "latest".into() } else { version });
+        if let Some(rest) = id.strip_prefix("neoforge-") {
+            return (
+                LoaderKind::Neoforge,
+                if rest.is_empty() {
+                    "latest".into()
+                } else {
+                    rest.to_string()
+                },
+            );
         }
-        if id.contains("neoforge") {
-            let version = id.replace("neoforge-", "").replace("neoforge", "");
-            return (LoaderKind::Neoforge, if version.is_empty() { "latest".into() } else { version });
+        if let Some(rest) = id.strip_prefix("forge-") {
+            return (
+                LoaderKind::Forge,
+                if rest.is_empty() {
+                    "latest".into()
+                } else {
+                    rest.to_string()
+                },
+            );
         }
-        if id.contains("fabric") {
-            let version = id.replace("fabric-", "").replace("fabric", "");
-            return (LoaderKind::Fabric, if version.is_empty() { "latest".into() } else { version });
+        if let Some(rest) = id.strip_prefix("fabric-") {
+            return (
+                LoaderKind::Fabric,
+                if rest.is_empty() {
+                    "latest".into()
+                } else {
+                    rest.to_string()
+                },
+            );
         }
-        if id.contains("quilt") {
-            let version = id.replace("quilt-", "").replace("quilt", "");
-            return (LoaderKind::Quilt, if version.is_empty() { "latest".into() } else { version });
+        if let Some(rest) = id.strip_prefix("quilt-") {
+            return (
+                LoaderKind::Quilt,
+                if rest.is_empty() {
+                    "latest".into()
+                } else {
+                    rest.to_string()
+                },
+            );
         }
     }
     (LoaderKind::Vanilla, String::new())

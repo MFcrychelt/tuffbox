@@ -15,7 +15,6 @@
     GitGraph,
     Zap,
     Lightbulb,
-    ArrowUpCircle,
     Sparkles,
     AlertTriangle,
     ChevronDown,
@@ -35,7 +34,7 @@
     Check,
     Package,
   } from "lucide-svelte";
-  import { projectPath } from "../lib/store";
+  import { projectPath, projectInfo } from "../lib/store";
 
   type ModRow = {
     id: string;
@@ -153,6 +152,57 @@
   function closeDownloadOverlay() {
     if (!downloadDone && downloadActiveCount > 0) return;
     downloadOpen = false;
+  }
+
+  async function retryFailedDownloads() {
+    if (!$projectPath) return;
+    const failedIds = downloadItems.filter((i) => i.status === "failed").map((i) => i.id);
+    if (failedIds.length === 0) return;
+    downloadDone = false;
+    downloadTitle = `Retrying ${failedIds.length} failed download${failedIds.length > 1 ? "s" : ""}`;
+    downloadScopeModIds = failedIds;
+    downloadItems = downloadItems.map((item) =>
+      failedIds.includes(item.id)
+        ? { ...item, status: "queued", percent: 0, downloaded: 0, total: 0 }
+        : item
+    );
+    try {
+      const result: any = await invoke("retry_failed_mod_downloads", {
+        path: $projectPath,
+        modIds: failedIds,
+      });
+      const stillFailed = result?.download?.failed?.length ?? 0;
+      if (stillFailed === 0) {
+        message = "Retry succeeded — all files downloaded.";
+      } else {
+        error = `${stillFailed} download(s) still failed.`;
+      }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      downloadDone = true;
+    }
+  }
+
+  async function retrySingleDownload(modId: string) {
+    if (!$projectPath) return;
+    downloadDone = false;
+    downloadScopeModIds = [modId];
+    downloadItems = downloadItems.map((item) =>
+      item.id === modId
+        ? { ...item, status: "queued", percent: 0, downloaded: 0, total: 0 }
+        : item
+    );
+    try {
+      await invoke("retry_failed_mod_downloads", {
+        path: $projectPath,
+        modIds: [modId],
+      });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      downloadDone = true;
+    }
   }
 
   onMount(async () => {
@@ -360,12 +410,46 @@
   let selectedResultIds: Record<string, boolean> = {};
 
   // --- Version picker (change mod version) ---
-  type ModVersion = { id: string; versionNumber: string; gameVersions: string[]; loaders: string[]; name?: string; changelog?: string; datePublished?: string };
+  type ModVersion = {
+    id: string;
+    versionNumber: string;
+    gameVersions: string[];
+    loaders: string[];
+    name?: string;
+    changelog?: string;
+    datePublished?: string;
+    versionType?: string;
+    compatible?: boolean;
+    compatibleMinecraft?: boolean;
+    compatibleLoader?: boolean;
+  };
   let versionPickerMod: ModRow | null = null;
   let availableVersions: ModVersion[] = [];
   let versionPickerLoading = false;
   let versionPickerError: string | null = null;
   let versionPickerChanging = false;
+  let versionPickerQuery = "";
+  let hideIncompatible = true;
+  let selectedVersion: ModVersion | null = null;
+  let versionPickerMc = "";
+  let versionPickerLoader = "";
+
+  $: versionPickerFiltered = availableVersions.filter((v) => {
+    if (hideIncompatible && v.compatible === false && v.versionNumber !== versionPickerMod?.version) {
+      return false;
+    }
+    const q = versionPickerQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      v.versionNumber.toLowerCase().includes(q) ||
+      (v.name ?? "").toLowerCase().includes(q) ||
+      v.gameVersions.some((gv) => gv.toLowerCase().includes(q)) ||
+      v.loaders.some((l) => l.toLowerCase().includes(q)) ||
+      (v.versionType ?? "").toLowerCase().includes(q)
+    );
+  });
+
+  $: compatibleVersionCount = availableVersions.filter((v) => v.compatible !== false).length;
 
   async function openVersionPicker(mod: ModRow) {
     if (!$projectPath || !mod.projectId) return;
@@ -373,13 +457,23 @@
     versionPickerLoading = true;
     versionPickerError = null;
     availableVersions = [];
+    selectedVersion = null;
+    versionPickerQuery = "";
+    hideIncompatible = true;
     try {
-      const info: any = await invoke("validate_project", { path: $projectPath });
+      const info: any = $projectInfo ?? await invoke("validate_project", { path: $projectPath });
+      versionPickerMc = info.minecraftVersion ?? "";
+      versionPickerLoader = (info.loaderKind ?? "").toLowerCase();
       availableVersions = await invoke("get_mod_versions", {
         modId: mod.projectId,
-        minecraftVersion: info.minecraftVersion,
-        loader: info.loaderKind,
+        minecraftVersion: versionPickerMc,
+        loader: versionPickerLoader || null,
       });
+      selectedVersion =
+        availableVersions.find((v) => v.versionNumber === mod.version) ??
+        availableVersions.find((v) => v.compatible !== false) ??
+        availableVersions[0] ??
+        null;
     } catch (e) {
       versionPickerError = String(e);
     } finally {
@@ -389,6 +483,13 @@
 
   async function changeVersion(versionId: string) {
     if (!$projectPath || !versionPickerMod) return;
+    const target = availableVersions.find((v) => v.id === versionId);
+    if (target && target.compatible === false) {
+      const ok = confirm(
+        `Version ${target.versionNumber} is not marked compatible with ${versionPickerLoader} ${versionPickerMc}. Install anyway?`
+      );
+      if (!ok) return;
+    }
     versionPickerChanging = true;
     versionPickerError = null;
     openDownloadOverlay(`Switching ${versionPickerMod.name}`);
@@ -400,6 +501,7 @@
       });
       versionPickerMod = null;
       availableVersions = [];
+      selectedVersion = null;
       await load(true);
     } catch (e) {
       versionPickerError = String(e);
@@ -440,7 +542,7 @@
     finally { recsLoading = false; }
   }
 
-  // Batch update state
+  // Batch update state (no separate update panel — badges + toolbar only)
   let updateList: any[] = [];
   let updateCheckLoading = false;
   let updateApplying = false;
@@ -461,9 +563,18 @@
   }
 
   async function applyAllUpdates() {
-    if (!$projectPath || updateList.length === 0) return;
+    if (!$projectPath) return;
     updateApplying = true;
     error = null;
+    message = null;
+    if (updateList.length === 0) {
+      await checkForUpdates();
+    }
+    if (updateList.length === 0) {
+      message = "All mods are up to date for this Minecraft version.";
+      updateApplying = false;
+      return;
+    }
     openDownloadOverlay(`Updating ${updateList.length} mod${updateList.length > 1 ? "s" : ""}`);
     try {
       const result: any = await invoke("update_all_mods", { path: $projectPath });
@@ -1030,33 +1141,6 @@
     }
   }
 
-  async function updateFromPanel(update: any) {
-    if (!$projectPath) return;
-    mutating = true;
-    error = null;
-    openDownloadOverlay(`Updating ${update.name}`, [update.modId]);
-    try {
-      const result: any = await invoke("update_project_mod", {
-        path: $projectPath,
-        modId: update.modId,
-        versionId: update.versionId ?? null,
-      });
-      const failures = result?.download?.failed ?? [];
-      if (failures.length) {
-        throw new Error(failures.map((failure: any) => failure.error).join("; "));
-      }
-      updateList = updateList.filter((u) => u.modId !== update.modId);
-      await load(true);
-    } catch (e) {
-      error = String(e);
-      downloadDone = true;
-    } finally {
-      mutating = false;
-      downloadDone = true;
-      downloadScopeModIds = null;
-    }
-  }
-
   function modIconUrl(mod: ModRow) {
     return mod.iconUrl;
   }
@@ -1199,9 +1283,17 @@
         }} disabled={!$projectPath || loading} title="Scan all content folders (mods/, resourcepacks/, shaderpacks/, datapacks/)">
           <RotateCw size={16} /> Sync
         </button>
-        <button class="secondary glow-btn" on:click={checkForUpdates} disabled={!$projectPath || updateCheckLoading} title="Check all mods for updates">
+        <button class="secondary glow-btn" on:click={applyAllUpdates} disabled={!$projectPath || updateApplying || updateCheckLoading} title="Update all mods to the latest build for this Minecraft version">
           <Sparkles size={16} />
-          {updateCheckLoading ? "Checking..." : updateList.length > 0 ? `${updateList.length} updates` : "Check updates"}
+          {#if updateApplying}
+            Updating...
+          {:else if updateCheckLoading}
+            Checking...
+          {:else if updateList.length > 0}
+            Update all ({updateList.length})
+          {:else}
+            Update all
+          {/if}
         </button>
         <button class="secondary" on:click={loadRecommendations} disabled={!$projectPath || recsLoading} title="Get mod recommendations">
           <Lightbulb size={16} />
@@ -1252,41 +1344,6 @@
   {/if}
 
   <!-- Build Lists panel removed: lists now appear as tabs next to Shaders -->
-
-  {#if updateList.length > 0}
-    <div class="update-panel">
-      <div class="update-panel-header">
-        <h3><ArrowUpCircle size={18} /> {updateList.length} update{updateList.length > 1 ? "s" : ""} ready</h3>
-        <button class="update-all-btn" on:click={applyAllUpdates} disabled={updateApplying}>
-          <Sparkles size={16} /> {updateApplying ? "Updating..." : "Update all"}
-        </button>
-      </div>
-      <div class="update-list">
-        {#each updateList as update}
-          <div class="update-row">
-            <div class="update-icon">
-              {#if update.iconUrl}
-                <img src={update.iconUrl} alt="" loading="lazy" />
-              {:else}
-                <span>{iconFallback(update.name)}</span>
-              {/if}
-            </div>
-            <div class="update-main">
-              <strong>{update.name}</strong>
-              <span class="update-versions">
-                <code class="ver-old">{update.currentVersion}</code>
-                <ArrowRight size={12} />
-                <code class="ver-new">{update.latestVersion}</code>
-              </span>
-            </div>
-            <button class="secondary mini" on:click={() => updateFromPanel(update)} disabled={mutating}>
-              <RotateCw size={12} /> Update
-            </button>
-          </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
 
   {#if error}
     <div class="error">{error}</div>
@@ -1462,6 +1519,7 @@
                   <span>Waiting…</span>
                 {:else if item.status === "failed"}
                   <span>Failed</span>
+                  <button class="mini ghost retry-one" on:click={() => retrySingleDownload(item.id)} disabled={!downloadDone}>Retry</button>
                 {:else}
                   <span>{formatBytes(item.downloaded)}</span>
                 {/if}
@@ -1473,6 +1531,11 @@
 
       {#if downloadDone}
         <div class="download-modal-actions">
+          {#if downloadFailedCount > 0}
+            <button class="secondary" on:click={retryFailedDownloads}>
+              <RotateCw size={16} /> Retry failed ({downloadFailedCount})
+            </button>
+          {/if}
           <button on:click={closeDownloadOverlay}>Done</button>
         </div>
       {/if}
@@ -1853,14 +1916,19 @@
   </div>
 {/if}
 
-<!-- Version picker modal -->
+<!-- Version picker modal — Modrinth-style: search, filter compatible, channel + confirm -->
 {#if versionPickerMod}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (versionPickerMod = null)} on:keydown={() => {}}>
     <div class="modal version-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
           <h2>Change version: {versionPickerMod.name}</h2>
-          <p>Current: {versionPickerMod.version}. Choose a different version.</p>
+          <p>
+            Current: <code>{versionPickerMod.version}</code>
+            · target <strong>{versionPickerLoader || "loader"}</strong>
+            <strong>{versionPickerMc || "Minecraft"}</strong>
+            · {compatibleVersionCount} compatible
+          </p>
         </div>
         <button class="icon-btn" on:click={() => (versionPickerMod = null)} aria-label="Close"><X size={18} /></button>
       </div>
@@ -1868,33 +1936,100 @@
       {#if versionPickerLoading}
         <div class="loading compact"><Loader2 size={20} class="spin" /> Loading versions...</div>
       {:else if availableVersions.length === 0}
-        <div class="empty compact">No compatible versions found for this mod.</div>
+        <div class="empty compact">No versions found for this mod on Modrinth.</div>
       {:else}
-        <div class="version-list">
-          {#each availableVersions as v}
-            <button
-              class="version-row"
-              class:current={v.versionNumber === versionPickerMod?.version}
-              on:click={() => changeVersion(v.id)}
-              disabled={versionPickerChanging}
-            >
-              <div class="version-main">
-                <strong>{v.versionNumber}</strong>
-                {#if v.name && v.name !== v.versionNumber}
-                  <span class="version-name">{v.name}</span>
+        <div class="version-toolbar">
+          <div class="search wide">
+            <Search size={16} />
+            <input bind:value={versionPickerQuery} placeholder="Search version, channel, MC…" />
+          </div>
+          <button
+            class="secondary mini"
+            class:active={!hideIncompatible}
+            on:click={() => (hideIncompatible = !hideIncompatible)}
+            title="Show versions for other Minecraft versions / loaders"
+          >
+            {hideIncompatible ? "Show all" : "Hide incompatible"}
+          </button>
+        </div>
+        <div class="version-picker-body">
+          <div class="version-list" role="listbox">
+            {#each versionPickerFiltered as v}
+              <button
+                class="version-row"
+                class:current={v.versionNumber === versionPickerMod?.version}
+                class:selected={selectedVersion?.id === v.id}
+                class:incompatible={v.compatible === false}
+                role="option"
+                aria-selected={selectedVersion?.id === v.id}
+                on:click={() => (selectedVersion = v)}
+                disabled={versionPickerChanging}
+              >
+                <div class="version-main">
+                  <div class="version-title-row">
+                    <span class="channel-dot channel-{v.versionType ?? 'release'}" title={v.versionType ?? "release"}></span>
+                    <strong>{v.versionNumber}</strong>
+                    {#if v.compatible === false}
+                      <span class="incompat-badge" title="Not for {versionPickerLoader} {versionPickerMc}"><AlertTriangle size={12} /></span>
+                    {/if}
+                  </div>
+                  {#if v.name && v.name !== v.versionNumber}
+                    <span class="version-name">{v.name}</span>
+                  {/if}
+                  <span class="version-loaders">
+                    {(v.versionType ?? "release")} · {v.loaders.join(", ")} · MC {v.gameVersions.slice(0, 4).join(", ")}{#if v.gameVersions.length > 4}…{/if}{#if v.datePublished} · {formatDate(v.datePublished)}{/if}
+                  </span>
+                </div>
+                {#if v.versionNumber === versionPickerMod?.version}
+                  <span class="current-badge">Current</span>
+                {:else if selectedVersion?.id === v.id}
+                  <span class="install-badge">Selected</span>
                 {/if}
-                <span class="version-loaders">{v.loaders.join(", ")} · MC {v.gameVersions.slice(0, 3).join(", ")}{#if v.datePublished} · {formatDate(v.datePublished)}{/if}</span>
-                {#if v.changelog}
-                  <span class="version-changelog">{stripHtml(v.changelog).slice(0, 120)}{stripHtml(v.changelog).length > 120 ? '...' : ''}</span>
+              </button>
+            {:else}
+              <div class="empty compact">No versions match this filter.</div>
+            {/each}
+          </div>
+          <div class="version-detail">
+            {#if selectedVersion}
+              <div class="version-detail-header">
+                <strong>{selectedVersion.versionNumber}</strong>
+                <span class="channel-pill channel-{selectedVersion.versionType ?? 'release'}">{selectedVersion.versionType ?? "release"}</span>
+              </div>
+              <p class="muted">
+                {selectedVersion.loaders.join(", ")} · MC {selectedVersion.gameVersions.join(", ")}
+                {#if selectedVersion.datePublished} · {formatDate(selectedVersion.datePublished)}{/if}
+              </p>
+              {#if selectedVersion.compatible === false}
+                <div class="notice warn compact">
+                  This build is not listed for {versionPickerLoader} {versionPickerMc}.
+                </div>
+              {/if}
+              <div class="version-changelog-full">
+                {#if selectedVersion.changelog}
+                  {stripHtml(selectedVersion.changelog).slice(0, 1200)}{stripHtml(selectedVersion.changelog).length > 1200 ? "…" : ""}
+                {:else}
+                  <span class="muted">No changelog for this version.</span>
                 {/if}
               </div>
-              {#if v.versionNumber === versionPickerMod?.version}
-                <span class="current-badge">Current</span>
-              {:else}
-                <span class="install-badge">Install</span>
-              {/if}
-            </button>
-          {/each}
+              <div class="version-detail-actions">
+                <button
+                  on:click={() => selectedVersion && changeVersion(selectedVersion.id)}
+                  disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
+                >
+                  {#if versionPickerChanging}
+                    <Loader2 size={16} class="spin" /> Switching...
+                  {:else if selectedVersion.versionNumber === versionPickerMod?.version}
+                    Already installed
+                  {:else}
+                    <Download size={16} /> Switch to this version
+                  {/if}
+                </button>
+              </div>
+            {:else}
+              <div class="empty compact">Select a version to preview its changelog.</div>
+            {/if}
+          </div>
         </div>
       {/if}
     </div>
@@ -2533,6 +2668,13 @@
     margin-top: 16px;
     display: flex;
     justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .retry-one {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 2px 8px !important;
   }
 
   .update-icon {
@@ -3229,39 +3371,16 @@
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }
   .recs-prio.low { background: var(--bg-elevated); color: var(--text-muted); }
 
-  .update-panel {
-    margin-bottom: 16px;
-    padding: 18px;
-    border: 1px solid rgba(27,217,106,.35);
-    border-radius: 18px;
-    background:
-      radial-gradient(circle at top right, rgba(27,217,106,.14), transparent 42%),
-      radial-gradient(circle at bottom left, rgba(139,92,246,.08), transparent 40%),
-      var(--bg-secondary);
-    animation: hero-in 0.35s ease both;
-  }
-  .update-panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 12px; }
-  .update-panel-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-primary); margin: 0; font-size: 16px; font-weight: 800; }
-  .update-list { display: grid; gap: 8px; max-height: 280px; overflow: auto; }
-  .update-row {
-    display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 12px;
+  .notice.warn {
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.08);
     padding: 10px 12px;
-    border-radius: 12px;
-    background: rgba(0,0,0,0.2);
-    border: 1px solid var(--border-color);
-    transition: border-color .15s, transform .15s;
+    border-radius: 10px;
+    margin: 8px 0;
+    font-size: 13px;
   }
-  .update-row:hover {
-    border-color: rgba(27,217,106,.35);
-    transform: translateX(2px);
-  }
-  .update-main { display: grid; gap: 4px; min-width: 0; }
-  .update-main strong { color: var(--text-primary); font-size: 13px; }
-  .update-main span { color: var(--text-muted); font-size: 12px; }
-  .update-main code { font-size: 12px; font-weight: 700; }
+  .notice.warn.compact { margin: 6px 0 10px; }
 
   :global(.spin) {
     animation: spin 900ms linear infinite;
@@ -3282,23 +3401,82 @@
     background: rgba(27, 217, 106, 0.08);
   }
 
-  .version-modal { max-width: 600px; }
-  .version-list { display: grid; gap: 6px; max-height: 70vh; overflow: auto; padding: 8px 0; }
+  .version-modal { max-width: min(920px, 94vw); width: 920px; }
+  .version-toolbar {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .version-toolbar .search { flex: 1; }
+  .version-toolbar .secondary.mini.active {
+    border-color: rgba(27,217,106,.4);
+    color: var(--accent-primary);
+  }
+  .version-picker-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: 14px;
+    min-height: 360px;
+    max-height: min(70vh, 560px);
+  }
+  .version-list {
+    display: grid;
+    gap: 6px;
+    overflow: auto;
+    padding: 4px 2px 8px 0;
+    align-content: start;
+  }
   .version-row {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border-color);
+    padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-secondary); text-align: left;
     width: 100%; transform: none;
   }
-  .version-row:hover, .version-row.current { border-color: rgba(27,217,106,.35); background: rgba(27,217,106,.06); }
+  .version-row:hover, .version-row.current, .version-row.selected {
+    border-color: rgba(27,217,106,.35);
+    background: rgba(27,217,106,.06);
+  }
+  .version-row.incompatible { opacity: 0.78; }
   .version-row:disabled { opacity: .5; cursor: wait; }
   .version-main { display: grid; gap: 3px; min-width: 0; flex: 1; }
-  .version-main strong { color: var(--text-primary); }
+  .version-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .version-title-row strong { color: var(--text-primary); }
   .version-name { color: var(--text-secondary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .version-loaders { color: var(--text-muted); font-size: 12px; }
-  .version-changelog { color: var(--text-muted); font-size: 11px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .channel-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    background: #22c55e;
+  }
+  .channel-dot.channel-beta { background: #3b82f6; }
+  .channel-dot.channel-alpha { background: #f59e0b; }
+  .channel-pill {
+    font-size: 11px; font-weight: 700; text-transform: capitalize;
+    padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-color);
+  }
+  .channel-pill.channel-release { color: #86efac; border-color: rgba(34,197,94,.35); }
+  .channel-pill.channel-beta { color: #93c5fd; border-color: rgba(59,130,246,.35); }
+  .channel-pill.channel-alpha { color: #fcd34d; border-color: rgba(245,158,11,.35); }
+  .incompat-badge { color: #fbbf24; display: inline-flex; }
+  .version-detail {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 12px 14px; border-radius: 14px; border: 1px solid var(--border-color);
+    background: var(--bg-secondary); min-height: 0; overflow: hidden;
+  }
+  .version-detail-header { display: flex; align-items: center; gap: 10px; }
+  .version-detail-header strong { font-size: 18px; color: var(--text-primary); }
+  .version-changelog-full {
+    flex: 1; overflow: auto; white-space: pre-wrap; font-size: 13px;
+    line-height: 1.45; color: var(--text-secondary); padding-right: 4px;
+  }
+  .version-detail-actions { display: flex; justify-content: flex-end; padding-top: 8px; }
   .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: rgba(27,217,106,.15); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
   .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: rgba(139,92,246,.12); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+
+  @media (max-width: 820px) {
+    .version-picker-body { grid-template-columns: 1fr; max-height: none; }
+    .version-list { max-height: 240px; }
+  }
 
   .dep-dialog { max-width: 520px; }
   .dep-dialog-actions { display: grid; gap: 14px; padding: 8px 0 18px; }

@@ -90,10 +90,37 @@ pub fn materialize_mod_file_with_progress(
         return Ok(MaterializeOutcome::Skipped);
     }
 
+    // Resolve CurseForge projectID/fileID → CDN URL when missing (or a website link).
+    let mut resolved_url = module.source.url.clone();
+    if matches!(module.source.kind, SourceKind::Curseforge) {
+        let needs_resolve = resolved_url
+            .as_ref()
+            .map(|u| {
+                u.trim().is_empty()
+                    || u.contains("curseforge.com/minecraft")
+                        && !u.contains("forgecdn.net")
+            })
+            .unwrap_or(true);
+        if needs_resolve {
+            if let (Some(pid), Some(fid)) = (
+                module.source.project_id.as_ref().and_then(|s| s.parse().ok()),
+                module.source.file_id.as_ref().and_then(|s| s.parse().ok()),
+            ) {
+                if let Ok(info) =
+                    crate::provider::CurseForgeProvider::new().get_file(pid, fid)
+                {
+                    if let Some(url) = info.download_url.filter(|u| !u.is_empty()) {
+                        resolved_url = Some(url);
+                    }
+                }
+            }
+        }
+    }
+
     let Some(file_name) = &module.file_name else {
         return Err(ModFileError::NoFileName(module.id.clone()));
     };
-    let Some(url) = &module.source.url else {
+    let Some(url) = &resolved_url else {
         return Err(ModFileError::NoDownloadUrl(module.id.clone()));
     };
 
@@ -114,8 +141,13 @@ pub fn materialize_mod_file_with_progress(
         }
     }
 
-    match crate::mc_install::download_with_progress(url, &target, expected_sha1, &module.id, progress)
-    {
+    let download_result = if crate::provider::curseforge::url_needs_curseforge_key(url) {
+        download_with_curseforge_key(url, &target, expected_sha1, &module.id, progress)
+    } else {
+        crate::mc_install::download_with_progress(url, &target, expected_sha1, &module.id, progress)
+    };
+
+    match download_result {
         Ok(()) => return Ok(MaterializeOutcome::Downloaded),
         Err(primary_error) => {
             let Some(sha1) = expected_sha1 else {
@@ -146,6 +178,72 @@ pub fn materialize_mod_file_with_progress(
             Ok(MaterializeOutcome::Downloaded)
         }
     }
+}
+
+fn download_with_curseforge_key(
+    url: &str,
+    path: &Path,
+    expected_sha1: Option<&str>,
+    id: &str,
+    progress: &crate::mc_install::ProgressCallback,
+) -> Result<(), InstallError> {
+    use sha1::{Digest, Sha1};
+    use std::io::{Read, Write};
+
+    let api_key = crate::provider::CurseForgeProvider::new().api_key().to_string();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .user_agent("TuffBox-IDE/0.1.0")
+        .redirect(reqwest::redirect::Policy::limited(8))
+        .build()
+        .map_err(|e| InstallError::MissingDownload(e.to_string()))?;
+
+    let response = client
+        .get(url)
+        .header("x-api-key", api_key)
+        .send()
+        .map_err(|e| InstallError::MissingDownload(format!("{e} (url: {url})")))?;
+    if !response.status().is_success() {
+        return Err(InstallError::MissingDownload(format!(
+            "HTTP {} for {url}",
+            response.status()
+        )));
+    }
+
+    let total_size = response.content_length().unwrap_or(0);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".tuffbox-download-")
+        .suffix(".part")
+        .tempfile_in(parent)
+        .map_err(InstallError::Io)?;
+    let mut hasher = Sha1::new();
+    let mut received: u64 = 0;
+    let mut stream = response;
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let n = stream.read(&mut buffer).map_err(InstallError::Io)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+        file.write_all(&buffer[..n]).map_err(InstallError::Io)?;
+        received += n as u64;
+        progress.call(id, received, total_size);
+    }
+    file.flush().map_err(InstallError::Io)?;
+    let actual = format!("{:x}", hasher.finalize());
+    if let Some(expected) = expected_sha1 {
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err(InstallError::MissingDownload(format!(
+                "sha1 mismatch: expected {expected}, got {actual}"
+            )));
+        }
+    }
+    file.persist(path)
+        .map_err(|e| InstallError::Io(e.error))?;
+    Ok(())
 }
 
 /// Report for a full mods-folder sync pass.

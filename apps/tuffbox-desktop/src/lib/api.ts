@@ -609,6 +609,9 @@ export const api = {
     updateAll(p?: string) {
       return cmd<{ updated: string[]; errors?: string[]; download?: Record<string, unknown> }>("update_all_mods", pathArg(p));
     },
+    retryFailedDownloads(modIds: string[], p?: string) {
+      return cmd<Record<string, unknown>>("retry_failed_mod_downloads", { ...pathArg(p), modIds });
+    },
     recommend(p?: string) { return cmd<Record<string, unknown>[]>("recommend_mods", pathArg(p)); },
     detectWrongLoader(p?: string) { return cmd<Record<string, unknown>[]>("detect_wrong_loader_mods", pathArg(p)); },
     disableJar(fileName: string, p?: string) { return cmd<string>("disable_wrong_loader_jar", { ...pathArg(p), fileName }); },
@@ -735,6 +738,9 @@ export const api = {
     itemIcon(itemId: string, p?: string) {
       return cmd<string | null>("get_item_icon", { ...pathArg(p), itemId });
     },
+    itemIconsBatch(itemIds: string[], p?: string) {
+      return cmd<Record<string, string | null>>("get_item_icons_batch", { ...pathArg(p), itemIds });
+    },
     runtimeStatus(p?: string) { return cmd<RecipeRuntimeStatus>("get_recipe_runtime_status", pathArg(p)); },
     runtimeSnapshot(p?: string) { return cmd<RecipeRuntimeSnapshot>("get_recipe_runtime_snapshot", pathArg(p)); },
     writeRemoves(recipeIds: string[], p?: string) {
@@ -807,6 +813,25 @@ export const api = {
   import: {
     project(source: string, targetDir: string) { return cmd<string>("import_project", { source, targetDir }); },
     curseforge(source: string, targetDir: string) { return cmd<string>("import_curseforge_project", { source, targetDir }); },
+    installModpack(source: string, targetDir: string, instanceName?: string | null) {
+      return cmd<Record<string, unknown>>("install_modpack", { source, targetDir, instanceName: instanceName ?? null });
+    },
+  },
+
+  curseforge: {
+    searchModpacks(query: string, gameVersion?: string | null, offset?: number) {
+      return cmd<Record<string, unknown>[]>("search_curseforge_modpacks", {
+        query,
+        gameVersion: gameVersion ?? null,
+        offset: offset ?? 0,
+      });
+    },
+    getModpackFiles(modId: number, gameVersion?: string | null) {
+      return cmd<Record<string, unknown>[]>("get_curseforge_modpack_files", {
+        modId,
+        gameVersion: gameVersion ?? null,
+      });
+    },
   },
 
   // ── Instance ──────────────────────────────────────────────────────

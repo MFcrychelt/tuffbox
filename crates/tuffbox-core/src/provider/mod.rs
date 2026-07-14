@@ -1,6 +1,8 @@
+pub mod curseforge;
 pub mod local;
 pub mod modrinth;
 
+pub use curseforge::CurseForgeProvider;
 pub use local::LocalJarProvider;
 pub use modrinth::ModrinthProvider;
 
@@ -95,6 +97,9 @@ pub struct VersionInfo {
     pub changelog: Option<String>,
     #[serde(default)]
     pub date_published: Option<String>,
+    /// Modrinth release channel: `release`, `beta`, or `alpha`.
+    #[serde(default)]
+    pub version_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

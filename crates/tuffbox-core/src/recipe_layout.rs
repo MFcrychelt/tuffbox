@@ -2,9 +2,9 @@
 //! `CraftingGridHelper.getCraftingIndex` in the JEI reference repo.
 
 use crate::unified::recipe::{parse_ingredient_value, parse_result_121, parse_result_value};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IngredientDisplay {
     pub id: String,
@@ -13,7 +13,7 @@ pub struct IngredientDisplay {
     pub alts: Option<Vec<IngredientDisplay>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecipeLayout {
     pub category: String,
@@ -28,7 +28,7 @@ pub struct RecipeLayout {
     pub experience: Option<f32>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScannedRecipe {
     pub id: String,

@@ -88,6 +88,7 @@ impl ContentProvider for LocalJarProvider {
             name: None,
             changelog: None,
             date_published: None,
+            version_type: None,
         })
     }
 

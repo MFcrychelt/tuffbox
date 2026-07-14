@@ -85,16 +85,22 @@ impl ModrinthProvider {
         if hashes.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
+        // Chunk large packs — Modrinth App / Prism keep batch bodies bounded.
+        const CHUNK: usize = 256;
         let url = format!("{BASE_URL}/version_files/update");
-        let body = serde_json::json!({
-            "hashes": hashes,
-            "algorithm": "sha1",
-            "loaders": loaders,
-            "game_versions": game_versions,
-        });
-        let raw: std::collections::HashMap<String, ModrinthVersion> =
-            crate::http::post_json(&url, &body)?;
-        Ok(raw.into_iter().map(|(k, v)| (k, v.into())).collect())
+        let mut merged = std::collections::HashMap::new();
+        for chunk in hashes.chunks(CHUNK) {
+            let body = serde_json::json!({
+                "hashes": chunk,
+                "algorithm": "sha1",
+                "loaders": loaders,
+                "game_versions": game_versions,
+            });
+            let raw: std::collections::HashMap<String, ModrinthVersion> =
+                crate::http::post_json(&url, &body)?;
+            merged.extend(raw.into_iter().map(|(k, v)| (k, v.into())));
+        }
+        Ok(merged)
     }
 }
 
@@ -389,6 +395,8 @@ struct ModrinthVersion {
     changelog: Option<String>,
     #[serde(default)]
     date_published: Option<String>,
+    #[serde(default)]
+    version_type: Option<String>,
 }
 
 impl From<ModrinthVersion> for VersionInfo {
@@ -408,6 +416,7 @@ impl From<ModrinthVersion> for VersionInfo {
             name: version.name,
             changelog: version.changelog,
             date_published: version.date_published,
+            version_type: version.version_type,
         }
     }
 }

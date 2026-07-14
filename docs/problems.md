@@ -166,6 +166,38 @@
   для финальной проверки специфичных веток (curseforge/prism/ mrpack с
   overrides). Базовая логика подтверждена тестами.
 
+## 8. Обновления модов / смена версии (Content)
+- **Симптом:** Update all и точечное обновление пропускали моды без sha1 в
+  манифесте; отдельная панель «updates ready» дублировала кнопки на карточках;
+  version picker показывал только server-filtered список без канала/поиска.
+- **Статус:** исправлено (2026-07-14)
+- **Что сделано:**
+  1. `check_mod_updates` / `update_all_mods` — общий `resolve_pending_mod_updates`:
+     sha1 из манифеста → hash jar на диске → fallback `project/{id}/version`
+     под текущие MC+loader (Quilt также пробует Fabric). Сравнение по
+     `file_id`/hash файла, не по строке version_number.
+  2. Убрана секция update-panel; в тулбаре **Update all**, на карточке —
+     иконка Update + Change version; бейджи/dots остаются.
+  3. `get_mod_versions` грузит все версии, помечает `compatible` /
+     `versionType`; UI: поиск, hide incompatible, changelog, confirm switch.
+  4. `validate_project.loaderKind` → `loader_kind_slug`; soft MC-check при
+     refresh metadata (явный switch на другую MC-версию после confirm).
+- **Референс:** Prism `ModrinthCheckUpdate`, Modrinth App ContentUpdaterModal,
+  modrinth-extras version+loader filter.
+
+## 9. CurseForge + установка модпаков + Retry
+- **Симптом:** не было CurseForge API; импорт CF zip ставил SourceKind::Modrinth
+  и website URL; UI не умел ставить модпаки; download dialog без Retry.
+- **Статус:** исправлено (2026-07-14)
+- **Что сделано:**
+  1. `provider/curseforge.rs` — Flame API (`x-api-key`, search modpacks,
+     `/mods/files`, Modrinth SHA1 fallback для blocked downloads).
+  2. Исправлен импорт CF: `projectID`/`fileID`, resolve URLs, overrides,
+     stash `curseforge/manifest.json`.
+  3. `install_modpack` + вкладки Add Instance: Blank / Import / CurseForge.
+  4. Download dialog: **Retry** на failed row + **Retry failed (N)**.
+- **Референс:** Prism FlameCreationTask / FileResolvingTask / NetworkJobFailedDialog.
+
 ---
 _Легенда статуса: не исправлено / в работе / исправлено._
 _Аудит 2026-07-09: большинство проблем уже реализованы в коде (проверено по

@@ -190,7 +190,7 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
         name: manifest.project.name.clone(),
         version: manifest.project.version.clone(),
         minecraft_version: manifest.minecraft.version.clone(),
-        loader_kind: format!("{:?}", manifest.loader.kind).to_lowercase(),
+        loader_kind: tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string(),
         loader_version: manifest.loader.version.clone(),
         java_path: manifest.java.as_ref().and_then(|j| j.path.clone()),
         memory_mb: profile.memory_mb.unwrap_or(4096),
@@ -820,9 +820,10 @@ async fn update_project_mod(
     .map_err(|e| e.to_string())?
 }
 
-/// Returns all available versions for a Modrinth project, filtered by the
-/// current Minecraft version and loader so the user only sees versions
-/// that are compatible with their project.
+/// Returns available versions for a Modrinth project.
+/// Loads *all* project versions (like Modrinth App's content updater), marks
+/// compatibility against the given Minecraft version + loader, and sorts
+/// compatible releases first. The UI can hide incompatible rows by default.
 #[tauri::command(rename_all = "camelCase")]
 async fn get_mod_versions(
     mod_id: String,
@@ -831,18 +832,43 @@ async fn get_mod_versions(
 ) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
         let provider = tuffbox_core::ModrinthProvider::new();
+        let loader_slug = loader
+            .as_deref()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty());
+        // Fetch unfiltered — filter/mark compatibility client-side style
+        // (Modrinth App ContentUpdaterModal pattern).
         let query = ProviderSearchQuery {
             query: None,
-            minecraft_version: Some(minecraft_version),
-            loader,
+            minecraft_version: None,
+            loader: None,
             ..Default::default()
         };
-        let versions = provider
+        let mut versions = provider
             .get_versions(&mod_id, &query)
             .map_err(|e| e.to_string())?;
-        Ok(versions
+
+        // Newest first (Modrinth usually returns that already; don't rely on it).
+        versions.sort_by(|a, b| {
+            b.date_published
+                .as_deref()
+                .unwrap_or("")
+                .cmp(a.date_published.as_deref().unwrap_or(""))
+        });
+
+        let mut rows: Vec<serde_json::Value> = versions
             .into_iter()
             .map(|v| {
+                let mc_ok = v.game_versions.iter().any(|gv| gv == &minecraft_version);
+                let loader_ok = match &loader_slug {
+                    Some(loader) => {
+                        v.loaders
+                            .iter()
+                            .any(|l| l == loader || (*loader == "quilt" && l == "fabric"))
+                    }
+                    None => true,
+                };
+                let compatible = mc_ok && loader_ok;
                 serde_json::json!({
                     "id": v.id,
                     "versionNumber": v.version_number,
@@ -851,9 +877,43 @@ async fn get_mod_versions(
                     "name": v.name,
                     "changelog": v.changelog,
                     "datePublished": v.date_published,
+                    "versionType": v.version_type.unwrap_or_else(|| "release".to_string()),
+                    "compatible": compatible,
+                    "compatibleMinecraft": mc_ok,
+                    "compatibleLoader": loader_ok,
                 })
             })
-            .collect())
+            .collect();
+
+        // Compatible first, then by channel preference (release > beta > alpha).
+        rows.sort_by(|a, b| {
+            let a_ok = a.get("compatible").and_then(|v| v.as_bool()).unwrap_or(false);
+            let b_ok = b.get("compatible").and_then(|v| v.as_bool()).unwrap_or(false);
+            match (a_ok, b_ok) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let rank = |row: &serde_json::Value| match row
+                        .get("versionType")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("release")
+                    {
+                        "release" => 0,
+                        "beta" => 1,
+                        "alpha" => 2,
+                        _ => 3,
+                    };
+                    rank(a).cmp(&rank(b)).then_with(|| {
+                        b.get("datePublished")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .cmp(a.get("datePublished").and_then(|v| v.as_str()).unwrap_or(""))
+                    })
+                }
+            }
+        });
+
+        Ok(rows)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1363,58 +1423,152 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
 
 /// ── Batch update manager ────────────────────────────────────────────
 
+/// Resolves sha1 for a mod: prefer manifest metadata, else hash the jar on disk
+/// (same approach as PrismLauncher's ModrinthCheckUpdate).
+fn resolve_mod_sha1(manifest_path: &Path, module: &ModSpec) -> Option<String> {
+    if let Some(hash) = module
+        .hashes
+        .as_ref()
+        .and_then(|h| h.sha1.as_ref())
+        .filter(|h| !h.is_empty())
+    {
+        return Some(hash.clone());
+    }
+    let path = existing_mod_file_path(manifest_path, module)?;
+    tuffbox_core::sha1_file(&path).ok()
+}
+
+fn installed_matches_version(module: &ModSpec, latest: &tuffbox_core::VersionInfo) -> bool {
+    if module.source.file_id.as_deref() == Some(latest.id.as_str()) {
+        return true;
+    }
+    if let Some(installed_sha1) = module.hashes.as_ref().and_then(|h| h.sha1.as_ref()) {
+        if latest
+            .files
+            .iter()
+            .any(|f| f.hashes.sha1.as_deref() == Some(installed_sha1.as_str()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn update_loaders_for(manifest: &ProjectManifest) -> (String, Vec<String>) {
+    let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    // Quilt can run many Fabric builds; try both like Prism expands loaders.
+    let loaders = if loader_slug == "quilt" {
+        vec![loader_slug.clone(), "fabric".to_string()]
+    } else {
+        vec![loader_slug.clone()]
+    };
+    (loader_slug, loaders)
+}
+
+/// Collects pending updates for the project's current Minecraft + loader.
+/// Uses Modrinth `version_files/update` for hashed jars, then falls back to
+/// `project/{id}/version` for Modrinth mods that still lack a usable hash.
+fn resolve_pending_mod_updates(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+    provider: &tuffbox_core::ModrinthProvider,
+) -> Result<(String, Vec<(usize, tuffbox_core::VersionInfo)>), String> {
+    let (loader_slug, loaders) = update_loaders_for(manifest);
+    let game_versions = vec![manifest.minecraft.version.clone()];
+
+    let mut hash_to_mod: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut hashes: Vec<String> = Vec::new();
+    let mut no_hash_idxs: Vec<usize> = Vec::new();
+
+    for (idx, module) in manifest.mods.iter().enumerate() {
+        let is_modrinth = module.source.kind == SourceKind::Modrinth
+            || module.source.project_id.is_some();
+        if !is_modrinth {
+            continue;
+        }
+        match resolve_mod_sha1(manifest_path, module) {
+            Some(hash) => {
+                hash_to_mod.insert(hash.clone(), idx);
+                hashes.push(hash);
+            }
+            None if module.source.project_id.is_some() => no_hash_idxs.push(idx),
+            None => {}
+        }
+    }
+
+    let mut pending: Vec<(usize, tuffbox_core::VersionInfo)> = Vec::new();
+    let mut resolved_idxs = std::collections::HashSet::new();
+
+    if !hashes.is_empty() {
+        let latest_map = provider
+            .get_latest_versions(&hashes, &loaders, &game_versions)
+            .map_err(|e| e.to_string())?;
+        for (hash, latest) in latest_map {
+            let Some(&idx) = hash_to_mod.get(&hash) else {
+                continue;
+            };
+            if installed_matches_version(&manifest.mods[idx], &latest) {
+                continue;
+            }
+            // Prefer versions that actually ship a file for our loader.
+            if ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).is_none() {
+                continue;
+            }
+            resolved_idxs.insert(idx);
+            pending.push((idx, latest));
+        }
+    }
+
+    for idx in no_hash_idxs {
+        if resolved_idxs.contains(&idx) {
+            continue;
+        }
+        let module = &manifest.mods[idx];
+        let Some(project_id) = module.source.project_id.as_ref() else {
+            continue;
+        };
+        let query = ProviderSearchQuery {
+            query: None,
+            minecraft_version: Some(manifest.minecraft.version.clone()),
+            loader: Some(loader_slug.clone()),
+            ..Default::default()
+        };
+        let Ok(versions) = provider.get_versions(project_id, &query) else {
+            continue;
+        };
+        let Some(latest) = versions.into_iter().next() else {
+            continue;
+        };
+        if installed_matches_version(module, &latest) {
+            continue;
+        }
+        if ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).is_none() {
+            continue;
+        }
+        pending.push((idx, latest));
+    }
+
+    Ok((loader_slug, pending))
+}
+
 /// Checks every Modrinth-sourced mod in the project for available updates,
 /// comparing the installed version against the latest compatible version.
-/// Uses Modrinth's batch update API for a single request instead of N.
+/// Uses Modrinth's batch update API plus disk-hash / project-id fallbacks.
 /// Returns a list with update info for each mod that could be updated.
 #[tauri::command(rename_all = "camelCase")]
 async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::ModrinthProvider::new();
-
-        let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
-        let loaders = vec![loader_slug.clone()];
-        let game_versions = vec![manifest.minecraft.version.clone()];
-
-        let mut hash_to_mod: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        let mut hashes: Vec<String> = Vec::new();
-
-        for (idx, m) in manifest.mods.iter().enumerate() {
-            if m.source.kind != SourceKind::Modrinth {
-                continue;
-            }
-            if let Some(h) = m.hashes.as_ref().and_then(|h| h.sha1.clone()) {
-                hash_to_mod.insert(h.clone(), idx);
-                hashes.push(h);
-            }
-        }
-
-        if hashes.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let latest_map = provider
-            .get_latest_versions(&hashes, &loaders, &game_versions)
-            .map_err(|e| e.to_string())?;
+        let (loader_slug, pending) =
+            resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
 
         let mut updates = Vec::new();
-        for (hash, latest) in &latest_map {
-            let Some(&idx) = hash_to_mod.get(hash) else {
-                continue;
-            };
+        for (idx, latest) in pending {
             let m = &manifest.mods[idx];
-            // Prefer file_id comparison — version_number strings can diverge
-            // from what Modrinth considers "the same" release.
-            if m.source.file_id.as_deref() == Some(latest.id.as_str()) {
-                continue;
-            }
-            if latest.version_number == m.version {
-                continue;
-            }
-
-            let file = ProviderFileInfo::select_file_for_loader(latest, &loader_slug).cloned();
+            let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
             updates.push(serde_json::json!({
                 "modId": m.id,
                 "name": m.name,
@@ -1426,6 +1580,7 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
                 "loaders": latest.loaders,
                 "changelog": latest.changelog,
                 "datePublished": latest.date_published,
+                "versionType": latest.version_type,
                 "iconUrl": m.source.icon_url,
             }));
         }
@@ -1448,48 +1603,8 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         let mut skipped_errors: Vec<String> = Vec::new();
 
         let provider = tuffbox_core::ModrinthProvider::new();
-        let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
-        let loaders = vec![loader_slug.clone()];
-        let game_versions = vec![manifest.minecraft.version.clone()];
-
-        let mut hash_to_idx: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        let mut hashes: Vec<String> = Vec::new();
-
-        for (idx, m) in manifest.mods.iter().enumerate() {
-            if m.source.kind != SourceKind::Modrinth {
-                continue;
-            }
-            if let Some(h) = m.hashes.as_ref().and_then(|h| h.sha1.clone()) {
-                hash_to_idx.insert(h.clone(), idx);
-                hashes.push(h);
-            }
-        }
-
-        if hashes.is_empty() {
-            return Ok(serde_json::json!({ "updated": updated, "errors": skipped_errors }));
-        }
-
-        let latest_map = provider
-            .get_latest_versions(&hashes, &loaders, &game_versions)
-            .map_err(|e| e.to_string())?;
-
-        // Collect (idx, latest) first so we can mutate without borrow issues
-        // and so a single failed project lookup doesn't abort the whole batch.
-        let mut pending: Vec<(usize, tuffbox_core::VersionInfo)> = Vec::new();
-        for (hash, latest) in latest_map {
-            let Some(&idx) = hash_to_idx.get(&hash) else {
-                continue;
-            };
-            let m = &manifest.mods[idx];
-            if m.source.file_id.as_deref() == Some(latest.id.as_str()) {
-                continue;
-            }
-            if latest.version_number == m.version {
-                continue;
-            }
-            pending.push((idx, latest));
-        }
+        let (loader_slug, pending) =
+            resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
 
         let mut download = tuffbox_core::ModSyncReport::default();
         for (idx, latest) in pending {
@@ -2870,20 +2985,20 @@ fn generate_server_properties(path: String) -> Result<String, String> {
 
 /// Scans mod JAR / datapack / KubeJS recipes with JEI-style layouts.
 #[tauri::command(rename_all = "camelCase")]
-fn scan_mod_recipes(path: String) -> Result<serde_json::Value, String> {
-    let result = tuffbox_core::recipe_scan::scan_project_recipes(Path::new(&path))?;
-    serde_json::to_value(result).map_err(|e| e.to_string())
+async fn scan_mod_recipes(path: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let result = tuffbox_core::recipe_scan::scan_project_recipes(Path::new(&path))?;
+        serde_json::to_value(result).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-/// Returns a cached PNG path for a Minecraft item id (`namespace:path`), extracted
-/// from the project mods and the installed vanilla client jar when available.
-#[tauri::command(rename_all = "camelCase")]
-fn get_item_icon(path: String, item_id: String) -> Result<Option<String>, String> {
-    let manifest_path = PathBuf::from(&path);
+fn recipe_icon_extra_jars(manifest_path: &Path) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let project_dir = manifest_path
         .parent()
         .ok_or_else(|| "manifest path has no parent".to_string())?;
-    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
     let mut extra_jars = Vec::new();
     let launcher_dir = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -2895,13 +3010,54 @@ fn get_item_icon(path: String, item_id: String) -> Result<Option<String>, String
     if client_jar.is_file() {
         extra_jars.push(client_jar);
     }
-    let icon = tuffbox_core::resolve_item_icon_path(project_dir, &item_id, &extra_jars)?;
-    Ok(icon.map(|file| file.to_string_lossy().to_string()))
+    Ok((project_dir.to_path_buf(), extra_jars))
+}
+
+/// Returns a cached PNG path for a Minecraft item id (`namespace:path`), extracted
+/// from the project mods and the installed vanilla client jar when available.
+#[tauri::command(rename_all = "camelCase")]
+async fn get_item_icon(path: String, item_id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let (project_dir, extra_jars) = recipe_icon_extra_jars(&manifest_path)?;
+        let icon = tuffbox_core::resolve_item_icon_path(&project_dir, &item_id, &extra_jars)?;
+        Ok(icon.map(|file| file.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Resolves many item icons in one IPC call (opens each mod jar once).
+#[tauri::command(rename_all = "camelCase")]
+async fn get_item_icons_batch(
+    path: String,
+    item_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let (project_dir, extra_jars) = recipe_icon_extra_jars(&manifest_path)?;
+        let icons =
+            tuffbox_core::resolve_item_icons_batch(&project_dir, &item_ids, &extra_jars)?;
+        Ok(icons
+            .into_iter()
+            .map(|(id, path)| (id, path.map(|file| file.to_string_lossy().to_string())))
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn get_recipe_runtime_status(path: String) -> tuffbox_core::RecipeRuntimeStatus {
-    tuffbox_core::recipe_runtime_status(Path::new(&path))
+async fn get_recipe_runtime_status(path: String) -> tuffbox_core::RecipeRuntimeStatus {
+    tokio::task::spawn_blocking(move || tuffbox_core::recipe_runtime_status(Path::new(&path)))
+        .await
+        .unwrap_or(tuffbox_core::RecipeRuntimeStatus {
+            connected: false,
+            supported: false,
+            message: "Failed to check JEI runtime".to_string(),
+            minecraft_version: None,
+            pid: None,
+        })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -4777,10 +4933,15 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 
 #[tauri::command]
 fn import_curseforge_project(source: String, target_dir: String) -> Result<String, String> {
-    let manifest = tuffbox_core::import_curseforge_pack(&source).map_err(|e| e.to_string())?;
+    let mut manifest = tuffbox_core::import_curseforge_pack(&source).map_err(|e| e.to_string())?;
+    let _ = tuffbox_core::resolve_curseforge_pack_files(&mut manifest).map_err(|e| e.to_string())?;
     let target = PathBuf::from(&target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
-    let manifest_path = target.join("project.tuffbox.json");
+    let overrides_folder =
+        tuffbox_core::curseforge_overrides_folder(&source).unwrap_or_else(|_| "overrides".into());
+    let _ = tuffbox_core::extract_curseforge_overrides(&source, &target, &overrides_folder);
+    let _ = tuffbox_core::stash_curseforge_manifest(&source, &target);
+    let manifest_path = target.join(format!("{}.tuffbox.json", manifest.project.id));
     let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     std::fs::write(&manifest_path, json).map_err(|e| e.to_string())?;
     Ok(manifest_path.to_string_lossy().to_string())
@@ -4788,7 +4949,10 @@ fn import_curseforge_project(source: String, target_dir: String) -> Result<Strin
 
 #[tauri::command(rename_all = "camelCase")]
 fn import_project(source: String, target_dir: String) -> Result<String, String> {
-    use tuffbox_core::{import_folder, import_modrinth_pack, import_prism_instance};
+    use tuffbox_core::{
+        import_curseforge_pack, import_folder, import_modrinth_pack, import_prism_instance,
+        is_curseforge_pack, resolve_curseforge_pack_files,
+    };
 
     let path = PathBuf::from(&source);
     let ext = path
@@ -4797,20 +4961,300 @@ fn import_project(source: String, target_dir: String) -> Result<String, String> 
         .unwrap_or("")
         .to_lowercase();
 
-    let manifest = if path.is_dir() {
-        import_folder(&source).map_err(|e| e.to_string())?
+    let (mut manifest, is_cf) = if path.is_dir() {
+        (import_folder(&source).map_err(|e| e.to_string())?, false)
     } else {
         match ext.as_str() {
-            "mrpack" => import_modrinth_pack(&source).map_err(|e| e.to_string())?,
-            "zip" => import_prism_instance(&source).map_err(|e| e.to_string())?,
+            "mrpack" => (import_modrinth_pack(&source).map_err(|e| e.to_string())?, false),
+            "zip" if is_curseforge_pack(&source) => (
+                import_curseforge_pack(&source).map_err(|e| e.to_string())?,
+                true,
+            ),
+            "zip" => (import_prism_instance(&source).map_err(|e| e.to_string())?, false),
             _ => return Err(format!("unsupported import format: {ext}")),
         }
     };
 
-    let target = PathBuf::from(target_dir).join(format!("{}.tuffbox.json", manifest.project.id));
+    if is_cf {
+        let _ = resolve_curseforge_pack_files(&mut manifest).map_err(|e| e.to_string())?;
+    }
+
+    let target_root = PathBuf::from(&target_dir).join(&manifest.project.id);
+    std::fs::create_dir_all(&target_root).map_err(|e| e.to_string())?;
+    if is_cf {
+        let overrides_folder = tuffbox_core::curseforge_overrides_folder(&source)
+            .unwrap_or_else(|_| "overrides".into());
+        let _ = tuffbox_core::extract_curseforge_overrides(&source, &target_root, &overrides_folder);
+        let _ = tuffbox_core::stash_curseforge_manifest(&source, &target_root);
+    }
+
+    let target = target_root.join(format!("{}.tuffbox.json", manifest.project.id));
     let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     std::fs::write(&target, json).map_err(|e| e.to_string())?;
     Ok(target.to_string_lossy().to_string())
+}
+
+/// Search CurseForge modpacks (classId 4471), Prism FlamePage style.
+#[tauri::command(rename_all = "camelCase")]
+async fn search_curseforge_modpacks(
+    query: String,
+    game_version: Option<String>,
+    offset: Option<u32>,
+) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let provider = tuffbox_core::CurseForgeProvider::new();
+        if !provider.is_configured() {
+            return Err("CurseForge API key is not configured".to_string());
+        }
+        let hits = provider
+            .search_modpacks(
+                &query,
+                game_version.as_deref(),
+                offset.unwrap_or(0),
+                20,
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(hits
+            .into_iter()
+            .map(|h| {
+                serde_json::json!({
+                    "id": h.id,
+                    "slug": h.slug,
+                    "name": h.name,
+                    "summary": h.summary,
+                    "downloadCount": h.download_count,
+                    "iconUrl": h.icon_url,
+                    "authors": h.authors,
+                    "categories": h.categories,
+                })
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// List files for a CurseForge modpack project.
+#[tauri::command(rename_all = "camelCase")]
+async fn get_curseforge_modpack_files(
+    mod_id: u64,
+    game_version: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let provider = tuffbox_core::CurseForgeProvider::new();
+        let files = provider
+            .get_mod_files(mod_id, game_version.as_deref())
+            .map_err(|e| e.to_string())?;
+        Ok(files
+            .into_iter()
+            .map(|f| {
+                serde_json::json!({
+                    "id": f.id,
+                    "modId": f.mod_id,
+                    "displayName": f.display_name,
+                    "fileName": f.file_name,
+                    "downloadUrl": f.download_url,
+                    "releaseType": f.release_type,
+                    "gameVersions": f.game_versions,
+                    "fileDate": f.file_date,
+                    "blocked": f.blocked,
+                })
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Download a CurseForge / Modrinth / local pack and create an instance with
+/// resolved mods + download progress (Prism InstanceImportTask flow).
+#[tauri::command(rename_all = "camelCase")]
+async fn install_modpack(
+    app: tauri::AppHandle,
+    source: String,
+    target_dir: String,
+    instance_name: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        use tauri::Emitter;
+        use tuffbox_core::{
+            curseforge_overrides_folder, extract_curseforge_overrides, import_curseforge_pack,
+            import_modrinth_pack, import_prism_instance, is_curseforge_pack,
+            resolve_curseforge_pack_files, stash_curseforge_manifest, CurseForgeProvider,
+        };
+
+        let _ = app.emit(
+            "modpack-install-progress",
+            serde_json::json!({ "phase": "resolving", "message": "Preparing modpack…" }),
+        );
+
+        // Remote CF file: source is "cf:<modId>:<fileId>" or a direct URL.
+        let pack_path = if let Some(rest) = source.strip_prefix("cf:") {
+            let parts: Vec<&str> = rest.split(':').collect();
+            if parts.len() != 2 {
+                return Err("expected cf:<modId>:<fileId>".into());
+            }
+            let mod_id: u64 = parts[0].parse().map_err(|_| "invalid mod id")?;
+            let file_id: u64 = parts[1].parse().map_err(|_| "invalid file id")?;
+            let provider = CurseForgeProvider::new();
+            let file = provider.get_file(mod_id, file_id).map_err(|e| e.to_string())?;
+            let url = file
+                .download_url
+                .filter(|u| !u.is_empty())
+                .ok_or_else(|| {
+                    "CurseForge blocked this pack download URL. Open the file on CurseForge and import the zip manually.".to_string()
+                })?;
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({ "phase": "downloading-pack", "message": format!("Downloading {}", file.file_name) }),
+            );
+            let tmp = std::env::temp_dir().join(format!("tuffbox-pack-{}-{}.zip", mod_id, file_id));
+            tuffbox_core::provider::curseforge::download_curseforge_url(
+                &url,
+                &tmp,
+                file.hashes.sha1.as_deref(),
+            )
+            .map_err(|e| format!("pack download failed: {e}"))?;
+            tmp
+        } else if source.starts_with("http://") || source.starts_with("https://") {
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({ "phase": "downloading-pack", "message": "Downloading pack…" }),
+            );
+            let tmp = std::env::temp_dir().join(format!(
+                "tuffbox-pack-{}.zip",
+                tuffbox_core::time_util::compact_now()
+            ));
+            tuffbox_core::download_with_sha1(&source, &tmp, None)
+                .map_err(|e| format!("pack download failed: {e}"))?;
+            tmp
+        } else {
+            PathBuf::from(&source)
+        };
+
+        if !pack_path.is_file() {
+            return Err(format!("pack not found: {}", pack_path.display()));
+        }
+
+        let ext = pack_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let is_cf = is_curseforge_pack(&pack_path);
+        let mut manifest = match ext.as_str() {
+            "mrpack" => import_modrinth_pack(&pack_path).map_err(|e| e.to_string())?,
+            "zip" if is_cf => import_curseforge_pack(&pack_path).map_err(|e| e.to_string())?,
+            "zip" => import_prism_instance(&pack_path).map_err(|e| e.to_string())?,
+            _ => return Err(format!("unsupported pack format: .{ext}")),
+        };
+
+        if let Some(name) = instance_name.filter(|n| !n.trim().is_empty()) {
+            manifest.project.name = name.clone();
+            manifest.project.id = name
+                .to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-")
+                .replace("--", "-")
+                .trim_matches('-')
+                .to_string();
+        }
+
+        if is_cf {
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({ "phase": "resolving-files", "message": "Resolving CurseForge files…" }),
+            );
+            let resolved =
+                resolve_curseforge_pack_files(&mut manifest).map_err(|e| e.to_string())?;
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({
+                    "phase": "resolving-files",
+                    "message": format!("Resolved {resolved} download URLs")
+                }),
+            );
+        }
+
+        let instance_dir = PathBuf::from(&target_dir).join(&manifest.project.id);
+        std::fs::create_dir_all(&instance_dir).map_err(|e| e.to_string())?;
+
+        if is_cf {
+            let folder =
+                curseforge_overrides_folder(&pack_path).unwrap_or_else(|_| "overrides".into());
+            let n = extract_curseforge_overrides(&pack_path, &instance_dir, &folder)
+                .unwrap_or(0);
+            let _ = stash_curseforge_manifest(&pack_path, &instance_dir);
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({
+                    "phase": "overrides",
+                    "message": format!("Extracted {n} override files")
+                }),
+            );
+        }
+
+        let manifest_path = instance_dir.join(format!("{}.tuffbox.json", manifest.project.id));
+        let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+        std::fs::write(&manifest_path, &json).map_err(|e| e.to_string())?;
+
+        let _ = app.emit(
+            "modpack-install-progress",
+            serde_json::json!({
+                "phase": "downloading-mods",
+                "message": format!("Downloading {} content files…", manifest.mods.len())
+            }),
+        );
+        let report = download_project_mods_tracked(&app, &manifest_path, &manifest, None);
+
+        let _ = app.emit(
+            "modpack-install-progress",
+            serde_json::json!({
+                "phase": "done",
+                "message": "Modpack installed",
+                "failed": report.failed.len(),
+            }),
+        );
+
+        Ok(serde_json::json!({
+            "path": manifest_path.to_string_lossy(),
+            "name": manifest.project.name,
+            "modCount": manifest.mods.len(),
+            "download": report,
+            "provider": if is_cf { "curseforge" } else if ext == "mrpack" { "modrinth" } else { "prism" },
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Re-download only the mods that failed in the last sync (user Retry).
+#[tauri::command(rename_all = "camelCase")]
+async fn retry_failed_mod_downloads(
+    app: tauri::AppHandle,
+    path: String,
+    mod_ids: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let mut manifest =
+            ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        // Re-resolve any CurseForge entries that still lack URLs.
+        let needs_cf = manifest.mods.iter().any(|m| {
+            mod_ids.contains(&m.id)
+                && m.source.kind == SourceKind::Curseforge
+                && m.source.url.as_ref().map(|u| u.is_empty()).unwrap_or(true)
+        });
+        if needs_cf {
+            let _ = tuffbox_core::resolve_curseforge_pack_files(&mut manifest);
+            let _ = save_manifest(&manifest_path, &manifest);
+        }
+        let only: std::collections::HashSet<String> = mod_ids.into_iter().collect();
+        let report =
+            download_project_mods_tracked(&app, &manifest_path, &manifest, Some(&only));
+        Ok(serde_json::json!({ "download": report }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -5764,20 +6208,12 @@ fn refresh_modrinth_file_metadata(
         .get_version(&version_id)
         .map_err(|e| format!("failed to refresh {} from Modrinth: {e}", module.name))?;
     let loader_slug = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
-    let mc = &manifest.minecraft.version;
-    if !version.game_versions.iter().any(|gv| gv == mc) {
-        return Err(format!(
-            "{} update targets Minecraft {} but the selected release supports [{}]",
-            module.name,
-            mc,
-            version.game_versions.join(", ")
-        ));
-    }
-    if !version
-        .loaders
-        .iter()
-        .any(|loader| loader == loader_slug)
-    {
+    // Loader must match so we don't install a Forge jar into a Fabric instance.
+    // Minecraft mismatch is allowed for intentional cross-version switches from
+    // the version picker (user confirms incompatible installs in the UI).
+    if !version.loaders.iter().any(|loader| {
+        loader == loader_slug || (loader_slug == "quilt" && loader == "fabric")
+    }) {
         return Err(format!(
             "{} update has no build for loader {loader_slug} (supports [{}])",
             module.name,
@@ -6735,6 +7171,7 @@ pub fn run() {
             generate_server_properties,
             scan_mod_recipes,
             get_item_icon,
+            get_item_icons_batch,
             get_recipe_runtime_status,
             get_recipe_runtime_snapshot,
             write_kubejs_recipe_removes,
@@ -6805,6 +7242,10 @@ pub fn run() {
             launch_with_quick_play,
             import_project,
             import_curseforge_project,
+            search_curseforge_modpacks,
+            get_curseforge_modpack_files,
+            install_modpack,
+            retry_failed_mod_downloads,
             has_crashed,
             open_project_folder,
             delete_project,

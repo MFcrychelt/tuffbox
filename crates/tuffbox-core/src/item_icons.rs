@@ -1,5 +1,6 @@
 //! Resolves Minecraft item icons from mod jars and the installed client jar.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -182,6 +183,63 @@ pub fn resolve_item_icon_path(
     }
 
     Ok(None)
+}
+
+fn open_jar_archives(project_dir: &Path, extra_jars: &[PathBuf]) -> Vec<ZipArchive<File>> {
+    jar_sources(project_dir, extra_jars)
+        .into_iter()
+        .filter_map(|jar_path| {
+            let file = File::open(&jar_path).ok()?;
+            ZipArchive::new(file).ok()
+        })
+        .collect()
+}
+
+/// Resolves many item icons in one pass, opening each mod jar only once.
+pub fn resolve_item_icons_batch(
+    project_dir: &Path,
+    item_ids: &[String],
+    extra_jars: &[PathBuf],
+) -> Result<HashMap<String, Option<PathBuf>>, String> {
+    let cache_dir = item_icon_cache_dir(project_dir);
+    std::fs::create_dir_all(&cache_dir).map_err(|error| error.to_string())?;
+
+    let mut out = HashMap::with_capacity(item_ids.len());
+    let mut pending: Vec<(String, String, String)> = Vec::new();
+
+    for item_id in item_ids {
+        let Some((namespace, item_path)) = parse_item_id(item_id) else {
+            out.insert(item_id.clone(), None);
+            continue;
+        };
+        let cache_file = cache_file_for(project_dir, item_id);
+        if cache_file.is_file() {
+            out.insert(item_id.clone(), Some(cache_file));
+            continue;
+        }
+        pending.push((item_id.clone(), namespace, item_path));
+    }
+
+    if pending.is_empty() {
+        return Ok(out);
+    }
+
+    let mut archives = open_jar_archives(project_dir, extra_jars);
+    for (item_id, namespace, item_path) in pending {
+        let mut found = None;
+        for archive in &mut archives {
+            if let Some(png) = find_in_jar(archive, &namespace, &item_path) {
+                let cache_file = cache_file_for(project_dir, &item_id);
+                if std::fs::write(&cache_file, png).is_ok() {
+                    found = Some(cache_file);
+                }
+                break;
+            }
+        }
+        out.insert(item_id, found);
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]
