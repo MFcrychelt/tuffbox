@@ -218,21 +218,26 @@
     if (distance < 1) return "";
     const ux = dx / distance;
     const uy = dy / distance;
-    const boundaryDistance = (node: PositionedNode) => {
-      const half = nodeSize(node) / 2;
-      return half / Math.max(Math.abs(ux), Math.abs(uy), 0.001);
-    };
-    const startOffset = boundaryDistance(source) + 2;
-    const endOffset = boundaryDistance(target) + 9;
-    const x1 = source.x + ux * startOffset;
-    const y1 = source.y + uy * startOffset;
-    const x2 = target.x - ux * endOffset;
-    const y2 = target.y - uy * endOffset;
-    // Light quadratic bend so hub fans do not all paint the same line.
-    let hash = 0;
-    const key = `${edge.from}:${edge.to}:${edge.kind}`;
-    for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
-    const bend = ((hash % 17) - 8) * Math.min(28, distance * 0.08);
+    const r1 = nodeSize(source) / 2;
+    const r2 = nodeSize(target) / 2;
+    const x1 = source.x + ux * (r1 + 2);
+    const y1 = source.y + uy * (r1 + 2);
+    const x2 = target.x - ux * (r2 + 8);
+    const y2 = target.y - uy * (r2 + 8);
+    // Match modrinth-extras: straight edges by default; only parallel
+    // multi-edges get a light fan so they stay readable.
+    const parallel = displayEdges.filter(
+      (e) =>
+        (e.from === edge.from && e.to === edge.to) ||
+        (e.from === edge.to && e.to === edge.from),
+    );
+    if (parallel.length <= 1) {
+      return `M ${x1} ${y1} L ${x2} ${y2}`;
+    }
+    const idx = parallel.findIndex(
+      (e) => e.from === edge.from && e.to === edge.to && e.kind === edge.kind,
+    );
+    const bend = (idx - (parallel.length - 1) / 2) * 22;
     const mx = (x1 + x2) / 2 + -uy * bend;
     const my = (y1 + y2) / 2 + ux * bend;
     return `M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`;
@@ -668,6 +673,15 @@
     }
     return { map, orphaned };
   })();
+  type LayoutNode = PositionedNode & {
+    depth: number;
+    isHub: boolean;
+    component: number;
+    hubId: string;
+    hubX: number;
+    hubY: number;
+  };
+
   let canvasWidth = 1600;
   let canvasHeight = 900;
   let positioned: PositionedNode[] = [];
@@ -675,15 +689,93 @@
   let simulationLayoutKey = "";
   let resetViewOnNextLayout = true;
 
-  function layoutCanvasSize(count: number) {
-    const n = Math.max(1, count);
-    const cols = Math.max(4, Math.ceil(Math.sqrt(n * 1.35)));
-    const rows = Math.max(3, Math.ceil(n / cols));
-    const cell = n > 80 ? 170 : n > 40 ? 155 : 140;
+  function layoutCanvasSize(count: number, maxDepth: number) {
+    const ring = Math.max(3, maxDepth + 1);
+    const span = Math.max(900, ring * 210 * 2 + 280);
+    const orphanPad = Math.max(0, count - 20) * 4;
     return {
-      width: Math.max(1400, cols * cell + 280),
-      height: Math.max(760, rows * cell + 240),
+      width: Math.max(1400, span + orphanPad),
+      height: Math.max(900, span * 0.85 + orphanPad),
     };
+  }
+
+  /** Undirected BFS depth + hub pick — same idea as modrinth-extras dependency rings. */
+  function computeDepthsAndHubs(nodeIds: string[], edges: GraphEdge[]) {
+    const adj = new Map<string, string[]>();
+    const degree = new Map<string, number>();
+    for (const id of nodeIds) {
+      adj.set(id, []);
+      degree.set(id, 0);
+    }
+    for (const edge of edges) {
+      if (!adj.has(edge.from) || !adj.has(edge.to)) continue;
+      adj.get(edge.from)!.push(edge.to);
+      adj.get(edge.to)!.push(edge.from);
+      degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+      degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+    }
+
+    const remaining = new Set(nodeIds);
+    const components: string[][] = [];
+    while (remaining.size) {
+      const start = remaining.values().next().value as string;
+      const queue = [start];
+      remaining.delete(start);
+      const comp: string[] = [];
+      while (queue.length) {
+        const cur = queue.shift()!;
+        comp.push(cur);
+        for (const next of adj.get(cur) ?? []) {
+          if (!remaining.has(next)) continue;
+          remaining.delete(next);
+          queue.push(next);
+        }
+      }
+      components.push(comp);
+    }
+    components.sort((a, b) => b.length - a.length);
+
+    const depth = new Map<string, number>();
+    const hubOf = new Map<string, string>();
+    const hubMeta: { id: string; component: number; x: number; y: number }[] = [];
+
+    components.forEach((comp, componentIndex) => {
+      const hub = [...comp].sort(
+        (a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.localeCompare(b),
+      )[0];
+      // Primary component sits at the origin; satellite components orbit it.
+      let hx = 0;
+      let hy = 0;
+      if (componentIndex > 0) {
+        const angle = ((componentIndex - 1) / Math.max(1, components.length - 1)) * Math.PI * 2;
+        const orbit = 420 + componentIndex * 60;
+        hx = Math.cos(angle) * orbit;
+        hy = Math.sin(angle) * orbit;
+      }
+      hubMeta.push({ id: hub, component: componentIndex, x: hx, y: hy });
+
+      const q = [hub];
+      depth.set(hub, 0);
+      hubOf.set(hub, hub);
+      while (q.length) {
+        const cur = q.shift()!;
+        const d = depth.get(cur) ?? 0;
+        for (const next of adj.get(cur) ?? []) {
+          if (depth.has(next)) continue;
+          depth.set(next, d + 1);
+          hubOf.set(next, hub);
+          q.push(next);
+        }
+      }
+      for (const id of comp) {
+        if (!depth.has(id)) {
+          depth.set(id, 1);
+          hubOf.set(id, hub);
+        }
+      }
+    });
+
+    return { degree, depth, hubOf, hubMeta, maxDepth: depth.size ? Math.max(...depth.values()) : 0 };
   }
 
   $: layoutKey = [
@@ -694,74 +786,126 @@
   function startSimulation() {
     if (!displayNodes.length) return;
 
-    const size = layoutCanvasSize(displayNodes.length);
+    const nodeIds = displayNodes.map((n) => n.id);
+    const { degree, depth, hubOf, hubMeta, maxDepth } = computeDepthsAndHubs(
+      nodeIds,
+      displayEdges,
+    );
+    const size = layoutCanvasSize(displayNodes.length, maxDepth);
     canvasWidth = size.width;
     canvasHeight = size.height;
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+    const hubPos = new Map(hubMeta.map((h) => [h.id, { x: cx + h.x, y: cy + h.y }]));
 
-    const degree = new Map<string, number>();
-    for (const edge of displayEdges) {
-      degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
-      degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
-    }
-
-    // Always reseed positions on structural changes. Reusing a collapsed
-    // previous layout keeps hubs glued together forever.
-    const initializedNodes = displayNodes.map((node, i) => {
+    // Seed on concentric rings around each hub (modrinth-extras pattern).
+    const ringIndex = new Map<string, number>();
+    const initializedNodes: LayoutNode[] = displayNodes.map((node) => {
       const isGhost = node.kind === "Missing";
       let tone: string;
       if (isGhost) tone = "ghost";
       else if (node.kind === "Mod") tone = depNodeIds.has(node.id) ? "dep" : String(node.side ?? "both").toLowerCase();
       else if (node.kind === "Profile") tone = "profile";
       else tone = "runtime";
-      const angle = (i / Math.max(1, displayNodes.length)) * Math.PI * 2;
-      const cx = canvasWidth / 2;
-      const cy = canvasHeight / 2;
-      const ring = Math.min(canvasWidth, canvasHeight) * (0.28 + (i % 5) * 0.04);
-      const jitter = ((i * 37) % 70) - 35;
+
+      const d = depth.get(node.id) ?? 1;
+      const hubId = hubOf.get(node.id) ?? node.id;
+      const hub = hubPos.get(hubId) ?? { x: cx, y: cy };
+      const isHub = hubMeta.some((h) => h.id === node.id);
+      const key = `${hubId}:${d}`;
+      const idx = ringIndex.get(key) ?? 0;
+      ringIndex.set(key, idx + 1);
+      const siblings = Math.max(
+        1,
+        [...depth.entries()].filter(([id, dd]) => dd === d && hubOf.get(id) === hubId).length,
+      );
+      const angle = (idx / siblings) * Math.PI * 2 + d * 0.35;
+      const ring = isHub ? 0 : d * 190 + ((idx % 3) - 1) * 12;
+
       return {
         ...node,
         label: displayLabel(node),
-        x: cx + Math.cos(angle) * ring + jitter,
-        y: cy + Math.sin(angle) * ring + ((i * 19) % 50) - 25,
+        x: hub.x + Math.cos(angle) * ring,
+        y: hub.y + Math.sin(angle) * ring,
+        fx: isHub ? hub.x : null,
+        fy: isHub ? hub.y : null,
         tone,
         ghost: isGhost,
-      } as PositionedNode;
+        depth: d,
+        isHub,
+        component: hubMeta.find((h) => h.id === hubId)?.component ?? 0,
+        hubId,
+        hubX: hub.x,
+        hubY: hub.y,
+      } as LayoutNode;
     });
 
     const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
+    const degOf = (id: string) => degree.get(id) ?? 0;
+
+    // Per-node radial toward that component's hub (d3 forceRadial is single-center only).
+    function forceHubRadial(strength = 0.32) {
+      let nodes: LayoutNode[] = [];
+      function force(alpha: number) {
+        const k = strength * alpha;
+        for (const d of nodes) {
+          if (d.isHub) continue;
+          const targetR = Math.max(1, d.depth) * 190;
+          const dx = d.x - d.hubX;
+          const dy = d.y - d.hubY;
+          const dist = Math.hypot(dx, dy) || 1;
+          const delta = ((dist - targetR) / dist) * k;
+          d.vx = (d.vx ?? 0) - dx * delta;
+          d.vy = (d.vy ?? 0) - dy * delta;
+        }
+      }
+      force.initialize = (_nodes: LayoutNode[]) => {
+        nodes = _nodes;
+      };
+      return force;
+    }
 
     if (simulation) simulation.stop();
 
+    // Physics mirror modrinth-extras/useForceGraph.ts (+ Obsidian-ish spacing):
+    // pin hubs, radial depth rings, default link strength (1/min-degree) so
+    // high-degree mods do not collapse into a singularity, local charge, hard collide.
     simulation = d3
-      .forceSimulation<PositionedNode>(initializedNodes)
+      .forceSimulation<LayoutNode>(initializedNodes)
+      .force(
+        "charge",
+        d3.forceManyBody<LayoutNode>().strength(-450).distanceMax(600),
+      )
       .force(
         "link",
         d3
           .forceLink(d3Links)
           .id((d: any) => d.id)
           .distance((link: any) => {
-            const deg = Math.max(degree.get(linkId(link.source)) ?? 1, degree.get(linkId(link.target)) ?? 1);
-            return 130 + Math.min(260, deg * 16);
-          })
-          .strength(0.28),
+            const s = linkId(link.source);
+            const t = linkId(link.target);
+            const rs = nodeSize({ id: s } as PositionedNode) / 2;
+            const rt = nodeSize({ id: t } as PositionedNode) / 2;
+            return rs + rt + 40 + Math.max(degOf(s), degOf(t)) * 5;
+          }),
+        // intentionally no .strength() — d3 default is 1/min(degree),
+        // which keeps hub fans from knitting into a bird nest.
       )
-      .force("charge", d3.forceManyBody().strength(-1100).distanceMax(1200))
       .force(
         "collide",
         d3
-          .forceCollide<PositionedNode>()
-          .radius((d) => nodeSize(d) / 2 + 42)
-          .strength(0.95)
-          .iterations(3),
+          .forceCollide<LayoutNode>()
+          .radius((d) => nodeSize(d) / 2 + 16)
+          .strength(1)
+          .iterations(2),
       )
-      // Soft centering only — forceCenter at default strength collapses hubs.
-      .force("x", d3.forceX(canvasWidth / 2).strength(0.02))
-      .force("y", d3.forceY(canvasHeight / 2).strength(0.02))
+      .force("radial", forceHubRadial(maxDepth === 0 ? 0 : 0.32))
       .alpha(1)
-      .alphaDecay(0.022)
+      .alphaDecay(0.085)
+      .velocityDecay(0.55)
       .on("tick", () => {
-        positioned = [...initializedNodes];
+        positioned = initializedNodes.map((n) => ({ ...n }));
       })
       .on("end", () => {
         if (resetViewOnNextLayout) {
@@ -769,7 +913,7 @@
           resetViewOnNextLayout = false;
         }
       });
-    positioned = [...initializedNodes];
+    positioned = initializedNodes.map((n) => ({ ...n }));
   }
 
   $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
@@ -816,7 +960,7 @@
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
-    const nextScale = Math.min(8, Math.max(0.2, viewScale / zoomFactor));
+    const nextScale = Math.min(8, Math.max(0.15, viewScale / zoomFactor));
     const cursor = clientToSvgPoint(event.clientX, event.clientY);
     const nextWidth = canvasWidth / nextScale;
     const nextHeight = canvasHeight / nextScale;
@@ -851,7 +995,7 @@
     window.removeEventListener("mouseup", handleBackgroundMouseUp);
   }
 
-  function fitToContent(padding = 90) {
+  function fitToContent(padding = 80) {
     if (!positioned.length) {
       viewX = 0;
       viewY = 0;
@@ -873,8 +1017,9 @@
     const contentH = Math.max(160, maxY - minY);
     const targetW = contentW + padding * 2;
     const targetH = contentH + padding * 2;
-    const scale = Math.min(canvasWidth / targetW, canvasHeight / targetH);
-    viewScale = Math.min(3.2, Math.max(0.35, scale));
+    // Cap like modrinth-extras (max ~1.2–1.5) so we never blow past readable size.
+    const scale = Math.min(canvasWidth / targetW, canvasHeight / targetH, 1.35);
+    viewScale = Math.min(4, Math.max(0.2, scale));
     const vbW = canvasWidth / viewScale;
     const vbH = canvasHeight / viewScale;
     viewX = (minX + maxX) / 2 - vbW / 2;
@@ -952,17 +1097,33 @@
     event.stopPropagation();
     selectedId = node.id;
     if (!simulation) return;
+    const layoutNode = node as LayoutNode;
+    const keepPinned = !!layoutNode.isHub;
     node.fx = node.x;
     node.fy = node.y;
     const onMouseMove = (ev: MouseEvent) => {
       const p = clientToSvgPoint(ev.clientX, ev.clientY);
       node.fx = p.x;
       node.fy = p.y;
+      if (keepPinned) {
+        layoutNode.hubX = p.x;
+        layoutNode.hubY = p.y;
+        for (const other of positioned) {
+          const o = other as LayoutNode;
+          if (o.hubId === layoutNode.hubId) {
+            o.hubX = p.x;
+            o.hubY = p.y;
+          }
+        }
+      }
       simulation?.alpha(0.3).restart();
     };
     const onMouseUp = () => {
-      node.fx = null;
-      node.fy = null;
+      // Hubs stay pinned (modrinth-extras root behavior); others rejoin the sim.
+      if (!keepPinned) {
+        node.fx = null;
+        node.fy = null;
+      }
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };

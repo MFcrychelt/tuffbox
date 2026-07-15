@@ -22,6 +22,7 @@
     ChevronDown,
     BadgeCheck,
     CircleHelp,
+    Ban,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
@@ -99,6 +100,7 @@
   let planning = false;
   let applying = false;
   let fixingIdx: number | null = null;
+  let disablingModId: string | null = null;
   let error: string | null = null;
   let message: string | null = null;
   let plan: any | null = null;
@@ -170,6 +172,49 @@
       error = String(e);
     } finally {
       fixingIdx = null;
+    }
+  }
+
+  /// Soft-disable a mod by renaming jar → `.jar.disabled` (keeps manifest entry).
+  async function fixDisableMod(modId: string, idx: number | null = null) {
+    if (!$projectPath) return;
+    if (idx !== null) fixingIdx = idx;
+    disablingModId = modId;
+    error = null;
+    message = null;
+    try {
+      const result: any = await invoke("disable_project_mod", {
+        path: $projectPath,
+        modId,
+      });
+      message = result?.alreadyDisabled
+        ? `${result.name ?? modId} was already disabled.`
+        : `Disabled ${result?.name ?? modId} (${result?.fileName ?? "★.disabled"}). Rerun the Test profile to verify.`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      fixingIdx = null;
+      disablingModId = null;
+    }
+  }
+
+  async function fixEnableMod(modId: string) {
+    if (!$projectPath) return;
+    disablingModId = modId;
+    error = null;
+    message = null;
+    try {
+      const result: any = await invoke("enable_project_mod", {
+        path: $projectPath,
+        modId,
+      });
+      message = `Re-enabled ${result?.name ?? modId}.`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      disablingModId = null;
     }
   }
 
@@ -547,6 +592,27 @@
           {:else}
             <p class="summary-copy">This mod has the highest combined diagnostic confidence, but no raw evidence line was returned.</p>
           {/if}
+          {#if topSuspect.knownInManifest}
+            <div class="summary-actions">
+              <button
+                class="secondary"
+                on:click={() => fixDisableMod(topSuspect.id)}
+                disabled={disablingModId !== null || fixingIdx !== null}
+                title="Rename jar to .disabled so the loader skips it"
+              >
+                <Ban size={15} />
+                {disablingModId === topSuspect.id ? "Disabling…" : "Disable mod"}
+              </button>
+              <button
+                class="ghost danger"
+                on:click={() => fixRemoveMod(topSuspect.id, -1)}
+                disabled={disablingModId !== null || fixingIdx !== null}
+                title="Remove from manifest and delete the jar"
+              >
+                <Trash2 size={15} /> Remove mod
+              </button>
+            </div>
+          {/if}
         </div>
       {:else}
         <div class="summary-icon"><CircleHelp size={22} /></div>
@@ -632,10 +698,16 @@
                 {:else if diag.code === "MOD_CONFLICT" && diag.relatedNodes?.length >= 2}
                   {@const modA = diag.relatedNodes[0].startsWith("mod:") ? diag.relatedNodes[0].slice(4) : diag.relatedNodes[0]}
                   {@const modB = diag.relatedNodes[1].startsWith("mod:") ? diag.relatedNodes[1].slice(4) : diag.relatedNodes[1]}
-                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modA, idx)} disabled={fixingIdx !== null}>
+                  <button class="ghost mini" on:click={() => fixDisableMod(modA, idx)} disabled={fixingIdx !== null || disablingModId !== null} title="Rename to .jar.disabled">
+                    <Ban size={14} /> Disable {modA}
+                  </button>
+                  <button class="ghost mini" on:click={() => fixDisableMod(modB, idx)} disabled={fixingIdx !== null || disablingModId !== null} title="Rename to .jar.disabled">
+                    <Ban size={14} /> Disable {modB}
+                  </button>
+                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modA, idx)} disabled={fixingIdx !== null || disablingModId !== null}>
                     <Trash2 size={14} /> Remove {modA}
                   </button>
-                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modB, idx)} disabled={fixingIdx !== null}>
+                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modB, idx)} disabled={fixingIdx !== null || disablingModId !== null}>
                     <Trash2 size={14} /> Remove {modB}
                   </button>
                 {:else if diag.code === "DUPLICATE_MOD"}
@@ -662,28 +734,13 @@
         </div>
 
         {#if selectedReport}
-          {#if selectedReport.sections?.length}
-            <div class="sections-strip">
-              {#each selectedReport.sections as section (`${section.title}-${section.startLine}`)}
-                <div class="section-pill">
-                  <strong>{section.title}</strong>
-                  <span>lines {section.startLine}-{section.endLine}</span>
-                </div>
-              {/each}
+          <div class="crash-preview">
+            <div class="crash-preview-bar">
+              <span>Crash log preview</span>
+              <small>{formatBytes(selectedReport.summary.size)}</small>
             </div>
-            <div class="section-previews">
-              {#each selectedReport.sections.slice(0, 4) as section (`${section.title}-${section.startLine}`)}
-                <details>
-                  <summary>{section.title}</summary>
-                  <pre>{section.preview || "No preview."}</pre>
-                </details>
-              {/each}
-            </div>
-          {/if}
-          <details class="raw-section">
-            <summary><span>Full crash report</span><small>{formatBytes(selectedReport.summary.size)}</small></summary>
             <pre class="report-content">{selectedReport.content}</pre>
-          </details>
+          </div>
         {:else}
           <div class="empty inline">No crash report to open yet.</div>
         {/if}
@@ -761,6 +818,26 @@
                     <p>{item.text}</p>
                   </div>
                 {/each}
+                {#if mod.knownInManifest}
+                  <div class="suspect-actions">
+                    <button
+                      class="ghost mini"
+                      on:click={() => fixDisableMod(mod.id)}
+                      disabled={disablingModId !== null || fixingIdx !== null}
+                      title="Rename jar to .disabled"
+                    >
+                      <Ban size={13} />
+                      {disablingModId === mod.id ? "Disabling…" : "Disable"}
+                    </button>
+                    <button
+                      class="ghost mini danger"
+                      on:click={() => fixRemoveMod(mod.id, -1)}
+                      disabled={disablingModId !== null || fixingIdx !== null}
+                    >
+                      <Trash2 size={13} /> Remove
+                    </button>
+                  </div>
+                {/if}
               </div>
             {/each}
           </div>
@@ -1107,6 +1184,11 @@
   .summary-evidence { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--accent-warning); border-radius: 0 10px 10px 0; background: var(--bg-tertiary); }
   .summary-evidence span { color: var(--text-muted); font-size: 11px; }
   .summary-evidence p, .summary-copy { margin: 5px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+  .summary-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .summary-actions button { display: inline-flex; align-items: center; gap: 6px; }
+  .suspect-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .ghost.danger { color: #fca5a5; }
+  .ghost.danger:hover { color: #fecaca; }
   .stats { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 14px; margin-bottom: 16px; }
   .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .stat-card { padding: 15px; display: flex; flex-direction: column; gap: 4px; }
@@ -1139,14 +1221,36 @@
   .log-status { padding: 10px; border: 1px dashed var(--border-color); border-radius: 10px; }
   .log-status.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.28); }
   pre { margin: 0; border-radius: 12px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow: auto; }
-  .sections-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-  .section-pill { display: grid; gap: 2px; padding: 8px 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .section-pill strong { color: var(--text-secondary); font-size: 12px; }
-  .section-pill span { color: var(--text-muted); font-size: 11px; }
-  .section-previews { display: grid; gap: 8px; margin-bottom: 12px; }
-  .section-previews details { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px; }
-  .section-previews summary { cursor: pointer; color: var(--text-secondary); font-weight: 800; }
-  .section-previews pre { margin-top: 8px; max-height: 180px; padding: 10px; }
+  .crash-preview {
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: #0d0d10;
+    overflow: hidden;
+  }
+  .crash-preview-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 800;
+    background: var(--bg-tertiary);
+  }
+  .crash-preview-bar small { color: var(--text-muted); font-weight: 500; }
+  .crash-preview .report-content {
+    margin: 0;
+    max-height: 420px;
+    overflow: auto;
+    padding: 14px;
+    color: #d4d4d8;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    font-family: ui-monospace, monospace;
+  }
   .raw-section { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); overflow: hidden; }
   .raw-section > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 800; }
   .raw-section > summary span { display: flex; align-items: center; gap: 8px; }

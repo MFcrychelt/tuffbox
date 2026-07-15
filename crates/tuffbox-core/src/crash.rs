@@ -818,6 +818,9 @@ pub fn create_crash_fix_plan(
         let node_id = NodeId::module(&top.id);
         let mut actions = Vec::new();
         if top.known_in_manifest && graph.has_node(&node_id) {
+            actions.push(ChangeAction::DisableMod {
+                node_id: node_id.clone(),
+            });
             actions.push(ChangeAction::UpdateMod {
                 node_id: node_id.clone(),
                 target_version: LATEST_COMPATIBLE_VERSION.to_string(),
@@ -826,7 +829,7 @@ pub fn create_crash_fix_plan(
         return ChangePlan {
             summary: if top.known_in_manifest {
                 format!(
-                    "Create a safety snapshot, then update or temporarily disable suspected mod {} and rerun the failing profile.",
+                    "Create a safety snapshot, then disable suspected mod {} (jar → .disabled) and rerun. If needed, update it to the latest compatible build afterward.",
                     top.name
                 )
             } else {
@@ -994,19 +997,45 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
 
 fn candidate_matches_line(candidate: &ModCandidate<'_>, line: &str) -> bool {
     let normalized_line = normalize_token(line);
+    let compact_line = compact_token(&normalized_line);
+    // Segment match avoids short name tokens like "critters" falsely hitting
+    // another mod id such as "crittersandcompanions" via substring contains().
+    let line_parts: HashSet<&str> = normalized_line
+        .split('-')
+        .filter(|part| part.len() >= 3)
+        .collect();
+
     candidate.tokens.iter().any(|token| {
-        token.len() >= 4 && (normalized_line == *token || normalized_line.contains(token))
+        if token.len() < 4 || is_noise_token(token) {
+            return false;
+        }
+        let compact = compact_token(token);
+        if normalized_line == *token || compact_line == compact || compact_line == *token {
+            return true;
+        }
+        if line_parts.contains(token.as_str()) || line_parts.contains(compact.as_str()) {
+            return true;
+        }
+        // Long stems / modids (file names, mixin packages) may appear mid-line.
+        compact.len() >= 10 && compact_line.contains(&compact)
     })
 }
 
 fn jar_matches_candidate(jar_name: &str, candidate: &ModCandidate<'_>) -> bool {
     let normalized = normalize_token(jar_name.trim_end_matches(".jar"));
+    let compact = compact_token(&normalized);
     if candidate.file_stem.as_deref() == Some(normalized.as_str()) {
         return true;
     }
     candidate.tokens.iter().any(|token| {
-        token.len() >= 4
-            && (normalized == *token || normalized.contains(token) || token.contains(&normalized))
+        if token.len() < 4 || is_noise_token(token) {
+            return false;
+        }
+        let token_compact = compact_token(token);
+        normalized == *token
+            || compact == token_compact
+            || (token_compact.len() >= 10
+                && (compact.contains(&token_compact) || token_compact.contains(&compact)))
     })
 }
 
@@ -1323,17 +1352,41 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
         });
+        // A different "critters*" mod must not steal the provided-by match via
+        // the shared short name token "critters".
+        manifest.mods.push(ModSpec {
+            id: "cosy-critters".to_string(),
+            name: "Cosy Critters & Creepy Crawlies".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("cosy-critters".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "0.1.2".to_string(),
+            file_name: Some("cosycritters-0.1.2+1.21.1-fabric.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
         let text = "Could not execute entrypoint stage 'main' due to errors, provided by 'crittersandcompanions'!";
 
         let (signals, suspects) =
             analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
 
         assert_eq!(signals[0].kind, CrashSignalKind::Entrypoint);
-        assert_eq!(suspects.len(), 1);
         assert_eq!(suspects[0].id, "critters-and-companions");
         assert_eq!(suspects[0].name, "Critters and Companions");
         assert!(suspects[0].known_in_manifest);
         assert!(suspects[0].confidence >= 96);
+        assert!(
+            !suspects.iter().any(|s| s.id == "cosy-critters"),
+            "Cosy Critters should not match crittersandcompanions via substring 'critters'"
+        );
     }
 
     #[test]

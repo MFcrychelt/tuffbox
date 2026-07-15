@@ -320,6 +320,13 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
         .mods
         .par_iter()
         .filter(|module| {
+            if module
+                .status
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case("disabled"))
+            {
+                return false;
+            }
             only_mod_ids
                 .map(|ids| ids.contains(&module.id))
                 .unwrap_or(true)

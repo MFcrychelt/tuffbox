@@ -268,6 +268,8 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
         ];
 
         let provider = tuffbox_core::ModrinthProvider::new();
+        let mut hash_index = tuffbox_core::ModHashIndex::load(&project_dir);
+        let mut index_dirty = false;
         let mut any_changes = false;
 
         for &(dir_name, ext, default_content_type) in content_dirs {
@@ -298,14 +300,31 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     continue;
                 }
 
-                // Try to identify this file against Modrinth by content hash.
-                let identified = tuffbox_core::identify_local_jar_via_modrinth(
-                    &provider,
-                    &entry.path(),
-                    tuffbox_core::manifest::Side::Both,
-                )
-                .ok()
-                .flatten();
+                let Ok(sha1) = tuffbox_core::sha1_file(&entry.path()) else {
+                    continue;
+                };
+
+                let identified = if let Some(cached) = hash_index.get(&sha1) {
+                    cached.to_mod_spec(file_name.clone(), tuffbox_core::manifest::Side::Both)
+                } else {
+                    match tuffbox_core::identify_local_jar_via_modrinth(
+                        &provider,
+                        &entry.path(),
+                        tuffbox_core::manifest::Side::Both,
+                    ) {
+                        Ok(Some(spec)) => {
+                            hash_index.put_modrinth(&sha1, &spec);
+                            index_dirty = true;
+                            Some(spec)
+                        }
+                        Ok(None) => {
+                            hash_index.put_miss(&sha1);
+                            index_dirty = true;
+                            None
+                        }
+                        Err(_) => None,
+                    }
+                };
 
                 if let Some(mut identified) = identified {
                     identified.file_name = Some(file_name.clone());
@@ -358,7 +377,10 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                         icon_url: None,
                     },
                     file_name: Some(file_name),
-                    hashes: None,
+                    hashes: Some(tuffbox_core::FileHashes {
+                        sha1: Some(sha1),
+                        sha512: None,
+                    }),
                     dependencies: vec![],
                     status: vec![],
                     content_type: default_content_type,
@@ -367,10 +389,8 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             }
         }
 
-        // Re-identify mods already in the manifest that aren't linked to a
-        // Modrinth project yet (e.g. imported/custom-local entries). A sha1
-        // match against Modrinth upgrades them to full Modrinth sources, which
-        // gives them an icon, version switching and update support.
+        // Re-identify local-only manifest entries once and cache the result.
+        // Already-indexed Modrinth/CurseForge mods are never re-queried.
         for idx in 0..manifest.mods.len() {
             if manifest.mods[idx].source.project_id.is_some() {
                 continue;
@@ -384,6 +404,22 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             if !file_path.is_file() {
                 continue;
             }
+            let Ok(sha1) = tuffbox_core::sha1_file(&file_path) else {
+                continue;
+            };
+            if let Some(cached) = hash_index.get(&sha1) {
+                if cached.status == "miss" {
+                    continue;
+                }
+                if let Some(mut spec) =
+                    cached.to_mod_spec(file_name.clone(), manifest.mods[idx].side)
+                {
+                    spec.side = manifest.mods[idx].side;
+                    manifest.mods[idx] = spec;
+                    any_changes = true;
+                }
+                continue;
+            }
             let identified = tuffbox_core::identify_local_jar_via_modrinth(
                 &provider,
                 &file_path,
@@ -392,15 +428,23 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             .ok()
             .flatten();
             if let Some(mut spec) = identified {
+                hash_index.put_modrinth(&sha1, &spec);
+                index_dirty = true;
                 spec.file_name = Some(file_name);
                 spec.side = manifest.mods[idx].side;
                 manifest.mods[idx] = spec;
                 any_changes = true;
+            } else {
+                hash_index.put_miss(&sha1);
+                index_dirty = true;
             }
         }
 
         if any_changes {
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        }
+        if index_dirty {
+            let _ = hash_index.save(&project_dir);
         }
 
         list_mods_impl(&path)
@@ -430,8 +474,13 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                             .map(|pid| format!("https://cdn.modrinth.com/data/{pid}/icon.png"))
                     })
                 }
-                _ => None,
+                tuffbox_core::manifest::SourceKind::Curseforge => m.source.icon_url.clone(),
+                _ => m.source.icon_url.clone(),
             };
+            let disabled = m
+                .status
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case("disabled"));
             serde_json::json!({
                 "id": m.id,
                 "name": m.name,
@@ -442,6 +491,8 @@ fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
                 "fileName": m.file_name,
                 "iconUrl": icon_url,
                 "contentType": content_type,
+                "disabled": disabled,
+                "status": m.status,
             })
         })
         .collect();
@@ -486,6 +537,85 @@ async fn search_modrinth_mods(
                 project_type: content_type,
             })
             .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn search_curseforge_mods(
+    path: String,
+    query: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+    content_type: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let provider = tuffbox_core::CurseForgeProvider::new();
+        if !provider.is_configured() {
+            return Err("CurseForge API key is not configured".to_string());
+        }
+        let project_type = content_type.unwrap_or_else(|| "mod".into());
+        let class_id = tuffbox_core::CurseForgeProvider::class_id_for_project_type(&project_type);
+        let gv = game_version.unwrap_or_else(|| manifest.minecraft.version.clone());
+        let loader_slug = loader.unwrap_or_else(|| {
+            tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()
+        });
+        let mod_loader = if project_type == "mod" {
+            tuffbox_core::CurseForgeProvider::mod_loader_type(&loader_slug)
+        } else {
+            None
+        };
+        let hits = provider
+            .search_content(class_id, &query, Some(&gv), mod_loader, 0, 30)
+            .map_err(|e| e.to_string())?;
+        Ok(hits
+            .into_iter()
+            .map(|hit| {
+                let mapped_type = match hit.class_id.unwrap_or(class_id) {
+                    12 => "resourcepack",
+                    6552 => "shader",
+                    6945 => "datapack",
+                    4471 => "modpack",
+                    _ => "mod",
+                };
+                serde_json::json!({
+                    "id": hit.id.to_string(),
+                    "slug": hit.slug,
+                    "name": hit.name,
+                    "description": hit.summary,
+                    "projectType": mapped_type,
+                    "iconUrl": hit.icon_url,
+                    "author": hit.authors.first().cloned(),
+                    "downloads": hit.download_count,
+                    "follows": null,
+                    "dateModified": null,
+                    "categories": hit.categories,
+                    "provider": "curseforge",
+                })
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn add_curseforge_mod(
+    app: tauri::AppHandle,
+    path: String,
+    mod_id: String,
+    side: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "add-curseforge-mod").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        add_mod_from_curseforge(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -788,33 +918,208 @@ async fn add_modrinth_mods_with_dependencies(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
-    auto_snapshot(&PathBuf::from(&path), "remove-mod").map_err(|e| e.to_string())?;
-    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let original_len = manifest.mods.len();
-    let removed_mod = manifest.mods.iter().find(|m| m.id == mod_id).cloned();
-    manifest.mods.retain(|m| m.id != mod_id);
-    if manifest.mods.len() == original_len {
-        return Err(format!("mod {mod_id} not found in project"));
-    }
-    save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
+async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "remove-mod").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let removed_idx = manifest
+            .mods
+            .iter()
+            .position(|m| {
+                m.id == mod_id
+                    || m.source.project_id.as_deref() == Some(mod_id.as_str())
+                    || m.file_name.as_deref() == Some(mod_id.as_str())
+            })
+            .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+        let removed_mod = manifest.mods.remove(removed_idx);
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
 
-    // Remove the physical file too, so a removed entry doesn't linger in
-    // its content folder and get loaded by Minecraft anyway on the next
-    // launch. Uses the entry's own content type so resourcepacks/shaders
-    // are removed from the right folder, not `mods/`.
-    if let Some(removed_mod) = removed_mod {
-        if let Some(file_name) = removed_mod.file_name {
-            if let Some(instance_dir) =
-                tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
-            {
-                let content_dir =
-                    tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
-                let _ = std::fs::remove_file(content_dir.join(file_name));
+        // Prefer live disk hash so we can also clear leftover renamed jars
+        // and the persistent Modrinth hash index.
+        let mut sha1 = removed_mod
+            .hashes
+            .as_ref()
+            .and_then(|h| h.sha1.clone())
+            .filter(|s| !s.is_empty());
+        if let Some(path_on_disk) = existing_mod_file_path(&manifest_path, &removed_mod) {
+            if let Ok(hash) = tuffbox_core::sha1_file(&path_on_disk) {
+                sha1 = Some(hash);
             }
         }
-    }
-    Ok(())
+
+        remove_mod_file_from_disk(&manifest_path, &removed_mod);
+        if let Some(ref hash) = sha1 {
+            // Drop any jar with the same bytes (renames / .disabled leftovers).
+            if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+                let content_dir =
+                    tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
+                if let Ok(entries) = std::fs::read_dir(&content_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path.is_file() {
+                            continue;
+                        }
+                        if let Ok(actual) = tuffbox_core::sha1_file(&path) {
+                            if actual.eq_ignore_ascii_case(hash) {
+                                let _ = std::fs::remove_file(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+            let mut index = tuffbox_core::ModHashIndex::load(&instance_dir);
+            if let Some(hash) = sha1.as_deref() {
+                index.remove_sha1(hash);
+            }
+            index.remove_id(&removed_mod.id);
+            if let Some(pid) = removed_mod.source.project_id.as_deref() {
+                index.remove_project(pid);
+            }
+            let _ = index.save(&instance_dir);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Soft-disable a tracked mod by renaming its jar to `*.disabled` (Prism/Minecraft
+/// convention). Keeps the manifest entry so it can be re-enabled later.
+#[tauri::command(rename_all = "camelCase")]
+async fn disable_project_mod(path: String, mod_id: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "disable-mod").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let idx = manifest
+            .mods
+            .iter()
+            .position(|m| {
+                m.id == mod_id
+                    || m.source.project_id.as_deref() == Some(mod_id.as_str())
+                    || m.file_name.as_deref() == Some(mod_id.as_str())
+            })
+            .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+        let module = &mut manifest.mods[idx];
+        if module.status.iter().any(|s| s.eq_ignore_ascii_case("disabled")) {
+            return Ok(serde_json::json!({
+                "id": module.id,
+                "disabled": true,
+                "alreadyDisabled": true,
+                "fileName": module.file_name,
+            }));
+        }
+        let Some(file_name) = module.file_name.clone() else {
+            return Err(format!("{} has no file name to disable", module.name));
+        };
+        let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) else {
+            return Err("could not resolve instance directory".to_string());
+        };
+        let content_dir = tuffbox_core::content_dir_for(&instance_dir, module.content_type);
+        let active = content_dir.join(&file_name);
+        let disabled = content_dir.join(format!("{file_name}.disabled"));
+        if disabled.is_file() && !active.is_file() {
+            // Already renamed on disk — just mark the status.
+        } else if active.is_file() {
+            if disabled.exists() {
+                let _ = std::fs::remove_file(&disabled);
+            }
+            std::fs::rename(&active, &disabled).map_err(|e| {
+                format!(
+                    "failed to rename {} → {}.disabled: {e}",
+                    active.display(),
+                    file_name
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "{} not found on disk (looked for {} and {}.disabled)",
+                module.name, file_name, file_name
+            ));
+        }
+        if !module
+            .status
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case("disabled"))
+        {
+            module.status.push("disabled".to_string());
+        }
+        let id = module.id.clone();
+        let name = module.name.clone();
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "id": id,
+            "name": name,
+            "disabled": true,
+            "alreadyDisabled": false,
+            "fileName": format!("{file_name}.disabled"),
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Re-enable a previously disabled mod by renaming `*.disabled` back.
+#[tauri::command(rename_all = "camelCase")]
+async fn enable_project_mod(path: String, mod_id: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "enable-mod").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let idx = manifest
+            .mods
+            .iter()
+            .position(|m| {
+                m.id == mod_id
+                    || m.source.project_id.as_deref() == Some(mod_id.as_str())
+                    || m.file_name.as_deref() == Some(mod_id.as_str())
+            })
+            .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+        let module = &mut manifest.mods[idx];
+        let Some(file_name) = module.file_name.clone() else {
+            return Err(format!("{} has no file name to enable", module.name));
+        };
+        let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) else {
+            return Err("could not resolve instance directory".to_string());
+        };
+        let content_dir = tuffbox_core::content_dir_for(&instance_dir, module.content_type);
+        let active = content_dir.join(&file_name);
+        let disabled = content_dir.join(format!("{file_name}.disabled"));
+        if active.is_file() {
+            // Already active.
+        } else if disabled.is_file() {
+            std::fs::rename(&disabled, &active).map_err(|e| {
+                format!(
+                    "failed to rename {}.disabled → {}: {e}",
+                    file_name,
+                    active.display()
+                )
+            })?;
+        } else {
+            return Err(format!(
+                "{} is not present as either {} or {}.disabled",
+                module.name, file_name, file_name
+            ));
+        }
+        module
+            .status
+            .retain(|s| !s.eq_ignore_ascii_case("disabled"));
+        let id = module.id.clone();
+        let name = module.name.clone();
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "id": id,
+            "name": name,
+            "disabled": false,
+            "fileName": file_name,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1577,8 +1882,10 @@ fn resolve_pending_mod_updates(
     let mut no_hash_idxs: Vec<usize> = Vec::new();
 
     for (idx, module) in manifest.mods.iter().enumerate() {
-        let is_modrinth =
-            module.source.kind == SourceKind::Modrinth || module.source.project_id.is_some();
+        let is_modrinth = module.source.kind == SourceKind::Modrinth
+            || (module.source.kind != SourceKind::Curseforge
+                && module.source.kind != SourceKind::Github
+                && module.source.project_id.is_some());
         if !is_modrinth {
             continue;
         }
@@ -6698,8 +7005,7 @@ fn apply_change_action(
                 .map_err(|e| e.to_string())?;
             applied.push(format!("installed {project_id}"));
         }
-        tuffbox_core::ChangeAction::RemoveMod { node_id }
-        | tuffbox_core::ChangeAction::DisableMod { node_id } => {
+        tuffbox_core::ChangeAction::RemoveMod { node_id } => {
             let mod_id = node_id
                 .0
                 .strip_prefix("mod:")
@@ -6713,6 +7019,36 @@ fn apply_change_action(
                     remove_mod_file_from_disk(manifest_path, &removed_mod);
                 }
                 applied.push(format!("removed {mod_id}"));
+            }
+        }
+        tuffbox_core::ChangeAction::DisableMod { node_id } => {
+            let mod_id = node_id
+                .0
+                .strip_prefix("mod:")
+                .unwrap_or(&node_id.0)
+                .to_string();
+            if let Some(module) = manifest.mods.iter_mut().find(|m| m.id == mod_id) {
+                if let Some(file_name) = module.file_name.clone() {
+                    if let Some(instance_dir) =
+                        tuffbox_core::instance_dir_for_manifest(manifest_path)
+                    {
+                        let content_dir =
+                            tuffbox_core::content_dir_for(&instance_dir, module.content_type);
+                        let active = content_dir.join(&file_name);
+                        let disabled = content_dir.join(format!("{file_name}.disabled"));
+                        if active.is_file() {
+                            let _ = std::fs::rename(&active, &disabled);
+                        }
+                    }
+                }
+                if !module
+                    .status
+                    .iter()
+                    .any(|s| s.eq_ignore_ascii_case("disabled"))
+                {
+                    module.status.push("disabled".to_string());
+                }
+                applied.push(format!("disabled {mod_id}"));
             }
         }
         tuffbox_core::ChangeAction::UpdateMod {
@@ -6829,6 +7165,97 @@ fn add_mod_from_modrinth(
     let mod_side = parse_side(side.as_deref(), Some(&project));
     let mod_spec = build_mod_spec(&project, &version, file, dependencies, mod_side);
     manifest.mods.push(mod_spec);
+    Ok(())
+}
+
+fn add_mod_from_curseforge(
+    manifest: &mut ProjectManifest,
+    mod_id: &str,
+    side: Option<String>,
+) -> anyhow::Result<()> {
+    let project_id: u64 = mod_id
+        .parse()
+        .map_err(|_| anyhow::anyhow!("invalid CurseForge project id: {mod_id}"))?;
+    let provider = tuffbox_core::CurseForgeProvider::new();
+    if !provider.is_configured() {
+        anyhow::bail!("CurseForge API key is not configured");
+    }
+    let hit = provider.get_mod(project_id)?;
+    let project_id_str = project_id.to_string();
+    let slug = if hit.slug.is_empty() {
+        format!("cf-{project_id}")
+    } else {
+        hit.slug.clone()
+    };
+    if manifest.mods.iter().any(|m| {
+        m.id == slug
+            || m.source.project_id.as_deref() == Some(mod_id)
+            || m.source.project_id.as_deref() == Some(project_id_str.as_str())
+    }) {
+        anyhow::bail!("mod {slug} is already in the project");
+    }
+
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    let mc = manifest.minecraft.version.clone();
+    let mut files = provider.get_mod_files(project_id, Some(&mc))?;
+    if files.is_empty() {
+        files = provider.get_mod_files(project_id, None)?;
+    }
+    let chosen = tuffbox_core::CurseForgeProvider::pick_best_file(&files, &mc, &loader)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("no compatible CurseForge file for {slug}"))?;
+    let mut file = provider.get_file(project_id, chosen.id).unwrap_or(chosen);
+    if file
+        .download_url
+        .as_ref()
+        .map(|u| u.is_empty())
+        .unwrap_or(true)
+    {
+        let mut map = std::collections::HashMap::from([(file.id, file.clone())]);
+        let _ = provider.apply_modrinth_fallback(&mut map);
+        if let Some(resolved) = map.remove(&file.id) {
+            file = resolved;
+        }
+    }
+    let download_url = file
+        .download_url
+        .clone()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "CurseForge withheld the download URL for {slug}. Install the file manually or mirror it via Modrinth."
+            )
+        })?;
+
+    let content_type = match hit.class_id.unwrap_or(6) {
+        12 => tuffbox_core::manifest::ContentType::Resourcepack,
+        6552 => tuffbox_core::manifest::ContentType::Shaderpack,
+        6945 => tuffbox_core::manifest::ContentType::Datapack,
+        _ => tuffbox_core::manifest::ContentType::Mod,
+    };
+    let mod_side = parse_side(side.as_deref(), None);
+    manifest.mods.push(ModSpec {
+        id: slug,
+        name: hit.name,
+        source: ModSource {
+            kind: SourceKind::Curseforge,
+            project_id: Some(project_id_str),
+            file_id: Some(file.id.to_string()),
+            url: Some(download_url),
+            path: None,
+            icon_url: hit.icon_url,
+        },
+        version: file.display_name.clone(),
+        file_name: Some(file.file_name),
+        hashes: Some(tuffbox_core::FileHashes {
+            sha1: file.hashes.sha1,
+            sha512: file.hashes.sha512,
+        }),
+        side: mod_side,
+        dependencies: vec![],
+        status: vec!["ok".to_string()],
+        content_type,
+    });
     Ok(())
 }
 
@@ -7546,6 +7973,7 @@ pub fn run() {
             list_mods,
             sync_mods_folder,
             search_modrinth_mods,
+            search_curseforge_mods,
             preview_modrinth_install,
             get_modrinth_project_icon,
             get_modrinth_project,
@@ -7559,7 +7987,10 @@ pub fn run() {
             add_modrinth_mod,
             add_modrinth_mod_with_dependencies,
             add_modrinth_mods_with_dependencies,
+            add_curseforge_mod,
             remove_project_mod,
+            disable_project_mod,
+            enable_project_mod,
             update_project_mod,
             check_mod_updates,
             update_all_mods,

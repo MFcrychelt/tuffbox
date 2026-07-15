@@ -65,6 +65,7 @@
     follows?: number | null;
     dateModified?: string | null;
     categories?: string[];
+    provider?: string;
   };
 
   type InstallPreview = {
@@ -359,6 +360,7 @@
   });
 
   let addOpen = false;
+  let catalogProvider: "modrinth" | "curseforge" = "modrinth";
   let searchQuery = "";
   let searchResults: SearchResult[] = [];
   let searchLoading = false;
@@ -430,6 +432,7 @@
       follows: (p.follows as number | null | undefined) ?? null,
       dateModified: (p.dateModified as string | null | undefined) ?? null,
       categories: (p.categories as string[] | undefined) ?? [],
+      provider: (p.provider as string | undefined) ?? undefined,
     };
   }
 
@@ -438,7 +441,22 @@
   }
 
   function canUpdateMod(mod: ModRow): boolean {
-    return mod.source === "modrinth" || !!mod.projectId;
+    return mod.source === "modrinth";
+  }
+
+  function isCurseForgeResult(result: SearchResult | null | undefined): boolean {
+    return result?.provider === "curseforge" || catalogProvider === "curseforge";
+  }
+
+  function setCatalogProvider(provider: "modrinth" | "curseforge") {
+    if (catalogProvider === provider) return;
+    catalogProvider = provider;
+    searchQuery = "";
+    searchResults = [];
+    selectedResultIds = {};
+    pendingInstall = null;
+    pendingInstallOptional = provider === "modrinth";
+    searchMods();
   }
 
   function savedViewLabel(filter: string): string {
@@ -448,6 +466,7 @@
   }
 
   function modIconLookupKey(mod: ModRow): string | null {
+    if (mod.source === "curseforge") return null;
     if (mod.projectId) return mod.projectId;
     if (mod.source === "modrinth" && mod.id) return mod.id;
     return null;
@@ -627,11 +646,21 @@
 
   async function doRemove() {
     if (!$projectPath || !confirmMod) return;
+    const target = confirmMod;
     confirmOpen = false;
-    mutating = true; error = null;
-    try { await invoke("remove_project_mod", { path: $projectPath, modId: confirmMod.id }); await load(true); }
-    catch (e) { error = String(e); }
-    finally { mutating = false; confirmMod = null; }
+    mutating = true;
+    error = null;
+    try {
+      await invoke("remove_project_mod", { path: $projectPath, modId: target.id });
+      mods = mods.filter((m) => m.id !== target.id);
+      confirmMod = null;
+      await load(true);
+    } catch (e) {
+      error = `Failed to remove ${target.name}: ${String(e)}`;
+      confirmMod = null;
+    } finally {
+      mutating = false;
+    }
   }
 
   // Mod recommendations
@@ -983,16 +1012,22 @@
     { id: "updated", label: "Date updated" },
   ];
 
+  function modsFingerprint(list: ModRow[]): string {
+    return list
+      .map((m) => `${m.id}|${m.version}|${m.projectId ?? ""}|${m.source}`)
+      .join(";");
+  }
+
   async function load(force = false) {
     if (!$projectPath) return;
     if (!force && lastLoadedPath === $projectPath && mods.length > 0) return;
+    const path = $projectPath;
     loading = true;
     error = null;
     try {
-      // Sync folders first so manually dropped jars get identified via Modrinth
-      // hash lookup and receive projectId/icon metadata before we render.
-      mods = await invoke("sync_mods_folder", { path: $projectPath });
-      lastLoadedPath = $projectPath;
+      // Fast path: list known mods from disk/index and paint immediately.
+      mods = await invoke("list_mods", { path });
+      lastLoadedPath = path;
       brokenIcons = [];
       await loadUserState();
     } catch (e) {
@@ -1000,15 +1035,25 @@
       loading = false;
       return;
     }
-    // Render the list immediately. The Modrinth calls below (icon hydration +
-    // update checks) can be slow or fail offline, so they run in the
-    // background instead of blocking the spinner forever.
+    // Don't block the spinner on Modrinth indexing / hash lookup.
     loading = false;
-    hydrateMissingIcons().catch(() => {});
-    refreshUpdateDots().catch(() => {});
     if (isSavedViewFilter(contentFilter)) {
       loadSavedModsView().catch(() => {});
     }
+    (async () => {
+      try {
+        const synced: ModRow[] = await invoke("sync_mods_folder", { path });
+        if ($projectPath !== path) return;
+        if (modsFingerprint(synced) !== modsFingerprint(mods)) {
+          mods = synced;
+        }
+      } catch {
+        // Keep the fast list; offline or sync failures shouldn't wipe the UI.
+      }
+      if ($projectPath !== path) return;
+      hydrateMissingIcons().catch(() => {});
+      refreshUpdateDots().catch(() => {});
+    })();
   }
 
   // Cross-references the latest available Modrinth versions with the installed
@@ -1119,22 +1164,44 @@
     searchLoading = true;
     error = null;
     try {
-      searchResults = await invoke("search_modrinth_mods", {
-        path: $projectPath,
-        query: searchQuery.trim(),
-        gameVersion: filterGameVersion || null,
+      const loader =
+        contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null;
+      const contentType = contentTypeForFilter(contentFilter);
+      if (catalogProvider === "curseforge") {
+        const results: SearchResult[] = await invoke("search_curseforge_mods", {
+          path: $projectPath,
+          query: searchQuery.trim(),
+          gameVersion: filterGameVersion || null,
+          loader,
+          contentType,
+        });
+        searchResults = results.map((r) => ({
+          ...r,
+          provider: r.provider ?? "curseforge",
+        }));
+      } else {
         // Resourcepacks/datapacks/shaders aren't tied to a mod loader on
         // Modrinth; sending a loader facet for them would return zero
         // results, so only apply it for the "mod" tab.
-        loader: contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null,
-        category: filterCategory || null,
-        environment: filterEnvironment || null,
-        license: filterLicense || null,
-        sort: sortBy,
-        contentType: contentTypeForFilter(contentFilter),
-      });
+        const results: SearchResult[] = await invoke("search_modrinth_mods", {
+          path: $projectPath,
+          query: searchQuery.trim(),
+          gameVersion: filterGameVersion || null,
+          loader,
+          category: filterCategory || null,
+          environment: filterEnvironment || null,
+          license: filterLicense || null,
+          sort: sortBy,
+          contentType,
+        });
+        searchResults = results.map((r) => ({
+          ...r,
+          provider: r.provider ?? "modrinth",
+        }));
+      }
     } catch (e) {
       error = String(e);
+      searchResults = [];
     } finally {
       searchLoading = false;
     }
@@ -1142,6 +1209,7 @@
 
   async function loadInstallPreview(result: SearchResult) {
     if (!$projectPath) return;
+    if (isCurseForgeResult(result)) return;
     if (previews[result.id] !== undefined) return;
     previewLoadingId = result.id;
     try {
@@ -1204,15 +1272,22 @@
   async function confirmInstall(withDependencies = false) {
     if (!$projectPath || !pendingInstall) return;
     const installTarget = pendingInstall;
+    const curseforge = isCurseForgeResult(installTarget);
     mutating = true;
     error = null;
     openDownloadOverlay(
-      withDependencies
+      !curseforge && withDependencies
         ? `Installing ${pendingInstall.name} + deps`
         : `Installing ${pendingInstall.name}`,
     );
     try {
-      if (withDependencies) {
+      if (curseforge) {
+        await invoke("add_curseforge_mod", {
+          path: $projectPath,
+          modId: pendingInstall.id,
+          side: selectedSide,
+        });
+      } else if (withDependencies) {
         await invoke("add_modrinth_mod_with_dependencies", {
           path: $projectPath,
           modId: pendingInstall.id,
@@ -1291,7 +1366,13 @@
   }
 
   function isInstalled(result: SearchResult) {
-    return mods.some((m) => m.id === result.slug || m.id === result.id || m.projectId === result.id);
+    return mods.some(
+      (m) =>
+        m.id === result.slug ||
+        m.id === result.id ||
+        m.projectId === result.id ||
+        m.projectId === String(result.id),
+    );
   }
 
   function iconFallback(name: string) {
@@ -1643,6 +1724,33 @@
   {/if}
 </div>
 
+{#if confirmOpen && confirmMod}
+  <div
+    class="modal-backdrop"
+    role="button"
+    tabindex="-1"
+    aria-label="Confirm remove mod"
+    on:click|self={() => { confirmOpen = false; confirmMod = null; }}
+    on:keydown={(event) => event.key === "Escape" && (confirmOpen = false, confirmMod = null)}
+  >
+    <div class="modal confirm-modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <h2>Remove {confirmMod.name}?</h2>
+          <p>Deletes the jar from disk and removes the Modrinth index entry. A snapshot is taken first.</p>
+        </div>
+        <button class="icon-btn" on:click={() => { confirmOpen = false; confirmMod = null; }}><X size={18} /></button>
+      </div>
+      <div class="plan-actions">
+        <button class="ghost" on:click={() => { confirmOpen = false; confirmMod = null; }}>Cancel</button>
+        <button class="danger" on:click={doRemove} disabled={mutating}>
+          <Trash2 size={16} /> Remove
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if downloadOpen}
   <div
     class="modal-backdrop download-backdrop"
@@ -1753,12 +1861,24 @@
     <div class="modal" role="dialog" aria-modal="true">
       <div class="modal-header">
         <div>
-          <h2>Add Modrinth {contentFilter}</h2>
+          <h2>Add {catalogProvider === "curseforge" ? "CurseForge" : "Modrinth"} {contentFilter}</h2>
           <p>
             {contentFilter === "mod"
               ? "Search is filtered by the current Minecraft version and loader."
               : "Search is filtered by the current Minecraft version."}
           </p>
+          <div class="provider-toggle" role="group" aria-label="Catalog provider">
+            <button
+              type="button"
+              class:active={catalogProvider === "modrinth"}
+              on:click={() => setCatalogProvider("modrinth")}
+            >Modrinth</button>
+            <button
+              type="button"
+              class:active={catalogProvider === "curseforge"}
+              on:click={() => setCatalogProvider("curseforge")}
+            >CurseForge</button>
+          </div>
         </div>
         <button class="icon-btn" on:click={() => (addOpen = false)}><X size={18} /></button>
       </div>
@@ -1886,12 +2006,12 @@
             <div class="bulk-actions">
               <button class="ghost" on:click={selectVisibleResults} disabled={pagedResults.length === 0}>Select visible</button>
               <button class="ghost" on:click={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
-              <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating}>Install selected + dependencies</button>
+              <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating || catalogProvider === "curseforge"} title={catalogProvider === "curseforge" ? "Bulk install with dependencies is Modrinth-only" : undefined}>Install selected + dependencies</button>
             </div>
           </div>
 
           {#if searchLoading}
-            <div class="loading compact">Loading Modrinth projects...</div>
+            <div class="loading compact">Loading {catalogProvider === "curseforge" ? "CurseForge" : "Modrinth"} projects...</div>
           {:else if isSavedViewFilter(contentFilter)}
             {#if savedModsLoading}
               <div class="loading compact">Loading saved projects...</div>
@@ -2058,7 +2178,9 @@
           <div>
             <span class="plan-eyebrow">Install plan</span>
             <h3>{pendingInstall.name} ({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</h3>
-            {#if previews[pendingInstall.id]}
+            {#if isCurseForgeResult(pendingInstall)}
+              <p class="muted">CurseForge installs the selected project directly (no dependency resolution).</p>
+            {:else if previews[pendingInstall.id]}
               <div class="dep-list">
                 <h4>Required ({requiredDeps(previews[pendingInstall.id]).length})</h4>
                 {#if requiredDeps(previews[pendingInstall.id]).length === 0}
@@ -2104,8 +2226,16 @@
           </div>
           <div class="plan-actions">
             <button class="ghost" on:click={() => (pendingInstall = null)}>Cancel</button>
-            <button on:click={() => confirmInstall(pendingInstallOptional)} disabled={mutating}>
-              <Download size={16} /> Install{pendingInstallOptional ? " with dependencies" : ""}
+            <button
+              on:click={() => confirmInstall(isCurseForgeResult(pendingInstall) ? false : pendingInstallOptional)}
+              disabled={mutating}
+            >
+              <Download size={16} />
+              {#if isCurseForgeResult(pendingInstall)}
+                Install
+              {:else}
+                Install{pendingInstallOptional ? " with dependencies" : ""}
+              {/if}
             </button>
           </div>
         </div>
@@ -3140,6 +3270,54 @@
     color: var(--text-muted);
     font-size: 13px;
     line-height: 1.45;
+  }
+
+  .provider-toggle {
+    display: inline-flex;
+    gap: 4px;
+    margin-top: 10px;
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+
+  .provider-toggle button {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .provider-toggle button.active {
+    background: rgba(27, 217, 106, 0.14);
+    color: var(--text-primary);
+  }
+
+  .confirm-modal {
+    width: min(480px, calc(100vw - 28px));
+    max-height: none;
+  }
+
+  .confirm-modal .plan-actions {
+    margin-top: 18px;
+  }
+
+  .confirm-modal button.danger {
+    background: #ef4444;
+    color: #fff;
+  }
+
+  .confirm-modal button.danger:hover:not(:disabled) {
+    background: #dc2626;
+  }
+
+  .confirm-modal button.danger:disabled {
+    opacity: 0.55;
   }
 
   .modal-search {

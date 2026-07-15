@@ -62,16 +62,18 @@ impl CurseForgeProvider {
         cf_post_json(&url, &self.api_key, body)
     }
 
-    /// Search CurseForge modpacks (`classId=4471`).
-    pub fn search_modpacks(
+    /// Search CurseForge content (mods / resource packs / shaders / datapacks).
+    pub fn search_content(
         &self,
+        class_id: u32,
         query: &str,
         game_version: Option<&str>,
+        mod_loader_type: Option<u32>,
         offset: u32,
         page_size: u32,
     ) -> Result<Vec<CurseForgeSearchHit>, ProviderError> {
         let mut path = format!(
-            "/mods/search?gameId={MINECRAFT_GAME_ID}&classId={CLASS_MODPACK}&index={offset}&pageSize={}&sortField=2&sortOrder=desc",
+            "/mods/search?gameId={MINECRAFT_GAME_ID}&classId={class_id}&index={offset}&pageSize={}&sortField=2&sortOrder=desc",
             page_size.clamp(1, 50)
         );
         if !query.trim().is_empty() {
@@ -83,8 +85,82 @@ impl CurseForgeProvider {
         if let Some(gv) = game_version.filter(|s| !s.is_empty()) {
             path.push_str(&format!("&gameVersion={}", urlencoding_minimal(gv)));
         }
+        if let Some(loader) = mod_loader_type {
+            path.push_str(&format!("&modLoaderType={loader}"));
+        }
         let resp: CfData<Vec<CfMod>> = self.get_json(&path)?;
         Ok(resp.data.into_iter().map(Into::into).collect())
+    }
+
+    /// Search CurseForge modpacks (`classId=4471`).
+    pub fn search_modpacks(
+        &self,
+        query: &str,
+        game_version: Option<&str>,
+        offset: u32,
+        page_size: u32,
+    ) -> Result<Vec<CurseForgeSearchHit>, ProviderError> {
+        self.search_content(CLASS_MODPACK, query, game_version, None, offset, page_size)
+    }
+
+    pub fn class_id_for_project_type(project_type: &str) -> u32 {
+        match project_type {
+            "resourcepack" => CLASS_RESOURCEPACK,
+            "shader" | "shaderpack" => CLASS_SHADER,
+            "datapack" => CLASS_DATAPACK,
+            "modpack" => CLASS_MODPACK,
+            _ => CLASS_MOD,
+        }
+    }
+
+    /// CurseForge `ModLoaderType` enum values (same mapping as Prism FlameAPI).
+    pub fn mod_loader_type(loader: &str) -> Option<u32> {
+        match loader.to_ascii_lowercase().as_str() {
+            "forge" => Some(1),
+            "liteloader" => Some(3),
+            "fabric" => Some(4),
+            "quilt" => Some(5),
+            "neoforge" => Some(6),
+            _ => None,
+        }
+    }
+
+    /// Prefer a file that mentions both the Minecraft version and loader
+    /// (CurseForge folds loader names into `gameVersions`).
+    pub fn pick_best_file<'a>(
+        files: &'a [CurseForgeFileInfo],
+        game_version: &str,
+        loader: &str,
+    ) -> Option<&'a CurseForgeFileInfo> {
+        if files.is_empty() {
+            return None;
+        }
+        let gv = game_version.trim();
+        let loader_lower = loader.to_ascii_lowercase();
+        let loader_label = match loader_lower.as_str() {
+            "neoforge" => "NeoForge",
+            "fabric" => "Fabric",
+            "quilt" => "Quilt",
+            "forge" => "Forge",
+            other => other,
+        };
+        let matches_gv = |f: &&CurseForgeFileInfo| {
+            gv.is_empty()
+                || f.game_versions
+                    .iter()
+                    .any(|v| v.eq_ignore_ascii_case(gv))
+        };
+        let matches_loader = |f: &&CurseForgeFileInfo| {
+            loader.is_empty()
+                || f.game_versions
+                    .iter()
+                    .any(|v| v.eq_ignore_ascii_case(loader_label))
+        };
+        files
+            .iter()
+            .find(|f| matches_gv(f) && matches_loader(f))
+            .or_else(|| files.iter().find(matches_gv))
+            .or_else(|| files.first())
     }
 
     pub fn get_mod(&self, mod_id: u64) -> Result<CurseForgeSearchHit, ProviderError> {
@@ -297,6 +373,7 @@ pub struct CurseForgeSearchHit {
     pub authors: Vec<String>,
     pub categories: Vec<String>,
     pub latest_files: Vec<CurseForgeFileInfo>,
+    pub class_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -352,7 +429,6 @@ struct CfMod {
     #[serde(default)]
     latest_files: Vec<CfFile>,
     #[serde(default)]
-    #[allow(dead_code)]
     class_id: Option<u32>,
 }
 
@@ -418,6 +494,7 @@ impl From<CfMod> for CurseForgeSearchHit {
             authors: m.authors.into_iter().map(|a| a.name).collect(),
             categories: m.categories.into_iter().map(|c| c.name).collect(),
             latest_files: m.latest_files.into_iter().map(Into::into).collect(),
+            class_id: m.class_id,
         }
     }
 }
