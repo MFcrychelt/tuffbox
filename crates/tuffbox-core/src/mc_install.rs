@@ -86,7 +86,8 @@ fn store_disk_install(launcher_dir: &Path, key: &str, version: &InstalledVersion
     }
 }
 
-const MOJANG_VERSION_MANIFEST: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const MOJANG_VERSION_MANIFEST: &str =
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const RESOURCES_URL: &str = "https://resources.download.minecraft.net";
 
 #[derive(Debug, Error)]
@@ -127,7 +128,11 @@ pub struct InstallProgress {
 
 impl InstallProgress {
     pub fn log(&self, msg: &str) {
-        if let Ok(mut f) = fs::OpenOptions::new().append(true).create(true).open(&self.log_path) {
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&self.log_path)
+        {
             let _ = writeln!(f, "{msg}");
         }
     }
@@ -204,12 +209,33 @@ pub fn install_game(
     fs::create_dir_all(&assets_dir)?;
 
     progress.log(&format!("# Checking Minecraft {mc_version}..."));
-    let mut vanilla = install_vanilla(mc_version, &versions_dir, &libraries_dir, &assets_dir, &natives_base, progress)?;
+    let mut vanilla = install_vanilla(
+        mc_version,
+        &versions_dir,
+        &libraries_dir,
+        &assets_dir,
+        &natives_base,
+        progress,
+    )?;
 
     if loader_kind == "fabric" || loader_kind == "quilt" {
-        progress.log(&format!("# Fetching {loader_kind} loader {loader_version}..."));
-        let fabric_profile = fetch_fabric_profile(mc_version, loader_version, loader_kind, launcher_dir, progress)?;
-        merge_fabric_profile(&mut vanilla, fabric_profile, &libraries_dir, mc_version, progress)?;
+        progress.log(&format!(
+            "# Fetching {loader_kind} loader {loader_version}..."
+        ));
+        let fabric_profile = fetch_fabric_profile(
+            mc_version,
+            loader_version,
+            loader_kind,
+            launcher_dir,
+            progress,
+        )?;
+        merge_fabric_profile(
+            &mut vanilla,
+            fabric_profile,
+            &libraries_dir,
+            mc_version,
+            progress,
+        )?;
     } else if loader_kind == "forge" {
         progress.log(&format!("# Fetching Forge {loader_version}..."));
         let forge_profile = crate::forge_install::fetch_forge_profile(mc_version, loader_version)?;
@@ -227,8 +253,13 @@ pub fn install_game(
         merge_forge_profile(&mut vanilla, forge_profile, &libraries_dir)?;
     } else if loader_kind == "neoforge" {
         progress.log(&format!("# Fetching NeoForge {loader_version}..."));
-        let (neoforge_profile, installer_path) = crate::forge_install::fetch_neoforge_profile(loader_version, progress)?;
-        crate::forge_install::download_forge_libraries(&neoforge_profile, &libraries_dir, progress)?;
+        let (neoforge_profile, installer_path) =
+            crate::forge_install::fetch_neoforge_profile(loader_version, progress)?;
+        crate::forge_install::download_forge_libraries(
+            &neoforge_profile,
+            &libraries_dir,
+            progress,
+        )?;
         crate::forge_install::run_forge_processors(
             &neoforge_profile,
             &libraries_dir,
@@ -272,7 +303,11 @@ fn install_vanilla(
             .into_iter()
             .find(|v| v.id == mc_version)
             .map(|v| v.url)
-            .ok_or_else(|| InstallError::MissingDownload(format!("Minecraft {mc_version} not found in manifest")))?;
+            .ok_or_else(|| {
+                InstallError::MissingDownload(format!(
+                    "Minecraft {mc_version} not found in manifest"
+                ))
+            })?;
         progress.log("# Fetching version JSON...");
         let raw = crate::http::get_text(&version_url)?;
         fs::create_dir_all(&version_dir)?;
@@ -283,7 +318,11 @@ fn install_vanilla(
     let client_jar = version_dir.join(format!("{}.jar", version_json.id));
     if !client_jar.exists() {
         progress.log("# Downloading client jar...");
-        download_with_sha1(&version_json.downloads.client.url, &client_jar, Some(&version_json.downloads.client.sha1))?;
+        download_with_sha1(
+            &version_json.downloads.client.url,
+            &client_jar,
+            Some(&version_json.downloads.client.sha1),
+        )?;
     }
 
     let natives_dir = natives_base.join(&version_json.id);
@@ -307,7 +346,11 @@ fn install_vanilla(
             if let Some(native) = classifiers.get(native_classifier()) {
                 let native_path = maven_path(libraries_dir, &native.path);
                 if !native_path.exists() {
-                    native_tasks.push((native.url.clone(), native_path.clone(), native.sha1.clone()));
+                    native_tasks.push((
+                        native.url.clone(),
+                        native_path.clone(),
+                        native.sha1.clone(),
+                    ));
                 }
             }
         }
@@ -367,7 +410,11 @@ fn install_vanilla(
         if let Some(parent) = asset_index_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        download_with_sha1(&version_json.asset_index.url, &asset_index_path, Some(&version_json.asset_index.sha1))?;
+        download_with_sha1(
+            &version_json.asset_index.url,
+            &asset_index_path,
+            Some(&version_json.asset_index.sha1),
+        )?;
     }
     let asset_index: AssetIndex = serde_json::from_str(&fs::read_to_string(&asset_index_path)?)?;
     install_assets_index(&asset_index, assets_dir, progress)?;
@@ -384,7 +431,8 @@ fn install_vanilla(
             path
         });
 
-    let (jvm_args, game_args) = parse_arguments(&version_json.arguments, &version_json.legacy_arguments);
+    let (jvm_args, game_args) =
+        parse_arguments(&version_json.arguments, &version_json.legacy_arguments);
 
     Ok(InstalledVersion {
         id: version_json.id.clone(),
@@ -483,7 +531,9 @@ fn merge_fabric_profile(
         // Replace ${modrinth.gameVersion} placeholder with actual MC version.
         let name = lib.name.replace("${modrinth.gameVersion}", mc_version);
         let Some((group_path, artifact, version, classifier)) = parse_maven_name(&name) else {
-            progress.log(&format!("# Skipping unsupported loader library coordinate: {name}"));
+            progress.log(&format!(
+                "# Skipping unsupported loader library coordinate: {name}"
+            ));
             continue;
         };
         let jar = match classifier {
@@ -524,7 +574,11 @@ fn merge_fabric_profile(
     Ok(())
 }
 
-fn install_assets_index(index: &AssetIndex, assets_dir: &Path, progress: &InstallProgress) -> Result<(), InstallError> {
+fn install_assets_index(
+    index: &AssetIndex,
+    assets_dir: &Path,
+    progress: &InstallProgress,
+) -> Result<(), InstallError> {
     let objects_dir = assets_dir.join("objects");
     let mut to_download: Vec<(String, String)> = Vec::new();
     for (_name, obj) in &index.objects {
@@ -543,7 +597,7 @@ fn install_assets_index(index: &AssetIndex, assets_dir: &Path, progress: &Instal
     let counter = AtomicUsize::new(0);
     let errs: Vec<String> = to_download
         .into_par_iter()
-            .filter_map(|(prefix, hash)| {
+        .filter_map(|(prefix, hash)| {
             let object_dir = objects_dir.join(&prefix);
             let object_path = object_dir.join(&hash);
             let url = format!("{}/{}/{}", RESOURCES_URL, prefix, hash);
@@ -626,7 +680,9 @@ fn download_tasks_with_sequential_retry(
             }
             Err(e) => {
                 let urls = task.urls.join(", ");
-                errors.push(format!("{urls}: first error: {first_error}; retry error: {e}"));
+                errors.push(format!(
+                    "{urls}: first error: {first_error}; retry error: {e}"
+                ));
             }
         }
     }
@@ -654,7 +710,13 @@ fn download_task(task: &DownloadTask) -> Result<(), InstallError> {
     }))
 }
 
-fn fabric_library_urls(base_url: &str, group_path: &str, artifact: &str, version: &str, jar: &str) -> Vec<String> {
+fn fabric_library_urls(
+    base_url: &str,
+    group_path: &str,
+    artifact: &str,
+    version: &str,
+    jar: &str,
+) -> Vec<String> {
     let base = base_url.trim_end_matches('/');
     let primary = format!("{base}/{group_path}/{artifact}/{version}/{jar}");
     let mut urls = vec![primary.clone()];
@@ -688,7 +750,11 @@ fn parse_maven_name(name: &str) -> Option<(String, String, String, Option<String
 /// provided. Uses streaming I/O (no full-file memory buffer) and atomic
 /// writes (downloads to `.part`, renames on success) so a failed or
 /// interrupted download never leaves a half-written file at `path`.
-pub fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -> Result<(), InstallError> {
+pub fn download_with_sha1(
+    url: &str,
+    path: &Path,
+    expected_sha1: Option<&str>,
+) -> Result<(), InstallError> {
     if path.exists() {
         if let Some(expected) = expected_sha1 {
             let existing = sha1_file(path)?;
@@ -700,8 +766,13 @@ pub fn download_with_sha1(url: &str, path: &Path, expected_sha1: Option<&str>) -
         }
     }
 
-    crate::http::download_streaming(url, path, expected_sha1, None::<Box<dyn FnMut(u64, u64) + Send>>)
-        .map_err(|e| InstallError::MissingDownload(format!("{} (url: {})", e, url)))?;
+    crate::http::download_streaming(
+        url,
+        path,
+        expected_sha1,
+        None::<Box<dyn FnMut(u64, u64) + Send>>,
+    )
+    .map_err(|e| InstallError::MissingDownload(format!("{} (url: {})", e, url)))?;
 
     Ok(())
 }
@@ -838,7 +909,10 @@ fn extract_natives(archive_path: &Path, natives_dir: &Path) -> Result<(), Instal
     Ok(())
 }
 
-fn parse_arguments(args: &Option<Arguments>, legacy: &Option<String>) -> (Vec<String>, Vec<String>) {
+fn parse_arguments(
+    args: &Option<Arguments>,
+    legacy: &Option<String>,
+) -> (Vec<String>, Vec<String>) {
     if let Some(legacy) = legacy {
         let game_args = legacy.split_whitespace().map(String::from).collect();
         return (Vec::new(), game_args);

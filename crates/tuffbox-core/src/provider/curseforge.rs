@@ -18,8 +18,7 @@ const CLASS_SHADER: u32 = 6552;
 const CLASS_DATAPACK: u32 = 6945;
 
 /// PrismLauncher's default CurseForge API key (Overwolf / public launcher builds).
-const DEFAULT_API_KEY: &str =
-    "$2a$10$wuAJuNZuted3NORVmpgUC.m8sI.pv1tOPKZyBgLFGjxFp/br0lZCC";
+const DEFAULT_API_KEY: &str = "$2a$10$wuAJuNZuted3NORVmpgUC.m8sI.pv1tOPKZyBgLFGjxFp/br0lZCC";
 
 #[derive(Debug, Clone)]
 pub struct CurseForgeProvider {
@@ -76,7 +75,10 @@ impl CurseForgeProvider {
             page_size.clamp(1, 50)
         );
         if !query.trim().is_empty() {
-            path.push_str(&format!("&searchFilter={}", urlencoding_minimal(query.trim())));
+            path.push_str(&format!(
+                "&searchFilter={}",
+                urlencoding_minimal(query.trim())
+            ));
         }
         if let Some(gv) = game_version.filter(|s| !s.is_empty()) {
             path.push_str(&format!("&gameVersion={}", urlencoding_minimal(gv)));
@@ -129,7 +131,10 @@ impl CurseForgeProvider {
         Ok(out)
     }
 
-    pub fn get_mods(&self, mod_ids: &[u64]) -> Result<HashMap<u64, CurseForgeSearchHit>, ProviderError> {
+    pub fn get_mods(
+        &self,
+        mod_ids: &[u64],
+    ) -> Result<HashMap<u64, CurseForgeSearchHit>, ProviderError> {
         if mod_ids.is_empty() {
             return Ok(HashMap::new());
         }
@@ -152,7 +157,12 @@ impl CurseForgeProvider {
     ) -> Result<(), ProviderError> {
         let hashes: Vec<String> = files
             .values()
-            .filter(|f| f.download_url.as_ref().map(|u| u.is_empty()).unwrap_or(true))
+            .filter(|f| {
+                f.download_url
+                    .as_ref()
+                    .map(|u| u.is_empty())
+                    .unwrap_or(true)
+            })
             .filter_map(|f| f.hashes.sha1.clone())
             .collect();
         if hashes.is_empty() {
@@ -166,7 +176,12 @@ impl CurseForgeProvider {
             let Some(sha1) = file.hashes.sha1.as_ref() else {
                 continue;
             };
-            if file.download_url.as_ref().map(|u| !u.is_empty()).unwrap_or(false) {
+            if file
+                .download_url
+                .as_ref()
+                .map(|u| !u.is_empty())
+                .unwrap_or(false)
+            {
                 continue;
             }
             let Some(version) = map.get(sha1) else {
@@ -419,9 +434,7 @@ impl From<CfFile> for CurseForgeFileInfo {
             // CurseForge doesn't ship sha512 commonly; keep field for ProviderFileHashes.
             let _ = &sha512;
         }
-        let url = f
-            .download_url
-            .filter(|u| !u.trim().is_empty());
+        let url = f.download_url.filter(|u| !u.trim().is_empty());
         let blocked = url.is_none();
         Self {
             id: f.id,
@@ -499,7 +512,6 @@ pub fn download_curseforge_url(
             )));
         }
     }
-    file.persist(dest)
-        .map_err(|e| ProviderError::Io(e.error))?;
+    file.persist(dest).map_err(|e| ProviderError::Io(e.error))?;
     Ok(())
 }

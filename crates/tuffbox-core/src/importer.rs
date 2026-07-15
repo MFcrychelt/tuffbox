@@ -175,7 +175,6 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
     })
 }
 
-
 /// ── CurseForge modpack import ────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -234,9 +233,7 @@ pub fn is_curseforge_pack(path: impl AsRef<Path>) -> bool {
         if let Ok(mut entry) = archive.by_name(name) {
             if entry.read_to_string(&mut raw).is_ok() {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    return v
-                        .get("manifestType")
-                        .and_then(|t| t.as_str())
+                    return v.get("manifestType").and_then(|t| t.as_str())
                         == Some("minecraftModpack");
                 }
             }
@@ -257,9 +254,9 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
     } else {
         "Manifest.json"
     };
-    let mut entry = archive
-        .by_name(manifest_name)
-        .map_err(|_| ImportError::UnsupportedFormat("no manifest.json in CurseForge pack".into()))?;
+    let mut entry = archive.by_name(manifest_name).map_err(|_| {
+        ImportError::UnsupportedFormat("no manifest.json in CurseForge pack".into())
+    })?;
     entry.read_to_string(&mut manifest_raw)?;
     let cf: CurseForgeManifest = serde_json::from_str(&manifest_raw)?;
 
@@ -316,7 +313,9 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
     Ok(ProjectManifest {
         schema_version: crate::manifest::CURRENT_PROJECT_SCHEMA_VERSION.into(),
         project: project_id,
-        minecraft: MinecraftSpec { version: mc_version },
+        minecraft: MinecraftSpec {
+            version: mc_version,
+        },
         loader: LoaderSpec {
             kind: loader_kind,
             version: loader_version,
@@ -566,7 +565,6 @@ fn slugify(s: &str) -> String {
         .to_string()
 }
 
-
 pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportError> {
     let path = path.as_ref();
     if !path.is_dir() {
@@ -680,7 +678,11 @@ fn fabric_version_from_jar(jar: &Path) -> Option<String> {
     let file = fs::File::open(jar).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let mut raw = String::new();
-    archive.by_name("fabric.mod.json").ok()?.read_to_string(&mut raw).ok()?;
+    archive
+        .by_name("fabric.mod.json")
+        .ok()?
+        .read_to_string(&mut raw)
+        .ok()?;
     let json: FabricModJson = serde_json::from_str(&raw).ok()?;
     json.depends
         .get("minecraft")

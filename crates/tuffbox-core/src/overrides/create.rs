@@ -3,19 +3,34 @@ use super::*;
 pub struct CreateOverride;
 
 impl ModOverride for CreateOverride {
-    fn mod_id(&self) -> &str { "create" }
+    fn mod_id(&self) -> &str {
+        "create"
+    }
 
     fn config_locations(&self) -> Vec<ModConfigLocation> {
         vec![
-            ModConfigLocation { path: "config/create-common.toml".to_string(), format: ConfigFileFormat::Toml, description: "Create common settings".to_string() },
-            ModConfigLocation { path: "config/create-client.toml".to_string(), format: ConfigFileFormat::Toml, description: "Create client settings".to_string() },
+            ModConfigLocation {
+                path: "config/create-common.toml".to_string(),
+                format: ConfigFileFormat::Toml,
+                description: "Create common settings".to_string(),
+            },
+            ModConfigLocation {
+                path: "config/create-client.toml".to_string(),
+                format: ConfigFileFormat::Toml,
+                description: "Create client settings".to_string(),
+            },
         ]
     }
 
     fn ore_gen_config_keys(&self) -> Vec<OreConfigMapping> {
-        vec![
-            OreConfigMapping { resource_name: "zinc".to_string(), config_file: "config/create-common.toml".to_string(), enabled_key: "worldgen.disableZincOre".to_string(), vein_size_key: None, min_height_key: None, max_height_key: None },
-        ]
+        vec![OreConfigMapping {
+            resource_name: "zinc".to_string(),
+            config_file: "config/create-common.toml".to_string(),
+            enabled_key: "worldgen.disableZincOre".to_string(),
+            vein_size_key: None,
+            min_height_key: None,
+            max_height_key: None,
+        }]
     }
 
     fn programmatic_items(&self) -> Vec<String> {
@@ -34,5 +49,7 @@ impl ModOverride for CreateOverride {
         ]
     }
 
-    fn programmatic_recipes(&self) -> Vec<UnifiedRecipe> { vec![] }
+    fn programmatic_recipes(&self) -> Vec<UnifiedRecipe> {
+        vec![]
+    }
 }

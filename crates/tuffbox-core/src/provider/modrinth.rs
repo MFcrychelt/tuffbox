@@ -43,7 +43,6 @@ impl ModrinthProvider {
         Self
     }
 
-
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ProviderError> {
         let url = format!("{BASE_URL}{path}");
         crate::http::get_json_with_context(&url).map_err(ProviderError::NetworkContext)
@@ -63,7 +62,10 @@ impl ModrinthProvider {
 
     /// Resolves the parent project for a version obtained through
     /// [`Self::get_version_by_hash`].
-    pub fn identify_local_jar(&self, sha1: &str) -> Result<Option<(ProjectInfo, VersionInfo)>, ProviderError> {
+    pub fn identify_local_jar(
+        &self,
+        sha1: &str,
+    ) -> Result<Option<(ProjectInfo, VersionInfo)>, ProviderError> {
         let Some(version) = self.get_version_by_hash(sha1)? else {
             return Ok(None);
         };
@@ -241,12 +243,18 @@ fn build_facets(query: &ProviderSearchQuery) -> String {
     }
     if let Some(category) = &query.category {
         if !category.trim().is_empty() {
-            facets.push(vec![format!("categories:{}", category.trim().to_lowercase().replace(' ', "-"))]);
+            facets.push(vec![format!(
+                "categories:{}",
+                category.trim().to_lowercase().replace(' ', "-")
+            )]);
         }
     }
     if let Some(environment) = &query.environment {
         if !environment.trim().is_empty() {
-            facets.push(vec![format!("{}_side:required", environment.trim().to_lowercase())]);
+            facets.push(vec![format!(
+                "{}_side:required",
+                environment.trim().to_lowercase()
+            )]);
         }
     }
     if query.license.as_deref() == Some("open-source") {

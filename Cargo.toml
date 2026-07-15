@@ -19,7 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 tempfile = "3"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "stream", "native-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "stream", "multipart", "native-tls"] }
 sha1 = "0.10"
 sha2 = "0.10"
 md-5 = "0.10"

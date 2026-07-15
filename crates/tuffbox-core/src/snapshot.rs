@@ -363,7 +363,10 @@ mod tests {
         // ID. Verify the timestamp actually reflects wall-clock time
         // instead of a magic constant.
         let now = rfc3339_now();
-        assert_ne!(now, "2026-06-29T00:00:00Z", "timestamp looks hardcoded: {now}");
+        assert_ne!(
+            now, "2026-06-29T00:00:00Z",
+            "timestamp looks hardcoded: {now}"
+        );
         assert!(now.ends_with('Z'));
     }
 }

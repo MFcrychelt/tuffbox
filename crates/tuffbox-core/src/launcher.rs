@@ -186,7 +186,12 @@ impl TestLauncher {
             Path::new(&java.path),
             progress,
         )
-        .map_err(|e| LauncherError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        .map_err(|e| {
+            LauncherError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e.to_string(),
+            ))
+        })?;
 
         let auth_player_name = profile
             .player_name
@@ -199,9 +204,12 @@ impl TestLauncher {
         let user_type = "msa";
         let version_type = "release";
         let assets_dir = canonicalize(&game.asset_dir).unwrap_or_else(|_| game.asset_dir.clone());
-        let game_dir = canonicalize(&options.instance_dir).unwrap_or_else(|_| options.instance_dir.clone());
-        let natives_dir = canonicalize(&game.natives_dir).unwrap_or_else(|_| game.natives_dir.clone());
-        let version_jar = canonicalize(&game.client_jar).unwrap_or_else(|_| game.client_jar.clone());
+        let game_dir =
+            canonicalize(&options.instance_dir).unwrap_or_else(|_| options.instance_dir.clone());
+        let natives_dir =
+            canonicalize(&game.natives_dir).unwrap_or_else(|_| game.natives_dir.clone());
+        let version_jar =
+            canonicalize(&game.client_jar).unwrap_or_else(|_| game.client_jar.clone());
         let library_dir = canonicalize(&launcher_dir.join("libraries"))
             .unwrap_or_else(|_| launcher_dir.join("libraries"));
         let assets_dir_s = assets_dir.to_string_lossy();
@@ -220,7 +228,11 @@ impl TestLauncher {
         // unresolvable and crashed `securejarhandler`'s module
         // initialization with `InaccessibleObjectException` instead of
         // launching Forge.
-        let classpath_separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+        let classpath_separator = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
 
         progress.log(&format!("# Main class: {}", game.main_class));
         progress.log(&format!("# Classpath entries: {}", game.libraries.len()));
@@ -319,7 +331,11 @@ fn classpath_string(paths: &[PathBuf]) -> String {
     std::env::join_paths(canonical_paths.iter().map(|p| p.as_os_str()))
         .map(|joined| joined.to_string_lossy().to_string())
         .unwrap_or_else(|_| {
-            let separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+            let separator = if cfg!(target_os = "windows") {
+                ";"
+            } else {
+                ":"
+            };
             canonical_paths
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
@@ -333,12 +349,19 @@ fn canonicalize(path: &Path) -> Result<PathBuf, LauncherError> {
     // library jars in a classpath that's 100+ syscalls every launch. Cache the
     // result for the process lifetime (paths in the launcher dir don't move
     // between launches), falling back to a fresh lookup on miss.
-    if let Some(cached) = CANON_CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(path) {
+    if let Some(cached) = CANON_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(path)
+    {
         return Ok(cached.clone());
     }
     let resolved = fs::canonicalize(path)?;
     let cleaned = PathBuf::from(resolved.to_string_lossy().trim_start_matches("\\\\?\\"));
-    CANON_CACHE.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_path_buf(), cleaned.clone());
+    CANON_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf(), cleaned.clone());
     Ok(cleaned)
 }
 

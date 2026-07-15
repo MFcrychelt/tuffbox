@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::environment::{ModpackEnvironment, TagNamespace};
 use crate::unified::tag::{TagId, UnifiedTag};
+use std::collections::HashMap;
 
 pub struct TagNormalizer;
 
@@ -52,17 +52,20 @@ impl TagNormalizer {
         }
 
         for (forge_path, common_path) in Self::known_mappings() {
-            let forge_tag = TagId { namespace: "forge".to_string(), path: forge_path.to_string() };
-            let common_tag = TagId { namespace: "c".to_string(), path: common_path.to_string() };
+            let forge_tag = TagId {
+                namespace: "forge".to_string(),
+                path: forge_path.to_string(),
+            };
+            let common_tag = TagId {
+                namespace: "c".to_string(),
+                path: common_path.to_string(),
+            };
 
             equivalences
                 .entry(forge_tag.clone())
                 .or_default()
                 .push(common_tag.clone());
-            equivalences
-                .entry(common_tag)
-                .or_default()
-                .push(forge_tag);
+            equivalences.entry(common_tag).or_default().push(forge_tag);
         }
 
         equivalences

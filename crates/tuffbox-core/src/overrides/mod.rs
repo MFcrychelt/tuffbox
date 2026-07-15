@@ -1,13 +1,13 @@
+pub mod create;
 pub mod mekanism;
 pub mod thermal;
-pub mod create;
 
 use crate::adapters::ConfigFileFormat;
 use crate::unified::UnifiedRecipe;
 
+pub use create::CreateOverride;
 pub use mekanism::MekanismOverride;
 pub use thermal::ThermalOverride;
-pub use create::CreateOverride;
 
 pub trait ModOverride: Send + Sync {
     fn mod_id(&self) -> &str;

@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 const POPULAR_MINECRAFT: &[&str] = &["1.12.2", "1.16.5", "1.20.1", "1.21.1", "26.1.2", "26.2"];
-const VERSION_MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+const VERSION_MANIFEST_URL: &str =
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 #[derive(Debug, Error)]
 pub enum VersionsError {
@@ -213,6 +214,9 @@ fn neoforge_prefix(mc: &str) -> Result<String, VersionsError> {
     let minor = parts[1].parse::<u32>().map_err(|_| {
         VersionsError::ParseError(format!("Invalid Minecraft minor version in {mc}"))
     })?;
-    let patch = parts.get(2).and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+    let patch = parts
+        .get(2)
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(0);
     Ok(format!("{minor}.{patch}."))
 }

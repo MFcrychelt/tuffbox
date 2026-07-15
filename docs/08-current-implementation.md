@@ -78,7 +78,7 @@ resolver.rs      # deterministic resolver skeleton
   - поиск Java (JAVA_HOME / PATH);
   - парсинг major-версии Java;
   - подготовка instance directory (mods, configs);
-  - заглушка запуска с записью log-файла.
+  - реальный запуск профиля с установкой клиента/loader и записью логов.
 
 ## tuffbox-desktop
 
@@ -148,7 +148,7 @@ apps/tuffbox-desktop/
   - `export_server_pack` — базовый server pack zip: server-safe mods, configs/scripts, download manifest, README и start scripts;
   - `export_prism_instance` / `export_curseforge_pack` — базовые Prism/CurseForge zip builders с metadata, overrides и `tuffbox.remote-mods.json`;
   - `generate_lockfile` — генерация lockfile;
-  - `launch_profile` — подготовка и запуск профиля (заглушка);
+  - `launch_profile` — подготовка и запуск профиля;
   - `import_project` — импорт `.mrpack` / Prism `.zip`.
 - Запуск: `npm run tauri:dev` из `apps/tuffbox-desktop`.
 

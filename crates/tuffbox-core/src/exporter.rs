@@ -84,7 +84,6 @@ struct ServerPackRemoteMod {
     sha512: Option<String>,
 }
 
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CurseForgeManifest {
@@ -174,7 +173,9 @@ pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> 
             None,
         ));
     }
-    if !matches!(manifest.loader.kind, LoaderKind::Vanilla) && manifest.loader.version.trim().is_empty() {
+    if !matches!(manifest.loader.kind, LoaderKind::Vanilla)
+        && manifest.loader.version.trim().is_empty()
+    {
         issues.push(issue(
             ExportIssueSeverity::Error,
             "MISSING_LOADER_VERSION",
@@ -200,7 +201,9 @@ pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> 
             ));
         }
         let hashes = module.hashes.as_ref();
-        if hashes.and_then(|h| h.sha1.as_ref()).is_none() && hashes.and_then(|h| h.sha512.as_ref()).is_none() {
+        if hashes.and_then(|h| h.sha1.as_ref()).is_none()
+            && hashes.and_then(|h| h.sha512.as_ref()).is_none()
+        {
             issues.push(issue(
                 ExportIssueSeverity::Warning,
                 "MOD_WITHOUT_HASH",
@@ -268,8 +271,16 @@ pub fn export_modrinth_pack(
         .mods
         .iter()
         .filter_map(|module| {
-            let file_name = module.file_name.clone().unwrap_or_else(|| format!("{}.jar", module.id));
-            let downloads = module.source.url.clone().map(|url| vec![url]).unwrap_or_default();
+            let file_name = module
+                .file_name
+                .clone()
+                .unwrap_or_else(|| format!("{}.jar", module.id));
+            let downloads = module
+                .source
+                .url
+                .clone()
+                .map(|url| vec![url])
+                .unwrap_or_default();
             if downloads.is_empty() {
                 return None;
             }
@@ -475,7 +486,12 @@ pub fn export_curseforge_pack(
         manifest_version: 1,
         name: manifest.project.name.clone(),
         version: manifest.project.version.clone(),
-        author: manifest.project.authors.first().cloned().unwrap_or_else(|| "TuffBox".to_string()),
+        author: manifest
+            .project
+            .authors
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "TuffBox".to_string()),
         files: Vec::new(),
         overrides: "overrides".to_string(),
     };
@@ -578,7 +594,15 @@ fn add_prism_files<W: Write + Seek>(
     options: SimpleFileOptions,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
-    for root in ["config", "defaultconfigs", "kubejs", "scripts", "resourcepacks", "shaderpacks", "mods"] {
+    for root in [
+        "config",
+        "defaultconfigs",
+        "kubejs",
+        "scripts",
+        "resourcepacks",
+        "shaderpacks",
+        "mods",
+    ] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
             count += add_dir_plain(zip, project_dir, &dir, options)?;
@@ -622,7 +646,14 @@ fn add_overrides<W: Write + Seek>(
     options: SimpleFileOptions,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
-    for root in ["config", "defaultconfigs", "kubejs", "scripts", "resourcepacks", "shaderpacks"] {
+    for root in [
+        "config",
+        "defaultconfigs",
+        "kubejs",
+        "scripts",
+        "resourcepacks",
+        "shaderpacks",
+    ] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
             count += add_dir(zip, project_dir, &dir, options)?;
@@ -658,12 +689,17 @@ fn server_readme(manifest: &ProjectManifest, server_manifest: &ServerPackManifes
     readme.push_str("## Install\n\n");
     readme.push_str("1. Install the matching Minecraft server and loader.\n");
     readme.push_str("2. Copy folders from this archive into the server directory.\n");
-    readme.push_str("3. If `tuffbox.server-pack.json` contains `remoteMods`, download them into `mods/`.\n");
+    readme.push_str(
+        "3. If `tuffbox.server-pack.json` contains `remoteMods`, download them into `mods/`.\n",
+    );
     readme.push_str("4. Review EULA and run `start.bat` or `start.sh`.\n\n");
     if !server_manifest.remote_mods.is_empty() {
         readme.push_str("## Remote mods to download\n\n");
         for module in &server_manifest.remote_mods {
-            readme.push_str(&format!("- {} {}: {}\n", module.name, module.version, module.url));
+            readme.push_str(&format!(
+                "- {} {}: {}\n",
+                module.name, module.version, module.url
+            ));
         }
         readme.push('\n');
     }
@@ -793,12 +829,12 @@ fn side_env(side: Side) -> HashMap<String, String> {
         Side::Optional => {
             env.insert("client".to_string(), "optional".to_string());
             env.insert("server".to_string(), "optional".to_string());
+        }
+        Side::Both | Side::Unknown => {
+            env.insert("client".to_string(), "required".to_string());
+            env.insert("server".to_string(), "required".to_string());
+        }
     }
-    Side::Both | Side::Unknown => {
-        env.insert("client".to_string(), "required".to_string());
-        env.insert("server".to_string(), "required".to_string());
-    }
-}
     env
 }
 
@@ -890,7 +926,11 @@ mod tests {
     fn write_manifest(dir: &Path) -> PathBuf {
         let manifest_path = dir.join("tuffbox.json");
         let manifest = fixture_manifest(dir);
-        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
         // mods/ folder so the exporter can resolve files
         fs::create_dir_all(dir.join("mods")).unwrap();
         fs::write(dir.join("mods").join("sodium.jar"), b"dummy").unwrap();
@@ -906,7 +946,11 @@ mod tests {
         let manifest_path = write_manifest(&dir);
         let out = dir.join("pack.mrpack");
         let result = export_modrinth_pack(&fixture_manifest(&dir), &manifest_path, &out);
-        assert!(result.is_ok(), "modrinth pack export failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "modrinth pack export failed: {:?}",
+            result.err()
+        );
         let res = result.unwrap();
         assert!(out.exists(), "output mrpack not created");
         // Both "both"-side and "client"-side mods get a download entry
@@ -922,7 +966,11 @@ mod tests {
         let manifest_path = write_manifest(&dir);
         let out = dir.join("server.zip");
         let result = export_server_pack(&fixture_manifest(&dir), &manifest_path, &out);
-        assert!(result.is_ok(), "server pack export failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "server pack export failed: {:?}",
+            result.err()
+        );
         assert!(out.exists(), "output server zip not created");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -935,7 +983,11 @@ mod tests {
         let manifest_path = write_manifest(&dir);
         let out = dir.join("instance.zip");
         let result = export_prism_instance(&fixture_manifest(&dir), &manifest_path, &out);
-        assert!(result.is_ok(), "prism instance export failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "prism instance export failed: {:?}",
+            result.err()
+        );
         assert!(out.exists(), "output prism zip not created");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -948,7 +1000,11 @@ mod tests {
         let manifest_path = write_manifest(&dir);
         let out = dir.join("modpack.zip");
         let result = export_curseforge_pack(&fixture_manifest(&dir), &manifest_path, &out);
-        assert!(result.is_ok(), "curseforge pack export failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "curseforge pack export failed: {:?}",
+            result.err()
+        );
         assert!(out.exists(), "output curseforge zip not created");
         let _ = fs::remove_dir_all(&dir);
     }

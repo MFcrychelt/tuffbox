@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 use zip::ZipArchive;
 
 pub fn item_icon_cache_dir(project_dir: &Path) -> PathBuf {
-    project_dir.join(".tuffbox").join("cache").join("item-icons")
+    project_dir
+        .join(".tuffbox")
+        .join("cache")
+        .join("item-icons")
 }
 
 fn cache_file_for(project_dir: &Path, item_id: &str) -> PathBuf {
@@ -120,7 +123,11 @@ fn resolve_from_model(
     None
 }
 
-fn find_in_jar(archive: &mut ZipArchive<File>, namespace: &str, item_path: &str) -> Option<Vec<u8>> {
+fn find_in_jar(
+    archive: &mut ZipArchive<File>,
+    namespace: &str,
+    item_path: &str,
+) -> Option<Vec<u8>> {
     for candidate in [
         format!("assets/{namespace}/textures/item/{item_path}.png"),
         format!("assets/{namespace}/textures/block/{item_path}.png"),
@@ -285,7 +292,10 @@ mod tests {
             parse_item_id("minecraft:diamond"),
             Some(("minecraft".into(), "diamond".into()))
         );
-        assert_eq!(parse_item_id("#forge:ingots/copper"), Some(("forge".into(), "ingots/copper".into())));
+        assert_eq!(
+            parse_item_id("#forge:ingots/copper"),
+            Some(("forge".into(), "ingots/copper".into()))
+        );
         assert_eq!(parse_item_id("bad"), None);
     }
 

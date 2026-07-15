@@ -3,7 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct QuestBook { pub chapters: Vec<Chapter>, pub title: Option<String>, pub subtitle: Option<String> }
+pub struct QuestBook {
+    pub chapters: Vec<Chapter>,
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub id: String,
@@ -16,13 +20,43 @@ pub struct Chapter {
     pub source_file: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Quest { pub id: String, pub title: String, pub subtitle: Option<String>, pub description: Vec<String>, pub x: f64, pub y: f64, pub icon: Option<String>, pub dependencies: Vec<String>, pub tasks: Vec<Task>, pub rewards: Vec<Reward>, pub optional: bool, pub shape: Option<String>, pub size: Option<f64> }
+pub struct Quest {
+    pub id: String,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub description: Vec<String>,
+    pub x: f64,
+    pub y: f64,
+    pub icon: Option<String>,
+    pub dependencies: Vec<String>,
+    pub tasks: Vec<Task>,
+    pub rewards: Vec<Reward>,
+    pub optional: bool,
+    pub shape: Option<String>,
+    pub size: Option<f64>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Task { pub id: String, #[serde(rename = "type")] pub task_type: String, pub title: Option<String>, pub value: Option<serde_json::Value>, pub properties: HashMap<String, serde_json::Value> }
+pub struct Task {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub task_type: String,
+    pub title: Option<String>,
+    pub value: Option<serde_json::Value>,
+    pub properties: HashMap<String, serde_json::Value>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Reward { pub id: String, #[serde(rename = "type")] pub reward_type: String, pub title: Option<String>, pub properties: HashMap<String, serde_json::Value> }
+pub struct Reward {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub reward_type: String,
+    pub title: Option<String>,
+    pub properties: HashMap<String, serde_json::Value>,
+}
 #[derive(Debug, Clone)]
-pub struct QuestValidationError { pub quest_id: String, pub message: String }
+pub struct QuestValidationError {
+    pub quest_id: String,
+    pub message: String,
+}
 
 impl QuestBook {
     /// Resolve FTB Quests directory inside a project (config or defaultconfigs).
@@ -41,10 +75,17 @@ impl QuestBook {
         Self::load_from_dir(&quests_dir, project_dir)
     }
 
-    pub fn load_from_dir(dir: &std::path::Path, project_dir: &std::path::Path) -> Result<Self, String> {
+    pub fn load_from_dir(
+        dir: &std::path::Path,
+        project_dir: &std::path::Path,
+    ) -> Result<Self, String> {
         let mut chapters = Vec::new();
         let chapter_dir = dir.join("chapters");
-        let search_dir = if chapter_dir.is_dir() { chapter_dir } else { dir.to_path_buf() };
+        let search_dir = if chapter_dir.is_dir() {
+            chapter_dir
+        } else {
+            dir.to_path_buf()
+        };
         if !search_dir.is_dir() {
             return Ok(Self::default());
         }
@@ -96,11 +137,29 @@ impl QuestBook {
 
     pub fn validate(&self) -> Vec<QuestValidationError> {
         let mut errors = Vec::new();
-        let all_ids: std::collections::HashSet<String> = self.chapters.iter().flat_map(|ch| ch.quests.iter().map(|q| q.id.clone())).collect();
-        for ch in &self.chapters { for q in &ch.quests {
-            for dep in &q.dependencies { if !all_ids.contains(dep) { errors.push(QuestValidationError { quest_id: q.id.clone(), message: format!("Dep '{}' missing", dep) }); } }
-            if q.tasks.is_empty() { errors.push(QuestValidationError { quest_id: q.id.clone(), message: "No tasks".into() }); }
-        }}
+        let all_ids: std::collections::HashSet<String> = self
+            .chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter().map(|q| q.id.clone()))
+            .collect();
+        for ch in &self.chapters {
+            for q in &ch.quests {
+                for dep in &q.dependencies {
+                    if !all_ids.contains(dep) {
+                        errors.push(QuestValidationError {
+                            quest_id: q.id.clone(),
+                            message: format!("Dep '{}' missing", dep),
+                        });
+                    }
+                }
+                if q.tasks.is_empty() {
+                    errors.push(QuestValidationError {
+                        quest_id: q.id.clone(),
+                        message: "No tasks".into(),
+                    });
+                }
+            }
+        }
         errors
     }
 }
@@ -114,12 +173,18 @@ fn snbt_to_json(text: &str) -> Result<serde_json::Value, String> {
 /// optional (whitespace or comma) separators between values.
 fn parse_snbt(text: &str) -> Result<serde_json::Value, String> {
     let chars: Vec<char> = text.chars().collect();
-    let mut p = SnbtParser { chars: &chars, pos: 0 };
+    let mut p = SnbtParser {
+        chars: &chars,
+        pos: 0,
+    };
     p.skip_ws();
     let v = p.parse_value()?;
     p.skip_ws();
     if p.pos != p.chars.len() {
-        return Err(format!("SNBT parse: trailing content at position {}", p.pos));
+        return Err(format!(
+            "SNBT parse: trailing content at position {}",
+            p.pos
+        ));
     }
     Ok(v)
 }
@@ -150,7 +215,10 @@ impl<'a> SnbtParser<'a> {
             Some('"') => Ok(serde_json::Value::String(self.parse_string()?)),
             Some(c) if c.is_ascii_digit() || c == '-' => self.parse_number(),
             Some(c) if c.is_alphabetic() || c == '_' => self.parse_ident_value(),
-            Some(other) => Err(format!("SNBT parse: unexpected char '{}' at {}", other, self.pos)),
+            Some(other) => Err(format!(
+                "SNBT parse: unexpected char '{}' at {}",
+                other, self.pos
+            )),
             None => Err("SNBT parse: unexpected end of input".into()),
         }
     }
@@ -167,7 +235,10 @@ impl<'a> SnbtParser<'a> {
             let key = self.parse_key()?;
             self.skip_ws();
             if self.peek() != Some(':') {
-                return Err(format!("SNBT parse: expected ':' after key at {}", self.pos));
+                return Err(format!(
+                    "SNBT parse: expected ':' after key at {}",
+                    self.pos
+                ));
             }
             self.pos += 1; // consume ':'
             let val = self.parse_value()?;
@@ -274,11 +345,16 @@ impl<'a> SnbtParser<'a> {
             }
         }
         // SNBT numeric suffixes: 0.0d, 1L, 2f, etc.
-        if matches!(self.peek(), Some('d' | 'D' | 'f' | 'F' | 'l' | 'L' | 'b' | 'B' | 's' | 'S')) {
+        if matches!(
+            self.peek(),
+            Some('d' | 'D' | 'f' | 'F' | 'l' | 'L' | 'b' | 'B' | 's' | 'S')
+        ) {
             self.pos += 1;
         }
         let s: String = self.chars[start..self.pos].iter().collect();
-        let numeric = s.trim_end_matches(|c: char| matches!(c, 'd' | 'D' | 'f' | 'F' | 'l' | 'L' | 'b' | 'B' | 's' | 'S'));
+        let numeric = s.trim_end_matches(|c: char| {
+            matches!(c, 'd' | 'D' | 'f' | 'F' | 'l' | 'L' | 'b' | 'B' | 's' | 'S')
+        });
         if let Ok(i) = numeric.parse::<i64>() {
             return Ok(serde_json::Value::from(i));
         }
@@ -307,13 +383,58 @@ impl<'a> SnbtParser<'a> {
 }
 
 fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {
-    let j = snbt_to_json(c)?; let m = j.as_object().ok_or("not object")?;
-    Ok(Chapter { id: gs(m,"id").unwrap_or_else(|| "untitled".into()), title: gs(m,"title").unwrap_or_else(|| "Untitled".into()), icon: gs(m,"icon"), group: gs(m,"group"), quests: m.get("quests").and_then(|v|v.as_array()).map(|a|a.iter().filter_map(|q|parse_snbt_quest(q).ok()).collect()).unwrap_or_default(), source_file: None })
+    let j = snbt_to_json(c)?;
+    let m = j.as_object().ok_or("not object")?;
+    Ok(Chapter {
+        id: gs(m, "id").unwrap_or_else(|| "untitled".into()),
+        title: gs(m, "title").unwrap_or_else(|| "Untitled".into()),
+        icon: gs(m, "icon"),
+        group: gs(m, "group"),
+        quests: m
+            .get("quests")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|q| parse_snbt_quest(q).ok()).collect())
+            .unwrap_or_default(),
+        source_file: None,
+    })
 }
 fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
     let m = v.as_object().ok_or("not object")?;
-    let dependencies = m.get("dependencies").map(parse_dependencies).unwrap_or_default();
-    Ok(Quest { id: gs(m,"id").unwrap_or_default(), title: gs(m,"title").unwrap_or_else(|| "Quest".into()), subtitle: gs(m,"subtitle"), description: m.get("description").and_then(|v|v.as_array()).map(|a|a.iter().filter_map(|x|x.as_str().map(|s|s.to_string())).collect()).unwrap_or_default(), x: m.get("x").and_then(|v|v.as_f64()).unwrap_or(0.0), y: m.get("y").and_then(|v|v.as_f64()).unwrap_or(0.0), icon: gs(m,"icon"), dependencies, tasks: m.get("tasks").and_then(|v|v.as_array()).map(|a|a.iter().filter_map(|t|parse_snbt_task(t).ok()).collect()).unwrap_or_default(), rewards: m.get("rewards").and_then(|v|v.as_array()).map(|a|a.iter().filter_map(|r|parse_snbt_reward(r).ok()).collect()).unwrap_or_default(), optional: m.get("optional").and_then(|v|v.as_bool()).unwrap_or(false), shape: gs(m,"shape"), size: m.get("size").and_then(|v|v.as_f64()) })
+    let dependencies = m
+        .get("dependencies")
+        .map(parse_dependencies)
+        .unwrap_or_default();
+    Ok(Quest {
+        id: gs(m, "id").unwrap_or_default(),
+        title: gs(m, "title").unwrap_or_else(|| "Quest".into()),
+        subtitle: gs(m, "subtitle"),
+        description: m
+            .get("description")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        x: m.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        y: m.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        icon: gs(m, "icon"),
+        dependencies,
+        tasks: m
+            .get("tasks")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|t| parse_snbt_task(t).ok()).collect())
+            .unwrap_or_default(),
+        rewards: m
+            .get("rewards")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|r| parse_snbt_reward(r).ok()).collect())
+            .unwrap_or_default(),
+        optional: m.get("optional").and_then(|v| v.as_bool()).unwrap_or(false),
+        shape: gs(m, "shape"),
+        size: m.get("size").and_then(|v| v.as_f64()),
+    })
 }
 
 fn parse_dependencies(v: &serde_json::Value) -> Vec<String> {
@@ -321,24 +442,54 @@ fn parse_dependencies(v: &serde_json::Value) -> Vec<String> {
         return s.split_whitespace().map(|x| x.to_string()).collect();
     }
     if let Some(arr) = v.as_array() {
-        return arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect();
+        return arr
+            .iter()
+            .filter_map(|x| x.as_str().map(|s| s.to_string()))
+            .collect();
     }
     Vec::new()
 }
 fn parse_snbt_task(v: &serde_json::Value) -> Result<Task, String> {
     let m = v.as_object().ok_or("not object")?;
-    Ok(Task { id: gs(m,"id").unwrap_or_default(), task_type: gs(m,"type").unwrap_or_else(|| "item".into()), title: gs(m,"title"), value: m.get("value").cloned(), properties: m.iter().filter(|(k,_)|!matches!(k.as_str(),"id"|"type"|"title"|"value")).map(|(k,v)|(k.clone(),v.clone())).collect() })
+    Ok(Task {
+        id: gs(m, "id").unwrap_or_default(),
+        task_type: gs(m, "type").unwrap_or_else(|| "item".into()),
+        title: gs(m, "title"),
+        value: m.get("value").cloned(),
+        properties: m
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "id" | "type" | "title" | "value"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    })
 }
 fn parse_snbt_reward(v: &serde_json::Value) -> Result<Reward, String> {
     let m = v.as_object().ok_or("not object")?;
-    Ok(Reward { id: gs(m,"id").unwrap_or_default(), reward_type: gs(m,"type").unwrap_or_else(|| "item".into()), title: gs(m,"title"), properties: m.iter().filter(|(k,_)|!matches!(k.as_str(),"id"|"type"|"title")).map(|(k,v)|(k.clone(),v.clone())).collect() })
+    Ok(Reward {
+        id: gs(m, "id").unwrap_or_default(),
+        reward_type: gs(m, "type").unwrap_or_else(|| "item".into()),
+        title: gs(m, "title"),
+        properties: m
+            .iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "id" | "type" | "title"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    })
 }
-fn gs(m: &serde_json::Map<String, serde_json::Value>, k: &str) -> Option<String> { m.get(k).and_then(|v|v.as_str()).map(|s|s.to_string()) }
+fn gs(m: &serde_json::Map<String, serde_json::Value>, k: &str) -> Option<String> {
+    m.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
 
 fn sanitize_snbt_filename(id: &str) -> String {
     let cleaned: String = id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if cleaned.is_empty() {
         "chapter".into()
@@ -447,7 +598,10 @@ pub fn serialize_chapter_to_snbt(chapter: &Chapter) -> String {
             for reward in &quest.rewards {
                 lines.push("\t\t\t\t{".to_string());
                 lines.push(format!("\t\t\t\t\tid: {}", snbt_quote(&reward.id)));
-                lines.push(format!("\t\t\t\t\ttype: {}", snbt_quote(&reward.reward_type)));
+                lines.push(format!(
+                    "\t\t\t\t\ttype: {}",
+                    snbt_quote(&reward.reward_type)
+                ));
                 if let Some(title) = &reward.title {
                     lines.push(format!("\t\t\t\t\ttitle: {}", snbt_quote(title)));
                 }

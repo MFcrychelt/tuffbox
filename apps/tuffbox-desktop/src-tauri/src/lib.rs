@@ -1,3 +1,5 @@
+mod integrations;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -305,33 +307,62 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                 .ok()
                 .flatten();
 
-                let mod_spec = if let Some(mut identified) = identified {
+                if let Some(mut identified) = identified {
                     identified.file_name = Some(file_name.clone());
-                    identified
-                } else {
-                    let id = file_name.trim_end_matches(&format!(".{}", ext)).to_string();
-                    tuffbox_core::manifest::ModSpec {
-                        id,
-                        name: file_name.clone(),
-                        version: "unknown".to_string(),
-                        side: tuffbox_core::manifest::Side::Both,
-                        source: tuffbox_core::manifest::ModSource {
-                            kind: tuffbox_core::manifest::SourceKind::Local,
-                            project_id: None,
-                            file_id: None,
-                            url: None,
-                            path: Some(format!("{}/{}", dir_name, file_name)),
-                            icon_url: None,
-                        },
-                        file_name: Some(file_name),
-                        hashes: None,
-                        dependencies: vec![],
-                        status: vec![],
-                        content_type: default_content_type,
+                    identified.content_type = default_content_type;
+                    // A leftover jar from a prior update (different filename,
+                    // same Modrinth project) must not become a second manifest
+                    // entry — that is how "updates duplicate mods".
+                    let existing_idx = manifest.mods.iter().position(|m| {
+                        identified
+                            .source
+                            .project_id
+                            .as_ref()
+                            .is_some_and(|pid| m.source.project_id.as_ref() == Some(pid))
+                            || m.id == identified.id
+                    });
+                    if let Some(idx) = existing_idx {
+                        let tracked = existing_mod_file_path(&manifest_path, &manifest.mods[idx]);
+                        if tracked
+                            .as_ref()
+                            .is_some_and(|tracked_path| tracked_path != &entry.path())
+                        {
+                            let _ = std::fs::remove_file(entry.path());
+                            continue;
+                        }
+                        if tracked.is_none() {
+                            let keep_id = manifest.mods[idx].id.clone();
+                            identified.id = keep_id;
+                            manifest.mods[idx] = identified;
+                            any_changes = true;
+                        }
+                        continue;
                     }
-                };
+                    manifest.mods.push(identified);
+                    any_changes = true;
+                    continue;
+                }
 
-                manifest.mods.push(mod_spec);
+                let id = file_name.trim_end_matches(&format!(".{}", ext)).to_string();
+                manifest.mods.push(tuffbox_core::manifest::ModSpec {
+                    id,
+                    name: file_name.clone(),
+                    version: "unknown".to_string(),
+                    side: tuffbox_core::manifest::Side::Both,
+                    source: tuffbox_core::manifest::ModSource {
+                        kind: tuffbox_core::manifest::SourceKind::Local,
+                        project_id: None,
+                        file_id: None,
+                        url: None,
+                        path: Some(format!("{}/{}", dir_name, file_name)),
+                        icon_url: None,
+                    },
+                    file_name: Some(file_name),
+                    hashes: None,
+                    dependencies: vec![],
+                    status: vec![],
+                    content_type: default_content_type,
+                });
                 any_changes = true;
             }
         }
@@ -810,8 +841,7 @@ async fn update_project_mod(
             .mods
             .iter()
             .find(|module| {
-                module.id == mod_id
-                    || module.source.project_id.as_deref() == Some(mod_id.as_str())
+                module.id == mod_id || module.source.project_id.as_deref() == Some(mod_id.as_str())
             })
             .cloned()
             .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
@@ -900,11 +930,10 @@ async fn get_mod_versions(
             .map(|v| {
                 let mc_ok = v.game_versions.iter().any(|gv| gv == &minecraft_version);
                 let loader_ok = match &loader_slug {
-                    Some(loader) => {
-                        v.loaders
-                            .iter()
-                            .any(|l| l == loader || (*loader == "quilt" && l == "fabric"))
-                    }
+                    Some(loader) => v
+                        .loaders
+                        .iter()
+                        .any(|l| l == loader || (*loader == "quilt" && l == "fabric")),
                     None => true,
                 };
                 let compatible = mc_ok && loader_ok;
@@ -926,8 +955,14 @@ async fn get_mod_versions(
 
         // Compatible first, then by channel preference (release > beta > alpha).
         rows.sort_by(|a, b| {
-            let a_ok = a.get("compatible").and_then(|v| v.as_bool()).unwrap_or(false);
-            let b_ok = b.get("compatible").and_then(|v| v.as_bool()).unwrap_or(false);
+            let a_ok = a
+                .get("compatible")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let b_ok = b
+                .get("compatible")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             match (a_ok, b_ok) {
                 (true, false) => std::cmp::Ordering::Less,
                 (false, true) => std::cmp::Ordering::Greater,
@@ -946,7 +981,11 @@ async fn get_mod_versions(
                         b.get("datePublished")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
-                            .cmp(a.get("datePublished").and_then(|v| v.as_str()).unwrap_or(""))
+                            .cmp(
+                                a.get("datePublished")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(""),
+                            )
                     })
                 }
             }
@@ -998,11 +1037,12 @@ async fn change_mod_version(
         let dependencies = provider
             .resolve_dependencies(&version_info.id)
             .unwrap_or(previous_deps);
-        let new_spec = build_mod_spec(&project, &version_info, file, dependencies, side);
+        let mut new_spec = build_mod_spec(&project, &version_info, file, dependencies, side);
+        // Keep the stable UI / dependency id across version switches.
+        new_spec.id = old_mod.id.clone();
         manifest.mods[idx] = new_spec;
 
-        let report =
-            commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, true)?;
+        let report = commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, true)?;
 
         Ok(serde_json::json!({
             "version": version_info.version_number,
@@ -1485,17 +1525,28 @@ fn installed_matches_version(
     installed_sha1: Option<&str>,
     latest: &tuffbox_core::VersionInfo,
 ) -> bool {
+    // Modrinth version id is authoritative when the install already points
+    // at it — hash metadata can be stale after interrupted updates.
+    if module.source.file_id.as_deref() == Some(latest.id.as_str()) {
+        return true;
+    }
     if let Some(installed_sha1) = installed_sha1 {
-        if latest
-            .files
-            .iter()
-            .any(|f| f.hashes.sha1.as_deref() == Some(installed_sha1))
-        {
+        if latest.files.iter().any(|f| {
+            f.hashes
+                .sha1
+                .as_deref()
+                .is_some_and(|h| h.eq_ignore_ascii_case(installed_sha1))
+        }) {
             return true;
         }
-        return false;
     }
-    module.source.file_id.as_deref() == Some(latest.id.as_str())
+    // Same published version string with no conflicting identity — skip the
+    // false "update available" badge users see when hashes disagree in case
+    // or the jar filename drifted while the install is already current.
+    let installed_ver = module.version.trim();
+    !installed_ver.is_empty()
+        && installed_ver != "unknown"
+        && installed_ver == latest.version_number.trim()
 }
 
 fn update_loaders_for(manifest: &ProjectManifest) -> (String, Vec<String>) {
@@ -1526,8 +1577,8 @@ fn resolve_pending_mod_updates(
     let mut no_hash_idxs: Vec<usize> = Vec::new();
 
     for (idx, module) in manifest.mods.iter().enumerate() {
-        let is_modrinth = module.source.kind == SourceKind::Modrinth
-            || module.source.project_id.is_some();
+        let is_modrinth =
+            module.source.kind == SourceKind::Modrinth || module.source.project_id.is_some();
         if !is_modrinth {
             continue;
         }
@@ -2778,6 +2829,17 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn analyze_crash_with_ai(path: String) -> Result<serde_json::Value, String> {
+    let context = build_ai_crash_context(path)?;
+    let prompt = context
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "crash context did not contain an AI prompt".to_string())?;
+    let settings = integrations::get_integration_status().settings;
+    integrations::call_ai(&settings.ai, prompt).await
+}
+
 /// ── Mod recommendation engine ─────────────────────────────────────
 
 /// Analyzes the current modpack and suggests mods that would fill gaps
@@ -3597,18 +3659,7 @@ fn cleanup_project(path: String) -> Result<serde_json::Value, String> {
 /// Returns the current TuffBox version.
 #[tauri::command(rename_all = "camelCase")]
 fn get_app_version() -> Result<String, String> {
-    Ok("0.1.0-alpha".into())
-}
-
-/// Stub for update check — returns mock data.
-#[tauri::command(rename_all = "camelCase")]
-fn check_for_app_update() -> Result<serde_json::Value, String> {
-    Ok(serde_json::json!({
-        "currentVersion": "0.1.0-alpha",
-        "latestVersion": "0.1.0-alpha",
-        "updateAvailable": false,
-        "checkedAt": tuffbox_core::time_util::rfc3339_now(),
-    }))
+    Ok(env!("CARGO_PKG_VERSION").to_string())
 }
 
 /// ── World preview (level.dat reader) ────────────────────────────
@@ -4803,6 +4854,7 @@ fn create_release_draft(path: String, changelog: String) -> Result<ReleaseDraftR
     std::fs::write(&draft_path, markdown).map_err(|e| e.to_string())?;
 
     let artifact_count = artifacts.len();
+    let publish_config = integrations::get_publish_config(path.clone()).unwrap_or_default();
     let metadata = serde_json::json!({
         "projectId": manifest.project.id.clone(),
         "version": manifest.project.version.clone(),
@@ -4814,9 +4866,19 @@ fn create_release_draft(path: String, changelog: String) -> Result<ReleaseDraftR
             .as_secs()
             .to_string(),
         "targets": {
-            "modrinth": "draft-placeholder",
-            "curseforge": "draft-placeholder",
-            "githubReleases": "draft-placeholder"
+            "modrinth": {
+                "configured": !publish_config.modrinth_project_id.is_empty(),
+                "projectId": publish_config.modrinth_project_id,
+            },
+            "curseforge": {
+                "configured": !publish_config.curseforge_project_id.is_empty(),
+                "projectId": publish_config.curseforge_project_id,
+                "gameVersionIds": publish_config.curseforge_game_version_ids,
+            },
+            "githubReleases": {
+                "configured": !publish_config.github_repository.is_empty(),
+                "repository": publish_config.github_repository,
+            }
         }
     });
     std::fs::write(
@@ -5120,7 +5182,8 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 #[tauri::command]
 fn import_curseforge_project(source: String, target_dir: String) -> Result<String, String> {
     let mut manifest = tuffbox_core::import_curseforge_pack(&source).map_err(|e| e.to_string())?;
-    let _ = tuffbox_core::resolve_curseforge_pack_files(&mut manifest).map_err(|e| e.to_string())?;
+    let _ =
+        tuffbox_core::resolve_curseforge_pack_files(&mut manifest).map_err(|e| e.to_string())?;
     let target = PathBuf::from(&target_dir);
     std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
     let overrides_folder =
@@ -5151,12 +5214,18 @@ fn import_project(source: String, target_dir: String) -> Result<String, String> 
         (import_folder(&source).map_err(|e| e.to_string())?, false)
     } else {
         match ext.as_str() {
-            "mrpack" => (import_modrinth_pack(&source).map_err(|e| e.to_string())?, false),
+            "mrpack" => (
+                import_modrinth_pack(&source).map_err(|e| e.to_string())?,
+                false,
+            ),
             "zip" if is_curseforge_pack(&source) => (
                 import_curseforge_pack(&source).map_err(|e| e.to_string())?,
                 true,
             ),
-            "zip" => (import_prism_instance(&source).map_err(|e| e.to_string())?, false),
+            "zip" => (
+                import_prism_instance(&source).map_err(|e| e.to_string())?,
+                false,
+            ),
             _ => return Err(format!("unsupported import format: {ext}")),
         }
     };
@@ -5170,7 +5239,8 @@ fn import_project(source: String, target_dir: String) -> Result<String, String> 
     if is_cf {
         let overrides_folder = tuffbox_core::curseforge_overrides_folder(&source)
             .unwrap_or_else(|_| "overrides".into());
-        let _ = tuffbox_core::extract_curseforge_overrides(&source, &target_root, &overrides_folder);
+        let _ =
+            tuffbox_core::extract_curseforge_overrides(&source, &target_root, &overrides_folder);
         let _ = tuffbox_core::stash_curseforge_manifest(&source, &target_root);
     }
 
@@ -5193,12 +5263,7 @@ async fn search_curseforge_modpacks(
             return Err("CurseForge API key is not configured".to_string());
         }
         let hits = provider
-            .search_modpacks(
-                &query,
-                game_version.as_deref(),
-                offset.unwrap_or(0),
-                20,
-            )
+            .search_modpacks(&query, game_version.as_deref(), offset.unwrap_or(0), 20)
             .map_err(|e| e.to_string())?;
         Ok(hits
             .into_iter()
@@ -5422,8 +5487,7 @@ async fn retry_failed_mod_downloads(
 ) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let mut manifest =
-            ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         // Re-resolve any CurseForge entries that still lack URLs.
         let needs_cf = manifest.mods.iter().any(|m| {
             mod_ids.contains(&m.id)
@@ -5452,6 +5516,45 @@ fn open_project_folder(app: tauri::AppHandle, path: String) -> Result<(), String
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
     use tauri_plugin_shell::ShellExt;
     app.shell().open(dir, None).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn create_project_desktop_shortcut(path: String) -> Result<String, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_parent(&path)?;
+    let desktop = dirs::desktop_dir().ok_or_else(|| "desktop folder was not found".to_string())?;
+    let safe_name: String = manifest
+        .project
+        .name
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+
+    #[cfg(target_os = "windows")]
+    {
+        let shortcut = desktop.join(format!("TuffBox - {safe_name}.url"));
+        let target = project_dir.to_string_lossy().replace('\\', "/");
+        let contents = format!("[InternetShortcut]\r\nURL=file:///{target}\r\nIconIndex=0\r\n");
+        std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
+        return Ok(shortcut.to_string_lossy().to_string());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let shortcut = desktop.join(format!("TuffBox - {safe_name}.desktop"));
+        let target = project_dir.to_string_lossy();
+        let contents = format!(
+            "[Desktop Entry]\nType=Link\nName=TuffBox - {safe_name}\nURL=file://{target}\n"
+        );
+        std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
+        Ok(shortcut.to_string_lossy().to_string())
+    }
 }
 
 #[tauri::command]
@@ -6379,6 +6482,57 @@ fn existing_mod_file_path(manifest_path: &Path, module: &ModSpec) -> Option<Path
     disabled.is_file().then_some(disabled)
 }
 
+/// Removes jars superseded by an update: the previous filename and any file
+/// whose sha1 still matches the pre-update artifact. Filename-only cleanup
+/// misses Modrinth renames (`mod-1.0.0.jar` → `mod-1.0.1.jar`) when the
+/// manifest path was already out of sync with disk.
+fn remove_superseded_mod_files(manifest_path: &Path, old_mod: &ModSpec, new_mod: &ModSpec) {
+    let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) else {
+        return;
+    };
+    let content_dir = tuffbox_core::content_dir_for(&instance_dir, new_mod.content_type);
+    let keep_name = new_mod.file_name.as_deref();
+    let old_name = old_mod.file_name.as_deref();
+    let old_sha1 = old_mod
+        .hashes
+        .as_ref()
+        .and_then(|h| h.sha1.as_ref())
+        .filter(|h| !h.is_empty())
+        .cloned();
+
+    let Ok(entries) = std::fs::read_dir(&content_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let base = name.strip_suffix(".disabled").unwrap_or(name.as_str());
+        if !(base.ends_with(".jar") || base.ends_with(".zip")) {
+            continue;
+        }
+        if keep_name == Some(base) {
+            continue;
+        }
+
+        let mut remove = old_name == Some(base);
+        if !remove {
+            if let Some(ref expected) = old_sha1 {
+                if let Ok(actual) = tuffbox_core::sha1_file(&path) {
+                    if actual.eq_ignore_ascii_case(expected) {
+                        remove = true;
+                    }
+                }
+            }
+        }
+        if remove {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 fn refresh_modrinth_file_metadata(
     manifest: &ProjectManifest,
     module: &mut ModSpec,
@@ -6397,17 +6551,19 @@ fn refresh_modrinth_file_metadata(
     // Loader must match so we don't install a Forge jar into a Fabric instance.
     // Minecraft mismatch is allowed for intentional cross-version switches from
     // the version picker (user confirms incompatible installs in the UI).
-    if !version.loaders.iter().any(|loader| {
-        loader == loader_slug || (loader_slug == "quilt" && loader == "fabric")
-    }) {
+    if !version
+        .loaders
+        .iter()
+        .any(|loader| loader == loader_slug || (loader_slug == "quilt" && loader == "fabric"))
+    {
         return Err(format!(
             "{} update has no build for loader {loader_slug} (supports [{}])",
             module.name,
             version.loaders.join(", ")
         ));
     }
-    let file = ProviderFileInfo::select_file_for_loader(&version, loader_slug)
-        .ok_or_else(|| {
+    let file =
+        ProviderFileInfo::select_file_for_loader(&version, loader_slug).ok_or_else(|| {
             format!(
                 "{} update has no downloadable file for loader {loader_slug}",
                 module.name
@@ -6455,6 +6611,25 @@ fn commit_single_mod_update(
     let old_path = existing_mod_file_path(manifest_path, old_mod);
     let new_path = mod_file_path(manifest_path, &new_mod)
         .ok_or_else(|| format!("updated mod {} has no destination file", new_mod.id))?;
+
+    // Prefer the on-disk hash for cleanup — manifest metadata may already
+    // disagree with the jar after a partial prior update.
+    let mut old_for_cleanup = old_mod.clone();
+    if let Some(path) = old_path.as_ref() {
+        if let Ok(hash) = tuffbox_core::sha1_file(path) {
+            old_for_cleanup.hashes = Some(tuffbox_core::FileHashes {
+                sha1: Some(hash),
+                sha512: old_mod
+                    .hashes
+                    .as_ref()
+                    .and_then(|h| h.sha512.clone()),
+            });
+        }
+        if let Some(name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) {
+            let base = name.strip_suffix(".disabled").unwrap_or(&name).to_string();
+            old_for_cleanup.file_name = Some(base);
+        }
+    }
 
     let backup = if let Some(path) = old_path.as_ref() {
         let parent = path
@@ -6507,11 +6682,7 @@ fn commit_single_mod_update(
         ));
     }
 
-    if let Some(path) = old_path {
-        if path != new_path {
-            let _ = std::fs::remove_file(path);
-        }
-    }
+    remove_superseded_mod_files(manifest_path, &old_for_cleanup, &new_mod);
     Ok(report)
 }
 
@@ -6553,10 +6724,11 @@ fn apply_change_action(
                 .strip_prefix("mod:")
                 .unwrap_or(&node_id.0)
                 .to_string();
-            let version_id = if target_version.trim().is_empty() {
+            let target_version = target_version.trim();
+            let version_id = if target_version.is_empty() || target_version == "latest-compatible" {
                 None
             } else {
-                Some(target_version.as_str())
+                Some(target_version)
             };
             update_mod_from_modrinth(manifest_path, manifest, &mod_id, version_id)
                 .map_err(|e| e.to_string())?;
@@ -6670,9 +6842,7 @@ fn update_mod_from_modrinth(
     let index = manifest
         .mods
         .iter()
-        .position(|m| {
-            m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id)
-        })
+        .position(|m| m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id))
         .ok_or_else(|| anyhow::anyhow!("mod {mod_id} not found in project"))?;
 
     let old_mod = manifest.mods[index].clone();
@@ -7164,9 +7334,7 @@ fn download_project_mods_tracked(
         .mods
         .iter()
         .filter(|m| {
-            only_mod_ids
-                .map(|ids| ids.contains(&m.id))
-                .unwrap_or(true)
+            only_mod_ids.map(|ids| ids.contains(&m.id)).unwrap_or(true)
                 && mod_needs_download(&instance_dir, m)
         })
         .map(|m| ModDownloadProgressPayload {
@@ -7179,8 +7347,7 @@ fn download_project_mods_tracked(
         })
         .collect();
 
-    let scope_mod_ids: Option<Vec<String>> =
-        only_mod_ids.map(|ids| ids.iter().cloned().collect());
+    let scope_mod_ids: Option<Vec<String>> = only_mod_ids.map(|ids| ids.iter().cloned().collect());
 
     // Nothing to fetch — still emit a quick start/done so any UI overlay can settle.
     if queue.is_empty() {
@@ -7419,6 +7586,7 @@ pub fn run() {
             list_backups,
             delete_backup,
             build_ai_crash_context,
+            analyze_crash_with_ai,
             recommend_mods,
             get_mod_info,
             restore_backup,
@@ -7445,7 +7613,15 @@ pub fn run() {
             lint_config,
             cleanup_project,
             get_app_version,
-            check_for_app_update,
+            integrations::check_for_app_update,
+            integrations::get_integration_status,
+            integrations::save_integration_settings,
+            integrations::set_integration_secret,
+            integrations::clear_integration_secret,
+            integrations::test_integration,
+            integrations::get_publish_config,
+            integrations::save_publish_config,
+            integrations::publish_release,
             read_world_info,
             generate_github_release,
             localize,
@@ -7505,6 +7681,7 @@ pub fn run() {
             retry_failed_mod_downloads,
             has_crashed,
             open_project_folder,
+            create_project_desktop_shortcut,
             delete_project,
             create_logs_zip,
             clone_project,

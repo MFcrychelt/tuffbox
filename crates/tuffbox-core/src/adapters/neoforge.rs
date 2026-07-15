@@ -1,8 +1,8 @@
 use super::*;
-use crate::environment::LoaderKind;
-use crate::unified::tag::tag_id_from_path;
-use crate::unified::recipe::*;
 use crate::adapters::forge::ForgeAdapter;
+use crate::environment::LoaderKind;
+use crate::unified::recipe::*;
+use crate::unified::tag::tag_id_from_path;
 
 pub struct NeoForgeAdapter;
 
@@ -61,8 +61,14 @@ impl LoaderAdapter for NeoForgeAdapter {
 
     fn config_file_patterns(&self) -> Vec<ConfigPattern> {
         vec![
-            ConfigPattern { path_pattern: "config/*.toml".to_string(), format: ConfigFileFormat::Toml },
-            ConfigPattern { path_pattern: "config/*/*.toml".to_string(), format: ConfigFileFormat::Toml },
+            ConfigPattern {
+                path_pattern: "config/*.toml".to_string(),
+                format: ConfigFileFormat::Toml,
+            },
+            ConfigPattern {
+                path_pattern: "config/*/*.toml".to_string(),
+                format: ConfigFileFormat::Toml,
+            },
         ]
     }
 
@@ -87,7 +93,10 @@ impl LoaderAdapter for NeoForgeAdapter {
         json: &serde_json::Value,
         file_path: &str,
     ) -> Result<UnifiedTag, AdapterError> {
-        let replace = json.get("replace").and_then(|v| v.as_bool()).unwrap_or(false);
+        let replace = json
+            .get("replace")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let values: Vec<TagEntry> = json
             .get("values")
@@ -96,11 +105,17 @@ impl LoaderAdapter for NeoForgeAdapter {
                 arr.iter()
                     .filter_map(|v| {
                         if let Some(s) = v.as_str() {
-                            Some(TagEntry { id: s.to_string(), required: true })
+                            Some(TagEntry {
+                                id: s.to_string(),
+                                required: true,
+                            })
                         } else if let Some(obj) = v.as_object() {
                             Some(TagEntry {
                                 id: obj.get("id")?.as_str()?.to_string(),
-                                required: obj.get("required").and_then(|r| r.as_bool()).unwrap_or(true),
+                                required: obj
+                                    .get("required")
+                                    .and_then(|r| r.as_bool())
+                                    .unwrap_or(true),
                             })
                         } else {
                             None
@@ -113,6 +128,10 @@ impl LoaderAdapter for NeoForgeAdapter {
         let tag_id = tag_id_from_path(file_path)
             .ok_or_else(|| AdapterError::InvalidPath(file_path.to_string()))?;
 
-        Ok(UnifiedTag { id: tag_id, entries: values, replace })
+        Ok(UnifiedTag {
+            id: tag_id,
+            entries: values,
+            replace,
+        })
     }
 }

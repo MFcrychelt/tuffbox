@@ -17,57 +17,31 @@
   let exporting = false;
   let result: ExportResult | null = null;
   let error: string | null = null;
-  let message: string | null = null;
   let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
   let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
 
-  // Modrinth publish URL generator
-  let modrinthPublishUrl = "";
-  let modrinthProjectId = "";
-  let modrinthVersionName = "";
-  let generatePublishUrl = false;
+  let lastPathForDefaults = "";
 
-  function buildModrinthUrl() {
-    const name = $projectInfo?.name ?? "modpack";
-    const version = $projectInfo?.version ?? "1.0.0";
-    const gameVersion = $projectInfo?.minecraftVersion ?? "1.20.1";
-    let loader = ($projectInfo?.loaderKind ?? "fabric").toLowerCase();
-    if (loader === "neoforge") loader = "neoforge";
-    if (loader === "vanilla") loader = "";
-    const encodedName = encodeURIComponent(name);
-    const encodedVersion = encodeURIComponent(modrinthVersionName || `${name} ${version}`);
-    const encodedGame = encodeURIComponent(gameVersion);
-    const baseUrl = "https://modrinth.com/modpack";
-    
-    if (modrinthProjectId.trim()) {
-      modrinthPublishUrl = `${baseUrl}/${modrinthProjectId.trim()}/version/create?name=${encodedVersion}&game_versions=[%22${encodedGame}%22]`;
-    } else {
-      modrinthPublishUrl = `${baseUrl}/create?name=${encodedName}&version=${encodedVersion}`;
-    }
-    if (loader) modrinthPublishUrl += `&loaders=[%22${loader}%22]`;
-    generatePublishUrl = true;
-  }
-
-  async function copyPublishUrl() {
-    try {
-      await navigator.clipboard.writeText(modrinthPublishUrl);
-      result = { path: "", fileCount: 0, overrideCount: 0 };
-      message = "Publish URL copied to clipboard.";
-    } catch(e) {
-      message = modrinthPublishUrl;
-    }
-  }
-
-  async function refreshDefaultPath() {
-    if (!$projectPath) return;
-    projectDir = await invoke("get_project_dir", { path: $projectPath });
-    issues = await invoke("validate_modrinth_export", { path: $projectPath });
+  async function loadDefaultPaths(path: string) {
+    projectDir = await invoke("get_project_dir", { path });
+    issues = await invoke("validate_modrinth_export", { path });
     const id = $projectInfo?.id ?? "modpack";
     const version = $projectInfo?.version ?? "1.0.0";
     targetPath = `${projectDir}/${id}-${version}.mrpack`;
     serverTargetPath = `${projectDir}/${id}-${version}-server.zip`;
     prismTargetPath = `${projectDir}/${id}-${version}-prism.zip`;
     curseforgeTargetPath = `${projectDir}/${id}-${version}-curseforge.zip`;
+  }
+
+  function refreshDefaultPath() {
+    if (!$projectPath) return;
+    void loadDefaultPaths($projectPath);
+  }
+
+  function onProjectPathChange(path: string | null) {
+    if (!path || path === lastPathForDefaults) return;
+    lastPathForDefaults = path;
+    void loadDefaultPaths(path);
   }
 
   async function exportMrpack() {
@@ -103,7 +77,7 @@
     }
   }
 
-  $: if ($projectPath && !targetPath) refreshDefaultPath();
+  $: onProjectPathChange($projectPath);
 </script>
 
 <div class="export-builder">
@@ -183,7 +157,7 @@
 
       {#if issues.length > 0}
         <div class="issues">
-          {#each issues as issue}
+          {#each issues as issue (issue.code + (issue.target ?? '') + issue.message)}
             <div class="issue {issue.severity}">
               <strong>{issue.code}</strong>
               <span>{issue.message}</span>
@@ -194,21 +168,11 @@
       {/if}
 
       <div class="publish-section">
-        <h3>Publish to Modrinth</h3>
-        <p>Generate a URL to create a Modrinth project page.</p>
-        <div class="publish-row">
-          <input bind:value={modrinthProjectId} placeholder="Existing project slug (optional)" style="flex:1" />
-          <input bind:value={modrinthVersionName} placeholder="Version name" style="flex:1" />
-          <button class="secondary" on:click={buildModrinthUrl}>
-            <UploadCloud size={14} /> Generate
-          </button>
-        </div>
-        {#if generatePublishUrl}
-          <div class="publish-result">
-            <code class="publish-url">{modrinthPublishUrl}</code>
-            <button class="secondary mini" on:click={copyPublishUrl}>Copy</button>
-          </div>
-        {/if}
+        <h3>Publish is in Release</h3>
+        <p>
+          This stage only builds local artifacts. Configure tokens in Settings, then open the
+          Release stage to publish to Modrinth, CurseForge or GitHub Releases.
+        </p>
       </div>
 
       <div class="export-actions">
@@ -267,13 +231,7 @@
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
   .publish-section { padding: 16px; border: 1px solid rgba(27,217,106,.25); border-radius: var(--border-radius-lg); background: rgba(27,217,106,.03); }
   .publish-section h3 { color: var(--text-primary); font-size: 14px; margin: 0 0 4px; }
-  .publish-section p { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; }
-  .publish-row { display: flex; gap: 8px; align-items: center; }
-  .publish-row input { font-size: 12px; padding: 6px 10px; }
-  .publish-row button { white-space: nowrap; }
-  .publish-result { display: flex; gap: 8px; align-items: center; margin-top: 10px; padding: 8px; border-radius: 8px; background: var(--bg-tertiary); }
-  .publish-url { font-size: 11px; color: var(--accent-secondary); word-break: break-all; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mini { padding: 5px 8px; font-size: 11px; }
+  .publish-section p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
 
   .export-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .export { justify-self: start; }

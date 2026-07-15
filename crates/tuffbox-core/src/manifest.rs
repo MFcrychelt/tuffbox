@@ -58,10 +58,11 @@ impl ProjectManifest {
             path: path_string.clone(),
             source,
         })?;
-        let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|source| ManifestError::Parse {
-            path: path_string.clone(),
-            source,
-        })?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|source| ManifestError::Parse {
+                path: path_string.clone(),
+                source,
+            })?;
         migrate_project_manifest_value(&mut value)?;
         let manifest = serde_json::from_value(value).map_err(|source| ManifestError::Parse {
             path: path_string,
@@ -95,7 +96,11 @@ pub fn migrate_project_manifest_value(value: &mut serde_json::Value) -> Result<(
         .unwrap_or("0.1")
         .to_string();
 
-    let normalized = if version == "0.1" { "0.1.0".to_string() } else { version.clone() };
+    let normalized = if version == "0.1" {
+        "0.1.0".to_string()
+    } else {
+        version.clone()
+    };
 
     if !SUPPORTED_PROJECT_SCHEMA_VERSIONS.contains(&normalized.as_str()) {
         return Err(ManifestError::UnsupportedSchemaVersion {

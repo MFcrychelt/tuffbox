@@ -10,7 +10,11 @@ pub struct McVersion {
 
 impl McVersion {
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -191,7 +195,8 @@ impl EnvironmentDetector {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(deps) = json.get("dependencies").and_then(|v| v.as_object()) {
                     if let Some(mc_ver_str) = deps.get("minecraft").and_then(|v| v.as_str()) {
-                        let mc_ver = McVersion::parse(mc_ver_str).ok_or(DetectError::VersionParse)?;
+                        let mc_ver =
+                            McVersion::parse(mc_ver_str).ok_or(DetectError::VersionParse)?;
                         let loader_key = match loader {
                             LoaderKind::Fabric => "fabric-loader",
                             LoaderKind::Quilt => "quilt-loader",

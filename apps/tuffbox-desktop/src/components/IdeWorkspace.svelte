@@ -11,7 +11,6 @@
     History,
     UploadCloud,
     Rocket,
-    CheckCircle2,
     Mountain,
     PackageOpen,
     ScrollText,
@@ -230,8 +229,6 @@
   }
 
   $: if ($projectPath) loadBrief();
-  $: activeIndex = stages.findIndex((stage) => stage.id === activeStage);
-  $: completed = new Set(stages.slice(0, Math.max(activeIndex, 0)).map((stage) => stage.id));
 
 </script>
 
@@ -296,20 +293,16 @@
   </section>
 
   <nav class="workflow-rail" aria-label="Modpack production workflow">
-    {#each stages as stage, index}
+    {#each stages as stage, index (stage.id)}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
-        class:done={completed.has(stage.id)}
         on:click={() => (activeStage = stage.id)}
         title={stage.goal}
+        aria-current={activeStage === stage.id ? "step" : undefined}
       >
-        <span class="stage-status">
-          {#if completed.has(stage.id)}
-            <CheckCircle2 size={15} />
-          {:else}
-            <Circle size={15} />
-          {/if}
+        <span class="stage-status" aria-hidden="true">
+          <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
         </span>
         <svelte:component this={stage.icon} size={20} />
         <span class="stage-text">
@@ -317,32 +310,29 @@
           <small>{stage.short}</small>
         </span>
       </button>
-      {#if index < stages.length - 1}<span class="rail-line" />{/if}
+      {#if index < stages.length - 1}<span class="rail-line"></span>{/if}
     {/each}
   </nav>
 </div>
 
 <style>
   .ide-workspace {
-    width: min(1840px, 100%);
-    min-height: calc(100vh - 120px);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .workflow-rail,
-  .stage-shell,
   .skeleton-page {
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    background: var(--bg-secondary);
+    width: min(1120px, 100%);
+    margin: 0 auto;
   }
 
   .stage-shell {
-    flex: 1;
-    min-height: 76vh;
-    padding: 18px;
+    min-width: 0;
+    min-height: 0;
     background:
       radial-gradient(circle at top right, rgba(27, 217, 106, 0.06), transparent 32%),
       rgba(255, 255, 255, 0.015);
@@ -351,33 +341,33 @@
 
   .stage-content {
     min-width: 0;
+    min-height: 0;
     width: 100%;
     height: 100%;
+    overflow: auto;
+    padding: 20px 24px;
+    scrollbar-gutter: stable;
   }
 
   .workflow-rail {
-    position: sticky;
-    bottom: 0;
-    z-index: 20;
     display: flex;
     align-items: stretch;
     gap: 0;
-    padding: 14px 16px;
+    min-width: 0;
+    padding: 8px 12px;
     overflow-x: auto;
-    box-shadow: 0 -18px 40px rgba(0, 0, 0, 0.25);
-    background:
-      linear-gradient(180deg, rgba(24, 24, 27, 0.92), rgba(12, 12, 14, 0.98)),
-      var(--bg-secondary);
-    backdrop-filter: blur(18px);
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    scrollbar-width: thin;
   }
 
   .stage-tab {
-    min-width: 148px;
-    min-height: 64px;
-    flex: 1 0 148px;
+    min-width: 112px;
+    min-height: 52px;
+    flex: 1 0 112px;
     justify-content: flex-start;
-    gap: 10px;
-    padding: 14px 12px;
+    gap: 8px;
+    padding: 9px 10px;
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid transparent;
@@ -391,15 +381,37 @@
     color: var(--text-primary);
   }
 
-  .stage-tab.done .stage-status {
+  .stage-tab.active .stage-status {
     color: var(--accent-primary);
+  }
+
+  .stage-tab:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+  }
+
+  .stage-status {
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    color: var(--text-muted);
   }
 
   .stage-text {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    min-width: 0;
     line-height: 1.1;
+  }
+
+  .stage-text strong,
+  .stage-text small {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .stage-text small {
@@ -408,14 +420,14 @@
   }
 
   .rail-line {
-    width: 10px;
+    width: 6px;
+    flex: 0 0 6px;
     align-self: center;
     border-top: 1px solid var(--border-color);
   }
 
   .skeleton-page {
-    padding: 24px;
-    min-height: 72vh;
+    min-height: 100%;
   }
 
   .skeleton-page h2 {
@@ -480,12 +492,42 @@
   }
 
   @media (max-width: 1100px) {
-    .stage-shell {
-      min-height: 72vh;
-    }
-
     .brief-grid {
       grid-template-columns: 1fr;
+    }
+
+    .stage-content {
+      padding: 16px;
+    }
+
+    .stage-tab {
+      min-width: 88px;
+      flex-basis: 88px;
+      justify-content: center;
+    }
+
+    .stage-status,
+    .stage-text small,
+    .rail-line {
+      display: none;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .workflow-rail {
+      padding-inline: 8px;
+    }
+
+    .stage-tab {
+      min-width: 56px;
+      flex-basis: 56px;
+      flex-direction: column;
+      gap: 4px;
+      padding-inline: 6px;
+    }
+
+    .stage-text strong {
+      font-size: 10px;
     }
   }
 </style>

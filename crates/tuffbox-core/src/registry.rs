@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use crate::environment::{ModpackEnvironment, DataEpoch};
+use crate::adapters::{FabricAdapter, ForgeAdapter, LoaderAdapter, ModMetadata, NeoForgeAdapter};
+use crate::environment::{DataEpoch, ModpackEnvironment};
 use crate::manifest::LoaderKind;
-use crate::adapters::{
-    LoaderAdapter, ModMetadata, ForgeAdapter, FabricAdapter, NeoForgeAdapter,
+use crate::overrides::{
+    CreateOverride, MekanismOverride, ModOverride, OreConfigMapping, ThermalOverride,
 };
-use crate::unified::{UnifiedRecipe, UnifiedTag, tag::TagId, tag::TagEntry};
 use crate::tag_normalizer::TagNormalizer;
-use crate::overrides::{ModOverride, MekanismOverride, ThermalOverride, CreateOverride, OreConfigMapping};
+use crate::unified::{tag::TagEntry, tag::TagId, UnifiedRecipe, UnifiedTag};
+use std::collections::HashMap;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
 pub struct AdapterRegistry {
     loader_adapters: Vec<Box<dyn LoaderAdapter>>,
@@ -48,10 +48,7 @@ impl AdapterRegistry {
         self.mod_overrides.get(mod_id).map(|o| o.as_ref())
     }
 
-    pub fn scan_modpack(
-        &self,
-        env: &ModpackEnvironment,
-    ) -> Result<UnifiedModpackData, ScanError> {
+    pub fn scan_modpack(&self, env: &ModpackEnvironment) -> Result<UnifiedModpackData, ScanError> {
         let adapter = self
             .get_adapter(env.loader)
             .ok_or(ScanError::UnsupportedLoader(env.loader))?;
@@ -105,7 +102,8 @@ impl AdapterRegistry {
                     let mut content = String::new();
                     if entry.read_to_string(&mut content).is_ok() {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                            if let Ok(recipe) = adapter.parse_recipe(&json, rpath, &env.mc_version) {
+                            if let Ok(recipe) = adapter.parse_recipe(&json, rpath, &env.mc_version)
+                            {
                                 recipes.push(recipe);
                             }
                         }
@@ -164,18 +162,11 @@ impl UnifiedModpackData {
         }
 
         for tag in scanned.tags {
-            self.all_tags
-                .entry(tag.id)
-                .or_default()
-                .extend(tag.entries);
+            self.all_tags.entry(tag.id).or_default().extend(tag.entries);
         }
     }
 
-    fn merge_with_override(
-        &mut self,
-        scanned: ScannedMod,
-        over: &dyn ModOverride,
-    ) {
+    fn merge_with_override(&mut self, scanned: ScannedMod, over: &dyn ModOverride) {
         let mod_id = scanned.metadata.mod_id.clone();
 
         for item in over.programmatic_items() {
@@ -196,10 +187,7 @@ impl UnifiedModpackData {
         for (tag_id, entries) in tags_snapshot {
             let normalized = TagNormalizer::normalize(&tag_id, env);
 
-            self.all_tags
-                .entry(normalized)
-                .or_default()
-                .extend(entries);
+            self.all_tags.entry(normalized).or_default().extend(entries);
         }
     }
 }

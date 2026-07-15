@@ -63,7 +63,7 @@
   <Sidebar bind:currentView />
   <div class="main">
     <Header {currentView} />
-    <main class="content">
+    <main class="content" class:ide-view={currentView === "ide"}>
       {#if currentView === "dashboard"}
         <Dashboard bind:currentView />
       {:else if currentView === "ide"}
@@ -114,6 +114,7 @@
     display: flex;
     height: 100vh;
     width: 100vw;
+    overflow: hidden;
     background: var(--bg-primary);
     color: var(--text-primary);
   }
@@ -123,11 +124,19 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
   }
 
   .content {
     flex: 1;
+    min-width: 0;
+    min-height: 0;
     overflow: auto;
     padding: 24px 32px;
+  }
+
+  .content.ide-view {
+    overflow: hidden;
+    padding: 0;
   }
 </style>

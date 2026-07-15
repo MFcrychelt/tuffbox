@@ -127,7 +127,7 @@
     }
   }
 
-  function scheduleIconPreload(ids: Array<string | null | undefined>) {
+  function scheduleIconPreload(ids: Array<string | null | undefined> = []) {
     for (const id of ids) {
       if (!id || id.startsWith("#")) continue;
       if (iconCache[id] !== undefined || iconInFlight.has(id)) continue;

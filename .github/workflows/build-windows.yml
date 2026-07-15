@@ -55,6 +55,10 @@ jobs:
       working-directory: apps/tuffbox-desktop
       run: npm ci
 
+    - name: Check frontend
+      working-directory: apps/tuffbox-desktop
+      run: npm run check
+
     - name: Build JEI runtime bridges
       working-directory: bridges/jei-runtime
       run: .\gradlew.bat syncDesktopResources --no-daemon

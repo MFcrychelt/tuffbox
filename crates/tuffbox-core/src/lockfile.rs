@@ -47,10 +47,11 @@ impl TuffboxLockfile {
             path: path_string.clone(),
             source,
         })?;
-        let mut value: serde_json::Value = serde_json::from_str(&raw).map_err(|source| LockfileError::Parse {
-            path: path_string.clone(),
-            source,
-        })?;
+        let mut value: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|source| LockfileError::Parse {
+                path: path_string.clone(),
+                source,
+            })?;
         migrate_lockfile_value(&mut value)?;
         serde_json::from_value(value).map_err(|source| LockfileError::Parse {
             path: path_string,
@@ -134,7 +135,11 @@ pub fn migrate_lockfile_value(value: &mut serde_json::Value) -> Result<(), Lockf
         .unwrap_or("0.1")
         .to_string();
 
-    let normalized = if version == "0.1" { "0.1.0".to_string() } else { version.clone() };
+    let normalized = if version == "0.1" {
+        "0.1.0".to_string()
+    } else {
+        version.clone()
+    };
 
     if !SUPPORTED_LOCKFILE_SCHEMA_VERSIONS.contains(&normalized.as_str()) {
         return Err(LockfileError::UnsupportedSchemaVersion {

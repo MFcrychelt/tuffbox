@@ -287,10 +287,10 @@
 </script>
 
 <div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}>
-  <div class="modal wide" role="dialog" aria-modal="true">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="add-instance-title">
     <div class="modal-header">
-      <h2>Add Instance</h2>
-      <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
+      <h2 id="add-instance-title">Add Instance</h2>
+      <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close add instance dialog">
         <X size={18} />
       </button>
     </div>
@@ -385,10 +385,10 @@
           <input id="inst-name-imp" bind:value={name} />
         </div>
         <div class="field">
-          <label>Pack file</label>
+          <label for="inst-pack-file">Pack file</label>
           <div class="input-row">
-            <input bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
-            <button class="secondary" on:click={pickImportFile}><Folder size={16} /></button>
+            <input id="inst-pack-file" bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
+            <button class="secondary" on:click={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
           </div>
         </div>
       {:else}
@@ -400,7 +400,7 @@
         <div class="search-row">
           <div class="search">
             <Search size={16} />
-            <input bind:value={cfQuery} placeholder="Search modpacks…" on:keydown={(e) => e.key === "Enter" && searchCurseForge()} />
+            <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" on:keydown={(e) => e.key === "Enter" && searchCurseForge()} />
           </div>
           <button class="secondary" on:click={searchCurseForge} disabled={cfLoading}>
             {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
@@ -449,7 +449,7 @@
         <label for="inst-location">Location</label>
         <div class="input-row">
           <input id="inst-location" bind:value={location} />
-          <button class="secondary" on:click={selectLocation}><Folder size={16} /></button>
+          <button class="secondary" on:click={selectLocation} aria-label="Choose instance location"><Folder size={16} /></button>
         </div>
       </div>
     </div>

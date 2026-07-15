@@ -18,6 +18,7 @@ use thiserror::Error;
 const MAX_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 const LATEST_LOG_TAIL_LINES: usize = 900;
 const MAX_EVIDENCE_PER_SUSPECT: usize = 8;
+pub const LATEST_COMPATIBLE_VERSION: &str = "latest-compatible";
 
 #[derive(Debug, Error)]
 pub enum CrashError {
@@ -163,7 +164,9 @@ struct SuspectAccumulator {
     evidence: Vec<SuspectEvidence>,
 }
 
-pub fn list_crash_reports(project_dir: impl AsRef<Path>) -> Result<Vec<CrashReportSummary>, CrashError> {
+pub fn list_crash_reports(
+    project_dir: impl AsRef<Path>,
+) -> Result<Vec<CrashReportSummary>, CrashError> {
     let project_dir = project_dir.as_ref();
     let reports_dir = project_dir.join("crash-reports");
     if !reports_dir.is_dir() {
@@ -187,10 +190,12 @@ pub fn list_crash_reports(project_dir: impl AsRef<Path>) -> Result<Vec<CrashRepo
         if !name.to_lowercase().ends_with(".txt") {
             continue;
         }
-        let metadata = entry.metadata().map_err(|source| CrashError::ReadCrashReport {
-            path: path.clone(),
-            source,
-        })?;
+        let metadata = entry
+            .metadata()
+            .map_err(|source| CrashError::ReadCrashReport {
+                path: path.clone(),
+                source,
+            })?;
         let modified = metadata
             .modified()
             .ok()
@@ -205,7 +210,11 @@ pub fn list_crash_reports(project_dir: impl AsRef<Path>) -> Result<Vec<CrashRepo
         });
     }
 
-    reports.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| b.name.cmp(&a.name)));
+    reports.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then_with(|| b.name.cmp(&a.name))
+    });
     Ok(reports)
 }
 
@@ -222,7 +231,9 @@ pub fn analyze_crash_report(
         source,
     })?;
     if metadata.len() > MAX_REPORT_BYTES {
-        return Err(CrashError::ReportTooLarge { size: metadata.len() });
+        return Err(CrashError::ReportTooLarge {
+            size: metadata.len(),
+        });
     }
     let content = fs::read_to_string(&path).map_err(|source| CrashError::ReadCrashReport {
         path: path.clone(),
@@ -261,7 +272,11 @@ pub fn analyze_latest_log(
     project_dir: impl AsRef<Path>,
     manifest: &ProjectManifest,
 ) -> LatestLogAnalysis {
-    analyze_log_file(project_dir.as_ref().join("logs").join("latest.log"), "logs/latest.log", manifest)
+    analyze_log_file(
+        project_dir.as_ref().join("logs").join("latest.log"),
+        "logs/latest.log",
+        manifest,
+    )
 }
 
 pub fn analyze_launcher_log(
@@ -307,7 +322,6 @@ pub fn build_crash_diagnosis(
     recent_snapshots: Vec<Snapshot>,
 ) -> Result<CrashDiagnosis, CrashError> {
     let project_dir = project_dir.as_ref();
-    ensure_log_placeholders(project_dir);
     let reports = list_crash_reports(project_dir)?;
     let selected_id = selected_report_id
         .filter(|id| reports.iter().any(|report| report.id == *id))
@@ -335,7 +349,12 @@ pub fn build_crash_diagnosis(
 
     let graph = DependencyGraph::from_manifest(manifest);
     let graph_diagnostics = Resolver::analyze_project(manifest, &graph);
-    let fix_plan = create_crash_fix_plan(&graph, &graph_diagnostics, &suspected_mods, &combined_signals);
+    let fix_plan = create_crash_fix_plan(
+        &graph,
+        &graph_diagnostics,
+        &suspected_mods,
+        &combined_signals,
+    );
 
     Ok(CrashDiagnosis {
         reports,
@@ -350,14 +369,19 @@ pub fn build_crash_diagnosis(
 }
 
 pub fn parse_crash_sections(text: &str) -> Vec<CrashReportSection> {
-    let mut starts = Vec::new();
+    let lines = text.lines().collect::<Vec<_>>();
+    let mut starts: Vec<(usize, String)> = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("-- ") && trimmed.ends_with(" --") {
             starts.push((index + 1, trimmed.trim_matches('-').trim().to_string()));
+        } else if let Some(title) = forge_section_title(trimmed) {
+            starts.push((index + 1, title.to_string()));
         }
     }
-    let lines = text.lines().collect::<Vec<_>>();
+    starts.sort_by_key(|(line, _)| *line);
+    starts.dedup_by_key(|(line, _)| *line);
+
     let mut sections = Vec::new();
     for (idx, (start_line, title)) in starts.iter().enumerate() {
         let end_line = starts
@@ -371,31 +395,8 @@ pub fn parse_crash_sections(text: &str) -> Vec<CrashReportSection> {
             .map(|line| line.trim_end())
             .filter(|line| !line.trim().is_empty())
             .collect::<Vec<_>>()
-            .join("
-");
-        // Recognize Forge/NeoForge sections in addition to vanilla ones
-    let forge_section_names = [
-        ("Forge Mod List", "FORGE_MOD_LIST"),
-        ("FML Mod Loading", "FML_LOADING"),
-        ("NeoForge Mod List", "NEO_MOD_LIST"),
-        ("Memory", "MEMORY"),
-        ("JVM Flags", "JVM_FLAGS"),
-        ("CPU", "CPU_INFO"),
-        ("Processor", "CPU_INFO"),
-    ];
-    for (name, id) in &forge_section_names {
-        if let Some(pos) = text.find(name) {
-            let line_no = text[..pos].lines().count();
-            sections.push(CrashReportSection {
-                title: id.to_string(),
-                start_line: line_no.saturating_sub(1),
-                end_line: line_no + 30,
-                preview: text[pos..].lines().take(8).collect::<Vec<_>>().join("\n"),
-            });
-        }
-    }
-
-    sections.push(CrashReportSection {
+            .join("\n");
+        sections.push(CrashReportSection {
             title: title.clone(),
             start_line: *start_line,
             end_line,
@@ -405,6 +406,26 @@ pub fn parse_crash_sections(text: &str) -> Vec<CrashReportSection> {
     sections
 }
 
+fn forge_section_title(line: &str) -> Option<&'static str> {
+    let heading = line.strip_suffix(':').unwrap_or(line).trim();
+    if heading.eq_ignore_ascii_case("Forge Mod List") {
+        Some("Forge Mod List")
+    } else if heading.eq_ignore_ascii_case("FML Mod Loading") {
+        Some("FML Mod Loading")
+    } else if heading.eq_ignore_ascii_case("NeoForge Mod List") {
+        Some("NeoForge Mod List")
+    } else if heading.eq_ignore_ascii_case("Memory") {
+        Some("Memory")
+    } else if heading.eq_ignore_ascii_case("JVM Flags") {
+        Some("JVM Flags")
+    } else if heading.eq_ignore_ascii_case("CPU") {
+        Some("CPU")
+    } else if heading.eq_ignore_ascii_case("Processor") {
+        Some("Processor")
+    } else {
+        None
+    }
+}
 
 /// Parse Forge/NeoForge crash report mod table format.
 /// Forge crash reports often have one of two table formats:
@@ -424,19 +445,33 @@ fn parse_forge_crash_mods(text: &str) -> Vec<CrashReportModEntry> {
         }
         if in_pipe_table {
             if !trimmed.starts_with('|') || trimmed.len() < 5 {
-                if !entries.is_empty() { break; }
+                if !entries.is_empty() {
+                    break;
+                }
                 in_pipe_table = false;
                 continue;
             }
-            let cells: Vec<&str> = trimmed.trim_matches('|').split('|').map(|c| c.trim()).collect();
+            let cells: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim())
+                .collect();
             if cells.len() >= 2 && !cells[0].is_empty() && !cells[0].contains('-') {
                 entries.push(CrashReportModEntry {
                     id: cells[0].to_string(),
-                    name: cells.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string()),
-                    version: cells.get(2).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                    name: cells
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
+                    version: cells
+                        .get(2)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
                     raw: trimmed.to_string(),
                 });
-                if entries.len() >= 200 { break; }
+                if entries.len() >= 200 {
+                    break;
+                }
             }
         }
     }
@@ -452,7 +487,9 @@ fn parse_forge_crash_mods(text: &str) -> Vec<CrashReportModEntry> {
             }
             if in_mod_list {
                 if trimmed.is_empty() || trimmed.starts_with("--") || trimmed.starts_with("[") {
-                    if !entries.is_empty() { break; }
+                    if !entries.is_empty() {
+                        break;
+                    }
                     in_mod_list = false;
                     continue;
                 }
@@ -474,7 +511,9 @@ fn parse_forge_crash_mods(text: &str) -> Vec<CrashReportModEntry> {
                         raw: trimmed.to_string(),
                     });
                 }
-                if entries.len() >= 200 { break; }
+                if entries.len() >= 200 {
+                    break;
+                }
             }
         }
     }
@@ -482,7 +521,10 @@ fn parse_forge_crash_mods(text: &str) -> Vec<CrashReportModEntry> {
     entries
 }
 
-pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> Vec<CrashReportModEntry> {
+pub fn parse_crash_mod_entries(
+    text: &str,
+    sections: &[CrashReportSection],
+) -> Vec<CrashReportModEntry> {
     // Try Forge/NeoForge table format first
     let forge_entries = parse_forge_crash_mods(text);
     if !forge_entries.is_empty() {
@@ -490,11 +532,18 @@ pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> V
     }
     // Fallback: vanilla crash report -- Mods -- section
     let lines = text.lines().collect::<Vec<_>>();
-    let Some(section) = sections.iter().find(|section| section.title.eq_ignore_ascii_case("mods")) else {
+    let Some(section) = sections
+        .iter()
+        .find(|section| section.title.eq_ignore_ascii_case("mods"))
+    else {
         return Vec::new();
     };
     let mut entries = Vec::new();
-    for line in lines.iter().skip(section.start_line).take(section.end_line.saturating_sub(section.start_line)) {
+    for line in lines
+        .iter()
+        .skip(section.start_line)
+        .take(section.end_line.saturating_sub(section.start_line))
+    {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("Mod") || trimmed.starts_with('-') {
             continue;
@@ -502,23 +551,36 @@ pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> V
         // Handle pipe-format lines inside the vanilla -- Mods -- section
         // (some hybrid reports mix formats)
         if trimmed.starts_with('|') {
-            let cells: Vec<&str> = trimmed.trim_matches('|').split('|').map(|c| c.trim()).collect();
+            let cells: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim())
+                .collect();
             if cells.len() >= 2 && !cells[0].is_empty() && !cells[0].contains('-') {
                 entries.push(CrashReportModEntry {
                     id: cells[0].to_string(),
-                    name: cells.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string()),
-                    version: cells.get(2).filter(|s| !s.is_empty()).map(|s| s.to_string()),
+                    name: cells
+                        .get(1)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
+                    version: cells
+                        .get(2)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
                     raw: trimmed.to_string(),
                 });
             }
             continue;
         }
-        let normalized = trimmed.trim_matches(|c: char| c == '\t' || c == '|' || c == '[' || c == ']');
+        let normalized =
+            trimmed.trim_matches(|c: char| c == '\t' || c == '|' || c == '[' || c == ']');
         let parts = normalized.split_whitespace().collect::<Vec<_>>();
         if parts.is_empty() {
             continue;
         }
-        let id = parts[0].trim_matches(|c: char| c == ':' || c == '|').to_string();
+        let id = parts[0]
+            .trim_matches(|c: char| c == ':' || c == '|')
+            .to_string();
         if id.len() < 2 || id.contains("----") {
             continue;
         }
@@ -528,7 +590,13 @@ pub fn parse_crash_mod_entries(text: &str, sections: &[CrashReportSection]) -> V
             .find(|part| part.chars().any(|c| c.is_ascii_digit()))
             .map(|part| part.trim_matches('|').to_string());
         let name = if parts.len() > 2 {
-            Some(parts[1..parts.len().saturating_sub(1)].join(" ").trim().to_string()).filter(|s| !s.is_empty())
+            Some(
+                parts[1..parts.len().saturating_sub(1)]
+                    .join(" ")
+                    .trim()
+                    .to_string(),
+            )
+            .filter(|s| !s.is_empty())
         } else {
             None
         };
@@ -566,12 +634,31 @@ pub fn analyze_text_for_suspects(
         };
         signals.push(signal);
 
-        if matches!(kind, CrashSignalKind::Entrypoint | CrashSignalKind::LoaderMismatch | CrashSignalKind::CausedBy) {
+        if matches!(
+            kind,
+            CrashSignalKind::Entrypoint
+                | CrashSignalKind::LoaderMismatch
+                | CrashSignalKind::CausedBy
+        ) {
             for mod_id in extract_quoted_mod_ids(line) {
-                if let Some(candidate) = candidates.iter().find(|candidate| candidate.tokens.iter().any(|t| t == &mod_id)) {
-                    add_manifest_suspect(&mut suspects, candidate.module, evidence(source, line_number, kind, line), 96);
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| candidate.tokens.iter().any(|t| t == &mod_id))
+                {
+                    add_manifest_suspect(
+                        &mut suspects,
+                        candidate.module,
+                        evidence(source, line_number, kind, line),
+                        96,
+                    );
                 } else if !is_noise_token(&mod_id) {
-                    add_inferred_suspect(&mut suspects, &mod_id, None, evidence(source, line_number, kind, line), 82);
+                    add_inferred_suspect(
+                        &mut suspects,
+                        &mod_id,
+                        None,
+                        evidence(source, line_number, kind, line),
+                        82,
+                    );
                 }
             }
         }
@@ -594,7 +681,10 @@ pub fn analyze_text_for_suspects(
 
         if matches!(kind, CrashSignalKind::ModFile) {
             for jar_name in extract_jar_names(line) {
-                if let Some(candidate) = candidates.iter().find(|candidate| jar_matches_candidate(&jar_name, candidate)) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| jar_matches_candidate(&jar_name, candidate))
+                {
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
@@ -616,12 +706,18 @@ pub fn analyze_text_for_suspects(
             }
         }
 
-        if matches!(kind, CrashSignalKind::Mixin | CrashSignalKind::SuspectedMods) {
+        if matches!(
+            kind,
+            CrashSignalKind::Mixin | CrashSignalKind::SuspectedMods
+        ) {
             for token in tokenize(line) {
                 if token.len() < 3 || is_noise_token(&token) {
                     continue;
                 }
-                if let Some(candidate) = candidates.iter().find(|candidate| candidate.tokens.iter().any(|t| t == &token)) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| candidate.tokens.iter().any(|t| t == &token))
+                {
                     add_manifest_suspect(
                         &mut suspects,
                         candidate.module,
@@ -652,7 +748,7 @@ pub fn analyze_text_for_suspects(
 pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec<SuspectedMod> {
     let mut by_id: BTreeMap<String, SuspectAccumulator> = BTreeMap::new();
     for module in mods {
-        let key = normalize_token(&module.id);
+        let key = compact_token(&normalize_token(&module.id));
         let entry = by_id.entry(key).or_insert_with(|| SuspectAccumulator {
             id: module.id.clone(),
             name: module.name.clone(),
@@ -663,6 +759,12 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             evidence: Vec::new(),
         });
         entry.confidence = entry.confidence.max(module.confidence);
+        if module.known_in_manifest && !entry.known_in_manifest {
+            entry.id = module.id.clone();
+            entry.name = module.name.clone();
+            entry.version = module.version.clone();
+            entry.file_name = module.file_name.clone();
+        }
         entry.known_in_manifest |= module.known_in_manifest;
         if entry.version.is_none() {
             entry.version = module.version.clone();
@@ -674,11 +776,9 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             if entry.evidence.len() >= MAX_EVIDENCE_PER_SUSPECT {
                 break;
             }
-            if !entry
-                .evidence
-                .iter()
-                .any(|item| item.source == evidence.source && item.line_number == evidence.line_number)
-            {
+            if !entry.evidence.iter().any(|item| {
+                item.source == evidence.source && item.line_number == evidence.line_number
+            }) {
                 entry.evidence.push(evidence);
             }
         }
@@ -720,7 +820,7 @@ pub fn create_crash_fix_plan(
         if top.known_in_manifest && graph.has_node(&node_id) {
             actions.push(ChangeAction::UpdateMod {
                 node_id: node_id.clone(),
-                target_version: "latest-compatible".to_string(),
+                target_version: LATEST_COMPATIBLE_VERSION.to_string(),
             });
         }
         return ChangePlan {
@@ -741,7 +841,10 @@ pub fn create_crash_fix_plan(
         };
     }
 
-    if signals.iter().any(|signal| signal.kind == CrashSignalKind::OpenGl) {
+    if signals
+        .iter()
+        .any(|signal| signal.kind == CrashSignalKind::OpenGl)
+    {
         return ChangePlan {
             summary: "OpenGL render pipeline errors detected (`GL_INVALID_OPERATION`). Treat this as a graphics/rendering compatibility issue first: update GPU drivers, disable shaders, then test without render optimization or visual mods such as Sodium/Iris/Voxy/ETF/MCEF/Litematica one group at a time.".to_string(),
             risk: ChangeRisk::Medium,
@@ -750,7 +853,10 @@ pub fn create_crash_fix_plan(
         };
     }
 
-    if signals.iter().any(|signal| signal.kind == CrashSignalKind::Performance) {
+    if signals
+        .iter()
+        .any(|signal| signal.kind == CrashSignalKind::Performance)
+    {
         return ChangePlan {
             summary: "Performance stall detected (`Can't keep up`). Reduce render/simulation load, lower view distance, review worldgen/entity-heavy mods and rerun the Test profile.".to_string(),
             risk: ChangeRisk::Low,
@@ -768,13 +874,23 @@ pub fn create_crash_fix_plan(
         .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
     ChangePlan {
         summary: if has_errors {
-            "Review graph diagnostics first, then rerun Test to produce a fresh latest.log.".to_string()
+            "Review graph diagnostics first, then rerun Test to produce a fresh latest.log."
+                .to_string()
         } else {
             "No deterministic crash source found yet. Reproduce the crash, then analyze crash-reports/latest and logs/latest.log.".to_string()
         },
         risk: ChangeRisk::Low,
         actions: Vec::new(),
         requires_snapshot: false,
+    }
+}
+
+pub fn resolve_update_target_version(target_version: &str) -> Option<&str> {
+    let target_version = target_version.trim();
+    if target_version.is_empty() || target_version.eq_ignore_ascii_case(LATEST_COMPATIBLE_VERSION) {
+        None
+    } else {
+        Some(target_version)
     }
 }
 
@@ -798,7 +914,10 @@ fn build_candidates(manifest: &ProjectManifest) -> Vec<ModCandidate<'_>> {
                 .map(|file| normalize_token(file.trim_end_matches(".jar")));
             ModCandidate {
                 module,
-                tokens: tokens.into_iter().filter(|token| !is_noise_token(token)).collect(),
+                tokens: tokens
+                    .into_iter()
+                    .filter(|token| !is_noise_token(token))
+                    .collect(),
                 file_stem,
             }
         })
@@ -809,10 +928,18 @@ fn insert_token_variants(tokens: &mut HashSet<String>, value: &str) {
     let normalized = normalize_token(value.trim_end_matches(".jar"));
     if !normalized.is_empty() {
         tokens.insert(normalized.clone());
+        let compact = compact_token(&normalized);
+        if compact.len() >= 4 {
+            tokens.insert(compact);
+        }
     }
     for token in tokenize(value) {
         if token.len() >= 3 {
+            let compact = compact_token(&token);
             tokens.insert(token);
+            if compact.len() >= 4 {
+                tokens.insert(compact);
+            }
         }
     }
 }
@@ -847,7 +974,10 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
     if lower.contains("suspected mod") || lower.contains("suspected mods") {
         return Some(CrashSignalKind::SuspectedMods);
     }
-    if lower.contains("mod file") || lower.contains("modfile") || lower.ends_with(".jar") && lower.contains("/mods/") {
+    if lower.contains("mod file")
+        || lower.contains("modfile")
+        || lower.ends_with(".jar") && lower.contains("/mods/")
+    {
         return Some(CrashSignalKind::ModFile);
     }
     if lower.contains("caused by:") {
@@ -875,7 +1005,8 @@ fn jar_matches_candidate(jar_name: &str, candidate: &ModCandidate<'_>) -> bool {
         return true;
     }
     candidate.tokens.iter().any(|token| {
-        token.len() >= 4 && (normalized == *token || normalized.contains(token) || token.contains(&normalized))
+        token.len() >= 4
+            && (normalized == *token || normalized.contains(token) || token.contains(&normalized))
     })
 }
 
@@ -933,7 +1064,12 @@ fn push_evidence(entry: &mut SuspectAccumulator, evidence: SuspectEvidence) {
     }
 }
 
-fn evidence(source: &str, line_number: usize, kind: CrashSignalKind, line: &str) -> SuspectEvidence {
+fn evidence(
+    source: &str,
+    line_number: usize,
+    kind: CrashSignalKind,
+    line: &str,
+) -> SuspectEvidence {
     SuspectEvidence {
         source: source.to_string(),
         line_number,
@@ -972,30 +1108,11 @@ fn extract_quoted_mod_ids(line: &str) -> Vec<String> {
     ids
 }
 
-fn ensure_log_placeholders(project_dir: &Path) {
-    let logs_dir = project_dir.join("logs");
-    let _ = fs::create_dir_all(&logs_dir);
-    let latest = logs_dir.join("latest.log");
-    if !latest.exists() {
-        let _ = fs::write(&latest, "# TuffBox latest.log placeholder. It will be replaced by the next test run.
-");
-    }
-    for launcher in [
-        logs_dir.join("launcher.log"),
-        logs_dir.join("launcher_log.txt"),
-        project_dir.join("launcher.log"),
-        project_dir.join("launcher_log.txt"),
-    ] {
-        if !launcher.exists() {
-            let _ = fs::write(&launcher, "# TuffBox launcher log placeholder. Launcher events will be written here.
-");
-        }
-    }
-}
-
 fn extract_jar_names(line: &str) -> Vec<String> {
     let mut jars = Vec::new();
-    for raw in line.split(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | ',' | ';')) {
+    for raw in line.split(|c: char| {
+        c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | ',' | ';')
+    }) {
         let trimmed = raw.trim_matches(|c: char| matches!(c, ':' | ',' | ';'));
         let lower = trimmed.to_lowercase();
         if let Some(idx) = lower.find(".jar") {
@@ -1037,7 +1154,10 @@ fn looks_like_version_token(token: &str) -> bool {
         .next()
         .map(|c| c.is_ascii_digit())
         .unwrap_or(false)
-        || matches!(lower.as_str(), "fabric" | "forge" | "neoforge" | "quilt" | "common" | "client")
+        || matches!(
+            lower.as_str(),
+            "fabric" | "forge" | "neoforge" | "quilt" | "common" | "client"
+        )
 }
 
 fn tokenize(value: &str) -> Vec<String> {
@@ -1063,6 +1183,13 @@ fn normalize_token(value: &str) -> String {
         }
     }
     out.trim_matches('-').to_string()
+}
+
+fn compact_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect()
 }
 
 fn is_noise_token(token: &str) -> bool {
@@ -1161,7 +1288,8 @@ mod tests {
     #[test]
     fn detects_mod_file_suspect_from_crash_report() {
         let text = "Mod File: /instance/mods/sodium-fabric-mc1.20.1-0.5.8.jar\nCaused by: java.lang.IllegalStateException";
-        let (_signals, suspects) = analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest());
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest());
         assert_eq!(suspects[0].id, "sodium");
         assert!(suspects[0].confidence >= 88);
     }
@@ -1171,6 +1299,71 @@ mod tests {
         let text = "Mixin apply failed sodium.mixins.json:features.render.MixinWorldRenderer -> net.minecraft.WorldRenderer";
         let (_signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &manifest());
         assert_eq!(suspects[0].id, "sodium");
+    }
+
+    #[test]
+    fn resolves_compact_provided_by_id_to_installed_mod() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "critters-and-companions".to_string(),
+            name: "Critters and Companions".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("critters-and-companions".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "2.1.0".to_string(),
+            file_name: Some("crittersandcompanions-fabric-2.1.0.jar".to_string()),
+            hashes: None,
+            side: Side::Both,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "Could not execute entrypoint stage 'main' due to errors, provided by 'crittersandcompanions'!";
+
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+
+        assert_eq!(signals[0].kind, CrashSignalKind::Entrypoint);
+        assert_eq!(suspects.len(), 1);
+        assert_eq!(suspects[0].id, "critters-and-companions");
+        assert_eq!(suspects[0].name, "Critters and Companions");
+        assert!(suspects[0].known_in_manifest);
+        assert!(suspects[0].confidence >= 96);
+    }
+
+    #[test]
+    fn merge_upgrades_inferred_provider_to_manifest_mod() {
+        let manifest = manifest();
+        let inferred = SuspectedMod {
+            id: "s-o-d-i-u-m".to_string(),
+            name: "s-o-d-i-u-m".to_string(),
+            version: None,
+            file_name: None,
+            known_in_manifest: false,
+            confidence: 70,
+            evidence: Vec::new(),
+        };
+        let resolved = SuspectedMod {
+            id: "sodium".to_string(),
+            name: manifest.mods[0].name.clone(),
+            version: Some(manifest.mods[0].version.clone()),
+            file_name: manifest.mods[0].file_name.clone(),
+            known_in_manifest: true,
+            confidence: 96,
+            evidence: Vec::new(),
+        };
+
+        let suspects = merge_suspected_mods([inferred, resolved]);
+
+        assert_eq!(suspects.len(), 1);
+        assert_eq!(suspects[0].id, "sodium");
+        assert_eq!(suspects[0].name, "Sodium");
+        assert!(suspects[0].known_in_manifest);
     }
 
     #[test]
@@ -1186,5 +1379,91 @@ mod tests {
         assert!(validate_report_id("crash-reports/crash.txt").is_ok());
         assert!(validate_report_id("../crash.txt").is_err());
         assert!(validate_report_id("logs/latest.log").is_err());
+    }
+
+    #[test]
+    fn parses_forge_sections_without_vanilla_sections_or_duplicates() {
+        let text = "\
+Forge Mod List:
+| ID | Name | Version |
+| sodium | Sodium | 0.5.8 |
+-- System Details --
+Memory: 2048 MB / 4096 MB
+CPU: 8x Example CPU
+JVM Flags:
+-Xmx4G";
+
+        let sections = parse_crash_sections(text);
+        let titles = sections
+            .iter()
+            .map(|section| section.title.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            titles,
+            vec!["Forge Mod List", "System Details", "JVM Flags"]
+        );
+        assert_eq!(
+            titles
+                .iter()
+                .filter(|title| **title == "Forge Mod List")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn parses_standalone_forge_heading_without_vanilla_start() {
+        let sections = parse_crash_sections("preamble\nNeoForge Mod List:\nexamplemod (1.0)");
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, "NeoForge Mod List");
+        assert_eq!(sections[0].start_line, 2);
+        assert!(sections[0].preview.contains("examplemod"));
+    }
+
+    #[test]
+    fn diagnosis_does_not_create_missing_log_files() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let diagnosis = build_crash_diagnosis(dir.path(), &manifest(), None, Vec::new()).unwrap();
+
+        assert!(!diagnosis.latest_log.exists);
+        assert!(!diagnosis.launcher_log.exists);
+        assert!(!dir.path().join("logs").exists());
+        assert!(!diagnosis.latest_log.path.exists());
+        assert!(!diagnosis.launcher_log.path.exists());
+    }
+
+    #[test]
+    fn latest_compatible_fix_target_resolves_to_automatic_selection() {
+        assert_eq!(
+            resolve_update_target_version(LATEST_COMPATIBLE_VERSION),
+            None
+        );
+        assert_eq!(resolve_update_target_version("  "), None);
+        assert_eq!(
+            resolve_update_target_version("version-id"),
+            Some("version-id")
+        );
+
+        let manifest = manifest();
+        let graph = DependencyGraph::from_manifest(&manifest);
+        let suspect = SuspectedMod {
+            id: "sodium".to_string(),
+            name: "Sodium".to_string(),
+            version: Some("0.5.8".to_string()),
+            file_name: manifest.mods[0].file_name.clone(),
+            known_in_manifest: true,
+            confidence: 96,
+            evidence: Vec::new(),
+        };
+        let plan = create_crash_fix_plan(&graph, &[], &[suspect], &[]);
+
+        let ChangeAction::UpdateMod { target_version, .. } = &plan.actions[0] else {
+            panic!("expected update action");
+        };
+        assert_eq!(target_version, LATEST_COMPATIBLE_VERSION);
+        assert_eq!(resolve_update_target_version(target_version), None);
     }
 }

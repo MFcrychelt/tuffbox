@@ -2,10 +2,14 @@
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModKnowledgeEntry {
-    pub slug: String, pub name: String,
-    pub config_paths: Vec<String>, pub ore_keys: Vec<String>,
-    pub programmatic_items: Vec<String>, pub known_conflicts: Vec<String>,
-    pub loaders: Vec<String>, pub category: String,
+    pub slug: String,
+    pub name: String,
+    pub config_paths: Vec<String>,
+    pub ore_keys: Vec<String>,
+    pub programmatic_items: Vec<String>,
+    pub known_conflicts: Vec<String>,
+    pub loaders: Vec<String>,
+    pub category: String,
 }
 use ModKnowledgeEntry as E;
 lazy_static::lazy_static! {
@@ -33,7 +37,9 @@ lazy_static::lazy_static! {
     ];
 }
 impl ModKnowledgeEntry {
-    pub fn builtin() -> &'static [ModKnowledgeEntry] { &*BUILTIN }
+    pub fn builtin() -> &'static [ModKnowledgeEntry] {
+        &*BUILTIN
+    }
     pub fn lookup(slug: &str) -> Option<&'static ModKnowledgeEntry> {
         let l = slug.to_lowercase();
         Self::builtin().iter().find(|e| e.slug.to_lowercase() == l)
@@ -41,11 +47,17 @@ impl ModKnowledgeEntry {
 }
 pub fn check_known_conflict(slug_a: &str, slug_b: &str) -> Option<String> {
     let a = ModKnowledgeEntry::lookup(slug_a)?;
-    if a.known_conflicts.iter().any(|c| c.eq_ignore_ascii_case(slug_b)) {
+    if a.known_conflicts
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(slug_b))
+    {
         return Some(format!("{} conflicts with {} (known)", a.name, slug_b));
     }
     let b = ModKnowledgeEntry::lookup(slug_b)?;
-    if b.known_conflicts.iter().any(|c| c.eq_ignore_ascii_case(slug_a)) {
+    if b.known_conflicts
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(slug_a))
+    {
         return Some(format!("{} conflicts with {} (known)", slug_a, b.name));
     }
     None

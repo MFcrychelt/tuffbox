@@ -15,7 +15,6 @@
     GitBranch,
     FileArchive,
     Download,
-    ExternalLink,
     Globe,
     ShieldAlert,
     Terminal,
@@ -24,6 +23,7 @@
   } from "lucide-svelte";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
+  import { open } from "@tauri-apps/plugin-shell";
   import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -106,16 +106,20 @@
   }
 
   // Load pinned state for visible projects
-  $: if ($recentProjects.length > 0) {
-    for (const p of $recentProjects) {
-      if (pinnedPaths[p.path] === undefined) {
-        api.session.isPinned(p.path).then((pinned) => {
-          pinnedPaths[p.path] = pinned;
-          pinnedPaths = { ...pinnedPaths };
-        }).catch(() => {});
-      }
+  function ensurePins(paths: string[]) {
+    let changed = false;
+    for (const path of paths) {
+      if (pinnedPaths[path] !== undefined) continue;
+      pinnedPaths[path] = false;
+      changed = true;
+      api.session.isPinned(path).then((pinned) => {
+        pinnedPaths[path] = pinned;
+        pinnedPaths = { ...pinnedPaths };
+      }).catch(() => {});
     }
+    if (changed) pinnedPaths = { ...pinnedPaths };
   }
+
   let actionError: string | null = null;
   let instanceSizes: Record<string, string> = {};
   let loadingSizes: Record<string, boolean> = {};
@@ -133,10 +137,12 @@
     }
   }
 
-  // Load sizes on mount
-  $: if ($recentProjects.length > 0) {
-    for (const p of $recentProjects) loadSize(p.path);
+  function ensureSizes(paths: string[]) {
+    for (const path of paths) loadSize(path);
   }
+
+  $: ensurePins($recentProjects.map((p) => p.path));
+  $: ensureSizes($recentProjects.map((p) => p.path));
 
   async function handleAction(action: string, project: RecentProject) {
     activeMenuPath = null;
@@ -149,7 +155,13 @@
         selectProject(project.path);
         break;
       case "desktop-shortcut":
-        toasts.info("Desktop shortcuts: Use Open Folder and create one manually for now.", 6000);
+        // No true shortcut creation without dedicated UX; open the project folder instead.
+        try {
+          await invoke("open_project_folder", { path: project.path });
+          toasts.info("Opened project folder.", 4000);
+        } catch (e) {
+          actionError = String(e);
+        }
         break;
       case "server-pack":
         actionBusy = true;
@@ -163,7 +175,34 @@
         }
         break;
       case "links":
-        toasts.info("Links: Project not published yet.", 4000);
+        actionBusy = true;
+        try {
+          const config: any = await invoke("get_publish_config", { path: project.path });
+          const links: string[] = [];
+          if (config?.modrinthProjectId) {
+            links.push(`https://modrinth.com/modpack/${config.modrinthProjectId}`);
+          }
+          if (config?.curseforgeProjectId) {
+            links.push(`https://www.curseforge.com/minecraft/modpacks/${config.curseforgeProjectId}`);
+          }
+          if (config?.githubRepository) {
+            links.push(`https://github.com/${config.githubRepository}/releases`);
+          }
+          if (links.length === 0) {
+            toasts.info("No publish links yet. Set project IDs in Release → publish config.", 6000);
+          } else if (links.length === 1) {
+            await open(links[0]);
+            toasts.success(`Opened ${links[0]}`);
+          } else {
+            await open(links[0]);
+            await navigator.clipboard.writeText(links.join("\n"));
+            toasts.info(`Opened first link. Copied all ${links.length} publish URLs.`, 7000);
+          }
+        } catch (e) {
+          actionError = String(e);
+        } finally {
+          actionBusy = false;
+        }
         break;
       case "worlds":
         actionBusy = true;
@@ -238,7 +277,16 @@
         break;
       }
       case "share":
-        toasts.info("Share Profile: Cloud sharing requires backend service (roadmap P3).", 5000);
+        actionBusy = true;
+        try {
+          const exported: any = await api.export.modrinthPack(null, project.path);
+          await navigator.clipboard.writeText(exported.path);
+          toasts.success(`Exported .mrpack and copied path: ${exported.path}`);
+        } catch (e) {
+          actionError = String(e);
+        } finally {
+          actionBusy = false;
+        }
         break;
       case "cleanup":
         actionBusy = true;
@@ -329,7 +377,7 @@
   <section class="hero">
     <button class="play-btn" on:click={launch} disabled={!selectedPath || launching}>
       {#if launching}
-        <span class="spinner" />
+        <span class="spinner"></span>
         <span class="play-label">Launching...</span>
       {:else}
         <Play size={32} fill="currentColor" />
@@ -377,7 +425,7 @@
       </div>
     {:else}
       <div class="projects-grid">
-        {#each $recentProjects as project}
+        {#each $recentProjects as project (project.path)}
           <div
             class="project-tile"
             class:active={selectedPath === project.path}
@@ -419,16 +467,13 @@
                     <ShieldAlert size={14} /> Change Version
                   </button>
                   <button on:click={() => handleAction("desktop-shortcut", project)}>
-                    <ExternalLink size={14} /> Create Desktop Shortcut
+                    <Folder size={14} /> Open Project Folder
                   </button>
                   <button on:click={() => handleAction("server-pack", project)}>
                     <Download size={14} /> Download Server Pack
                   </button>
                   <button on:click={() => handleAction("links", project)}>
                     <Link2 size={14} /> Links
-                  </button>
-                  <button on:click={() => handleAction("open-folder", project)}>
-                    <Folder size={14} /> Open Folder
                   </button>
                   <button on:click={() => handleAction("worlds", project)}>
                     <Globe size={14} /> List Worlds
@@ -449,7 +494,7 @@
                     <GitBranch size={14} /> Clone as...
                   </button>
                   <button on:click={() => handleAction("share", project)}>
-                    <Share2 size={14} /> Share Profile
+                    <Share2 size={14} /> Export & copy path
                   </button>
                   <button on:click={() => handleAction("cleanup", project)}>
                     <Eraser size={14} /> Cleanup
@@ -458,7 +503,7 @@
                     <Wrench size={14} /> Repair Profile
                   </button>
                 </div>
-                <div class="menu-separator" />
+                <div class="menu-separator"></div>
                 <div class="menu-group">
                   <button on:click={() => handleAction("remove", project)}>
                     <Minus size={14} /> Remove from launcher

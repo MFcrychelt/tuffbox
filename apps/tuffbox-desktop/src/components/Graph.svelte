@@ -224,7 +224,18 @@
     };
     const startOffset = boundaryDistance(source) + 2;
     const endOffset = boundaryDistance(target) + 9;
-    return `M ${source.x + ux * startOffset} ${source.y + uy * startOffset} L ${target.x - ux * endOffset} ${target.y - uy * endOffset}`;
+    const x1 = source.x + ux * startOffset;
+    const y1 = source.y + uy * startOffset;
+    const x2 = target.x - ux * endOffset;
+    const y2 = target.y - uy * endOffset;
+    // Light quadratic bend so hub fans do not all paint the same line.
+    let hash = 0;
+    const key = `${edge.from}:${edge.to}:${edge.kind}`;
+    for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+    const bend = ((hash % 17) - 8) * Math.min(28, distance * 0.08);
+    const mx = (x1 + x2) / 2 + -uy * bend;
+    const my = (y1 + y2) / 2 + ux * bend;
+    return `M ${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`;
   }
 
   function isGhost(id: string) {
@@ -657,12 +668,23 @@
     }
     return { map, orphaned };
   })();
-  $: canvasHeight = Math.max(420, Math.ceil(modNodes.length / 3) * 100 + 120);
-  const BASE_WIDTH = 1120;
+  let canvasWidth = 1600;
+  let canvasHeight = 900;
   let positioned: PositionedNode[] = [];
   let simulation: any = null;
   let simulationLayoutKey = "";
   let resetViewOnNextLayout = true;
+
+  function layoutCanvasSize(count: number) {
+    const n = Math.max(1, count);
+    const cols = Math.max(4, Math.ceil(Math.sqrt(n * 1.35)));
+    const rows = Math.max(3, Math.ceil(n / cols));
+    const cell = n > 80 ? 170 : n > 40 ? 155 : 140;
+    return {
+      width: Math.max(1400, cols * cell + 280),
+      height: Math.max(760, rows * cell + 240),
+    };
+  }
 
   $: layoutKey = [
     ...displayNodes.map((n) => n.id).sort(),
@@ -672,6 +694,18 @@
   function startSimulation() {
     if (!displayNodes.length) return;
 
+    const size = layoutCanvasSize(displayNodes.length);
+    canvasWidth = size.width;
+    canvasHeight = size.height;
+
+    const degree = new Map<string, number>();
+    for (const edge of displayEdges) {
+      degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
+      degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
+    }
+
+    // Always reseed positions on structural changes. Reusing a collapsed
+    // previous layout keeps hubs glued together forever.
     const initializedNodes = displayNodes.map((node, i) => {
       const isGhost = node.kind === "Missing";
       let tone: string;
@@ -679,41 +713,63 @@
       else if (node.kind === "Mod") tone = depNodeIds.has(node.id) ? "dep" : String(node.side ?? "both").toLowerCase();
       else if (node.kind === "Profile") tone = "profile";
       else tone = "runtime";
-      const existing = positioned.find((p) => p.id === node.id);
       const angle = (i / Math.max(1, displayNodes.length)) * Math.PI * 2;
-      const cx = BASE_WIDTH / 2;
+      const cx = canvasWidth / 2;
       const cy = canvasHeight / 2;
-      const r = Math.min(BASE_WIDTH, canvasHeight) / 3;
+      const ring = Math.min(canvasWidth, canvasHeight) * (0.28 + (i % 5) * 0.04);
+      const jitter = ((i * 37) % 70) - 35;
       return {
         ...node,
         label: displayLabel(node),
-        x: existing?.x ?? cx + Math.cos(angle) * r + (Math.random() - 0.5) * 40,
-        y: existing?.y ?? cy + Math.sin(angle) * r + (Math.random() - 0.5) * 40,
+        x: cx + Math.cos(angle) * ring + jitter,
+        y: cy + Math.sin(angle) * ring + ((i * 19) % 50) - 25,
         tone,
         ghost: isGhost,
       } as PositionedNode;
     });
 
     const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
+    const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
 
     if (simulation) simulation.stop();
 
     simulation = d3
       .forceSimulation<PositionedNode>(initializedNodes)
-      .force("link", d3.forceLink(d3Links).id((d: any) => d.id).distance(140))
-      .force("charge", d3.forceManyBody().strength(-500))
-      .force("collide", d3.forceCollide().radius(55))
-      .force("center", d3.forceCenter(BASE_WIDTH / 2, canvasHeight / 2))
-      .force("x", d3.forceX(BASE_WIDTH / 2).strength(0.04))
-      .force("y", d3.forceY(canvasHeight / 2).strength(0.04))
+      .force(
+        "link",
+        d3
+          .forceLink(d3Links)
+          .id((d: any) => d.id)
+          .distance((link: any) => {
+            const deg = Math.max(degree.get(linkId(link.source)) ?? 1, degree.get(linkId(link.target)) ?? 1);
+            return 130 + Math.min(260, deg * 16);
+          })
+          .strength(0.28),
+      )
+      .force("charge", d3.forceManyBody().strength(-1100).distanceMax(1200))
+      .force(
+        "collide",
+        d3
+          .forceCollide<PositionedNode>()
+          .radius((d) => nodeSize(d) / 2 + 42)
+          .strength(0.95)
+          .iterations(3),
+      )
+      // Soft centering only — forceCenter at default strength collapses hubs.
+      .force("x", d3.forceX(canvasWidth / 2).strength(0.02))
+      .force("y", d3.forceY(canvasHeight / 2).strength(0.02))
+      .alpha(1)
+      .alphaDecay(0.022)
       .on("tick", () => {
         positioned = [...initializedNodes];
+      })
+      .on("end", () => {
+        if (resetViewOnNextLayout) {
+          fitToContent();
+          resetViewOnNextLayout = false;
+        }
       });
     positioned = [...initializedNodes];
-    if (resetViewOnNextLayout) {
-      resetView();
-      resetViewOnNextLayout = false;
-    }
   }
 
   $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
@@ -743,8 +799,9 @@
   let isPanning = false;
   let panStart = { x: 0, y: 0, viewX: 0, viewY: 0 };
   $: viewBoxHeight = canvasHeight / viewScale;
-  $: viewBoxWidth = BASE_WIDTH / viewScale;
+  $: viewBoxWidth = canvasWidth / viewScale;
   $: viewBoxString = `${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`;
+  $: denseGraph = displayEdges.length > 70;
 
   function clientToSvgPoint(clientX: number, clientY: number) {
     const rect = viewportEl.getBoundingClientRect();
@@ -761,7 +818,7 @@
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
     const nextScale = Math.min(8, Math.max(0.2, viewScale / zoomFactor));
     const cursor = clientToSvgPoint(event.clientX, event.clientY);
-    const nextWidth = BASE_WIDTH / nextScale;
+    const nextWidth = canvasWidth / nextScale;
     const nextHeight = canvasHeight / nextScale;
     // Keep the point under the cursor stationary while zooming.
     const ratioX = (cursor.x - viewX) / viewBoxWidth;
@@ -794,17 +851,45 @@
     window.removeEventListener("mouseup", handleBackgroundMouseUp);
   }
 
+  function fitToContent(padding = 90) {
+    if (!positioned.length) {
+      viewX = 0;
+      viewY = 0;
+      viewScale = 1;
+      return;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of positioned) {
+      const half = nodeSize(node) / 2 + 28;
+      minX = Math.min(minX, node.x - half);
+      minY = Math.min(minY, node.y - half);
+      maxX = Math.max(maxX, node.x + half);
+      maxY = Math.max(maxY, node.y + half + 18);
+    }
+    const contentW = Math.max(160, maxX - minX);
+    const contentH = Math.max(160, maxY - minY);
+    const targetW = contentW + padding * 2;
+    const targetH = contentH + padding * 2;
+    const scale = Math.min(canvasWidth / targetW, canvasHeight / targetH);
+    viewScale = Math.min(3.2, Math.max(0.35, scale));
+    const vbW = canvasWidth / viewScale;
+    const vbH = canvasHeight / viewScale;
+    viewX = (minX + maxX) / 2 - vbW / 2;
+    viewY = (minY + maxY) / 2 - vbH / 2;
+  }
+
   function resetView() {
-    viewX = 0;
-    viewY = 0;
-    viewScale = 1;
+    fitToContent();
   }
 
   function zoomBy(factor: number) {
     const centerX = viewX + viewBoxWidth / 2;
     const centerY = viewY + viewBoxHeight / 2;
     const nextScale = Math.min(8, Math.max(0.2, viewScale * factor));
-    const nextWidth = BASE_WIDTH / nextScale;
+    const nextWidth = canvasWidth / nextScale;
     const nextHeight = canvasHeight / nextScale;
     viewX = centerX - nextWidth / 2;
     viewY = centerY - nextHeight / 2;
@@ -972,7 +1057,7 @@
       <div class="canvas-controls">
         <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
         <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
-        <button class="ghost mini" on:click={resetView} title="Reset view (fit)">⤢</button>
+        <button class="ghost mini" on:click={resetView} title="Fit graph to view">⤢</button>
         <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
           {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
         </button>
@@ -1000,6 +1085,7 @@
         {#each displayEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
           <path
             class="graph-edge"
+            class:dense={denseGraph}
             class:danger-edge={edgeDanger(edge)}
             class:dimmed={selectedId && edge.from !== selectedId && edge.to !== selectedId}
             d={edgePath(edge)}
@@ -1540,13 +1626,18 @@
 
   .graph-canvas .graph-edge {
     fill: none;
-    stroke: rgba(161, 161, 170, 0.72);
-    stroke-width: 2;
+    stroke: rgba(161, 161, 170, 0.55);
+    stroke-width: 1.6;
     transition: opacity 120ms ease;
   }
 
+  .graph-canvas .graph-edge.dense {
+    stroke: rgba(161, 161, 170, 0.28);
+    stroke-width: 1.2;
+  }
+
   .graph-canvas .graph-edge.dimmed {
-    opacity: 0.35;
+    opacity: 0.12;
   }
 
   .svg-node.dimmed {

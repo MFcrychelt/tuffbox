@@ -48,7 +48,10 @@ pub struct ForgeArguments {
 #[serde(untagged)]
 pub enum ForgeArgument {
     Plain(String),
-    Ruled { rules: Vec<serde_json::Value>, value: serde_json::Value },
+    Ruled {
+        rules: Vec<serde_json::Value>,
+        value: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,7 +122,10 @@ fn parse_artifact_value(v: &serde_json::Value) -> Option<ForgeArtifact> {
         return Some(ForgeArtifact {
             path: obj.get("path")?.as_str()?.to_string(),
             url: obj.get("url")?.as_str()?.to_string(),
-            sha1: obj.get("sha1").and_then(|s| s.as_str()).map(|s| s.to_string()),
+            sha1: obj
+                .get("sha1")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string()),
             size: obj.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
         });
     }
@@ -181,10 +187,17 @@ fn maven_path(libraries_dir: &Path, name: &str) -> Result<PathBuf, InstallError>
 fn maven_url(base: &str, name: &str) -> Result<String, InstallError> {
     let path = maven_path(Path::new(""), name)?;
     let base = base.trim_end_matches('/');
-    Ok(format!("{}/{}", base, path.to_string_lossy().replace('\\', "/")))
+    Ok(format!(
+        "{}/{}",
+        base,
+        path.to_string_lossy().replace('\\', "/")
+    ))
 }
 
-pub fn fetch_forge_profile_url(mc_version: &str, loader_version: &str) -> Result<String, InstallError> {
+pub fn fetch_forge_profile_url(
+    mc_version: &str,
+    loader_version: &str,
+) -> Result<String, InstallError> {
     let manifest: serde_json::Value = crate::http::get_json(FORGE_MANIFEST_URL)?;
     let game_versions = manifest
         .get("gameVersions")
@@ -192,14 +205,20 @@ pub fn fetch_forge_profile_url(mc_version: &str, loader_version: &str) -> Result
         .ok_or_else(|| InstallError::MissingDownload("Forge manifest malformed".to_string()))?;
     for gv in game_versions {
         if gv.get("id").and_then(|v| v.as_str()) == Some(mc_version) {
-            let loaders = gv.get("loaders").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let loaders = gv
+                .get("loaders")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             for loader in loaders {
                 if loader.get("id").and_then(|v| v.as_str()) == Some(loader_version) {
                     return loader
                         .get("url")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
-                        .ok_or_else(|| InstallError::MissingDownload("Forge loader URL missing".to_string()));
+                        .ok_or_else(|| {
+                            InstallError::MissingDownload("Forge loader URL missing".to_string())
+                        });
                 }
             }
         }
@@ -209,7 +228,10 @@ pub fn fetch_forge_profile_url(mc_version: &str, loader_version: &str) -> Result
     )))
 }
 
-pub fn fetch_forge_profile(mc_version: &str, loader_version: &str) -> Result<ForgeProfile, InstallError> {
+pub fn fetch_forge_profile(
+    mc_version: &str,
+    loader_version: &str,
+) -> Result<ForgeProfile, InstallError> {
     let url = fetch_forge_profile_url(mc_version, loader_version)?;
     Ok(crate::http::get_json(&url)?)
 }
@@ -222,8 +244,11 @@ pub fn fetch_neoforge_profile(
         "https://maven.neoforged.net/releases/net/neoforged/neoforge/{0}/neoforge-{0}-installer.jar",
         loader_version
     );
-    let installer_path = std::env::temp_dir().join(format!("neoforge-{loader_version}-installer.jar"));
-    progress.log(&format!("# Downloading NeoForge installer {loader_version}..."));
+    let installer_path =
+        std::env::temp_dir().join(format!("neoforge-{loader_version}-installer.jar"));
+    progress.log(&format!(
+        "# Downloading NeoForge installer {loader_version}..."
+    ));
     download_with_sha1(&url, &installer_path, None)?;
 
     let file = fs::File::open(&installer_path)?;
@@ -253,7 +278,10 @@ pub fn fetch_neoforge_profile(
     Ok((profile, installer_path))
 }
 
-fn read_zip_json(archive: &mut zip::ZipArchive<fs::File>, name: &str) -> Result<serde_json::Value, InstallError> {
+fn read_zip_json(
+    archive: &mut zip::ZipArchive<fs::File>,
+    name: &str,
+) -> Result<serde_json::Value, InstallError> {
     let mut file = archive.by_name(name)?;
     let mut text = String::new();
     file.read_to_string(&mut text)?;
@@ -310,7 +338,9 @@ pub fn download_forge_libraries(
         progress.log("# All Forge libraries already present.");
     } else {
         let total = tasks.len();
-        progress.log(&format!("# Downloading {total} Forge libraries in parallel..."));
+        progress.log(&format!(
+            "# Downloading {total} Forge libraries in parallel..."
+        ));
         let counter = AtomicUsize::new(0);
         let errs: Vec<String> = tasks
             .into_par_iter()
@@ -362,7 +392,11 @@ fn processor_classpath(
     processor: &Processor,
 ) -> Result<String, InstallError> {
     let mut paths: Vec<PathBuf> = Vec::new();
-    for name in processor.classpath.iter().chain(std::iter::once(&processor.jar)) {
+    for name in processor
+        .classpath
+        .iter()
+        .chain(std::iter::once(&processor.jar))
+    {
         paths.push(maven_path(libraries_dir, name)?);
     }
     // `;` is only the classpath separator on Windows; using it
@@ -437,9 +471,7 @@ fn outputs_up_to_date(
         return Ok(false);
     }
     for (key, expected_sha1) in &processor.outputs {
-        let raw = key
-            .trim_start_matches('{')
-            .trim_end_matches('}');
+        let raw = key.trim_start_matches('{').trim_end_matches('}');
         let path = if let Some(lib) = raw.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             maven_path(libraries_dir, lib)?
         } else {
@@ -478,11 +510,19 @@ pub fn run_forge_processors(
 
     for (index, processor) in profile.processors.iter().enumerate() {
         if !processor.sides.is_empty() && !processor.sides.contains(&"client".to_string()) {
-            progress.log(&format!("# Skipping processor {}/{} (not client)", index + 1, total));
+            progress.log(&format!(
+                "# Skipping processor {}/{} (not client)",
+                index + 1,
+                total
+            ));
             continue;
         }
         if outputs_up_to_date(libraries_dir, data, processor)? {
-            progress.log(&format!("# Processor {}/{} already up to date.", index + 1, total));
+            progress.log(&format!(
+                "# Processor {}/{} already up to date.",
+                index + 1,
+                total
+            ));
             continue;
         }
 
@@ -501,7 +541,11 @@ pub fn run_forge_processors(
             installer_path,
         )?;
 
-        progress.log(&format!("# Running processor {}/{}: {main_class}", index + 1, total));
+        progress.log(&format!(
+            "# Running processor {}/{}: {main_class}",
+            index + 1,
+            total
+        ));
         let mut c = Command::new(java_path);
         c.arg("-cp").arg(cp).arg(main_class).args(args);
         #[cfg(windows)]

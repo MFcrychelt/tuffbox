@@ -97,18 +97,19 @@ pub fn materialize_mod_file_with_progress(
             .as_ref()
             .map(|u| {
                 u.trim().is_empty()
-                    || u.contains("curseforge.com/minecraft")
-                        && !u.contains("forgecdn.net")
+                    || u.contains("curseforge.com/minecraft") && !u.contains("forgecdn.net")
             })
             .unwrap_or(true);
         if needs_resolve {
             if let (Some(pid), Some(fid)) = (
-                module.source.project_id.as_ref().and_then(|s| s.parse().ok()),
+                module
+                    .source
+                    .project_id
+                    .as_ref()
+                    .and_then(|s| s.parse().ok()),
                 module.source.file_id.as_ref().and_then(|s| s.parse().ok()),
             ) {
-                if let Ok(info) =
-                    crate::provider::CurseForgeProvider::new().get_file(pid, fid)
-                {
+                if let Ok(info) = crate::provider::CurseForgeProvider::new().get_file(pid, fid) {
                     if let Some(url) = info.download_url.filter(|u| !u.is_empty()) {
                         resolved_url = Some(url);
                     }
@@ -169,11 +170,9 @@ pub fn materialize_mod_file_with_progress(
                 progress,
             )
             .map_err(|fallback_error| {
-                ModFileError::Install(crate::mc_install::InstallError::MissingDownload(
-                    format!(
-                        "cdn failed ({primary_error}); modrinth redirect failed ({fallback_error})"
-                    ),
-                ))
+                ModFileError::Install(crate::mc_install::InstallError::MissingDownload(format!(
+                    "cdn failed ({primary_error}); modrinth redirect failed ({fallback_error})"
+                )))
             })?;
             Ok(MaterializeOutcome::Downloaded)
         }
@@ -190,7 +189,9 @@ fn download_with_curseforge_key(
     use sha1::{Digest, Sha1};
     use std::io::{Read, Write};
 
-    let api_key = crate::provider::CurseForgeProvider::new().api_key().to_string();
+    let api_key = crate::provider::CurseForgeProvider::new()
+        .api_key()
+        .to_string();
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .user_agent("TuffBox-IDE/0.1.0")
@@ -241,8 +242,7 @@ fn download_with_curseforge_key(
             )));
         }
     }
-    file.persist(path)
-        .map_err(|e| InstallError::Io(e.error))?;
+    file.persist(path).map_err(|e| InstallError::Io(e.error))?;
     Ok(())
 }
 
@@ -285,7 +285,11 @@ pub fn ensure_project_mods_downloaded(
     manifest: &ProjectManifest,
     instance_dir: &Path,
 ) -> ModSyncReport {
-    ensure_project_mods_downloaded_with_progress(manifest, instance_dir, &crate::mc_install::ProgressCallback::new())
+    ensure_project_mods_downloaded_with_progress(
+        manifest,
+        instance_dir,
+        &crate::mc_install::ProgressCallback::new(),
+    )
 }
 
 /// Same as `ensure_project_mods_downloaded`, but with a progress callback
@@ -295,12 +299,7 @@ pub fn ensure_project_mods_downloaded_with_progress(
     instance_dir: &Path,
     progress: &crate::mc_install::ProgressCallback,
 ) -> ModSyncReport {
-    ensure_project_mods_downloaded_with_progress_filtered(
-        manifest,
-        instance_dir,
-        progress,
-        None,
-    )
+    ensure_project_mods_downloaded_with_progress_filtered(manifest, instance_dir, progress, None)
 }
 
 /// Like [`ensure_project_mods_downloaded_with_progress`], but only materializes
@@ -330,7 +329,9 @@ pub fn ensure_project_mods_downloaded_with_progress_filtered(
             let mut report = report.lock().unwrap();
             match outcome {
                 Ok(MaterializeOutcome::Downloaded) => report.downloaded.push(module.id.clone()),
-                Ok(MaterializeOutcome::AlreadyPresent) => report.already_present.push(module.id.clone()),
+                Ok(MaterializeOutcome::AlreadyPresent) => {
+                    report.already_present.push(module.id.clone())
+                }
                 Ok(MaterializeOutcome::Skipped) => report.skipped.push(module.id.clone()),
                 Err(e) => report.failed.push(ModSyncFailure {
                     mod_id: module.id.clone(),
@@ -470,7 +471,11 @@ mod tests {
     #[test]
     fn remote_mod_without_file_name_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        let module = sample_mod(SourceKind::Modrinth, None, Some("https://example.com/mod.jar"));
+        let module = sample_mod(
+            SourceKind::Modrinth,
+            None,
+            Some("https://example.com/mod.jar"),
+        );
         let result = materialize_mod_file(dir.path(), &module);
         assert!(matches!(result, Err(ModFileError::NoFileName(_))));
     }

@@ -75,7 +75,11 @@ pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
 
     // PATH entries.
     if let Ok(path) = std::env::var("PATH") {
-        let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
+        let sep = if cfg!(target_os = "windows") {
+            ';'
+        } else {
+            ':'
+        };
         for dir in path.split(sep) {
             paths.insert(PathBuf::from(dir));
         }
@@ -138,8 +142,14 @@ pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
             r"SOFTWARE\Microsoft\JDK",
         ];
         for key in &keys {
-            for flags in [KEY_READ, KEY_READ | 0x0100 /* KEY_WOW64_64KEY */, KEY_READ | 0x0200 /* KEY_WOW64_32KEY */] {
-                if let Ok(jre_key) = winreg::RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(key, flags) {
+            for flags in [
+                KEY_READ,
+                KEY_READ | 0x0100, /* KEY_WOW64_64KEY */
+                KEY_READ | 0x0200, /* KEY_WOW64_32KEY */
+            ] {
+                if let Ok(jre_key) =
+                    winreg::RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(key, flags)
+                {
                     for subkey in jre_key.enum_keys().flatten() {
                         if let Ok(sk) = jre_key.open_subkey(subkey) {
                             for value_name in ["JavaHome", "InstallationPath"] {
@@ -165,7 +175,11 @@ pub fn find_all_runtimes() -> Result<Vec<JavaRuntime>, JreError> {
 
 pub fn check_java_at_path(path: &Path) -> Result<JavaRuntime, JreError> {
     let bin = path.to_path_buf();
-    let java_bin = if bin.file_name().map(|f| f == java_binary_name()).unwrap_or(false) {
+    let java_bin = if bin
+        .file_name()
+        .map(|f| f == java_binary_name())
+        .unwrap_or(false)
+    {
         bin
     } else {
         bin.join(java_binary_name())
@@ -264,7 +278,10 @@ mod tests {
         // instead of always jumping to the newest.
         let runtimes = vec![runtime(8), runtime(11), runtime(21)];
         let picked = find_runtime_for(&runtimes, 17).unwrap();
-        assert_eq!(picked.major, 21, "should pick the closest newer runtime, not skip past it");
+        assert_eq!(
+            picked.major, 21,
+            "should pick the closest newer runtime, not skip past it"
+        );
     }
 
     #[test]

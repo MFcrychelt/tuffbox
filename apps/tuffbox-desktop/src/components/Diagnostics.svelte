@@ -18,8 +18,11 @@
     Database,
     Zap,
     Gauge,
+    Copy,
+    ChevronDown,
+    BadgeCheck,
+    CircleHelp,
   } from "lucide-svelte";
-  import { Copy } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
   type Diagnostic = {
@@ -114,13 +117,18 @@
       diagnosis = data;
       selectedReportId = data.selectedReport?.summary.id ?? data.reports[0]?.id ?? "";
       plan = null;
-      lastLoadedPath = $projectPath;
       detectWrongLoaderMods();
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  function onProjectPathChange(path: string | null) {
+    if (!path || path === lastLoadedPath) return;
+    lastLoadedPath = path;
+    void load(true);
   }
 
   async function chooseReport(reportId: string) {
@@ -251,17 +259,22 @@
   let aiContext: any = null;
   let aiPrompt: string = "";
   let aiShowPrompt = false;
+  let aiAnalysis: any = null;
 
-  async function buildAiContext() {
+  async function runAiExplain() {
     if (!$projectPath) return;
     aiLoading = true;
+    error = null;
     try {
-      const result: any = await invoke("build_ai_crash_context", { path: $projectPath });
-      aiContext = result;
-      aiPrompt = result.prompt ?? "";
+      const context: any = await invoke("build_ai_crash_context", { path: $projectPath });
+      aiContext = context;
+      aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
+      aiAnalysis = await invoke("analyze_crash_with_ai", { path: $projectPath });
+      message = "AI analysis ready. Review the suggestions before applying any fix plan.";
     } catch (e) {
       error = String(e);
+      aiAnalysis = null;
     } finally {
       aiLoading = false;
     }
@@ -396,6 +409,11 @@
 
   $: selectedReport = diagnosis?.selectedReport ?? null;
   $: suspected = diagnosis?.suspectedMods ?? [];
+  $: topSuspect = suspected[0] ?? null;
+  $: strongestEvidence = topSuspect?.evidence?.[0] ?? null;
+  $: providedByEvidence = topSuspect?.evidence?.find((item) =>
+    item.text.toLowerCase().includes("provided by"),
+  ) ?? null;
 
   /// Actually applies the crash-diagnosis fix plan on the backend (snapshot
   /// + update/disable suspected mod / install missing dependency) and
@@ -438,7 +456,7 @@
 
   $: errorCount = graphDiagnostics.filter((d) => d.severity === "Error").length;
   $: warningCount = graphDiagnostics.filter((d) => d.severity === "Warning").length;
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  $: onProjectPathChange($projectPath);
 </script>
 
 <div class="diagnostics">
@@ -447,6 +465,19 @@
       <Stethoscope size={18} />
       <span>Diagnose 2.0</span>
     </div>
+    <div class="primary-actions">
+      <button class="refresh" on:click={() => load(true)} disabled={!$projectPath || loading}>
+        <RefreshCw size={16} class={loading ? "spin" : ""} />
+        {loading ? "Refreshing..." : "Refresh"}
+      </button>
+    </div>
+  </div>
+
+  <details class="analysis-tools">
+    <summary>
+      <span><Wrench size={16} /> Analysis tools</span>
+      <span class="tools-hint">Scanners, fix planning and export <ChevronDown size={15} /></span>
+    </summary>
     <div class="actions">
       <button class="secondary" on:click={createFixPlan} disabled={!$projectPath || planning}>
         <Wrench size={16} />
@@ -472,15 +503,12 @@
         <Zap size={16} />
         {unifyLoading ? "Generating..." : "Unify config"}
       </button>
-      <button class="secondary" on:click={buildAiContext} disabled={!$projectPath || aiLoading}>
+      <button class="secondary" on:click={runAiExplain} disabled={!$projectPath || aiLoading}>
         <MessageCircle size={16} />
-        {aiLoading ? "Building..." : "AI explain"}
-      </button>
-      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
+        {aiLoading ? "Analyzing..." : "AI explain"}
       </button>
     </div>
-  </div>
+  </details>
 
   {#if error}<div class="notice error">{error}</div>{/if}
   {#if message}<div class="notice success">{message}</div>{/if}
@@ -490,6 +518,46 @@
   {:else if !$projectPath}
     <div class="empty">Open a project to analyze crash reports, latest.log and recent snapshots.</div>
   {:else if diagnosis}
+    <section class="diagnosis-summary" class:neutral={!topSuspect}>
+      {#if topSuspect}
+        <div class="summary-icon"><AlertTriangle size={22} /></div>
+        <div class="summary-body">
+          <span class="eyebrow">Likely crash source</span>
+          <div class="summary-heading">
+            <h1>{topSuspect.name}</h1>
+            <strong>{topSuspect.confidence}% confidence</strong>
+          </div>
+          <div class="summary-meta">
+            <code>{topSuspect.id}{topSuspect.version ? ` · ${topSuspect.version}` : ""}</code>
+            <span class:installed={topSuspect.knownInManifest}>
+              {#if topSuspect.knownInManifest}<BadgeCheck size={14} />{:else}<CircleHelp size={14} />{/if}
+              {topSuspect.knownInManifest ? "Installed mod" : "Inferred from logs"}
+            </span>
+          </div>
+          {#if providedByEvidence && topSuspect.knownInManifest}
+            <p class="mapping-note">
+              The crash log’s <code>provided by</code> identifier was mapped to this installed mod.
+            </p>
+          {/if}
+          {#if strongestEvidence}
+            <div class="summary-evidence">
+              <span>Strongest evidence · {strongestEvidence.source}:{strongestEvidence.lineNumber}</span>
+              <p>{strongestEvidence.text}</p>
+            </div>
+          {:else}
+            <p class="summary-copy">This mod has the highest combined diagnostic confidence, but no raw evidence line was returned.</p>
+          {/if}
+        </div>
+      {:else}
+        <div class="summary-icon"><CircleHelp size={22} /></div>
+        <div class="summary-body">
+          <span class="eyebrow">Diagnosis summary</span>
+          <h1>No likely mod identified yet</h1>
+          <p class="summary-copy">Select a crash report or run Minecraft once, then refresh. Diagnose will compare crash-log identifiers with installed manifest mods.</p>
+        </div>
+      {/if}
+    </section>
+
     <div class="stats">
       <div class="stat-card" class:danger={diagnosis.reports.length > 0}>
         <strong>{diagnosis.reports.length}</strong>
@@ -515,7 +583,7 @@
         {#if diagnosis.reports.length === 0}
           <div class="muted-box">No files in <code>crash-reports/*.txt</code>.</div>
         {:else}
-          {#each diagnosis.reports as report}
+          {#each diagnosis.reports as report (report.id)}
             <button class="report-card" class:selected={selectedReportId === report.id} on:click={() => chooseReport(report.id)}>
               <strong>{report.name}</strong>
               <span>{formatBytes(report.size)} · {formatDate(report.modified)}</span>
@@ -539,7 +607,7 @@
 
         {#if graphDiagnostics.length > 0}
           <h2 class="log-title"><AlertTriangle size={16} /> Conflicts & Issues</h2>
-          {#each graphDiagnostics as diag, idx}
+          {#each graphDiagnostics as diag, idx (`${diag.code}-${idx}`)}
             <div class="conflict-card {diag.severity.toLowerCase()}">
               <div class="conflict-header">
                 <strong>{diag.code}</strong>
@@ -550,7 +618,7 @@
               <p style="font-size: 12px; margin: 4px 0; color: var(--text-muted);">{diag.message}</p>
               {#if diag.relatedNodes && diag.relatedNodes.length > 0}
                 <div class="related-mods">
-                  {#each diag.relatedNodes as node}
+                  {#each diag.relatedNodes as node (node)}
                     <span class="mod-pill">{node}</span>
                   {/each}
                 </div>
@@ -596,7 +664,7 @@
         {#if selectedReport}
           {#if selectedReport.sections?.length}
             <div class="sections-strip">
-              {#each selectedReport.sections as section}
+              {#each selectedReport.sections as section (`${section.title}-${section.startLine}`)}
                 <div class="section-pill">
                   <strong>{section.title}</strong>
                   <span>lines {section.startLine}-{section.endLine}</span>
@@ -604,7 +672,7 @@
               {/each}
             </div>
             <div class="section-previews">
-              {#each selectedReport.sections.slice(0, 4) as section}
+              {#each selectedReport.sections.slice(0, 4) as section (`${section.title}-${section.startLine}`)}
                 <details>
                   <summary>{section.title}</summary>
                   <pre>{section.preview || "No preview."}</pre>
@@ -612,33 +680,36 @@
               {/each}
             </div>
           {/if}
-          <pre class="report-content">{selectedReport.content}</pre>
+          <details class="raw-section">
+            <summary><span>Full crash report</span><small>{formatBytes(selectedReport.summary.size)}</small></summary>
+            <pre class="report-content">{selectedReport.content}</pre>
+          </details>
         {:else}
           <div class="empty inline">No crash report to open yet.</div>
         {/if}
 
-        <div class="latest-log">
-          <div class="panel-header small">
-            <h2><Terminal size={16} /> latest.log tail</h2>
-            <span>{diagnosis.latestLog.exists ? "last parser window" : "missing"}</span>
-          </div>
+        <details class="raw-section latest-log">
+          <summary>
+            <span><Terminal size={16} /> latest.log tail</span>
+            <small>{diagnosis.latestLog.exists ? "last parser window" : "missing"}</small>
+          </summary>
           <pre class="log-content">{diagnosis.latestLog.tail || "logs/latest.log will appear here after a Test run."}</pre>
-        </div>
+        </details>
 
-        <div class="latest-log">
-          <div class="panel-header small">
-            <h2><Terminal size={16} /> launcher.log tail</h2>
-            <span>{diagnosis.launcherLog.exists ? "launcher parser window" : "missing"}</span>
-          </div>
+        <details class="raw-section latest-log">
+          <summary>
+            <span><Terminal size={16} /> launcher.log tail</span>
+            <small>{diagnosis.launcherLog.exists ? "launcher parser window" : "missing"}</small>
+          </summary>
           <pre class="log-content">{diagnosis.launcherLog.tail || "launcher.log will appear here after launcher events."}</pre>
-        </div>
+        </details>
       </section>
 
       <aside class="inspector panel">
         {#if signalGroups.length > 0}
           <h2><Stethoscope size={16} /> Signal groups</h2>
           <div class="signal-groups">
-            {#each signalGroups as group}
+            {#each signalGroups as group (group.title)}
               <div class="signal-group">
                 <strong>{group.title}</strong>
                 <span>{group.hint}</span>
@@ -653,7 +724,7 @@
         {#if selectedReport?.modEntries?.length}
           <h2><FileText size={16} /> Crash Mods section</h2>
           <div class="mod-entry-list">
-            {#each selectedReport.modEntries.slice(0, 18) as entry}
+            {#each selectedReport.modEntries.slice(0, 18) as entry (`${entry.id}-${entry.version ?? ""}`)}
               <div class="mod-entry">
                 <strong>{entry.id}</strong>
                 <span>{entry.name ?? "unknown name"}</span>
@@ -668,20 +739,23 @@
           <div class="muted-box">No suspected mods extracted yet. Parser watches <code>Mod File</code>, <code>Caused by</code>, <code>Mixin</code>, <code>Exception</code>, <code>OpenGL</code>, performance and resource-warning lines.</div>
         {:else}
           <div class="suspects">
-            {#each suspected as mod}
-              <div class="suspect-card">
+            {#each suspected as mod (mod.id)}
+              <div class="suspect-card" class:unresolved={!mod.knownInManifest}>
                 <div class="suspect-head">
                   <div>
                     <strong>{mod.name}</strong>
-                    <span>{mod.id}{mod.version ? ` · ${mod.version}` : ""}</span>
+                    <span class="suspect-identity">{mod.id}{mod.version ? ` · ${mod.version}` : ""}</span>
                   </div>
                   <b>{mod.confidence}%</b>
                 </div>
                 <div class="badges">
-                  <small class:known={mod.knownInManifest}>{mod.knownInManifest ? "manifest" : "inferred"}</small>
+                  <small class:known={mod.knownInManifest}>
+                    {#if mod.knownInManifest}<BadgeCheck size={13} />{:else}<CircleHelp size={13} />{/if}
+                    {mod.knownInManifest ? "Installed mod" : "Unresolved log identifier"}
+                  </small>
                   {#if mod.fileName}<small>{mod.fileName}</small>{/if}
                 </div>
-                {#each mod.evidence.slice(0, 3) as item}
+                {#each mod.evidence.slice(0, 3) as item (`${item.source}-${item.lineNumber}-${item.kind}`)}
                   <div class="evidence">
                     <code>{item.kind} · {item.source}:{item.lineNumber}</code>
                     <p>{item.text}</p>
@@ -697,7 +771,7 @@
           <div class="muted-box">No snapshots yet. Risky changes should create snapshots before edits.</div>
         {:else}
           <div class="snapshot-list">
-            {#each diagnosis.recentSnapshots as snapshot}
+            {#each diagnosis.recentSnapshots as snapshot (snapshot.id)}
               <div class="snapshot-row">
                 <strong>{snapshot.name}</strong>
                 <span>{snapshot.createdAt} · {snapshot.reason}</span>
@@ -721,7 +795,7 @@
             </div>
             {#if plan.actions?.length}
               <ul>
-                {#each plan.actions as action}
+                {#each plan.actions as action, actionIdx (actionIdx)}
                   <li>{actionLabel(action)}</li>
                 {/each}
               </ul>
@@ -736,23 +810,66 @@
       </aside>
     </div>
 
-    {#if aiContext}
+    {#if aiContext || aiAnalysis}
       <section class="ai-panel panel">
         <h2><MessageCircle size={16} /> AI Crash Explanation</h2>
-        <div class="ai-stats">
-          <div class="ai-stat"><strong>{aiContext.findingsCount}</strong> findings</div>
-          <div class="ai-stat"><strong>{aiContext.promptLength}</strong> chars prompt</div>
-          <div class="ai-stat"><strong>{aiContext.context?.installedMods?.length ?? 0}</strong> mods</div>
-        </div>
-        <p class="ai-desc">Copy the prompt below and paste it into ChatGPT, Claude, or any LLM to get an AI explanation of the crash.</p>
-        <button class="secondary" on:click={() => (aiShowPrompt = !aiShowPrompt)}>
-          {aiShowPrompt ? "Hide" : "Show"} prompt
-        </button>
-        <button class="secondary" on:click={copyAiPrompt}>
-          <Copy size={14} /> Copy prompt
-        </button>
-        {#if aiShowPrompt}
-          <pre class="ai-prompt-text">{aiPrompt}</pre>
+        {#if aiAnalysis}
+          <div class="ai-analysis">
+            <p class="ai-human">{aiAnalysis.human_explanation ?? aiAnalysis.humanExplanation}</p>
+            <div class="ai-stats">
+              <div class="ai-stat"><strong>{Math.round(((aiAnalysis.confidence ?? 0) * 100))}%</strong> confidence</div>
+              <div class="ai-stat"><strong>{(aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods ?? []).length}</strong> suspected mods</div>
+              <div class="ai-stat"><strong>{(aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions ?? []).length}</strong> actions</div>
+            </div>
+            {#if (aiAnalysis.needs_user_review ?? aiAnalysis.needsUserReview) !== false}
+              <div class="notice warning">AI suggestions require manual review. Nothing was applied automatically.</div>
+            {:else}
+              <div class="notice warning">These are suggestions only — nothing was applied automatically.</div>
+            {/if}
+            {#if (aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods)?.length}
+              <div class="ai-list">
+                <strong>Suspected mods</strong>
+                <ul>
+                  {#each (aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods) as modId (modId)}
+                    <li><code>{modId}</code></li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+            {#if (aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions)?.length}
+              <div class="ai-list">
+                <strong>Recommended actions</strong>
+                <ul>
+                  {#each (aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions) as action, aIdx (aIdx)}
+                    <li>
+                      <strong>{action.action_type ?? action.actionType}</strong>
+                      {#if action.mod_id ?? action.modId}<code>{action.mod_id ?? action.modId}</code>{/if}
+                      <span>{action.description}</span>
+                      <small>risk: {action.risk}</small>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <p class="ai-desc">AI analysis failed or is incomplete. You can still use the raw prompt fallback below.</p>
+        {/if}
+        {#if aiContext}
+          <div class="ai-stats">
+            <div class="ai-stat"><strong>{aiContext.findingsCount}</strong> findings</div>
+            <div class="ai-stat"><strong>{aiContext.promptLength}</strong> chars prompt</div>
+            <div class="ai-stat"><strong>{aiContext.context?.installedMods?.length ?? 0}</strong> mods</div>
+          </div>
+          <button class="secondary" on:click={() => (aiShowPrompt = !aiShowPrompt)}>
+            {aiShowPrompt ? "Hide" : "Show"} prompt
+          </button>
+          <button class="secondary" on:click={copyAiPrompt}>
+            <Copy size={14} /> Copy prompt
+          </button>
+          {#if aiShowPrompt}
+            <pre class="ai-prompt-text">{aiPrompt}</pre>
+          {/if}
         {/if}
       </section>
     {/if}
@@ -761,7 +878,7 @@
       <section class="crash-assistant panel">
         <h2><Zap size={16} /> Crash Assistant ({crashFindings.length} finding{crashFindings.length > 1 ? "s" : ""})</h2>
         <div class="crash-list">
-          {#each crashFindings as f}
+          {#each crashFindings as f (f.code + f.title)}
             <div class="crash-card {f.severity}">
               <div class="crash-card-header">
                 <span class="crash-sev {f.severity}">{f.severity}</span>
@@ -776,7 +893,7 @@
               {/if}
               {#if f.references?.length}
                 <div class="crash-refs">
-                  {#each f.references as ref}
+                  {#each f.references as ref (ref)}
                     <a href={ref} target="_blank" class="crash-link">{ref}</a>
                   {/each}
                 </div>
@@ -788,7 +905,7 @@
           <div class="crash-mcreator">
             <strong>MCreator mods detected ({crashMcreator.length})</strong>
             <p>These mods were built with MCreator and may have compatibility issues:</p>
-            <div class="crash-tags">{#each crashMcreator as m}<code>{m}</code>{/each}</div>
+            <div class="crash-tags">{#each crashMcreator as m (m)}<code>{m}</code>{/each}</div>
           </div>
         {/if}
 
@@ -797,7 +914,7 @@
             <strong>Class finder results</strong>
             <p>Missing classes found in crash logs and their owning mods:</p>
             <div class="crash-tags">
-              {#each crashClassFinder as cf}
+              {#each crashClassFinder as cf (cf.className + cf.modId)}
                 <div class="class-match"><code>{cf.className}</code> → <span>{cf.modId}</span></div>
               {/each}
             </div>
@@ -822,7 +939,7 @@
       <section class="ore-gen panel">
         <h2><Database size={16} /> Ore generation scan ({oreFindings.length})</h2>
         <div class="ore-list">
-          {#each oreFindings as ore}
+          {#each oreFindings as ore (ore.configFile + ore.resource + (ore.enabledKey ?? ''))}
             <div class="ore-card">
               <div class="ore-header">
                 <strong>{ore.resource}</strong>
@@ -846,7 +963,7 @@
       <section class="duplicates panel">
         <h2><GitMerge size={16} /> Duplicate items ({duplicateFindings.length})</h2>
         <div class="duplicate-list">
-          {#each duplicateFindings as dup}
+          {#each duplicateFindings as dup (dup.material + dup.itemType + (dup.dominantItem ?? ''))}
             <div class="duplicate-card">
               <strong>{dup.material}</strong>
               <span class="dup-type">{dup.itemType}</span>
@@ -855,7 +972,7 @@
               {/if}
               {#if dup.alternatives?.length}
                 <div class="dup-alts">
-                  {#each dup.alternatives as alt}
+                  {#each dup.alternatives as alt (alt.itemId)}
                     <span class="dup-alt">{alt.itemId}</span>
                   {/each}
                 </div>
@@ -882,7 +999,7 @@
       <section class="perf-audit panel">
         <h2><Gauge size={16} /> Performance audit ({perfFindings.length})</h2>
         <div class="perf-list">
-          {#each perfFindings as finding}
+          {#each perfFindings as finding, pIdx (finding.code + (finding.file ?? '') + pIdx)}
             <div class="perf-card {finding.severity}">
               <div class="perf-card-header">
                 <strong>{finding.code}</strong>
@@ -903,7 +1020,7 @@
           These .jar files were detected as built for a different mod loader than your project uses. They can cause crashes or silent failures.
         </p>
         <div class="wrong-loader-list">
-          {#each wrongLoaderJars as jar}
+          {#each wrongLoaderJars as jar (jar.fileName)}
             <div class="wrong-loader-card">
               <div class="wrong-loader-main">
                 <strong>{jar.fileName}</strong>
@@ -932,7 +1049,7 @@
         </div>
       {:else}
         <div class="diagnostic-list">
-          {#each graphDiagnostics as d}
+          {#each graphDiagnostics as d, dIdx (`${d.code}-${dIdx}`)}
             <div class="diag-card {d.severity.toLowerCase()}">
               <div class="diag-icon">
                 <svelte:component this={icon(d.severity)} size={20} />
@@ -956,14 +1073,40 @@
 
 <style>
   .diagnostics { max-width: none; width: 100%; }
-  .toolbar, .actions, .title, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+  .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
+  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .actions { gap: 10px; }
+  .actions { gap: 8px; flex-wrap: wrap; }
+  .refresh { display: inline-flex; align-items: center; gap: 8px; }
+  .analysis-tools { margin-bottom: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); background: var(--bg-secondary); }
+  .analysis-tools > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; color: var(--text-secondary); cursor: pointer; list-style: none; font-size: 12px; font-weight: 700; }
+  .analysis-tools > summary::-webkit-details-marker { display: none; }
+  .analysis-tools > summary span { display: flex; align-items: center; gap: 7px; }
+  .analysis-tools .tools-hint { color: var(--text-muted); font-weight: 500; }
+  .analysis-tools[open] .tools-hint :global(svg) { transform: rotate(180deg); }
+  .analysis-tools .actions { padding: 0 12px 12px; border-top: 1px solid var(--border-color); padding-top: 12px; }
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .diagnosis-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: 18px; margin-bottom: 16px; border: 1px solid rgba(245, 158, 11, 0.42); border-radius: var(--border-radius-lg); background: linear-gradient(135deg, rgba(245, 158, 11, 0.11), var(--bg-secondary) 65%); }
+  .diagnosis-summary.neutral { border-color: var(--border-color); background: var(--bg-secondary); }
+  .summary-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--accent-warning); background: rgba(245, 158, 11, 0.13); }
+  .neutral .summary-icon { color: var(--text-muted); background: var(--bg-tertiary); }
+  .summary-body { min-width: 0; }
+  .eyebrow { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  .summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .summary-heading h1, .summary-body > h1 { margin: 0; color: var(--text-primary); font-size: 22px; line-height: 1.25; }
+  .summary-heading strong { flex-shrink: 0; color: var(--accent-warning); font-size: 13px; }
+  .summary-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+  .summary-meta code { color: var(--text-secondary); font-size: 12px; }
+  .summary-meta span { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; color: var(--text-muted); background: var(--bg-tertiary); font-size: 11px; font-weight: 700; }
+  .summary-meta span.installed { color: var(--accent-primary); }
+  .mapping-note { margin: 12px 0 0; color: var(--text-secondary); font-size: 12px; }
+  .mapping-note code { color: var(--accent-primary); }
+  .summary-evidence { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--accent-warning); border-radius: 0 10px 10px 0; background: var(--bg-tertiary); }
+  .summary-evidence span { color: var(--text-muted); font-size: 11px; }
+  .summary-evidence p, .summary-copy { margin: 5px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
   .stats { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 14px; margin-bottom: 16px; }
   .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .stat-card { padding: 15px; display: flex; flex-direction: column; gap: 4px; }
@@ -1004,6 +1147,11 @@
   .section-previews details { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px; }
   .section-previews summary { cursor: pointer; color: var(--text-secondary); font-weight: 800; }
   .section-previews pre { margin-top: 8px; max-height: 180px; padding: 10px; }
+  .raw-section { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); overflow: hidden; }
+  .raw-section > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 800; }
+  .raw-section > summary span { display: flex; align-items: center; gap: 8px; }
+  .raw-section > summary small { color: var(--text-muted); font-weight: 500; }
+  .raw-section[open] > summary { border-bottom: 1px solid var(--border-color); }
   .report-content { max-height: 520px; padding: 16px; }
   .log-content { max-height: 250px; padding: 14px; color: #a1a1aa; }
   .suspects, .snapshot-list, .diagnostic-list, .signal-groups, .mod-entry-list { display: flex; flex-direction: column; gap: 10px; }
@@ -1016,10 +1164,13 @@
   .signal-group span, .signal-group small, .signal-group p { color: var(--text-muted); font-size: 12px; }
   .signal-group p { margin: 2px 0; line-height: 1.45; }
   .suspect-head { justify-content: space-between; gap: 10px; }
-  .suspect-head strong { display: block; color: var(--text-primary); }
+  .suspect-head strong { display: block; color: var(--text-primary); font-size: 15px; }
+  .suspect-card { border-left: 4px solid var(--accent-primary); }
+  .suspect-card.unresolved { border-left-color: var(--text-muted); }
+  .suspect-identity { display: block; margin-top: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   .suspect-head b { color: var(--accent-primary); }
   .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
-  .badges small { color: var(--text-muted); background: var(--bg-elevated); border-radius: 999px; padding: 3px 8px; }
+  .badges small { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); background: var(--bg-elevated); border-radius: 999px; padding: 3px 8px; }
   .badges small.known { color: var(--accent-primary); }
   .evidence { border-top: 1px solid var(--border-color); padding-top: 8px; margin-top: 8px; }
   .evidence code, .code { color: var(--text-muted); font-size: 11px; }
@@ -1091,6 +1242,12 @@
   .ai-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 12px; }
   .ai-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 10px; padding: 10px; text-align: center; }
   .ai-stat strong { font-size: 20px; color: var(--accent-secondary); }
+  .ai-human { color: var(--text-primary); font-size: 14px; line-height: 1.5; margin: 0 0 12px; }
+  .ai-list { margin: 10px 0; }
+  .ai-list ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+  .ai-list li { color: var(--text-secondary); font-size: 12px; }
+  .ai-list small { color: var(--text-muted); margin-left: 6px; }
+  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; }
   .ai-desc { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; line-height: 1.4; }
   .ai-prompt-text { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
 
@@ -1113,6 +1270,25 @@
   .empty.success { display: flex; flex-direction: column; align-items: center; gap: 12px; }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 1180px) { .diagnose-grid { grid-template-columns: 1fr; } .stats { grid-template-columns: repeat(2, 1fr); } }
-  @media (max-width: 700px) { .stats { grid-template-columns: 1fr; } }
+  @media (max-width: 1180px) {
+    .diagnose-grid { grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr); }
+    .inspector { grid-column: 1 / -1; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 760px) {
+    .diagnose-grid, .stats { grid-template-columns: 1fr; }
+    .inspector { grid-column: auto; }
+    .summary-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+    .analysis-tools > summary { align-items: flex-start; }
+    .analysis-tools .tools-hint { display: none; }
+    .actions button { flex: 1 1 160px; justify-content: center; }
+  }
+  @media (max-width: 480px) {
+    .diagnosis-summary { grid-template-columns: 1fr; padding: 14px; }
+    .toolbar { align-items: flex-start; }
+    .title span { font-size: 14px; }
+    .mod-entry { grid-template-columns: 1fr; }
+    .wrong-loader-card, .wrong-loader-actions { flex-direction: column; }
+    .wrong-loader-actions { width: 100%; }
+  }
 </style>

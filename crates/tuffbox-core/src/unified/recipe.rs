@@ -235,7 +235,11 @@ impl RecipeParser for LegacySmithingParser {
 
         let output = match json.get("result") {
             Some(result) => try_parse_output(result)?,
-            None => return Err(RecipeError::Parse("no result in legacy smithing recipe".to_string())),
+            None => {
+                return Err(RecipeError::Parse(
+                    "no result in legacy smithing recipe".to_string(),
+                ))
+            }
         };
 
         Ok(UnifiedRecipe {
@@ -310,8 +314,12 @@ impl RecipeParser for ForgeConditionalRecipeParser {
     ) -> Result<UnifiedRecipe, RecipeError> {
         let inner = resolve_conditional_entry(json)
             .ok_or_else(|| RecipeError::Parse("no usable forge:conditional entry".to_string()))?;
-        let inner_type = inner.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let mut recipe = parser_for_type(inner_type, mc_version).parse(inner, file_path, mc_version)?;
+        let inner_type = inner
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let mut recipe =
+            parser_for_type(inner_type, mc_version).parse(inner, file_path, mc_version)?;
         recipe.is_conditional = true;
         Ok(recipe)
     }
@@ -324,10 +332,15 @@ impl RecipeParser for NeoForgeConditionalParser {
         file_path: &str,
         mc_version: &McVersion,
     ) -> Result<UnifiedRecipe, RecipeError> {
-        let inner = resolve_conditional_entry(json)
-            .ok_or_else(|| RecipeError::Parse("no usable neoforge:conditional entry".to_string()))?;
-        let inner_type = inner.get("type").and_then(|v| v.as_str()).unwrap_or("unknown");
-        let mut recipe = parser_for_type(inner_type, mc_version).parse(inner, file_path, mc_version)?;
+        let inner = resolve_conditional_entry(json).ok_or_else(|| {
+            RecipeError::Parse("no usable neoforge:conditional entry".to_string())
+        })?;
+        let inner_type = inner
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let mut recipe =
+            parser_for_type(inner_type, mc_version).parse(inner, file_path, mc_version)?;
         recipe.is_conditional = true;
         Ok(recipe)
     }
@@ -421,10 +434,7 @@ pub fn parse_ingredient_value(value: &serde_json::Value) -> Option<UnifiedIngred
         return Some(UnifiedIngredient::Tag(format!("#{}", tag)));
     }
     if let Some(arr) = value.as_array() {
-        let alts: Vec<UnifiedIngredient> = arr
-            .iter()
-            .filter_map(parse_ingredient_value)
-            .collect();
+        let alts: Vec<UnifiedIngredient> = arr.iter().filter_map(parse_ingredient_value).collect();
         if !alts.is_empty() {
             return Some(UnifiedIngredient::OneOf(alts));
         }
@@ -445,7 +455,10 @@ pub fn parse_result_value(json: &serde_json::Value) -> Result<UnifiedOutput, Rec
         .ok_or_else(|| RecipeError::Parse("no result field".to_string()))?;
 
     if let Some(s) = result.as_str() {
-        return Ok(UnifiedOutput { item: s.to_string(), count: 1 });
+        return Ok(UnifiedOutput {
+            item: s.to_string(),
+            count: 1,
+        });
     }
 
     if let Some(obj) = result.as_object() {
@@ -454,11 +467,11 @@ pub fn parse_result_value(json: &serde_json::Value) -> Result<UnifiedOutput, Rec
             .or_else(|| obj.get("id"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| RecipeError::Parse("no item in result".to_string()))?;
-        let count = obj
-            .get("count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as u32;
-        return Ok(UnifiedOutput { item: item.to_string(), count });
+        let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+        return Ok(UnifiedOutput {
+            item: item.to_string(),
+            count,
+        });
     }
 
     Err(RecipeError::Parse("unparseable result".to_string()))
@@ -474,15 +487,18 @@ pub fn parse_result_121(json: &serde_json::Value) -> Result<UnifiedOutput, Recip
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| RecipeError::Parse("no id in 1.21 result".to_string()))?;
-        let count = obj
-            .get("count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as u32;
-        return Ok(UnifiedOutput { item: item.to_string(), count });
+        let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+        return Ok(UnifiedOutput {
+            item: item.to_string(),
+            count,
+        });
     }
 
     if let Some(s) = result.as_str() {
-        return Ok(UnifiedOutput { item: s.to_string(), count: 1 });
+        return Ok(UnifiedOutput {
+            item: s.to_string(),
+            count: 1,
+        });
     }
 
     Err(RecipeError::Parse("unparseable 1.21 result".to_string()))
@@ -490,7 +506,10 @@ pub fn parse_result_121(json: &serde_json::Value) -> Result<UnifiedOutput, Recip
 
 pub fn try_parse_output(value: &serde_json::Value) -> Result<UnifiedOutput, RecipeError> {
     if let Some(s) = value.as_str() {
-        return Ok(UnifiedOutput { item: s.to_string(), count: 1 });
+        return Ok(UnifiedOutput {
+            item: s.to_string(),
+            count: 1,
+        });
     }
     if let Some(obj) = value.as_object() {
         let item = obj
@@ -498,11 +517,11 @@ pub fn try_parse_output(value: &serde_json::Value) -> Result<UnifiedOutput, Reci
             .or_else(|| obj.get("id"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| RecipeError::Parse("no item".to_string()))?;
-        let count = obj
-            .get("count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(1) as u32;
-        return Ok(UnifiedOutput { item: item.to_string(), count });
+        let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+        return Ok(UnifiedOutput {
+            item: item.to_string(),
+            count,
+        });
     }
     if let Some(arr) = value.as_array() {
         if let Some(first) = arr.first() {

@@ -1,11 +1,24 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Rocket, RefreshCw, Save, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen } from "lucide-svelte";
+  import { open } from "@tauri-apps/plugin-shell";
+  import { Rocket, RefreshCw, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, Save, UploadCloud } from "lucide-svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
   type Artifact = { id: string; kind: string; path: string; createdAt: string; fileCount: number; overrideCount: number };
+  type PublishConfig = {
+    githubRepository: string;
+    modrinthProjectId: string;
+    curseforgeProjectId: string;
+    curseforgeGameVersionIds: number[];
+  };
+  type PublishResult = {
+    target: string;
+    id: string;
+    url?: string | null;
+    uploadedFiles?: string[];
+  };
 
   let version = $projectInfo?.version ?? "1.0.0";
   let changelog = "";
@@ -18,16 +31,152 @@
     changelog: false,
     snapshot: false,
   };
-  let publishTargets = [
-    { id: "modrinth", label: "Modrinth", state: "not exported", artifactKind: "mrpack" },
-    { id: "curseforge", label: "CurseForge", state: "not exported", artifactKind: "curseforge" },
-    { id: "github", label: "GitHub Releases", state: "not prepared", artifactKind: null },
-  ];
+
+  let publishConfig: PublishConfig = {
+    githubRepository: "",
+    modrinthProjectId: "",
+    curseforgeProjectId: "",
+    curseforgeGameVersionIds: [],
+  };
+  let curseforgeGameVersionIdsText = "";
+  let configLoading = false;
+  let configSaving = false;
+  let publishingTarget: string | null = null;
+  let publishResults: Record<string, PublishResult> = {};
+  let publishErrors: Record<string, string> = {};
 
   let exportLoading: string | null = null;
-
   let githubRelease: any = null;
   let githubLoading = false;
+  let loading = false;
+  let error = "";
+  let message = "";
+  let lastLoadedPath: string | null = null;
+
+  function parseGameVersionIds(text: string): number[] {
+    return text
+      .split(/[,\s]+/)
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => Number(part))
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }
+
+  function hasArtifact(kind: string) {
+    return artifacts.some((a) => a.kind === kind);
+  }
+
+  function canPublish(target: string) {
+    if (!$projectPath || !!publishingTarget || errorCount > 0) return false;
+    if (target === "github") {
+      return !!publishConfig.githubRepository.trim() && artifacts.length > 0;
+    }
+    if (target === "modrinth") {
+      return !!publishConfig.modrinthProjectId.trim() && hasArtifact("mrpack");
+    }
+    if (target === "curseforge") {
+      return (
+        !!publishConfig.curseforgeProjectId.trim() &&
+        publishConfig.curseforgeGameVersionIds.length > 0 &&
+        hasArtifact("curseforge")
+      );
+    }
+    return false;
+  }
+
+  function targetState(id: string) {
+    if (publishResults[id]) {
+      return publishResults[id].url
+        ? `published · ${publishResults[id].id}`
+        : `published · id ${publishResults[id].id}`;
+    }
+    if (publishErrors[id]) return "publish failed";
+    if (id === "github") {
+      return artifacts.length > 0
+        ? (publishConfig.githubRepository.trim() ? "ready to publish" : "needs repository")
+        : "needs artifacts";
+    }
+    if (id === "modrinth") {
+      if (!hasArtifact("mrpack")) return "not exported";
+      return publishConfig.modrinthProjectId.trim() ? "ready to publish" : "needs project id";
+    }
+    if (id === "curseforge") {
+      if (!hasArtifact("curseforge")) return "not exported";
+      if (!publishConfig.curseforgeProjectId.trim()) return "needs project id";
+      if (publishConfig.curseforgeGameVersionIds.length === 0) return "needs game version ids";
+      return "ready to publish";
+    }
+    return "idle";
+  }
+
+  async function loadPublishConfig() {
+    if (!$projectPath) return;
+    configLoading = true;
+    try {
+      publishConfig = await invoke<PublishConfig>("get_publish_config", { path: $projectPath });
+      curseforgeGameVersionIdsText = (publishConfig.curseforgeGameVersionIds ?? []).join(", ");
+    } catch (e) {
+      error = String(e);
+    } finally {
+      configLoading = false;
+    }
+  }
+
+  async function savePublishConfig() {
+    if (!$projectPath) return;
+    configSaving = true;
+    error = "";
+    message = "";
+    try {
+      const config: PublishConfig = {
+        githubRepository: publishConfig.githubRepository.trim(),
+        modrinthProjectId: publishConfig.modrinthProjectId.trim(),
+        curseforgeProjectId: publishConfig.curseforgeProjectId.trim(),
+        curseforgeGameVersionIds: parseGameVersionIds(curseforgeGameVersionIdsText),
+      };
+      await invoke("save_publish_config", { path: $projectPath, config });
+      publishConfig = config;
+      curseforgeGameVersionIdsText = config.curseforgeGameVersionIds.join(", ");
+      message = "Publish config saved.";
+    } catch (e) {
+      error = String(e);
+    } finally {
+      configSaving = false;
+    }
+  }
+
+  async function publish(target: string) {
+    if (!$projectPath || !canPublish(target)) return;
+    publishingTarget = target;
+    error = "";
+    message = "";
+    publishErrors = { ...publishErrors, [target]: "" };
+    try {
+      const result = await invoke<PublishResult>("publish_release", {
+        path: $projectPath,
+        target,
+        changelog,
+      });
+      publishResults = { ...publishResults, [target]: result };
+      message = result.url
+        ? `Published to ${target}: ${result.url}`
+        : `Published to ${target} (id ${result.id}).`;
+    } catch (e) {
+      publishErrors = { ...publishErrors, [target]: String(e) };
+      error = String(e);
+    } finally {
+      publishingTarget = null;
+    }
+  }
+
+  async function openPublishUrl(url?: string | null) {
+    if (!url) return;
+    try {
+      await open(url);
+    } catch (e) {
+      error = String(e);
+    }
+  }
 
   async function generateGithubRelease() {
     if (!$projectPath) return;
@@ -35,21 +184,23 @@
     try {
       const tag = version.trim() ? `v${version.trim()}` : null;
       githubRelease = await invoke("generate_github_release", { path: $projectPath, tag, target: null });
-      publishTargets = publishTargets.map(t => t.id === "github" ? { ...t, state: "prepared" } : t);
-      message = `GitHub release prepared: ${githubRelease.tagName}`;
-    } catch(e) { error = String(e); }
-    finally { githubLoading = false; }
+      message = `GitHub release notes prepared: ${githubRelease.tagName}`;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      githubLoading = false;
+    }
   }
 
   async function copyReleaseBody() {
     if (!githubRelease) return;
-    try { await navigator.clipboard.writeText(githubRelease.body); message = "Release body copied to clipboard."; }
-    catch { message = "Failed to copy."; }
+    try {
+      await navigator.clipboard.writeText(githubRelease.body);
+      message = "Release body copied to clipboard.";
+    } catch {
+      message = "Failed to copy.";
+    }
   }
-  let loading = false;
-  let error = "";
-  let message = "";
-  let lastLoadedPath: string | null = null;
 
   async function refresh() {
     if (!$projectPath) return;
@@ -61,27 +212,13 @@
       changelog = await invoke("generate_release_changelog", { path: $projectPath });
       artifacts = await invoke("list_release_artifacts", { path: $projectPath });
       version = $projectInfo?.version ?? version;
-      syncPublishTargets();
+      await loadPublishConfig();
       lastLoadedPath = $projectPath;
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
-  }
-
-  function syncPublishTargets() {
-    publishTargets = publishTargets.map((target) => {
-      if (target.id === "github") {
-        return { ...target, state: githubRelease ? "prepared" : "not prepared" };
-      }
-      const kind = target.artifactKind;
-      const found = kind ? artifacts.find((a) => a.kind === kind) : null;
-      return {
-        ...target,
-        state: found ? `exported · ${found.fileCount} files` : "not exported",
-      };
-    });
   }
 
   async function exportArtifact(kind: "mrpack" | "server" | "prism" | "curseforge") {
@@ -140,13 +277,6 @@
     }
   }
 
-  function markPublishTarget(id: string) {
-    publishTargets = publishTargets.map((target) =>
-      target.id === id ? { ...target, state: "marked ready (manual upload)" } : target
-    );
-    message = `${publishTargets.find((target) => target.id === id)?.label} marked for manual upload.`;
-  }
-
   async function createReleaseDraft() {
     if (!$projectPath) return;
     loading = true;
@@ -179,6 +309,11 @@
     }
   }
 
+  function onProjectPathChange(path: string | null) {
+    if (!path || path === lastLoadedPath) return;
+    void refresh();
+  }
+
   $: errorCount = issues.filter((issue) => issue.severity === "error").length;
   $: warningCount = issues.filter((issue) => issue.severity === "warning").length;
   $: checklist.version = Boolean(version.trim());
@@ -186,7 +321,7 @@
   $: checklist.artifacts = artifacts.length > 0;
   $: checklist.changelog = changelog.trim().length > 0;
   $: releaseReady = Object.values(checklist).every(Boolean);
-  $: if ($projectPath && lastLoadedPath !== $projectPath) refresh();
+  $: onProjectPathChange($projectPath);
 </script>
 
 <div class="release-room">
@@ -224,7 +359,7 @@
 
         <div class="release-checklist">
           <h3>Release checklist</h3>
-          {#each Object.entries(checklist) as [key, done]}
+          {#each Object.entries(checklist) as [key, done] (key)}
             <label class:done>
               <input type="checkbox" bind:checked={checklist[key]} />
               <span>{key}</span>
@@ -233,31 +368,96 @@
           <div class="ready" class:ok={releaseReady}>{releaseReady ? "Ready to ship" : "Release not ready yet"}</div>
         </div>
 
+        <div class="publish-config">
+          <h3>Publish config</h3>
+          <p class="config-hint">Per-project IDs used by Publish. Tokens stay in Settings → Integrations.</p>
+          <label>
+            GitHub repository
+            <input bind:value={publishConfig.githubRepository} placeholder="owner/repository" />
+          </label>
+          <label>
+            Modrinth project id / slug
+            <input bind:value={publishConfig.modrinthProjectId} placeholder="project-slug" />
+          </label>
+          <label>
+            CurseForge project id
+            <input bind:value={publishConfig.curseforgeProjectId} placeholder="123456" />
+          </label>
+          <label>
+            CurseForge game version ids
+            <input bind:value={curseforgeGameVersionIdsText} placeholder="9008, 9990" />
+          </label>
+          <div class="target-actions">
+            <button class="secondary mini" on:click={savePublishConfig} disabled={configSaving || configLoading}>
+              <Save size={12} /> {configSaving ? "Saving…" : "Save config"}
+            </button>
+          </div>
+        </div>
+
         <div class="publish-targets">
           <h3>Export & publish</h3>
-          {#each publishTargets as target}
-            <div class="publish-target">
-              <div><strong>{target.label}</strong><span>{target.state}</span></div>
-              <div class="target-actions">
-                {#if target.id === "modrinth"}
-                  <button class="secondary mini" on:click={() => exportArtifact("mrpack")} disabled={!!exportLoading || errorCount > 0}>
-                    {exportLoading === "mrpack" ? "…" : "Export .mrpack"}
-                  </button>
-                {:else if target.id === "curseforge"}
-                  <button class="secondary mini" on:click={() => exportArtifact("curseforge")} disabled={!!exportLoading || errorCount > 0}>
-                    {exportLoading === "curseforge" ? "…" : "Export zip"}
-                  </button>
-                {:else if target.id === "github"}
-                  <button class="secondary mini" on:click={generateGithubRelease} disabled={githubLoading}>
-                    {githubLoading ? "…" : "Generate"}
-                  </button>
-                {/if}
-                {#if target.id !== "github"}
-                  <button class="ghost mini" on:click={() => markPublishTarget(target.id)}>Mark ready</button>
-                {/if}
-              </div>
+          <div class="publish-target">
+            <div><strong>Modrinth</strong><span>{targetState("modrinth")}</span></div>
+            <div class="target-actions">
+              <button class="secondary mini" on:click={() => exportArtifact("mrpack")} disabled={!!exportLoading || errorCount > 0}>
+                {exportLoading === "mrpack" ? "…" : "Export .mrpack"}
+              </button>
+              <button class="mini" on:click={() => publish("modrinth")} disabled={!canPublish("modrinth")}>
+                <UploadCloud size={12} /> {publishingTarget === "modrinth" ? "Publishing…" : "Publish"}
+              </button>
             </div>
-          {/each}
+            {#if publishErrors.modrinth}<small class="pub-err">{publishErrors.modrinth}</small>{/if}
+            {#if publishResults.modrinth}
+              <small class="pub-ok">
+                id {publishResults.modrinth.id}
+                {#if publishResults.modrinth.url}
+                  · <button class="linkish" on:click={() => openPublishUrl(publishResults.modrinth.url)}>{publishResults.modrinth.url}</button>
+                {/if}
+              </small>
+            {/if}
+          </div>
+
+          <div class="publish-target">
+            <div><strong>CurseForge</strong><span>{targetState("curseforge")}</span></div>
+            <div class="target-actions">
+              <button class="secondary mini" on:click={() => exportArtifact("curseforge")} disabled={!!exportLoading || errorCount > 0}>
+                {exportLoading === "curseforge" ? "…" : "Export zip"}
+              </button>
+              <button class="mini" on:click={() => publish("curseforge")} disabled={!canPublish("curseforge")}>
+                <UploadCloud size={12} /> {publishingTarget === "curseforge" ? "Publishing…" : "Publish"}
+              </button>
+            </div>
+            {#if publishErrors.curseforge}<small class="pub-err">{publishErrors.curseforge}</small>{/if}
+            {#if publishResults.curseforge}
+              <small class="pub-ok">
+                id {publishResults.curseforge.id}
+                {#if publishResults.curseforge.url}
+                  · <button class="linkish" on:click={() => openPublishUrl(publishResults.curseforge.url)}>{publishResults.curseforge.url}</button>
+                {/if}
+              </small>
+            {/if}
+          </div>
+
+          <div class="publish-target">
+            <div><strong>GitHub Releases</strong><span>{targetState("github")}</span></div>
+            <div class="target-actions">
+              <button class="secondary mini" on:click={generateGithubRelease} disabled={githubLoading}>
+                {githubLoading ? "…" : "Prepare notes"}
+              </button>
+              <button class="mini" on:click={() => publish("github")} disabled={!canPublish("github")}>
+                <UploadCloud size={12} /> {publishingTarget === "github" ? "Publishing…" : "Publish"}
+              </button>
+            </div>
+            {#if publishErrors.github}<small class="pub-err">{publishErrors.github}</small>{/if}
+            {#if publishResults.github}
+              <small class="pub-ok">
+                id {publishResults.github.id}
+                {#if publishResults.github.url}
+                  · <button class="linkish" on:click={() => openPublishUrl(publishResults.github.url)}>{publishResults.github.url}</button>
+                {/if}
+              </small>
+            {/if}
+          </div>
         </div>
 
         <div class="quick-exports">
@@ -280,7 +480,7 @@
           {#if artifacts.length === 0}
             <div class="muted-box">No exported artifacts recorded yet. Use Export stage first.</div>
           {:else}
-            {#each artifacts.slice(0, 6) as artifact}
+            {#each artifacts.slice(0, 6) as artifact (artifact.id)}
               <div class="artifact-row">
                 <strong>{artifact.kind}</strong>
                 <span>{artifact.path}</span>
@@ -295,7 +495,7 @@
           {#if issues.length === 0}
             <div class="issue ok"><CheckCircle2 size={16} /> Export validation passed.</div>
           {:else}
-            {#each issues as issue}
+            {#each issues as issue (issue.code + (issue.target ?? '') + issue.message)}
               <div class="issue {issue.severity}">
                 <strong>{issue.code}</strong>
                 <span>{issue.message}</span>
@@ -307,7 +507,7 @@
 
         {#if githubRelease}
           <div class="github-preview">
-            <h4>GitHub Release: {githubRelease.tagName}</h4>
+            <h4>GitHub Release notes: {githubRelease.tagName}</h4>
             <div class="github-actions">
               <button class="secondary mini" on:click={copyReleaseBody}>Copy body</button>
               <span class="gh-meta">{githubRelease.artifactCount} artifacts · release.json saved</span>
@@ -330,11 +530,11 @@
         <div class="changelog-header">
           <div>
             <h2>Changelog</h2>
-            <p>Generated from manifest, brief, diagnostics, mods and recent snapshots. Edit before creating release snapshot.</p>
+            <p>Generated from manifest, brief, diagnostics, mods and recent snapshots. Edit before publishing or creating a release snapshot.</p>
           </div>
           <button class="secondary" on:click={refresh} disabled={loading}>Regenerate</button>
         </div>
-        <textarea bind:value={changelog} spellcheck="false" />
+        <textarea bind:value={changelog} spellcheck="false"></textarea>
       </section>
     </div>
   {/if}
@@ -361,20 +561,24 @@
   .scorecards span, .changelog-header p { color: var(--text-muted); font-size: 12px; }
   .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
   .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
-  .release-checklist, .artifact-list, .publish-targets { display: grid; gap: 8px; }
-  .release-checklist h3, .artifact-list h3, .publish-targets h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
+  .release-checklist, .artifact-list, .publish-targets, .publish-config { display: grid; gap: 8px; }
+  .release-checklist h3, .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
+  .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; text-transform: none; letter-spacing: 0; }
   .release-checklist label.done { border-color: rgba(27, 217, 106, .28); }
   .release-checklist input { width: auto; }
   .ready { padding: 9px 10px; border-radius: 12px; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .ready.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, .35); }
-  .publish-target { display: flex; justify-content: space-between; gap: 10px; align-items: center; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .publish-target > div:first-child { display: grid; gap: 3px; }
   .target-actions, .export-btns { display: flex; gap: 6px; flex-wrap: wrap; }
   .quick-exports { display: grid; gap: 8px; }
   .quick-exports h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
-  .publish-target div { display: grid; gap: 3px; }
   .publish-target strong { color: var(--text-primary); }
   .publish-target span { color: var(--text-muted); font-size: 12px; }
+  .pub-err { color: #fecaca; font-size: 11px; word-break: break-word; }
+  .pub-ok { color: var(--accent-primary); font-size: 11px; word-break: break-all; }
+  .linkish { background: none; border: none; color: var(--accent-secondary); padding: 0; font-size: 11px; cursor: pointer; text-decoration: underline; }
   .artifact-row, .muted-box { display: grid; gap: 4px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .artifact-row strong { color: var(--text-primary); text-transform: uppercase; font-size: 12px; }
   .artifact-row span, .artifact-row small, .muted-box { color: var(--text-muted); font-size: 12px; word-break: break-all; }

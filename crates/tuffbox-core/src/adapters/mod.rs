@@ -1,13 +1,13 @@
-pub mod forge;
 pub mod fabric;
+pub mod forge;
 pub mod neoforge;
 
-use crate::environment::{McVersion, LoaderKind};
-use crate::unified::{UnifiedRecipe, UnifiedTag, tag::TagEntry};
+use crate::environment::{LoaderKind, McVersion};
+use crate::unified::{tag::TagEntry, UnifiedRecipe, UnifiedTag};
 use std::io::Read;
 
-pub use forge::ForgeAdapter;
 pub use fabric::FabricAdapter;
+pub use forge::ForgeAdapter;
 pub use neoforge::NeoForgeAdapter;
 
 #[derive(Debug, Clone)]
