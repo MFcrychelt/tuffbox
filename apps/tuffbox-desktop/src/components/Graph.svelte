@@ -1,9 +1,10 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2 } from "lucide-svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import * as d3 from "d3-force";
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
   type GraphNode = {
     id: string;
@@ -28,6 +29,18 @@
   };
 
   type PositionedNode = GraphNode & { x: number; y: number; fx?: number | null; fy?: number | null; tone: string; ghost?: boolean };
+  type DownloadProgress = {
+    id: string;
+    name: string;
+    percent: number;
+    status: string;
+  };
+  type DownloadBatch = {
+    phase: string;
+    failed?: { modId: string; error: string }[];
+    downloaded?: string[];
+    alreadyPresent?: string[];
+  };
 
   let graph: GraphModel | null = null;
   let loading = false;
@@ -50,6 +63,16 @@
   let depPreviewRequired: { target: string; reason?: string | null }[] = [];
   let depPreviewOptional: { target: string; reason?: string | null }[] = [];
   let depPreviewInstallWithOptional = true;
+  let depInstallStatus: "idle" | "downloading" | "done" | "failed" = "idle";
+  let depInstallMessage = "";
+  let depInstallError: string | null = null;
+  let depInstallFailedIds: string[] = [];
+  let depInstallBatchSeen = false;
+  let unlistenDownloadProgress: UnlistenFn | null = null;
+  let unlistenDownloadBatch: UnlistenFn | null = null;
+  let graphCanvasEl: HTMLElement;
+  let fullscreenElement: Element | null = null;
+  $: graphFullscreen = fullscreenElement === graphCanvasEl;
 
   function normalizeNode(node: any): GraphNode {
     return {
@@ -185,6 +208,25 @@
     return positionById.get(id);
   }
 
+  function edgePath(edge: GraphEdge): string {
+    const source = point(edge.from);
+    const target = point(edge.to);
+    if (!source || !target) return "";
+    const dx = target.x - source.x;
+    const dy = target.y - source.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1) return "";
+    const ux = dx / distance;
+    const uy = dy / distance;
+    const boundaryDistance = (node: PositionedNode) => {
+      const half = nodeSize(node) / 2;
+      return half / Math.max(Math.abs(ux), Math.abs(uy), 0.001);
+    };
+    const startOffset = boundaryDistance(source) + 2;
+    const endOffset = boundaryDistance(target) + 9;
+    return `M ${source.x + ux * startOffset} ${source.y + uy * startOffset} L ${target.x - ux * endOffset} ${target.y - uy * endOffset}`;
+  }
+
   function isGhost(id: string) {
     return id.startsWith("__ghost__");
   }
@@ -247,29 +289,7 @@
 
   async function installGhostNode(nodeId: string) {
     if (!$projectPath) return;
-    const slug = modIdFromNode(nodeId);
-    resolving = true;
-    error = null;
-    message = null;
-    try {
-      const installed: string[] = await invoke("install_graph_dep", {
-        path: $projectPath,
-        modId: slug,
-      });
-      if (installed.length > 0) {
-        message = `Installed ${slug}${installed.length > 1 ? ` (+${installed.length - 1} transitive deps)` : ""}`;
-      } else {
-        message = `${slug} is already installed.`;
-      }
-      await load(true);
-    } catch (e) {
-      // Fall back to the preview dialog if direct install fails
-      const slug2 = modIdFromNode(nodeId);
-      await previewModrinthDep(slug2);
-      error = String(e);
-    } finally {
-      resolving = false;
-    }
+    await previewModrinthDep(modIdFromNode(nodeId));
   }
 
   async function downloadMissingFiles() {
@@ -353,6 +373,18 @@
     }
   }
 
+  function formatChangeAction(action: Record<string, any>): string {
+    if (action.installMod) {
+      const version = action.installMod.version;
+      return `Install ${action.installMod.project_id}${version ? ` at ${version}` : " (latest compatible version)"}`;
+    }
+    if (action.removeMod) return `Remove ${action.removeMod.node_id}`;
+    if (action.disableMod) return `Disable ${action.disableMod.node_id}`;
+    if (action.updateMod) return `Update ${action.updateMod.node_id} to ${action.updateMod.target_version}`;
+    if (action.editConfig) return `Edit configuration: ${action.editConfig.path}`;
+    return "Apply recommended change";
+  }
+
   async function installMissingDependencies() {
     if (!$projectPath || missingEdges.length === 0) return;
     resolving = true;
@@ -374,26 +406,7 @@
   async function installSingleMissingDep(edge: GraphEdge) {
     if (!$projectPath) return;
     const depId = edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to;
-    resolving = true;
-    error = null;
-    message = null;
-    try {
-      const installed: string[] = await invoke("install_graph_dep", {
-        path: $projectPath,
-        modId: depId,
-      });
-      if (installed.length > 0) {
-        message = `Installed ${depId}${installed.length > 1 ? ` (+${installed.length - 1} transitive)` : ""}`;
-        await load(true);
-      } else {
-        await previewModrinthDep(depId);
-      }
-    } catch (e) {
-      error = String(e);
-      await previewModrinthDep(depId);
-    } finally {
-      resolving = false;
-    }
+    await previewModrinthDep(depId);
   }
 
   /// Fetches Modrinth dependency info and shows the preview dialog.
@@ -406,6 +419,10 @@
     depPreviewOpen = true;
     depPreviewLoading = true;
     depPreviewInstallWithOptional = true;
+    depInstallStatus = "idle";
+    depInstallMessage = "";
+    depInstallError = null;
+    depInstallFailedIds = [];
     try {
       const preview: any = await invoke("preview_modrinth_install", { path: $projectPath, modId: depId });
       if (preview) {
@@ -431,10 +448,14 @@
   /// Actually install from the dep preview dialog.
   async function confirmDepInstall() {
     if (!$projectPath) return;
-    depPreviewOpen = false;
     resolving = true;
     error = null;
     message = null;
+    depInstallStatus = "downloading";
+    depInstallMessage = `Downloading ${depPreviewName}…`;
+    depInstallError = null;
+    depInstallFailedIds = [];
+    depInstallBatchSeen = false;
     try {
       if (depPreviewInstallWithOptional) {
         await invoke("add_modrinth_mod_with_dependencies", {
@@ -449,10 +470,41 @@
           side: "auto",
         });
       }
-      message = `Installed ${depPreviewName}.`;
-      await load(true);
+      if (!depInstallBatchSeen) {
+        depInstallStatus = "done";
+        depInstallMessage = `${depPreviewName} installed.`;
+        message = `Installed ${depPreviewName}.`;
+        await load(true);
+      }
     } catch (e) {
-      error = String(e);
+      depInstallStatus = "failed";
+      depInstallError = String(e);
+      depInstallMessage = `Could not install ${depPreviewName}.`;
+    } finally {
+      resolving = false;
+    }
+  }
+
+  async function retryDepInstall() {
+    if (!$projectPath) return;
+    if (depInstallFailedIds.length === 0) {
+      await confirmDepInstall();
+      return;
+    }
+    resolving = true;
+    depInstallStatus = "downloading";
+    depInstallMessage = `Retrying ${depPreviewName}…`;
+    depInstallError = null;
+    depInstallBatchSeen = false;
+    try {
+      await invoke("retry_failed_mod_downloads", {
+        path: $projectPath,
+        modIds: depInstallFailedIds,
+      });
+    } catch (e) {
+      depInstallStatus = "failed";
+      depInstallError = String(e);
+      depInstallMessage = `Retry failed for ${depPreviewName}.`;
     } finally {
       resolving = false;
     }
@@ -759,6 +811,57 @@
     viewScale = nextScale;
   }
 
+  async function toggleFullscreen() {
+    try {
+      if (graphFullscreen) {
+        await document.exitFullscreen();
+      } else {
+        await graphCanvasEl.requestFullscreen();
+      }
+      resetView();
+    } catch (e) {
+      error = `Fullscreen mode is unavailable: ${String(e)}`;
+    }
+  }
+
+  onMount(() => {
+    void listen<DownloadProgress>("mod-download-progress", (event) => {
+      if (depInstallStatus !== "downloading") return;
+      depInstallBatchSeen = true;
+      const item = event.payload;
+      depInstallMessage = item.status === "downloading"
+        ? `Downloading ${item.name}… ${Math.round(item.percent)}%`
+        : `${item.name}: ${item.status}`;
+    }).then((unlisten) => {
+      unlistenDownloadProgress = unlisten;
+    });
+    void listen<DownloadBatch>("mod-download-batch", (event) => {
+      if (depInstallStatus !== "downloading") return;
+      depInstallBatchSeen = true;
+      if (event.payload.phase !== "done") return;
+      const failures = event.payload.failed ?? [];
+      if (failures.length > 0) {
+        depInstallStatus = "failed";
+        depInstallFailedIds = failures.map((failure) => failure.modId);
+        depInstallError = failures.map((failure) => `${failure.modId}: ${failure.error}`).join("\n");
+        depInstallMessage = `Download failed for ${failures.length} file${failures.length > 1 ? "s" : ""}.`;
+      } else {
+        depInstallStatus = "done";
+        depInstallMessage = `${depPreviewName} and its dependencies are installed.`;
+        message = `Installed ${depPreviewName}.`;
+        void load(true);
+      }
+    }).then((unlisten) => {
+      unlistenDownloadBatch = unlisten;
+    });
+  });
+
+  onDestroy(() => {
+    unlistenDownloadProgress?.();
+    unlistenDownloadBatch?.();
+    simulation?.stop();
+  });
+
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
   function handleNodeMouseDown(event: MouseEvent, node: PositionedNode) {
     event.stopPropagation();
@@ -782,6 +885,8 @@
     window.addEventListener("mouseup", onMouseUp);
   }
 </script>
+
+<svelte:document bind:fullscreenElement />
 
 <div class="graph">
   <div class="toolbar">
@@ -849,9 +954,9 @@
         </div>
         {#if changePlan.actions?.length}
           <div class="plan-actions-list">
-            {#each changePlan.actions as action, index}
+            {#each changePlan.actions as action, index (index)}
               <div class="plan-action-row">
-                <code>{JSON.stringify(action)}</code>
+                <span class="plan-action-label">{formatChangeAction(action)}</span>
                 <button class="secondary mini" on:click={() => applyAction(index)} disabled={resolving}>Apply action</button>
               </div>
             {/each}
@@ -863,14 +968,17 @@
       </section>
     {/if}
 
-    <section class="graph-canvas" aria-label="Dependency graph canvas">
+    <section bind:this={graphCanvasEl} class="graph-canvas" class:fullscreen={graphFullscreen} aria-label="Dependency graph canvas">
       <div class="canvas-controls">
         <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
         <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
         <button class="ghost mini" on:click={resetView} title="Reset view (fit)">⤢</button>
+        <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
+          {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
+        </button>
         <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
       </div>
-      <!-- svelte-ignore a11y-no-noninteractive-element-interactions a11y-missing-attribute -->
+      <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
       <svg
         bind:this={viewportEl}
         viewBox={viewBoxString}
@@ -889,18 +997,16 @@
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(113,113,122,.95)" />
           </marker>
         </defs>
-        {#each displayEdges as edge}
-          <line
+        {#each displayEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
+          <path
+            class="graph-edge"
             class:danger-edge={edgeDanger(edge)}
             class:dimmed={selectedId && edge.from !== selectedId && edge.to !== selectedId}
-            x1={point(edge.from)?.x ?? 0}
-            y1={point(edge.from)?.y ?? 0}
-            x2={point(edge.to)?.x ?? 1060}
-            y2={point(edge.to)?.y ?? (point(edge.from)?.y ?? 0)}
+            d={edgePath(edge)}
             marker-end={edgeDanger(edge) ? "url(#arrow-danger)" : "url(#arrow)"}
           />
         {/each}
-        {#each positioned as node}
+        {#each positioned as node (node.id)}
           {@const size = nodeSize(node)}
           {@const half = size / 2}
           {@const icon = nodeIconUrl(node)}
@@ -989,11 +1095,19 @@
           <div class="muted-box">No mod nodes yet.</div>
         {:else}
           <div class="mod-grid">
-            {#each modNodes as node}
+            {#each modNodes as node (node.id)}
               {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
               {@const isClickableDep = depNodeIds.has(node.id)}
               {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
-              <button class="node-card compact side-{node.side}" class:selected={selectedId === node.id} class:is-dep={isClickableDep} on:click={() => (selectedId = node.id)}>
+              <div
+                class="node-card compact side-{node.side}"
+                class:selected={selectedId === node.id}
+                class:is-dep={isClickableDep}
+                role="button"
+                tabindex="0"
+                on:click={() => (selectedId = node.id)}
+                on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
+              >
                 {#if icon}
                   {#if isClickableDep}
                     <button
@@ -1038,7 +1152,7 @@
                 <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
                   <X size={14} />
                 </span>
-              </button>
+              </div>
             {/each}
           </div>
         {/if}
@@ -1049,7 +1163,7 @@
           <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
           <p class="column-hint">Click an icon to install.</p>
           <div class="mod-grid">
-            {#each ghostNodes as node}
+            {#each ghostNodes as node (node.id)}
               <button
                 class="node-card compact missing-card"
                 class:selected={selectedId === node.id}
@@ -1105,7 +1219,7 @@
           {#if selected.metadata && Object.keys(selected.metadata).length > 0}
             <h3>Metadata</h3>
             <div class="kv">
-              {#each Object.entries(selected.metadata) as [key, value]}
+              {#each Object.entries(selected.metadata) as [key, value] (key)}
                 <span>{key}</span><code>{value}</code>
               {/each}
             </div>
@@ -1116,7 +1230,7 @@
             <div class="muted-box">No direct relations.</div>
           {:else}
             <div class="relations">
-              {#each selectedEdges as edge}
+              {#each selectedEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
                 {@const otherId = edge.from === selectedId ? edge.to : edge.from}
                 {@const isMissingDep = edge.kind === "Requires" && !nodeById(otherId)}
                 <div class="relation" class:incoming={edge.to === selectedId}>
@@ -1144,7 +1258,7 @@
     {#if conflictEdges.length > 0}
       <div class="conflict-panel">
         <h3><AlertTriangle size={16} /> Conflicts</h3>
-        {#each conflictEdges as edge}
+        {#each conflictEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
           <div class="conflict-row">
             <div>
               <strong>{nodeById(edge.from)?.label ?? edge.from}</strong>
@@ -1169,7 +1283,7 @@
             <Download size={14} /> Install all ({missingEdges.length})
           </button>
         </div>
-        {#each missingEdges as edge}
+        {#each missingEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
           <button class="missing-row" on:click={() => installSingleMissingDep(edge)} disabled={resolving}>
             <span>{nodeById(edge.from)?.label ?? edge.from}</span>
             <code class="dep-slug">{edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to}</code>
@@ -1202,7 +1316,7 @@
             {#if depPreviewRequired.length === 0}
               <p class="muted">No hard dependencies — installing the mod alone should work.</p>
             {:else}
-              {#each depPreviewRequired as dep}
+              {#each depPreviewRequired as dep (dep.target)}
                 <div class="dep-entry required">
                   <span class="dep-target">{dep.target}</span>
                   {#if dep.reason}<small>{dep.reason}</small>{/if}
@@ -1215,7 +1329,7 @@
             {#if depPreviewOptional.length === 0}
               <p class="muted">No optional dependencies listed.</p>
             {:else}
-              {#each depPreviewOptional as dep}
+              {#each depPreviewOptional as dep (dep.target)}
                 <div class="dep-entry optional">
                   <span class="dep-target">{dep.target}</span>
                   {#if dep.reason}<small>{dep.reason}</small>{/if}
@@ -1230,10 +1344,36 @@
         {/if}
       </div>
       <div class="modal-footer">
-        <button class="secondary" on:click={() => (depPreviewOpen = false)}>Cancel</button>
-        <button on:click={confirmDepInstall} disabled={depPreviewLoading}>
-          <Download size={16} /> Install
-        </button>
+        {#if depInstallStatus === "downloading"}
+          <div class="install-transfer" aria-live="polite">
+            <Loader2 size={16} class="spin" />
+            <span>{depInstallMessage}</span>
+          </div>
+        {:else if depInstallStatus === "failed"}
+          <div class="install-transfer failed" aria-live="assertive">
+            <AlertTriangle size={16} />
+            <div><strong>{depInstallMessage}</strong><pre>{depInstallError}</pre></div>
+          </div>
+        {:else if depInstallStatus === "done"}
+          <div class="install-transfer done" aria-live="polite">
+            <Download size={16} />
+            <span>{depInstallMessage}</span>
+          </div>
+        {/if}
+        <div class="modal-footer-actions">
+          <button class="secondary" on:click={() => (depPreviewOpen = false)} disabled={depInstallStatus === "downloading"}>
+            {depInstallStatus === "done" ? "Close" : "Cancel"}
+          </button>
+          {#if depInstallStatus === "failed"}
+            <button on:click={retryDepInstall} disabled={resolving}>
+              <RotateCw size={16} /> Retry
+            </button>
+          {:else if depInstallStatus !== "done"}
+            <button on:click={confirmDepInstall} disabled={depPreviewLoading || depInstallStatus === "downloading"}>
+              <Download size={16} /> {depInstallStatus === "downloading" ? "Downloading…" : "Install"}
+            </button>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
@@ -1323,6 +1463,11 @@
   .change-plan-panel p { color: var(--text-muted); }
   .plan-actions-list { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
   .plan-action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+  .plan-action-label {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.35;
+  }
   .mini { padding: 5px 8px; font-size: 11px; }
 
   .graph-canvas {
@@ -1342,6 +1487,17 @@
     display: block;
     cursor: grab;
     touch-action: none;
+  }
+
+  .graph-canvas:fullscreen {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: #09090b;
+  }
+
+  .graph-canvas:fullscreen svg {
+    height: 100vh;
   }
 
   .graph-canvas svg.panning {
@@ -1382,13 +1538,14 @@
     text-align: center;
   }
 
-  .graph-canvas line {
+  .graph-canvas .graph-edge {
+    fill: none;
     stroke: rgba(161, 161, 170, 0.72);
     stroke-width: 2;
     transition: opacity 120ms ease;
   }
 
-  .graph-canvas line.dimmed {
+  .graph-canvas .graph-edge.dimmed {
     opacity: 0.35;
   }
 
@@ -1396,7 +1553,7 @@
     opacity: 0.25;
   }
 
-  .graph-canvas line.danger-edge {
+  .graph-canvas .graph-edge.danger-edge {
     stroke: rgba(82, 82, 91, 0.95);
     stroke-dasharray: 6 5;
   }
@@ -2043,9 +2200,38 @@
   .modal-body { padding: 16px 24px; }
   .modal-footer {
     display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
     gap: 10px;
     padding: 12px 24px 20px;
+  }
+  .modal-footer-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+  .install-transfer {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 10px 12px;
+    border: 1px solid rgba(27, 217, 106, 0.28);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    background: rgba(27, 217, 106, 0.06);
+    font-size: 13px;
+  }
+  .install-transfer.failed {
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.08);
+    color: #fca5a5;
+  }
+  .install-transfer.done { color: var(--accent-primary); }
+  .install-transfer pre {
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
   }
   .icon-btn {
     background: none;

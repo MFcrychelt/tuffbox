@@ -84,6 +84,27 @@
     total: number;
     percent: number;
     status: "queued" | "downloading" | "done" | "failed" | "skipped" | string;
+    error?: string | null;
+  };
+
+  type ModUpdateProgress = {
+    phase: string;
+    message: string;
+    current: number;
+    total: number;
+    percent: number;
+    modId?: string | null;
+  };
+
+  type DownloadBatch = {
+    phase: string;
+    items?: DownloadItem[];
+    downloaded?: string[];
+    failed?: { modId: string; error: string }[];
+    alreadyPresent?: string[];
+    skipped?: string[];
+    scopeModIds?: string[];
+    batchComplete?: boolean;
   };
 
   let mods: ModRow[] = [];
@@ -94,7 +115,7 @@
   let contentFilter = "mod"; // mod, resourcepack, datapack, shader, favorites, list:<name>
   let error: string | null = null;
   let lastLoadedPath: string | null = null;
-  let brokenIcons = new Set<string>();
+  let brokenIcons: string[] = [];
   let savedMods: SearchResult[] = [];
   let savedModsLoading = false;
 
@@ -105,7 +126,11 @@
   let downloadDone = false;
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenBatch: UnlistenFn | null = null;
+  let unlistenUpdateProgress: UnlistenFn | null = null;
   let downloadScopeModIds: Set<string> | null = null;
+  let downloadStageMessage = "Preparing downloads…";
+  let downloadStagePercent = 0;
+  let downloadError: string | null = null;
 
   function formatBytes(n: number): string {
     if (!n || n <= 0) return "0 B";
@@ -124,8 +149,9 @@
   function upsertDownloadItem(payload: Partial<DownloadItem> & { id: string }) {
     const idx = downloadItems.findIndex((i) => i.id === payload.id);
     if (idx >= 0) {
-      downloadItems[idx] = { ...downloadItems[idx], ...payload };
-      downloadItems = downloadItems;
+      downloadItems = downloadItems.map((item, itemIdx) =>
+        itemIdx === idx ? { ...item, ...payload } : item
+      );
     } else {
       downloadItems = [
         ...downloadItems,
@@ -146,6 +172,9 @@
     downloadItems = [];
     downloadDone = false;
     downloadScopeModIds = scopeModIds?.length ? new Set(scopeModIds) : null;
+    downloadStageMessage = "Preparing downloads…";
+    downloadStagePercent = 0;
+    downloadError = null;
     downloadOpen = true;
   }
 
@@ -160,7 +189,10 @@
     if (failedIds.length === 0) return;
     downloadDone = false;
     downloadTitle = `Retrying ${failedIds.length} failed download${failedIds.length > 1 ? "s" : ""}`;
-    downloadScopeModIds = failedIds;
+    downloadScopeModIds = new Set(failedIds);
+    downloadStageMessage = "Retrying failed downloads…";
+    downloadStagePercent = 0;
+    downloadError = null;
     downloadItems = downloadItems.map((item) =>
       failedIds.includes(item.id)
         ? { ...item, status: "queued", percent: 0, downloaded: 0, total: 0 }
@@ -178,7 +210,8 @@
         error = `${stillFailed} download(s) still failed.`;
       }
     } catch (e) {
-      error = String(e);
+      downloadError = String(e);
+      error = downloadError;
     } finally {
       downloadDone = true;
     }
@@ -187,7 +220,10 @@
   async function retrySingleDownload(modId: string) {
     if (!$projectPath) return;
     downloadDone = false;
-    downloadScopeModIds = [modId];
+    downloadScopeModIds = new Set([modId]);
+    downloadStageMessage = "Retrying download…";
+    downloadStagePercent = 0;
+    downloadError = null;
     downloadItems = downloadItems.map((item) =>
       item.id === modId
         ? { ...item, status: "queued", percent: 0, downloaded: 0, total: 0 }
@@ -199,20 +235,31 @@
         modIds: [modId],
       });
     } catch (e) {
-      error = String(e);
+      downloadError = String(e);
+      error = downloadError;
     } finally {
       downloadDone = true;
     }
   }
 
+  onMount(() =>
+    projectPath.subscribe((path) => {
+      if (path && lastLoadedPath !== path) {
+        void load(true);
+      }
+    })
+  );
+
   onMount(async () => {
-    unlistenBatch = await listen<{ phase: string; items?: DownloadItem[]; failed?: { modId: string; error: string }[]; scopeModIds?: string[]; batchComplete?: boolean }>(
+    unlistenBatch = await listen<DownloadBatch>(
       "mod-download-batch",
       (event) => {
         const payload = event.payload;
         if (payload.phase === "start") {
           downloadOpen = true;
           downloadDone = false;
+          downloadStageMessage = "Preparing downloads…";
+          downloadStagePercent = 0;
           const scoped = payload.scopeModIds?.length ? new Set(payload.scopeModIds) : null;
           if (scoped) {
             downloadScopeModIds = scoped;
@@ -226,9 +273,44 @@
             status: "queued",
           }));
         } else if (payload.phase === "done") {
+          const downloadedIds = new Set(payload.downloaded ?? []);
+          const alreadyPresentIds = new Set(payload.alreadyPresent ?? []);
+          const skippedIds = new Set(payload.skipped ?? []);
+          const failedIds = new Set((payload.failed ?? []).map((failure) => failure.modId));
+          const failureById = new Map((payload.failed ?? []).map((failure) => [failure.modId, failure.error]));
+          const successfulIds = new Set([...downloadedIds, ...alreadyPresentIds, ...skippedIds]);
+
+          downloadItems = downloadItems.map((item) => {
+            if (skippedIds.has(item.id)) {
+              return { ...item, status: "skipped", percent: 100 };
+            }
+            if (downloadedIds.has(item.id) || alreadyPresentIds.has(item.id)) {
+              return { ...item, status: "done", percent: 100 };
+            }
+            if (
+              failedIds.has(item.id) ||
+              ((item.status === "queued" || item.status === "downloading") && !successfulIds.has(item.id))
+            ) {
+              return {
+                ...item,
+                status: "failed",
+                percent: 0,
+                error: failureById.get(item.id) ?? "The download did not complete.",
+              };
+            }
+            return item;
+          });
+
           if (payload.batchComplete !== false) {
             downloadDone = true;
-            const failed = payload.failed?.length ?? downloadFailedCount;
+            downloadStagePercent = 100;
+            const failed = downloadItems.filter((item) => item.status === "failed").length;
+            downloadStageMessage = failed > 0
+              ? `Downloads finished with ${failed} failure${failed > 1 ? "s" : ""}.`
+              : "Downloads complete.";
+            downloadError = failed > 0
+              ? (payload.failed ?? []).map((failure) => `${failure.modId}: ${failure.error}`).join("\n")
+              : null;
             if (failed === 0) {
               setTimeout(() => {
                 if (downloadDone) downloadOpen = false;
@@ -238,6 +320,16 @@
         }
       },
     );
+
+    unlistenUpdateProgress = await listen<ModUpdateProgress>("mod-update-progress", (event) => {
+      const payload = event.payload;
+      downloadStageMessage = payload.message;
+      downloadStagePercent = Math.max(0, Math.min(100, payload.percent));
+      if (!downloadOpen) {
+        downloadOpen = true;
+        downloadDone = payload.phase === "done";
+      }
+    });
 
     unlistenProgress = await listen<DownloadItem>("mod-download-progress", (event) => {
       if (downloadScopeModIds && !downloadScopeModIds.has(event.payload.id)) {
@@ -263,6 +355,7 @@
   onDestroy(() => {
     unlistenProgress?.();
     unlistenBatch?.();
+    unlistenUpdateProgress?.();
   });
 
   let addOpen = false;
@@ -367,8 +460,7 @@
       const url: string | null = await invoke("get_modrinth_project_icon", { projectId: key });
       if (url) {
         mods = mods.map((x) => (x.id === mod.id ? { ...x, iconUrl: url } : x));
-        brokenIcons.delete(mod.id);
-        brokenIcons = brokenIcons;
+        brokenIcons = brokenIcons.filter((id) => id !== mod.id);
       }
     } catch {
       // keep letter-avatar fallback
@@ -376,8 +468,9 @@
   }
 
   async function handleIconError(mod: ModRow) {
-    brokenIcons.add(mod.id);
-    brokenIcons = brokenIcons;
+    if (!brokenIcons.includes(mod.id)) {
+      brokenIcons = [...brokenIcons, mod.id];
+    }
     await resolveIconForMod(mod);
   }
 
@@ -608,6 +701,7 @@
       await load(true);
     } catch (e) {
       error = String(e);
+      downloadStageMessage = "Update failed.";
       downloadDone = true;
     } finally {
       updateApplying = false;
@@ -899,7 +993,7 @@
       // hash lookup and receive projectId/icon metadata before we render.
       mods = await invoke("sync_mods_folder", { path: $projectPath });
       lastLoadedPath = $projectPath;
-      brokenIcons = new Set();
+      brokenIcons = [];
       await loadUserState();
     } catch (e) {
       error = String(e);
@@ -937,7 +1031,7 @@
   async function hydrateMissingIcons() {
     if (!$projectPath) return;
     const missing = mods.filter((m) => {
-      if (brokenIcons.has(m.id)) return !!modIconLookupKey(m);
+      if (brokenIcons.includes(m.id)) return !!modIconLookupKey(m);
       if (m.iconUrl) return false;
       return !!modIconLookupKey(m);
     });
@@ -1109,6 +1203,7 @@
 
   async function confirmInstall(withDependencies = false) {
     if (!$projectPath || !pendingInstall) return;
+    const installTarget = pendingInstall;
     mutating = true;
     error = null;
     openDownloadOverlay(
@@ -1136,7 +1231,16 @@
       searchQuery = "";
       await load(true);
     } catch (e) {
-      error = String(e);
+      downloadError = String(e);
+      error = downloadError;
+      downloadStageMessage = `Installation failed for ${installTarget.name}.`;
+      upsertDownloadItem({
+        id: installTarget.id,
+        name: installTarget.name,
+        status: "failed",
+        percent: 0,
+        error: downloadError,
+      });
       downloadDone = true;
     } finally {
       mutating = false;
@@ -1173,6 +1277,7 @@
       await load(true);
     } catch (e) {
       error = String(e);
+      downloadStageMessage = "Update failed.";
       downloadDone = true;
     } finally {
       mutating = false;
@@ -1275,7 +1380,6 @@
     both: mods.filter((m) => m.side === "both").length,
   };
 
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
 </script>
 
 <div class="mods">
@@ -1310,7 +1414,7 @@
       <button class={contentFilter === "favorites" ? "primary" : "secondary"} on:click={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
         <Heart size={14} /> Favorites
       </button>
-      {#each listTabNames as listName}
+      {#each listTabNames as listName (listName)}
         <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} on:click={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
           <Bookmark size={14} /> {listName}
           <span class="tab-count">{userState.lists[listName]?.length ?? 0}</span>
@@ -1331,7 +1435,7 @@
           loading = true;
           try {
             mods = await invoke("sync_mods_folder", { path: $projectPath });
-            brokenIcons = new Set();
+            brokenIcons = [];
             hydrateMissingIcons().catch(() => {});
           } catch(e) {
             error = String(e);
@@ -1374,7 +1478,7 @@
     <div class="recs-panel">
       <div class="recs-header"><h3><Lightbulb size={16} /> Recommendations ({recommendations.length})</h3></div>
       <div class="recs-list">
-        {#each recommendations as rec}
+        {#each recommendations as rec (rec.slug)}
           <div class="recs-row">
             <div class="recs-main">
               <span class="recs-prio {rec.priority}">{rec.priority}</span>
@@ -1493,13 +1597,13 @@
     <div class="empty">No mods found.</div>
   {:else}
     <div class="installed-list">
-      {#each filtered as mod, i}
+      {#each filtered as mod, i (mod.id)}
         <article class="installed-card" class:has-update={mod.updateAvailable} style="--i: {i}">
           <div class="mod-icon">
             {#if mod.updateAvailable}
               <span class="update-dot" title="Update available"></span>
             {/if}
-            {#if mod.iconUrl && !brokenIcons.has(mod.id)}
+            {#if mod.iconUrl && !brokenIcons.includes(mod.id)}
               <img src={mod.iconUrl} alt="" loading="lazy" on:error={() => handleIconError(mod)} />
             {:else}
               <span>{iconFallback(mod.name)}</span>
@@ -1568,17 +1672,35 @@
         {/if}
       </div>
 
-      <div class="download-overall">
-        <div class="download-overall-bar">
-          <div class="download-overall-fill" style="width: {downloadOverallPercent}%"></div>
+      <div class="download-stage" aria-live="polite">
+        <div class="download-stage-top">
+          <span>{downloadStageMessage}</span>
+          <strong>{downloadStagePercent}%</strong>
+        </div>
+        <div
+          class="download-overall-bar"
+          role="progressbar"
+          aria-label="Overall update progress"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={downloadStagePercent}
+        >
+          <div class="download-overall-fill" style="width: {downloadStagePercent}%"></div>
         </div>
       </div>
+
+      {#if downloadError}
+        <div class="download-error" role="alert">
+          <AlertTriangle size={16} />
+          <pre>{downloadError}</pre>
+        </div>
+      {/if}
 
       <div class="download-list">
         {#if downloadItems.length === 0}
           <div class="download-empty">Preparing downloads…</div>
         {:else}
-          {#each downloadItems as item}
+          {#each downloadItems as item (item.id)}
             <div class="download-row" class:done={item.status === "done" || item.status === "skipped"} class:failed={item.status === "failed"} class:active={item.status === "downloading"}>
               <div class="download-row-top">
                 <strong>{item.name}</strong>
@@ -1594,7 +1716,7 @@
                 {:else if item.status === "queued"}
                   <span>Waiting…</span>
                 {:else if item.status === "failed"}
-                  <span>Failed</span>
+                  <span class="download-item-error">{item.error ?? "Download failed"}</span>
                   <button class="mini ghost retry-one" on:click={() => retrySingleDownload(item.id)} disabled={!downloadDone}>Retry</button>
                 {:else}
                   <span>{formatBytes(item.downloaded)}</span>
@@ -1647,7 +1769,7 @@
         <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
         <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
         <button class:active={contentFilter === "favorites"} on:click={() => switchContentFilter("favorites")}>Favorites</button>
-        {#each listTabNames as listName}
+        {#each listTabNames as listName (listName)}
           <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
         {/each}
       </div>
@@ -1666,7 +1788,7 @@
                   <input bind:value={versionSearch} placeholder="Search version..." />
                 </div>
                 <div class="filter-list">
-                  {#each filteredVersions as version}
+                  {#each filteredVersions as version (version)}
                     <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(); }}>{version}</button>
                   {/each}
                 </div>
@@ -1685,7 +1807,7 @@
             {#if accordionOpen.loader}
               <div class="filter-body">
                 <div class="filter-list loader-list">
-                  {#each shownLoaders as loaderName}
+                  {#each shownLoaders as loaderName (loaderName)}
                     <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>
                       <span class="loader-ic">
                         {#if loaderName === "Fabric"}<Scroll size={16} />{:else if loaderName === "Forge"}<Hammer size={16} />{:else}<Anvil size={16} />{/if}
@@ -1712,7 +1834,7 @@
               <div class="filter-body">
                 <div class="filter-list">
                   <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(); }}>All categories</button>
-                  {#each categories as category}
+                  {#each categories as category (category)}
                     <button class="cat-row" class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(); }}>
                       <Tag size={14} />
                       <span>{humanize(category)}</span>
@@ -1733,7 +1855,7 @@
             <div class="topbar-controls">
               <label class="sort-select">Sort by:
                 <select bind:value={sortBy} on:change={() => searchMods()}>
-                  {#each sortOptions as option}<option value={option.id}>{option.label}</option>{/each}
+                  {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
                 </select>
               </label>
               <label class="sort-select">View:
@@ -1748,7 +1870,7 @@
             </div>
             <div class="pagination">
               <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
-              {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p}
+              {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
                 <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
               {/each}
               {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
@@ -1783,7 +1905,7 @@
               </div>
             {:else}
               <div class="results {viewMode}">
-                {#each savedMods as result}
+                {#each savedMods as result (result.id)}
                   <article class="result-card" class:installed={isInstalled(result)} class:list={viewMode === "list"}>
                     <div class="result-icon">
                       {#if result.iconUrl}
@@ -1814,7 +1936,7 @@
                           {#if saveDropdownFor === result.id}
                             <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
                               <div class="save-dropdown-header">Add to list</div>
-                              {#each listTabNames as listName}
+                              {#each listTabNames as listName (listName)}
                                 <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
                                   <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
                                   <span>{listName}</span>
@@ -1849,7 +1971,7 @@
             <div class="empty compact">No projects found. Adjust filters or search text.</div>
           {:else}
             <div class="results {viewMode}">
-          {#each pagedResults as result}
+          {#each pagedResults as result (result.id)}
             <article class="result-card" class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"} on:mouseenter={() => loadInstallPreview(result)} on:focusin={() => loadInstallPreview(result)}>
               <label class="select-result" title="Select for bulk install">
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
@@ -1877,7 +1999,7 @@
                   </div>
                 {/if}
                 <div class="result-badges">
-                  {#each resultBadges(result) as b}
+                  {#each resultBadges(result) as b (b.label)}
                     <span class="badge"><Tag size={12} />{b.label}</span>
                   {/each}
                 </div>
@@ -1897,7 +2019,7 @@
                     {#if saveDropdownFor === result.id}
                       <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
                         <div class="save-dropdown-header">Add to list</div>
-                        {#each Object.keys(userState.lists) as listName}
+                        {#each Object.keys(userState.lists) as listName (listName)}
                           <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
                             <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
                             <span>{listName}</span>
@@ -1942,7 +2064,7 @@
                 {#if requiredDeps(previews[pendingInstall.id]).length === 0}
                   <p class="muted">No hard dependencies.</p>
                 {:else}
-                  {#each requiredDeps(previews[pendingInstall.id]) as dep}
+                  {#each requiredDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
                     <div class="dep-entry required">
                       <span class="dep-target">{dep.target}</span>
                       {#if dep.reason}<small>{dep.reason}</small>{/if}
@@ -1955,7 +2077,7 @@
                 {#if optionalDeps(previews[pendingInstall.id]).length === 0}
                   <p class="muted">No optional dependencies.</p>
                 {:else}
-                  {#each optionalDeps(previews[pendingInstall.id]) as dep}
+                  {#each optionalDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
                     <div class="dep-entry optional">
                       <span class="dep-target">{dep.target}</span>
                       {#if dep.reason}<small>{dep.reason}</small>{/if}
@@ -1971,7 +2093,7 @@
                 <div class="conflict-warning">
                   <strong><AlertTriangle size={14} /> Conflict warning</strong>
                   <span>This project declares incompatible dependencies. Review before installing.</span>
-                  {#each conflictDeps(previews[pendingInstall.id]) as dep}
+                  {#each conflictDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
                     <code>{dep.type}:{dep.target}</code>
                   {/each}
                 </div>
@@ -2030,7 +2152,7 @@
         </div>
         <div class="version-picker-body">
           <div class="version-list" role="listbox">
-            {#each versionPickerFiltered as v}
+            {#each versionPickerFiltered as v (v.id)}
               <button
                 class="version-row"
                 class:current={v.versionNumber === versionPickerMod?.version}
@@ -2180,7 +2302,7 @@
             <div class="plan-deps-section">
               <strong>Required dependencies ({requiredDeps(planPreviewDeps).length})</strong>
               <div class="plan-dep-list">
-                {#each requiredDeps(planPreviewDeps) as dep}
+                {#each requiredDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
                   <div class="plan-dep-row">
                     <code>{dep.target}</code>
                     {#if dep.versionConstraint}<span>{dep.versionConstraint}</span>{/if}
@@ -2196,7 +2318,7 @@
             <div class="plan-conflicts">
               <strong>⚠ Conflicts detected ({conflictDeps(planPreviewDeps).length})</strong>
               <div class="plan-dep-list">
-                {#each conflictDeps(planPreviewDeps) as dep}
+                {#each conflictDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
                   <div class="plan-dep-row conflict">
                     <code>{dep.target}</code>
                     <span>incompatible</span>
@@ -2632,12 +2754,69 @@
     animation: spin 0.9s linear infinite;
   }
 
+  .download-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 10px;
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.08);
+  }
+
+  .download-error pre {
+    margin: 0;
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .download-item-error {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: #fca5a5;
+  }
+
   @keyframes spin {
     to { transform: rotate(360deg); }
   }
 
-  .download-overall {
+  .download-stage {
     margin-bottom: 14px;
+    padding: 12px 14px;
+    border: 1px solid rgba(27, 217, 106, 0.24);
+    border-radius: 14px;
+    background:
+      linear-gradient(135deg, rgba(27, 217, 106, 0.1), rgba(110, 231, 168, 0.025)),
+      rgba(255, 255, 255, 0.02);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  .download-stage-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 9px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .download-stage-top span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .download-stage-top strong {
+    flex-shrink: 0;
+    color: var(--accent-primary);
+    font-variant-numeric: tabular-nums;
   }
 
   .download-overall-bar,

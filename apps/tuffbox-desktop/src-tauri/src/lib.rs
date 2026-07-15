@@ -794,6 +794,15 @@ async fn update_project_mod(
     version_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
+        emit_mod_update_progress(
+            &app,
+            "preparing",
+            "Creating a safety snapshot…",
+            0,
+            1,
+            5,
+            Some(&mod_id),
+        );
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "update-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -806,6 +815,15 @@ async fn update_project_mod(
             })
             .cloned()
             .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+        emit_mod_update_progress(
+            &app,
+            "resolving",
+            &format!("Resolving the latest version of {}…", old_mod.name),
+            0,
+            1,
+            20,
+            Some(&old_mod.id),
+        );
         update_mod_from_modrinth(
             &manifest_path,
             &mut manifest,
@@ -813,8 +831,25 @@ async fn update_project_mod(
             version_id.as_deref(),
         )
         .map_err(|e| e.to_string())?;
-        let report =
-            commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, true)?;
+        emit_mod_update_progress(
+            &app,
+            "downloading",
+            &format!("Downloading {}…", old_mod.name),
+            0,
+            1,
+            40,
+            Some(&old_mod.id),
+        );
+        let report = commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, true)?;
+        emit_mod_update_progress(
+            &app,
+            "done",
+            &format!("{} was updated successfully.", old_mod.name),
+            1,
+            1,
+            100,
+            Some(&old_mod.id),
+        );
         Ok(serde_json::json!({
             "modId": mod_id,
             "download": report,
@@ -1428,35 +1463,39 @@ fn run_project_validation(path: String) -> Result<serde_json::Value, String> {
 
 /// ── Batch update manager ────────────────────────────────────────────
 
-/// Resolves sha1 for a mod: prefer manifest metadata, else hash the jar on disk
-/// (same approach as PrismLauncher's ModrinthCheckUpdate).
+/// Resolves the installed sha1 from disk, falling back to manifest metadata
+/// only when the file is unavailable. The jar is the source of truth: an
+/// interrupted older update may have already changed manifest metadata.
 fn resolve_mod_sha1(manifest_path: &Path, module: &ModSpec) -> Option<String> {
-    if let Some(hash) = module
+    if let Some(path) = existing_mod_file_path(manifest_path, module) {
+        if let Ok(hash) = tuffbox_core::sha1_file(&path) {
+            return Some(hash);
+        }
+    }
+    module
         .hashes
         .as_ref()
         .and_then(|h| h.sha1.as_ref())
         .filter(|h| !h.is_empty())
-    {
-        return Some(hash.clone());
-    }
-    let path = existing_mod_file_path(manifest_path, module)?;
-    tuffbox_core::sha1_file(&path).ok()
+        .cloned()
 }
 
-fn installed_matches_version(module: &ModSpec, latest: &tuffbox_core::VersionInfo) -> bool {
-    if module.source.file_id.as_deref() == Some(latest.id.as_str()) {
-        return true;
-    }
-    if let Some(installed_sha1) = module.hashes.as_ref().and_then(|h| h.sha1.as_ref()) {
+fn installed_matches_version(
+    module: &ModSpec,
+    installed_sha1: Option<&str>,
+    latest: &tuffbox_core::VersionInfo,
+) -> bool {
+    if let Some(installed_sha1) = installed_sha1 {
         if latest
             .files
             .iter()
-            .any(|f| f.hashes.sha1.as_deref() == Some(installed_sha1.as_str()))
+            .any(|f| f.hashes.sha1.as_deref() == Some(installed_sha1))
         {
             return true;
         }
+        return false;
     }
-    false
+    module.source.file_id.as_deref() == Some(latest.id.as_str())
 }
 
 fn update_loaders_for(manifest: &ProjectManifest) -> (String, Vec<String>) {
@@ -1513,7 +1552,7 @@ fn resolve_pending_mod_updates(
             let Some(&idx) = hash_to_mod.get(&hash) else {
                 continue;
             };
-            if installed_matches_version(&manifest.mods[idx], &latest) {
+            if installed_matches_version(&manifest.mods[idx], Some(&hash), &latest) {
                 continue;
             }
             // Prefer versions that actually ship a file for our loader.
@@ -1545,7 +1584,7 @@ fn resolve_pending_mod_updates(
         let Some(latest) = versions.into_iter().next() else {
             continue;
         };
-        if installed_matches_version(module, &latest) {
+        if installed_matches_version(module, None, &latest) {
             continue;
         }
         if ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).is_none() {
@@ -1603,12 +1642,30 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
     tokio::task::spawn_blocking(move || {
         use tauri::Emitter;
 
+        emit_mod_update_progress(
+            &app,
+            "preparing",
+            "Creating a safety snapshot…",
+            0,
+            0,
+            5,
+            None,
+        );
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "batch-update-all").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let mut updated = Vec::new();
         let mut skipped_errors: Vec<String> = Vec::new();
 
+        emit_mod_update_progress(
+            &app,
+            "checking",
+            "Checking Modrinth for compatible updates…",
+            0,
+            manifest.mods.len(),
+            12,
+            None,
+        );
         let provider = tuffbox_core::ModrinthProvider::new();
         let (loader_slug, pending) =
             resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
@@ -1643,13 +1700,33 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         }
 
         let mut download = tuffbox_core::ModSyncReport::default();
-        for (idx, latest) in pending {
+        let pending_count = pending.len();
+        for (position, (idx, latest)) in pending.into_iter().enumerate() {
+            let current_mod_id = manifest.mods[idx].id.clone();
+            let current_mod_name = manifest.mods[idx].name.clone();
+            let percent =
+                20 + ((position as f64 / pending_count.max(1) as f64) * 70.0).round() as u32;
+            emit_mod_update_progress(
+                &app,
+                "updating",
+                &format!(
+                    "Updating {} ({}/{})…",
+                    current_mod_name,
+                    position + 1,
+                    pending_count
+                ),
+                position,
+                pending_count,
+                percent,
+                Some(&current_mod_id),
+            );
             let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
             let Some(file) = file else {
                 skipped_errors.push(format!(
                     "{}: no compatible file for loader {loader_slug}",
                     manifest.mods[idx].name
                 ));
+                emit_mod_download_status(&app, &current_mod_id, &current_mod_name, "failed", 0);
                 continue;
             };
 
@@ -1669,7 +1746,10 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             let dependencies = provider
                 .resolve_dependencies(&latest.id)
                 .unwrap_or(previous_deps);
-            let new_spec = build_mod_spec(&project, &latest, file, dependencies, old_mod.side);
+            let mut new_spec = build_mod_spec(&project, &latest, file, dependencies, old_mod.side);
+            // Keep references and frontend progress scopes valid across an
+            // update even when the provider has renamed the project slug.
+            new_spec.id = old_mod.id.clone();
             let name = new_spec.name.clone();
             manifest.mods[idx] = new_spec;
             match commit_single_mod_update(&app, &manifest_path, &mut manifest, &old_mod, false) {
@@ -1683,10 +1763,20 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
                 Err(error) => {
                     manifest.mods[idx] = old_mod;
                     skipped_errors.push(format!("{name}: {error}"));
+                    emit_mod_download_status(&app, &current_mod_id, &current_mod_name, "failed", 0);
                 }
             }
         }
 
+        emit_mod_update_progress(
+            &app,
+            "finalizing",
+            "Finalizing the mod list…",
+            pending_count,
+            pending_count,
+            95,
+            None,
+        );
         if !scope_mod_ids.is_empty() {
             let _ = app.emit(
                 "mod-download-batch",
@@ -1701,6 +1791,15 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
                 }),
             );
         }
+        emit_mod_update_progress(
+            &app,
+            "done",
+            "Mod updates complete.",
+            pending_count,
+            pending_count,
+            100,
+            None,
+        );
 
         Ok(serde_json::json!({
             "updated": updated,
@@ -3961,7 +4060,11 @@ fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePl
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<String>, String> {
+async fn apply_resolve_action(
+    app: tauri::AppHandle,
+    path: String,
+    action_index: usize,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = manifest_for_graph(&path)?;
@@ -3979,7 +4082,7 @@ async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<S
         let mut applied = Vec::new();
         apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(applied)
     })
     .await
@@ -3987,7 +4090,10 @@ async fn apply_resolve_action(path: String, action_index: usize) -> Result<Vec<S
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> {
+async fn apply_resolve_change_plan(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = manifest_for_graph(&path)?;
@@ -4004,7 +4110,7 @@ async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> 
             apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(applied)
     })
     .await
@@ -4012,11 +4118,19 @@ async fn apply_resolve_change_plan(path: String) -> Result<Vec<String>, String> 
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, String> {
+async fn resolve_missing_dependencies(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         // Use the same cached dependency edges the graph view shows.
         let mut manifest = manifest_for_graph(&path)?;
+        let existing_ids = manifest
+            .mods
+            .iter()
+            .map(|module| module.id.clone())
+            .collect::<std::collections::HashSet<_>>();
         let graph = DependencyGraph::from_manifest(&manifest);
         let diagnostics = Resolver::analyze_project(&manifest, &graph);
         let mut missing = diagnostics
@@ -4034,7 +4148,13 @@ async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, Strin
         // Use recursive resolution: install direct deps + transitive deps
         let installed = install_modrinth_with_dependencies(&mut manifest, &missing, "auto");
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        let installed_ids = manifest
+            .mods
+            .iter()
+            .filter(|module| !existing_ids.contains(&module.id))
+            .map(|module| module.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        download_project_mods_tracked(&app, &manifest_path, &manifest, Some(&installed_ids), true);
         Ok(installed)
     })
     .await
@@ -4045,7 +4165,11 @@ async fn resolve_missing_dependencies(path: String) -> Result<Vec<String>, Strin
 /// either a Modrinth project ID (e.g. "AANobbMI") or a slug (e.g. "malilib").
 /// Used by the graph "Install" button on ghost/missing nodes.
 #[tauri::command(rename_all = "camelCase")]
-async fn install_graph_dep(path: String, mod_id: String) -> Result<Vec<String>, String> {
+async fn install_graph_dep(
+    app: tauri::AppHandle,
+    path: String,
+    mod_id: String,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -4057,6 +4181,11 @@ async fn install_graph_dep(path: String, mod_id: String) -> Result<Vec<String>, 
         {
             return Ok(Vec::new());
         }
+        let existing_ids = manifest
+            .mods
+            .iter()
+            .map(|module| module.id.clone())
+            .collect::<std::collections::HashSet<_>>();
         auto_snapshot(&manifest_path, "install-graph-dep").map_err(|e| e.to_string())?;
         // Recursive: install the dep + all its transitive dependencies
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto");
@@ -4066,7 +4195,13 @@ async fn install_graph_dep(path: String, mod_id: String) -> Result<Vec<String>, 
             ));
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-        download_project_mods(&manifest_path, &manifest);
+        let installed_ids = manifest
+            .mods
+            .iter()
+            .filter(|module| !existing_ids.contains(&module.id))
+            .map(|module| module.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        download_project_mods_tracked(&app, &manifest_path, &manifest, Some(&installed_ids), true);
         Ok(installed)
     })
     .await
@@ -4077,11 +4212,14 @@ async fn install_graph_dep(path: String, mod_id: String) -> Result<Vec<String>, 
 /// file is missing from disk. Returns the list of mod IDs that were
 /// successfully downloaded.
 #[tauri::command(rename_all = "camelCase")]
-async fn download_missing_files(path: String) -> Result<Vec<String>, String> {
+async fn download_missing_files(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let report = download_project_mods(&manifest_path, &manifest);
+        let report = download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok(report.downloaded)
     })
     .await
@@ -6590,7 +6728,10 @@ fn update_mod_from_modrinth(
     let dependencies = provider
         .resolve_dependencies(&version.id)
         .unwrap_or_else(|_| old_mod.dependencies.clone());
-    let new_spec = build_mod_spec(&project, &version, file, dependencies, old_mod.side);
+    let mut new_spec = build_mod_spec(&project, &version, file, dependencies, old_mod.side);
+    // A manifest id is referenced by UI state, dependency edges, progress
+    // scopes and history. Keep it stable even if Modrinth changed the slug.
+    new_spec.id = old_mod.id;
 
     manifest.mods[index] = new_spec;
     Ok(())
@@ -6930,6 +7071,61 @@ struct ModDownloadProgressPayload {
     total: u64,
     percent: u32,
     status: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModUpdateProgressPayload {
+    phase: String,
+    message: String,
+    current: usize,
+    total: usize,
+    percent: u32,
+    mod_id: Option<String>,
+}
+
+fn emit_mod_update_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    message: &str,
+    current: usize,
+    total: usize,
+    percent: u32,
+    mod_id: Option<&str>,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "mod-update-progress",
+        ModUpdateProgressPayload {
+            phase: phase.to_string(),
+            message: message.to_string(),
+            current,
+            total,
+            percent: percent.min(100),
+            mod_id: mod_id.map(str::to_string),
+        },
+    );
+}
+
+fn emit_mod_download_status(
+    app: &tauri::AppHandle,
+    id: &str,
+    name: &str,
+    status: &str,
+    percent: u32,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "mod-download-progress",
+        ModDownloadProgressPayload {
+            id: id.to_string(),
+            name: name.to_string(),
+            downloaded: 0,
+            total: 0,
+            percent: percent.min(100),
+            status: status.to_string(),
+        },
+    );
 }
 
 /// Downloads missing mod files while streaming per-mod byte progress to the
