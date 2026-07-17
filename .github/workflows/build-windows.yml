@@ -90,7 +90,9 @@ jobs:
       run: |
         $candidates = @(
           "target/release/tuffbox-desktop.exe",
-          "target/x86_64-pc-windows-msvc/release/tuffbox-desktop.exe"
+          "target/x86_64-pc-windows-msvc/release/tuffbox-desktop.exe",
+          "target/debug/tuffbox-desktop.exe",
+          "target/x86_64-pc-windows-msvc/debug/tuffbox-desktop.exe"
         )
         $exe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
         if (-not $exe) {
