@@ -248,6 +248,7 @@
   }
 
   function edgeDanger(edge: GraphEdge) {
+    if (edge.kind === "Conflicts" || edge.kind === "BreaksWith") return true;
     return edge.kind === "Requires" && !nodeById(edge.to);
   }
 
@@ -713,7 +714,11 @@
   }
 
   /** Undirected BFS depth + hub pick — same idea as modrinth-extras dependency rings. */
-  function computeDepthsAndHubs(nodeIds: string[], edges: GraphEdge[]) {
+  function computeDepthsAndHubs(
+    nodeIds: string[],
+    edges: GraphEdge[],
+    rootWeight: (id: string) => number = () => 0,
+  ) {
     const adj = new Map<string, string[]>();
     const degree = new Map<string, number>();
     for (const id of nodeIds) {
@@ -753,8 +758,14 @@
     const hubMeta: { id: string; component: number; x: number; y: number }[] = [];
 
     components.forEach((comp, componentIndex) => {
+      // Prefer root/platform nodes (minecraft, loader, fabric-api, …) as the
+      // hub so they sit at the centre and everything radiates outward from them
+      // instead of from a random high-degree mod.
       const hub = [...comp].sort(
-        (a, b) => (degree.get(b) ?? 0) - (degree.get(a) ?? 0) || a.localeCompare(b),
+        (a, b) =>
+          rootWeight(b) - rootWeight(a) ||
+          (degree.get(b) ?? 0) - (degree.get(a) ?? 0) ||
+          a.localeCompare(b),
       )[0];
       // Primary component sits at the origin; satellite components orbit it.
       let hx = 0;
@@ -800,9 +811,22 @@
     if (!displayNodes.length) return;
 
     const nodeIds = displayNodes.map((n) => n.id);
+    // Root weight: platform/runtime and "api" hubs should be the centre of
+    // their component so the graph reads as concentric rings around fabric /
+    // fabric-api / minecraft rather than a tangle of equal-weight mods.
+    const rootWeight = (id: string): number => {
+      const node = nodeById(id);
+      const kind = node?.kind ?? "";
+      if (kind === "MinecraftVersion" || kind === "Loader" || kind === "JavaRuntime") return 1000;
+      const label = (node?.label ?? id).toLowerCase();
+      if (label.includes("fabric-api") || label.includes("fabric") || label.includes("quilt") || label.includes("forge") || label.includes("neoforge")) return 600;
+      if (label.includes("api")) return 300;
+      return 0;
+    };
     const { degree, depth, hubOf, hubMeta, maxDepth } = computeDepthsAndHubs(
       nodeIds,
       displayEdges,
+      rootWeight,
     );
     const size = layoutCanvasSize(displayNodes.length, maxDepth);
     canvasWidth = size.width;
@@ -833,7 +857,7 @@
         [...depth.entries()].filter(([id, dd]) => dd === d && hubOf.get(id) === hubId).length,
       );
       const angle = (idx / siblings) * Math.PI * 2 + d * 0.35;
-      const ring = isHub ? 0 : d * 190 + ((idx % 3) - 1) * 12;
+      const ring = isHub ? 0 : d * 230 + ((idx % 3) - 1) * 12;
 
       return {
         ...node,
@@ -856,23 +880,38 @@
     const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
     const degOf = (id: string) => degree.get(id) ?? 0;
-    const centerX = canvasWidth / 2;
-    const centerY = canvasHeight / 2;
 
-    // Radial depth rings centered on the canvas (modrinth-extras pattern):
-    // each node is pulled toward a radius determined by its dependency depth,
-    // so hubs sit in the middle and deeper deps form outer rings instead of
-    // collapsing into a knot.
-    function radialStrength(node: LayoutNode) {
-      if (node.isHub) return 0;
-      return maxDepth === 0 ? 0 : 0.3;
+    // Per-node radial toward that component's hub (d3 forceRadial is single
+    // center only). Concentric depth rings: depth 1 hugs the hub, deeper deps
+    // push outward, while charge + collide keep siblings spread around the ring
+    // instead of piling onto one point.
+    const ringStep = 230;
+    function forceHubRadial(strength = 0.22) {
+      let nodes: LayoutNode[] = [];
+      function force(alpha: number) {
+        const k = strength * alpha;
+        for (const d of nodes) {
+          if (d.isHub) continue;
+          const targetR = Math.max(20, d.depth) * ringStep;
+          const dx = d.x - d.hubX;
+          const dy = d.y - d.hubY;
+          const dist = Math.hypot(dx, dy) || 1;
+          const delta = ((dist - targetR) / dist) * k;
+          d.vx = (d.vx ?? 0) - dx * delta;
+          d.vy = (d.vy ?? 0) - dy * delta;
+        }
+      }
+      force.initialize = (_nodes: LayoutNode[]) => {
+        nodes = _nodes;
+      };
+      return force;
     }
 
     if (simulation) simulation.stop();
 
     // Physics (modrinth-extras/useForceGraph.ts): local degree-independent
-    // repulsion, fixed link gap, hard collide, concentric depth rings pinned
-    // to the canvas centre, higher alphaDecay so it settles fast.
+    // repulsion, fixed link gap, hard collide, concentric depth rings around
+    // each component's hub, higher alphaDecay so it settles fast.
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
       .force(
@@ -901,12 +940,7 @@
           .strength(1)
           .iterations(2),
       )
-      .force(
-        "radial",
-        d3
-          .forceRadial<LayoutNode>((n) => Math.max(1, n.depth) * 250, centerX, centerY)
-          .strength(radialStrength),
-      )
+      .force("radial", forceHubRadial(maxDepth === 0 ? 0 : 0.22))
       .alpha(1)
       .alphaDecay(0.1)
       .velocityDecay(0.6)
@@ -944,6 +978,7 @@
   $: edgePaths = displayEdges.map((edge) => ({
     key: `${edge.from}:${edge.to}:${edge.kind}`,
     edge,
+    kind: edge.kind,
     from: edge.from,
     to: edge.to,
     d: edgePath(edge),
@@ -1311,6 +1346,7 @@
             class="graph-edge"
             class:dense={denseGraph}
             class:danger-edge={ep.danger}
+            class:runtime-edge={["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)}
             class:dimmed={selectedId && ep.from !== selectedId && ep.to !== selectedId}
             d={ep.d}
             marker-end={ep.danger ? "url(#arrow-danger)" : "url(#arrow)"}
@@ -1869,8 +1905,16 @@
     opacity: 0.25;
   }
 
+  /* Loader/runtime edges (fabric-api -> mods) are numerous; keep them faint
+     and thin so the hub reads as a clean star instead of a tangle. */
+  .graph-canvas .graph-edge.runtime-edge {
+    stroke: rgba(161, 161, 170, 0.22);
+    stroke-width: 1;
+  }
+
   .graph-canvas .graph-edge.danger-edge {
-    stroke: rgba(82, 82, 91, 0.95);
+    stroke: rgba(239, 68, 68, 0.95);
+    stroke-width: 2;
     stroke-dasharray: 6 5;
   }
 
