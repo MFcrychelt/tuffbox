@@ -22,6 +22,7 @@ lazy_static.workspace = true
 rayon.workspace = true
 chrono.workspace = true
 tempfile.workspace = true
+semver = "1"
 
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true

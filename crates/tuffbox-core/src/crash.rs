@@ -1702,7 +1702,21 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
     if lower.contains("caused by:") {
         return Some(CrashSignalKind::CausedBy);
     }
-    if lower.contains("mixin") {
+    // Only treat as a mixin *failure* when the line clearly reports a broken
+    // transformer — not every benign "mixin" mention in the loader startup
+    // log (reference-map warnings, "Force-disabling mixin", the MIXIN
+    // Subsystem banner). Those are normal and must not raise a false hint.
+    if lower.contains("mixin")
+        && (lower.contains("fail")
+            || lower.contains("error")
+            || lower.contains("exception")
+            || lower.contains("could not")
+            || lower.contains("couldn't")
+            || lower.contains("conflict")
+            || lower.contains("crash")
+            || lower.contains("transform")
+            || lower.contains("invalid"))
+    {
         return Some(CrashSignalKind::Mixin);
     }
     if lower.contains("exception")

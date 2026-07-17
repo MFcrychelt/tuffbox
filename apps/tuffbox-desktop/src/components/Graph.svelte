@@ -975,7 +975,7 @@
         d3
           .forceManyBody<LayoutNode>()
           .strength((d) => -260 - Math.min(degOf(d.id), 24) * 28)
-          .distanceMax(Math.max(canvasWidth, canvasHeight)),
+          .distanceMax(900),
       )
       .force(
         "link",

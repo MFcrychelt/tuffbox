@@ -488,6 +488,7 @@
                 tabindex="0"
                 on:click={() => selectProject(project.path)}
                 on:keydown={(e) => e.key === 'Enter' && selectProject(project.path)}
+                on:contextmenu|preventDefault={(e) => toggleMenu(e, project.path)}
               >
                 <div
                   class="tile-icon"
@@ -839,6 +840,7 @@
   .hero-left {
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 16px;
   }
 

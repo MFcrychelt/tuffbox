@@ -597,6 +597,20 @@
     new Map(allHints.filter((h) => h && h.id).map((h) => [h.id, h])).values()
   );
 
+  // Per-line detection highlights for the open crash report: lineNumber -> kind.
+  // Drives the inline signal marker so crashes are visible at a glance.
+  $: signalLineMap = (() => {
+    const m = new Map<number, string>();
+    for (const s of selectedReport?.signals ?? []) {
+      if (s.lineNumber && s.lineNumber > 0) {
+        const prev = m.get(s.lineNumber);
+        // Keep the most severe kind already recorded (critical wins).
+        m.set(s.lineNumber, prev ?? s.kind);
+      }
+    }
+    return m;
+  })();
+
   // --- Inline log search (Find-in-log, IDE style) ---
   let logQuery = "";
   let logMatches: { line: number }[] = [];
@@ -1086,7 +1100,14 @@
             {/if}
             <pre class="report-content" bind:this={logPreEl}>
               {#each selectedReport.content.split("\n") as line, i}
-                <div class="log-line" class:active={logQuery && i === logMatches[activeMatch]?.line}>{@html highlightLog(line, logQuery)}</div>
+                <div
+                  class="log-line"
+                  class:active={logQuery && i === logMatches[activeMatch]?.line}
+                  class:signal={signalLineMap.has(i + 1)}
+                  data-sig={signalLineMap.get(i + 1) ?? ""}
+                >
+                  {#if signalLineMap.has(i + 1)}<span class="sig-marker" title={signalLineMap.get(i + 1)??""}>{signalLineMap.get(i + 1) ?? ""}</span>{/if}{@html highlightLog(line, logQuery)}
+                </div>
               {/each}
             </pre>
           </div>
@@ -1548,7 +1569,8 @@
   .stat-card.danger { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.06); }
   .stat-card.warning { border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.06); }
   .stat-card.accent { border-color: rgba(27, 217, 106, 0.3); background: rgba(27, 217, 106, 0.06); }
-  .diagnose-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+  .diagnose-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+  .inspector { max-height: calc(100vh - 150px); overflow: auto; }
   .panel { padding: 16px; min-width: 0; }
   .panel-header { justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .panel-header h2 { margin: 0 0 4px; }
@@ -1609,7 +1631,8 @@
   .raw-section[open] > summary { border-bottom: 1px solid var(--border-color); }
   .report-content { max-height: 520px; padding: 16px; }
   .log-content { max-height: 250px; padding: 14px; color: #a1a1aa; }
-  .suspects, .snapshot-list, .diagnostic-list, .signal-groups, .mod-entry-list { display: flex; flex-direction: column; gap: 10px; }
+  .suspects, .snapshot-list, .diagnostic-list, .signal-groups, .mod-entry-list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .suspects { max-height: 520px; overflow: auto; padding-right: 4px; }
   .suspect-card, .snapshot-row, .diag-card, .plan-card, .signal-group, .mod-entry { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; }
   .mod-entry { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 8px; align-items: center; }
   .mod-entry strong { color: var(--text-primary); }
@@ -1618,11 +1641,11 @@
   .signal-group strong { color: var(--text-primary); }
   .signal-group span, .signal-group small, .signal-group p { color: var(--text-muted); font-size: 12px; }
   .signal-group p { margin: 2px 0; line-height: 1.45; }
-  .suspect-head { justify-content: space-between; gap: 10px; }
-  .suspect-head strong { display: block; color: var(--text-primary); font-size: 15px; }
-  .suspect-card { border-left: 4px solid var(--accent-primary); }
+  .suspect-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .suspect-head strong { display: block; color: var(--text-primary); font-size: 15px; overflow-wrap: anywhere; }
+  .suspect-card { border-left: 4px solid var(--accent-primary); min-width: 0; }
   .suspect-card.unresolved { border-left-color: var(--text-muted); }
-  .suspect-identity { display: block; margin-top: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .suspect-identity { display: block; margin-top: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow-wrap: anywhere; word-break: break-all; }
   .suspect-head b { color: var(--accent-primary); }
   .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
   .badges small { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); background: var(--bg-elevated); border-radius: 999px; padding: 3px 8px; }
@@ -1803,5 +1826,17 @@
   .toc-item:hover { border-color: rgba(27, 217, 106, 0.4); color: var(--text-primary); }
   .report-content .log-line { padding: 0 2px; border-radius: 3px; }
   .report-content .log-line.active { background: rgba(234, 179, 8, 0.22); outline: 1px solid rgba(234, 179, 8, 0.5); }
+  .report-content .log-line.signal { background: rgba(239, 68, 68, 0.12); box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.85); }
+  .report-content .log-line.signal[data-sig="Mixin"],
+  .report-content .log-line.signal[data-sig="Exception"],
+  .report-content .log-line.signal[data-sig="CausedBy"] { background: rgba(249, 115, 22, 0.12); box-shadow: inset 3px 0 0 rgba(249, 115, 22, 0.85); }
+  .report-content .log-line.signal[data-sig="OutOfMemory"],
+  .report-content .log-line.signal[data-sig="Watchdog"],
+  .report-content .log-line.signal[data-sig="EulaNotAccepted"],
+  .report-content .log-line.signal[data-sig="PortConflict"],
+  .report-content .log-line.signal[data-sig="CorruptJar"],
+  .report-content .log-line.signal[data-sig="MissingDependency"],
+  .report-content .log-line.signal[data-sig="SuspectedMods"] { background: rgba(239, 68, 68, 0.16); box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.95); }
+  .sig-marker { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--bg-primary); background: rgba(239, 68, 68, 0.85); border-radius: 3px; padding: 0 4px; margin-right: 6px; vertical-align: middle; }
   .report-content :global(mark) { background: rgba(234, 179, 8, 0.45); color: inherit; border-radius: 2px; padding: 0 1px; }
 </style>

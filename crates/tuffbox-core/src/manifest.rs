@@ -286,6 +286,15 @@ pub struct ModSpec {
     pub content_type: ContentType,
 }
 
+impl ModSpec {
+    /// A mod is "pinned" (frozen against updates, mirroring packwiz's per-mod
+    /// `pin` flag in `.pw.toml`) when its `status` list carries `"pinned"`.
+    /// The IDE adds/removes that token through the config editor.
+    pub fn pinned(&self) -> bool {
+        self.status.iter().any(|s| s.eq_ignore_ascii_case("pinned"))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {

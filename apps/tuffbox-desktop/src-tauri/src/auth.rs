@@ -945,7 +945,7 @@ fn sync_auth_state_from_accounts() -> Result<(), String> {
 
 // ─── Tauri commands ──────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_start_device_code() -> Result<DeviceCodeInfo, String> {
     let (info, device_code, interval) = start_device_code_flow().await?;
     save_token("mc-device-code", &device_code)?;
@@ -953,7 +953,7 @@ pub async fn mc_start_device_code() -> Result<DeviceCodeInfo, String> {
     Ok(info)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     let device_code = load_token("mc-device-code")?;
     let interval: u64 = load_token("mc-device-interval")?.parse().unwrap_or(5);
@@ -1002,7 +1002,7 @@ pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     Ok(login)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_offline_login(
     username: String,
     skin_source: SkinSource,
@@ -1058,7 +1058,7 @@ pub async fn mc_offline_login(
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_get_auth_status() -> Result<AuthState, String> {
     let mut state = load_auth_state();
     let accounts = load_accounts_file();
@@ -1111,7 +1111,7 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
     Ok(state)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn mc_logout() -> Result<(), String> {
     // Clear current account tokens
     let state = load_auth_state();
@@ -1137,7 +1137,7 @@ pub fn mc_logout() -> Result<(), String> {
     save_auth_state(&new_state)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     let state = load_auth_state();
 
@@ -1189,7 +1189,7 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     Ok(updated)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn mc_get_skin_path(uuid: String) -> Result<String, String> {
     let path = cached_skin_path(&uuid);
     if path.exists() {
@@ -1199,7 +1199,7 @@ pub fn mc_get_skin_path(uuid: String) -> Result<String, String> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_fetch_skin_url(uuid: String) -> Result<Option<String>, String> {
     if let Some(url) = fetch_skin_mojang(&uuid).await {
         let _ = download_and_cache_skin(&url, &uuid).await;
@@ -1208,7 +1208,7 @@ pub async fn mc_fetch_skin_url(uuid: String) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_fetch_skin_for_username(
     username: String,
     source: SkinSource,
@@ -1216,7 +1216,7 @@ pub async fn mc_fetch_skin_for_username(
     Ok(fetch_skin_for_username(&username, &source).await)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn mc_set_skin_source(source: SkinSource) -> Result<(), String> {
     let mut state = load_auth_state();
     state.skin_source = source;
@@ -1225,20 +1225,20 @@ pub fn mc_set_skin_source(source: SkinSource) -> Result<(), String> {
 
 // ─── Multi-account commands ──────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn mc_list_accounts() -> Result<Vec<AccountEntry>, String> {
     let data = load_accounts_file();
     Ok(data.accounts)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
     set_active_account(&uuid)?;
     sync_auth_state_from_accounts()?;
     Ok(load_auth_state())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub fn mc_remove_account(uuid: String) -> Result<(), String> {
     let _ = clear_token(&account_refresh_key(&uuid));
     let _ = clear_token(&account_access_key(&uuid));
@@ -1248,19 +1248,19 @@ pub fn mc_remove_account(uuid: String) -> Result<(), String> {
 
 // ─── Skin upload commands ────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_apply_skin(skin_url: String, variant: String) -> Result<(), String> {
     let access_token = load_mc_access_token()?;
     apply_minecraft_skin(&access_token, &skin_url, &variant).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_apply_cape(cape_id: String) -> Result<(), String> {
     let access_token = load_mc_access_token()?;
     apply_minecraft_cape(&access_token, &cape_id).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_check_entitlement() -> Result<bool, String> {
     let access_token = load_mc_access_token()?;
     check_minecraft_entitlement(&access_token).await
@@ -1268,7 +1268,7 @@ pub async fn mc_check_entitlement() -> Result<bool, String> {
 
 // ─── Skin base64 for 3D viewer ──────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn mc_get_skin_base64(url: String) -> Result<String, String> {
     fetch_skin_as_base64(&url).await
 }

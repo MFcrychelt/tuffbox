@@ -4834,6 +4834,7 @@ dependencies = [
  "md-5",
  "rayon",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "sha1",

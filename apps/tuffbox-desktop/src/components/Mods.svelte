@@ -444,7 +444,7 @@
   }
 
   function canUpdateMod(mod: ModRow): boolean {
-    return mod.source === "modrinth";
+    return mod.source === "modrinth" && !!mod.updateAvailable;
   }
 
   function isCurseForgeResult(result: SearchResult | null | undefined): boolean {
@@ -1743,10 +1743,12 @@
             <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || !canUpdateMod(mod)} title="Change version">
               <ArrowUpDown size={16} />
             </button>
-            <button class="icon-btn update-btn" class:hot={mod.updateAvailable} on:click={() => updateMod(mod)} disabled={mutating || !canUpdateMod(mod)} title="Update to latest from Modrinth">
-              <RotateCw size={16} />
-              {#if mod.updateAvailable}<span class="update-text">Update</span>{/if}
-            </button>
+            {#if mod.updateAvailable}
+              <button class="icon-btn update-btn hot" on:click={() => updateMod(mod)} disabled={mutating} title="Update to latest from Modrinth">
+                <RotateCw size={16} />
+                <span class="update-text">Update</span>
+              </button>
+            {/if}
             <button class="icon-btn danger" on:click={() => showRemoveConfirm(mod)} disabled={mutating} title="Remove with snapshot">
               <Trash2 size={16} />
             </button>
