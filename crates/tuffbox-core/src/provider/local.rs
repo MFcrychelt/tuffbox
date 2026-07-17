@@ -1,6 +1,6 @@
 use super::{
     ContentProvider, ModDependencySpec, ProjectInfo, ProviderError, ProviderFileHashes,
-    ProviderFileInfo, ProviderSearchQuery, VersionInfo,
+    ProviderFileInfo, ProviderSearchQuery, SearchPage, VersionInfo,
 };
 use sha1::Sha1;
 use sha2::{Digest, Sha512};
@@ -45,8 +45,11 @@ impl LocalJarProvider {
 }
 
 impl ContentProvider for LocalJarProvider {
-    fn search(&self, _query: &ProviderSearchQuery) -> Result<Vec<ProjectInfo>, ProviderError> {
-        Ok(vec![self.get_project("local")?])
+    fn search(&self, _query: &ProviderSearchQuery) -> Result<SearchPage, ProviderError> {
+        Ok(SearchPage {
+            results: vec![self.get_project("local")?],
+            total: 1,
+        })
     }
 
     fn get_project(&self, _id: &str) -> Result<ProjectInfo, ProviderError> {

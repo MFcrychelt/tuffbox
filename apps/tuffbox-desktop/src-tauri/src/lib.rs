@@ -506,6 +506,136 @@ async fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
         .map_err(|e| e.to_string())?
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PagedCatalog {
+    results: Vec<serde_json::Value>,
+    total: u32,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn search_unified_mods(
+    path: String,
+    query: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+    content_type: Option<String>,
+    page: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<PagedCatalog, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let page_size = page_size.unwrap_or(30).clamp(1, 100);
+        let page = page.unwrap_or(1).max(1);
+        let offset = (page - 1) * page_size;
+        let per = (page_size / 2).max(1);
+
+        let mr = tuffbox_core::ModrinthProvider::new();
+        let default_loader =
+            tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+        let mr_total;
+        let mut mr_hits: Vec<serde_json::Value> = Vec::new();
+        if let Ok(page_result) = mr.search(&ProviderSearchQuery {
+            query: Some(query.clone()),
+            minecraft_version: game_version
+                .clone()
+                .or_else(|| Some(manifest.minecraft.version.clone())),
+            loader: loader.clone().or_else(|| Some(default_loader)),
+            limit: Some(per),
+            project_type: content_type.clone(),
+            offset: Some(offset / 2),
+            ..Default::default()
+        }) {
+            mr_total = page_result.total;
+            for p in page_result.results {
+                let value = serde_json::to_value(&p).unwrap_or(serde_json::Value::Null);
+                let mut obj = match value {
+                    serde_json::Value::Object(m) => m,
+                    _ => serde_json::Map::new(),
+                };
+                obj.insert("provider".into(), serde_json::json!("modrinth"));
+                mr_hits.push(serde_json::Value::Object(obj));
+            }
+        } else {
+            mr_total = 0;
+        }
+
+        let mut cf_hits: Vec<serde_json::Value> = Vec::new();
+        let cf_total;
+        let cf_provider = tuffbox_core::CurseForgeProvider::new();
+        if cf_provider.is_configured() {
+            let project_type = content_type.clone().unwrap_or_else(|| "mod".into());
+            let class_id = tuffbox_core::CurseForgeProvider::class_id_for_project_type(&project_type);
+            let gv = game_version.unwrap_or_else(|| manifest.minecraft.version.clone());
+            let loader_slug = loader
+                .clone()
+                .unwrap_or_else(|| tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string());
+            let mod_loader = if project_type == "mod" {
+                tuffbox_core::CurseForgeProvider::mod_loader_type(&loader_slug)
+            } else {
+                None
+            };
+            if let Ok(page_result) = cf_provider.search_content(
+                class_id,
+                &query,
+                Some(&gv),
+                mod_loader,
+                offset / 2,
+                per,
+                None,
+            ) {
+                cf_total = page_result.total;
+                for hit in page_result.hits {
+                    let mapped_type = match hit.class_id.unwrap_or(class_id) {
+                        12 => "resourcepack",
+                        6552 => "shader",
+                        6945 => "datapack",
+                        4471 => "modpack",
+                        _ => "mod",
+                    };
+                    cf_hits.push(serde_json::json!({
+                        "id": hit.id.to_string(),
+                        "slug": hit.slug,
+                        "name": hit.name,
+                        "description": hit.summary,
+                        "projectType": mapped_type,
+                        "iconUrl": hit.icon_url,
+                        "author": hit.authors.first().cloned(),
+                        "downloads": hit.download_count,
+                        "follows": null,
+                        "dateModified": null,
+                        "categories": hit.categories,
+                        "provider": "curseforge",
+                    }));
+                }
+            } else {
+                cf_total = 0;
+            }
+        } else {
+            cf_total = 0;
+        }
+
+        let mut results: Vec<serde_json::Value> = Vec::with_capacity(page_size as usize);
+        let max = mr_hits.len().max(cf_hits.len());
+        for i in 0..max {
+            if i < mr_hits.len() {
+                results.push(mr_hits[i].clone());
+            }
+            if i < cf_hits.len() {
+                results.push(cf_hits[i].clone());
+            }
+        }
+        results.truncate(page_size as usize);
+
+        Ok(PagedCatalog {
+            results,
+            total: mr_total.saturating_add(cf_total),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command(rename_all = "camelCase")]
 async fn search_modrinth_mods(
     path: String,
@@ -517,13 +647,17 @@ async fn search_modrinth_mods(
     license: Option<String>,
     sort: Option<String>,
     content_type: Option<String>,
-) -> Result<Vec<tuffbox_core::ProjectInfo>, String> {
+    page: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<PagedCatalog, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::ModrinthProvider::new();
         let default_loader =
             tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
-        provider
+        let page_size = page_size.unwrap_or(30).clamp(1, 100);
+        let offset = (page.unwrap_or(1).saturating_sub(1)) * page_size;
+        let page_result = provider
             .search(&ProviderSearchQuery {
                 query: Some(query),
                 minecraft_version: game_version
@@ -533,10 +667,28 @@ async fn search_modrinth_mods(
                 environment,
                 license,
                 sort,
-                limit: Some(30),
+                limit: Some(page_size),
                 project_type: content_type,
+                offset: Some(offset),
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        let results = page_result
+            .results
+            .into_iter()
+            .map(|p| {
+                let value = serde_json::to_value(&p).unwrap_or(serde_json::Value::Null);
+                let mut obj = match value {
+                    serde_json::Value::Object(m) => m,
+                    _ => serde_json::Map::new(),
+                };
+                obj.insert("provider".into(), serde_json::json!("modrinth"));
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+        Ok(PagedCatalog {
+            results,
+            total: page_result.total,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -549,7 +701,10 @@ async fn search_curseforge_mods(
     game_version: Option<String>,
     loader: Option<String>,
     content_type: Option<String>,
-) -> Result<Vec<serde_json::Value>, String> {
+    page: Option<u32>,
+    page_size: Option<u32>,
+    sort_field: Option<u32>,
+) -> Result<PagedCatalog, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::CurseForgeProvider::new();
@@ -559,18 +714,22 @@ async fn search_curseforge_mods(
         let project_type = content_type.unwrap_or_else(|| "mod".into());
         let class_id = tuffbox_core::CurseForgeProvider::class_id_for_project_type(&project_type);
         let gv = game_version.unwrap_or_else(|| manifest.minecraft.version.clone());
-        let loader_slug = loader.unwrap_or_else(|| {
-            tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()
-        });
+        let loader_slug = loader
+            .clone()
+            .unwrap_or_else(|| tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string());
         let mod_loader = if project_type == "mod" {
             tuffbox_core::CurseForgeProvider::mod_loader_type(&loader_slug)
         } else {
             None
         };
-        let hits = provider
-            .search_content(class_id, &query, Some(&gv), mod_loader, 0, 30)
+        let page_size = page_size.unwrap_or(30).clamp(1, 50);
+        let offset = (page.unwrap_or(1).saturating_sub(1)) * page_size;
+        let sort_field = sort_field.unwrap_or(2);
+        let page_result = provider
+            .search_content(class_id, &query, Some(&gv), mod_loader, offset, page_size, Some(sort_field))
             .map_err(|e| e.to_string())?;
-        Ok(hits
+        let results = page_result
+            .hits
             .into_iter()
             .map(|hit| {
                 let mapped_type = match hit.class_id.unwrap_or(class_id) {
@@ -595,7 +754,11 @@ async fn search_curseforge_mods(
                     "provider": "curseforge",
                 })
             })
-            .collect())
+            .collect();
+        Ok(PagedCatalog {
+            results,
+            total: page_result.total,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5571,7 +5734,8 @@ async fn search_curseforge_modpacks(
         }
         let hits = provider
             .search_modpacks(&query, game_version.as_deref(), offset.unwrap_or(0), 20)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .hits;
         Ok(hits
             .into_iter()
             .map(|h| {
@@ -7974,6 +8138,7 @@ pub fn run() {
             sync_mods_folder,
             search_modrinth_mods,
             search_curseforge_mods,
+            search_unified_mods,
             preview_modrinth_install,
             get_modrinth_project_icon,
             get_modrinth_project,

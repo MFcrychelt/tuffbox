@@ -263,7 +263,7 @@ fn main() -> anyhow::Result<()> {
                     loader,
                     ..Default::default()
                 })?;
-                println!("{}", serde_json::to_string_pretty(&results)?);
+                println!("{}", serde_json::to_string_pretty(&results.results)?);
             }
             ModrinthCommand::Versions {
                 project_id,

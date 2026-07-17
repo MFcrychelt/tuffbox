@@ -1,7 +1,7 @@
 use super::{
     provider_dependency_to_spec, ContentProvider, ModDependencySpec, ProjectInfo,
     ProviderDependency, ProviderError, ProviderFileHashes, ProviderFileInfo, ProviderSearchQuery,
-    VersionInfo,
+    SearchPage, VersionInfo,
 };
 use serde::{Deserialize, Deserializer};
 
@@ -107,10 +107,16 @@ impl ModrinthProvider {
 }
 
 impl ContentProvider for ModrinthProvider {
-    fn search(&self, query: &ProviderSearchQuery) -> Result<Vec<ProjectInfo>, ProviderError> {
+    fn search(&self, query: &ProviderSearchQuery) -> Result<SearchPage, ProviderError> {
         let index = query.sort.as_deref().unwrap_or("relevance");
         let limit = query.limit.unwrap_or(24).clamp(1, 100);
-        let mut path = format!("/search?index={}&limit={}", urlencode(index), limit);
+        let offset = query.offset.unwrap_or(0);
+        let mut path = format!(
+            "/search?index={}&limit={}&offset={}",
+            urlencode(index),
+            limit,
+            offset
+        );
         if let Some(q) = &query.query {
             if !q.trim().is_empty() {
                 path.push_str(&format!("&query={}", urlencode(q.trim())));
@@ -122,7 +128,10 @@ impl ContentProvider for ModrinthProvider {
         }
 
         let response: ModrinthSearchResponse = self.get_json(&path)?;
-        Ok(response.hits.into_iter().map(Into::into).collect())
+        Ok(SearchPage {
+            results: response.hits.into_iter().map(Into::into).collect(),
+            total: response.total_hits,
+        })
     }
 
     fn get_project(&self, id: &str) -> Result<ProjectInfo, ProviderError> {
@@ -287,6 +296,12 @@ fn urlencode(value: &str) -> String {
 #[derive(Debug, Clone, Deserialize)]
 struct ModrinthSearchResponse {
     hits: Vec<ModrinthSearchHit>,
+    #[serde(default)]
+    offset: u32,
+    #[serde(default)]
+    limit: u32,
+    #[serde(default)]
+    total_hits: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -493,7 +508,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        assert!(!results.is_empty());
-        assert!(results.iter().any(|p| p.slug == "sodium"));
+        assert!(!results.results.is_empty());
+        assert!(results.results.iter().any(|p| p.slug == "sodium"));
     }
 }

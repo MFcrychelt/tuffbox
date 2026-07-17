@@ -52,6 +52,18 @@ pub struct ProviderSearchQuery {
     /// that don't distinguish content types can ignore it.
     #[serde(default)]
     pub project_type: Option<String>,
+    /// Zero-based offset for server-side pagination (Modrinth + CurseForge).
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+/// Paginated search result. `total` is the backend's reported match count
+/// (not just the length of `results`), enabling real paged browsing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPage {
+    pub results: Vec<ProjectInfo>,
+    pub total: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,7 +139,7 @@ pub struct ProviderDependency {
 }
 
 pub trait ContentProvider {
-    fn search(&self, query: &ProviderSearchQuery) -> Result<Vec<ProjectInfo>, ProviderError>;
+    fn search(&self, query: &ProviderSearchQuery) -> Result<SearchPage, ProviderError>;
     fn get_project(&self, id: &str) -> Result<ProjectInfo, ProviderError>;
     fn get_versions(
         &self,

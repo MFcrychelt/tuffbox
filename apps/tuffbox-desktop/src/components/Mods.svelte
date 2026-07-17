@@ -360,9 +360,10 @@
   });
 
   let addOpen = false;
-  let catalogProvider: "modrinth" | "curseforge" = "modrinth";
+  let catalogProvider: "modrinth" | "curseforge" | "both" = "modrinth";
   let searchQuery = "";
   let searchResults: SearchResult[] = [];
+  let searchTotal = 0;
   let searchLoading = false;
   let selectedSide = "auto";
   let pendingInstallOptional = true;
@@ -372,6 +373,7 @@
   let filterEnvironment = "";
   let filterLicense = "";
   let sortBy = "relevance";
+  let cfSortField = 2;
   let previewLoadingId = "";
 
   // --- Add-mods browser chrome ---
@@ -384,6 +386,7 @@
     gameVersion: true,
     loader: true,
     category: true,
+    cfSort: true,
   };
 
   function toggleAccordion(key: string) {
@@ -448,15 +451,16 @@
     return result?.provider === "curseforge" || catalogProvider === "curseforge";
   }
 
-  function setCatalogProvider(provider: "modrinth" | "curseforge") {
+  function setCatalogProvider(provider: "modrinth" | "curseforge" | "both") {
     if (catalogProvider === provider) return;
     catalogProvider = provider;
     searchQuery = "";
     searchResults = [];
+    searchTotal = 0;
     selectedResultIds = {};
     pendingInstall = null;
-    pendingInstallOptional = provider === "modrinth";
-    searchMods();
+    pendingInstallOptional = provider !== "curseforge";
+    searchMods(1);
   }
 
   function savedViewLabel(filter: string): string {
@@ -520,12 +524,14 @@
     ? loaders
     : loaders.slice(0, 3);
 
-  $: totalPages = Math.max(1, Math.ceil(searchResults.length / pageSize));
+  $: totalPages = Math.max(1, Math.ceil(searchTotal / pageSize));
   $: pagedResults = searchResults.slice((page - 1) * pageSize, page * pageSize);
   $: if (page > totalPages) page = totalPages;
 
   function goToPage(p: number) {
-    page = Math.min(totalPages, Math.max(1, p));
+    const target = Math.min(totalPages, Math.max(1, p));
+    if (target === page && searchResults.length > 0) return;
+    searchMods(target);
   }
 
   let previews: Record<string, InstallPreview | null> = {};
@@ -615,6 +621,7 @@
     }
     versionPickerChanging = true;
     versionPickerError = null;
+    const targetModId = versionPickerMod.id;
     openDownloadOverlay(`Switching ${versionPickerMod.name}`);
     try {
       await invoke("change_mod_version", {
@@ -625,7 +632,7 @@
       versionPickerMod = null;
       availableVersions = [];
       selectedVersion = null;
-      await load(true);
+      await refreshSingleMod(targetModId);
     } catch (e) {
       versionPickerError = String(e);
       downloadDone = true;
@@ -1056,6 +1063,24 @@
     })();
   }
 
+  // Updates a single installed mod row in place (no full-list repaint), so
+  // changing a version or updating one mod doesn't flash the entire list.
+  async function refreshSingleMod(modId: string) {
+    if (!$projectPath) return;
+    try {
+      const fresh: ModRow[] = await invoke("list_mods", { path: $projectPath });
+      const found = fresh.find((m) => m.id === modId);
+      if (found) {
+        mods = mods.map((m) => (m.id === modId ? { ...found } : m));
+      } else {
+        mods = mods.filter((m) => m.id !== modId);
+      }
+      refreshUpdateDots().catch(() => {});
+    } catch {
+      await load(true);
+    }
+  }
+
   // Cross-references the latest available Modrinth versions with the installed
   // ones and flags each mod row that has an update pending (drives the dot).
   async function refreshUpdateDots() {
@@ -1134,7 +1159,7 @@
   function switchContentFilter(next: string) {
     contentFilter = next;
     filter = "";
-    if (addOpen) searchMods();
+    if (addOpen) searchMods(1);
     if (isSavedViewFilter(next)) {
       loadUserState().then(() => loadSavedModsView()).catch(() => {});
     }
@@ -1156,10 +1181,10 @@
       // keep defaults
     }
     await loadUserState();
-    await searchMods();
+    await searchMods(1);
   }
 
-  async function searchMods() {
+  async function searchMods(targetPage: number = 1) {
     if (!$projectPath) return;
     searchLoading = true;
     error = null;
@@ -1167,41 +1192,48 @@
       const loader =
         contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null;
       const contentType = contentTypeForFilter(contentFilter);
+      const args = {
+        path: $projectPath,
+        query: searchQuery.trim(),
+        gameVersion: filterGameVersion || null,
+        loader,
+        contentType,
+        page: targetPage,
+        pageSize,
+      };
+      let payload: { results: SearchResult[]; total: number };
       if (catalogProvider === "curseforge") {
-        const results: SearchResult[] = await invoke("search_curseforge_mods", {
-          path: $projectPath,
-          query: searchQuery.trim(),
-          gameVersion: filterGameVersion || null,
-          loader,
-          contentType,
+        payload = await invoke("search_curseforge_mods", {
+          ...args,
+          sortField: cfSortField,
         });
-        searchResults = results.map((r) => ({
-          ...r,
-          provider: r.provider ?? "curseforge",
-        }));
+      } else if (catalogProvider === "both") {
+        payload = await invoke("search_unified_mods", {
+          ...args,
+          sortField: cfSortField,
+        });
       } else {
         // Resourcepacks/datapacks/shaders aren't tied to a mod loader on
         // Modrinth; sending a loader facet for them would return zero
         // results, so only apply it for the "mod" tab.
-        const results: SearchResult[] = await invoke("search_modrinth_mods", {
-          path: $projectPath,
-          query: searchQuery.trim(),
-          gameVersion: filterGameVersion || null,
-          loader,
+        payload = await invoke("search_modrinth_mods", {
+          ...args,
           category: filterCategory || null,
           environment: filterEnvironment || null,
           license: filterLicense || null,
           sort: sortBy,
-          contentType,
         });
-        searchResults = results.map((r) => ({
-          ...r,
-          provider: r.provider ?? "modrinth",
-        }));
       }
+      searchResults = payload.results.map((r) => ({
+        ...r,
+        provider: r.provider ?? (catalogProvider === "curseforge" ? "curseforge" : "modrinth"),
+      }));
+      searchTotal = payload.total;
+      page = targetPage;
     } catch (e) {
       error = String(e);
       searchResults = [];
+      searchTotal = 0;
     } finally {
       searchLoading = false;
     }
@@ -1349,7 +1381,7 @@
       }
       updateList = updateList.filter((u) => u.modId !== mod.id);
       message = `Updated ${mod.name}.`;
-      await load(true);
+      await refreshSingleMod(mod.id);
     } catch (e) {
       error = String(e);
       downloadStageMessage = "Update failed.";
@@ -1878,6 +1910,12 @@
               class:active={catalogProvider === "curseforge"}
               on:click={() => setCatalogProvider("curseforge")}
             >CurseForge</button>
+            <button
+              type="button"
+              class:active={catalogProvider === "both"}
+              on:click={() => setCatalogProvider("both")}
+              title="Search both catalogs at once"
+            >Both</button>
           </div>
         </div>
         <button class="icon-btn" on:click={() => (addOpen = false)}><X size={18} /></button>
@@ -1909,17 +1947,17 @@
                 </div>
                 <div class="filter-list">
                   {#each filteredVersions as version (version)}
-                    <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(); }}>{version}</button>
+                    <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(1); }}>{version}</button>
                   {/each}
                 </div>
                 <label class="check-row">
-                  <input type="checkbox" checked={filterGameVersion === ""} on:change={() => { filterGameVersion = ""; searchMods(); }} /> Show all versions
+                  <input type="checkbox" checked={filterGameVersion === ""} on:change={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
                 </label>
               </div>
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.loader}>
+          <section class="filter-block" class:closed={!accordionOpen.loader} hidden={contentFilter !== "mod"}>
             <button class="filter-head" on:click={() => toggleAccordion("loader")}>
               <span>Loader</span>
               <ChevronDown size={16} class={!accordionOpen.loader ? "rot" : ""} />
@@ -1928,7 +1966,7 @@
               <div class="filter-body">
                 <div class="filter-list loader-list">
                   {#each shownLoaders as loaderName (loaderName)}
-                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(); }}>
+                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}>
                       <span class="loader-ic">
                         {#if loaderName === "Fabric"}<Scroll size={16} />{:else if loaderName === "Forge"}<Hammer size={16} />{:else}<Anvil size={16} />{/if}
                       </span>
@@ -1945,7 +1983,7 @@
             {/if}
           </section>
 
-          <section class="filter-block" class:closed={!accordionOpen.category}>
+          <section class="filter-block" class:closed={!accordionOpen.category} hidden={catalogProvider === "curseforge"}>
             <button class="filter-head" on:click={() => toggleAccordion("category")}>
               <span>Category</span>
               <ChevronDown size={16} class={!accordionOpen.category ? "rot" : ""} />
@@ -1953,12 +1991,28 @@
             {#if accordionOpen.category}
               <div class="filter-body">
                 <div class="filter-list">
-                  <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(); }}>All categories</button>
+                  <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
                   {#each categories as category (category)}
-                    <button class="cat-row" class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(); }}>
+                    <button class="cat-row" class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(1); }}>
                       <Tag size={14} />
                       <span>{humanize(category)}</span>
                     </button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </section>
+
+          <section class="filter-block" class:closed={!accordionOpen.cfSort} hidden={catalogProvider !== "curseforge"}>
+            <button class="filter-head" on:click={() => toggleAccordion("cfSort")}>
+              <span>Sort (CurseForge)</span>
+              <ChevronDown size={16} class={!accordionOpen.cfSort ? "rot" : ""} />
+            </button>
+            {#if accordionOpen.cfSort}
+              <div class="filter-body">
+                <div class="filter-list">
+                  {#each [{ id: 1, label: "Featured" }, { id: 2, label: "Popularity" }, { id: 3, label: "Last Updated" }, { id: 4, label: "Name" }, { id: 5, label: "Total Downloads" }, { id: 6, label: "Views" }] as opt (opt.id)}
+                    <button class:active={cfSortField === opt.id} on:click={() => { cfSortField = opt.id; searchMods(1); }}>{opt.label}</button>
                   {/each}
                 </div>
               </div>
@@ -1970,16 +2024,16 @@
           <div class="browser-topbar">
             <div class="search wide">
               <Search size={16} />
-              <input bind:value={searchQuery} placeholder="Search mods..." on:keydown={(e) => e.key === "Enter" && searchMods()} />
+              <input bind:value={searchQuery} placeholder="Search mods..." on:keydown={(e) => e.key === "Enter" && searchMods(1)} />
             </div>
             <div class="topbar-controls">
               <label class="sort-select">Sort by:
-                <select bind:value={sortBy} on:change={() => searchMods()}>
+                <select bind:value={sortBy} on:change={() => searchMods(1)}>
                   {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
                 </select>
               </label>
               <label class="sort-select">View:
-                <select bind:value={pageSize} on:change={() => (page = 1)}>
+                <select bind:value={pageSize} on:change={() => searchMods(1)}>
                   <option value={20}>20</option>
                   <option value={40}>40</option>
                   <option value={60}>60</option>
@@ -2092,7 +2146,7 @@
           {:else}
             <div class="results {viewMode}">
           {#each pagedResults as result (result.id)}
-            <article class="result-card" class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"} on:mouseenter={() => loadInstallPreview(result)} on:focusin={() => loadInstallPreview(result)}>
+            <article class="result-card" class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"}>
               <label class="select-result" title="Select for bulk install">
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
               </label>
@@ -2168,6 +2222,17 @@
               </div>
             </article>
           {/each}
+            </div>
+          {/if}
+          {#if totalPages > 1 && !isSavedViewFilter(contentFilter)}
+            <div class="pagination bottom">
+              <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹ Prev</button>
+              {#each Array.from({ length: Math.min(totalPages, 7) }, (_, i) => i + 1) as p (p)}
+                <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+              {/each}
+              {#if totalPages > 7}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+              <span class="page-info">{page} / {totalPages}</span>
+              <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}>Next ›</button>
             </div>
           {/if}
         </section>
@@ -2317,6 +2382,23 @@
             {:else}
               <div class="empty compact">No versions match this filter.</div>
             {/each}
+            {#if selectedVersion}
+              <div class="version-switch-footer">
+                <button
+                  class="primary block"
+                  on:click={() => selectedVersion && changeVersion(selectedVersion.id)}
+                  disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
+                >
+                  {#if versionPickerChanging}
+                    <Loader2 size={16} class="spin" /> Switching...
+                  {:else if selectedVersion.versionNumber === versionPickerMod?.version}
+                    Already installed
+                  {:else}
+                    <Download size={16} /> Switch to {selectedVersion.versionNumber}
+                  {/if}
+                </button>
+              </div>
+            {/if}
           </div>
           <div class="version-detail">
             {#if selectedVersion}
@@ -3502,6 +3584,31 @@
     font-weight: 800;
   }
   .page-ellipsis { color: var(--text-muted); padding: 0 2px; }
+
+  .pagination.bottom {
+    margin: 16px auto 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .pagination .page-info {
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 0 8px;
+    align-self: center;
+  }
+
+  .version-switch-footer {
+    position: sticky;
+    bottom: 0;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+  }
+  .primary.block,
+  button.primary.block {
+    width: 100%;
+    justify-content: center;
+  }
 
   .bulk-bar {
     display: flex;

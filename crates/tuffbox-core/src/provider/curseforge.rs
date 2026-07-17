@@ -71,10 +71,13 @@ impl CurseForgeProvider {
         mod_loader_type: Option<u32>,
         offset: u32,
         page_size: u32,
-    ) -> Result<Vec<CurseForgeSearchHit>, ProviderError> {
+        sort_field: Option<u32>,
+    ) -> Result<CurseForgeSearchPage, ProviderError> {
+        let sort_field = sort_field.unwrap_or(2);
         let mut path = format!(
-            "/mods/search?gameId={MINECRAFT_GAME_ID}&classId={class_id}&index={offset}&pageSize={}&sortField=2&sortOrder=desc",
-            page_size.clamp(1, 50)
+            "/mods/search?gameId={MINECRAFT_GAME_ID}&classId={class_id}&index={offset}&pageSize={}&sortField={}&sortOrder=desc",
+            page_size.clamp(1, 50),
+            sort_field
         );
         if !query.trim().is_empty() {
             path.push_str(&format!(
@@ -89,7 +92,10 @@ impl CurseForgeProvider {
             path.push_str(&format!("&modLoaderType={loader}"));
         }
         let resp: CfData<Vec<CfMod>> = self.get_json(&path)?;
-        Ok(resp.data.into_iter().map(Into::into).collect())
+        Ok(CurseForgeSearchPage {
+            hits: resp.data.into_iter().map(Into::into).collect(),
+            total: resp.pagination.total_count,
+        })
     }
 
     /// Search CurseForge modpacks (`classId=4471`).
@@ -99,8 +105,8 @@ impl CurseForgeProvider {
         game_version: Option<&str>,
         offset: u32,
         page_size: u32,
-    ) -> Result<Vec<CurseForgeSearchHit>, ProviderError> {
-        self.search_content(CLASS_MODPACK, query, game_version, None, offset, page_size)
+    ) -> Result<CurseForgeSearchPage, ProviderError> {
+        self.search_content(CLASS_MODPACK, query, game_version, None, offset, page_size, None)
     }
 
     pub fn class_id_for_project_type(project_type: &str) -> u32 {
@@ -407,6 +413,27 @@ impl CurseForgeFileInfo {
 #[derive(Debug, Deserialize)]
 struct CfData<T> {
     data: T,
+    #[serde(default)]
+    pagination: CfPagination,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfPagination {
+    #[serde(default)]
+    total_count: u32,
+    #[serde(default)]
+    index: u32,
+    #[serde(default)]
+    page_size: u32,
+}
+
+/// Paginated CurseForge search result.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgeSearchPage {
+    pub hits: Vec<CurseForgeSearchHit>,
+    pub total: u32,
 }
 
 #[derive(Debug, Deserialize)]
