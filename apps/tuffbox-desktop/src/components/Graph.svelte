@@ -205,7 +205,7 @@
   }
 
   function point(id: string) {
-    return positionById.get(id);
+    return simNodes.find((n) => n.id === id) ?? positionById.get(id);
   }
 
   function edgePath(edge: GraphEdge): string {
@@ -693,6 +693,8 @@
   let simulation: any = null;
   let simulationLayoutKey = "";
   let simNodes: LayoutNode[] = [];
+  const nodeEls = new Map<string, SVGGElement>();
+  const edgeEls = new Map<string, SVGPathElement>();
   let resetViewOnNextLayout = true;
 
   function layoutCanvasSize(count: number, maxDepth: number) {
@@ -911,15 +913,17 @@
       .alphaDecay(0.085)
       .velocityDecay(0.55)
       .on("tick", () => {
-        positioned = simNodes.map((n) => ({ ...n }));
+        updateGraphDom();
       })
       .on("end", () => {
+        updateGraphDom();
         if (resetViewOnNextLayout) {
           fitToContent();
           resetViewOnNextLayout = false;
         }
       });
     positioned = simNodes.map((n) => ({ ...n }));
+    updateGraphDom();
   }
 
   $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
@@ -941,11 +945,38 @@
   // `positionById`) changes, so arrows track nodes live during the sim.
   $: edgePaths = displayEdges.map((edge) => ({
     key: `${edge.from}:${edge.to}:${edge.kind}`,
+    edge,
     from: edge.from,
     to: edge.to,
     d: edgePath(edge),
     danger: edgeDanger(edge),
   }));
+
+  function edgeKey(edge: GraphEdge): string {
+    return `${edge.from}:${edge.to}:${edge.kind}`;
+  }
+
+  function registerNode(el: Element, node: PositionedNode) {
+    nodeEls.set(node.id, el as SVGGElement);
+  }
+
+  function registerEdge(el: Element, edge: GraphEdge) {
+    edgeEls.set(edgeKey(edge), el as SVGPathElement);
+  }
+
+  // Imperative DOM update (modrinth-extras pattern): mutate transforms and
+  // edge `d` attributes directly each tick instead of rebuilding a reactive
+  // array, so arrows stay glued to nodes and dragging is smooth.
+  function updateGraphDom() {
+    for (const node of simNodes) {
+      const el = nodeEls.get(node.id);
+      if (el) el.style.transform = `translate(${node.x}px, ${node.y}px)`;
+    }
+    for (const edge of displayEdges) {
+      const el = edgeEls.get(edgeKey(edge));
+      if (el) el.setAttribute("d", edgePath(edge));
+    }
+  }
 
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
@@ -1012,7 +1043,8 @@
   }
 
   function fitToContent(padding = 80) {
-    if (!positioned.length) {
+    const fitNodes = simNodes.length ? simNodes : positioned;
+    if (!fitNodes.length) {
       viewX = 0;
       viewY = 0;
       viewScale = 1;
@@ -1022,7 +1054,7 @@
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (const node of positioned) {
+    for (const node of fitNodes) {
       const half = nodeSize(node) / 2 + 28;
       minX = Math.min(minX, node.x - half);
       minY = Math.min(minY, node.y - half);
@@ -1123,6 +1155,8 @@
       const p = clientToSvgPoint(ev.clientX, ev.clientY);
       layoutNode.fx = p.x;
       layoutNode.fy = p.y;
+      layoutNode.x = p.x;
+      layoutNode.y = p.y;
       if (keepPinned) {
         layoutNode.hubX = p.x;
         layoutNode.hubY = p.y;
@@ -1262,6 +1296,7 @@
         </defs>
         {#each edgePaths as ep (ep.key)}
           <path
+            use:registerEdge={ep.edge}
             class="graph-edge"
             class:dense={denseGraph}
             class:danger-edge={ep.danger}
@@ -1278,13 +1313,14 @@
           {@const isInstalledDep = node.kind === "Mod" && depNodeIds.has(node.id)}
           {@const isClickableDep = isGhost || isInstalledDep}
           <g
+            use:registerNode={node}
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
             class:clickable-dep={isInstalledDep}
             class:dimmed={selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)}
             role="button"
             tabindex="0"
-            transform={`translate(${node.x}, ${node.y})`}
+            style={`transform: translate(${node.x}px, ${node.y}px)`}
             on:mousedown={(e) => handleNodeMouseDown(e, node)}
             on:click|stopPropagation={() => handleNodeClick(node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
