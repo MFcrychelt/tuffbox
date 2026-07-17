@@ -833,9 +833,27 @@
     canvasHeight = size.height;
     const cx = canvasWidth / 2;
     const cy = canvasHeight / 2;
-    const hubPos = new Map(hubMeta.map((h) => [h.id, { x: cx + h.x, y: cy + h.y }]));
 
-    // Seed on concentric rings around each hub (modrinth-extras pattern).
+    // Primary hub sits dead-centre; satellite hubs orbit it on a fixed,
+    // relatively small ring so the whole graph reads as one centred system
+    // rather than several scattered centres.
+    const hubPositions = new Map<string, { x: number; y: number }>();
+    const hubOrbit = 480;
+    hubMeta.forEach((h, i) => {
+      if (h.component === 0) {
+        hubPositions.set(h.id, { x: cx, y: cy });
+      } else {
+        const angle = ((i - 1) / Math.max(1, hubMeta.length - 1)) * Math.PI * 2;
+        hubPositions.set(h.id, {
+          x: cx + Math.cos(angle) * hubOrbit,
+          y: cy + Math.sin(angle) * hubOrbit,
+        });
+      }
+    });
+    const hubPosOf = (id: string) => hubPositions.get(id) ?? { x: cx, y: cy };
+
+    // Deterministic seed: hubs at their anchor positions, every other node on
+    // a spiral by dependency depth so the simulation starts already readable.
     const ringIndex = new Map<string, number>();
     simNodes = displayNodes.map((node) => {
       const isGhost = node.kind === "Missing";
@@ -847,8 +865,8 @@
 
       const d = depth.get(node.id) ?? 1;
       const hubId = hubOf.get(node.id) ?? node.id;
-      const hub = hubPos.get(hubId) ?? { x: cx, y: cy };
       const isHub = hubMeta.some((h) => h.id === node.id);
+      const anchor = hubPosOf(hubId);
       const key = `${hubId}:${d}`;
       const idx = ringIndex.get(key) ?? 0;
       ringIndex.set(key, idx + 1);
@@ -856,24 +874,24 @@
         1,
         [...depth.entries()].filter(([id, dd]) => dd === d && hubOf.get(id) === hubId).length,
       );
-      const angle = (idx / siblings) * Math.PI * 2 + d * 0.35;
-      const ring = isHub ? 0 : d * 230 + ((idx % 3) - 1) * 12;
+      const angle = (idx / siblings) * Math.PI * 2 + d * 0.6;
+      const ring = isHub ? 0 : 150 + d * 200 + ((idx % 3) - 1) * 14;
 
       return {
         ...node,
         label: displayLabel(node),
-        x: hub.x + Math.cos(angle) * ring,
-        y: hub.y + Math.sin(angle) * ring,
-        fx: isHub ? hub.x : null,
-        fy: isHub ? hub.y : null,
+        x: anchor.x + Math.cos(angle) * ring,
+        y: anchor.y + Math.sin(angle) * ring,
+        fx: isHub ? anchor.x : null,
+        fy: isHub ? anchor.y : null,
         tone,
         ghost: isGhost,
         depth: d,
         isHub,
         component: hubMeta.find((h) => h.id === hubId)?.component ?? 0,
         hubId,
-        hubX: hub.x,
-        hubY: hub.y,
+        hubX: anchor.x,
+        hubY: anchor.y,
       } as LayoutNode;
     });
 
@@ -881,20 +899,19 @@
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
     const degOf = (id: string) => degree.get(id) ?? 0;
 
-    // Per-node radial toward that component's hub (d3 forceRadial is single
-    // center only). Concentric depth rings: depth 1 hugs the hub, deeper deps
-    // push outward, while charge + collide keep siblings spread around the ring
-    // instead of piling onto one point.
-    const ringStep = 230;
-    function forceHubRadial(strength = 0.22) {
+    // Soft radial toward the canvas centre by dependency depth: hubs stay
+    // pinned at their anchors, deeper mods form outer rings. Combined with
+    // link springs + repulsion this yields clean concentric rings around the
+    // hub instead of a knot.
+    function forceCenterRadial(strength = 0.18) {
       let nodes: LayoutNode[] = [];
       function force(alpha: number) {
         const k = strength * alpha;
         for (const d of nodes) {
           if (d.isHub) continue;
-          const targetR = Math.max(20, d.depth) * ringStep;
-          const dx = d.x - d.hubX;
-          const dy = d.y - d.hubY;
+          const targetR = Math.max(60, d.depth) * 210;
+          const dx = d.x - cx;
+          const dy = d.y - cy;
           const dist = Math.hypot(dx, dy) || 1;
           const delta = ((dist - targetR) / dist) * k;
           d.vx = (d.vx ?? 0) - dx * delta;
@@ -909,14 +926,15 @@
 
     if (simulation) simulation.stop();
 
-    // Physics (modrinth-extras/useForceGraph.ts): local degree-independent
-    // repulsion, fixed link gap, hard collide, concentric depth rings around
-    // each component's hub, higher alphaDecay so it settles fast.
+    // Classic force-directed layout: repulsion keeps nodes apart, links pull
+    // dependencies together, collide prevents overlap, a gentle radial by
+    // depth keeps everything centred on the hub. Higher alphaDecay so it
+    // settles quickly without the "football" jitter.
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
       .force(
         "charge",
-        d3.forceManyBody<LayoutNode>().strength(-650).distanceMax(700),
+        d3.forceManyBody<LayoutNode>().strength(-550).distanceMax(900),
       )
       .force(
         "link",
@@ -928,22 +946,26 @@
             const t = linkId(link.target);
             const rs = nodeSize({ id: s } as PositionedNode) / 2;
             const rt = nodeSize({ id: t } as PositionedNode) / 2;
-            return rs + rt + 70 + Math.max(degOf(s), degOf(t)) * 6;
+            return rs + rt + 60 + Math.max(degOf(s), degOf(t)) * 5;
+          })
+          .strength((link: any) => {
+            const s = linkId(link.source);
+            const t = linkId(link.target);
+            return 1 / (1 + Math.min(degOf(s), degOf(t)));
           }),
-        // d3's default link strength (1 / min degree) keeps hubs from collapsing.
       )
       .force(
         "collide",
         d3
           .forceCollide<LayoutNode>()
-          .radius((d) => nodeSize(d) / 2 + 26)
+          .radius((d) => nodeSize(d) / 2 + 24)
           .strength(1)
-          .iterations(2),
+          .iterations(3),
       )
-      .force("radial", forceHubRadial(maxDepth === 0 ? 0 : 0.22))
-      .alpha(1)
-      .alphaDecay(0.1)
-      .velocityDecay(0.6)
+      .force("radial", forceCenterRadial(maxDepth === 0 ? 0 : 0.18))
+      .alpha(0.9)
+      .alphaDecay(0.12)
+      .velocityDecay(0.65)
       .on("tick", () => {
         updateGraphDom();
       })
