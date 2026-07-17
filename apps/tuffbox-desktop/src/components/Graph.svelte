@@ -618,12 +618,17 @@
     }
     return out;
   })();
-  $: displayNodes = [...nodes.filter((n) => n.kind === "Mod"), ...ghostNodes];
-  // Mod-to-mod relations only (same set modrinth-extras puts on the canvas).
-  // Optional/recommended edges are hidden here — they point outward from hub
-  // mods and read like inverted dependencies in a dense pack graph.
+  $: displayNodes = [
+    ...nodes.filter((n) => n.kind === "Mod"),
+    ...platformNodes,
+    ...ghostNodes,
+  ];
+  // Mod-to-mod relations plus loader/runtime links (fabric-api, lithium,
+  // ferrite-core etc. only depend on the loader, so without these edges they
+  // look orphaned). Optional/recommended edges stay hidden — they point
+  // outward from hub mods and read like inverted deps in a dense pack.
   $: displayEdges = edges.filter((e) =>
-    e.kind === "Requires" || e.kind === "Conflicts" || e.kind === "BreaksWith" || e.kind === "Replaces"
+    ["Requires", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
   );
 
   async function hydrateGhostNodes() {
@@ -851,39 +856,28 @@
     const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
     const degOf = (id: string) => degree.get(id) ?? 0;
+    const centerX = canvasWidth / 2;
+    const centerY = canvasHeight / 2;
 
-    // Per-node radial toward that component's hub (d3 forceRadial is single-center only).
-    function forceHubRadial(strength = 0.32) {
-      let nodes: LayoutNode[] = [];
-      function force(alpha: number) {
-        const k = strength * alpha;
-        for (const d of nodes) {
-          if (d.isHub) continue;
-          const targetR = Math.max(1, d.depth) * 190;
-          const dx = d.x - d.hubX;
-          const dy = d.y - d.hubY;
-          const dist = Math.hypot(dx, dy) || 1;
-          const delta = ((dist - targetR) / dist) * k;
-          d.vx = (d.vx ?? 0) - dx * delta;
-          d.vy = (d.vy ?? 0) - dy * delta;
-        }
-      }
-      force.initialize = (_nodes: LayoutNode[]) => {
-        nodes = _nodes;
-      };
-      return force;
+    // Radial depth rings centered on the canvas (modrinth-extras pattern):
+    // each node is pulled toward a radius determined by its dependency depth,
+    // so hubs sit in the middle and deeper deps form outer rings instead of
+    // collapsing into a knot.
+    function radialStrength(node: LayoutNode) {
+      if (node.isHub) return 0;
+      return maxDepth === 0 ? 0 : 0.3;
     }
 
     if (simulation) simulation.stop();
 
-    // Physics mirror modrinth-extras/useForceGraph.ts (+ Obsidian-ish spacing):
-    // pin hubs, radial depth rings, default link strength (1/min-degree) so
-    // high-degree mods do not collapse into a singularity, local charge, hard collide.
+    // Physics (modrinth-extras/useForceGraph.ts): local degree-independent
+    // repulsion, fixed link gap, hard collide, concentric depth rings pinned
+    // to the canvas centre, higher alphaDecay so it settles fast.
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
       .force(
         "charge",
-        d3.forceManyBody<LayoutNode>().strength(-450).distanceMax(600),
+        d3.forceManyBody<LayoutNode>().strength(-650).distanceMax(700),
       )
       .force(
         "link",
@@ -895,23 +889,27 @@
             const t = linkId(link.target);
             const rs = nodeSize({ id: s } as PositionedNode) / 2;
             const rt = nodeSize({ id: t } as PositionedNode) / 2;
-            return rs + rt + 40 + Math.max(degOf(s), degOf(t)) * 5;
+            return rs + rt + 70 + Math.max(degOf(s), degOf(t)) * 6;
           }),
-        // intentionally no .strength() — d3 default is 1/min(degree),
-        // which keeps hub fans from knitting into a bird nest.
+        // d3's default link strength (1 / min degree) keeps hubs from collapsing.
       )
       .force(
         "collide",
         d3
           .forceCollide<LayoutNode>()
-          .radius((d) => nodeSize(d) / 2 + 16)
+          .radius((d) => nodeSize(d) / 2 + 26)
           .strength(1)
           .iterations(2),
       )
-      .force("radial", forceHubRadial(maxDepth === 0 ? 0 : 0.32))
+      .force(
+        "radial",
+        d3
+          .forceRadial<LayoutNode>((n) => Math.max(1, n.depth) * 250, centerX, centerY)
+          .strength(radialStrength),
+      )
       .alpha(1)
-      .alphaDecay(0.085)
-      .velocityDecay(0.55)
+      .alphaDecay(0.1)
+      .velocityDecay(0.6)
       .on("tick", () => {
         updateGraphDom();
       })
@@ -1019,9 +1017,12 @@
     viewScale = nextScale;
   }
 
+  let panMoved = false;
   function handleBackgroundMouseDown(event: MouseEvent) {
     if (event.button !== 0) return;
+    if (isPanning) return;
     isPanning = true;
+    panMoved = false;
     panStart = { x: event.clientX, y: event.clientY, viewX, viewY };
     window.addEventListener("mousemove", handleBackgroundMouseMove);
     window.addEventListener("mouseup", handleBackgroundMouseUp);
@@ -1032,6 +1033,9 @@
     const rect = viewportEl.getBoundingClientRect();
     const dx = ((event.clientX - panStart.x) / rect.width) * viewBoxWidth;
     const dy = ((event.clientY - panStart.y) / rect.height) * viewBoxHeight;
+    if (Math.abs(event.clientX - panStart.x) > 3 || Math.abs(event.clientY - panStart.y) > 3) {
+      panMoved = true;
+    }
     viewX = panStart.viewX - dx;
     viewY = panStart.viewY - dy;
   }
@@ -1167,7 +1171,7 @@
           }
         }
       }
-      simulation?.alpha(0.3).restart();
+      simulation?.alpha(0.1).restart();
     };
     const onMouseUp = () => {
       // Hubs stay pinned (modrinth-extras root behavior); others rejoin the sim.
@@ -1175,6 +1179,7 @@
         layoutNode.fx = null;
         layoutNode.fy = null;
       }
+      simulation?.alphaTarget(0);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
     };
@@ -1284,7 +1289,13 @@
         class:panning={isPanning}
         on:wheel={handleWheel}
         on:mousedown={handleBackgroundMouseDown}
+        on:click={(e) => {
+          // Click on empty canvas (not a node — those stopPropagation) clears
+          // the current selection, but only if the user wasn't panning.
+          if (!panMoved) selectedId = null;
+        }}
         on:dblclick={resetView}
+        on:keydown={() => {}}
       >
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
