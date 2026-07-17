@@ -422,10 +422,6 @@ struct CfData<T> {
 struct CfPagination {
     #[serde(default)]
     total_count: u32,
-    #[serde(default)]
-    index: u32,
-    #[serde(default)]
-    page_size: u32,
 }
 
 /// Paginated CurseForge search result.

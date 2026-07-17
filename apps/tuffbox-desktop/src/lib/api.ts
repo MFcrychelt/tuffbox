@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { projectPath } from "./store";
+import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry } from "./store";
 import { get } from "svelte/store";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -900,5 +900,30 @@ export const api = {
   l10n: {
     get(key: string) { return cmd<string>("localize", { key }); },
     list() { return cmd<LocalizationEntry[]>("list_localizations"); },
+  },
+
+  // ── Minecraft Auth ───────────────────────────────────────────────
+  mcAuth: {
+    startDeviceCode() { return cmd<DeviceCodeInfo>("mcStartDeviceCode"); },
+    pollDeviceCode() { return cmd<{ profile: McProfile; mcAccessToken: string }>("mcPollDeviceCode"); },
+    offlineLogin(username: string, skinSource: SkinSource) {
+      return cmd<{ profile: McProfile; mcAccessToken: string }>("mcOfflineLogin", { username, skinSource });
+    },
+    getAuthStatus() { return cmd<AuthState>("mcGetAuthStatus"); },
+    logout() { return cmd<void>("mcLogout"); },
+    refreshProfile() { return cmd<McProfile>("mcRefreshProfile"); },
+    getSkinPath(uuid: string) { return cmd<string>("mcGetSkinPath", { uuid }); },
+    fetchSkinUrl(uuid: string) { return cmd<string | null>("mcFetchSkinUrl", { uuid }); },
+    fetchSkinForUsername(username: string, source: SkinSource) {
+      return cmd<string | null>("mcFetchSkinForUsername", { username, source });
+    },
+    setSkinSource(source: SkinSource) { return cmd<void>("mcSetSkinSource", { source }); },
+    listAccounts() { return cmd<AccountEntry[]>("mcListAccounts"); },
+    switchAccount(uuid: string) { return cmd<AuthState>("mcSwitchAccount", { uuid }); },
+    removeAccount(uuid: string) { return cmd<void>("mcRemoveAccount", { uuid }); },
+    applySkin(skinUrl: string, variant: string) { return cmd<void>("mcApplySkin", { skinUrl, variant }); },
+    applyCape(capeId: string) { return cmd<void>("mcApplyCape", { capeId }); },
+    checkEntitlement() { return cmd<boolean>("mcCheckEntitlement"); },
+    getSkinBase64(url: string) { return cmd<string>("mcGetSkinBase64", { url }); },
   },
 };

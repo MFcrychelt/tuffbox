@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import * as d3 from "d3-force";
   import { onDestroy, onMount } from "svelte";
@@ -153,8 +153,8 @@
 
   // Track which nodes have a broken icon so we can fall back to a letter avatar
   let brokenIcons = new Set<string>();
-  /// Modrinth metadata for missing (ghost) dependency nodes: name + icon.
-  let ghostMeta: Record<string, { name: string; iconUrl?: string | null; projectId?: string }> = {};
+  /// Modrinth/CurseForge metadata for missing (ghost) dependency nodes.
+  let ghostMeta: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
 
   function markIconBroken(id: string) {
     if (!brokenIcons.has(id)) {
@@ -611,7 +611,8 @@
             metadata: {
               ...(cached?.iconUrl ? { icon_url: cached.iconUrl } : {}),
               ...(cached?.projectId ? { project_id: cached.projectId } : {}),
-              source: "modrinth",
+              ...(cached?.description ? { description: cached.description } : {}),
+              source: cached?.source ?? "modrinth",
             },
           });
         }
@@ -636,10 +637,11 @@
     if (!$projectPath || !graph) return;
     const missing = ghostNodes.filter((n) => !ghostMeta[n.id]);
     if (missing.length === 0) return;
-    const updates: Record<string, { name: string; iconUrl?: string | null; projectId?: string }> = {};
+    const updates: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
     await Promise.all(
       missing.map(async (node) => {
         const key = modIdFromNode(node.id);
+        // Try Modrinth first (slug or project id).
         try {
           const project: any = await invoke("get_modrinth_project", { projectId: key });
           if (project) {
@@ -647,6 +649,33 @@
               name: project.name ?? key,
               iconUrl: project.iconUrl ?? null,
               projectId: project.id ?? key,
+              description: project.description ?? undefined,
+              source: "modrinth",
+            };
+            return;
+          }
+        } catch {
+          // fall through to CurseForge
+        }
+        // CurseForge fallback: search by slug, take the top hit.
+        try {
+          const page: any = await invoke("search_curseforge_mods", {
+            path: $projectPath,
+            query: key,
+            gameVersion: null,
+            loader: null,
+            contentType: "mod",
+            page: 1,
+            pageSize: 5,
+          });
+          const hit = page?.results?.[0];
+          if (hit) {
+            updates[node.id] = {
+              name: hit.name ?? key,
+              iconUrl: hit.iconUrl ?? null,
+              projectId: hit.id ?? key,
+              description: hit.description ?? undefined,
+              source: "curseforge",
             };
           }
         } catch {
@@ -705,11 +734,14 @@
 
   function layoutCanvasSize(count: number, maxDepth: number) {
     const ring = Math.max(3, maxDepth + 1);
-    const span = Math.max(900, ring * 210 * 2 + 280);
-    const orphanPad = Math.max(0, count - 20) * 4;
+    const span = Math.max(1000, ring * 250 * 2 + 320);
+    // Generous breathing room so heavy hubs don't pile nodes on top of each
+    // other; scale with node count, not just depth.
+    const area = Math.sqrt(Math.max(count, 1));
+    const pad = area * 60 + Math.max(0, count - 30) * 6;
     return {
-      width: Math.max(1400, span + orphanPad),
-      height: Math.max(900, span * 0.85 + orphanPad),
+      width: Math.max(1500, span + pad),
+      height: Math.max(1000, span * 0.9 + pad),
     };
   }
 
@@ -899,19 +931,19 @@
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
     const degOf = (id: string) => degree.get(id) ?? 0;
 
-    // Soft radial toward the canvas centre by dependency depth: hubs stay
-    // pinned at their anchors, deeper mods form outer rings. Combined with
-    // link springs + repulsion this yields clean concentric rings around the
-    // hub instead of a knot.
-    function forceCenterRadial(strength = 0.18) {
+    // Soft attraction of every node toward *its own* hub anchor (not the
+    // canvas centre). Deeper dependencies sit farther from their hub, so each
+    // component forms tidy rings around its hub instead of collapsing into a
+    // single over-dense "star" at one centre or stacking into a line.
+    function forceHubAttract(strength = 0.22) {
       let nodes: LayoutNode[] = [];
       function force(alpha: number) {
         const k = strength * alpha;
         for (const d of nodes) {
           if (d.isHub) continue;
-          const targetR = Math.max(60, d.depth) * 210;
-          const dx = d.x - cx;
-          const dy = d.y - cy;
+          const targetR = Math.max(70, d.depth) * 240;
+          const dx = d.x - d.hubX;
+          const dy = d.y - d.hubY;
           const dist = Math.hypot(dx, dy) || 1;
           const delta = ((dist - targetR) / dist) * k;
           d.vx = (d.vx ?? 0) - dx * delta;
@@ -926,15 +958,24 @@
 
     if (simulation) simulation.stop();
 
-    // Classic force-directed layout: repulsion keeps nodes apart, links pull
-    // dependencies together, collide prevents overlap, a gentle radial by
-    // depth keeps everything centred on the hub. Higher alphaDecay so it
-    // settles quickly without the "football" jitter.
+    // Force-directed layout tuned to avoid the classic "star" / line-stacking
+    // artifacts:
+    //  - strong, long-range repulsion keeps hubs from sucking everything in;
+    //  - link springs are *logarithmically* weakened for high-degree nodes so a
+    //    central hub can't collapse the whole graph onto itself;
+    //  - each node is pulled toward its own hub (not the canvas centre), so
+    //    components stay separated and form rings instead of a column;
+    //  - collide prevents overlap; positions are clamped to the canvas so
+    //    isolated nodes don't fly into empty space.
+    const margin = 80;
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
       .force(
         "charge",
-        d3.forceManyBody<LayoutNode>().strength(-550).distanceMax(900),
+        d3
+          .forceManyBody<LayoutNode>()
+          .strength((d) => -260 - Math.min(degOf(d.id), 24) * 28)
+          .distanceMax(Math.max(canvasWidth, canvasHeight)),
       )
       .force(
         "link",
@@ -946,30 +987,41 @@
             const t = linkId(link.target);
             const rs = nodeSize({ id: s } as PositionedNode) / 2;
             const rt = nodeSize({ id: t } as PositionedNode) / 2;
-            return rs + rt + 60 + Math.max(degOf(s), degOf(t)) * 5;
+            return rs + rt + 70 + Math.max(degOf(s), degOf(t)) * 6;
           })
           .strength((link: any) => {
             const s = linkId(link.source);
             const t = linkId(link.target);
-            return 1 / (1 + Math.min(degOf(s), degOf(t)));
+            const minDeg = Math.min(degOf(s), degOf(t));
+            // Logarithmic falloff: hubs (low min degree) keep a *weaker* pull so
+            // they don't bunch every dependent into one point.
+            return 1 / (1 + Math.log2(1 + minDeg) * 3);
           }),
       )
       .force(
         "collide",
         d3
           .forceCollide<LayoutNode>()
-          .radius((d) => nodeSize(d) / 2 + 24)
+          .radius((d) => nodeSize(d) / 2 + 30)
           .strength(1)
-          .iterations(3),
+          .iterations(4),
       )
-      .force("radial", forceCenterRadial(maxDepth === 0 ? 0 : 0.18))
-      .alpha(0.9)
-      .alphaDecay(0.12)
-      .velocityDecay(0.65)
+      .force("hub", forceHubAttract(maxDepth === 0 ? 0 : 0.2))
+      .alpha(1)
+      .alphaDecay(0.05)
+      .velocityDecay(0.78)
       .on("tick", () => {
+        for (const d of simNodes) {
+          d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
+          d.y = Math.max(margin, Math.min(canvasHeight - margin, d.y ?? cy));
+        }
         updateGraphDom();
       })
       .on("end", () => {
+        for (const d of simNodes) {
+          d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
+          d.y = Math.max(margin, Math.min(canvasHeight - margin, d.y ?? cy));
+        }
         updateGraphDom();
         if (resetViewOnNextLayout) {
           fitToContent();
@@ -1306,24 +1358,25 @@
 
     {#if changePlan}
       <section class="change-plan-panel">
-        <div>
+        <div class="change-plan-head">
           <span class="eyebrow">Change plan</span>
-          <h2>{changePlan.summary}</h2>
-          <p>Risk: {changePlan.risk} · {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot required"}</p>
+          <strong class="change-plan-summary">{changePlan.summary}</strong>
+          <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
+            {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
+          </span>
         </div>
-        {#if changePlan.actions?.length}
-          <div class="plan-actions-list">
+        <div class="change-plan-actions">
+          {#if changePlan.actions?.length}
             {#each changePlan.actions as action, index (index)}
-              <div class="plan-action-row">
-                <span class="plan-action-label">{formatChangeAction(action)}</span>
-                <button class="secondary mini" on:click={() => applyAction(index)} disabled={resolving}>Apply action</button>
-              </div>
+              <button class="chip" on:click={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
+                {formatChangeAction(action)}
+              </button>
             {/each}
-            <button on:click={applyChangePlan} disabled={resolving}>Apply full plan</button>
-          </div>
-        {:else}
-          <button class="secondary" on:click={applyChangePlan} disabled={resolving}>Mark reviewed</button>
-        {/if}
+          {/if}
+          <button class="primary mini" on:click={applyChangePlan} disabled={resolving}>
+            {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
+          </button>
+        </div>
       </section>
     {/if}
 
@@ -1530,23 +1583,29 @@
       {#if ghostNodes.length > 0}
         <section class="node-column missing-column">
           <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
-          <p class="column-hint">Click an icon to install.</p>
+          <p class="column-hint">Install from Modrinth or CurseForge.</p>
           <div class="mod-grid">
             {#each ghostNodes as node (node.id)}
-              <button
-                class="node-card compact missing-card"
-                class:selected={selectedId === node.id}
-                on:click={() => installGhostNode(node.id)}
-                disabled={resolving}
-                title="Click to install {node.label}"
-              >
-                <span class="card-icon-fallback missing-fallback">⬇</span>
+              {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
+              <div class="node-card compact missing-card" class:selected={selectedId === node.id}>
+                {#if icon}
+                  <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                {:else}
+                  <span class="card-icon-fallback missing-fallback">⬇</span>
+                {/if}
                 <div class="card-text">
                   <span class="node-label">{node.label}</span>
-                  <span class="node-meta">not installed</span>
+                  <span class="node-meta">{ghostMeta[node.id]?.description ?? "not installed"}</span>
                 </div>
-                <Download size={14} />
-              </button>
+                <button
+                  class="card-install-deps"
+                  title="Install {node.label}"
+                  on:click|stopPropagation={() => installGhostNode(node.id)}
+                  disabled={resolving}
+                >
+                  <Download size={14} />
+                </button>
+              </div>
             {/each}
           </div>
         </section>
@@ -1619,7 +1678,10 @@
             </div>
           {/if}
         {:else}
-          <div class="muted-box">Select a node to inspect dependencies.</div>
+          <div class="muted-box subtle-hint">
+            <Info size={15} />
+            <span>Pick a node on the graph to see what it requires and what requires it.</span>
+          </div>
         {/if}
       </aside>
     </div>
@@ -1644,23 +1706,6 @@
       </div>
     {/if}
 
-    {#if missingEdges.length > 0}
-      <div class="missing-panel">
-        <h3><AlertTriangle size={16} /> Missing dependencies</h3>
-        <div class="missing-actions">
-          <button class="mini" on:click={installMissingDependencies} disabled={resolving}>
-            <Download size={14} /> Install all ({missingEdges.length})
-          </button>
-        </div>
-        {#each missingEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
-          <button class="missing-row" on:click={() => installSingleMissingDep(edge)} disabled={resolving}>
-            <span>{nodeById(edge.from)?.label ?? edge.from}</span>
-            <code class="dep-slug">{edge.to.startsWith("mod:") ? edge.to.slice(4) : edge.to}</code>
-            <Download size={14} class="dep-icon" />
-          </button>
-        {/each}
-      </div>
-    {/if}
   {:else}
     <div class="empty">Open a project to view its dependency graph.</div>
   {/if}
@@ -1819,24 +1864,36 @@
 
   .change-plan-panel {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
-    padding: 16px;
+    gap: 10px 16px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
     border: 1px solid rgba(27, 217, 106, .28);
     border-radius: var(--border-radius-lg);
     background: radial-gradient(circle at top left, rgba(27,217,106,.09), transparent 42%), var(--bg-secondary);
   }
-
-  .change-plan-panel h2 { margin: 4px 0; font-size: 17px; }
-  .change-plan-panel p { color: var(--text-muted); }
-  .plan-actions-list { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
-  .plan-action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; }
-  .plan-action-label {
-    color: var(--text-secondary);
-    font-size: 13px;
-    line-height: 1.35;
+  .change-plan-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .change-plan-summary { font-size: 14px; font-weight: 700; color: var(--text-primary); }
+  .change-plan-risk {
+    font-size: 11px; color: var(--text-muted);
+    padding: 2px 8px; border-radius: 999px;
+    background: var(--bg-tertiary); border: 1px solid var(--border-color);
   }
+  .change-plan-risk.req { color: #fbbf24; border-color: rgba(251,191,36,.35); }
+  .change-plan-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 5px 10px; font-size: 12px; border-radius: 999px;
+    background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary);
+    transform: none;
+  }
+  .chip:hover:not(:disabled) { color: var(--text-primary); border-color: var(--accent-primary); }
+  .chip:disabled { opacity: .5; cursor: default; }
+
+  .subtle-hint { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
+  .subtle-hint span { line-height: 1.4; }
   .mini { padding: 5px 8px; font-size: 11px; }
 
   .graph-canvas {
@@ -2082,8 +2139,7 @@
   }
 
   .node-column,
-  .details,
-  .missing-panel {
+  .details {
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
@@ -2442,18 +2498,6 @@
     line-height: 1.45;
   }
 
-  .missing-panel {
-    margin-top: 16px;
-    border-color: rgba(239, 68, 68, 0.3);
-  }
-
-  .missing-panel h3 {
-    color: #fca5a5;
-  }
-
-  .missing-actions {
-    margin-bottom: 10px;
-  }
 
   .missing-row {
     display: flex;

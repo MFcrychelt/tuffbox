@@ -169,6 +169,7 @@ impl TestLauncher {
         java: &JavaRuntime,
         launcher_dir: &Path,
         progress: &InstallProgress,
+        mc_access_token: Option<&str>,
     ) -> Result<(std::process::Command, PathBuf), LauncherError> {
         if !options.instance_dir.exists() {
             return Err(LauncherError::InstanceNotPrepared);
@@ -199,9 +200,29 @@ impl TestLauncher {
             .filter(|name| !name.trim().is_empty())
             .unwrap_or("Player")
             .to_string();
-        let auth_uuid = offline_uuid(&auth_player_name);
-        let auth_access_token = "0";
-        let user_type = "msa";
+
+        // Use real MC access token when available, otherwise offline mode
+        let (auth_uuid, auth_access_token, user_type) = if let Some(token) = mc_access_token {
+            if !token.is_empty() && token != "0" {
+                (
+                    offline_uuid(&auth_player_name),
+                    token.to_string(),
+                    "msa",
+                )
+            } else {
+                (
+                    offline_uuid(&auth_player_name),
+                    "0".to_string(),
+                    "msa",
+                )
+            }
+        } else {
+            (
+                offline_uuid(&auth_player_name),
+                "0".to_string(),
+                "msa",
+            )
+        };
         let version_type = "release";
         let assets_dir = canonicalize(&game.asset_dir).unwrap_or_else(|_| game.asset_dir.clone());
         let game_dir =
@@ -289,9 +310,9 @@ impl TestLauncher {
                 .replace(' ', "\n")
                 .replace("${auth_player_name}", &auth_player_name)
                 .replace("${auth_uuid}", &auth_uuid)
-                .replace("${auth_access_token}", auth_access_token)
-                .replace("${auth_session}", auth_access_token)
-                .replace("${user_type}", user_type)
+                .replace("${auth_access_token}", &auth_access_token)
+                .replace("${auth_session}", &auth_access_token)
+                .replace("${user_type}", &user_type)
                 .replace("${user_properties}", "{}")
                 .replace("${version_type}", version_type)
                 .replace("${assets_root}", &assets_dir_s)

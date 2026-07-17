@@ -50,7 +50,7 @@ pub struct CrashReportSummary {
     pub modified: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CrashSignalKind {
     SuspectedMods,
     ModFile,
@@ -62,6 +62,21 @@ pub enum CrashSignalKind {
     ResourceWarning,
     Entrypoint,
     LoaderMismatch,
+    MissingDependency,
+    ModVersionMismatch,
+    MinecraftVersionMismatch,
+    LoaderVersionMismatch,
+    WrongLoader,
+    OutOfMemory,
+    Watchdog,
+    PortConflict,
+    EulaNotAccepted,
+    CorruptJar,
+    DuplicateMod,
+    JavaVersion,
+    TickingEntity,
+    SideMismatch,
+    ServerState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +107,36 @@ pub struct SuspectedMod {
     pub known_in_manifest: bool,
     pub confidence: u8,
     pub evidence: Vec<SuspectEvidence>,
+}
+
+/// A plain-language explanation of a detected crash cause plus actionable
+/// remediation steps the user can apply. Returned alongside suspects so the UI
+/// can render a "Fix" panel without re-deriving meaning from raw signals.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosisHint {
+    pub id: String,
+    pub title: String,
+    pub severity: String,
+    pub detail: String,
+    pub steps: Vec<String>,
+    /// Mod ids this hint is tied to (may be empty for system-level issues).
+    pub related_mods: Vec<String>,
+    /// Optional machine-actionable fix the UI can offer a button for.
+    pub fix: Option<FixAction>,
+    /// When several mods are implicated (e.g. multiple entrypoint/mixin
+    /// suspects) this carries one fix action per known mod, so the UI can
+    /// render a button for each. Falls back to `fix` when empty.
+    pub fixes: Vec<FixAction>,
+}
+
+/// A fix the launcher can attempt automatically from the UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixAction {
+    pub kind: String,
+    pub label: String,
+    pub mod_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +176,7 @@ pub struct LatestLogAnalysis {
     pub tail: String,
     pub signals: Vec<CrashSignal>,
     pub suspected_mods: Vec<SuspectedMod>,
+    pub hints: Vec<DiagnosisHint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +187,7 @@ pub struct CrashDiagnosis {
     pub latest_log: LatestLogAnalysis,
     pub launcher_log: LatestLogAnalysis,
     pub suspected_mods: Vec<SuspectedMod>,
+    pub hints: Vec<DiagnosisHint>,
     pub recent_snapshots: Vec<Snapshot>,
     pub graph_diagnostics: Vec<Diagnostic>,
     pub fix_plan: ChangePlan,
@@ -306,12 +353,14 @@ fn analyze_log_file(path: PathBuf, source: &str, manifest: &ProjectManifest) -> 
         String::new()
     };
     let (signals, suspected_mods) = analyze_text_for_suspects(&tail, source, manifest);
+    let hints = build_hints(&signals, &suspected_mods);
     LatestLogAnalysis {
         path,
         exists,
         tail,
         signals,
         suspected_mods,
+        hints,
     }
 }
 
@@ -356,12 +405,15 @@ pub fn build_crash_diagnosis(
         &combined_signals,
     );
 
+    let hints = build_hints(&combined_signals, &suspected_mods);
+
     Ok(CrashDiagnosis {
         reports,
         selected_report,
         latest_log,
         launcher_log,
         suspected_mods,
+        hints,
         recent_snapshots,
         graph_diagnostics,
         fix_plan,
@@ -677,6 +729,31 @@ pub fn analyze_text_for_suspects(
                     );
                 }
             }
+
+            // Stack-trace FQN / mixin package attribution: `knot//
+            // net.earthcomputer.clientcommands...PlayerRandCracker` or
+            // `dev.isxander.controlify.mixins...` map to the mod whose id/name
+            // matches the package component, without blind substring matches.
+            if matches!(
+                kind,
+                CrashSignalKind::Exception
+                    | CrashSignalKind::Mixin
+                    | CrashSignalKind::Entrypoint
+                    | CrashSignalKind::CausedBy
+            ) {
+                for pkg in extract_java_packages(line) {
+                    for candidate in &candidates {
+                        if candidate_matches_java_package(candidate, &pkg) {
+                            add_manifest_suspect(
+                                &mut suspects,
+                                candidate.module,
+                                evidence(source, line_number, kind, line),
+                                88,
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         if matches!(kind, CrashSignalKind::ModFile) {
@@ -702,6 +779,37 @@ pub fn analyze_text_for_suspects(
                             68,
                         );
                     }
+                }
+            }
+        }
+
+        if matches!(
+            kind,
+            CrashSignalKind::MissingDependency
+                | CrashSignalKind::ModVersionMismatch
+                | CrashSignalKind::MinecraftVersionMismatch
+                | CrashSignalKind::LoaderVersionMismatch
+                | CrashSignalKind::WrongLoader
+        ) {
+            for mod_id in extract_named_mods(line) {
+                if let Some(candidate) = candidates
+                    .iter()
+                    .find(|candidate| candidate.tokens.iter().any(|t| t == &mod_id))
+                {
+                    add_manifest_suspect(
+                        &mut suspects,
+                        candidate.module,
+                        evidence(source, line_number, kind, line),
+                        confidence_for_kind(kind),
+                    );
+                } else if !is_noise_token(&mod_id) {
+                    add_inferred_suspect(
+                        &mut suspects,
+                        &mod_id,
+                        None,
+                        evidence(source, line_number, kind, line),
+                        confidence_for_kind(kind).saturating_sub(8),
+                    );
                 }
             }
         }
@@ -806,6 +914,474 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             .then_with(|| a.name.cmp(&b.name))
     });
     out
+}
+
+/// Build plain-language remediation hints from the detected signals and the
+/// suspected mods they reference. Each hint carries actionable steps and an
+/// optional machine-actionable `FixAction` the launcher UI can trigger.
+pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<DiagnosisHint> {
+    let kinds: HashSet<CrashSignalKind> = signals.iter().map(|s| s.kind.clone()).collect();
+    let mut hints: Vec<DiagnosisHint> = Vec::new();
+
+    let mut push = |h: DiagnosisHint| {
+        if !hints.iter().any(|existing| existing.id == h.id) {
+            hints.push(h);
+        }
+    };
+
+    // Top mod suspect, if any (highest confidence, known in manifest).
+    let top = suspects
+        .iter()
+        .find(|s| s.known_in_manifest)
+        .or_else(|| suspects.first());
+
+    if kinds.contains(&CrashSignalKind::OutOfMemory) {
+        push(DiagnosisHint {
+            id: "out-of-memory".into(),
+            title: "Not enough memory (OutOfMemoryError)".into(),
+            severity: "critical".into(),
+            detail: "The JVM ran out of heap memory. This is usually caused by too many \
+                mods/entities/chunks for the allocated RAM, or a memory leak in a mod."
+                .into(),
+            steps: vec![
+                "Increase the JVM heap: set memory_mb in project settings to at least 4–6 GB for heavily modded instances.".into(),
+                "Lower view-distance / simulation-distance in the world or server settings.".into(),
+                "Pre-generate chunks to reduce runtime world generation load.".into(),
+                "If it recurs after raising RAM, a specific mod likely leaks memory — bisect mods.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: Some(FixAction {
+                kind: "raiseMemory".into(),
+                label: "Raise allocated memory to 6 GB".into(),
+                mod_id: None,
+            }),
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::Watchdog) {
+        push(DiagnosisHint {
+            id: "watchdog".into(),
+            title: "Server watchdog timeout".into(),
+            severity: "critical".into(),
+            detail: "A single server tick took too long, so the watchdog force-stopped the server. \
+                Usually a slow mod, overloaded world, or insufficient CPU/RAM."
+                .into(),
+            steps: vec![
+                "Reduce view-distance / simulation-distance and entity counts.".into(),
+                "Allocate more RAM and ensure the JVM has enough CPU headroom.".into(),
+                "Remove or update the mod responsible for the slow tick (check ticking-entity/block-entity errors).".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: None,
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::EulaNotAccepted) {
+        push(DiagnosisHint {
+            id: "eula".into(),
+            title: "EULA not accepted".into(),
+            severity: "critical".into(),
+            detail: "The server refuses to start until you accept Mojang's EULA."
+                .into(),
+            steps: vec![
+                "Open eula.txt in the instance folder and set eula=true.".into(),
+                "Restart the server afterwards.".into(),
+            ],
+            related_mods: Vec::new(),
+            fix: Some(FixAction {
+                kind: "acceptEula".into(),
+                label: "Accept EULA (set eula.txt eula=true)".into(),
+                mod_id: None,
+            }),
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::PortConflict) {
+        push(DiagnosisHint {
+            id: "port-conflict".into(),
+            title: "Port already in use".into(),
+            severity: "critical".into(),
+            detail: "Another process (often a previous server instance that did not shut down) \
+                is already holding the Minecraft port (usually 25565)."
+                .into(),
+            steps: vec![
+                "Stop the other server / Java process, or restart the machine.".into(),
+                "Or change server-port in server.properties to a free port (e.g. 25566).".into(),
+                "Ensure server-ip is empty unless you must bind to a specific address.".into(),
+            ],
+            related_mods: Vec::new(),
+            fix: Some(FixAction {
+                kind: "changePort".into(),
+                label: "Use port 25566 instead".into(),
+                mod_id: None,
+            }),
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::CorruptJar) {
+        push(DiagnosisHint {
+            id: "corrupt-jar".into(),
+            title: "Corrupted mod jar".into(),
+            severity: "critical".into(),
+            detail: "A mod file is corrupt (zip END header / CEN header error) — usually from an \
+                interrupted download. The failing jar name is printed in the error."
+                .into(),
+            steps: vec![
+                "Re-download the named mod jar from its source (Modrinth/CurseForge) and replace the file.".into(),
+                "Delete the corrupt file and let TuffBox re-fetch it if it is a managed mod.".into(),
+                "If unsure which jar, re-download the most recently added mods first.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: top
+                .filter(|s| s.known_in_manifest)
+                .map(|s| FixAction {
+                    kind: "reinstallMod".into(),
+                    label: format!("Re-download {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }),
+                fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::DuplicateMod) {
+        push(DiagnosisHint {
+            id: "duplicate-mod".into(),
+            title: "Duplicate mod detected".into(),
+            severity: "critical".into(),
+            detail: "Two copies of the same mod are present (often an old jar left after updating). \
+                The loader refuses to start."
+                .into(),
+            steps: vec![
+                "Open the mods folder and delete the older/duplicate jar of the named mod.".into(),
+                "Keep only one version of each mod.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: None,
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::JavaVersion) {
+        push(DiagnosisHint {
+            id: "java-version".into(),
+            title: "Wrong Java version".into(),
+            severity: "critical".into(),
+            detail: "UnsupportedClassVersionError means the mod/loader was built for a newer Java \
+                than the one running. Modern Minecraft needs Java 17 (1.18+) or Java 21 (1.20.5+ / NeoForge)."
+                .into(),
+            steps: vec![
+                "Install the Java version required by your Minecraft version and point the project at it.".into(),
+                "1.17–1.20.4 → Java 17; 1.20.5+ and recent NeoForge → Java 21.".into(),
+                "Update the loader if it also requires a newer Java.".into(),
+            ],
+            related_mods: Vec::new(),
+            fix: Some(FixAction {
+                kind: "autoJava".into(),
+                label: "Auto-select a compatible Java runtime".into(),
+                mod_id: None,
+            }),
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::TickingEntity) {
+        push(DiagnosisHint {
+            id: "ticking-entity".into(),
+            title: "Crash while ticking an entity/block".into(),
+            severity: "high".into(),
+            detail: "A specific entity or block entity threw an exception during its tick — the \
+                stack trace names the exact class, which identifies the culprit mod."
+                .into(),
+            steps: vec![
+                "Identify the entity/block from the stack trace and remove or update that mod.".into(),
+                "If a chunk is corrupted, restore it from a backup or delete the region file.".into(),
+                "As a last resort, remove the most recently added mod and retest.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: top
+                .filter(|s| s.known_in_manifest)
+                .map(|s| FixAction {
+                    kind: "disableMod".into(),
+                    label: format!("Disable {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }),
+                fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::SideMismatch) {
+        push(DiagnosisHint {
+            id: "side-mismatch".into(),
+            title: "Mod loaded on the wrong side".into(),
+            severity: "high".into(),
+            detail: "A mod tried to load a client-only class on a server (or vice versa). This \
+                happens with client-only mods installed on a dedicated server."
+                .into(),
+            steps: vec![
+                "Remove the client-only mod from the server's mods folder.".into(),
+                "Keep server-only mods out of the client instance.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: top
+                .filter(|s| s.known_in_manifest)
+                .map(|s| FixAction {
+                    kind: "disableMod".into(),
+                    label: format!("Disable {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }),
+                fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::ServerState) {
+        push(DiagnosisHint {
+            id: "server-state".into(),
+            title: "World/session lock after a crash".into(),
+            severity: "high".into(),
+            detail: "The server was killed mid-run (power loss / hard crash) and left a session \
+                lock or inconsistent state file. Minecraft sometimes corrupts its own JSON on sudden shutdown."
+                .into(),
+            steps: vec![
+                "Delete session.lock in the world folder if present.".into(),
+                "Restore the world from the most recent backup.".into(),
+                "Make sure the previous server process is fully stopped before restarting.".into(),
+            ],
+            related_mods: Vec::new(),
+            fix: None,
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::MissingDependency) {
+        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        push(DiagnosisHint {
+            id: "missing-dependency".into(),
+            title: "Missing mod dependency".into(),
+            severity: "high".into(),
+            detail: "One or more mods require another mod that is not installed (or could not be \
+                loaded). The loader reports it as a ModResolutionException / missing dependency."
+                .into(),
+            steps: vec![
+                "Install the missing dependency mod for the same Minecraft + loader version.".into(),
+                "If the dependency is present, it may be the wrong version — update it.".into(),
+                "For JIJ (jar-in-jar) dependencies, update the parent mod.".into(),
+            ],
+            related_mods: names.clone(),
+            fix: if names.is_empty() {
+                None
+            } else {
+                Some(FixAction {
+                    kind: "installDependency".into(),
+                    label: "Try to install missing dependencies".into(),
+                    mod_id: names.into_iter().next(),
+                })
+            },
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::ModVersionMismatch) {
+        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        push(DiagnosisHint {
+            id: "version-mismatch".into(),
+            title: "Mod / version conflict".into(),
+            severity: "high".into(),
+            detail: "Two mods conflict, or a mod is the wrong version for your setup. Common with \
+                mixin conflicts or libraries at incompatible versions."
+                .into(),
+            steps: vec![
+                "Update the conflicting mod(s) to versions compatible with your Minecraft + loader.".into(),
+                "If two mods edit the same feature, keep only one or use a compatibility patch.".into(),
+                "Check the mod's issue tracker for known incompatibilities.".into(),
+            ],
+            related_mods: names.clone(),
+            fix: if names.is_empty() {
+                None
+            } else {
+                Some(FixAction {
+                    kind: "updateMod".into(),
+                    label: "Update suspected mod(s)".into(),
+                    mod_id: names.into_iter().next(),
+                })
+            },
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::MinecraftVersionMismatch) {
+        push(DiagnosisHint {
+            id: "minecraft-version".into(),
+            title: "Wrong Minecraft version for mod".into(),
+            severity: "high".into(),
+            detail: "A mod requires a different Minecraft version than the one installed."
+                .into(),
+            steps: vec![
+                "Either downgrade/upgrade Minecraft to the version the mod supports, or".into(),
+                "Replace the mod with a build for your current Minecraft version.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: top
+                .filter(|s| s.known_in_manifest)
+                .map(|s| FixAction {
+                    kind: "updateMod".into(),
+                    label: format!("Update {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }),
+                fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::WrongLoader) {
+        push(DiagnosisHint {
+            id: "wrong-loader".into(),
+            title: "Wrong mod loader".into(),
+            severity: "high".into(),
+            detail: "A mod is built for a different loader (e.g. Forge mod on Fabric, or vice versa)."
+                .into(),
+            steps: vec![
+                "Install the correct loader (Fabric/Forge/NeoForge/Quilt) for the mod.".into(),
+                "Or replace the mod with a port for your current loader.".into(),
+            ],
+            related_mods: top.map(|s| vec![s.id.clone()]).unwrap_or_default(),
+            fix: None,
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::LoaderVersionMismatch) {
+        push(DiagnosisHint {
+            id: "loader-version".into(),
+            title: "Wrong loader version".into(),
+            severity: "high".into(),
+            detail: "A mod requires a newer (or older) version of the mod loader than is installed."
+                .into(),
+            steps: vec![
+                "Update the mod loader to the version the mod requires.".into(),
+                "Fabric Loader, Forge, NeoForge and Quilt each have their own version line.".into(),
+            ],
+            related_mods: Vec::new(),
+            fix: Some(FixAction {
+                kind: "updateLoader".into(),
+                label: "Update mod loader".into(),
+                mod_id: None,
+            }),
+            fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::Entrypoint) {
+        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        push(DiagnosisHint {
+            id: "entrypoint".into(),
+            title: "Mod entrypoint failed".into(),
+            severity: "high".into(),
+            detail: "A mod's initialization code threw while the game was starting. Often a \
+                version mismatch or a missing dependency for that specific mod."
+                .into(),
+            steps: vec![
+                "Update or remove the mod named in the error.".into(),
+                "Check for a missing dependency the mod requires.".into(),
+            ],
+            related_mods: names.clone(),
+            fix: top
+                .filter(|s| s.known_in_manifest)
+                .map(|s| FixAction {
+                    kind: "disableMod".into(),
+                    label: format!("Disable {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }),
+                fixes: vec![],
+        });
+    }
+
+    if kinds.contains(&CrashSignalKind::Mixin) {
+        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        push(DiagnosisHint {
+            id: "mixin".into(),
+            title: "Mixin injection failure".into(),
+            severity: "high".into(),
+            detail: "A mod failed to apply its mixin transformers. Usually caused by a wrong \
+                Minecraft/loader version, two mods editing the same code, or a library mismatch."
+                .into(),
+            steps: vec![
+                "Update the mod whose mixin failed (named in the error / stack trace).".into(),
+                "If two mods conflict on the same class, keep only one or add a compat patch.".into(),
+                "Verify the mod supports your exact Minecraft + loader version.".into(),
+            ],
+            related_mods: names.clone(),
+            fix: top
+                .filter(|s| s.known_in_manifest)
+                .map(|s| FixAction {
+                    kind: "updateMod".into(),
+                    label: format!("Update {}", s.name),
+                    mod_id: Some(s.id.clone()),
+                }),
+                fixes: vec![],
+        });
+    }
+
+    // For hints that implicate several installed mods, offer a Fix button per
+    // mod instead of only the top suspect. We derive the fix kind + verb from
+    // the hint id and target every known-in-manifest related mod.
+    let known_by_id: std::collections::HashMap<&str, &SuspectedMod> = suspects
+        .iter()
+        .filter(|s| s.known_in_manifest)
+        .map(|s| (s.id.as_str(), s))
+        .collect();
+    for hint in hints.iter_mut() {
+        if !hint.fixes.is_empty() {
+            continue;
+        }
+        let Some(kind) = mod_fix_kind_for_hint(&hint.id) else {
+            continue;
+        };
+        let targets: Vec<&SuspectedMod> = if hint.related_mods.is_empty() {
+            known_by_id.values().copied().collect()
+        } else {
+            hint.related_mods
+                .iter()
+                .filter_map(|id| known_by_id.get(id.as_str()).copied())
+                .collect()
+        };
+        if targets.len() <= 1 {
+            continue;
+        }
+        hint.fixes = targets
+            .iter()
+            .map(|s| FixAction {
+                kind: kind.to_string(),
+                label: format!("{} {}", fix_verb(kind), s.name),
+                mod_id: Some(s.id.clone()),
+            })
+            .collect();
+    }
+
+    hints
+}
+
+/// Maps a diagnosis-hint id to the fix action kind appropriate for a
+/// per-mod button (disable / update / reinstall).
+fn mod_fix_kind_for_hint(hint_id: &str) -> Option<&'static str> {
+    match hint_id {
+        "corrupt-jar" => Some("reinstallMod"),
+        "ticking-entity" | "side-mismatch" | "entrypoint" => Some("disableMod"),
+        "mixin" | "version-mismatch" | "minecraft-version" => Some("updateMod"),
+        _ => None,
+    }
+}
+
+/// Verb shown on the per-mod fix button label.
+fn fix_verb(kind: &str) -> &'static str {
+    match kind {
+        "reinstallMod" => "Reinstall",
+        "disableMod" => "Disable",
+        "updateMod" => "Update",
+        _ => "Fix",
+    }
 }
 
 pub fn create_crash_fix_plan(
@@ -949,6 +1525,146 @@ fn insert_token_variants(tokens: &mut HashSet<String>, value: &str) {
 
 fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
     let lower = line.to_lowercase();
+
+    // ---- System / environment crashes (highest priority) ----
+    if lower.contains("java.lang.outofmemoryerror")
+        || lower.contains("out of memory")
+        || lower.contains("gc overhead limit exceeded")
+    {
+        return Some(CrashSignalKind::OutOfMemory);
+    }
+    if lower.contains("watchdog")
+        || lower.contains("server watchdog")
+        || lower.contains("the server has stopped responding")
+        || lower.contains("a single server tick took")
+    {
+        return Some(CrashSignalKind::Watchdog);
+    }
+    if lower.contains("you need to agree to the eula")
+        || lower.contains("eula.txt")
+        || (lower.contains("eula") && lower.contains("not accepted"))
+    {
+        return Some(CrashSignalKind::EulaNotAccepted);
+    }
+    if lower.contains("failed to bind to port")
+        || lower.contains("address already in use")
+        || lower.contains("bind(..) failed")
+    {
+        return Some(CrashSignalKind::PortConflict);
+    }
+    if lower.contains("zip end header not found")
+        || lower.contains("invalid cen header")
+        || lower.contains("zipexception")
+        || lower.contains("corrupt jar")
+        || lower.contains("invalid or corrupt jarfile")
+        || lower.contains("error analyzing")
+    {
+        return Some(CrashSignalKind::CorruptJar);
+    }
+    if lower.contains("duplicate mod")
+        || lower.contains("duplicate mods")
+        || (lower.contains("found duplicate") && lower.contains("mod"))
+        || lower.contains("mod already loaded")
+    {
+        return Some(CrashSignalKind::DuplicateMod);
+    }
+    if lower.contains("unsupportedclassversionerror")
+        || (lower.contains("unsupported") && lower.contains("class version"))
+        || lower.contains("has been compiled by a more recent version of the java runtime")
+    {
+        return Some(CrashSignalKind::JavaVersion);
+    }
+    if lower.contains("ticking entity")
+        || lower.contains("ticking block entity")
+        || lower.contains("exception in server tick loop")
+        || lower.contains("exception ticking")
+    {
+        return Some(CrashSignalKind::TickingEntity);
+    }
+    if lower.contains("attempted to load class")
+        && lower.contains("invalid side")
+        || lower.contains("for invalid side")
+        || (lower.contains("client class") && lower.contains("server"))
+    {
+        return Some(CrashSignalKind::SideMismatch);
+    }
+    if lower.contains("state engine was in the incorrect state")
+        || lower.contains("forced into state server_stopped")
+        || lower.contains("failed to check session lock")
+    {
+        return Some(CrashSignalKind::ServerState);
+    }
+
+    // ---- Dependency / version / loader resolution errors ----
+    // These are the most actionable crash causes, so they take priority.
+    let is_resolution_error = lower.contains("which is missing")
+        || lower.contains("is missing!")
+        || (lower.contains("missing") && lower.contains("mod"))
+        || lower.contains("missing dependency")
+        || lower.contains("could not be loaded")
+        || lower.contains("dependency")
+        || lower.contains("requires ")
+        || lower.contains("incompatible mod set")
+        || lower.contains("conflict")
+        || lower.contains("incompatible")
+        || lower.contains("modresolutionexception");
+    if is_resolution_error {
+        // Narrow down to a more specific kind when the text is explicit.
+        let mentions_minecraft = lower.contains("minecraft");
+        // A loader *name* (fabric/forge/...) in the text only counts when it is
+        // clearly the subject, not e.g. the `net.fabricmc.loader` package in a
+        // ModResolutionException stack line.
+        let mentions_loader_kind = lower.contains("wrong loader")
+            || lower.contains("not a fabric mod")
+            || lower.contains("not a forge mod")
+            || lower.contains("not a neoforge mod")
+            || lower.contains("mod loader")
+            || lower.contains("is in use")
+            || lower.contains("requires the fabric")
+            || lower.contains("requires the forge")
+            || lower.contains("requires the neoforge")
+            || lower.contains("requires the quilt");
+        let mentions_loader_version = lower.contains("fabricloader")
+            || lower.contains("fabric loader")
+            || lower.contains("loader version")
+            || lower.contains("loader 0.")
+            || (lower.contains("loader") && (lower.contains("below") || lower.contains("above")));
+        let mentions_version_mismatch = lower.contains("non-matching version")
+            || lower.contains("wrong version")
+            || lower.contains("but a ")
+            || lower.contains("which is present")
+            || lower.contains("incompatible")
+            || lower.contains("conflict");
+
+        // Explicit missing-dependency markers win over generic loader checks.
+        if lower.contains("which is missing")
+            || lower.contains("is missing!")
+            || lower.contains("modresolutionexception")
+            || lower.contains("missing dependency")
+            || lower.contains("could not be loaded")
+        {
+            return Some(CrashSignalKind::MissingDependency);
+        }
+        if mentions_minecraft
+            && (lower.contains("requires")
+                || lower.contains("needs")
+                || mentions_version_mismatch)
+        {
+            return Some(CrashSignalKind::MinecraftVersionMismatch);
+        }
+        // Wrong-loader (Forge mod on Fabric, etc.) takes priority over a plain
+        // loader-version requirement.
+        if mentions_loader_kind {
+            return Some(CrashSignalKind::WrongLoader);
+        }
+        if mentions_loader_version {
+            return Some(CrashSignalKind::LoaderVersionMismatch);
+        }
+        if mentions_version_mismatch {
+            return Some(CrashSignalKind::ModVersionMismatch);
+        }
+        return Some(CrashSignalKind::MissingDependency);
+    }
     if lower.contains("could not execute entrypoint") || lower.contains("provided by '") {
         return Some(CrashSignalKind::Entrypoint);
     }
@@ -989,10 +1705,34 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
     if lower.contains("mixin") {
         return Some(CrashSignalKind::Mixin);
     }
-    if lower.contains("exception") || lower.contains("error:") || lower.contains("error ") {
+    if lower.contains("exception")
+        || lower.contains("error:")
+        || lower.contains("error ")
+        || lower.contains("knot//")
+        || lower.contains("net.fabricmc.loader")
+        || lower.contains("java.base/")
+        || (lower.starts_with("at ") && lower.contains(".java:"))
+    {
         return Some(CrashSignalKind::Exception);
     }
     None
+}
+
+/// Match a Java package/FQN string (e.g. `net.earthcomputer.clientcommands`)
+/// against a mod candidate. A candidate matches when its token equals the
+/// package or is the final component of the package (`...clientcommands`).
+fn candidate_matches_java_package(candidate: &ModCandidate<'_>, pkg: &str) -> bool {
+    // Keep the package dots intact for suffix matching.
+    let pkg = pkg.replace('\\', "/");
+    candidate.tokens.iter().any(|token| {
+        if token.len() < 4 || is_noise_token(token) {
+            return false;
+        }
+        let compact = compact_token(token);
+        compact == compact_token(&pkg)
+            || pkg.ends_with(&format!("-{compact}"))
+            || pkg.ends_with(&format!(".{compact}"))
+    })
 }
 
 fn candidate_matches_line(candidate: &ModCandidate<'_>, line: &str) -> bool {
@@ -1001,7 +1741,7 @@ fn candidate_matches_line(candidate: &ModCandidate<'_>, line: &str) -> bool {
     // Segment match avoids short name tokens like "critters" falsely hitting
     // another mod id such as "crittersandcompanions" via substring contains().
     let line_parts: HashSet<&str> = normalized_line
-        .split('-')
+        .split(['-', '.'])
         .filter(|part| part.len() >= 3)
         .collect();
 
@@ -1019,6 +1759,42 @@ fn candidate_matches_line(candidate: &ModCandidate<'_>, line: &str) -> bool {
         // Long stems / modids (file names, mixin packages) may appear mid-line.
         compact.len() >= 10 && compact_line.contains(&compact)
     })
+}
+
+/// Extract Java fully-qualified names (and their package prefixes) from a
+/// stack-trace line such as `at knot//net.earthcomputer.clientcommands...
+/// .PlayerRandCracker.throwItem(PlayerRandCracker.java:412)`. Each dotted
+/// segment becomes a candidate token so a mod whose id/name matches a package
+/// component (e.g. `clientcommands`) is correctly attributed.
+fn extract_java_packages(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in line.split(|c: char| {
+        c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ':' | ';')
+    }) {
+        // Keep dots/packages intact; only switch Fabric's `knot//` separator to
+        // a dot so `net/earthcomputer` style and `knot//net.x` both normalize.
+        let unified = raw.replace("knot//", "").replace(['/', '\\'], ".");
+        if unified.contains('.') && unified.chars().any(|c| c.is_ascii_alphabetic()) {
+            let trimmed = unified.trim_end_matches(".class");
+            // Emit every dotted prefix (full FQN down to the top-level package)
+            // so `net.earthcomputer.clientcommands` also yields `clientcommands`.
+            let mut acc = String::new();
+            for seg in trimmed.split('.') {
+                if seg.is_empty() {
+                    continue;
+                }
+                acc = if acc.is_empty() {
+                    seg.to_string()
+                } else {
+                    format!("{acc}.{seg}")
+                };
+                if acc.len() >= 3 {
+                    out.push(acc.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 fn jar_matches_candidate(jar_name: &str, candidate: &ModCandidate<'_>) -> bool {
@@ -1111,9 +1887,24 @@ fn confidence_for_kind(kind: CrashSignalKind) -> u8 {
     match kind {
         CrashSignalKind::SuspectedMods => 95,
         CrashSignalKind::ModFile => 88,
-        CrashSignalKind::Mixin => 78,
         CrashSignalKind::Entrypoint => 96,
+        CrashSignalKind::MissingDependency => 92,
         CrashSignalKind::LoaderMismatch => 86,
+        CrashSignalKind::ModVersionMismatch => 90,
+        CrashSignalKind::MinecraftVersionMismatch => 90,
+        CrashSignalKind::WrongLoader => 90,
+        CrashSignalKind::LoaderVersionMismatch => 88,
+        CrashSignalKind::OutOfMemory => 92,
+        CrashSignalKind::Watchdog => 90,
+        CrashSignalKind::PortConflict => 90,
+        CrashSignalKind::EulaNotAccepted => 96,
+        CrashSignalKind::CorruptJar => 94,
+        CrashSignalKind::DuplicateMod => 92,
+        CrashSignalKind::JavaVersion => 94,
+        CrashSignalKind::TickingEntity => 84,
+        CrashSignalKind::SideMismatch => 92,
+        CrashSignalKind::ServerState => 80,
+        CrashSignalKind::Mixin => 78,
         CrashSignalKind::CausedBy => 66,
         CrashSignalKind::OpenGl => 58,
         CrashSignalKind::Exception => 48,
@@ -1134,6 +1925,64 @@ fn extract_quoted_mod_ids(line: &str) -> Vec<String> {
             }
         }
     }
+    ids
+}
+
+/// Extract mod identifiers named explicitly inside loader resolution errors,
+/// e.g. `Mod 'Client Commands' (clientcommands) requires ...` or
+/// `'fabricloader' (fabricloader) 0.x` or `mod fabric-api (fabric-api)`.
+fn extract_named_mods(line: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    // Pattern: Mod 'Display Name' (modid)  /  'modid' (modid)
+    let mut rest = line;
+    while let Some(pos) = rest.find('\'') {
+        let after_open = &rest[pos + 1..];
+        if let Some(end) = after_open.find('\'') {
+            let inner = &after_open[..end];
+            // Look ahead for `(modid)` immediately after the closing quote.
+            let tail = &after_open[end + 1..];
+            if let Some(open) = tail.find('(') {
+                if let Some(close) = tail[open..].find(')') {
+                    let id = normalize_token(&tail[open + 1..open + close]);
+                    if !id.is_empty() {
+                        ids.push(id);
+                    }
+                }
+            }
+            ids.push(normalize_token(inner));
+            rest = &after_open[end + 1..];
+        } else {
+            break;
+        }
+    }
+    // Pattern: `mod <id> (` without quotes.
+    for cap in line.match_indices("mod ") {
+        let tail = &line[cap.0 + 4..];
+        if let Some(open) = tail.find('(') {
+            let id = normalize_token(&tail[..open]);
+            if !id.is_empty() && id.len() >= 3 {
+                ids.push(id);
+            }
+        }
+    }
+    // Pattern: `modid (incompatible)` / `modid (disabled)` in resource-pack or
+    // mod lists (no quotes, no `mod ` prefix).
+    for cap in line.match_indices('(') {
+        let before = &line[..cap.0];
+        let after = &line[cap.0 + 1..];
+        let close = match after.find(')') {
+            Some(c) => c,
+            None => continue,
+        };
+        let reason = &after[..close];
+        if reason == "incompatible" || reason == "disabled" || reason.contains("incompatible") {
+            let id = normalize_token(before.trim_end().split(',').last().unwrap_or(before).trim());
+            if !id.is_empty() && id.len() >= 3 {
+                ids.push(id);
+            }
+        }
+    }
+    ids.retain(|id| !is_noise_token(id) && id.len() >= 3);
     ids
 }
 
@@ -1428,6 +2277,274 @@ mod tests {
     }
 
     #[test]
+    fn detects_missing_dependency_with_named_mod() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "lithium".to_string(),
+            name: "Lithium".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("lithium".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "0.11.0".to_string(),
+            file_name: Some("lithium-fabric-0.11.0.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        // Real Fabric loader resolution error format.
+        let text = "net.fabricmc.loader.impl.discovery.ModResolutionException: Mod 'Lithium' (lithium) requires version 1.0.0 or later of mod 'jellysquid3's sodium' (sodium), which is missing!";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert_eq!(signals[0].kind, CrashSignalKind::MissingDependency);
+        assert!(suspects.iter().any(|s| s.id == "lithium"));
+        assert!(suspects.iter().any(|s| s.id == "sodium"));
+    }
+
+    #[test]
+    fn detects_wrong_minecraft_version_for_mod() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "iris".to_string(),
+            name: "Iris".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("iris".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "1.7.0".to_string(),
+            file_name: Some("iris-1.7.0.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "Incompatible mod set!\nMod 'Iris' (iris) requires version 1.21.4 or later of 'Minecraft' (minecraft), but a non-matching version 1.20.1 is present!";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert!(
+            signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::MinecraftVersionMismatch),
+            "expected a MinecraftVersionMismatch signal, got {:?}",
+            signals
+        );
+        assert!(suspects.iter().any(|s| s.id == "iris"));
+        assert_eq!(suspects[0].confidence, 90);
+    }
+
+    #[test]
+    fn detects_wrong_loader_for_mod() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "create".to_string(),
+            name: "Create".to_string(),
+            source: ModSource {
+                kind: SourceKind::Curseforge,
+                project_id: Some("create".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "0.5.1".to_string(),
+            file_name: Some("create-1.20.1-0.5.1.jar".to_string()),
+            hashes: None,
+            side: Side::Both,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "Mod 'Create' (create) requires the Forge mod loader, but Fabric Loader 0.15.0 is in use!";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert_eq!(signals[0].kind, CrashSignalKind::WrongLoader);
+        assert!(suspects.iter().any(|s| s.id == "create"));
+    }
+
+    #[test]
+    fn detects_wrong_mod_version_conflict() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "sodium".to_string(),
+            name: "Sodium".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("AANobbMI".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "0.6.0".to_string(),
+            file_name: Some("sodium-fabric-0.6.0.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "Mod 'Reese's Sodium Options' (reeses-sodium-options) 1.8.0 conflicts with 'Sodium' (sodium) 0.6.0 (incompatible).";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert_eq!(signals[0].kind, CrashSignalKind::ModVersionMismatch);
+        assert!(suspects.iter().any(|s| s.id == "sodium"));
+    }
+
+    #[test]
+    fn detects_loader_version_mismatch() {
+        let mut manifest = manifest();
+        manifest
+            .mods
+            .push(ModSpec {
+                id: "fabric-api".to_string(),
+                name: "Fabric API".to_string(),
+                source: ModSource {
+                    kind: SourceKind::Modrinth,
+                    project_id: Some("fabric-api".to_string()),
+                    file_id: None,
+                    url: None,
+                    path: None,
+                    icon_url: None,
+                },
+                version: "0.92.0".to_string(),
+                file_name: Some("fabric-api-0.92.0.jar".to_string()),
+                hashes: None,
+                side: Side::Both,
+                dependencies: Vec::new(),
+                status: Vec::new(),
+                content_type: crate::manifest::ContentType::Mod,
+            });
+        let text = "Mod 'Fabric API' (fabric-api) requires Fabric Loader 0.16.0 or later, but 0.15.0 is present!";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert_eq!(signals[0].kind, CrashSignalKind::LoaderVersionMismatch);
+        assert!(suspects.iter().any(|s| s.id == "fabric-api"));
+    }
+
+    #[test]
+    fn detects_stacktrace_mod_by_java_package() {
+        // Real crash from Fabulously Optimized: clientcommands NPE in tick task.
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "clientcommands".to_string(),
+            name: "Client Commands".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("clientcommands".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "2.9.11".to_string(),
+            file_name: Some("clientcommands-2.9.11.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null\n\tat knot//net.earthcomputer.clientcommands.features.PlayerRandCracker.throwItem(PlayerRandCracker.java:412)";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert!(suspects.iter().any(|s| s.id == "clientcommands"));
+    }
+
+    #[test]
+    fn detects_clientcommands_from_real_fo_crash() {
+        // Real fragment from Fabulously Optimized 8.1.0 crash-2025-09-20:
+        // the stack trace names `net.earthcomputer.clientcommands`, and the
+        // resource-pack list flags `clientcommands (incompatible)`.
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "clientcommands".to_string(),
+            name: "Client Commands".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("clientcommands".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "2.9.11".to_string(),
+            file_name: Some("clientcommands-2.9.11.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "\
+java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null
+	at knot//net.earthcomputer.clientcommands.features.PlayerRandCracker.throwItem(PlayerRandCracker.java:412)
+	at knot//net.earthcomputer.clientcommands.task.ItemThrowTask.onTick(ItemThrowTask.java:60)
+Mixins in Stacktrace:
+	net.minecraft.class_310:
+		net.earthcomputer.clientcommands.mixin.events.MinecraftMixin (mixins.clientcommands.json)
+Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommands (incompatible), cloth-config";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert!(
+            suspects.iter().any(|s| s.id == "clientcommands"),
+            "clientcommands should be attributed via Java package / mixin / incompatible marker"
+        );
+        // The stack-trace lines must carry a high-confidence signal.
+        assert!(
+            signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::Exception || s.kind == CrashSignalKind::Mixin)
+        );
+    }
+
+    #[test]
+    fn detects_incompatible_marker_in_resource_pack_list() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "clientcommands".to_string(),
+            name: "Client Commands".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("clientcommands".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+            },
+            version: "2.9.11".to_string(),
+            file_name: Some("clientcommands-2.9.11.jar".to_string()),
+            hashes: None,
+            side: Side::Client,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommands (incompatible), cloth-config";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest);
+        assert!(
+            suspects.iter().any(|s| s.id == "clientcommands"),
+            "clientcommands should be attributed via the (incompatible) marker"
+        );
+        assert!(
+            signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::ModVersionMismatch)
+        );
+    }
+
+    #[test]
     fn validates_report_path() {
         assert!(validate_report_id("crash-reports/crash.txt").is_ok());
         assert!(validate_report_id("../crash.txt").is_err());
@@ -1525,3 +2642,4 @@ JVM Flags:
         assert_eq!(resolve_update_target_version(update), None);
     }
 }
+

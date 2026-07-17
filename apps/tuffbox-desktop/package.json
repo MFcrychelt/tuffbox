@@ -25,6 +25,7 @@
     "codemirror": "^6.0.2",
     "d3-force": "^3.0.0",
     "lucide-svelte": "^0.487.0",
+    "skinview3d": "^3.4.2",
     "svelte-codemirror-editor": "^1.4.2"
   },
   "devDependencies": {

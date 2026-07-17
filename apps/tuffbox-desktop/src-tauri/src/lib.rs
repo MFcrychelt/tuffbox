@@ -1,3 +1,4 @@
+mod auth;
 mod integrations;
 
 use std::io::Write;
@@ -8,6 +9,7 @@ use tuffbox_core::{
     ProviderFileInfo, ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind,
     TuffboxLockfile,
 };
+use tuffbox_core::crash::FixAction;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1517,6 +1519,375 @@ async fn change_mod_version(
             "id": version_info.id,
             "download": report,
         }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Inner helper: soft-disable a tracked mod (mirrors the `disable_project_mod`
+/// command without the async wrapper) so the fix command can reuse it.
+fn disable_project_mod_inner(
+    manifest_path: &Path,
+    mod_id: &str,
+) -> Result<serde_json::Value, String> {
+    auto_snapshot(manifest_path, "disable-mod").map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    let idx = manifest
+        .mods
+        .iter()
+        .position(|m| {
+            m.id == mod_id
+                || m.source.project_id.as_deref() == Some(mod_id)
+                || m.file_name.as_deref() == Some(mod_id)
+        })
+        .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+    let module = &mut manifest.mods[idx];
+    if module
+        .status
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case("disabled"))
+    {
+        return Ok(serde_json::json!({
+            "id": module.id,
+            "disabled": true,
+            "alreadyDisabled": true,
+            "fileName": module.file_name,
+        }));
+    }
+    let Some(file_name) = module.file_name.clone() else {
+        return Err(format!("{} has no file name to disable", module.name));
+    };
+    let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) else {
+        return Err("could not resolve instance directory".to_string());
+    };
+    let content_dir = tuffbox_core::content_dir_for(&instance_dir, module.content_type);
+    let active = content_dir.join(&file_name);
+    let disabled = content_dir.join(format!("{file_name}.disabled"));
+    if disabled.is_file() && !active.is_file() {
+        // Already renamed on disk.
+    } else if active.is_file() {
+        if disabled.exists() {
+            let _ = std::fs::remove_file(&disabled);
+        }
+        std::fs::rename(&active, &disabled).map_err(|e| {
+            format!("failed to rename {} → {}.disabled: {e}", active.display(), file_name)
+        })?;
+    } else {
+        return Err(format!(
+            "{} not found on disk (looked for {} and {}.disabled)",
+            module.name, file_name, file_name
+        ));
+    }
+    if !module
+        .status
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case("disabled"))
+    {
+        module.status.push("disabled".to_string());
+    }
+    let id = module.id.clone();
+    save_manifest(manifest_path, &manifest).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "id": id,
+        "disabled": true,
+        "alreadyDisabled": false,
+        "fileName": format!("{file_name}.disabled"),
+    }))
+}
+
+/// Inner helper: remove a tracked mod (mirrors `remove_project_mod`).
+fn remove_project_mod_inner(manifest_path: &Path, mod_id: &str) -> Result<(), String> {
+    auto_snapshot(manifest_path, "remove-mod").map_err(|e| e.to_string())?;
+    let mut manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    let removed_idx = manifest
+        .mods
+        .iter()
+        .position(|m| {
+            m.id == mod_id
+                || m.source.project_id.as_deref() == Some(mod_id)
+                || m.file_name.as_deref() == Some(mod_id)
+        })
+        .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+    let removed_mod = manifest.mods.remove(removed_idx);
+    save_manifest(manifest_path, &manifest).map_err(|e| e.to_string())?;
+    remove_mod_file_from_disk(manifest_path, &removed_mod);
+    Ok(())
+}
+
+/// Updates a single mod to the newest version compatible with the project's
+/// current Minecraft version + loader. Returns a short summary of what was
+/// applied. Used by the crash-diagnosis Fix buttons ("update mod").
+fn apply_mod_update_to_latest(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    manifest: &mut ProjectManifest,
+    mod_id: &str,
+) -> Result<String, String> {
+    let idx = manifest
+        .mods
+        .iter()
+        .position(|m| {
+            m.id == mod_id
+                || m.source.project_id.as_deref() == Some(mod_id)
+                || m.file_name.as_deref() == Some(mod_id)
+        })
+        .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+    let old_mod = manifest.mods[idx].clone();
+    let project_id = old_mod
+        .source
+        .project_id
+        .clone()
+        .ok_or_else(|| format!("{} is not a Modrinth mod and cannot be auto-updated", old_mod.name))?;
+    let (loader_slug, loaders) = update_loaders_for(manifest);
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(loader_slug.clone()),
+        ..Default::default()
+    };
+    let mut versions = provider
+        .get_versions(&project_id, &query)
+        .map_err(|e| e.to_string())?;
+    versions.sort_by(|a, b| {
+        b.date_published
+            .as_deref()
+            .unwrap_or("")
+            .cmp(a.date_published.as_deref().unwrap_or(""))
+    });
+    let version_info = versions
+        .into_iter()
+        .find(|v| v.loaders.iter().any(|l| loaders.iter().any(|s| s == l)))
+        .ok_or_else(|| format!("no compatible update for {} on this loader", old_mod.name))?;
+    if old_mod.version == version_info.version_number {
+        return Ok(format!("{} is already on the latest version", old_mod.name));
+    }
+    let project = provider
+        .get_project(&version_info.project_id)
+        .map_err(|e| e.to_string())?;
+    let file = ProviderFileInfo::select_file_for_loader(&version_info, &loader_slug)
+        .cloned()
+        .ok_or_else(|| format!("no primary file for version {}", version_info.id))?;
+    let dependencies = provider
+        .resolve_dependencies(&version_info.id)
+        .unwrap_or_else(|_| old_mod.dependencies.clone());
+    let mut new_spec = build_mod_spec(&project, &version_info, file, dependencies, old_mod.side);
+    new_spec.id = old_mod.id.clone();
+    manifest.mods[idx] = new_spec;
+    let report = commit_single_mod_update(app, manifest_path, manifest, &old_mod, true)?;
+    let _ = report;
+    Ok(format!(
+        "Updated {} → {}",
+        old_mod.name, version_info.version_number
+    ))
+}
+
+/// Reinstalls a mod by removing its tracked entry + jar and re-fetching the
+/// current compatible version from Modrinth. Used by the "reinstall mod" fix.
+fn apply_mod_reinstall(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    manifest: &mut ProjectManifest,
+    mod_id: &str,
+) -> Result<String, String> {
+    let idx = manifest
+        .mods
+        .iter()
+        .position(|m| {
+            m.id == mod_id
+                || m.source.project_id.as_deref() == Some(mod_id)
+                || m.file_name.as_deref() == Some(mod_id)
+        })
+        .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
+    let old_mod = manifest.mods[idx].clone();
+    let project_id = old_mod
+        .source
+        .project_id
+        .clone()
+        .ok_or_else(|| format!("{} is not a Modrinth mod and cannot be reinstalled", old_mod.name))?;
+    let (loader_slug, loaders) = update_loaders_for(manifest);
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(loader_slug.clone()),
+        ..Default::default()
+    };
+    let mut versions = provider
+        .get_versions(&project_id, &query)
+        .map_err(|e| e.to_string())?;
+    versions.sort_by(|a, b| {
+        b.date_published
+            .as_deref()
+            .unwrap_or("")
+            .cmp(a.date_published.as_deref().unwrap_or(""))
+    });
+    let version_info = versions
+        .into_iter()
+        .find(|v| v.loaders.iter().any(|l| loaders.iter().any(|s| s == l)))
+        .ok_or_else(|| format!("no compatible version for {} on this loader", old_mod.name))?;
+    let project = provider
+        .get_project(&version_info.project_id)
+        .map_err(|e| e.to_string())?;
+    let file = ProviderFileInfo::select_file_for_loader(&version_info, &loader_slug)
+        .cloned()
+        .ok_or_else(|| format!("no primary file for version {}", version_info.id))?;
+    let dependencies = provider
+        .resolve_dependencies(&version_info.id)
+        .unwrap_or_default();
+    manifest.mods.remove(idx);
+    remove_mod_file_from_disk(manifest_path, &old_mod);
+    let mut new_spec = build_mod_spec(&project, &version_info, file, dependencies, old_mod.side);
+    new_spec.id = old_mod.id.clone();
+    manifest.mods.push(new_spec);
+    let report = commit_single_mod_update(app, manifest_path, manifest, &old_mod, true)?;
+    let _ = report;
+    Ok(format!("Reinstalled {} ({})", old_mod.name, version_info.version_number))
+}
+
+/// Applies a machine-actionable fix produced by crash diagnosis.
+#[tauri::command(rename_all = "camelCase")]
+async fn apply_fix_action(
+    app: tauri::AppHandle,
+    path: String,
+    action: FixAction,
+) -> Result<String, String> {
+    let manifest_path = PathBuf::from(&path);
+    let mod_id = action.mod_id.clone().unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        match action.kind.as_str() {
+            "disableMod" => {
+                if mod_id.is_empty() {
+                    return Err("disableMod requires a mod id".into());
+                }
+                let res = disable_project_mod_inner(&manifest_path, &mod_id)?;
+                Ok(format!(
+                    "Disabled {} ({})",
+                    res.get("id").and_then(|v| v.as_str()).unwrap_or(&mod_id),
+                    res.get("fileName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("jar")
+                ))
+            }
+            "removeMod" => {
+                if mod_id.is_empty() {
+                    return Err("removeMod requires a mod id".into());
+                }
+                remove_project_mod_inner(&manifest_path, &mod_id)?;
+                Ok(format!("Removed {mod_id}"))
+            }
+            "reinstallMod" => {
+                if mod_id.is_empty() {
+                    return Err("reinstallMod requires a mod id".into());
+                }
+                auto_snapshot(&manifest_path, "fix-reinstall-mod").map_err(|e| e.to_string())?;
+                let mut manifest =
+                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                let msg =
+                    apply_mod_reinstall(&app, &manifest_path, &mut manifest, &mod_id)?;
+                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                Ok(msg)
+            }
+            "updateMod" => {
+                if mod_id.is_empty() {
+                    return Err("updateMod requires a mod id".into());
+                }
+                auto_snapshot(&manifest_path, "fix-update-mod").map_err(|e| e.to_string())?;
+                let mut manifest =
+                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                let msg = apply_mod_update_to_latest(&app, &manifest_path, &mut manifest, &mod_id)?;
+                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                Ok(msg)
+            }
+            "installDependency" => {
+                if mod_id.is_empty() {
+                    return Err("installDependency requires a mod id".into());
+                }
+                auto_snapshot(&manifest_path, "fix-install-dep").map_err(|e| e.to_string())?;
+                let mut manifest =
+                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both");
+                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                download_project_mods_tracked(&app, &manifest_path, &manifest, None, false);
+                Ok(format!("Installed dependency {mod_id}"))
+            }
+            "updateLoader" => {
+                auto_snapshot(&manifest_path, "fix-update-loader").map_err(|e| e.to_string())?;
+                let mut manifest =
+                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                let (loader_slug, _loaders) = update_loaders_for(&manifest);
+                let latest = tuffbox_core::versions::fetch_loader_versions(
+                    &loader_slug,
+                    &manifest.minecraft.version,
+                )
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .max_by(|a, b| a.id.cmp(&b.id))
+                .ok_or_else(|| {
+                    format!(
+                        "no {loader_slug} build for {}",
+                        manifest.minecraft.version
+                    )
+                })?;
+                manifest.loader.version = latest.id.clone();
+                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                Ok(format!("Updated loader to {}", latest.id))
+            }
+            "raiseMemory" => {
+                auto_snapshot(&manifest_path, "fix-raise-memory").map_err(|e| e.to_string())?;
+                let mut manifest =
+                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                let target = 6144u32;
+                for profile in manifest.profiles.iter_mut() {
+                    if profile.memory_mb.map(|m| m < target).unwrap_or(true) {
+                        profile.memory_mb = Some(target);
+                    }
+                }
+                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                Ok(format!("Set allocated memory to {} MB", target))
+            }
+            "acceptEula" => {
+                let instance_dir =
+                    tuffbox_core::instance_dir_for_manifest(&manifest_path)
+                        .ok_or_else(|| "could not resolve instance directory".to_string())?;
+                let eula_path = instance_dir.join("eula.txt");
+                std::fs::write(&eula_path, "# Auto-accepted by TuffBox crash fix\neula=true\n")
+                    .map_err(|e| format!("failed to write {}: {e}", eula_path.display()))?;
+                Ok("Set eula=true in eula.txt".into())
+            }
+            "changePort" => {
+                let instance_dir =
+                    tuffbox_core::instance_dir_for_manifest(&manifest_path)
+                        .ok_or_else(|| "could not resolve instance directory".to_string())?;
+                let props_path = instance_dir.join("server.properties");
+                let content = std::fs::read_to_string(&props_path).unwrap_or_default();
+                let mut props = tuffbox_core::properties_parser::PropertiesFile::parse(&content);
+                props.set("server-port", "25566");
+                std::fs::write(&props_path, props.to_string())
+                    .map_err(|e| format!("failed to write {}: {e}", props_path.display()))?;
+                Ok("Changed server-port to 25566".into())
+            }
+            "autoJava" => {
+                auto_snapshot(&manifest_path, "fix-auto-java").map_err(|e| e.to_string())?;
+                let mut manifest =
+                    ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                let runtimes = tuffbox_core::jre::find_all_runtimes().map_err(|e| e.to_string())?;
+                let required = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
+                let best = tuffbox_core::jre::find_runtime_for(&runtimes, required)
+                    .ok_or_else(|| "no compatible Java runtime found on this machine".to_string())?;
+                let mut java = manifest.java.clone().unwrap_or(tuffbox_core::manifest::JavaSpec {
+                    major: None,
+                    distribution: None,
+                    path: None,
+                });
+                java.path = Some(best.path.clone());
+                java.major = Some(best.major.try_into().unwrap_or(u16::MAX));
+                manifest.java = Some(java);
+                save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                Ok(format!("Selected Java {} ({})", best.major, best.path))
+            }
+            other => Err(format!("unknown fix action kind: {other}")),
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5611,7 +5982,7 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
     let bridge = match tuffbox_core::prepare_recipe_bridge(&manifest, &game_dir) {
         Ok(bridge) => bridge,
         Err(error) => {
-            progress.log(&format!("# WARNING: JEI live bridge unavailable: {error}"));
+            progress.log(&format!("# WARNING: JEI live recipe bridge unavailable: {error}"));
             None
         }
     };
@@ -5623,6 +5994,9 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
     } else {
         Vec::new()
     };
+
+    // Try to load real MC access token from stored auth
+    let mc_token = auth::load_mc_access_token().ok();
 
     let options = LaunchOptions {
         profile_id: profile.clone(),
@@ -5638,6 +6012,7 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
         &java,
         &launcher_dir,
         &progress,
+        mc_token.as_deref(),
     )
     .map_err(|e| e.to_string())?;
 
@@ -6358,6 +6733,39 @@ fn get_launch_log(path: String) -> Result<String, String> {
         .map(|p| p.join("logs").join("latest.log"))
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
     tuffbox_core::process::read_log_tail(&log_path, 500).map_err(|e| e.to_string())
+}
+
+/// Analyze an arbitrary log/console text against the installed mods of a
+/// project and return the suspected mods together with the exact line numbers
+/// where they were referenced, so the UI can highlight those lines.
+#[tauri::command(rename_all = "camelCase")]
+fn analyze_log_text(
+    path: String,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    use tuffbox_core::crash::analyze_text_for_suspects;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (signals, suspected_mods) = analyze_text_for_suspects(&text, "log", &manifest);
+    let highlights: Vec<serde_json::Value> = suspected_mods
+        .iter()
+        .flat_map(|s| {
+            s.evidence.iter().map(move |ev| {
+                serde_json::json!({
+                    "lineNumber": ev.line_number,
+                    "modId": s.id,
+                    "modName": s.name,
+                    "confidence": s.confidence,
+                    "kind": format!("{:?}", ev.kind),
+                    "text": ev.text,
+                })
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "signals": signals.len(),
+        "suspectedMods": suspected_mods,
+        "highlights": highlights,
+    }))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -8125,6 +8533,22 @@ pub fn run() {
             if let Ok(resources) = app.path().resource_dir() {
                 std::env::set_var("TUFFBOX_JEI_BRIDGE_DIR", resources.join("jei-bridge"));
             }
+            // Size the window to the current screen resolution: 95% of the
+            // monitor's width and 94% of its height, so it adapts to whatever
+            // display the app is launched on (and re-applies on monitor change).
+            fn fit_to_screen(win: &tauri::WebviewWindow) {
+                if let Ok(Some(monitor)) = win.current_monitor() {
+                    let size = monitor.size();
+                    let (mw, mh) = (size.width as f64, size.height as f64);
+                    let w = (mw * 0.95).max(1100.0);
+                    let h = (mh * 0.94).max(700.0);
+                    let _ = win.set_size(tauri::LogicalSize::new(w, h));
+                    let _ = win.center();
+                }
+            }
+            if let Some(win) = app.get_webview_window("main") {
+                fit_to_screen(&win);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -8241,6 +8665,7 @@ pub fn run() {
             get_crash_diagnosis,
             create_crash_fix_plan,
             apply_crash_fix_plan,
+            apply_fix_action,
             get_history_settings,
             update_history_settings,
             list_project_change_history,
@@ -8292,6 +8717,7 @@ pub fn run() {
             get_java_version,
             get_default_java_version,
             get_launch_log,
+            analyze_log_text,
             list_instance_logs,
             read_instance_log,
             get_instance_size,
@@ -8300,6 +8726,23 @@ pub fn run() {
             set_last_opened_project,
             get_last_opened_project,
             update_project_settings,
+            auth::mc_start_device_code,
+            auth::mc_poll_device_code,
+            auth::mc_get_auth_status,
+            auth::mc_logout,
+            auth::mc_refresh_profile,
+            auth::mc_get_skin_path,
+            auth::mc_fetch_skin_url,
+            auth::mc_offline_login,
+            auth::mc_fetch_skin_for_username,
+            auth::mc_set_skin_source,
+            auth::mc_list_accounts,
+            auth::mc_switch_account,
+            auth::mc_remove_account,
+            auth::mc_apply_skin,
+            auth::mc_apply_cape,
+            auth::mc_check_entitlement,
+            auth::mc_get_skin_base64,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

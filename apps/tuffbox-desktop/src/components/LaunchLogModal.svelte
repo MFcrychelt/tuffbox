@@ -15,6 +15,90 @@
   let loadingLogList = false;
   let logListOpen = false;
 
+  type SignalKind =
+    | "SuspectedMods"
+    | "ModFile"
+    | "CausedBy"
+    | "Mixin"
+    | "Exception"
+    | "OpenGl"
+    | "Performance"
+    | "ResourceWarning"
+    | "Entrypoint"
+    | "LoaderMismatch"
+    | "MissingDependency"
+    | "ModVersionMismatch"
+    | "MinecraftVersionMismatch"
+    | "LoaderVersionMismatch"
+    | "WrongLoader";
+
+  const KIND_LABEL: Record<SignalKind, string> = {
+    SuspectedMods: "Suspected",
+    ModFile: "Bad file",
+    CausedBy: "Caused by",
+    Mixin: "Mixin",
+    Exception: "Crash",
+    OpenGl: "GPU",
+    Performance: "Lag",
+    ResourceWarning: "Asset",
+    Entrypoint: "Entrypoint",
+    LoaderMismatch: "Loader clash",
+    MissingDependency: "Missing dependency",
+    ModVersionMismatch: "Version conflict",
+    MinecraftVersionMismatch: "Wrong MC version",
+    LoaderVersionMismatch: "Wrong loader version",
+    WrongLoader: "Wrong loader",
+  };
+
+  type Highlight = {
+    modId: string;
+    modName: string;
+    confidence: number;
+    kind: SignalKind;
+    text: string;
+  };
+  let highlights = new Map<number, Highlight>();
+  let suspectCount = 0;
+
+  async function analyzeLog() {
+    if (!log) {
+      highlights = new Map();
+      suspectCount = 0;
+      return;
+    }
+    try {
+      const res = (await invoke("analyze_log_text", {
+        path: projectPath,
+        text: log,
+      })) as {
+        suspectedMods: { id: string; name: string; confidence: number }[];
+        highlights: {
+          lineNumber: number;
+          modId: string;
+          modName: string;
+          confidence: number;
+          kind: SignalKind;
+          text: string;
+        }[];
+      };
+      const map = new Map<number, Highlight>();
+      for (const h of res.highlights) {
+        map.set(h.lineNumber, {
+          modId: h.modId,
+          modName: h.modName,
+          confidence: h.confidence,
+          kind: h.kind,
+          text: h.text,
+        });
+      }
+      highlights = map;
+      suspectCount = res.suspectedMods?.length ?? 0;
+    } catch {
+      highlights = new Map();
+      suspectCount = 0;
+    }
+  }
+
   async function loadLog() {
     try {
       if (selectedLog === "latest.log") {
@@ -24,6 +108,7 @@
         const result = await invoke("read_instance_log", { path: projectPath, logName: selectedLog });
         log = result as string;
       }
+      await analyzeLog();
     } catch (e) {
       log += `\n[error] ${e}`;
     } finally {
@@ -98,7 +183,19 @@
           Waiting for log...
         </div>
       {/if}
-      <pre class="log">{log || "Waiting for process output..."}</pre>
+      {#if suspectCount > 0}
+        <div class="suspect-banner">
+          <strong>{suspectCount}</strong> mod{suspectCount === 1 ? "" : "s"} referenced in this log —
+          highlighted below.
+        </div>
+      {/if}
+      {#if log}
+        <pre class="log">{#each log.split("\n") as line, i}{@const ln = i + 1}{@const h = highlights.get(ln)}{#if h}<span class="log-hl" title={h.modName + " — " + (KIND_LABEL[h.kind] ?? h.kind) + " (" + h.confidence + "%)"}><span class="log-line-no">{ln}</span><span class="log-badge">{h.modName}</span><span class="log-tag">{KIND_LABEL[h.kind] ?? h.kind}</span>{line}
+</span>{:else}<span class="log-line-no">{ln}</span>{line}
+{/if}{/each}</pre>
+      {:else}
+        <pre class="log">Waiting for process output...</pre>
+      {/if}
     </div>
 
     <div class="modal-footer">
@@ -204,6 +301,58 @@
     font-size: 12px;
     white-space: pre-wrap;
     overflow: auto;
+  }
+
+  .log-hl {
+    display: block;
+    background: rgba(255, 71, 87, 0.14);
+    border-left: 3px solid #ff4757;
+    color: #ffd9dd;
+    padding: 0 6px;
+  }
+
+  .log-line-no {
+    display: inline-block;
+    width: 42px;
+    color: var(--text-muted);
+    user-select: none;
+    text-align: right;
+    margin-right: 8px;
+  }
+
+  .log-badge {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: rgba(255, 71, 87, 0.25);
+    color: #ff8a93;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .log-tag {
+    display: inline-block;
+    margin-right: 8px;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #ffc2c8;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .suspect-banner {
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    background: rgba(255, 71, 87, 0.12);
+    border: 1px solid rgba(255, 71, 87, 0.35);
+    color: #ff8a93;
+    font-size: 12px;
   }
 
   .modal-header-left { display: grid; gap: 8px; position: relative; }

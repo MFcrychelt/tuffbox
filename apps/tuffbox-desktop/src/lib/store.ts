@@ -67,3 +67,60 @@ function createRecentProjects() {
 export const recentProjects = createRecentProjects();
 export const projectPath = writable<string | null>(null);
 export const projectInfo = writable<ProjectInfo | null>(null);
+
+// ─── Minecraft Auth ──────────────────────────────────────────────
+
+export type SkinSource = "mojang" | "elyby" | "tlauncher" | "offline";
+export type LoginType = "microsoft" | "offline";
+
+export interface McCapeEntry {
+  id: string;
+  alias: string | null;
+  url: string;
+  state: string;
+}
+
+export interface McProfile {
+  uuid: string;
+  name: string;
+  skinUrl: string | null;
+  capeUrl: string | null;
+  capes: McCapeEntry[];
+}
+
+export interface AccountEntry {
+  uuid: string;
+  name: string;
+  loginType: LoginType;
+  skinSource: SkinSource;
+  addedAt: number;
+}
+
+export interface AuthState {
+  loggedIn: boolean;
+  profile: McProfile | null;
+  expiresAt: number | null;
+  loginType: LoginType;
+  skinSource: SkinSource;
+  accounts: AccountEntry[];
+  activeAccountUuid: string | null;
+}
+
+export interface DeviceCodeInfo {
+  userCode: string;
+  verificationUri: string;
+  message: string;
+  expiresIn: number;
+}
+
+export const authState = writable<AuthState>({
+  loggedIn: false,
+  profile: null,
+  expiresAt: null,
+  loginType: "offline",
+  skinSource: "mojang",
+  accounts: [],
+  activeAccountUuid: null,
+});
+
+export const skinPath = writable<string | null>(null);

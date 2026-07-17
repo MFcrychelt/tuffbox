@@ -2,11 +2,18 @@
   import { invoke } from "@tauri-apps/api/core";
   import {
     MessageCircle,
+    Search,
     Stethoscope,
+    Play,
+    CheckCircle,
+    FolderOpen,
+    ArrowUpCircle,
     RefreshCw,
     AlertCircle,
     AlertTriangle,
     Info,
+    Lightbulb,
+    ListChecks,
     FileText,
     Terminal,
     History,
@@ -81,6 +88,24 @@
     tail: string;
     signals: Evidence[];
     suspectedMods: SuspectedMod[];
+    hints: DiagnosisHint[];
+  };
+
+  type DiagnosisHint = {
+    id: string;
+    title: string;
+    severity: string;
+    detail: string;
+    steps: string[];
+    relatedMods: string[];
+    fix: FixAction | null;
+    fixes: FixAction[];
+  };
+
+  type FixAction = {
+    kind: string;
+    label: string;
+    modId: string | null;
   };
 
   type CrashDiagnosis = {
@@ -89,6 +114,7 @@
     latestLog: LatestLogAnalysis;
     launcherLog: LatestLogAnalysis;
     suspectedMods: SuspectedMod[];
+    hints: DiagnosisHint[];
     recentSnapshots: Snapshot[];
     graphDiagnostics: Diagnostic[];
     fixPlan: any;
@@ -99,6 +125,8 @@
   let loading = false;
   let planning = false;
   let applying = false;
+  let applyingHintId: string | null = null;
+  let launching = false;
   let fixingIdx: number | null = null;
   let disablingModId: string | null = null;
   let error: string | null = null;
@@ -215,6 +243,26 @@
       error = String(e);
     } finally {
       disablingModId = null;
+    }
+  }
+
+  /// One-click update of the top suspect to the latest compatible version.
+  async function applyTopSuspectUpdate() {
+    if (!$projectPath || !topSuspect) return;
+    fixingIdx = -1;
+    error = null;
+    message = null;
+    try {
+      const summary: string = await invoke("apply_fix_action", {
+        path: $projectPath,
+        action: { kind: "updateMod", label: `Update ${topSuspect.name}`, modId: topSuspect.id },
+      });
+      message = summary || `Updated ${topSuspect.name}`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      fixingIdx = null;
     }
   }
 
@@ -486,6 +534,163 @@
     }
   }
 
+  /// Applies a machine-actionable fix from a diagnosis hint (raise memory,
+  /// accept EULA, change port, update/reinstall/disable a mod, etc.).
+  async function applyHintFix(hint: DiagnosisHint) {
+    if (hint.fix) await applyHintFixAction(hint, hint.fix);
+  }
+
+  /// Applies a specific fix action (used for per-mod buttons on a hint).
+  async function applyHintFixAction(hint: DiagnosisHint, action: FixAction) {
+    if (!$projectPath) return;
+    applyingHintId = hint.id;
+    error = null;
+    message = null;
+    try {
+      const summary: string = await invoke("apply_fix_action", {
+        path: $projectPath,
+        action,
+      });
+      message = summary || `Applied fix: ${hint.title}`;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      applyingHintId = null;
+    }
+  }
+
+  /// Launches the client (Test) profile so the user can reproduce a crash,
+  /// then refreshes the diagnosis once it stops.
+  async function runTest() {
+    if (!$projectPath || launching) return;
+    launching = true;
+    error = null;
+    message = "Launching Test profile — reproduce the crash, then come back.";
+    try {
+      await invoke("launch_profile", { path: $projectPath, profile: "client" });
+      message = "Test launch started. Re-run Diagnose after it crashes/closes.";
+    } catch (e) {
+      error = String(e);
+    } finally {
+      launching = false;
+    }
+  }
+
+  /// Opens the project folder in the OS file manager (quick access to
+  /// crash-reports / logs without leaving Diagnose).
+  async function openFolder() {
+    if (!$projectPath) return;
+    try {
+      await invoke("open_project_folder", { path: $projectPath });
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  $: allHints = [
+    ...(diagnosis?.hints ?? []),
+    ...(diagnosis?.latestLog?.hints ?? []),
+    ...(diagnosis?.launcherLog?.hints ?? []),
+  ];
+  $: dedupedHints = Array.from(
+    new Map(allHints.filter((h) => h && h.id).map((h) => [h.id, h])).values()
+  );
+
+  // --- Inline log search (Find-in-log, IDE style) ---
+  let logQuery = "";
+  let logMatches: { line: number }[] = [];
+  let activeMatch = 0;
+  let logPreEl: HTMLPreElement | null = null;
+
+  // Splits log text into lines and highlights the current search query.
+  function highlightLog(text: string, query: string): string {
+    if (!query) return escapeHtml(text);
+    const q = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(${q})`, "gi");
+    return escapeHtml(text).replace(re, "<mark>$1</mark>");
+  }
+
+  function escapeHtml(s: string): string {
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  // Counts query matches across the current crash-report / log text and
+  // prepares line offsets for jumping between them.
+  function recomputeLogMatches(text: string) {
+    if (!logQuery) {
+      logMatches = [];
+      activeMatch = 0;
+      return;
+    }
+    const lower = text.toLowerCase();
+    const q = logQuery.toLowerCase();
+    const found: { line: number }[] = [];
+    let from = 0;
+    while (true) {
+      const idx = lower.indexOf(q, from);
+      if (idx < 0) break;
+      const line = text.slice(0, idx).split("\n").length - 1;
+      found.push({ line });
+      from = idx + q.length;
+    }
+    logMatches = found;
+    activeMatch = found.length ? Math.min(activeMatch, found.length - 1) : 0;
+  }
+
+  function jumpToMatch(dir: 1 | -1) {
+    if (!logMatches.length) return;
+    activeMatch = (activeMatch + dir + logMatches.length) % logMatches.length;
+    scrollLogToLine(logMatches[activeMatch].line);
+  }
+
+  function scrollLogToLine(line: number) {
+    if (!logPreEl) return;
+    const lines = logPreEl.querySelectorAll("div.log-line");
+    const target = lines[Math.min(line, lines.length - 1)] as HTMLElement | undefined;
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  // --- Unified Problems panel (IDE "Problems" tool window) ---
+  type ProblemRow = {
+    id: string;
+    severity: "critical" | "error" | "warning" | "info";
+    title: string;
+    detail: string;
+    actions: FixAction[];
+    source: string;
+  };
+
+  $: problems = buildProblems(diagnosis);
+  function buildProblems(d: CrashDiagnosis | null): ProblemRow[] {
+    if (!d) return [];
+    const rows: ProblemRow[] = [];
+    for (const h of d.hints) {
+      rows.push({
+        id: `hint:${h.id}`,
+        severity: h.severity === "critical" ? "critical" : h.severity === "error" ? "error" : h.severity === "warning" ? "warning" : "info",
+        title: h.title,
+        detail: h.detail,
+        actions: h.fixes && h.fixes.length ? h.fixes : h.fix ? [h.fix] : [],
+        source: "Diagnosis",
+      });
+    }
+    for (const g of d.graphDiagnostics) {
+      rows.push({
+        id: `graph:${g.code}`,
+        severity: g.severity === "Error" ? "error" : g.severity === "Warning" ? "warning" : "info",
+        title: g.code,
+        detail: g.message,
+        actions: [],
+        source: "Graph",
+      });
+    }
+    return rows;
+  }
+
   $: graphDiagnostics = diagnosis?.graphDiagnostics ?? [];
   $: allSignals = [
     ...(diagnosis?.selectedReport?.signals ?? []),
@@ -511,9 +716,25 @@
       <span>Diagnose 2.0</span>
     </div>
     <div class="primary-actions">
+      <button class="primary" on:click={runTest} disabled={!$projectPath || launching || loading}>
+        <Play size={16} class={launching ? "spin" : ""} />
+        {launching ? "Launching…" : "Test launch"}
+      </button>
+      <button class="secondary" on:click={createFixPlan} disabled={!$projectPath || planning}>
+        <Wrench size={16} />
+        {planning ? "Creating…" : "Create fix plan"}
+      </button>
+      <button class="secondary" on:click={applyFix} disabled={!$projectPath || applying || !diagnosis?.fixPlan || diagnosis.fixPlan.actions?.length === 0}>
+        <CheckCircle size={16} />
+        {applying ? "Applying…" : "Apply fix plan"}
+      </button>
+      <button class="ghost" on:click={openFolder} disabled={!$projectPath}>
+        <FolderOpen size={16} />
+        Folder
+      </button>
       <button class="refresh" on:click={() => load(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
-        {loading ? "Refreshing..." : "Refresh"}
+        {loading ? "Refreshing…" : "Refresh"}
       </button>
     </div>
   </div>
@@ -604,6 +825,14 @@
                 {disablingModId === topSuspect.id ? "Disabling…" : "Disable mod"}
               </button>
               <button
+                class="secondary"
+                on:click={() => applyTopSuspectUpdate()}
+                disabled={disablingModId !== null || fixingIdx !== null}
+                title="Update to the latest compatible version"
+              >
+                <ArrowUpCircle size={15} /> Update mod
+              </button>
+              <button
                 class="ghost danger"
                 on:click={() => fixRemoveMod(topSuspect.id, -1)}
                 disabled={disablingModId !== null || fixingIdx !== null}
@@ -624,6 +853,48 @@
       {/if}
     </section>
 
+    {#if problems.length > 0}
+      <section class="problems-panel panel">
+        <div class="problems-head">
+          <h2><ListChecks size={16} /> Problems <span class="count">{problems.length}</span></h2>
+          <div class="problems-legend">
+            {#each ["critical", "error", "warning", "info"] as sev}
+              {@const n = problems.filter((p) => p.severity === sev).length}
+              {#if n > 0}<span class="legend-pill {sev}">{n} {sev}</span>{/if}
+            {/each}
+          </div>
+        </div>
+        <div class="problems-list">
+          {#each problems as problem (problem.id)}
+            <div class="problem-row {problem.severity}">
+              <span class="sev-dot" />
+              <div class="problem-main">
+                <div class="problem-title">
+                  <strong>{problem.title}</strong>
+                  <small class="problem-source">{problem.source}</small>
+                </div>
+                <p class="problem-detail">{problem.detail}</p>
+              </div>
+              {#if problem.actions.length}
+                <div class="problem-actions">
+                  {#each problem.actions as action (action.kind + (action.modId ?? ""))}
+                    <button
+                      class="primary small"
+                      on:click={() => applyHintFixAction({ id: problem.id, title: problem.title, severity: problem.severity, detail: problem.detail, steps: [], relatedMods: [], fix: null, fixes: [] }, action)}
+                      disabled={applyingHintId !== null}
+                      title={action.modId ? `Target: ${action.modId}` : "System-level fix"}
+                    >
+                      <Wrench size={13} /> {action.label}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
     <div class="stats">
       <div class="stat-card" class:danger={diagnosis.reports.length > 0}>
         <strong>{diagnosis.reports.length}</strong>
@@ -642,6 +913,54 @@
         <span>latest.log signals</span>
       </div>
     </div>
+
+    {#if dedupedHints.length > 0}
+      <section class="hints-panel panel">
+        <h2><Lightbulb size={16} /> Recommended fixes</h2>
+        <div class="hints-list">
+          {#each dedupedHints as hint (hint.id)}
+            <div class="hint-card {hint.severity.toLowerCase()}">
+              <div class="hint-head">
+                <strong>{hint.title}</strong>
+                {#if applyingHintId === hint.id}
+                  <span class="fixing-spinner">Applying…</span>
+                {/if}
+              </div>
+              <p class="hint-detail">{hint.detail}</p>
+              {#if hint.steps?.length}
+                <ol class="hint-steps">
+                  {#each hint.steps as step (step)}
+                    <li>{step}</li>
+                  {/each}
+                </ol>
+              {/if}
+              {#if hint.relatedMods?.length}
+                <div class="related-mods">
+                  {#each hint.relatedMods as modId (modId)}
+                    <span class="mod-pill">{modId}</span>
+                  {/each}
+                </div>
+              {/if}
+              {#if (hint.fixes && hint.fixes.length) || hint.fix}
+                <div class="hint-actions">
+                  {#each (hint.fixes && hint.fixes.length ? hint.fixes : hint.fix ? [hint.fix] : []) as action (action.kind + (action.modId ?? ""))}
+                    <button
+                      class="primary small"
+                      on:click={() => applyHintFixAction(hint, action)}
+                      disabled={applyingHintId !== null}
+                      title={action.modId ? `Target: ${action.modId}` : "System-level fix"}
+                    >
+                      <Wrench size={14} />
+                      {action.label}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
 
     <div class="diagnose-grid">
       <aside class="reports panel">
@@ -737,9 +1056,39 @@
           <div class="crash-preview">
             <div class="crash-preview-bar">
               <span>Crash log preview</span>
-              <small>{formatBytes(selectedReport.summary.size)}</small>
+              <div class="preview-tools">
+                <div class="find-box">
+                  <Search size={13} />
+                  <input
+                    class="find-input"
+                    placeholder="Find in log…"
+                    bind:value={logQuery}
+                    on:input={() => recomputeLogMatches(selectedReport?.content ?? "")}
+                  />
+                  {#if logQuery}
+                    <span class="find-count">{logMatches.length ? `${activeMatch + 1}/${logMatches.length}` : "0/0"}</span>
+                    <button class="find-nav" on:click={() => jumpToMatch(-1)} disabled={!logMatches.length} title="Previous">↑</button>
+                    <button class="find-nav" on:click={() => jumpToMatch(1)} disabled={!logMatches.length} title="Next">↓</button>
+                    <button class="find-nav" on:click={() => { logQuery = ""; logMatches = []; activeMatch = 0; }} title="Clear">✕</button>
+                  {/if}
+                </div>
+                <small>{formatBytes(selectedReport.summary.size)}</small>
+              </div>
             </div>
-            <pre class="report-content">{selectedReport.content}</pre>
+            {#if selectedReport.sections && selectedReport.sections.length}
+              <div class="toc">
+                {#each selectedReport.sections as section (section.title + section.startLine)}
+                  <button class="toc-item" on:click={() => scrollLogToLine(section.startLine)} title={section.preview}>
+                    {section.title}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            <pre class="report-content" bind:this={logPreEl}>
+              {#each selectedReport.content.split("\n") as line, i}
+                <div class="log-line" class:active={logQuery && i === logMatches[activeMatch]?.line}>{@html highlightLog(line, logQuery)}</div>
+              {/each}
+            </pre>
           </div>
         {:else}
           <div class="empty inline">No crash report to open yet.</div>
@@ -1151,9 +1500,11 @@
 <style>
   .diagnostics { max-width: none; width: 100%; }
   .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
+  .primary-actions { gap: 8px; flex-wrap: wrap; }
+  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost, .primary-actions .refresh { cursor: pointer; }
   .refresh { display: inline-flex; align-items: center; gap: 8px; }
   .analysis-tools { margin-bottom: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); background: var(--bg-secondary); }
   .analysis-tools > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; color: var(--text-secondary); cursor: pointer; list-style: none; font-size: 12px; font-weight: 700; }
@@ -1203,7 +1554,7 @@
   .panel-header h2 { margin: 0 0 4px; }
   .panel-header.small { margin: 18px 0 8px; }
   .panel-header.small span { color: var(--text-muted); font-size: 12px; }
-  .report-card { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 11px; margin-bottom: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; transform: none; }
+  .report-card { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 11px; margin-bottom: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; transform: none; cursor: pointer; transition: border-color .12s ease, background .12s ease; }
   .report-card:hover, .report-card.selected { border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); color: var(--text-primary); }
   .conflict-card { margin-bottom: 12px; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
   .conflict-card.error { border-color: rgba(239, 68, 68, 0.5); }
@@ -1282,6 +1633,20 @@
   .snapshot-row { display: flex; flex-direction: column; gap: 5px; }
   .snapshot-row strong { color: var(--text-primary); }
   .plan-card { margin-top: 16px; border-color: rgba(27, 217, 106, 0.32); background: rgba(27, 217, 106, 0.06); }
+  .hints-panel { margin-top: 16px; border-color: rgba(96, 165, 250, 0.35); background: rgba(96, 165, 250, 0.04); }
+  .hints-list { display: grid; gap: 10px; margin-top: 10px; }
+  .hint-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; background: var(--bg-tertiary); }
+  .hint-card.error { border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.05); }
+  .hint-card.warning { border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.05); }
+  .hint-card.info { border-color: rgba(96, 165, 250, 0.3); background: rgba(96, 165, 250, 0.05); }
+  .hint-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .hint-head strong { color: var(--text-primary); }
+  .hint-detail { margin: 6px 0 0; color: var(--text-secondary); line-height: 1.45; font-size: 13px; }
+  .hint-steps { margin: 8px 0 0 18px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+  .hint-steps li { margin: 2px 0; }
+  .hint-actions { margin-top: 10px; }
+  .primary.small { font-size: 12px; padding: 6px 10px; }
+  .fixing-spinner { color: var(--accent); font-size: 12px; }
   .plan-meta { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 12px; margin: 10px 0; }
   .plan-card ul { margin: 8px 0 0 18px; color: var(--text-secondary); font-size: 12px; }
   .graph-health { margin-top: 16px; }
@@ -1391,8 +1756,52 @@
     .diagnosis-summary { grid-template-columns: 1fr; padding: 14px; }
     .toolbar { align-items: flex-start; }
     .title span { font-size: 14px; }
-    .mod-entry { grid-template-columns: 1fr; }
-    .wrong-loader-card, .wrong-loader-actions { flex-direction: column; }
-    .wrong-loader-actions { width: 100%; }
+  .mod-entry { grid-template-columns: 1fr; }
+  .wrong-loader-card, .wrong-loader-actions { flex-direction: column; }
+  .wrong-loader-actions { width: 100%; }
   }
+
+  /* --- Unified Problems panel (IDE "Problems" tool window) --- */
+  .problems-panel { margin-top: 16px; border-color: rgba(239, 68, 68, 0.25); background: rgba(239, 68, 68, 0.04); }
+  .problems-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .problems-head h2 { margin: 0; }
+  .problems-head .count { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 20px; padding: 1px 9px; font-size: 11px; color: var(--text-secondary); }
+  .problems-legend { display: flex; gap: 6px; flex-wrap: wrap; }
+  .legend-pill { font-size: 11px; padding: 2px 8px; border-radius: 12px; border: 1px solid var(--border-color); }
+  .legend-pill.critical { color: #fecaca; border-color: rgba(239, 68, 68, 0.5); }
+  .legend-pill.error { color: #fecaca; border-color: rgba(239, 68, 68, 0.4); }
+  .legend-pill.warning { color: #fde68a; border-color: rgba(234, 179, 8, 0.4); }
+  .legend-pill.info { color: #bfdbfe; border-color: rgba(59, 130, 246, 0.4); }
+  .problems-list { display: grid; gap: 8px; }
+  .problem-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
+  .problem-row.critical { border-color: rgba(239, 68, 68, 0.5); }
+  .problem-row.error { border-color: rgba(239, 68, 68, 0.3); }
+  .problem-row.warning { border-color: rgba(234, 179, 8, 0.35); }
+  .problem-row.info { border-color: rgba(59, 130, 246, 0.3); }
+  .sev-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; background: var(--text-muted); }
+  .problem-row.critical .sev-dot, .problem-row.error .sev-dot { background: #ef4444; }
+  .problem-row.warning .sev-dot { background: #eab308; }
+  .problem-row.info .sev-dot { background: #3b82f6; }
+  .problem-main { flex: 1; min-width: 0; }
+  .problem-title { display: flex; align-items: center; gap: 8px; }
+  .problem-title strong { color: var(--text-primary); }
+  .problem-source { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); border: 1px solid var(--border-color); border-radius: 10px; padding: 0 7px; }
+  .problem-detail { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+  .problem-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; align-items: center; }
+
+  /* --- Find-in-log + section TOC --- */
+  .preview-tools { display: flex; align-items: center; gap: 12px; }
+  .find-box { display: flex; align-items: center; gap: 6px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 8px; padding: 3px 8px; }
+  .find-box :global(svg) { color: var(--text-muted); }
+  .find-input { background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 12px; width: 150px; }
+  .find-count { font-size: 11px; color: var(--text-muted); min-width: 30px; text-align: center; }
+  .find-nav { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 13px; padding: 0 3px; }
+  .find-nav:hover:not(:disabled) { color: var(--text-primary); }
+  .find-nav:disabled { opacity: .4; cursor: default; }
+  .toc { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 4px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px; }
+  .toc-item { font-size: 11px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; transition: border-color .12s ease, color .12s ease; }
+  .toc-item:hover { border-color: rgba(27, 217, 106, 0.4); color: var(--text-primary); }
+  .report-content .log-line { padding: 0 2px; border-radius: 3px; }
+  .report-content .log-line.active { background: rgba(234, 179, 8, 0.22); outline: 1px solid rgba(234, 179, 8, 0.5); }
+  .report-content :global(mark) { background: rgba(234, 179, 8, 0.45); color: inherit; border-radius: 2px; padding: 0 1px; }
 </style>

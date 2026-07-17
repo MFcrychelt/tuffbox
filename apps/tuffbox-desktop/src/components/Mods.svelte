@@ -1743,8 +1743,9 @@
             <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || !canUpdateMod(mod)} title="Change version">
               <ArrowUpDown size={16} />
             </button>
-            <button class="icon-btn" class:hot={mod.updateAvailable} on:click={() => updateMod(mod)} disabled={mutating || !canUpdateMod(mod)} title="Update to latest from Modrinth">
+            <button class="icon-btn update-btn" class:hot={mod.updateAvailable} on:click={() => updateMod(mod)} disabled={mutating || !canUpdateMod(mod)} title="Update to latest from Modrinth">
               <RotateCw size={16} />
+              {#if mod.updateAvailable}<span class="update-text">Update</span>{/if}
             </button>
             <button class="icon-btn danger" on:click={() => showRemoveConfirm(mod)} disabled={mutating} title="Remove with snapshot">
               <Trash2 size={16} />
@@ -3266,6 +3267,17 @@
     color: var(--accent-danger);
   }
 
+  .update-btn {
+    width: auto;
+    padding: 0 10px;
+    gap: 5px;
+    display: inline-flex;
+    align-items: center;
+    color: #1bd96a;
+  }
+  .update-btn .update-text { font-size: 12px; font-weight: 700; }
+  .update-btn.hot { background: rgba(27, 217, 106, 0.12); border-radius: 8px; }
+
   .empty,
   .loading,
   .error {
@@ -3627,7 +3639,7 @@
 
   .results {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
     gap: 14px;
   }
   .results.list { grid-template-columns: 1fr; }

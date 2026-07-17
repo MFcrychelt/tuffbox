@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
   import {
     Play,
     Plus,
@@ -20,15 +21,33 @@
     Terminal,
     Minus,
     Workflow,
+    LogIn,
+    LogOut,
+    User,
+    Package,
+    GitGraph,
+    Stethoscope,
+    History,
+    Puzzle,
+    Sparkles,
+    FolderOpen,
+    RefreshCw,
+    ChevronRight,
+    HardDrive,
+    Palette,
   } from "lucide-svelte";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
+  import { convertFileSrc } from "@tauri-apps/api/core";
+  import { recentProjects, projectPath, projectInfo, authState, skinPath, type RecentProject, type SkinSource } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LaunchLogModal from "./LaunchLogModal.svelte";
+  import MinecraftLogin from "./MinecraftLogin.svelte";
+  import SkinPreview3D from "./SkinPreview3D.svelte";
+  import AccountManager from "./AccountManager.svelte";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests";
 
@@ -38,8 +57,27 @@
   let menuAnchor: HTMLElement | null = null;
   let showAddModal = false;
   let showLogModal = false;
+  let showLoginModal = false;
+  let showAccountManager = false;
 
   $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
+
+  onMount(async () => {
+    try {
+      const status = await api.mcAuth.getAuthStatus();
+      authState.set(status);
+      if (status.loggedIn && status.profile) {
+        try {
+          const path = await api.mcAuth.getSkinPath(status.profile.uuid);
+          skinPath.set(path);
+        } catch {}
+      }
+    } catch {}
+
+    if (selectedPath && !selectedProject && $recentProjects.length > 0) {
+      selectProject($recentProjects[0].path);
+    }
+  });
 
   async function loadProject(path: string) {
     const info = await invoke("validate_project", { path });
@@ -105,7 +143,6 @@
     } catch {}
   }
 
-  // Load pinned state for visible projects
   function ensurePins(paths: string[]) {
     let changed = false;
     for (const path of paths) {
@@ -120,7 +157,6 @@
     if (changed) pinnedPaths = { ...pinnedPaths };
   }
 
-  let actionError: string | null = null;
   let instanceSizes: Record<string, string> = {};
   let loadingSizes: Record<string, boolean> = {};
 
@@ -146,82 +182,42 @@
 
   async function handleAction(action: string, project: RecentProject) {
     activeMenuPath = null;
-    actionError = null;
     switch (action) {
+      case "open-folder":
+        await invoke("open_project_folder", { path: project.path });
+        break;
       case "change-version":
-        // Loader/Minecraft version is edited in Project Settings, not a
-        // separate one-off dialog — jump straight there instead of a stub.
         currentView = "project-settings";
         selectProject(project.path);
-        break;
-      case "desktop-shortcut":
-        // No true shortcut creation without dedicated UX; open the project folder instead.
-        try {
-          await invoke("open_project_folder", { path: project.path });
-          toasts.info("Opened project folder.", 4000);
-        } catch (e) {
-          actionError = String(e);
-        }
         break;
       case "server-pack":
         actionBusy = true;
         try {
-          const result: any = await invoke("export_server_pack", { path: project.path, targetPath: null });
+          await invoke("export_server_pack", { path: project.path, targetPath: null });
           toasts.success(`Server pack exported.`);
-        } catch (e) {
-          actionError = String(e);
-        } finally {
-          actionBusy = false;
-        }
+        } catch (e) { toasts.error(String(e)); }
+        finally { actionBusy = false; }
         break;
       case "links":
         actionBusy = true;
         try {
           const config: any = await invoke("get_publish_config", { path: project.path });
           const links: string[] = [];
-          if (config?.modrinthProjectId) {
-            links.push(`https://modrinth.com/modpack/${config.modrinthProjectId}`);
-          }
-          if (config?.curseforgeProjectId) {
-            links.push(`https://www.curseforge.com/minecraft/modpacks/${config.curseforgeProjectId}`);
-          }
-          if (config?.githubRepository) {
-            links.push(`https://github.com/${config.githubRepository}/releases`);
-          }
-          if (links.length === 0) {
-            toasts.info("No publish links yet. Set project IDs in Release → publish config.", 6000);
-          } else if (links.length === 1) {
-            await open(links[0]);
-            toasts.success(`Opened ${links[0]}`);
-          } else {
-            await open(links[0]);
-            await navigator.clipboard.writeText(links.join("\n"));
-            toasts.info(`Opened first link. Copied all ${links.length} publish URLs.`, 7000);
-          }
-        } catch (e) {
-          actionError = String(e);
-        } finally {
-          actionBusy = false;
-        }
+          if (config?.modrinthProjectId) links.push(`https://modrinth.com/modpack/${config.modrinthProjectId}`);
+          if (config?.curseforgeProjectId) links.push(`https://www.curseforge.com/minecraft/modpacks/${config.curseforgeProjectId}`);
+          if (config?.githubRepository) links.push(`https://github.com/${config.githubRepository}/releases`);
+          if (links.length === 0) toasts.info("No publish links yet.", 5000);
+          else { await open(links[0]); toasts.success(`Opened ${links[0]}`); }
+        } catch (e) { toasts.error(String(e)); }
+        finally { actionBusy = false; }
         break;
       case "worlds":
         actionBusy = true;
         try {
           const worlds: any[] = await invoke("list_worlds", { path: project.path });
-          if (worlds.length === 0) toasts.info("No worlds found in saves/ folder.");
-          else {
-            let detail = "";
-            for (const w of worlds.slice(0, 3)) {
-              try {
-                const info: any = await invoke("read_world_info", { path: project.path, worldName: w.name });
-                detail += `${w.name}: ${info.gameType}, seed ${info.seed}, ${info.sizeFormatted}
-`;
-              } catch { detail += `${w.name}: ${w.sizeFormatted}
-`; }
-            }
-            toasts.info(detail || `${worlds.length} world(s) found.`, 8000);
-          }
-        } catch (e) { actionError = String(e); }
+          if (worlds.length === 0) toasts.info("No worlds found.");
+          else { toasts.info(`${worlds.length} world(s) found.`, 5000); }
+        } catch (e) { toasts.error(String(e)); }
         finally { actionBusy = false; }
         break;
       case "backup-world":
@@ -229,39 +225,28 @@
         try {
           const worlds: any[] = await invoke("list_worlds", { path: project.path });
           if (worlds.length === 0) { toasts.info("No worlds to backup."); break; }
-          const worldNames = worlds.map((w: any) => w.name).join("\n");
-          const chosen = window.prompt(`Worlds found:\n${worldNames}\n\nEnter world name to backup:`, worlds[0].name);
+          const chosen = window.prompt(`Worlds: ${worlds.map((w: any) => w.name).join(", ")}\n\nEnter world name:`, worlds[0].name);
           if (chosen) {
             await invoke("backup_world", { path: project.path, worldName: chosen });
             toasts.success(`World "${chosen}" backed up.`);
           }
-        } catch (e) { actionError = String(e); }
+        } catch (e) { toasts.error(String(e)); }
         finally { actionBusy = false; }
-        break;
-      case "open-folder":
-        await invoke("open_project_folder", { path: project.path });
         break;
       case "logs-zip":
         actionBusy = true;
         try {
-          const zipPath = await invoke("create_logs_zip", { path: project.path });
+          await invoke("create_logs_zip", { path: project.path });
           toasts.success(`Logs archive created.`);
-        } catch (e) {
-          actionError = String(e);
-        } finally {
-          actionBusy = false;
-        }
+        } catch (e) { toasts.error(String(e)); }
+        finally { actionBusy = false; }
         break;
       case "copy-link":
         await navigator.clipboard.writeText(project.path);
-        toasts.success("Modpack path copied to clipboard");
-        break;
-      case "profile-options":
-        currentView = "project-settings";
-        selectProject(project.path);
+        toasts.success("Path copied to clipboard");
         break;
       case "clone": {
-        const newName = window.prompt("Name for the cloned project:", `${project.info.name} copy`);
+        const newName = window.prompt("Clone name:", `${project.info.name} copy`);
         if (!newName) break;
         actionBusy = true;
         try {
@@ -269,11 +254,8 @@
           const info = await invoke("validate_project", { path: clonedPath });
           recentProjects.add({ path: clonedPath, info: info as any });
           toasts.success(`Cloned to: ${clonedPath}`);
-        } catch (e) {
-          actionError = String(e);
-        } finally {
-          actionBusy = false;
-        }
+        } catch (e) { toasts.error(String(e)); }
+        finally { actionBusy = false; }
         break;
       }
       case "share":
@@ -281,19 +263,16 @@
         try {
           const exported: any = await api.export.modrinthPack(null, project.path);
           await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported .mrpack and copied path: ${exported.path}`);
-        } catch (e) {
-          actionError = String(e);
-        } finally {
-          actionBusy = false;
-        }
+          toasts.success(`Exported .mrpack: ${exported.path}`);
+        } catch (e) { toasts.error(String(e)); }
+        finally { actionBusy = false; }
         break;
       case "cleanup":
         actionBusy = true;
         try {
           const result: any = await invoke("cleanup_project", { path: project.path });
-          toasts.success(`Cleaned ${result.count} files: ${result.cleaned?.join(", ") || "none"}`);
-        } catch (e) { actionError = String(e); }
+          toasts.success(`Cleaned ${result.count} files.`);
+        } catch (e) { toasts.error(String(e)); }
         finally { actionBusy = false; }
         break;
       case "repair":
@@ -304,231 +283,342 @@
           const failed = report.failed?.length ?? 0;
           toasts.success(
             downloaded === 0 && failed === 0
-              ? "All mod files were already present and valid."
+              ? "All mod files present and valid."
               : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`
           );
-        } catch (e) {
-          actionError = String(e);
-        } finally {
-          actionBusy = false;
-        }
+        } catch (e) { toasts.error(String(e)); }
+        finally { actionBusy = false; }
         break;
       case "remove":
-        removeFromLauncher(project);
+        recentProjects.remove(project.path);
+        if (selectedPath === project.path) {
+          selectedPath = $recentProjects[0]?.path ?? null;
+          projectPath.set(selectedPath);
+          projectInfo.set($recentProjects[0]?.info ?? null);
+        }
         break;
-      case "delete":
-        await deleteProject(project);
+      case "delete": {
+        const ok = await confirm(`Delete "${project.info.name}"?`, { title: "Delete", kind: "warning" });
+        if (!ok) break;
+        try {
+          await invoke("delete_project", { path: project.path });
+          recentProjects.remove(project.path);
+          if (selectedPath === project.path) {
+            selectedPath = $recentProjects[0]?.path ?? null;
+            projectPath.set(selectedPath);
+            projectInfo.set($recentProjects[0]?.info ?? null);
+          }
+        } catch (e) { toasts.error(String(e)); }
         break;
-    }
-    if (actionError) toasts.error(`Action failed: ${actionError}`);
-  }
-
-  function removeFromLauncher(project: RecentProject) {
-    recentProjects.remove(project.path);
-    if (selectedPath === project.path) {
-      selectedPath = $recentProjects[0]?.path ?? null;
-      projectPath.set(selectedPath);
-      projectInfo.set($recentProjects[0]?.info ?? null);
-    }
-  }
-
-  async function deleteProject(project: RecentProject) {
-    const ok = await confirm(
-      `Delete profile "${project.info.name}"? This removes the project manifest file.`,
-      { title: "Delete Profile", kind: "warning" }
-    );
-    if (!ok) return;
-    try {
-      await invoke("delete_project", { path: project.path });
-      recentProjects.remove(project.path);
-      if (selectedPath === project.path) {
-        selectedPath = $recentProjects[0]?.path ?? null;
-        projectPath.set(selectedPath);
-        projectInfo.set($recentProjects[0]?.info ?? null);
       }
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await api.mcAuth.logout();
+      authState.set({
+        loggedIn: false,
+        profile: null,
+        expiresAt: null,
+        loginType: "offline",
+        skinSource: "mojang",
+        accounts: $authState.accounts,
+        activeAccountUuid: $authState.activeAccountUuid,
+      });
+      skinPath.set(null);
+      toasts.info("Logged out");
     } catch (e) {
-      toasts.error(`Failed to delete profile: ${e}`);
+      toasts.error(String(e));
     }
   }
 
   function gradientFrom(name: string) {
-    const colors = [
-      "#1bd96a",
-      "#8b5cf6",
-      "#3b82f6",
-      "#f59e0b",
-      "#ec4899",
-      "#06b6d4",
-      "#ef4444",
-    ];
+    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
   }
 
-  if (selectedPath && !selectedProject && $recentProjects.length > 0) {
-    selectProject($recentProjects[0].path);
-  }
+  $: skinUrl = $authState.profile?.skinUrl ?? null;
 </script>
 
 <svelte:window on:click={closeMenu} />
 
 <div class="home">
-  <section class="hero">
-    <button class="play-btn" on:click={launch} disabled={!selectedPath || launching}>
-      {#if launching}
-        <span class="spinner"></span>
-        <span class="play-label">Launching...</span>
-      {:else}
-        <Play size={32} fill="currentColor" />
-        <span class="play-label">Play</span>
-        {#if selectedProject}
-          <span class="play-subtitle">{selectedProject.info.name}</span>
-          <span class="play-meta"
-            >{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span
-          >
-        {:else}
-          <span class="play-subtitle muted">No instance selected</span>
-        {/if}
-      {/if}
-    </button>
-
-    {#if selectedProject}
-      <div class="hero-actions">
-        <button class="ide-cta" on:click={() => (currentView = "ide")}>
-          <Workflow size={16} />
-          Open IDE
-        </button>
-        <button class="ghost" on:click={openSettings}>
-          <Settings size={16} />
-          Settings
-        </button>
-      </div>
-    {/if}
-  </section>
-
-  <section class="projects-section">
-    <div class="section-header">
-      <h2>Instances</h2>
-      <button class="ghost add-btn" on:click={() => (showAddModal = true)}>
-        <Plus size={16} />
-        Add
+  <!-- Top bar: Quick actions left, Avatar right -->
+  <div class="top-bar">
+    <div class="quick-nav">
+      <button class="quick-action" on:click={() => (currentView = "mods")} title="Mods">
+        <Package size={18} />
+        <span>Mods</span>
       </button>
+      <button class="quick-action" on:click={() => (currentView = "graph")} title="Dependency Graph">
+        <GitGraph size={18} />
+        <span>Graph</span>
+      </button>
+      <button class="quick-action" on:click={() => (currentView = "diagnostics")} title="Diagnostics">
+        <Stethoscope size={18} />
+        <span>Diagnostics</span>
+      </button>
+      <button class="quick-action" on:click={() => (currentView = "snapshots")} title="Snapshots">
+        <History size={18} />
+        <span>Snapshots</span>
+      </button>
+      {#if selectedProject}
+        <button class="quick-action" on:click={() => (currentView = "recipes")} title="Recipes">
+          <Puzzle size={18} />
+          <span>Recipes</span>
+        </button>
+        <button class="quick-action" on:click={() => (currentView = "quests")} title="Quests">
+          <Sparkles size={18} />
+          <span>Quests</span>
+        </button>
+      {/if}
     </div>
 
-    {#if $recentProjects.length === 0}
-      <div class="empty-grid">
-        <div class="empty-card">
-          <p>No instances yet</p>
-          <button on:click={() => (showAddModal = true)}>Add instance</button>
-        </div>
-      </div>
-    {:else}
-      <div class="projects-grid">
-        {#each $recentProjects as project (project.path)}
-          <div
-            class="project-tile"
-            class:active={selectedPath === project.path}
-            role="button"
-            tabindex="0"
-            on:click={() => selectProject(project.path)}
-            on:keydown={(e) => e.key === 'Enter' && selectProject(project.path)}
-          >
-            <div
-              class="tile-icon"
-              style="background: linear-gradient(135deg, {gradientFrom(project.info.name)}, {gradientFrom(
-                project.info.id
-              )})"
-            >
-              {project.info.name[0]}
+    <!-- Account avatar in top-right -->
+    <div class="account-avatar-section">
+      {#if $authState.loggedIn && $authState.profile}
+        <button class="account-avatar-btn" on:click={() => (showAccountManager = true)} title="Account Manager">
+          {#if $skinPath}
+            <img src={convertFileSrc($skinPath)} alt={$authState.profile.name} class="avatar-img" />
+          {:else}
+            <div class="avatar-fallback">
+              <User size={18} />
             </div>
-            <div class="tile-info">
-              <span class="tile-name">{project.info.name}</span>
-              <span class="tile-meta"
-                >{project.info.minecraftVersion} · {project.info.loaderKind}{#if instanceSizes[project.path]} · {instanceSizes[project.path]}{/if}</span
-              >
-            </div>
-            <button class="tile-pin" class:pinned={pinnedPaths[project.path]} on:click={(e) => togglePin(e, project.path)} title={pinnedPaths[project.path] ? "Unpin" : "Pin"}>
-              <Pin size={14} />
-            </button>
-            <button
-              class="tile-menu"
-              class:active={activeMenuPath === project.path}
-              on:click={(e) => toggleMenu(e, project.path)}
-              aria-label="Actions"
-            >
-              <MoreVertical size={18} />
-            </button>
-
-              {#if activeMenuPath === project.path}
-                <div class="actions-menu" role="menu" tabindex="-1" aria-label="Project actions" on:keydown={() => {}}>
-                  <div class="menu-group">
-                  <button on:click={() => handleAction("change-version", project)}>
-                    <ShieldAlert size={14} /> Change Version
-                  </button>
-                  <button on:click={() => handleAction("desktop-shortcut", project)}>
-                    <Folder size={14} /> Open Project Folder
-                  </button>
-                  <button on:click={() => handleAction("server-pack", project)}>
-                    <Download size={14} /> Download Server Pack
-                  </button>
-                  <button on:click={() => handleAction("links", project)}>
-                    <Link2 size={14} /> Links
-                  </button>
-                  <button on:click={() => handleAction("worlds", project)}>
-                    <Globe size={14} /> List Worlds
-                  </button>
-                  <button on:click={() => handleAction("backup-world", project)}>
-                    <Download size={14} /> Backup World
-                  </button>
-                  <button on:click={() => handleAction("logs-zip", project)}>
-                    <FileArchive size={14} /> Create logs.zip
-                  </button>
-                  <button on:click={() => handleAction("copy-link", project)}>
-                    <Copy size={14} /> Copy Modpack Link
-                  </button>
-                  <button on:click={() => handleAction("profile-options", project)}>
-                    <Terminal size={14} /> Profile Options
-                  </button>
-                  <button on:click={() => handleAction("clone", project)}>
-                    <GitBranch size={14} /> Clone as...
-                  </button>
-                  <button on:click={() => handleAction("share", project)}>
-                    <Share2 size={14} /> Export & copy path
-                  </button>
-                  <button on:click={() => handleAction("cleanup", project)}>
-                    <Eraser size={14} /> Cleanup
-                  </button>
-                  <button on:click={() => handleAction("repair", project)}>
-                    <Wrench size={14} /> Repair Profile
-                  </button>
-                </div>
-                <div class="menu-separator"></div>
-                <div class="menu-group">
-                  <button on:click={() => handleAction("remove", project)}>
-                    <Minus size={14} /> Remove from launcher
-                  </button>
-                </div>
-                <div class="menu-group danger">
-                  <button on:click={() => handleAction("delete", project)}>
-                    <Trash2 size={14} /> Delete Profile
-                  </button>
-                </div>
-              </div>
-            {/if}
-          </div>
-        {/each}
-
-        <button class="project-tile add-tile" on:click={() => (showAddModal = true)}>
-          <div class="tile-icon add-icon">
-            <Plus size={24} />
-          </div>
-          <span class="tile-name">Add instance</span>
+          {/if}
+          <span class="avatar-name">{$authState.profile.name}</span>
+          <span class="avatar-badge" class:microsoft={$authState.loginType === "microsoft"} class:offline={$authState.loginType === "offline"}>
+            {$authState.loginType === "microsoft" ? "MS" : "OFF"}
+          </span>
         </button>
+      {:else}
+        <button class="account-avatar-btn login" on:click={() => (showLoginModal = true)}>
+          <LogIn size={18} />
+        </button>
+      {/if}
+    </div>
+  </div>
+
+  <!-- Main content: Left (hero + instances) + Right (3D skin) -->
+  <div class="main-layout">
+    <!-- Left column -->
+    <div class="left-column">
+      <!-- Hero: Play button + project info -->
+      <section class="hero">
+        <div class="hero-left">
+          <button class="play-btn" on:click={launch} disabled={!selectedPath || launching}>
+            {#if launching}
+              <span class="spinner"></span>
+              <span class="play-text">Launching...</span>
+            {:else}
+              <Play size={28} fill="currentColor" />
+              <span class="play-text">Play</span>
+            {/if}
+          </button>
+
+          {#if selectedProject}
+            <div class="project-quick-info">
+              <span class="project-name">{selectedProject.info.name}</span>
+              <span class="project-version">{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
+            </div>
+          {/if}
+
+          <div class="hero-actions">
+            {#if selectedProject}
+              <button class="action-btn primary" on:click={() => (currentView = "ide")}>
+                <Workflow size={15} />
+                IDE
+              </button>
+              <button class="action-btn" on:click={openSettings}>
+                <Settings size={15} />
+                Settings
+              </button>
+              <button class="action-btn" on:click={() => invoke("open_project_folder", { path: selectedProject.path })}>
+                <FolderOpen size={15} />
+                Folder
+              </button>
+            {/if}
+            <button class="action-btn accent" on:click={() => (showAddModal = true)}>
+              <Plus size={15} />
+              New
+            </button>
+          </div>
+        </div>
+
+        {#if selectedProject}
+          <div class="hero-right">
+            <div class="instance-stats">
+              <div class="stat">
+                <HardDrive size={14} />
+                <span>{instanceSizes[selectedProject.path] || "..."}</span>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </section>
+
+      <!-- Instances grid -->
+      <section class="projects-section">
+        <div class="section-header">
+          <h2>Instances</h2>
+          <span class="instance-count">{$recentProjects.length}</span>
+        </div>
+
+        {#if $recentProjects.length === 0}
+          <div class="empty-state">
+            <div class="empty-icon">
+              <Package size={40} />
+            </div>
+            <h3>No instances yet</h3>
+            <p>Create your first modpack instance to get started.</p>
+            <button class="action-btn accent" on:click={() => (showAddModal = true)}>
+              <Plus size={16} />
+              Create instance
+            </button>
+          </div>
+        {:else}
+          <div class="projects-grid">
+            {#each $recentProjects as project (project.path)}
+              <div
+                class="project-tile"
+                class:active={selectedPath === project.path}
+                role="button"
+                tabindex="0"
+                on:click={() => selectProject(project.path)}
+                on:keydown={(e) => e.key === 'Enter' && selectProject(project.path)}
+              >
+                <div
+                  class="tile-icon"
+                  style="background: linear-gradient(135deg, {gradientFrom(project.info.name)}, {gradientFrom(project.info.id)})"
+                >
+                  {project.info.name[0]}
+                </div>
+                <div class="tile-info">
+                  <span class="tile-name">{project.info.name}</span>
+                  <span class="tile-meta">
+                    {project.info.minecraftVersion} · {project.info.loaderKind}
+                    {#if instanceSizes[project.path]} · {instanceSizes[project.path]}{/if}
+                  </span>
+                </div>
+                <button class="tile-pin" class:pinned={pinnedPaths[project.path]} on:click={(e) => togglePin(e, project.path)} title={pinnedPaths[project.path] ? "Unpin" : "Pin"}>
+                  <Pin size={14} />
+                </button>
+                <button
+                  class="tile-menu"
+                  class:active={activeMenuPath === project.path}
+                  on:click={(e) => toggleMenu(e, project.path)}
+                  aria-label="Actions"
+                >
+                  <MoreVertical size={18} />
+                </button>
+
+                {#if activeMenuPath === project.path}
+                  <div class="actions-menu" role="menu" tabindex="-1" on:keydown={() => {}}>
+                    <div class="menu-group">
+                      <button on:click={() => handleAction("change-version", project)}>
+                        <ShieldAlert size={14} /> Change Version
+                      </button>
+                      <button on:click={() => handleAction("open-folder", project)}>
+                        <Folder size={14} /> Open Folder
+                      </button>
+                      <button on:click={() => handleAction("server-pack", project)}>
+                        <Download size={14} /> Server Pack
+                      </button>
+                      <button on:click={() => handleAction("links", project)}>
+                        <Link2 size={14} /> Links
+                      </button>
+                      <button on:click={() => handleAction("worlds", project)}>
+                        <Globe size={14} /> Worlds
+                      </button>
+                      <button on:click={() => handleAction("backup-world", project)}>
+                        <Download size={14} /> Backup World
+                      </button>
+                      <button on:click={() => handleAction("logs-zip", project)}>
+                        <FileArchive size={14} /> Logs ZIP
+                      </button>
+                      <button on:click={() => handleAction("copy-link", project)}>
+                        <Copy size={14} /> Copy Path
+                      </button>
+                      <button on:click={() => handleAction("clone", project)}>
+                        <GitBranch size={14} /> Clone
+                      </button>
+                      <button on:click={() => handleAction("share", project)}>
+                        <Share2 size={14} /> Export
+                      </button>
+                      <button on:click={() => handleAction("cleanup", project)}>
+                        <Eraser size={14} /> Cleanup
+                      </button>
+                      <button on:click={() => handleAction("repair", project)}>
+                        <Wrench size={14} /> Repair
+                      </button>
+                    </div>
+                    <div class="menu-separator"></div>
+                    <div class="menu-group">
+                      <button on:click={() => handleAction("remove", project)}>
+                        <Minus size={14} /> Remove
+                      </button>
+                    </div>
+                    <div class="menu-group danger">
+                      <button on:click={() => handleAction("delete", project)}>
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+
+            <button class="project-tile add-tile" on:click={() => (showAddModal = true)}>
+              <div class="tile-icon add-icon">
+                <Plus size={24} />
+              </div>
+              <span class="tile-name">Add instance</span>
+            </button>
+          </div>
+        {/if}
+      </section>
+    </div>
+
+    <!-- Right column: 3D Skin -->
+    <div class="right-column">
+      <div class="skin-panel">
+        {#if $authState.loggedIn && $authState.profile}
+          <SkinPreview3D
+            skinUrl={skinUrl}
+            width={300}
+            height={400}
+          />
+          <div class="skin-panel-footer">
+            <span class="skin-player-name">{$authState.profile.name}</span>
+            <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
+              <Palette size={14} />
+              Change Skin
+            </button>
+          </div>
+        {:else}
+          <div class="skin-panel-empty">
+            <User size={48} />
+            <p>Sign in to see your skin</p>
+            <button class="action-btn accent" on:click={() => (showLoginModal = true)}>
+              <LogIn size={16} />
+              Sign In
+            </button>
+          </div>
+        {/if}
       </div>
-    {/if}
-  </section>
+    </div>
+  </div>
 </div>
+
+{#if showLoginModal}
+  <MinecraftLogin on:close={() => (showLoginModal = false)} />
+{/if}
+
+{#if showAccountManager}
+  <AccountManager on:close={() => (showAccountManager = false)} />
+{/if}
 
 {#if showAddModal}
   <AddInstanceModal
@@ -543,38 +633,252 @@
 
 <style>
   .home {
-    max-width: 1200px;
+    max-width: 1400px;
   }
 
-  .hero {
+  /* ─── Top Bar ─────────────────────────────────────── */
+  .top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    gap: 16px;
+  }
+
+  .quick-nav {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .quick-action {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.15s ease;
+  }
+
+  .quick-action:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--bg-hover);
+  }
+
+  /* ─── Account Avatar ─────────────────────────────── */
+  .account-avatar-section {
+    flex-shrink: 0;
+  }
+
+  .account-avatar-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px 6px 6px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .account-avatar-btn:hover {
+    border-color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.04);
+  }
+
+  .account-avatar-btn.login {
+    padding: 8px 14px;
+    color: var(--text-secondary);
+  }
+
+  .account-avatar-btn.login:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+  }
+
+  .avatar-img {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    object-fit: cover;
+    image-rendering: pixelated;
+  }
+
+  .avatar-fallback {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+  }
+
+  .avatar-name {
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  .avatar-badge {
+    font-size: 9px;
+    font-weight: 800;
+    padding: 1px 4px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+
+  .avatar-badge.microsoft {
+    color: #00a4ef;
+    background: rgba(0, 164, 239, 0.12);
+  }
+
+  .avatar-badge.offline {
+    color: var(--text-muted);
+    background: var(--bg-hover);
+  }
+
+  /* ─── Main Layout ────────────────────────────────── */
+  .main-layout {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+  }
+
+  .left-column {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .right-column {
+    width: 320px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 20px;
+  }
+
+  .skin-panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-xl);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .skin-panel-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .skin-player-name {
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--text-primary);
+  }
+
+  .change-skin-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .change-skin-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.04);
+  }
+
+  .skin-panel-empty {
     display: flex;
     flex-direction: column;
     align-items: center;
+    gap: 12px;
+    padding: 60px 24px;
     text-align: center;
-    padding: 56px 32px;
-    background: linear-gradient(180deg, rgba(27, 217, 106, 0.08), transparent);
+    color: var(--text-muted);
+  }
+
+  .skin-panel-empty p {
+    font-size: 13px;
+  }
+
+  /* ─── Hero ────────────────────────────────────────── */
+  .hero {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 32px;
+    background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
-    margin-bottom: 32px;
+    margin-bottom: 24px;
+    gap: 24px;
+  }
+
+  .hero-left {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .hero-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .instance-stats {
+    display: flex;
+    gap: 8px;
+  }
+
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    padding: 6px 10px;
+    border-radius: 8px;
   }
 
   .play-btn {
-    width: 280px;
-    min-height: 140px;
+    width: 160px;
+    height: 56px;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    font-size: 20px;
-    border-radius: var(--border-radius-xl);
-    box-shadow: 0 16px 40px rgba(27, 217, 106, 0.35);
-    margin-bottom: 16px;
-    padding: 20px;
+    gap: 10px;
+    font-size: 18px;
+    border-radius: var(--border-radius-lg);
+    box-shadow: 0 8px 24px rgba(27, 217, 106, 0.3);
+    padding: 0 24px;
   }
 
   .play-btn:hover {
-    box-shadow: 0 20px 48px rgba(27, 217, 106, 0.45);
+    box-shadow: 0 12px 32px rgba(27, 217, 106, 0.4);
   }
 
   .play-btn:disabled {
@@ -583,60 +887,95 @@
     box-shadow: none;
   }
 
-  .play-label {
-    font-size: 26px;
-    font-weight: 900;
-    line-height: 1;
-    margin-top: 2px;
+  .play-text {
+    font-weight: 800;
   }
 
-  .play-subtitle {
-    font-size: 14px;
+  .project-quick-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .project-name {
     font-weight: 700;
-    color: rgba(0, 0, 0, 0.65);
-    margin-top: 4px;
+    font-size: 15px;
+    color: var(--text-primary);
   }
 
-  .play-subtitle.muted {
-    color: rgba(0, 0, 0, 0.45);
-    font-weight: 600;
-  }
-
-  .play-meta {
+  .project-version {
     font-size: 12px;
-    font-weight: 700;
-    color: rgba(0, 0, 0, 0.5);
+    color: var(--text-muted);
     text-transform: capitalize;
   }
 
+  .hero-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .action-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.15s ease;
+  }
+
+  .action-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  .action-btn.primary {
+    background: var(--bg-elevated);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+  }
+
+  .action-btn.primary:hover {
+    background: rgba(27, 217, 106, 0.1);
+  }
+
+  .action-btn.accent {
+    background: var(--accent-primary);
+    color: #000;
+    border-color: transparent;
+  }
+
+  .action-btn.accent:hover {
+    background: var(--accent-hover);
+  }
+
   .spinner {
-    width: 24px;
-    height: 24px;
-    border: 3px solid rgba(0, 0, 0, 0.2);
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(0, 0, 0, 0.2);
     border-top-color: #000;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
 
   @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+    to { transform: rotate(360deg); }
   }
 
-  .hero-actions {
-    display: flex;
-    gap: 12px;
-  }
-
+  /* ─── Instances ───────────────────────────────────── */
   .projects-section {
     margin-bottom: 32px;
   }
 
   .section-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 10px;
     margin-bottom: 16px;
   }
 
@@ -645,20 +984,30 @@
     font-weight: 700;
   }
 
+  .instance-count {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    padding: 2px 8px;
+    border-radius: 12px;
+  }
+
   .projects-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
   }
 
   .project-tile {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 16px;
+    gap: 12px;
+    padding: 14px;
     background: var(--bg-secondary);
-    border: 2px solid var(--border-color);
+    border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     text-align: left;
     transition: all 0.15s ease;
@@ -667,23 +1016,24 @@
 
   .project-tile:hover {
     border-color: var(--bg-hover);
-    transform: translateY(-2px);
+    background: var(--bg-tertiary);
+    transform: translateY(-1px);
   }
 
   .project-tile.active {
     border-color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.06);
+    background: rgba(27, 217, 106, 0.04);
   }
 
   .tile-icon {
-    width: 52px;
-    height: 52px;
+    width: 44px;
+    height: 44px;
     border-radius: var(--border-radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 900;
-    font-size: 22px;
+    font-size: 18px;
     color: #fff;
     flex-shrink: 0;
   }
@@ -704,6 +1054,7 @@
 
   .tile-name {
     font-weight: 700;
+    font-size: 13px;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
@@ -711,7 +1062,7 @@
   }
 
   .tile-meta {
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
     text-transform: capitalize;
   }
@@ -727,95 +1078,67 @@
   .tile-pin:hover { color: var(--accent-primary) !important; }
 
   .tile-menu {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--border-radius-sm);
-    background: transparent;
-    color: var(--text-muted);
-    border: none;
-    cursor: pointer;
-    flex-shrink: 0;
+    width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+    border-radius: var(--border-radius-sm); background: transparent; color: var(--text-muted);
+    border: none; cursor: pointer; flex-shrink: 0; opacity: 0; transition: opacity .15s;
   }
-
-  .tile-menu:hover,
-  .tile-menu.active {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
+  .project-tile:hover .tile-menu { opacity: 1; }
+  .tile-menu:hover, .tile-menu.active { background: var(--bg-hover); color: var(--text-primary); }
 
   .actions-menu {
-    position: absolute;
-    top: 46px;
-    right: 12px;
-    width: 220px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-    z-index: 50;
-    padding: 6px;
+    position: absolute; top: 42px; right: 10px; width: 200px;
+    background: var(--bg-elevated); border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg); box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    z-index: 50; padding: 4px;
   }
 
   .actions-menu button {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 10px;
-    border-radius: var(--border-radius-md);
-    background: transparent;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 13px;
-    text-align: left;
-    cursor: pointer;
+    width: 100%; display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: var(--border-radius-md);
+    background: transparent; border: none; color: var(--text-secondary);
+    font-size: 12px; text-align: left; cursor: pointer;
   }
 
-  .actions-menu button:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
-  }
+  .actions-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-  .menu-separator {
-    height: 1px;
-    background: var(--border-color);
-    margin: 6px 0;
-  }
+  .menu-separator { height: 1px; background: var(--border-color); margin: 4px 0; }
+  .menu-group.danger button:hover { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
 
-  .menu-group.danger button:hover {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
-  }
+  .add-tile:hover .tile-icon { color: var(--accent-primary); border-color: var(--accent-primary); }
 
-  .add-tile:hover .tile-icon {
-    color: var(--accent-primary);
-    border-color: var(--accent-primary);
-  }
-
-  .empty-grid {
-    display: flex;
-    justify-content: center;
-  }
-
-  .empty-card {
-    background: var(--bg-secondary);
-    border: 2px dashed var(--border-color);
-    border-radius: var(--border-radius-lg);
-    padding: 48px;
-    text-align: center;
+  /* ─── Empty State ─────────────────────────────────── */
+  .empty-state {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 14px;
+    gap: 12px;
+    padding: 64px 32px;
+    text-align: center;
+    background: var(--bg-secondary);
+    border: 2px dashed var(--border-color);
+    border-radius: var(--border-radius-xl);
+  }
+
+  .empty-icon {
+    width: 72px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elevated);
+    border-radius: 50%;
     color: var(--text-muted);
   }
 
-  .empty-card p {
-    color: var(--text-secondary);
-    font-weight: 500;
+  .empty-state h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
   }
 
+  .empty-state p {
+    font-size: 13px;
+    color: var(--text-muted);
+    max-width: 320px;
+  }
 </style>

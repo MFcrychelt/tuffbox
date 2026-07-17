@@ -297,10 +297,6 @@ fn urlencode(value: &str) -> String {
 struct ModrinthSearchResponse {
     hits: Vec<ModrinthSearchHit>,
     #[serde(default)]
-    offset: u32,
-    #[serde(default)]
-    limit: u32,
-    #[serde(default)]
     total_hits: u32,
 }
 
