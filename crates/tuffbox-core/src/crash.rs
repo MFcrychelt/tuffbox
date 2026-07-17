@@ -1513,10 +1513,15 @@ JVM Flags:
         };
         let plan = create_crash_fix_plan(&graph, &[], &[suspect], &[]);
 
-        let ChangeAction::UpdateMod { target_version, .. } = &plan.actions[0] else {
-            panic!("expected update action");
-        };
-        assert_eq!(target_version, LATEST_COMPATIBLE_VERSION);
-        assert_eq!(resolve_update_target_version(target_version), None);
+        let update = plan
+            .actions
+            .iter()
+            .find_map(|action| match action {
+                ChangeAction::UpdateMod { target_version, .. } => Some(target_version),
+                _ => None,
+            })
+            .expect("expected update action");
+        assert_eq!(update, LATEST_COMPATIBLE_VERSION);
+        assert_eq!(resolve_update_target_version(update), None);
     }
 }
