@@ -692,6 +692,7 @@
   let positioned: PositionedNode[] = [];
   let simulation: any = null;
   let simulationLayoutKey = "";
+  let simNodes: LayoutNode[] = [];
   let resetViewOnNextLayout = true;
 
   function layoutCanvasSize(count: number, maxDepth: number) {
@@ -805,7 +806,7 @@
 
     // Seed on concentric rings around each hub (modrinth-extras pattern).
     const ringIndex = new Map<string, number>();
-    const initializedNodes: LayoutNode[] = displayNodes.map((node) => {
+    simNodes = displayNodes.map((node) => {
       const isGhost = node.kind === "Missing";
       let tone: string;
       if (isGhost) tone = "ghost";
@@ -877,7 +878,7 @@
     // pin hubs, radial depth rings, default link strength (1/min-degree) so
     // high-degree mods do not collapse into a singularity, local charge, hard collide.
     simulation = d3
-      .forceSimulation<LayoutNode>(initializedNodes)
+      .forceSimulation<LayoutNode>(simNodes)
       .force(
         "charge",
         d3.forceManyBody<LayoutNode>().strength(-450).distanceMax(600),
@@ -910,7 +911,7 @@
       .alphaDecay(0.085)
       .velocityDecay(0.55)
       .on("tick", () => {
-        positioned = initializedNodes.map((n) => ({ ...n }));
+        positioned = simNodes.map((n) => ({ ...n }));
       })
       .on("end", () => {
         if (resetViewOnNextLayout) {
@@ -918,7 +919,7 @@
           resetViewOnNextLayout = false;
         }
       });
-    positioned = initializedNodes.map((n) => ({ ...n }));
+    positioned = simNodes.map((n) => ({ ...n }));
   }
 
   $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
@@ -935,6 +936,16 @@
   }
 
   $: positionById = new Map(positioned.map((node) => [node.id, node]));
+
+  // Reactive edge paths: recomputed whenever `positioned` (and thus
+  // `positionById`) changes, so arrows track nodes live during the sim.
+  $: edgePaths = displayEdges.map((edge) => ({
+    key: `${edge.from}:${edge.to}:${edge.kind}`,
+    from: edge.from,
+    to: edge.to,
+    d: edgePath(edge),
+    danger: edgeDanger(edge),
+  }));
 
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
@@ -1102,22 +1113,23 @@
     event.stopPropagation();
     selectedId = node.id;
     if (!simulation) return;
-    const layoutNode = node as LayoutNode;
+    const sim = simNodes.find((n) => n.id === node.id);
+    if (!sim) return;
+    const layoutNode = sim;
     const keepPinned = !!layoutNode.isHub;
-    node.fx = node.x;
-    node.fy = node.y;
+    layoutNode.fx = layoutNode.x;
+    layoutNode.fy = layoutNode.y;
     const onMouseMove = (ev: MouseEvent) => {
       const p = clientToSvgPoint(ev.clientX, ev.clientY);
-      node.fx = p.x;
-      node.fy = p.y;
+      layoutNode.fx = p.x;
+      layoutNode.fy = p.y;
       if (keepPinned) {
         layoutNode.hubX = p.x;
         layoutNode.hubY = p.y;
-        for (const other of positioned) {
-          const o = other as LayoutNode;
-          if (o.hubId === layoutNode.hubId) {
-            o.hubX = p.x;
-            o.hubY = p.y;
+        for (const other of simNodes) {
+          if (other.hubId === layoutNode.hubId) {
+            other.hubX = p.x;
+            other.hubY = p.y;
           }
         }
       }
@@ -1126,8 +1138,8 @@
     const onMouseUp = () => {
       // Hubs stay pinned (modrinth-extras root behavior); others rejoin the sim.
       if (!keepPinned) {
-        node.fx = null;
-        node.fy = null;
+        layoutNode.fx = null;
+        layoutNode.fy = null;
       }
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
@@ -1248,14 +1260,14 @@
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(113,113,122,.95)" />
           </marker>
         </defs>
-        {#each displayEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
+        {#each edgePaths as ep (ep.key)}
           <path
             class="graph-edge"
             class:dense={denseGraph}
-            class:danger-edge={edgeDanger(edge)}
-            class:dimmed={selectedId && edge.from !== selectedId && edge.to !== selectedId}
-            d={edgePath(edge)}
-            marker-end={edgeDanger(edge) ? "url(#arrow-danger)" : "url(#arrow)"}
+            class:danger-edge={ep.danger}
+            class:dimmed={selectedId && ep.from !== selectedId && ep.to !== selectedId}
+            d={ep.d}
+            marker-end={ep.danger ? "url(#arrow-danger)" : "url(#arrow)"}
           />
         {/each}
         {#each positioned as node (node.id)}
