@@ -63,7 +63,27 @@ jobs:
 
     - name: Build Tauri (Windows .exe + installer)
       working-directory: apps/tuffbox-desktop
-      run: npm run tauri:build
+      run: npm run tauri:build 2>&1 | Tee-Object -FilePath $env:GITHUB_WORKSPACE/tauri-build.log
+
+    - name: Dump target tree on failure
+      if: failure()
+      shell: pwsh
+      run: |
+        Get-ChildItem -Recurse -File target -ErrorAction SilentlyContinue |
+          Where-Object { $_.FullName -match '\.(exe|msi|dll)$' } |
+          Select-Object FullName, Length | Format-Table -AutoSize
+        if (Test-Path $env:GITHUB_WORKSPACE/tauri-build.log) {
+          Write-Host "===== tauri-build.log (tail) ====="
+          Get-Content $env:GITHUB_WORKSPACE/tauri-build.log -Tail 80
+        }
+
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tuffbox-build-log
+        path: tauri-build.log
+        if-no-files-found: ignore
 
     - name: Locate build output
       shell: pwsh
