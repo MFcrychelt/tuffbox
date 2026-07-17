@@ -680,6 +680,11 @@
     hubId: string;
     hubX: number;
     hubY: number;
+    vx?: number;
+    vy?: number;
+    fx?: number | null;
+    fy?: number | null;
+    index?: number;
   };
 
   let canvasWidth = 1600;
