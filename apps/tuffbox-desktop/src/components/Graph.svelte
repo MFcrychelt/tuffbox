@@ -570,6 +570,28 @@
     return acc;
   }, {});
   $: modNodes = nodes.filter((node) => node.kind === "Mod");
+  /// Side-panel grouping: mods bucketed by the same human categories used for
+  /// the graph clusters, so the list reads top-to-bottom like the canvas.
+  $: groupedMods = (() => {
+    const buckets = new Map<string, { label: string; color: string; nodes: GraphNode[] }>();
+    for (const node of modNodes) {
+      const g = categorizeMod(node.id, node.label);
+      const bucket = buckets.get(g.key) ?? { label: g.label, color: g.color, nodes: [] };
+      bucket.nodes.push(node);
+      buckets.set(g.key, bucket);
+    }
+    const order = MOD_GROUPS.map((g) => g.key);
+    return [...buckets.entries()]
+      .sort((a, b) => {
+        const ia = order.indexOf(a[0]);
+        const ib = order.indexOf(b[0]);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a[1].label.localeCompare(b[1].label);
+      })
+      .map(([, bucket]) => ({
+        ...bucket,
+        nodes: bucket.nodes.slice().sort((x, y) => x.label.localeCompare(y.label)),
+      }));
+  })();
   $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing");
   $: profileNodes = nodes.filter((node) => node.kind === "Profile");
 
@@ -720,7 +742,11 @@
     fx?: number | null;
     fy?: number | null;
     index?: number;
+    groupKey?: string;
   };
+
+  type GroupMeta = { key: string; label: string; color: string; x: number; y: number };
+  let groupMeta: GroupMeta[] = [];
 
   let canvasWidth = 1600;
   let canvasHeight = 900;
@@ -731,6 +757,102 @@
   const nodeEls = new Map<string, SVGGElement>();
   const edgeEls = new Map<string, SVGPathElement>();
   let resetViewOnNextLayout = true;
+
+  /// Human-friendly mod categories so the graph reads as labelled clusters
+  /// ("Rendering", "Create / Automation", …) instead of one undifferentiated
+  /// tangle where every mod is shoved into a corner by depth-from-hub rings.
+  type ModGroup = {
+    key: string;
+    label: string;
+    color: string;
+    matches: (id: string, label: string) => boolean;
+  };
+
+  const MOD_GROUPS: ModGroup[] = [
+    {
+      key: "rendering",
+      label: "Rendering & Performance",
+      color: "rgba(139,92,246,0.5)",
+      matches: (id, label) =>
+        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|entityculling|cull-less| continuity|entitytexture|dashloader|lazyd|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle)|render|optifine|performance|fps/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "worldgen",
+      label: "World Generation",
+      color: "rgba(34,197,94,0.5)",
+      matches: (id, label) =>
+        /(biome|terrablender|terralith|tectonic|biomesoplenty|byg|ohthebiomes|dungeons|reterraforged|yungs|cave|structure|waystones|explorify|wwoo|noise|worldgen|geophilic|largemeals|incendium|amplified|promenade|regions|nullscape|wilder|biomes)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "create",
+      label: "Create & Automation",
+      color: "rgba(245,158,11,0.55)",
+      matches: (id, label) =>
+        /(create|flywheel|ponder|train|steam|rc|trackwork|createplus|decorative|casing|sequenced|mechanical|automated|factory|pipez|integrateddynamics|applied|refinedstorage|thermal|mekanism|techreborn|industrial|immersive|botania|powah|energy|ae2)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "storage",
+      label: "Storage & Inventory",
+      color: "rgba(56,189,248,0.5)",
+      matches: (id, label) =>
+        /(jei|rei|emi|inventory|sort|chest|shulker|sophisticated|ironchest|trinket|backpack|curios|collective|roughly|jade|wthit|theoneprobe|glassential|itemzo|justenough|waila)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "magic",
+      label: "Magic & RPG",
+      color: "rgba(217,70,239,0.5)",
+      matches: (id, label) =>
+        /(magic|mana|arcanus|hexerei|ironspell|spell|bloodmagic|astral|occultism|forbidden|ars|naturesaura|reliquary|artifact|origins|runes|mage|wizard|ritual)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "adventure",
+      label: "Adventure & Mobs",
+      color: "rgba(239,68,68,0.5)",
+      matches: (id, label) =>
+        /(mob|creature|enemy|entity|boss|dungeon|adventure|expansion|farm|alex|guard|equipment|weapon|armor|combat|tactical|cataclysm|goblin|undead|mutant|iceandfire|twilight|aether|shire|dragon|bestiary|poke)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "library",
+      label: "Libraries & Core",
+      color: "rgba(148,163,184,0.55)",
+      matches: (id, label) =>
+        /(api|lib|library|core|fabric|forge|neoforge|quilt|architectury|cloth|yacl|trinkets|cardinal|player|collective| midnightlib|resourceful|reacharound|commander|balm|container|configured|framework|platform|modmenu|curios|slight)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "qol",
+      label: "Quality of Life",
+      color: "rgba(250,204,21,0.5)",
+      matches: (id, label) =>
+        /(qol|utility|tooltip|xaero|journeymap|minimap|map|sound|music|harvest|rightclick|mouse|keybind|zoom|chat|emoji|cosmetic|skin|recipe|patchouli|bookshelf|supplementaries|decor|furniture|macaw|hand|totem|waystone|comfort|physic|presence|villager|easy|fast|extra|more|added|delight|farmers|croptopia)/i.test(
+          id + " " + label
+        ),
+    },
+  ];
+
+  /// Assign every Mod/Missing node to a human category. The first matching
+  /// group wins; anything unmatched lands in "misc" so no node is orphaned
+  /// (orphans are exactly what caused the lopsided "square of mods" layout).
+  function categorizeMod(id: string, label: string): ModGroup {
+    const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
+    for (const group of MOD_GROUPS) {
+      if (group.matches(slug, label)) return group;
+    }
+    return { key: "misc", label: "Other Mods", color: "rgba(113,113,122,0.5)", matches: () => false };
+  }
 
   function layoutCanvasSize(count: number, maxDepth: number) {
     const ring = Math.max(3, maxDepth + 1);
@@ -837,6 +959,7 @@
   $: layoutKey = [
     ...displayNodes.map((n) => n.id).sort(),
     ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
+    groupMeta.map((g) => g.key).join(","),
   ].join("|");
 
   function startSimulation() {
@@ -866,9 +989,11 @@
     const cx = canvasWidth / 2;
     const cy = canvasHeight / 2;
 
-    // Primary hub sits dead-centre; satellite hubs orbit it on a fixed,
-    // relatively small ring so the whole graph reads as one centred system
-    // rather than several scattered centres.
+    // Core hubs (minecraft / loader / java / profile) sit dead-centre;
+    // everything else is grouped into human categories ("Rendering",
+    // "Create & Automation", …) and each group gets its own anchor on a ring
+    // around the centre. This keeps related mods physically together (a labelled
+    // cluster) instead of scattering them into the four corners of a square.
     const hubPositions = new Map<string, { x: number; y: number }>();
     const hubOrbit = 480;
     hubMeta.forEach((h, i) => {
@@ -884,8 +1009,45 @@
     });
     const hubPosOf = (id: string) => hubPositions.get(id) ?? { x: cx, y: cy };
 
-    // Deterministic seed: hubs at their anchor positions, every other node on
-    // a spiral by dependency depth so the simulation starts already readable.
+    // Build group anchors: distribute categories evenly on a ring around the
+    // centre so clusters never overlap and there is no "square" artifact.
+    const isCoreNode = (node: GraphNode) =>
+      node.kind === "MinecraftVersion" ||
+      node.kind === "Loader" ||
+      node.kind === "JavaRuntime" ||
+      node.kind === "Profile";
+
+    const groupCounts = new Map<string, number>();
+    for (const node of displayNodes) {
+      if (isCoreNode(node)) continue;
+      const key = categorizeMod(node.id, node.label).key;
+      groupCounts.set(key, (groupCounts.get(key) ?? 0) + 1);
+    }
+    const groupKeys = [...groupCounts.keys()];
+    const groupRadius = 620 + groupKeys.length * 40;
+    const groupAnchors = new Map<string, { x: number; y: number }>();
+    groupKeys.forEach((key, i) => {
+      const angle = (i / Math.max(1, groupKeys.length)) * Math.PI * 2 - Math.PI / 2;
+      groupAnchors.set(key, {
+        x: cx + Math.cos(angle) * groupRadius,
+        y: cy + Math.sin(angle) * groupRadius,
+      });
+    });
+    // expose for rendering group hulls / labels
+    groupMeta = groupKeys.map((key) => {
+      const def = MOD_GROUPS.find((g) => g.key === key) ?? {
+        key,
+        label: "Other Mods",
+        color: "rgba(113,113,122,0.5)",
+        matches: () => false,
+      };
+      const anchor = groupAnchors.get(key)!;
+      return { key, label: def.label, color: def.color, x: anchor.x, y: anchor.y };
+    });
+
+    // Deterministic seed: core hubs at centre, each mod on a tight spiral around
+    // *its group anchor* (not around a hub), so the simulation starts as
+    // readable clusters rather than a collapsed star.
     const ringIndex = new Map<string, number>();
     simNodes = displayNodes.map((node) => {
       const isGhost = node.kind === "Missing";
@@ -895,27 +1057,35 @@
       else if (node.kind === "Profile") tone = "profile";
       else tone = "runtime";
 
+      const isHub = hubMeta.some((h) => h.id === node.id);
       const d = depth.get(node.id) ?? 1;
       const hubId = hubOf.get(node.id) ?? node.id;
-      const isHub = hubMeta.some((h) => h.id === node.id);
-      const anchor = hubPosOf(hubId);
-      const key = `${hubId}:${d}`;
+
+      let anchor: { x: number; y: number };
+      let pinned = false;
+      if (isCoreNode(node) || isHub) {
+        anchor = hubPosOf(hubId);
+        pinned = true;
+      } else {
+        const group = categorizeMod(node.id, node.label);
+        anchor = groupAnchors.get(group.key) ?? { x: cx, y: cy };
+      }
+
+      const key = `${anchor.x.toFixed(0)}:${anchor.y.toFixed(0)}`;
       const idx = ringIndex.get(key) ?? 0;
       ringIndex.set(key, idx + 1);
-      const siblings = Math.max(
-        1,
-        [...depth.entries()].filter(([id, dd]) => dd === d && hubOf.get(id) === hubId).length,
-      );
-      const angle = (idx / siblings) * Math.PI * 2 + d * 0.6;
-      const ring = isHub ? 0 : 150 + d * 200 + ((idx % 3) - 1) * 14;
+      const siblings = Math.max(1, groupCounts.get(categorizeMod(node.id, node.label).key) ?? 1);
+      const angle = (idx / siblings) * Math.PI * 2 + idx * 0.5;
+      // Compact local spiral: groups read as clusters, not corner-pinned rings.
+      const ring = pinned ? 0 : 70 + (idx % 14) * 34 + Math.floor(idx / 14) * 26;
 
       return {
         ...node,
         label: displayLabel(node),
         x: anchor.x + Math.cos(angle) * ring,
         y: anchor.y + Math.sin(angle) * ring,
-        fx: isHub ? anchor.x : null,
-        fy: isHub ? anchor.y : null,
+        fx: pinned ? anchor.x : null,
+        fy: pinned ? anchor.y : null,
         tone,
         ghost: isGhost,
         depth: d,
@@ -924,6 +1094,7 @@
         hubId,
         hubX: anchor.x,
         hubY: anchor.y,
+        groupKey: isCoreNode(node) ? "core" : categorizeMod(node.id, node.label).key,
       } as LayoutNode;
     });
 
@@ -931,28 +1102,26 @@
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
     const degOf = (id: string) => degree.get(id) ?? 0;
 
-    // Soft attraction of every node toward *its own* hub anchor (not the
-    // canvas centre). Deeper dependencies sit farther from their hub, so each
-    // component forms tidy rings around its hub instead of collapsing into a
-    // single over-dense "star" at one centre or stacking into a line.
-    function forceHubAttract(strength = 0.22) {
+    // Soft attraction of every node toward the centre of *its own category
+    // cluster* (group anchor), so related mods stay together as a labelled blob
+    // instead of being flung to the canvas corners. Core hubs stay pinned at the
+    // centre; mods only drift locally within their group, which is exactly what
+    // prevents the "square of mods" collapse.
+    function forceGroupAttract(strength = 0.16) {
       let nodes: LayoutNode[] = [];
+      force.initialize = (_nodes: LayoutNode[]) => {
+        nodes = _nodes;
+      };
       function force(alpha: number) {
         const k = strength * alpha;
         for (const d of nodes) {
           if (d.isHub) continue;
-          const targetR = Math.max(70, d.depth) * 240;
           const dx = d.x - d.hubX;
           const dy = d.y - d.hubY;
-          const dist = Math.hypot(dx, dy) || 1;
-          const delta = ((dist - targetR) / dist) * k;
-          d.vx = (d.vx ?? 0) - dx * delta;
-          d.vy = (d.vy ?? 0) - dy * delta;
+          d.vx = (d.vx ?? 0) - dx * k;
+          d.vy = (d.vy ?? 0) - dy * k;
         }
       }
-      force.initialize = (_nodes: LayoutNode[]) => {
-        nodes = _nodes;
-      };
       return force;
     }
 
@@ -1006,7 +1175,7 @@
           .strength(1)
           .iterations(4),
       )
-      .force("hub", forceHubAttract(maxDepth === 0 ? 0 : 0.2))
+      .force("hub", forceGroupAttract(maxDepth === 0 ? 0.06 : 0.16))
       .alpha(1)
       .alphaDecay(0.05)
       .velocityDecay(0.78)
@@ -1273,8 +1442,10 @@
       if (keepPinned) {
         layoutNode.hubX = p.x;
         layoutNode.hubY = p.y;
+        // Only core/cluster-root nodes share this hub position; category groups
+        // keep their own anchors, so we must NOT drag every mod along with a hub.
         for (const other of simNodes) {
-          if (other.hubId === layoutNode.hubId) {
+          if (other.groupKey === layoutNode.groupKey && other.id !== layoutNode.id) {
             other.hubX = p.x;
             other.hubY = p.y;
           }
@@ -1415,6 +1586,12 @@
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(113,113,122,.95)" />
           </marker>
         </defs>
+        {#each groupMeta as group (group.key)}
+          <g class="graph-group" style={`color:${group.color}`}>
+            <circle class="group-halo" cx={group.x} cy={group.y} r="250" />
+            <text class="group-label" x={group.x} y={group.y - 268} text-anchor="middle">{group.label}</text>
+          </g>
+        {/each}
         {#each edgePaths as ep (ep.key)}
           <path
             use:registerEdge={ep.edge}
@@ -1516,67 +1693,70 @@
         {#if modNodes.length === 0}
           <div class="muted-box">No mod nodes yet.</div>
         {:else}
-          <div class="mod-grid">
-            {#each modNodes as node (node.id)}
-              {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
-              {@const isClickableDep = depNodeIds.has(node.id)}
-              {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
-              <div
-                class="node-card compact side-{node.side}"
-                class:selected={selectedId === node.id}
-                class:is-dep={isClickableDep}
-                role="button"
-                tabindex="0"
-                on:click={() => (selectedId = node.id)}
-                on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
-              >
-                {#if icon}
-                  {#if isClickableDep}
+          {#each groupedMods as group (group.label)}
+            <div class="profile-group-title" style={`--group-color:${group.color}`}>{group.label} ({group.nodes.length})</div>
+            <div class="mod-grid">
+              {#each group.nodes as node (node.id)}
+                {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
+                {@const isClickableDep = depNodeIds.has(node.id)}
+                {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
+                <div
+                  class="node-card compact side-{node.side}"
+                  class:selected={selectedId === node.id}
+                  class:is-dep={isClickableDep}
+                  role="button"
+                  tabindex="0"
+                  on:click={() => (selectedId = node.id)}
+                  on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
+                >
+                  {#if icon}
+                    {#if isClickableDep}
+                      <button
+                        class="card-icon-btn"
+                        title="Click to re-download this dependency"
+                        on:click|stopPropagation={downloadMissingFiles}
+                      >
+                        <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                      </button>
+                    {:else}
+                      <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                    {/if}
+                  {:else if isClickableDep}
                     <button
                       class="card-icon-btn"
                       title="Click to re-download this dependency"
                       on:click|stopPropagation={downloadMissingFiles}
                     >
-                      <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                      <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                     </button>
                   {:else}
-                    <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
-                  {/if}
-                {:else if isClickableDep}
-                  <button
-                    class="card-icon-btn"
-                    title="Click to re-download this dependency"
-                    on:click|stopPropagation={downloadMissingFiles}
-                  >
                     <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
-                  </button>
-                {:else}
-                  <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
-                {/if}
-                <div class="card-text">
-                  <span class="node-label">{node.label}</span>
-                  <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
+                  {/if}
+                  <div class="card-text">
+                    <span class="node-label">{node.label}</span>
+                    <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
+                  </div>
+                  {#if missingDeps.length > 0}
+                    <button
+                      class="card-install-deps"
+                      title="Install missing dependencies"
+                      on:click|stopPropagation={async () => {
+                        for (const edge of missingDeps) {
+                          await installSingleMissingDep(edge);
+                        }
+                      }}
+                      disabled={resolving}
+                    >
+                      <Download size={14} />
+                    </button>
+                  {/if}
+                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+                    <X size={14} />
+                  </span>
                 </div>
-                {#if missingDeps.length > 0}
-                  <button
-                    class="card-install-deps"
-                    title="Install missing dependencies"
-                    on:click|stopPropagation={async () => {
-                      for (const edge of missingDeps) {
-                        await installSingleMissingDep(edge);
-                      }
-                    }}
-                    disabled={resolving}
-                  >
-                    <Download size={14} />
-                  </button>
-                {/if}
-                <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
-                  <X size={14} />
-                </span>
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
+          {/each}
         {/if}
       </section>
 
@@ -1971,6 +2151,28 @@
     transition: opacity 120ms ease;
   }
 
+  /* Category cluster halos: faint, colour-coded discs that make each group of
+     mods read as a labelled region of the canvas for human perception. */
+  .graph-group .group-halo {
+    fill: currentColor;
+    fill-opacity: 0.06;
+    stroke: currentColor;
+    stroke-opacity: 0.28;
+    stroke-width: 1.5;
+    stroke-dasharray: 2 8;
+    pointer-events: none;
+  }
+  .graph-group .group-label {
+    fill: currentColor;
+    fill-opacity: 0.85;
+    stroke: none;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+
   .graph-canvas .graph-edge.dense {
     stroke: rgba(161, 161, 170, 0.28);
     stroke-width: 1.2;
@@ -2194,7 +2396,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--accent-primary);
+    background: var(--group-color, var(--accent-primary));
   }
 
   .profile-group-title.orphaned::before {

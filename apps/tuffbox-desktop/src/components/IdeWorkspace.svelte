@@ -310,9 +310,8 @@
           <small>{stage.short}</small>
         </span>
       </button>
-      {#if index < stages.length - 1}<span class="rail-line"></span>{/if}
-    {/each}
-  </nav>
+      {/each}
+    </nav>
 </div>
 
 <style>
@@ -351,20 +350,20 @@
 
   .workflow-rail {
     display: flex;
+    flex-wrap: wrap;
     align-items: stretch;
-    gap: 0;
+    gap: 4px;
     min-width: 0;
     padding: 8px 12px;
-    overflow-x: auto;
+    overflow: visible;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
-    scrollbar-width: thin;
   }
 
   .stage-tab {
-    min-width: 112px;
+    min-width: 0;
     min-height: 52px;
-    flex: 1 0 112px;
+    flex: 1 1 auto;
     justify-content: flex-start;
     gap: 8px;
     padding: 9px 10px;
@@ -417,13 +416,6 @@
   .stage-text small {
     color: var(--text-muted);
     font-size: 11px;
-  }
-
-  .rail-line {
-    width: 6px;
-    flex: 0 0 6px;
-    align-self: center;
-    border-top: 1px solid var(--border-color);
   }
 
   .skeleton-page {
@@ -500,15 +492,14 @@
       padding: 16px;
     }
 
+    /* Keep every stage tab visible (no horizontal scrollbar): show the short
+       label + icon and drop the long descriptive name on narrower windows. */
     .stage-tab {
-      min-width: 88px;
-      flex-basis: 88px;
       justify-content: center;
+      flex: 1 1 auto;
     }
 
-    .stage-status,
-    .stage-text small,
-    .rail-line {
+    .stage-text strong {
       display: none;
     }
   }
@@ -519,14 +510,12 @@
     }
 
     .stage-tab {
-      min-width: 56px;
-      flex-basis: 56px;
       flex-direction: column;
       gap: 4px;
       padding-inline: 6px;
     }
 
-    .stage-text strong {
+    .stage-text small {
       font-size: 10px;
     }
   }

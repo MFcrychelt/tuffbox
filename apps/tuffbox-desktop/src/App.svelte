@@ -39,6 +39,11 @@
     };
     window.addEventListener("tuffbox:open-graph", onOpenGraph);
 
+    const onOpenDiagnostics = () => {
+      currentView = "diagnostics";
+    };
+    window.addEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
+
     void (async () => {
       try {
         const lastPath = await api.session.getLastOpened();
@@ -55,6 +60,7 @@
 
     return () => {
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
+      window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
     };
   });
 </script>

@@ -8,31 +8,33 @@
 
   const dispatch = createEventDispatcher<{ close: void; created: string }>();
 
-  type Tab = "blank" | "import" | "curseforge";
-  let tab: Tab = "blank";
+  // Each "input type" on the home screen is an isolated, self-validating
+  // page (PrismLauncher-style: page-per-type) instead of one shared
+  // form whose fields leak across modes.
+  type CreateMode = "blank" | "import" | "curseforge";
+  let mode: CreateMode = "blank";
 
+  // --- Blank instance (explicit, typed inputs) ---
   let name = "New Instance";
   let minecraftVersion = "1.20.1";
-  let loader = "fabric";
+  let loader: "vanilla" | "fabric" | "forge" | "neoforge" | "quilt" = "fabric";
   let loaderVersion = "";
-  let location = "";
-  let loading = false;
-  let error = "";
-  let installMessage = "";
-
   let mcVersions: { id: string; popular: boolean }[] = [];
   let loaderVersions: { id: string; stable: boolean }[] = [];
   let loadingMc = true;
   let loadingLoader = false;
 
+  // --- Templates (blank helper) ---
   let templates: any[] = [];
   let templatesLoaded = false;
   let useTemplate = false;
 
-  // Import file
+  // --- Import pack (.mrpack / zip) ---
+  let importName = "New Instance";
   let importPath = "";
 
-  // CurseForge browse
+  // --- CurseForge browse ---
+  let cfName = "New Instance";
   let cfQuery = "";
   let cfHits: any[] = [];
   let cfLoading = false;
@@ -40,9 +42,23 @@
   let cfFiles: any[] = [];
   let cfFilesLoading = false;
   let cfFileId: number | null = null;
+
+  // --- Shared ---
+  let location = "";
+  let loading = false;
+  let error = "";
+  let installMessage = "";
   let packPhase = "";
 
   let unlistenPack: UnlistenFn | null = null;
+
+  const loaders = [
+    { id: "vanilla", label: "Vanilla" },
+    { id: "fabric", label: "Fabric" },
+    { id: "forge", label: "Forge" },
+    { id: "neoforge", label: "NeoForge" },
+    { id: "quilt", label: "Quilt" },
+  ];
 
   async function loadTemplates() {
     if (!$projectPath) {
@@ -58,26 +74,17 @@
     templatesLoaded = true;
   }
 
-  const loaders = [
-    { id: "vanilla", label: "Vanilla" },
-    { id: "fabric", label: "Fabric" },
-    { id: "forge", label: "Forge" },
-    { id: "neoforge", label: "NeoForge" },
-    { id: "quilt", label: "Quilt" },
-  ];
-
   onMount(async () => {
     loadingMc = true;
     try {
-      const [versions] = await Promise.all([
-        invoke("get_minecraft_versions"),
-        pickDefaultLocation(),
-        loadLoaderVersions(),
-      ]);
+      const versions = await invoke("get_minecraft_versions");
       mcVersions = versions as { id: string; popular: boolean }[];
       if (!mcVersions.some((v) => v.id === minecraftVersion)) {
         minecraftVersion = mcVersions[0]?.id ?? "";
       }
+      await loadDefaultHome();
+      location = guessLocation();
+      await loadLoaderVersions();
     } catch (e) {
       error = `Failed to load Minecraft versions: ${e}`;
     } finally {
@@ -92,9 +99,14 @@
     unlistenPack?.();
   });
 
-  async function pickDefaultLocation() {
-    const home = await invoke("get_home_dir").catch(() => "");
-    location = `${home}/TuffBox/instances/${slugify(name)}`;
+  function guessLocation(): string {
+    const home = (defaultHome ?? "").replace(/\/$/, "");
+    return `${home}/TuffBox/instances/${slugify(activeName())}`;
+  }
+
+  let defaultHome = "";
+  async function loadDefaultHome() {
+    defaultHome = (await invoke("get_home_dir").catch(() => "")) as string;
   }
 
   async function loadLoaderVersions() {
@@ -142,7 +154,8 @@
     if (selected && typeof selected === "string") {
       importPath = selected;
       const base = selected.replace(/\\/g, "/").split("/").pop() ?? "Imported pack";
-      name = base.replace(/\.(mrpack|zip)$/i, "");
+      importName = base.replace(/\.(mrpack|zip)$/i, "");
+      location = guessLocation();
     }
   }
 
@@ -154,7 +167,32 @@
       .replace(/^-+|-+$/g, "");
   }
 
+  function applyTemplateLoader(kindRaw: string) {
+    const kind = kindRaw.toLowerCase();
+    const allowed = ["fabric", "forge", "neoforge", "quilt", "vanilla"];
+    if (allowed.includes(kind)) {
+      loader = kind as "vanilla" | "fabric" | "forge" | "neoforge" | "quilt";
+    }
+  }
+
+  // Name for the current mode drives the default location slug.
+  function activeName(): string {
+    if (mode === "import") return importName || name;
+    if (mode === "curseforge") return cfName || name;
+    return name;
+  }
+
+  // Page-per-type validation: each mode validates only its own inputs.
+  $: blankValid = !!minecraftVersion && (loader === "vanilla" || !!loaderVersion);
+  $: importValid = !!importPath;
+  $: cfValid = !!cfSelected && cfFileId !== null;
+  $: canCreate = mode === "blank" ? blankValid : mode === "import" ? importValid : cfValid;
+
   async function create() {
+    if (!blankValid) {
+      error = "Pick a Minecraft version and a loader version (or Vanilla).";
+      return;
+    }
     loading = true;
     error = "";
     installMessage = "";
@@ -176,7 +214,7 @@
   }
 
   async function installFromFile() {
-    if (!importPath) {
+    if (!importValid) {
       error = "Pick a modpack file first.";
       return;
     }
@@ -184,11 +222,11 @@
     error = "";
     installMessage = "Installing pack…";
     try {
-      const parent = location.replace(/\\/g, "/").replace(/\/[^/]+$/, "") || location;
+      const parent = location.replace(/\\/g, "/").replace(/\/[^\/]+$/, "") || location;
       const result: any = await invoke("install_modpack", {
         source: importPath,
         targetDir: parent,
-        instanceName: name,
+        instanceName: importName,
       });
       const failed = result?.download?.failed?.length ?? 0;
       if (failed > 0) {
@@ -229,7 +267,7 @@
 
   async function selectCfPack(hit: any) {
     cfSelected = hit;
-    name = hit.name || name;
+    cfName = hit.name || cfName;
     cfFilesLoading = true;
     cfFiles = [];
     cfFileId = null;
@@ -252,7 +290,7 @@
   }
 
   async function installFromCurseForge() {
-    if (!cfSelected || !cfFileId) {
+    if (!cfValid) {
       error = "Select a modpack file version.";
       return;
     }
@@ -260,11 +298,11 @@
     error = "";
     installMessage = "Downloading CurseForge modpack…";
     try {
-      const parent = location.replace(/\\/g, "/").replace(/\/[^/]+$/, "") || location;
+      const parent = location.replace(/\\/g, "/").replace(/\/[^\/]+$/, "") || location;
       const result: any = await invoke("install_modpack", {
         source: `cf:${cfSelected.id}:${cfFileId}`,
         targetDir: parent,
-        instanceName: name,
+        instanceName: cfName,
       });
       const failed = result?.download?.failed?.length ?? 0;
       if (failed > 0) {
@@ -281,7 +319,7 @@
     }
   }
 
-  $: if (minecraftVersion || loader) {
+  $: if (mode === "blank" && (minecraftVersion || loader)) {
     if (!loadingMc) loadLoaderVersions();
   }
 </script>
@@ -296,180 +334,183 @@
     </div>
 
     <div class="tabs">
-      <button class:active={tab === "blank"} on:click={() => (tab = "blank")}>Blank</button>
-      <button class:active={tab === "import"} on:click={() => (tab = "import")}>Import pack</button>
-      <button class:active={tab === "curseforge"} on:click={() => (tab = "curseforge")}>CurseForge</button>
-    </div>
+      <button class:active={mode === "blank"} on:click={() => (mode = "blank")}>Blank</button>
+      <button class:active={mode === "import"} on:click={() => (mode = "import")}>Import pack</button>
+       <button class:active={mode === "curseforge"} on:click={() => (mode = "curseforge")}>CurseForge</button>
+     </div>
 
-    <div class="modal-body">
-      {#if error}
-        <div class="error">{error}</div>
-      {/if}
-      {#if installMessage || packPhase}
-        <div class="notice">{packPhase || installMessage}</div>
-      {/if}
+     <div class="modal-body">
+       {#if error}
+         <div class="error">{error}</div>
+       {/if}
+       {#if installMessage || packPhase}
+         <div class="notice">{packPhase || installMessage}</div>
+       {/if}
 
-      {#if tab === "blank"}
-        <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
-          {useTemplate ? "Create from scratch" : "Use template"}
-        </button>
+       {#if mode === "blank"}
+         <!-- Page 1: typed, self-validating blank instance fields -->
+         <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
+           {useTemplate ? "Create from scratch" : "Use template"}
+         </button>
 
-        {#if useTemplate && templates.length > 0}
-          <div class="template-list">
-            {#each templates.slice(0, 5) as tpl}
-              <button class="template-row" on:click={() => {
-                name = tpl.name || "New Instance";
-                if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
-                if (tpl.manifest?.loader?.kind) {
-                  const kind = String(tpl.manifest.loader.kind).toLowerCase();
-                  if (["fabric","forge","neoforge","quilt","vanilla"].includes(kind)) loader = kind;
-                }
-                if (tpl.manifest?.loader?.version) loaderVersion = tpl.manifest.loader.version;
-                useTemplate = false;
-              }}>
-                <strong>{tpl.name}</strong>
-                <span>{tpl.modCount || 0} mods · {tpl.manifest?.minecraft?.version || "?"}</span>
-              </button>
-            {/each}
-          </div>
-        {:else if useTemplate}
-          <div class="muted">No templates found. Save a project as template first.</div>
-        {/if}
+         {#if useTemplate && templates.length > 0}
+           <div class="template-list">
+             {#each templates.slice(0, 5) as tpl}
+               <button class="template-row" on:click={() => {
+                 name = tpl.name || "New Instance";
+                 if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
+                 if (tpl.manifest?.loader?.kind) {
+                   applyTemplateLoader(String(tpl.manifest.loader.kind));
+                 }
+                 if (tpl.manifest?.loader?.version) loaderVersion = tpl.manifest.loader.version;
+                 useTemplate = false;
+                 loadLoaderVersions();
+               }}>
+                 <strong>{tpl.name}</strong>
+                 <span>{tpl.modCount || 0} mods · {tpl.manifest?.minecraft?.version || "?"}</span>
+               </button>
+             {/each}
+           </div>
+         {:else if useTemplate}
+           <div class="muted">No templates found. Save a project as template first.</div>
+         {/if}
 
-        <div class="field">
-          <label for="inst-name">Name</label>
-          <input id="inst-name" bind:value={name} />
-        </div>
+         <div class="field">
+           <label for="inst-name">Name</label>
+           <input id="inst-name" bind:value={name} on:input={() => (location = guessLocation())} />
+         </div>
 
-        <div class="field">
-          <label for="inst-mc">Minecraft version</label>
-          {#if loadingMc}
-            <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions...</div>
-          {:else}
-            <select id="inst-mc" bind:value={minecraftVersion}>
-              {#each mcVersions as v}
-                <option value={v.id}>{v.id}{#if v.popular} ★{/if}</option>
-              {/each}
-            </select>
-          {/if}
-        </div>
+         <div class="field">
+           <label for="inst-mc">Minecraft version</label>
+           {#if loadingMc}
+             <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions...</div>
+           {:else}
+             <select id="inst-mc" bind:value={minecraftVersion}>
+               {#each mcVersions as v}
+                 <option value={v.id}>{v.id}{#if v.popular} ★{/if}</option>
+               {/each}
+             </select>
+           {/if}
+         </div>
 
-        <div class="field-row">
-          <div class="field">
-            <label for="inst-loader">Loader</label>
-            <select id="inst-loader" bind:value={loader}>
-              {#each loaders as l}
-                <option value={l.id}>{l.label}</option>
-              {/each}
-            </select>
-          </div>
-          <div class="field">
-            <label for="inst-loader-version">Loader version</label>
-            {#if loadingLoader}
-              <div class="field-loader"><Loader2 size={16} class="spin" /> Loading...</div>
-            {:else if loader === "vanilla"}
-              <input id="inst-loader-version" value="-" disabled />
-            {:else}
-              <select id="inst-loader-version" bind:value={loaderVersion}>
-                {#each loaderVersions as v}
-                  <option value={v.id}>{v.id}{#if v.stable} (stable){/if}</option>
-                {/each}
-              </select>
-            {/if}
-          </div>
-        </div>
-      {:else if tab === "import"}
-        <p class="muted">Import a Modrinth <code>.mrpack</code>, CurseForge zip, or Prism instance zip — mods download automatically (Prism-style).</p>
-        <div class="field">
-          <label for="inst-name-imp">Instance name</label>
-          <input id="inst-name-imp" bind:value={name} />
-        </div>
-        <div class="field">
-          <label for="inst-pack-file">Pack file</label>
-          <div class="input-row">
-            <input id="inst-pack-file" bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
-            <button class="secondary" on:click={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
-          </div>
-        </div>
-      {:else}
-        <p class="muted">Browse CurseForge modpacks (same API as PrismLauncher Flame).</p>
-        <div class="field">
-          <label for="inst-name-cf">Instance name</label>
-          <input id="inst-name-cf" bind:value={name} />
-        </div>
-        <div class="search-row">
-          <div class="search">
-            <Search size={16} />
-            <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" on:keydown={(e) => e.key === "Enter" && searchCurseForge()} />
-          </div>
-          <button class="secondary" on:click={searchCurseForge} disabled={cfLoading}>
-            {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
-            Search
-          </button>
-        </div>
-        <div class="cf-layout">
-          <div class="cf-list">
-            {#each cfHits as hit}
-              <button class="cf-row" class:active={cfSelected?.id === hit.id} on:click={() => selectCfPack(hit)}>
-                {#if hit.iconUrl}
-                  <img src={hit.iconUrl} alt="" />
-                {:else}
-                  <span class="cf-icon"><Package size={18} /></span>
-                {/if}
-                <div>
-                  <strong>{hit.name}</strong>
-                  <span>{hit.summary?.slice(0, 100) ?? ""}</span>
-                </div>
-              </button>
-            {:else}
-              <div class="muted compact">{cfLoading ? "Searching…" : "Search for a modpack to begin."}</div>
-            {/each}
-          </div>
-          <div class="cf-detail">
-            {#if cfSelected}
-              <h3>{cfSelected.name}</h3>
-              {#if cfFilesLoading}
-                <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
-              {:else}
-                <label for="cf-file">Pack version</label>
-                <select id="cf-file" value={cfFileId ?? ""} on:change={onCfFileChange}>
-                  {#each cfFiles as f}
-                    <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
-                  {/each}
-                </select>
-              {/if}
-            {:else}
-              <div class="muted compact">Select a pack to choose its file version.</div>
-            {/if}
-          </div>
-        </div>
-      {/if}
+         <div class="field-row">
+           <div class="field">
+             <label for="inst-loader">Loader</label>
+             <select id="inst-loader" bind:value={loader} on:change={() => loadLoaderVersions()}>
+               {#each loaders as l}
+                 <option value={l.id}>{l.label}</option>
+               {/each}
+             </select>
+           </div>
+           <div class="field">
+             <label for="inst-loader-version">Loader version</label>
+             {#if loadingLoader}
+               <div class="field-loader"><Loader2 size={16} class="spin" /> Loading...</div>
+             {:else if loader === "vanilla"}
+               <input id="inst-loader-version" value="No loader (Vanilla)" disabled />
+             {:else}
+               <select id="inst-loader-version" bind:value={loaderVersion}>
+                 {#each loaderVersions as v}
+                   <option value={v.id}>{v.id}{#if v.stable} (stable){/if}</option>
+                 {/each}
+               </select>
+             {/if}
+           </div>
+         </div>
+       {:else if mode === "import"}
+         <!-- Page 2: import — name derived from file, isolated -->
+         <p class="muted">Import a Modrinth <code>.mrpack</code>, CurseForge zip, or Prism instance zip — mods download automatically (Prism-style).</p>
+         <div class="field">
+           <label for="inst-pack-file">Pack file</label>
+           <div class="input-row">
+             <input id="inst-pack-file" bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
+             <button class="secondary" on:click={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
+           </div>
+         </div>
+         <div class="field">
+           <label for="inst-name-imp">Instance name</label>
+           <input id="inst-name-imp" bind:value={importName} on:input={() => (location = guessLocation())} />
+         </div>
+       {:else}
+         <!-- Page 3: CurseForge browse — name + file selection isolated -->
+         <p class="muted">Browse CurseForge modpacks (same API as PrismLauncher Flame).</p>
+         <div class="search-row">
+           <div class="search">
+             <Search size={16} />
+             <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" on:keydown={(e) => e.key === "Enter" && searchCurseForge()} />
+           </div>
+           <button class="secondary" on:click={searchCurseForge} disabled={cfLoading}>
+             {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
+             Search
+           </button>
+         </div>
+         <div class="cf-layout">
+           <div class="cf-list">
+             {#each cfHits as hit}
+               <button class="cf-row" class:active={cfSelected?.id === hit.id} on:click={() => selectCfPack(hit)}>
+                 {#if hit.iconUrl}
+                   <img src={hit.iconUrl} alt="" />
+                 {:else}
+                   <span class="cf-icon"><Package size={18} /></span>
+                 {/if}
+                 <div>
+                   <strong>{hit.name}</strong>
+                   <span>{hit.summary?.slice(0, 100) ?? ""}</span>
+                 </div>
+               </button>
+             {:else}
+               <div class="muted compact">{cfLoading ? "Searching…" : "Search for a modpack to begin."}</div>
+             {/each}
+           </div>
+           <div class="cf-detail">
+             {#if cfSelected}
+               <h3>{cfSelected.name}</h3>
+               {#if cfFilesLoading}
+                 <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
+               {:else}
+                 <label for="cf-file">Pack version</label>
+                 <select id="cf-file" value={cfFileId ?? ""} on:change={onCfFileChange}>
+                   {#each cfFiles as f}
+                     <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
+                   {/each}
+                 </select>
+                 <div class="field" style="margin-top:12px">
+                   <label for="inst-name-cf">Instance name</label>
+                   <input id="inst-name-cf" bind:value={cfName} on:input={() => (location = guessLocation())} />
+                 </div>
+               {/if}
+             {:else}
+               <div class="muted compact">Select a pack to choose its file version.</div>
+             {/if}
+           </div>
+         </div>
+       {/if}
 
-      <div class="field">
-        <label for="inst-location">Location</label>
-        <div class="input-row">
-          <input id="inst-location" bind:value={location} />
-          <button class="secondary" on:click={selectLocation} aria-label="Choose instance location"><Folder size={16} /></button>
-        </div>
-      </div>
-    </div>
+       <div class="field">
+         <label for="inst-location">Location</label>
+         <div class="input-row">
+           <input id="inst-location" bind:value={location} />
+           <button class="secondary" on:click={selectLocation} aria-label="Choose instance location"><Folder size={16} /></button>
+         </div>
+       </div>
+     </div>
 
-    <div class="modal-footer">
-      <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
-      {#if tab === "blank"}
-        <button on:click={create} disabled={loading || !minecraftVersion}>
-          {#if loading}<Loader2 size={16} class="spin" /> Creating...{:else}Create instance{/if}
-        </button>
-      {:else if tab === "import"}
-        <button on:click={installFromFile} disabled={loading || !importPath}>
-          {#if loading}<Loader2 size={16} class="spin" /> Installing...{:else}<Download size={16} /> Install pack{/if}
-        </button>
-      {:else}
-        <button on:click={installFromCurseForge} disabled={loading || !cfSelected || !cfFileId}>
-          {#if loading}<Loader2 size={16} class="spin" /> Installing...{:else}<Download size={16} /> Install from CurseForge{/if}
-        </button>
-      {/if}
-    </div>
+     <div class="modal-footer">
+       <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
+       {#if mode === "blank"}
+         <button on:click={create} disabled={loading || !blankValid}>
+           {#if loading}<Loader2 size={16} class="spin" /> Creating...{:else}Create instance{/if}
+         </button>
+       {:else if mode === "import"}
+         <button on:click={installFromFile} disabled={loading || !importValid}>
+           {#if loading}<Loader2 size={16} class="spin" /> Installing...{:else}<Download size={16} /> Install pack{/if}
+         </button>
+       {:else}
+         <button on:click={installFromCurseForge} disabled={loading || !cfValid}>
+           {#if loading}<Loader2 size={16} class="spin" /> Installing...{:else}<Download size={16} /> Install from CurseForge{/if}
+         </button>
+       {/if}
+     </div>
   </div>
 </div>
 

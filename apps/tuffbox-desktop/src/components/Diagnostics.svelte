@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { onMount } from "svelte";
   import {
     MessageCircle,
     Search,
@@ -721,6 +722,19 @@
   $: errorCount = graphDiagnostics.filter((d) => d.severity === "Error").length;
   $: warningCount = graphDiagnostics.filter((d) => d.severity === "Warning").length;
   $: onProjectPathChange($projectPath);
+
+  onMount(() => {
+    // Refresh whenever the Diagnose tab is (re)opened so the user always sees
+    // fresh crash-report / log data rather than a stale snapshot from a
+    // previous visit. Without this the panel could appear "stuck" / empty.
+    const reload = () => {
+      lastLoadedPath = null;
+      void load(true);
+    };
+    window.addEventListener("tuffbox:open-diagnostics", reload);
+    if ($projectPath) void load(true);
+    return () => window.removeEventListener("tuffbox:open-diagnostics", reload);
+  });
 </script>
 
 <div class="diagnostics">
@@ -1570,6 +1584,8 @@
   .stat-card.warning { border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.06); }
   .stat-card.accent { border-color: rgba(27, 217, 106, 0.3); background: rgba(27, 217, 106, 0.06); }
   .diagnose-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+  .diagnose-grid > * { min-width: 0; }
+  .reader { overflow: hidden; }
   .inspector { max-height: calc(100vh - 150px); overflow: auto; }
   .panel { padding: 16px; min-width: 0; }
   .panel-header { justify-content: space-between; gap: 12px; margin-bottom: 12px; }
@@ -1593,7 +1609,7 @@
   .log-title, .changes-title { margin-top: 20px; }
   .log-status { padding: 10px; border: 1px dashed var(--border-color); border-radius: 10px; }
   .log-status.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.28); }
-  pre { margin: 0; border-radius: 12px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow: auto; }
+  pre { margin: 0; border-radius: 12px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow: auto; max-width: 100%; }
   .crash-preview {
     border: 1px solid var(--border-color);
     border-radius: 12px;
@@ -1667,8 +1683,8 @@
   .hint-detail { margin: 6px 0 0; color: var(--text-secondary); line-height: 1.45; font-size: 13px; }
   .hint-steps { margin: 8px 0 0 18px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
   .hint-steps li { margin: 2px 0; }
-  .hint-actions { margin-top: 10px; }
-  .primary.small { font-size: 12px; padding: 6px 10px; }
+  .hint-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .primary.small { font-size: 12px; padding: 6px 10px; white-space: nowrap; flex: 0 0 auto; min-width: 0; max-width: 100%; }
   .fixing-spinner { color: var(--accent); font-size: 12px; }
   .plan-meta { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 12px; margin: 10px 0; }
   .plan-card ul { margin: 8px 0 0 18px; color: var(--text-secondary); font-size: 12px; }
@@ -1839,4 +1855,31 @@
   .report-content .log-line.signal[data-sig="SuspectedMods"] { background: rgba(239, 68, 68, 0.16); box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.95); }
   .sig-marker { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--bg-primary); background: rgba(239, 68, 68, 0.85); border-radius: 3px; padding: 0 4px; margin-right: 6px; vertical-align: middle; }
   .report-content :global(mark) { background: rgba(234, 179, 8, 0.45); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+  /* --- Diagnostics button-group + card spacing hardening ---
+     Prevents action buttons from collapsing to one-letter-wide columns
+     ("text in a vertical stack of single letters") and keeps cards from
+     touching each other. */
+  .problems-list, .hints-list, .suspects, .diagnostic-list, .signal-groups, .mod-entry-list {
+    display: grid;
+    gap: 12px;
+  }
+  .problem-actions, .hint-actions, .suspect-actions, .conflict-actions, .plan-card ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .problem-actions button, .hint-actions button, .suspect-actions button, .conflict-actions button {
+    white-space: nowrap;
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .hint-card, .problem-row, .suspect-card, .conflict-card, .diag-card, .signal-group, .mod-entry, .plan-card {
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+  .problem-main { overflow-wrap: break-word; word-break: normal; }
+  .suspects { max-height: none; overflow: visible; }
 </style>
