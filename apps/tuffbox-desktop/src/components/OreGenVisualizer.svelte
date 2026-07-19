@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Mountain, RefreshCw, Database } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import WorldMap from "./WorldMap.svelte";
 
   type OreEntry = {
     resource: string;
@@ -303,6 +304,8 @@
                 {#if selectedWorldInfo.sizeFormatted}<span class="flag">size {selectedWorldInfo.sizeFormatted}</span>{/if}
               </div>
             </div>
+
+            <WorldMap worldName={selectedWorld ?? ""} />
           </div>
         {:else}
           <div class="world-detail empty-detail">Select a world to see level.dat details.</div>

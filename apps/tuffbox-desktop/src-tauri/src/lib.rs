@@ -653,18 +653,22 @@ async fn search_modrinth_mods(
     page_size: Option<u32>,
 ) -> Result<PagedCatalog, String> {
     tokio::task::spawn_blocking(move || {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        // A manifest is only needed to infer a default loader / game version.
+        // When no project is open (empty path) we still allow browsing the
+        // Modrinth catalog with the caller-supplied filters.
+        let manifest = ProjectManifest::load_from_path(&path).ok();
         let provider = tuffbox_core::ModrinthProvider::new();
-        let default_loader =
-            tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+        let default_loader = manifest
+            .as_ref()
+            .map(|m| tuffbox_core::graph::loader_kind_slug(&m.loader.kind).to_string());
         let page_size = page_size.unwrap_or(30).clamp(1, 100);
         let offset = (page.unwrap_or(1).saturating_sub(1)) * page_size;
         let page_result = provider
             .search(&ProviderSearchQuery {
                 query: Some(query),
                 minecraft_version: game_version
-                    .or_else(|| Some(manifest.minecraft.version.clone())),
-                loader: loader.or_else(|| Some(default_loader)),
+                    .or_else(|| manifest.as_ref().map(|m| m.minecraft.version.clone())),
+                loader: loader.or(default_loader),
                 category,
                 environment,
                 license,
@@ -848,6 +852,35 @@ async fn get_modrinth_project(project_id: String) -> Result<tuffbox_core::Projec
     tokio::task::spawn_blocking(move || {
         let provider = tuffbox_core::ModrinthProvider::new();
         provider.get_project(&project_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Resolves the download URL of the latest Modrinth modpack file (.mrpack) for
+/// a project, so the Library "Discover" tab can import a remote pack directly
+/// via `install_modpack`.
+#[tauri::command(rename_all = "camelCase")]
+async fn get_modrinth_pack_download(project_id: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let provider = tuffbox_core::ModrinthProvider::new();
+        let versions = provider
+            .get_versions(&project_id, &ProviderSearchQuery::default())
+            .map_err(|e| e.to_string())?;
+        for version in &versions {
+            for file in &version.files {
+                if file.filename.to_lowercase().ends_with(".mrpack") {
+                    return Ok(file.url.clone());
+                }
+            }
+        }
+        // Fallback: any primary file if no .mrpack is published.
+        for version in &versions {
+            if let Some(primary) = version.files.iter().find(|f| f.primary) {
+                return Ok(primary.url.clone());
+            }
+        }
+        Err("No downloadable file found for this modpack.".into())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4521,6 +4554,45 @@ fn read_world_info(path: String, world_name: String) -> Result<serde_json::Value
         "cheatsEnabled": info.cheats_enabled,
         "sizeBytes": info.size_bytes, "sizeFormatted": info.size_formatted,
     }))
+}
+
+/// ── World map (Anvil region reader) ──────────────────────────
+
+/// Returns a mcaselector-style 2D overview of a world's region files:
+/// per-region 32x32 chunk grids with presence, last-modified time and a
+/// coarse generation status used for coloring.
+#[tauri::command(rename_all = "camelCase")]
+fn read_world_map(path: String, world_name: String) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let map = tuffbox_core::region::read_world_map(&world_dir)?;
+    Ok(serde_json::to_value(&map).map_err(|e| e.to_string())?)
+}
+
+/// A region coordinate paired with the local chunk indices (0..1024) to clear.
+#[derive(serde::Deserialize)]
+struct ChunkSelection {
+    region_x: i32,
+    region_z: i32,
+    indices: Vec<usize>,
+}
+
+/// Deletes selected chunks from a world's region files, mirroring mcaselector.
+/// Each selection maps a region coordinate to the local chunk indices to clear.
+#[tauri::command(rename_all = "camelCase")]
+fn delete_world_chunks(
+    path: String,
+    world_name: String,
+    selections: Vec<ChunkSelection>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let pairs: Vec<(i32, i32, Vec<usize>)> = selections
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    tuffbox_core::region::delete_world_chunks(&world_dir, &pairs)
+        .map_err(|e| format!("Failed to delete chunks: {}", e))
 }
 
 /// ── Export to GitHub Releases ──────────────────────────────────
@@ -8566,6 +8638,7 @@ pub fn run() {
             preview_modrinth_install,
             get_modrinth_project_icon,
             get_modrinth_project,
+            get_modrinth_pack_download,
             get_mod_user_state,
             set_mod_user_state,
             create_mod_list,
@@ -8643,6 +8716,8 @@ pub fn run() {
             integrations::save_publish_config,
             integrations::publish_release,
             read_world_info,
+            read_world_map,
+            delete_world_chunks,
             generate_github_release,
             localize,
             list_localizations,

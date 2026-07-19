@@ -477,6 +477,31 @@ export interface WorldInfo {
   thundering: boolean;
 }
 
+export interface ChunkCell {
+  present: number;
+  lastModified: number;
+  status: number;
+}
+
+export interface RegionInfo {
+  regionX: number;
+  regionZ: number;
+  present: number;
+  minModified: number;
+  maxModified: number;
+  chunks: ChunkCell[];
+}
+
+export interface WorldMap {
+  regions: RegionInfo[];
+  minRegionX: number;
+  minRegionZ: number;
+  maxRegionX: number;
+  maxRegionZ: number;
+  totalPresent: number;
+  regionCount: number;
+}
+
 export interface JavaRuntime {
   path: string;
   version: string;
@@ -730,6 +755,10 @@ export const api = {
     list(p?: string) { return cmd<WorldInfo[]>("list_worlds", pathArg(p)); },
     readInfo(worldName: string, p?: string) { return cmd<WorldInfo>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
+    map(worldName: string, p?: string) { return cmd<WorldMap>("read_world_map", { ...pathArg(p), worldName }); },
+    deleteChunks(worldName: string, selections: { regionX: number; regionZ: number; indices: number[] }[], p?: string) {
+      return cmd<number>("delete_world_chunks", { ...pathArg(p), worldName, selections });
+    },
   },
 
   // ── Recipes (JEI-style browser) ─────────────────────────────────
@@ -796,6 +825,18 @@ export const api = {
     batchAll(p?: string) { return cmd<Record<string, unknown>[]>("batch_export_all", pathArg(p)); },
     projectReport(p?: string) { return cmd<Record<string, unknown>>("export_project_report", pathArg(p)); },
     validateModrinth(p?: string) { return cmd<ExportIssue[]>("validate_modrinth_export", pathArg(p)); },
+  },
+
+  // ── Modpack library (remote browse + import) ─────────────────────
+  modpacks: {
+    getModpackUrl(projectId: string) { return cmd<string>("get_modrinth_pack_download", { projectId }); },
+    install(url: string, targetDir: string, instanceName: string) {
+      return cmd<{ path: string; download?: Record<string, unknown> }>("install_modpack", {
+        source: url,
+        targetDir,
+        instanceName,
+      });
+    },
   },
 
   // ── Release ───────────────────────────────────────────────────────

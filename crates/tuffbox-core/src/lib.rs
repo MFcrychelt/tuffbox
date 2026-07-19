@@ -37,6 +37,7 @@ pub mod crash_assistant;
 pub mod environment;
 pub mod knowledge;
 pub mod level_dat;
+pub mod region;
 pub mod overrides;
 pub mod properties_parser;
 pub mod recipe_layout;
