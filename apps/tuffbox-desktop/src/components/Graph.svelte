@@ -783,7 +783,7 @@
     groupKey?: string;
   };
 
-  type GroupMeta = { key: string; label: string; color: string; x: number; y: number };
+  type GroupMeta = { key: string; label: string; color: string; x: number; y: number; r: number };
   let groupMeta: GroupMeta[] = [];
 
   /// Cluster currently hovered in the legend / on a halo; used to spotlight that
@@ -934,202 +934,150 @@
     return MOD_GROUPS.find((g) => g.key === "qol")!;
   }
 
-  function layoutCanvasSize(count: number, maxDepth: number) {
-    const ring = Math.max(3, maxDepth + 1);
-    const span = Math.max(1000, ring * 250 * 2 + 320);
-    // Generous breathing room so heavy hubs don't pile nodes on top of each
-    // other; scale with node count, not just depth.
-    const area = Math.sqrt(Math.max(count, 1));
-    const pad = area * 60 + Math.max(0, count - 30) * 6;
-    return {
-      width: Math.max(1500, span + pad),
-      height: Math.max(1000, span * 0.9 + pad),
-    };
-  }
-
-  /** Undirected BFS depth + hub pick — same idea as modrinth-extras dependency rings. */
-  function computeDepthsAndHubs(
-    nodeIds: string[],
-    edges: GraphEdge[],
-    rootWeight: (id: string) => number = () => 0,
-  ) {
-    const adj = new Map<string, string[]>();
-    const degree = new Map<string, number>();
-    for (const id of nodeIds) {
-      adj.set(id, []);
-      degree.set(id, 0);
-    }
-    for (const edge of edges) {
-      if (!adj.has(edge.from) || !adj.has(edge.to)) continue;
-      adj.get(edge.from)!.push(edge.to);
-      adj.get(edge.to)!.push(edge.from);
-      degree.set(edge.from, (degree.get(edge.from) ?? 0) + 1);
-      degree.set(edge.to, (degree.get(edge.to) ?? 0) + 1);
-    }
-
-    const remaining = new Set(nodeIds);
-    const components: string[][] = [];
-    while (remaining.size) {
-      const start = remaining.values().next().value as string;
-      const queue = [start];
-      remaining.delete(start);
-      const comp: string[] = [];
-      while (queue.length) {
-        const cur = queue.shift()!;
-        comp.push(cur);
-        for (const next of adj.get(cur) ?? []) {
-          if (!remaining.has(next)) continue;
-          remaining.delete(next);
-          queue.push(next);
-        }
-      }
-      components.push(comp);
-    }
-    components.sort((a, b) => b.length - a.length);
-
-    const depth = new Map<string, number>();
-    const hubOf = new Map<string, string>();
-    const hubMeta: { id: string; component: number; x: number; y: number }[] = [];
-
-    components.forEach((comp, componentIndex) => {
-      // Prefer root/platform nodes (minecraft, loader, fabric-api, …) as the
-      // hub so they sit at the centre and everything radiates outward from them
-      // instead of from a random high-degree mod.
-      const hub = [...comp].sort(
-        (a, b) =>
-          rootWeight(b) - rootWeight(a) ||
-          (degree.get(b) ?? 0) - (degree.get(a) ?? 0) ||
-          a.localeCompare(b),
-      )[0];
-      // Primary component sits at the origin; satellite components orbit it.
-      let hx = 0;
-      let hy = 0;
-      if (componentIndex > 0) {
-        const angle = ((componentIndex - 1) / Math.max(1, components.length - 1)) * Math.PI * 2;
-        const orbit = 420 + componentIndex * 60;
-        hx = Math.cos(angle) * orbit;
-        hy = Math.sin(angle) * orbit;
-      }
-      hubMeta.push({ id: hub, component: componentIndex, x: hx, y: hy });
-
-      const q = [hub];
-      depth.set(hub, 0);
-      hubOf.set(hub, hub);
-      while (q.length) {
-        const cur = q.shift()!;
-        const d = depth.get(cur) ?? 0;
-        for (const next of adj.get(cur) ?? []) {
-          if (depth.has(next)) continue;
-          depth.set(next, d + 1);
-          hubOf.set(next, hub);
-          q.push(next);
-        }
-      }
-      for (const id of comp) {
-        if (!depth.has(id)) {
-          depth.set(id, 1);
-          hubOf.set(id, hub);
-        }
-      }
-    });
-
-    return { degree, depth, hubOf, hubMeta, maxDepth: depth.size ? Math.max(...depth.values()) : 0 };
-  }
-
   $: layoutKey = [
     ...displayNodes.map((n) => n.id).sort(),
     ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
     groupMeta.map((g) => g.key).join(","),
   ].join("|");
 
+  // Edge kinds that link every mod to the core runtime. They carry no layout
+  // information (every mod has both), but as d3 links they dominate the physics
+  // and drag the whole graph into a knot — so they are drawn but never fed to
+  // the link force.
+  const HUB_EDGE_KINDS = ["RequiresLoader", "RequiresMinecraft", "RequiresJava"];
+
+  /// Deterministic clustered layout.
+  ///
+  /// Replaces the old free-form force layout, which on real packs (150+ mods,
+  /// 550+ edges) collapsed into an unreadable knot: hub edges to the pinned
+  /// loader/minecraft nodes pulled every mod toward the centre, the category
+  /// catch-all grew huge, and the undamped anchor spring overshot chaotically.
+  ///
+  /// Instead we compute positions up front and let the simulation only polish:
+  ///  - every mod is routed into one category cluster (categorizeMod);
+  ///  - each cluster is packed as a phyllotaxis (sunflower) disc, highest
+  ///    degree nodes at the centre, so it is compact and overlap-free by
+  ///    construction — the disc radius scales with sqrt(member count);
+  ///  - cluster anchors are placed sequentially on a ring sized from the disc
+  ///    diameters, so clusters can never overlap or collapse into one corner;
+  ///  - the sim then runs only collide + strong anchor springs + intra-cluster
+  ///    links (hub/runtime edges excluded), starting from an already-tidy
+  ///    layout — nothing can explode, and the result is deterministic.
   function startSimulation() {
     if (!displayNodes.length) return;
 
-    const nodeIds = displayNodes.map((n) => n.id);
-    // Root weight: platform/runtime and "api" hubs should be the centre of
-    // their component so the graph reads as concentric rings around fabric /
-    // fabric-api / minecraft rather than a tangle of equal-weight mods.
-    const rootWeight = (id: string): number => {
-      const node = nodeById(id);
-      const kind = node?.kind ?? "";
-      if (kind === "MinecraftVersion" || kind === "Loader" || kind === "JavaRuntime") return 1000;
-      const label = (node?.label ?? id).toLowerCase();
-      if (label.includes("fabric-api") || label.includes("fabric") || label.includes("quilt") || label.includes("forge") || label.includes("neoforge")) return 600;
-      if (label.includes("api")) return 300;
-      return 0;
-    };
-    const { degree, depth, hubOf, hubMeta, maxDepth } = computeDepthsAndHubs(
-      nodeIds,
-      displayEdges,
-      rootWeight,
-    );
-    const size = layoutCanvasSize(displayNodes.length, maxDepth);
-    canvasWidth = size.width;
-    canvasHeight = size.height;
-    const cx = canvasWidth / 2;
-    const cy = canvasHeight / 2;
-
-    // Core hubs (minecraft / loader / java / profile) sit dead-centre;
-    // everything else is grouped into human categories ("Rendering",
-    // "Create & Automation", …) and each group gets its own anchor on a ring
-    // around the centre. This keeps related mods physically together (a labelled
-    // cluster) instead of scattering them into the four corners of a square.
-    const hubPositions = new Map<string, { x: number; y: number }>();
-    const hubOrbit = 480;
-    hubMeta.forEach((h, i) => {
-      if (h.component === 0) {
-        hubPositions.set(h.id, { x: cx, y: cy });
-      } else {
-        const angle = ((i - 1) / Math.max(1, hubMeta.length - 1)) * Math.PI * 2;
-        hubPositions.set(h.id, {
-          x: cx + Math.cos(angle) * hubOrbit,
-          y: cy + Math.sin(angle) * hubOrbit,
-        });
-      }
-    });
-    const hubPosOf = (id: string) => hubPositions.get(id) ?? { x: cx, y: cy };
-
-    // Build group anchors: distribute categories evenly on a ring around the
-    // centre so clusters never overlap and there is no "square" artifact.
     const isCoreNode = (node: GraphNode) =>
       node.kind === "MinecraftVersion" ||
       node.kind === "Loader" ||
       node.kind === "JavaRuntime" ||
       node.kind === "Profile";
 
-    const groupCounts = new Map<string, number>();
+    // Links that actually shape the layout: real mod-to-mod relations only.
+    const simLinks = displayEdges
+      .filter((e) => !HUB_EDGE_KINDS.includes(e.kind))
+      .map((e) => ({ source: e.from, target: e.to, ...e }));
+    const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
+    const simDegree = new Map<string, number>();
+    for (const id of displayNodes.map((n) => n.id)) simDegree.set(id, 0);
+    for (const l of simLinks) {
+      simDegree.set(linkId(l.source), (simDegree.get(linkId(l.source)) ?? 0) + 1);
+      simDegree.set(linkId(l.target), (simDegree.get(linkId(l.target)) ?? 0) + 1);
+    }
+    const degOf = (id: string) => simDegree.get(id) ?? 0;
+
+    // Group members by category, sorted by degree (cluster hubs first).
+    const byGroup = new Map<string, GraphNode[]>();
     for (const node of displayNodes) {
       if (isCoreNode(node)) continue;
       const key = categorizeMod(node.id, node.label).key;
-      groupCounts.set(key, (groupCounts.get(key) ?? 0) + 1);
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key)!.push(node);
     }
-    const groupKeys = [...groupCounts.keys()];
-    const groupRadius = 620 + groupKeys.length * 40;
-    const groupAnchors = new Map<string, { x: number; y: number }>();
-    groupKeys.forEach((key, i) => {
-      const angle = (i / Math.max(1, groupKeys.length)) * Math.PI * 2 - Math.PI / 2;
-      groupAnchors.set(key, {
-        x: cx + Math.cos(angle) * groupRadius,
-        y: cy + Math.sin(angle) * groupRadius,
+    const groupOrder = MOD_GROUPS.map((g) => g.key);
+    const clusters = [...byGroup.entries()]
+      .map(([key, members]) => {
+        members.sort((a, b) => degOf(b.id) - degOf(a.id) || a.id.localeCompare(b.id));
+        return { key, members };
+      })
+      .sort((a, b) => groupOrder.indexOf(a.key) - groupOrder.indexOf(b.key));
+
+    // Disc sizing: phyllotaxis radius for a cluster of n members.
+    const SPACING = 58;
+    const discRadius = (n: number) => (SPACING * Math.sqrt(Math.max(1, n))) / 2 + 36;
+
+    // Ring placement: each cluster gets an arc proportional to its diameter,
+    // so discs are spaced evenly around the centre and never touch.
+    const arcWidths = clusters.map((c) => 2 * discRadius(c.members.length) + 90);
+    const ringRadius = Math.max(360, arcWidths.reduce((a, b) => a + b, 0) / (2 * Math.PI));
+    const canvasSpan = (ringRadius + Math.max(300, ...clusters.map((c) => discRadius(c.members.length))) + 140) * 2;
+    canvasWidth = Math.max(1500, canvasSpan);
+    canvasHeight = Math.max(1000, canvasSpan);
+    const cx = canvasWidth / 2;
+    const cy = canvasHeight / 2;
+
+    let angleCursor = -Math.PI / 2;
+    const anchors = new Map<string, { x: number; y: number }>();
+    clusters.forEach((cluster, i) => {
+      const arc = arcWidths[i] / ringRadius;
+      const angle = angleCursor + arc / 2;
+      angleCursor += arc;
+      anchors.set(cluster.key, {
+        x: cx + Math.cos(angle) * ringRadius,
+        y: cy + Math.sin(angle) * ringRadius,
       });
     });
-    // expose for rendering group hulls / labels
-    groupMeta = groupKeys.map((key) => {
-      const def = MOD_GROUPS.find((g) => g.key === key) ?? {
-        key,
+
+    // Expose cluster halos/labels for rendering. Halo radius follows the disc
+    // size so big categories (a 100+ mod "Quality of Life" pack) stay inside.
+    groupMeta = clusters.map((cluster) => {
+      const def = MOD_GROUPS.find((g) => g.key === cluster.key) ?? {
+        key: cluster.key,
         label: "Other Mods",
         color: "rgba(113,113,122,0.5)",
         matches: () => false,
       };
-      const anchor = groupAnchors.get(key)!;
-      return { key, label: def.label, color: def.color, x: anchor.x, y: anchor.y };
+      const anchor = anchors.get(cluster.key)!;
+      return {
+        key: cluster.key,
+        label: def.label,
+        color: def.color,
+        x: anchor.x,
+        y: anchor.y,
+        r: discRadius(cluster.members.length) + 30,
+      };
     });
 
-    // Deterministic seed: core hubs at centre, each mod on a tight spiral around
-    // *its group anchor* (not around a hub), so the simulation starts as
-    // readable clusters rather than a collapsed star.
-    const ringIndex = new Map<string, number>();
+    // Seed positions: core runtime nodes on a small triangle at the centre
+    // (they were previously stacked on one point), mods on a phyllotaxis
+    // spiral inside their cluster disc.
+    const coreNodes = displayNodes.filter(isCoreNode);
+    const corePos = new Map<string, { x: number; y: number }>();
+    coreNodes.forEach((node, i) => {
+      const angle = (i / Math.max(1, coreNodes.length)) * Math.PI * 2 - Math.PI / 2;
+      corePos.set(node.id, {
+        x: cx + Math.cos(angle) * (coreNodes.length > 1 ? 70 : 0),
+        y: cy + Math.sin(angle) * (coreNodes.length > 1 ? 70 : 0),
+      });
+    });
+    const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+    const clusterOf = new Map<string, string>();
+    for (const cluster of clusters) for (const m of cluster.members) clusterOf.set(m.id, cluster.key);
+
     simNodes = displayNodes.map((node) => {
+      const core = isCoreNode(node);
+      const anchor = core
+        ? corePos.get(node.id) ?? { x: cx, y: cy }
+        : anchors.get(clusterOf.get(node.id) ?? "") ?? { x: cx, y: cy };
+      let x = anchor.x;
+      let y = anchor.y;
+      if (!core) {
+        const cluster = clusters.find((c) => c.key === clusterOf.get(node.id));
+        const idx = Math.max(0, cluster?.members.findIndex((m) => m.id === node.id) ?? 0);
+        const r = (SPACING * Math.sqrt(idx + 0.5)) / 2;
+        const theta = idx * GOLDEN_ANGLE;
+        x = anchor.x + Math.cos(theta) * r;
+        y = anchor.y + Math.sin(theta) * r;
+      }
       const isGhost = node.kind === "Missing";
       let tone: string;
       if (isGhost) tone = "ghost";
@@ -1137,132 +1085,59 @@
       else if (node.kind === "Profile") tone = "profile";
       else tone = "runtime";
 
-      const isHub = hubMeta.some((h) => h.id === node.id);
-      const d = depth.get(node.id) ?? 1;
-      const hubId = hubOf.get(node.id) ?? node.id;
-
-      let anchor: { x: number; y: number };
-      let pinned = false;
-      if (isCoreNode(node) || isHub) {
-        anchor = hubPosOf(hubId);
-        pinned = true;
-      } else {
-        const group = categorizeMod(node.id, node.label);
-        anchor = groupAnchors.get(group.key) ?? { x: cx, y: cy };
-      }
-
-      const key = `${anchor.x.toFixed(0)}:${anchor.y.toFixed(0)}`;
-      const idx = ringIndex.get(key) ?? 0;
-      ringIndex.set(key, idx + 1);
-      const siblings = Math.max(1, groupCounts.get(categorizeMod(node.id, node.label).key) ?? 1);
-      const angle = (idx / siblings) * Math.PI * 2 + idx * 0.5;
-      // Compact local spiral: groups read as clusters, not corner-pinned rings.
-      const ring = pinned ? 0 : 70 + (idx % 14) * 34 + Math.floor(idx / 14) * 26;
-
       return {
         ...node,
         label: displayLabel(node),
-        x: anchor.x + Math.cos(angle) * ring,
-        y: anchor.y + Math.sin(angle) * ring,
-        fx: pinned ? anchor.x : null,
-        fy: pinned ? anchor.y : null,
+        x,
+        y,
+        fx: core ? anchor.x : null,
+        fy: core ? anchor.y : null,
         tone,
         ghost: isGhost,
-        depth: d,
-        isHub,
-        component: hubMeta.find((h) => h.id === hubId)?.component ?? 0,
-        hubId,
+        depth: 0,
+        isHub: core,
+        component: 0,
+        hubId: node.id,
         hubX: anchor.x,
         hubY: anchor.y,
-        groupKey: isCoreNode(node) ? "core" : categorizeMod(node.id, node.label).key,
+        groupKey: core ? "core" : clusterOf.get(node.id) ?? "qol",
       } as LayoutNode;
     });
 
-    const d3Links = displayEdges.map((e) => ({ source: e.from, target: e.to, ...e }));
-    const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
-    const degOf = (id: string) => degree.get(id) ?? 0;
-
-    // Soft attraction of every node toward the centre of *its own category
-    // cluster* (group anchor), so related mods stay together as a labelled blob
-    // instead of being flung to the canvas corners. Core hubs stay pinned at the
-    // centre; mods only drift locally within their group, which is exactly what
-    // prevents the "square of mods" collapse.
-    function forceGroupAttract(strength = 0.16) {
-      let nodes: LayoutNode[] = [];
-      force.initialize = (_nodes: LayoutNode[]) => {
-        nodes = _nodes;
-      };
-      function force(alpha: number) {
-        const k = strength * alpha;
-        for (const d of nodes) {
-          if (d.isHub) continue;
-          const dx = d.x - d.hubX;
-          const dy = d.y - d.hubY;
-          d.vx = (d.vx ?? 0) - dx * k;
-          d.vy = (d.vy ?? 0) - dy * k;
-        }
-      }
-      return force;
-    }
-
     if (simulation) simulation.stop();
 
-    // Force-directed layout tuned to avoid the classic "star" / line-stacking
-    // artifacts:
-    //  - strong, long-range repulsion keeps hubs from sucking everything in;
-    //  - link springs are *logarithmically* weakened for high-degree nodes so a
-    //    central hub can't collapse the whole graph onto itself;
-    //  - each node is pulled toward its own hub (not the canvas centre), so
-    //    components stay separated and form rings instead of a column;
-    //  - collide prevents overlap; positions are clamped to the canvas so
-    //    isolated nodes don't fly into empty space.
+    // Polish-only physics on an already-tidy seed:
+    //  - collide resolves the small spacing slack from the phyllotaxis;
+    //  - strong springs hold every mod at its cluster anchor (0.12 toward its
+    //    own anchor, not the canvas centre — this is what stops the knot);
+    //  - intra-cluster links pull related mods together inside their disc;
+    //  - hub edges are excluded (see HUB_EDGE_KINDS above), charge is weak
+    //    and short-range so neighbouring clusters don't interfere.
     const margin = 80;
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
-      .force(
-        "charge",
-        d3
-          .forceManyBody<LayoutNode>()
-          .strength((d) => -460 - Math.min(degOf(d.id), 24) * 36)
-          .distanceMax(1100),
-      )
+      .force("charge", d3.forceManyBody<LayoutNode>().strength(-120).distanceMax(220))
       .force(
         "link",
         d3
-          .forceLink(d3Links)
+          .forceLink(simLinks.filter((l) => clusterOf.get(linkId(l.source)) === clusterOf.get(linkId(l.target))))
           .id((d: any) => d.id)
-          .distance((link: any) => {
-            const s = linkId(link.source);
-            const t = linkId(link.target);
-            const rs = nodeSize({ id: s } as PositionedNode) / 2;
-            const rt = nodeSize({ id: t } as PositionedNode) / 2;
-            // Longer links for the central hub so peripheral mods are flung
-            // out toward their category circles instead of piling on the core.
-            const hubEnd = isCoreNode(nodeById(s) ?? nodeById(t) ?? ({} as GraphNode)) ||
-              hubMeta.some((h) => h.id === s || h.id === t);
-            return rs + rt + (hubEnd ? 160 : 90) + Math.max(degOf(s), degOf(t)) * 8;
-          })
-          .strength((link: any) => {
-            const s = linkId(link.source);
-            const t = linkId(link.target);
-            const minDeg = Math.min(degOf(s), degOf(t));
-            // Logarithmic falloff: hubs (low min degree) keep a *weaker* pull so
-            // they don't bunch every dependent into one point.
-            return 1 / (1 + Math.log2(1 + minDeg) * 3);
-          }),
+          .distance(110)
+          .strength(0.15),
       )
       .force(
         "collide",
         d3
           .forceCollide<LayoutNode>()
-          .radius((d) => nodeSize(d) / 2 + 30)
-          .strength(1)
-          .iterations(4),
+          .radius((d) => nodeSize(d) / 2 + 12)
+          .strength(0.9)
+          .iterations(2),
       )
-      .force("hub", forceGroupAttract(maxDepth === 0 ? 0.06 : 0.16))
-      .alpha(1)
-      .alphaDecay(0.05)
-      .velocityDecay(0.78)
+      .force("x", d3.forceX<LayoutNode>((d) => d.hubX).strength((d) => (d.isHub ? 0 : 0.12)))
+      .force("y", d3.forceY<LayoutNode>((d) => d.hubY).strength((d) => (d.isHub ? 0 : 0.12)))
+      .alpha(0.7)
+      .alphaDecay(0.08)
+      .velocityDecay(0.5)
       .on("tick", () => {
         for (const d of simNodes) {
           d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
@@ -1717,8 +1592,8 @@
             on:mouseenter={() => (hoveredGroup = group.key)}
             on:mouseleave={() => (hoveredGroup = null)}
           >
-            <circle class="group-halo" cx={group.x} cy={group.y} r="250" />
-            <text class="group-label" x={group.x} y={group.y - 268} text-anchor="middle">{group.label}</text>
+            <circle class="group-halo" cx={group.x} cy={group.y} r={group.r} />
+            <text class="group-label" x={group.x} y={group.y - group.r - 18} text-anchor="middle">{group.label}</text>
           </g>
         {/each}
         {#each edgePaths as ep (ep.key)}
