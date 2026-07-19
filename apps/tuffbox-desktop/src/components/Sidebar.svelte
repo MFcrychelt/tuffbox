@@ -8,9 +8,10 @@
     Workflow,
     Settings,
     Plus,
+    Library,
   } from "lucide-svelte";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library";
   export let currentView: View;
 
   const items: { id: View; label: string; icon: any; featured?: boolean }[] = [
@@ -18,6 +19,7 @@
     { id: "ide", label: "Open IDE", icon: Workflow, featured: true },
     { id: "mods", label: "Mods", icon: Package },
     { id: "graph", label: "Graph", icon: GitGraph },
+    { id: "library", label: "Library", icon: Library },
     { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
     { id: "snapshots", label: "Snapshots", icon: History },
   ];

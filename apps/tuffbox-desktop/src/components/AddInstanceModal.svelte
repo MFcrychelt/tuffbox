@@ -548,17 +548,22 @@
     background: rgba(27,217,106,.1);
     color: var(--accent-primary);
   }
-  .modal-body { padding: 8px 20px 16px; display: grid; gap: 12px; }
+   .modal-body { padding: 8px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
   .modal-footer {
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 12px 20px 18px; border-top: 1px solid var(--border-color);
   }
-  .field { display: grid; gap: 6px; }
-  .field label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
-  .field input, .field select, .cf-detail select {
-    width: 100%; padding: 10px 12px; border-radius: 10px;
-    border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
-  }
+   .field { display: grid; gap: 6px; }
+   .field label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+   .field input, .field select, .cf-detail select {
+     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
+     border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
+     font-size: 14px; line-height: 1;
+   }
+   .field input:disabled {
+     color: var(--text-muted); background: var(--bg-elevated); cursor: not-allowed;
+     opacity: 0.85;
+   }
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .input-row { display: flex; gap: 8px; }
   .input-row input { flex: 1; }
@@ -573,7 +578,7 @@
   .muted { color: var(--text-muted); font-size: 13px; }
   .muted.compact { padding: 16px; text-align: center; }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
-  .template-btn { justify-self: start; }
+   .template-btn { align-self: flex-start; }
   .template-list { display: grid; gap: 6px; }
   .template-row {
     display: grid; text-align: left; gap: 2px; padding: 10px 12px;
@@ -586,10 +591,10 @@
     padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary);
   }
   .search input { border: 0; background: transparent; color: var(--text-primary); width: 100%; padding: 10px 0; }
-  .cf-layout {
-    display: grid; grid-template-columns: 1.2fr 0.9fr; gap: 12px;
-    min-height: 280px; max-height: 360px;
-  }
+   .cf-layout {
+     display: grid; grid-template-columns: 1.2fr 0.9fr; gap: 12px;
+     min-height: 300px; max-height: 380px;
+   }
   .cf-list { overflow: auto; display: grid; gap: 6px; align-content: start; }
   .cf-row {
     display: grid; grid-template-columns: 40px 1fr; gap: 10px; text-align: left;

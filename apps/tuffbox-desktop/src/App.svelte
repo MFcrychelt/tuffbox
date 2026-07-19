@@ -11,6 +11,7 @@
   import OreGenVisualizer from "./components/OreGenVisualizer.svelte";
   import RecipeBrowser from "./components/RecipeBrowser.svelte";
   import QuestEditor from "./components/QuestEditor.svelte";
+  import Library from "./components/Library.svelte";
   import ToastContainer from "./components/ToastContainer.svelte";
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
@@ -30,7 +31,8 @@
     | "project-settings"
     | "ore-gen"
     | "recipes"
-    | "quests";
+    | "quests"
+    | "library";
   let currentView: View = "dashboard";
 
   onMount(() => {
@@ -94,6 +96,8 @@
         <RecipeBrowser />
       {:else if currentView === "quests"}
         <QuestEditor />
+      {:else if currentView === "library"}
+        <Library bind:currentView />
       {/if}
     </main>
   </div>

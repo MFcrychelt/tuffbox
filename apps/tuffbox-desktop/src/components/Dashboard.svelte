@@ -377,7 +377,7 @@
       {/if}
     </div>
 
-    <!-- Account avatar in top-right -->
+    <!-- Account avatar in top-right (sign-in lives in the skin panel) -->
     <div class="account-avatar-section">
       {#if $authState.loggedIn && $authState.profile}
         <button class="account-avatar-btn" on:click={() => (showAccountManager = true)} title="Account Manager">
@@ -392,10 +392,6 @@
           <span class="avatar-badge" class:microsoft={$authState.loginType === "microsoft"} class:offline={$authState.loginType === "offline"}>
             {$authState.loginType === "microsoft" ? "MS" : "OFF"}
           </span>
-        </button>
-      {:else}
-        <button class="account-avatar-btn login" on:click={() => (showLoginModal = true)}>
-          <LogIn size={18} />
         </button>
       {/if}
     </div>
@@ -635,6 +631,7 @@
 <style>
   .home {
     max-width: 1400px;
+    margin: 0 auto;
   }
 
   /* ─── Top Bar ─────────────────────────────────────── */

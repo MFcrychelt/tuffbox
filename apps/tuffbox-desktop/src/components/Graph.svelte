@@ -28,7 +28,7 @@
     edges: GraphEdge[];
   };
 
-  type PositionedNode = GraphNode & { x: number; y: number; fx?: number | null; fy?: number | null; tone: string; ghost?: boolean };
+  type PositionedNode = GraphNode & { x: number; y: number; fx?: number | null; fy?: number | null; tone: string; ghost?: boolean; groupKey?: string };
   type DownloadProgress = {
     id: string;
     name: string;
@@ -209,8 +209,14 @@
   }
 
   function edgePath(edge: GraphEdge): string {
-    const source = point(edge.from);
-    const target = point(edge.to);
+    // Hard dependencies point from the parent (library/dependency) toward the
+    // child (the mod that requires it) so the hub reads top-down. Conflict and
+    // loader/optional edges keep their natural direction.
+    const reversed = edge.kind === "Requires";
+    const srcId = reversed ? edge.to : edge.from;
+    const tgtId = reversed ? edge.from : edge.to;
+    const source = point(srcId);
+    const target = point(tgtId);
     if (!source || !target) return "";
     const dx = target.x - source.x;
     const dy = target.y - source.y;
@@ -228,8 +234,8 @@
     // multi-edges get a light fan so they stay readable.
     const parallel = displayEdges.filter(
       (e) =>
-        (e.from === edge.from && e.to === edge.to) ||
-        (e.from === edge.to && e.to === edge.from),
+        (e.from === srcId && e.to === tgtId) ||
+        (e.from === tgtId && e.to === srcId),
     );
     if (parallel.length <= 1) {
       return `M ${x1} ${y1} L ${x2} ${y2}`;
@@ -647,12 +653,44 @@
     ...platformNodes,
     ...ghostNodes,
   ];
+  // Transitive reduction over the Requires graph: if A requires B and B
+  // requires C, drop the direct A->C link so the centre isn't overloaded with
+  // redundant edges (modrinth-extras / hub-and-spoke readability). Non-Requires
+  // edges (conflicts, optional, loader links) are left untouched.
+  function reduceTransitiveRequires(allEdges: GraphEdge[]): GraphEdge[] {
+    const req = allEdges.filter((e) => e.kind === "Requires");
+    const adj = new Map<string, string[]>();
+    for (const e of req) {
+      if (!adj.has(e.from)) adj.set(e.from, []);
+      adj.get(e.from)!.push(e.to);
+    }
+    const reachable = (start: string, excludeDirect: string): boolean => {
+      const seen = new Set<string>([start]);
+      const stack = [...(adj.get(start) ?? [])];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        if (cur === excludeDirect) return true;
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        for (const next of adj.get(cur) ?? []) {
+          if (next !== excludeDirect) stack.push(next);
+        }
+      }
+      return false;
+    };
+    const keep = req.filter((e) => !reachable(e.from, e.to));
+    const others = allEdges.filter((e) => e.kind !== "Requires");
+    return [...keep, ...others];
+  }
+
   // Mod-to-mod relations plus loader/runtime links (fabric-api, lithium,
   // ferrite-core etc. only depend on the loader, so without these edges they
-  // look orphaned). Optional/recommended edges stay hidden — they point
-  // outward from hub mods and read like inverted deps in a dense pack.
-  $: displayEdges = edges.filter((e) =>
-    ["Requires", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
+  // look orphaned). Optional edges are now shown as semantic (yellow/green)
+  // integration links; transitive Requires edges are collapsed away.
+  $: displayEdges = reduceTransitiveRequires(
+    edges.filter((e) =>
+      ["Requires", "Optional", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
+    )
   );
 
   async function hydrateGhostNodes() {
@@ -748,6 +786,24 @@
   type GroupMeta = { key: string; label: string; color: string; x: number; y: number };
   let groupMeta: GroupMeta[] = [];
 
+  /// Cluster currently hovered in the legend / on a halo; used to spotlight that
+  /// group's nodes and edges and dim the rest.
+  let hoveredGroup: string | null = null;
+
+  function nodeGroupKey(id: string): string | null {
+    return positionById.get(id)?.groupKey ?? null;
+  }
+  /// True when an edge belongs to the hovered cluster (both endpoints in it, or
+  /// one endpoint is a core/runtime hub that the cluster radiates from).
+  function edgeInHoveredGroup(from: string, to: string): boolean {
+    if (!hoveredGroup) return true;
+    const gf = nodeGroupKey(from);
+    const gt = nodeGroupKey(to);
+    const core = (g: string | null) => g === "core" || g === "runtime" || g === null;
+    if (core(gf) || core(gt)) return true;
+    return gf === hoveredGroup || gt === hoveredGroup;
+  }
+
   let canvasWidth = 1600;
   let canvasHeight = 900;
   let positioned: PositionedNode[] = [];
@@ -768,13 +824,26 @@
     matches: (id: string, label: string) => boolean;
   };
 
+  // Functional clusters (Hub & Spoke). Every mod is routed into exactly one
+  // cluster by keyword match; unmatched mods fall back to Quality of Life so no
+  // node is orphaned. Adding a group here automatically adds a ring anchor, a
+  // colour-coded halo and a side-panel section.
   const MOD_GROUPS: ModGroup[] = [
+    {
+      key: "library",
+      label: "Libraries & Core",
+      color: "rgba(148,163,184,0.55)",
+      matches: (id, label) =>
+        /(api|lib|library|core|fabric|forge|neoforge|quilt|architectury|cloth|yacl|trinkets|cardinal|player|collective|midnightlib|resourceful|reacharound|commander|balm|container|configured|framework|platform|modmenu|curios|slight|packetfixer|fabric-language|java|mixin|config)/i.test(
+          id + " " + label
+        ),
+    },
     {
       key: "rendering",
       label: "Rendering & Performance",
       color: "rgba(139,92,246,0.5)",
       matches: (id, label) =>
-        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|entityculling|cull-less| continuity|entitytexture|dashloader|lazyd|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle)|render|optifine|performance|fps/i.test(
+        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|cull-less|continuity|entitytexture|dashloader|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle|render|optifine|performance|fps)/i.test(
           id + " " + label
         ),
     },
@@ -788,20 +857,29 @@
         ),
     },
     {
+      key: "storage",
+      label: "Storage & Inventory",
+      color: "rgba(56,189,248,0.5)",
+      matches: (id, label) =>
+        /(jei|rei|emi|inventory|sort|chest|shulker|sophisticated|ironchest|trinket|backpack|curios|collective|roughly|jade|wthit|theoneprobe|glassential|itemzo|justenough|waila|storage|ironbar|expandedstorage)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "qol",
+      label: "Quality of Life",
+      color: "rgba(250,204,21,0.5)",
+      matches: (id, label) =>
+        /(qol|utility|tooltip|xaero|journeymap|minimap|map|sound|music|harvest|rightclick|mouse|keybind|zoom|chat|emoji|cosmetic|skin|recipe|patchouli|comfort|physic|presence|villager|easy|fast|extra|more|added)/i.test(
+          id + " " + label
+        ),
+    },
+    {
       key: "create",
       label: "Create & Automation",
       color: "rgba(245,158,11,0.55)",
       matches: (id, label) =>
         /(create|flywheel|ponder|train|steam|rc|trackwork|createplus|decorative|casing|sequenced|mechanical|automated|factory|pipez|integrateddynamics|applied|refinedstorage|thermal|mekanism|techreborn|industrial|immersive|botania|powah|energy|ae2)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "storage",
-      label: "Storage & Inventory",
-      color: "rgba(56,189,248,0.5)",
-      matches: (id, label) =>
-        /(jei|rei|emi|inventory|sort|chest|shulker|sophisticated|ironchest|trinket|backpack|curios|collective|roughly|jade|wthit|theoneprobe|glassential|itemzo|justenough|waila)/i.test(
           id + " " + label
         ),
     },
@@ -824,34 +902,36 @@
         ),
     },
     {
-      key: "library",
-      label: "Libraries & Core",
-      color: "rgba(148,163,184,0.55)",
+      key: "farming",
+      label: "Farming & Food",
+      color: "rgba(132,204,22,0.5)",
       matches: (id, label) =>
-        /(api|lib|library|core|fabric|forge|neoforge|quilt|architectury|cloth|yacl|trinkets|cardinal|player|collective| midnightlib|resourceful|reacharound|commander|balm|container|configured|framework|platform|modmenu|curios|slight)/i.test(
+        /(farmers|croptopia|delight|food|farm|brewin|beer|harvest|cuisine|pam|vanilla|apple|crop|nutrition|spice|bee|honey)/i.test(
           id + " " + label
         ),
     },
     {
-      key: "qol",
-      label: "Quality of Life",
-      color: "rgba(250,204,21,0.5)",
+      key: "decor",
+      label: "Building & Decor",
+      color: "rgba(45,212,191,0.5)",
       matches: (id, label) =>
-        /(qol|utility|tooltip|xaero|journeymap|minimap|map|sound|music|harvest|rightclick|mouse|keybind|zoom|chat|emoji|cosmetic|skin|recipe|patchouli|bookshelf|supplementaries|decor|furniture|macaw|hand|totem|waystone|comfort|physic|presence|villager|easy|fast|extra|more|added|delight|farmers|croptopia)/i.test(
+        /(bookshelf|supplementaries|decor|furniture|macaw|hand|totem|waystone|building|chisel|construction|architect|block|gravestone|lantern|lighting|painting|statue|plant|flower|terraform|abundance|earth|stone|cobble|Quark)/i.test(
           id + " " + label
         ),
     },
   ];
 
-  /// Assign every Mod/Missing node to a human category. The first matching
-  /// group wins; anything unmatched lands in "misc" so no node is orphaned
-  /// (orphans are exactly what caused the lopsided "square of mods" layout).
+  /// Assign every Mod/Missing node to one of the four clusters. The first
+  /// matching group wins; anything unmatched routes to Quality of Life so no
+  /// node is orphaned (orphans caused the lopsided "square of mods" layout).
   function categorizeMod(id: string, label: string): ModGroup {
     const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
     for (const group of MOD_GROUPS) {
       if (group.matches(slug, label)) return group;
     }
-    return { key: "misc", label: "Other Mods", color: "rgba(113,113,122,0.5)", matches: () => false };
+    // No match — every mod must live in one of the four clusters, so route the
+    // remainder to Quality of Life (the catch-all interface/utility bucket).
+    return MOD_GROUPS.find((g) => g.key === "qol")!;
   }
 
   function layoutCanvasSize(count: number, maxDepth: number) {
@@ -1143,8 +1223,8 @@
         "charge",
         d3
           .forceManyBody<LayoutNode>()
-          .strength((d) => -260 - Math.min(degOf(d.id), 24) * 28)
-          .distanceMax(900),
+          .strength((d) => -460 - Math.min(degOf(d.id), 24) * 36)
+          .distanceMax(1100),
       )
       .force(
         "link",
@@ -1156,7 +1236,11 @@
             const t = linkId(link.target);
             const rs = nodeSize({ id: s } as PositionedNode) / 2;
             const rt = nodeSize({ id: t } as PositionedNode) / 2;
-            return rs + rt + 70 + Math.max(degOf(s), degOf(t)) * 6;
+            // Longer links for the central hub so peripheral mods are flung
+            // out toward their category circles instead of piling on the core.
+            const hubEnd = isCoreNode(nodeById(s) ?? nodeById(t) ?? ({} as GraphNode)) ||
+              hubMeta.some((h) => h.id === s || h.id === t);
+            return rs + rt + (hubEnd ? 160 : 90) + Math.max(degOf(s), degOf(t)) * 8;
           })
           .strength((link: any) => {
             const s = linkId(link.source);
@@ -1561,6 +1645,36 @@
         </button>
         <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
       </div>
+      <div class="graph-legend">
+        <div class="legend-block">
+          <span class="legend-title">Edges</span>
+          <span class="legend-row"><i class="lg-line hard"></i> Hard dependency</span>
+          <span class="legend-row"><i class="lg-line conflict"></i> Conflict</span>
+          <span class="legend-row"><i class="lg-line optional"></i> Optional</span>
+          <span class="legend-row"><i class="lg-line runtime"></i> Loader / runtime</span>
+        </div>
+        <div class="legend-block">
+          <span class="legend-title">Nodes</span>
+          <span class="legend-row"><i class="lg-dot client"></i> Client</span>
+          <span class="legend-row"><i class="lg-dot server"></i> Server</span>
+          <span class="legend-row"><i class="lg-dot both"></i> Both</span>
+          <span class="legend-row"><i class="lg-dot dep"></i> Dependency</span>
+          <span class="legend-row"><i class="lg-dot missing"></i> Missing</span>
+        </div>
+        <div class="legend-block legend-groups">
+          <span class="legend-title">Clusters</span>
+          {#each groupMeta as group (group.key)}
+            <button
+              class="legend-chip"
+              class:on={hoveredGroup === group.key}
+              style={`--chip:${group.color}`}
+              on:mouseenter={() => (hoveredGroup = group.key)}
+              on:mouseleave={() => (hoveredGroup = null)}
+              on:click|stopPropagation={() => (hoveredGroup = hoveredGroup === group.key ? null : group.key)}
+            >{group.label}</button>
+          {/each}
+        </div>
+      </div>
       <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
       <svg
         bind:this={viewportEl}
@@ -1583,11 +1697,26 @@
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.75)" />
           </marker>
           <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-            <path d="M0,0 L0,6 L7,3 z" fill="rgba(113,113,122,.95)" />
+            <path d="M0,0 L0,6 L7,3 z" fill="rgba(239,68,68,.95)" />
+          </marker>
+          <marker id="arrow-optional" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L0,6 L7,3 z" fill="rgba(132,204,22,.85)" />
+          </marker>
+          <marker id="arrow-runtime" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.45)" />
           </marker>
         </defs>
         {#each groupMeta as group (group.key)}
-          <g class="graph-group" style={`color:${group.color}`}>
+          <g
+            class="graph-group"
+            class:active={hoveredGroup === group.key}
+            class:dim={hoveredGroup !== null && hoveredGroup !== group.key}
+            style={`color:${group.color}`}
+            role="group"
+            aria-label={group.label}
+            on:mouseenter={() => (hoveredGroup = group.key)}
+            on:mouseleave={() => (hoveredGroup = null)}
+          >
             <circle class="group-halo" cx={group.x} cy={group.y} r="250" />
             <text class="group-label" x={group.x} y={group.y - 268} text-anchor="middle">{group.label}</text>
           </g>
@@ -1598,10 +1727,11 @@
             class="graph-edge"
             class:dense={denseGraph}
             class:danger-edge={ep.danger}
+            class:optional-edge={ep.kind === "Optional"}
             class:runtime-edge={["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)}
-            class:dimmed={selectedId && ep.from !== selectedId && ep.to !== selectedId}
+            class:dimmed={(selectedId && ep.from !== selectedId && ep.to !== selectedId) || !edgeInHoveredGroup(ep.from, ep.to)}
             d={ep.d}
-            marker-end={ep.danger ? "url(#arrow-danger)" : "url(#arrow)"}
+            marker-end={ep.danger ? "url(#arrow-danger)" : ep.kind === "Optional" ? "url(#arrow-optional)" : ["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind) ? "url(#arrow-runtime)" : "url(#arrow)"}
           />
         {/each}
         {#each positioned as node (node.id)}
@@ -1616,7 +1746,7 @@
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
             class:clickable-dep={isInstalledDep}
-            class:dimmed={selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)}
+            class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime")}
             role="button"
             tabindex="0"
             style={`transform: translate(${node.x}px, ${node.y}px)`}
@@ -2171,6 +2301,78 @@
     letter-spacing: 0.03em;
     text-transform: uppercase;
     pointer-events: none;
+    transition: fill-opacity 120ms ease;
+  }
+  /* Cluster spotlight: hovered halo brightens; the rest fade back. */
+  .graph-group { cursor: pointer; transition: opacity 120ms ease; }
+  .graph-group.active .group-halo {
+    fill-opacity: 0.14;
+    stroke-opacity: 0.6;
+  }
+  .graph-group.active .group-label { fill-opacity: 1; }
+  .graph-group.dim { opacity: 0.35; }
+
+  /* Graph legend overlay (edge semantics + node tones + clickable clusters). */
+  .graph-legend {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    z-index: 2;
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    max-width: calc(100% - 24px);
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: rgba(9, 9, 11, 0.74);
+    backdrop-filter: blur(6px);
+    color: var(--text-secondary);
+    font-size: 11px;
+  }
+  .legend-block { display: flex; flex-direction: column; gap: 4px; }
+  .legend-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+  }
+  .legend-row { display: flex; align-items: center; gap: 7px; line-height: 1.4; }
+  .lg-line {
+    width: 22px; height: 0;
+    border-top-width: 2px; border-top-style: solid;
+    display: inline-block;
+  }
+  .lg-line.hard { border-color: rgba(161,161,170,.85); }
+  .lg-line.conflict { border-color: rgba(239,68,68,.95); border-top-style: dashed; }
+  .lg-line.optional { border-color: rgba(132,204,22,.85); border-top-style: dashed; }
+  .lg-line.runtime { border-color: rgba(161,161,170,.4); }
+  .lg-dot {
+    width: 11px; height: 11px; border-radius: 3px;
+    border: 1.6px solid; display: inline-block;
+    background: #18181b;
+  }
+  .lg-dot.client { border-color: rgba(139,92,246,.8); }
+  .lg-dot.server { border-color: rgba(59,130,246,.8); }
+  .lg-dot.both { border-color: rgba(27,217,106,.8); }
+  .lg-dot.dep { border-color: rgba(245,158,11,.8); border-style: dashed; }
+  .lg-dot.missing { border-color: rgba(113,113,122,.9); border-style: dashed; }
+  .legend-groups { max-width: 240px; }
+  .legend-chip {
+    display: inline-flex; align-items: center;
+    padding: 2px 8px; margin: 0 4px 4px 0;
+    font-size: 10px; font-weight: 700;
+    border-radius: 999px;
+    border: 1px solid var(--chip, var(--border-color));
+    color: var(--text-secondary);
+    background: transparent;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+  .legend-chip:hover, .legend-chip.on {
+    background: var(--chip, var(--bg-tertiary));
+    color: #09090b;
   }
 
   .graph-canvas .graph-edge.dense {
@@ -2197,6 +2399,14 @@
     stroke: rgba(239, 68, 68, 0.95);
     stroke-width: 2;
     stroke-dasharray: 6 5;
+  }
+
+  /* Optional dependencies / integrations — semantic yellow-green dashed, kept
+     visually distinct from the solid grey hard-dependency links. */
+  .graph-canvas .graph-edge.optional-edge {
+    stroke: rgba(132, 204, 22, 0.8);
+    stroke-width: 1.6;
+    stroke-dasharray: 3 5;
   }
 
   .svg-node {
