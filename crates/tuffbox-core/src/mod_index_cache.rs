@@ -172,6 +172,7 @@ impl ModHashIndexEntry {
                 url: self.download_url.clone(),
                 path: None,
                 icon_url: self.icon_url.clone(),
+                categories: Vec::new(),
             },
             file_name: Some(file_name),
             hashes: Some(FileHashes {

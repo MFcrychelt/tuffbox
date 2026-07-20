@@ -192,6 +192,15 @@ impl DependencyGraph {
             if let Some(icon_url) = &module.source.icon_url {
                 metadata.insert("icon_url".to_string(), icon_url.clone());
             }
+            // Provider categories (Modrinth tags) drive the graph clustering in
+            // the desktop view. Serialized as a comma-separated list so it rides
+            // along in the existing string metadata map.
+            if !module.source.categories.is_empty() {
+                metadata.insert(
+                    "categories".to_string(),
+                    module.source.categories.join(","),
+                );
+            }
 
             let mod_id = NodeId::module(&module.id);
             graph.nodes.push(GraphNode {

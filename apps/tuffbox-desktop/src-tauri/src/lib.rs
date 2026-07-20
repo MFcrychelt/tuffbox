@@ -377,6 +377,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                         url: None,
                         path: Some(format!("{}/{}", dir_name, file_name)),
                         icon_url: None,
+                        categories: Vec::new(),
                     },
                     file_name: Some(file_name),
                     hashes: Some(tuffbox_core::FileHashes {
@@ -4999,9 +5000,17 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
             }
         }
 
-        if module.source.icon_url.is_none() {
+        // Fetch the project once to backfill both the icon and the site
+        // categories (Modrinth tags). Categories drive the graph clustering,
+        // so we refresh them even when the icon is already cached.
+        if module.source.icon_url.is_none() || module.source.categories.is_empty() {
             if let Ok(project) = provider.get_project(&project_id) {
-                module.source.icon_url = project.icon_url;
+                if module.source.icon_url.is_none() {
+                    module.source.icon_url = project.icon_url;
+                }
+                if !project.categories.is_empty() {
+                    module.source.categories = project.categories;
+                }
             }
         }
     });
@@ -7888,6 +7897,7 @@ fn add_mod_from_curseforge(
             url: Some(download_url),
             path: None,
             icon_url: hit.icon_url,
+            categories: Vec::new(),
         },
         version: file.display_name.clone(),
         file_name: Some(file.file_name),
@@ -8026,6 +8036,7 @@ fn build_mod_spec(
             url: Some(file.url),
             path: None,
             icon_url: project.icon_url.clone(),
+            categories: Vec::new(),
         },
         version: version.version_number.clone(),
         file_name: Some(file.filename),

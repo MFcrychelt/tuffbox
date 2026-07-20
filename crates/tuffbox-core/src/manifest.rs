@@ -348,6 +348,11 @@ pub struct ModSource {
     /// mod on every list load.
     #[serde(default, rename = "iconUrl")]
     pub icon_url: Option<String>,
+    /// Cached provider categories/tags (e.g. Modrinth `optimization`,
+    /// `worldgen`, `magic`). Used to cluster the dependency graph by the real
+    /// site taxonomy instead of fragile keyword guessing.
+    #[serde(default)]
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

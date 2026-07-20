@@ -453,6 +453,7 @@ fn build_mod_spec(
             url: Some(file.url),
             path: None,
             icon_url: project.icon_url.clone(),
+            categories: Vec::new(),
         },
         version: version.version_number.clone(),
         file_name: Some(file.filename),

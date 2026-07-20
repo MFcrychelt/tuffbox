@@ -581,7 +581,7 @@
   $: groupedMods = (() => {
     const buckets = new Map<string, { label: string; color: string; nodes: GraphNode[] }>();
     for (const node of modNodes) {
-      const g = categorizeMod(node.id, node.label);
+      const g = categorizeMod(node);
       const bucket = buckets.get(g.key) ?? { label: g.label, color: g.color, nodes: [] };
       bucket.nodes.push(node);
       buckets.set(g.key, bucket);
@@ -695,12 +695,14 @@
 
   // --- Canvas edge curation ---
   // The full edge list drives the side panel, missing-dep detection and the
-  // layout sim, but drawing all of it turns the canvas into spaghetti (on a
-  // real 160-mod pack: ~320 runtime links converging on the centre, 90+
-  // Optional integration lines, and a 77-edge Requires fan-in into
-  // fabric-api). The canvas therefore shows a curated set by default:
-  // hard deps + conflicts, minus the API-hub fan-ins. Everything hidden is
-  // revealed for the selected node, or globally via the "All edges" toggle.
+  // layout sim, but drawing every runtime link turns the canvas into spaghetti
+  // (on a real 160-mod pack: ~320 loader/minecraft/java links converging on the
+  // centre). The canvas therefore hides ONLY those pure-runtime links by
+  // default. Every real mod-to-mod relation — hard deps (grey), optional
+  // integrations (green) and conflicts (red) — stays visible, so the graph
+  // reads as a connected web instead of just the red conflict edges. Hub
+  // fan-ins (e.g. everything → fabric-api) are still drawn but faded so they
+  // don't dominate. The "All edges" toggle also reveals the runtime links.
   let showAllEdges = false;
   const RUNTIME_EDGE_KINDS = ["RequiresLoader", "RequiresMinecraft", "RequiresJava"];
   const HUB_FAN_IN_THRESHOLD = 8;
@@ -717,9 +719,12 @@
   $: renderedEdges = showAllEdges
     ? displayEdges
     : displayEdges.filter((e) => {
-        const touchesSelected = !!selectedId && (e.from === selectedId || e.to === selectedId);
-        if (RUNTIME_EDGE_KINDS.includes(e.kind) || e.kind === "Optional") return touchesSelected;
-        if (e.kind === "Requires" && hubTargetIds.has(e.to)) return touchesSelected;
+        // Only the pure-runtime links (loader/minecraft/java) are hidden by
+        // default; reveal them for the selected node. Everything else —
+        // Requires, Optional, Conflicts, BreaksWith, Replaces — is always drawn.
+        if (RUNTIME_EDGE_KINDS.includes(e.kind)) {
+          return !!selectedId && (e.from === selectedId || e.to === selectedId);
+        }
         return true;
       });
 
@@ -951,16 +956,80 @@
     },
   ];
 
-  /// Assign every Mod/Missing node to one of the four clusters. The first
-  /// matching group wins; anything unmatched routes to Quality of Life so no
-  /// node is orphaned (orphans caused the lopsided "square of mods" layout).
-  function categorizeMod(id: string, label: string): ModGroup {
+  /// Modrinth's official category taxonomy → our cluster key. This is the
+  /// authoritative distribution: a mod tagged `optimization` on the site lands
+  /// in Rendering & Performance regardless of its name. Keyword matching is
+  /// only a fallback for mods with no cached categories (local jars, ghosts).
+  /// Ordered by specificity: technology/create before generic buckets.
+  const MODRINTH_CATEGORY_TO_GROUP: Record<string, string> = {
+    // Rendering & Performance
+    optimization: "rendering",
+    // World Generation
+    worldgen: "worldgen",
+    // Storage & Inventory
+    storage: "storage",
+    management: "storage",
+    // Create & Automation / tech
+    technology: "create",
+    transportation: "create",
+    // Magic & RPG
+    magic: "magic",
+    // Adventure & Mobs
+    adventure: "adventure",
+    mobs: "adventure",
+    equipment: "adventure",
+    minigame: "adventure",
+    // Farming & Food
+    food: "farming",
+    // Building & Decor
+    decoration: "decor",
+    // Quality of Life (catch-all interface/social/economy/mechanics)
+    utility: "qol",
+    social: "qol",
+    economy: "qol",
+    "game-mechanics": "qol",
+    // Libraries & Core
+    library: "library",
+    // Loose/aesthetic tags that shouldn't hijack a functional bucket fall
+    // through to keyword matching below (cursed, etc.).
+  };
+
+  function nodeCategories(node: { metadata?: Record<string, string> }): string[] {
+    const raw = node.metadata?.categories;
+    if (!raw) return [];
+    return raw
+      .split(",")
+      .map((c) => c.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  /// Assign every Mod/Missing node to one cluster. Modrinth categories win
+  /// (authoritative site taxonomy); mods without cached categories fall back to
+  /// keyword matching; anything still unmatched routes to Quality of Life so no
+  /// node is orphaned.
+  function categorizeMod(node: GraphNode | PositionedNode): ModGroup {
+    const id = node.id;
+    const label = node.label;
+    // 1) Authoritative: Modrinth categories. Respect MOD_GROUPS order so a mod
+    //    tagged both `technology` and `utility` lands in the more specific
+    //    functional cluster (create) rather than the qol catch-all.
+    const cats = nodeCategories(node);
+    if (cats.length) {
+      const mappedKeys = cats
+        .map((c) => MODRINTH_CATEGORY_TO_GROUP[c])
+        .filter((k): k is string => !!k);
+      if (mappedKeys.length) {
+        for (const group of MOD_GROUPS) {
+          if (mappedKeys.includes(group.key)) return group;
+        }
+      }
+    }
+    // 2) Fallback: keyword heuristics on slug + label.
     const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
     for (const group of MOD_GROUPS) {
       if (group.matches(slug, label)) return group;
     }
-    // No match — every mod must live in one of the four clusters, so route the
-    // remainder to Quality of Life (the catch-all interface/utility bucket).
+    // 3) Last resort: Quality of Life (catch-all interface/utility bucket).
     return MOD_GROUPS.find((g) => g.key === "qol")!;
   }
 
@@ -1019,7 +1088,7 @@
     const byGroup = new Map<string, GraphNode[]>();
     for (const node of displayNodes) {
       if (isCoreNode(node)) continue;
-      const key = categorizeMod(node.id, node.label).key;
+      const key = categorizeMod(node).key;
       if (!byGroup.has(key)) byGroup.set(key, []);
       byGroup.get(key)!.push(node);
     }
@@ -1215,6 +1284,9 @@
     to: edge.to,
     d: edgePath(edge),
     danger: edgeDanger(edge),
+    // Fan-in into a heavily-shared library (fabric-api, cloth-config, …): still
+    // drawn so the hub reads as a star, but faded so it doesn't drown the graph.
+    hub: edge.kind === "Requires" && hubTargetIds.has(edge.to),
   }));
 
   function edgeKey(edge: GraphEdge): string {
@@ -1641,6 +1713,7 @@
             class:dense={denseGraph}
             class:danger-edge={ep.danger}
             class:optional-edge={ep.kind === "Optional"}
+            class:hub-edge={ep.hub && !ep.danger}
             class:runtime-edge={["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)}
             class:dimmed={(selectedId && ep.from !== selectedId && ep.to !== selectedId) || !edgeInHoveredGroup(ep.from, ep.to)}
             d={ep.d}
@@ -2319,6 +2392,14 @@
   .graph-canvas .graph-edge.runtime-edge {
     stroke: rgba(161, 161, 170, 0.22);
     stroke-width: 1;
+  }
+
+  /* Hard-dep fan-in into a shared library hub: kept visible (so the graph is a
+     connected web, not just red conflicts) but faded so the hub doesn't drown
+     the layout. Selecting the hub still highlights these normally. */
+  .graph-canvas .graph-edge.hub-edge {
+    stroke: rgba(161, 161, 170, 0.3);
+    stroke-width: 1.1;
   }
 
   .graph-canvas .graph-edge.danger-edge {
