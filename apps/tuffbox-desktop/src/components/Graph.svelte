@@ -693,6 +693,36 @@
     )
   );
 
+  // --- Canvas edge curation ---
+  // The full edge list drives the side panel, missing-dep detection and the
+  // layout sim, but drawing all of it turns the canvas into spaghetti (on a
+  // real 160-mod pack: ~320 runtime links converging on the centre, 90+
+  // Optional integration lines, and a 77-edge Requires fan-in into
+  // fabric-api). The canvas therefore shows a curated set by default:
+  // hard deps + conflicts, minus the API-hub fan-ins. Everything hidden is
+  // revealed for the selected node, or globally via the "All edges" toggle.
+  let showAllEdges = false;
+  const RUNTIME_EDGE_KINDS = ["RequiresLoader", "RequiresMinecraft", "RequiresJava"];
+  const HUB_FAN_IN_THRESHOLD = 8;
+  $: hubTargetIds = new Set(
+    [
+      ...displayEdges
+        .filter((e) => e.kind === "Requires")
+        .reduce((acc, e) => acc.set(e.to, (acc.get(e.to) ?? 0) + 1), new Map<string, number>())
+        .entries(),
+    ]
+      .filter(([, count]) => count >= HUB_FAN_IN_THRESHOLD)
+      .map(([id]) => id),
+  );
+  $: renderedEdges = showAllEdges
+    ? displayEdges
+    : displayEdges.filter((e) => {
+        const touchesSelected = !!selectedId && (e.from === selectedId || e.to === selectedId);
+        if (RUNTIME_EDGE_KINDS.includes(e.kind) || e.kind === "Optional") return touchesSelected;
+        if (e.kind === "Requires" && hubTargetIds.has(e.to)) return touchesSelected;
+        return true;
+      });
+
   async function hydrateGhostNodes() {
     if (!$projectPath || !graph) return;
     const missing = ghostNodes.filter((n) => !ghostMeta[n.id]);
@@ -1177,7 +1207,7 @@
 
   // Reactive edge paths: recomputed whenever `positioned` (and thus
   // `positionById`) changes, so arrows track nodes live during the sim.
-  $: edgePaths = displayEdges.map((edge) => ({
+  $: edgePaths = renderedEdges.map((edge) => ({
     key: `${edge.from}:${edge.to}:${edge.kind}`,
     edge,
     kind: edge.kind,
@@ -1207,7 +1237,7 @@
       const el = nodeEls.get(node.id);
       if (el) el.style.transform = `translate(${node.x}px, ${node.y}px)`;
     }
-    for (const edge of displayEdges) {
+    for (const edge of renderedEdges) {
       const el = edgeEls.get(edgeKey(edge));
       if (el) el.setAttribute("d", edgePath(edge));
     }
@@ -1227,7 +1257,7 @@
   $: viewBoxHeight = canvasHeight / viewScale;
   $: viewBoxWidth = canvasWidth / viewScale;
   $: viewBoxString = `${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`;
-  $: denseGraph = displayEdges.length > 70;
+  $: denseGraph = renderedEdges.length > 70;
 
   function clientToSvgPoint(clientX: number, clientY: number) {
     const rect = viewportEl.getBoundingClientRect();
@@ -1515,6 +1545,14 @@
         <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
         <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
         <button class="ghost mini" on:click={resetView} title="Fit graph to view">⤢</button>
+        <button
+          class="ghost mini edge-toggle"
+          class:active={showAllEdges}
+          on:click={() => (showAllEdges = !showAllEdges)}
+          title={showAllEdges ? "Show only hard deps & conflicts" : "Show all edges (runtime, optional, API fan-in)"}
+        >
+          {showAllEdges ? "Curated edges" : "All edges"}
+        </button>
         <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
           {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
         </button>
@@ -2139,6 +2177,19 @@
     justify-content: center;
     font-size: 15px;
     line-height: 1;
+  }
+
+  .canvas-controls .edge-toggle {
+    width: auto;
+    padding: 0 10px;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .canvas-controls .mini.active {
+    background: rgba(139, 92, 246, 0.18);
+    border-color: rgba(139, 92, 246, 0.45);
+    color: #c4b5fd;
   }
 
   .zoom-readout {

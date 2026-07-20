@@ -88,9 +88,9 @@ struct ForgeModsToml {
 #[derive(Debug, Deserialize)]
 struct ForgeModEntry {
     #[serde(default)]
-    modid: String,
+    _modid: String,
     #[serde(default, rename = "networking")]
-    networking: Option<ForgeNetworking>,
+    _networking: Option<ForgeNetworking>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,15 +98,15 @@ struct ForgeNetworking {
     #[serde(default, rename = "channel")]
     _channel: Option<String>,
     #[serde(default, rename = "directional")]
-    directional: Option<bool>,
+    _directional: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ForgeDependency {
     #[serde(default)]
-    modid: String,
+    _modid: String,
     #[serde(default, rename = "type")]
-    kind: Option<String>,
+    _kind: Option<String>,
 }
 
 fn read_entry(archive: &mut ZipArchive<std::fs::File>, name: &str, path: &str) -> Result<String, ModScanError> {
