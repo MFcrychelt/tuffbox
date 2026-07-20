@@ -5,6 +5,10 @@ use sha1::{Digest, Sha1};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// Schema version for cache invalidation. Increment when the cache format or
+/// enrichment logic changes so old caches are rebuilt automatically.
+const CACHE_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphCache {
@@ -12,6 +16,8 @@ pub struct GraphCache {
     pub generated_at: String,
     pub enriched_manifest: ProjectManifest,
     pub graph: DependencyGraph,
+    #[serde(default)]
+    pub cache_version: u32,
 }
 
 impl GraphCache {
@@ -22,6 +28,7 @@ impl GraphCache {
             generated_at: crate::time_util::rfc3339_now(),
             enriched_manifest,
             graph,
+            cache_version: CACHE_VERSION,
         }
     }
 
@@ -37,7 +44,9 @@ impl GraphCache {
             .map_err(|error| format!("failed to read graph cache {}: {error}", path.display()))?;
         let cache: Self = serde_json::from_str(&raw)
             .map_err(|error| format!("failed to parse graph cache {}: {error}", path.display()))?;
-        Ok((cache.manifest_fingerprint == manifest_fingerprint(manifest)).then_some(cache))
+        Ok((cache.cache_version == CACHE_VERSION
+            && cache.manifest_fingerprint == manifest_fingerprint(manifest))
+            .then_some(cache))
     }
 
     pub fn save(&self, manifest_path: &Path) -> Result<PathBuf, String> {
@@ -145,5 +154,26 @@ mod tests {
         assert!(GraphCache::load_if_current(&manifest_path, &changed)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn cache_is_invalidated_when_version_bumped() {
+        let manifest: ProjectManifest = serde_json::from_str(include_str!(
+            "../../../examples/sample-project.tuffbox.json"
+        ))
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("project.tuffbox.json");
+        // Save with a deliberately old version to simulate a stale cache.
+        let mut cache = GraphCache::new(&manifest, manifest.clone());
+        cache.cache_version = 0;
+        cache.save(&manifest_path).unwrap();
+        // Should be rejected: cache.cache_version (0) != CACHE_VERSION (1)
+        assert!(
+            GraphCache::load_if_current(&manifest_path, &manifest)
+                .unwrap()
+                .is_none(),
+            "old-version cache should be rejected"
+        );
     }
 }

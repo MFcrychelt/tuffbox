@@ -1,7 +1,134 @@
-use std::sync::LazyLock;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use reqwest::StatusCode;
+
+// ---------------------------------------------------------------------------
+// Circuit Breaker — prevents hammering an API that is down
+// ---------------------------------------------------------------------------
+//
+// Inspired by theseus/fetch.rs.  After `OPEN_THRESHOLD` consecutive failures
+// to the same host within `WINDOW` seconds the circuit *opens* for
+// `OPEN_DURATION`.  During the open window every request to that host
+// immediately returns `CircuitBreakerOpen` without touching the network.
+// After the window expires the next request is allowed through
+// (*half-open*) — if it succeeds the circuit resets, if it fails the
+// breaker opens again.
+
+const OPEN_THRESHOLD: u32 = 5;
+const WINDOW: Duration = Duration::from_secs(60);
+const OPEN_DURATION: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CircuitState {
+    Closed,
+    Open { opened_at: Instant },
+}
+
+#[derive(Debug)]
+struct HostBreaker {
+    failures: Vec<Instant>,
+    state: CircuitState,
+}
+
+struct CircuitBreakerState {
+    hosts: HashMap<String, HostBreaker>,
+}
+
+static CIRCUIT: LazyLock<Mutex<CircuitBreakerState>> = LazyLock::new(|| {
+    Mutex::new(CircuitBreakerState {
+        hosts: HashMap::new(),
+    })
+});
+
+/// Returns `Ok(())` if the request may proceed, or `Err` if the
+/// circuit breaker has tripped for this host.
+fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
+    let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
+    let now = Instant::now();
+    let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
+        failures: Vec::new(),
+        state: CircuitState::Closed,
+    });
+
+    match entry.state {
+        CircuitState::Open { opened_at } => {
+            if now.duration_since(opened_at) < OPEN_DURATION {
+                return Err(CircuitBreakerOpen {
+                    host: host.to_string(),
+                    retry_after_secs: (OPEN_DURATION - now.duration_since(opened_at)).as_secs(),
+                });
+            }
+            // Half-open: allow the request through, reset failure window.
+            entry.state = CircuitState::Closed;
+            entry.failures.clear();
+        }
+        CircuitState::Closed => {
+            // Prune old failures outside the tracking window.
+            entry.failures.retain(|t| now.duration_since(*t) < WINDOW);
+        }
+    }
+    Ok(())
+}
+
+/// Must be called after a *successful* request to the host.
+fn circuit_record_success(host: &str) {
+    let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
+    if let Some(entry) = cb.hosts.get_mut(host) {
+        entry.failures.clear();
+        entry.state = CircuitState::Closed;
+    }
+}
+
+/// Must be called after a *failed* request to the host.
+fn circuit_record_failure(host: &str) {
+    let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
+    let now = Instant::now();
+    let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
+        failures: Vec::new(),
+        state: CircuitState::Closed,
+    });
+
+    entry.failures.push(now);
+    // Prune stale failures.
+    entry.failures.retain(|t| now.duration_since(*t) < WINDOW);
+
+    if entry.failures.len() as u32 >= OPEN_THRESHOLD {
+        entry.state = CircuitState::Open { opened_at: now };
+    }
+}
+
+#[derive(Debug)]
+pub struct CircuitBreakerOpen {
+    host: String,
+    retry_after_secs: u64,
+}
+
+impl std::fmt::Display for CircuitBreakerOpen {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "circuit breaker open for {}: retry in {}s",
+            self.host, self.retry_after_secs
+        )
+    }
+}
+
+impl std::error::Error for CircuitBreakerOpen {}
+
+/// Extracts the hostname from a URL for circuit-breaker tracking.
+fn host_from_url(url: &str) -> &str {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|rest| rest.split(':').next())
+        .unwrap_or(url)
+}
+
+// ---------------------------------------------------------------------------
+// HTTP Client
+// ---------------------------------------------------------------------------
 
 static HTTP: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
     reqwest::blocking::Client::builder()
@@ -122,6 +249,7 @@ fn fetch_with_redirects(url: &str) -> Result<reqwest::blocking::Response, reqwes
 }
 
 fn fetch(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
+    let host = host_from_url(url);
     let mut last_err: Option<reqwest::Error> = None;
     let mut rate_limit_retries: u32 = 0;
 
@@ -137,6 +265,7 @@ fn fetch(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
                 if status == StatusCode::TOO_MANY_REQUESTS {
                     rate_limit_retries += 1;
                     if rate_limit_retries > MAX_RATE_LIMIT_RETRIES {
+                        circuit_record_failure(host);
                         return resp.error_for_status();
                     }
                     let delay_secs = resp
@@ -150,6 +279,7 @@ fn fetch(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
                         });
                     let capped_delay = delay_secs.min(MAX_RATE_LIMIT_WAIT_SECS);
                     last_err = Some(resp.error_for_status().unwrap_err());
+                    circuit_record_failure(host);
                     std::thread::sleep(Duration::from_secs(capped_delay));
                     continue;
                 }
@@ -157,16 +287,23 @@ fn fetch(url: &str) -> Result<reqwest::blocking::Response, reqwest::Error> {
                 if status.is_server_error() {
                     if attempt < MAX_RETRIES {
                         last_err = Some(resp.error_for_status().unwrap_err());
+                        circuit_record_failure(host);
                         continue;
                     }
+                    circuit_record_failure(host);
                     return resp.error_for_status();
                 }
+                circuit_record_success(host);
                 return Ok(resp);
             }
             Err(e) if retryable(&e) && attempt < MAX_RETRIES => {
+                circuit_record_failure(host);
                 last_err = Some(e);
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                circuit_record_failure(host);
+                return Err(e);
+            }
         }
     }
     Err(last_err.expect("retries exhausted with last_err set"))
@@ -177,6 +314,8 @@ pub fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, reqwest:
 }
 
 pub fn get_json_with_context<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, String> {
+    let host = host_from_url(url);
+    circuit_check(host).map_err(|e| e.to_string())?;
     let response = fetch(url).map_err(|e| format!("HTTP request failed: {}", e))?;
     let status = response.status();
     let body = response
@@ -241,12 +380,22 @@ pub fn download_streaming(
     use sha1::{Digest, Sha1};
     use std::io::{Read, Write};
 
+    let host = host_from_url(url);
+    circuit_check(host).map_err(|e| {
+        StreamingDownloadError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("circuit breaker open for {}: retry in {}s", e.host, e.retry_after_secs),
+        ))
+    })?;
+
     let response = fetch_with_redirects(url).map_err(StreamingDownloadError::Http)?;
     if !response.status().is_success() {
+        circuit_record_failure(host);
         return Err(StreamingDownloadError::Http(
             response.error_for_status().unwrap_err(),
         ));
     }
+    circuit_record_success(host);
 
     let total_size = response.content_length().unwrap_or(0);
     let mut hasher = Sha1::new();
@@ -343,6 +492,8 @@ pub fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
     url: &str,
     body: &B,
 ) -> Result<T, reqwest::Error> {
+    let host = host_from_url(url);
+
     let mut last_err = None;
     for attempt in 0..=MAX_RETRIES {
         if attempt > 0 {
@@ -358,16 +509,23 @@ pub fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
                 if r.status().is_server_error() {
                     if attempt < MAX_RETRIES {
                         last_err = Some(r.error_for_status().unwrap_err());
+                        circuit_record_failure(host);
                         continue;
                     }
+                    circuit_record_failure(host);
                     return r.error_for_status()?.json();
                 }
+                circuit_record_success(host);
                 return r.error_for_status()?.json();
             }
             Err(e) if retryable(&e) && attempt < MAX_RETRIES => {
+                circuit_record_failure(host);
                 last_err = Some(e);
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                circuit_record_failure(host);
+                return Err(e);
+            }
         }
     }
     Err(last_err.expect("retries exhausted with last_err set"))

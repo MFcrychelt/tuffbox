@@ -1294,7 +1294,9 @@
   }
 
   function registerNode(el: Element, node: PositionedNode) {
-    nodeEls.set(node.id, el as SVGGElement);
+    const g = el as SVGGElement;
+    nodeEls.set(node.id, g);
+    g.style.transform = `translate(${node.x}px, ${node.y}px)`;
   }
 
   function registerEdge(el: Element, edge: GraphEdge) {
@@ -1735,7 +1737,6 @@
             class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime")}
             role="button"
             tabindex="0"
-            style={`transform: translate(${node.x}px, ${node.y}px)`}
             on:mousedown={(e) => handleNodeMouseDown(e, node)}
             on:click|stopPropagation={() => handleNodeClick(node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}

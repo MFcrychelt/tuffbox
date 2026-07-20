@@ -16,6 +16,8 @@ pub enum VersionsError {
     Json(#[from] serde_json::Error),
     #[error("parse error: {0}")]
     ParseError(String),
+    #[error("{0}")]
+    Other(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +48,8 @@ pub fn fetch_minecraft_versions() -> Result<Vec<MinecraftVersion>, VersionsError
         })
         .collect();
 
-    let manifest: Manifest = crate::http::get_json(VERSION_MANIFEST_URL)?;
+    let manifest: Manifest = crate::http::get_json_with_context(VERSION_MANIFEST_URL)
+        .map_err(VersionsError::Other)?;
     let mut rest: Vec<MinecraftVersion> = manifest
         .versions
         .into_iter()
@@ -93,7 +96,8 @@ pub fn fetch_loader_versions(
 
 fn fetch_fabric_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = format!("https://meta.fabricmc.net/v2/versions/loader/{mc}");
-    let entries: Vec<FabricLoaderEntry> = crate::http::get_json(&url)?;
+    let entries: Vec<FabricLoaderEntry> = crate::http::get_json_with_context(&url)
+        .map_err(VersionsError::Other)?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderVersion {
@@ -116,7 +120,8 @@ struct FabricLoader {
 
 fn fetch_quilt_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = format!("https://meta.quiltmc.org/v3/versions/loader/{mc}");
-    let entries: Vec<QuiltLoaderEntry> = crate::http::get_json(&url)?;
+    let entries: Vec<QuiltLoaderEntry> = crate::http::get_json_with_context(&url)
+        .map_err(VersionsError::Other)?;
     Ok(entries
         .into_iter()
         .map(|e| LoaderVersion {
@@ -162,7 +167,8 @@ struct ModrinthLoaderEntry {
 
 fn fetch_forge_versions(mc: &str) -> Result<Vec<LoaderVersion>, VersionsError> {
     let url = "https://launcher-meta.modrinth.com/forge/v0/manifest.json";
-    let manifest: ModrinthLoaderManifest = crate::http::get_json(url)?;
+    let manifest: ModrinthLoaderManifest = crate::http::get_json_with_context(url)
+        .map_err(VersionsError::Other)?;
     Ok(manifest
         .game_versions
         .into_iter()

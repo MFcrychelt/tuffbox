@@ -179,6 +179,14 @@ impl ProviderFileInfo {
         if version.files.is_empty() {
             return None;
         }
+
+        // Check if this version actually supports the requested loader
+        // (accounting for aliases like neoforge↔neo, paper↔bukkit).
+        let version_matches_loader = version
+            .loaders
+            .iter()
+            .any(|vl| loaders_match(vl, loader));
+
         // A version declaring a single loader only has one kind of file.
         let single_loader = version.loaders.len() <= 1;
         let keyword = loader_keyword(loader);
@@ -189,8 +197,12 @@ impl ProviderFileInfo {
                 if single_loader {
                     return true;
                 }
-                if let Some(kw) = &keyword {
-                    return f.filename.to_lowercase().contains(kw);
+                // If the version explicitly lists the target loader (or an
+                // alias), prefer files whose name matches the loader keyword.
+                if version_matches_loader {
+                    if let Some(kw) = &keyword {
+                        return f.filename.to_lowercase().contains(kw);
+                    }
                 }
                 // Loaders without a name keyword (e.g. vanilla) accept any file.
                 true
@@ -217,6 +229,51 @@ fn loader_keyword(loader: &str) -> Option<&'static str> {
     }
 }
 
+/// Returns loader aliases — alternative names that refer to the same
+/// loader family.  Ported from `modrinth-content-management` so the
+/// dependency resolver treats e.g. NeoForge ↔ Neo, or
+/// Paper/Purpur/Spigot/Bukkit as compatible.
+///
+/// A loader with no known aliases returns `&[]`.
+fn loader_aliases(loader: &str) -> &'static [&'static str] {
+    match loader.to_lowercase().as_str() {
+        "neoforge" => &["neo"],
+        "neo" => &["neoforge"],
+        "paper" | "purpur" | "spigot" | "bukkit" => {
+            &["paper", "purpur", "spigot", "bukkit"]
+        }
+        _ => &[],
+    }
+}
+
+/// Checks whether two loader strings refer to the same loader family,
+/// accounting for aliases (e.g. `neoforge` == `neo`, `paper` == `bukkit`).
+///
+/// Comparison is case-insensitive.
+pub fn loaders_match(expected: &str, candidate: &str) -> bool {
+    let expected = expected.to_lowercase();
+    let candidate = candidate.to_lowercase();
+
+    expected == candidate
+        || loader_aliases(&expected).contains(&candidate.as_str())
+        || loader_aliases(&candidate).contains(&expected.as_str())
+}
+
+/// Returns the list of loaders that are considered equivalent to
+/// `loader` (including itself).  Useful for building query parameters
+/// that should cover all variants (e.g. searching Modrinth for a
+/// project that lists `bukkit` when the user selected `paper`).
+pub fn equivalent_loaders(loader: &str) -> Vec<String> {
+    let lower = loader.to_lowercase();
+    let mut result: Vec<String> = vec![lower.clone()];
+    for alias in loader_aliases(&lower) {
+        result.push(alias.to_string());
+    }
+    // Deduplicate (e.g. "paper" in both the input and the alias list).
+    result.dedup();
+    result
+}
+
 pub fn provider_dependency_to_spec(dep: ProviderDependency) -> Option<ModDependencySpec> {
     // Mirror modrinth-extras graph types: required/optional/embedded enter the
     // graph; incompatible becomes a conflict edge. Embedded is treated as
@@ -239,6 +296,64 @@ pub fn provider_dependency_to_spec(dep: ProviderDependency) -> Option<ModDepende
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // loader_aliases / loaders_match
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn loaders_match_exact() {
+        assert!(loaders_match("fabric", "fabric"));
+        assert!(loaders_match("forge", "forge"));
+        assert!(loaders_match("neoforge", "neoforge"));
+    }
+
+    #[test]
+    fn loaders_match_case_insensitive() {
+        assert!(loaders_match("Fabric", "fabric"));
+        assert!(loaders_match("FORGE", "forge"));
+    }
+
+    #[test]
+    fn loaders_match_aliases() {
+        assert!(loaders_match("neoforge", "neo"));
+        assert!(loaders_match("neo", "neoforge"));
+        // Bukkit-family are all equivalent.
+        assert!(loaders_match("paper", "bukkit"));
+        assert!(loaders_match("spigot", "purpur"));
+        assert!(loaders_match("bukkit", "paper"));
+    }
+
+    #[test]
+    fn loaders_match_different_families_are_not_equal() {
+        assert!(!loaders_match("fabric", "forge"));
+        assert!(!loaders_match("neoforge", "fabric"));
+        assert!(!loaders_match("paper", "fabric"));
+    }
+
+    #[test]
+    fn equivalent_loaders_includes_self() {
+        let loaders = equivalent_loaders("paper");
+        assert!(loaders.contains(&"paper".to_string()));
+    }
+
+    #[test]
+    fn equivalent_loaders_includes_aliases() {
+        let loaders = equivalent_loaders("paper");
+        assert!(loaders.contains(&"bukkit".to_string()));
+        assert!(loaders.contains(&"spigot".to_string()));
+        assert!(loaders.contains(&"purpur".to_string()));
+    }
+
+    #[test]
+    fn equivalent_loaders_no_aliases_for_unknown() {
+        let loaders = equivalent_loaders("sodium");
+        assert_eq!(loaders, vec!["sodium".to_string()]);
+    }
+
+    // -----------------------------------------------------------------------
+    // loader_keyword
+    // -----------------------------------------------------------------------
 
     #[test]
     fn provider_dependency_to_spec_maps_required() {

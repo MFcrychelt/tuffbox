@@ -55,9 +55,15 @@ impl ModrinthProvider {
     /// tracked Modrinth-sourced entries instead of leaving them as opaque
     /// "local" mods forever.
     pub fn get_version_by_hash(&self, sha1: &str) -> Result<Option<VersionInfo>, ProviderError> {
+        let key = crate::api_cache::hash_key("modrinth", sha1);
+        if let Some(cached) = crate::api_cache::get::<Option<VersionInfo>>(&key) {
+            return Ok(cached);
+        }
         let url = format!("{BASE_URL}/version_file/{sha1}?algorithm=sha1");
         let version: Option<ModrinthVersion> = crate::http::get_json_optional(&url)?;
-        Ok(version.map(Into::into))
+        let result = version.map(Into::into);
+        crate::api_cache::put(key, result.clone());
+        Ok(result)
     }
 
     /// Resolves the parent project for a version obtained through
@@ -135,13 +141,25 @@ impl ContentProvider for ModrinthProvider {
     }
 
     fn get_project(&self, id: &str) -> Result<ProjectInfo, ProviderError> {
+        let key = crate::api_cache::project_key("modrinth", id);
+        if let Some(cached) = crate::api_cache::get::<ProjectInfo>(&key) {
+            return Ok(cached);
+        }
         let project: ModrinthProject = self.get_json(&format!("/project/{id}"))?;
-        Ok(project.into())
+        let info: ProjectInfo = project.into();
+        crate::api_cache::put(key, info.clone());
+        Ok(info)
     }
 
     fn get_version(&self, version_id: &str) -> Result<VersionInfo, ProviderError> {
+        let key = crate::api_cache::version_key("modrinth", version_id);
+        if let Some(cached) = crate::api_cache::get::<VersionInfo>(&key) {
+            return Ok(cached);
+        }
         let version: ModrinthVersion = self.get_json(&format!("/version/{version_id}"))?;
-        Ok(version.into())
+        let info: VersionInfo = version.into();
+        crate::api_cache::put(key, info.clone());
+        Ok(info)
     }
 
     fn get_versions(
