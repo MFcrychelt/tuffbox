@@ -15,6 +15,8 @@ export interface ProjectSummary {
   memoryMb: number;
   jvmArgs: string[];
   playerName: string;
+  /** Canonical `.tuffbox.json` path (may differ from the path passed to validate). */
+  manifestPath: string;
 }
 
 export interface SchemaStatus {
@@ -644,6 +646,7 @@ export const api = {
   // ── Project ───────────────────────────────────────────────────────
   project: {
     validate(p?: string) { return cmd<ProjectSummary>("validate_project", pathArg(p)); },
+    resolvePath(p?: string) { return cmd<string>("resolve_project_path", pathArg(p)); },
     getSchemaStatus(p?: string) { return cmd<SchemaStatus>("get_project_schema_status", pathArg(p)); },
     migrateSchema(p?: string) { return cmd<SchemaStatus>("migrate_project_schema", pathArg(p)); },
     getBrief(p?: string) { return cmd<PackBrief>("get_project_brief", pathArg(p)); },
@@ -995,26 +998,26 @@ export const api = {
 
   // ── Minecraft Auth ───────────────────────────────────────────────
   mcAuth: {
-    startDeviceCode() { return cmd<DeviceCodeInfo>("mcStartDeviceCode"); },
-    pollDeviceCode() { return cmd<{ profile: McProfile; mcAccessToken: string }>("mcPollDeviceCode"); },
+    startDeviceCode() { return cmd<DeviceCodeInfo>("mc_start_device_code"); },
+    pollDeviceCode() { return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_poll_device_code"); },
     offlineLogin(username: string, skinSource: SkinSource) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mcOfflineLogin", { username, skinSource });
+      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_offline_login", { username, skinSource });
     },
-    getAuthStatus() { return cmd<AuthState>("mcGetAuthStatus"); },
-    logout() { return cmd<void>("mcLogout"); },
-    refreshProfile() { return cmd<McProfile>("mcRefreshProfile"); },
-    getSkinPath(uuid: string) { return cmd<string>("mcGetSkinPath", { uuid }); },
-    fetchSkinUrl(uuid: string) { return cmd<string | null>("mcFetchSkinUrl", { uuid }); },
+    getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
+    logout() { return cmd<void>("mc_logout"); },
+    refreshProfile() { return cmd<McProfile>("mc_refresh_profile"); },
+    getSkinPath(uuid: string) { return cmd<string>("mc_get_skin_path", { uuid }); },
+    fetchSkinUrl(uuid: string) { return cmd<string | null>("mc_fetch_skin_url", { uuid }); },
     fetchSkinForUsername(username: string, source: SkinSource) {
-      return cmd<string | null>("mcFetchSkinForUsername", { username, source });
+      return cmd<string | null>("mc_fetch_skin_for_username", { username, source });
     },
-    setSkinSource(source: SkinSource) { return cmd<void>("mcSetSkinSource", { source }); },
-    listAccounts() { return cmd<AccountEntry[]>("mcListAccounts"); },
-    switchAccount(uuid: string) { return cmd<AuthState>("mcSwitchAccount", { uuid }); },
-    removeAccount(uuid: string) { return cmd<void>("mcRemoveAccount", { uuid }); },
-    applySkin(skinUrl: string, variant: string) { return cmd<void>("mcApplySkin", { skinUrl, variant }); },
-    applyCape(capeId: string) { return cmd<void>("mcApplyCape", { capeId }); },
-    checkEntitlement() { return cmd<boolean>("mcCheckEntitlement"); },
-    getSkinBase64(url: string) { return cmd<string>("mcGetSkinBase64", { url }); },
+    setSkinSource(source: SkinSource) { return cmd<void>("mc_set_skin_source", { source }); },
+    listAccounts() { return cmd<AccountEntry[]>("mc_list_accounts"); },
+    switchAccount(uuid: string) { return cmd<AuthState>("mc_switch_account", { uuid }); },
+    removeAccount(uuid: string) { return cmd<void>("mc_remove_account", { uuid }); },
+    applySkin(skinUrl: string, variant: string) { return cmd<void>("mc_apply_skin", { skinUrl, variant }); },
+    applyCape(capeId: string) { return cmd<void>("mc_apply_cape", { capeId }); },
+    checkEntitlement() { return cmd<boolean>("mc_check_entitlement"); },
+    getSkinBase64(url: string) { return cmd<string>("mc_get_skin_base64", { url }); },
   },
 };

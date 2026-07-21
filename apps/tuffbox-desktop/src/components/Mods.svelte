@@ -35,7 +35,8 @@
     Package,
   } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
-import { confirm } from "@tauri-apps/plugin-dialog";
+  import { toasts } from "../lib/toast";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 import PromptDialog from "./PromptDialog.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
 import EmptyState from "./EmptyState.svelte";
@@ -1192,6 +1193,19 @@ import { trapFocus } from "../lib/focusTrap";
     await searchMods(1);
   }
 
+  async function openProjectFolder() {
+    const selected = await open({ directory: true, title: "Select Minecraft instance" });
+    if (!selected || typeof selected !== "string") return;
+    try {
+      const info = await api.project.validate(selected);
+      const manifestPath = info.manifestPath || selected;
+      projectPath.set(manifestPath);
+      projectInfo.set(info);
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
   async function searchMods(targetPage: number = 1) {
     if (!$projectPath) return;
     searchLoading = true;
@@ -1638,7 +1652,7 @@ import { trapFocus } from "../lib/focusTrap";
   {#if loading}
     <div class="loading">Loading mods...</div>
   {:else if !$projectPath}
-    <EmptyState icon={Package} title="No project selected" description="Open a project to manage mods." actionLabel="Open project" on:action={() => { open({ directory: true, title: "Select Minecraft instance" }).then(r => { if (r) projectPath.set(r); }); }} />
+    <EmptyState icon={Package} title="No project selected" description="Open a project to manage mods." actionLabel="Open project" on:action={openProjectFolder} />
   {:else if isSavedViewFilter(contentFilter)}
     {#if savedModsLoading}
       <div class="loading">Loading {savedViewLabel(contentFilter).toLowerCase()}...</div>

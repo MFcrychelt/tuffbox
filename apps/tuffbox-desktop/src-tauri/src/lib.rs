@@ -27,6 +27,8 @@ struct ProjectSummary {
     memory_mb: u32,
     jvm_args: Vec<String>,
     player_name: String,
+    /// Canonical manifest file path (may differ from the path passed in).
+    manifest_path: String,
 }
 
 #[derive(serde::Serialize)]
@@ -183,7 +185,9 @@ fn migrate_project_schema(path: String) -> Result<SchemaStatus, String> {
 
 #[tauri::command]
 fn validate_project(path: String) -> Result<ProjectSummary, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     manifest.validate_basic().map_err(|e| e.to_string())?;
     let profile = manifest
         .profiles
@@ -192,7 +196,22 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
         .or_else(|| manifest.profiles.first())
         .ok_or_else(|| "project has no profiles".to_string())?;
 
-    Ok(ProjectSummary {
+    Ok(project_summary_from_manifest(&manifest_path, &manifest, profile))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn resolve_project_path(path: String) -> Result<String, String> {
+    Ok(resolve_manifest_path(&path)?
+        .to_string_lossy()
+        .to_string())
+}
+
+fn project_summary_from_manifest(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+    profile: &tuffbox_core::manifest::ProfileSpec,
+) -> ProjectSummary {
+    ProjectSummary {
         id: manifest.project.id.clone(),
         name: manifest.project.name.clone(),
         version: manifest.project.version.clone(),
@@ -206,7 +225,8 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
             .player_name
             .clone()
             .unwrap_or_else(|| "Player".to_string()),
-    })
+        manifest_path: manifest_path.to_string_lossy().to_string(),
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -5992,6 +6012,12 @@ async fn launch_profile(
     path: String,
     profile: String,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
+    let path = resolve_manifest_path(&path).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e)
+    })?
+    .to_string_lossy()
+    .to_string();
+
     let log_path = PathBuf::from(&path)
         .parent()
         .map(|p| p.join("logs").join("latest.log"))
@@ -6071,7 +6097,12 @@ fn build_and_spawn(
     let _instance_id = profile.clone();
     use tuffbox_core::{LaunchOptions, TestLauncher};
 
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| {
+    let manifest_path = resolve_manifest_path(&path).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e).with_log(&log_path)
+    })?;
+    let path = manifest_path.to_string_lossy().to_string();
+
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
     })?;
     let project_profile = manifest
@@ -7236,6 +7267,7 @@ fn create_instance(
 
 fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
     let dir = PathBuf::from(project_dir);
+    let mut manifests = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
@@ -7245,10 +7277,63 @@ fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
             .map(|name| name.ends_with(".tuffbox.json"))
             .unwrap_or(false)
         {
-            return Ok(path);
+            manifests.push(path);
         }
     }
-    Err("project manifest not found in project directory".to_string())
+
+    if manifests.is_empty() {
+        return Err(format!(
+            "project manifest not found in project directory: {}",
+            dir.display()
+        ));
+    }
+
+    if manifests.len() == 1 {
+        return Ok(manifests.remove(0));
+    }
+
+    let state = load_launcher_data(&dir);
+    if let Some(ref last_opened) = state.last_opened {
+        let preferred = PathBuf::from(last_opened);
+        if manifests.iter().any(|path| path == &preferred) {
+            return Ok(preferred);
+        }
+    }
+
+    let default = dir.join("project.tuffbox.json");
+    if default.exists() {
+        return Ok(default);
+    }
+
+    manifests.sort();
+    Ok(manifests[0].clone())
+}
+
+/// Resolve a project directory or manifest path to the canonical `.tuffbox.json` file.
+/// If the given manifest path does not exist, scans the parent folder for any manifest.
+fn resolve_manifest_path(path: &str) -> Result<PathBuf, String> {
+    let path_buf = PathBuf::from(path);
+
+    if path_buf.is_dir() {
+        return find_manifest_in_project_dir(path);
+    }
+
+    if path_buf.is_file() {
+        return Ok(path_buf);
+    }
+
+    if let Some(parent) = path_buf.parent() {
+        if parent.is_dir() {
+            if let Ok(found) = find_manifest_in_project_dir(&parent.to_string_lossy()) {
+                return Ok(found);
+            }
+        }
+    }
+
+    Err(format!(
+        "project manifest not found: {}",
+        path_buf.display()
+    ))
 }
 
 fn manifest_parent(path: &str) -> Result<PathBuf, String> {
@@ -8817,6 +8902,7 @@ pub fn run() {
             get_project_schema_status,
             migrate_project_schema,
             validate_project,
+            resolve_project_path,
             get_project_brief,
             update_project_brief,
             list_profiles,

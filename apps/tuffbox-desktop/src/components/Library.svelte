@@ -98,8 +98,9 @@
       const slug = result.slug || result.id;
       const targetDir = `${home}/TuffBox/instances/${slug}`;
       const res: any = await api.modpacks.install(url, targetDir, result.name);
-      const info = await invoke("validate_project", { path: res.path });
-      recentProjects.add({ path: res.path, info: info as any });
+      const info = await invoke("validate_project", { path: res.path }) as import("../lib/api").ProjectSummary;
+      const manifestPath = info.manifestPath || res.path;
+      recentProjects.add({ path: manifestPath, info: info as any });
       toasts.success(`Added "${result.name}" to your library.`);
       search();
     } catch (e) {

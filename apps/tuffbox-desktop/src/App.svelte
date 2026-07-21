@@ -66,8 +66,9 @@
         const lastPath = await api.session.getLastOpened();
         if (lastPath) {
           const info = await api.project.validate(lastPath);
-          recentProjects.add({ path: lastPath, info: info as any });
-          projectPath.set(lastPath);
+          const manifestPath = info.manifestPath || lastPath;
+          recentProjects.add({ path: manifestPath, info: info as any });
+          projectPath.set(manifestPath);
           projectInfo.set(info as any);
         }
       } catch {
