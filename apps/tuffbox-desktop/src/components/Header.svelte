@@ -2,7 +2,8 @@
   import { Play, FolderOpen, ChevronRight } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { projectPath, projectInfo, isLaunching } from "../lib/store";
+  import { launchWithFeedback } from "../lib/launch";
 
   export let currentView: string;
 
@@ -33,7 +34,7 @@
   async function launch() {
     const path = $projectPath;
     if (!path) return;
-    await invoke("launch_profile", { path, profile: "client" });
+    await launchWithFeedback({ path, profile: "client" });
   }
 </script>
 
@@ -63,9 +64,14 @@
       {$projectPath ? "Switch" : "Open"}
     </button>
 
-    <button on:click={launch} disabled={!$projectPath}>
-      <Play size={16} fill="currentColor" />
-      Launch
+    <button class="launch-btn" on:click={launch} disabled={!$projectPath || $isLaunching}>
+      {#if $isLaunching}
+        <span class="spinner"></span>
+        <span>Launching…</span>
+      {:else}
+        <Play size={16} fill="currentColor" />
+        <span>Launch</span>
+      {/if}
     </button>
   </div>
 </header>
@@ -143,5 +149,22 @@
   button:disabled:hover {
     transform: none;
     background: inherit;
+  }
+
+  .launch-btn {
+    min-width: 100px;
+  }
+
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(0, 0, 0, 0.2);
+    border-top-color: #000;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
   }
 </style>

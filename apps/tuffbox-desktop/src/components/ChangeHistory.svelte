@@ -3,6 +3,7 @@
   import { History, RefreshCw, Search, FileText, Maximize2, Save, X, RotateCcw, ChevronDown, ChevronRight } from "lucide-svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
 
   type ChangeEntry = {
     id: string;
@@ -252,11 +253,11 @@
   </div>
 
   {#if !$projectPath}
-    <div class="empty">Open a project to view file and mod change history.</div>
+    <EmptyState icon={History} title="No project selected" description="Open a project to view file and mod change history." />
   {:else if loading && entries.length === 0}
     <div class="empty">Loading history...</div>
   {:else if entries.length === 0}
-    <div class="empty">No tracked changes yet. Edits, mod operations and snapshots will appear here.</div>
+    <EmptyState icon={History} title="No changes yet" description="Edits, mod operations and snapshots will appear here." />
   {:else}
     <div class="history-layout">
       <aside class="change-tree">

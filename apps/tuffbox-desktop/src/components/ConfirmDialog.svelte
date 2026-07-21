@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { AlertTriangle, X } from "lucide-svelte";
+  import { trapFocus } from "../lib/focusTrap";
 
   const dispatch = createEventDispatcher<{ confirm: void; cancel: void }>();
 
@@ -11,8 +12,8 @@
   export let cancelLabel = "Cancel";
 </script>
 
-<div class="cd-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("cancel")} on:keydown={(e) => e.key === "Escape" && dispatch("cancel")}>
-  <div class="cd-dialog" role="alertdialog" aria-modal="true">
+<div class="cd-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("cancel")} on:keydown={() => {}}>
+  <div class="cd-dialog" role="alertdialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("cancel") }}>
     <div class="cd-icon">
       <AlertTriangle size={28} color={danger ? "#f87171" : "#fbbf24"} />
     </div>

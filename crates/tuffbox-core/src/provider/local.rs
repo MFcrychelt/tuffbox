@@ -38,7 +38,6 @@ impl LocalJarProvider {
 
     fn mod_id(&self) -> String {
         self.file_name()
-            .trim_start_matches("mods/")
             .trim_end_matches(".jar")
             .to_string()
     }

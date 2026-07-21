@@ -9,7 +9,9 @@
 //! Also includes the Package/Class Finder and Jdeps analysis tools from
 //! Crash Assistant's GUI.
 
+use crate::launch_error::{LaunchErrorInfo, LaunchErrorKind};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrashAnalysisFinding {
@@ -1070,9 +1072,152 @@ fn build_message(ctx: &AnalysisCtx, findings: &[CrashAnalysisFinding], platform:
     msg
 }
 
+/// Read the last `max_lines` of a log file as a single string.
+pub fn tail_log(path: &Path, max_lines: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            lines[start..].join("\n")
+        }
+        Err(_) => String::new(),
+    }
+}
+
+/// Analyze a failed launch log and produce a categorized, user-facing launch
+/// error the UI surfaces with a Retry action. The logic runs the same
+/// crash-analysis engine used for the in-app report, but is kept tiny and
+/// synchronous so it can be exercised in unit tests.
+pub fn classify_launch_crash(
+    log_path: &Path,
+    exit_code: Option<i32>,
+    mc_version: &str,
+    java_version: &str,
+    loader_kind: &str,
+    loader_version: &str,
+    installed_mods: &[String],
+) -> LaunchErrorInfo {
+    let tail = tail_log(log_path, 300);
+    let analysis_ctx = AnalysisCtx {
+        crash_content: tail.lines().map(|s| s.to_string()).collect(),
+        latest_log: tail.clone(),
+        launcher_log: String::new(),
+        installed_mods: installed_mods.to_vec(),
+        previous_mods: Vec::new(),
+        java_version: java_version.to_string(),
+        java_vendor: String::new(),
+        os_name: std::env::consts::OS.to_string(),
+        mc_version: mc_version.to_string(),
+        loader: loader_kind.to_string(),
+        loader_version: loader_version.to_string(),
+        cpu_name: String::new(),
+        gpu_names: Vec::new(),
+        total_ram_mb: 0,
+        is_offline: false,
+        win_events: Vec::new(),
+    };
+
+    let report = run_full_analysis(&analysis_ctx);
+
+    let code_note = match exit_code {
+        Some(c) => format!("Minecraft exited with code {c}. "),
+        None => "Minecraft exited unexpectedly. ".to_string(),
+    };
+
+    let mut message = code_note;
+    if report.findings.is_empty() {
+        message.push_str("No obvious cause was detected in the log — open the log to investigate.");
+    } else {
+        // Surface the most severe findings (up to 3) directly in the toast so
+        // the user sees the likely causes without first opening Diagnose.
+        let severity_rank = |s: &str| match s {
+            "critical" => 3,
+            "high" => 2,
+            "medium" => 1,
+            _ => 0,
+        };
+        let mut ranked: Vec<&CrashAnalysisFinding> = report.findings.iter().collect();
+        ranked.sort_by(|a, b| severity_rank(&b.severity).cmp(&severity_rank(&a.severity)));
+        let shown = ranked.len().min(3);
+        message.push_str("Likely cause(s): ");
+        for (i, f) in ranked.iter().take(shown).enumerate() {
+            if i > 0 {
+                message.push_str("; ");
+            }
+            message.push_str(&f.title);
+        }
+        if report.findings.len() > shown {
+            message.push_str(&format!(
+                ". +{} more — open Diagnose for the full report.",
+                report.findings.len() - shown
+            ));
+        } else {
+            message.push('.');
+        }
+    }
+
+    LaunchErrorInfo::new(LaunchErrorKind::LaunchCrash, message).with_log(log_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    fn write_temp_log(name: &str, contents: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("tuffbox_crash_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(contents.as_bytes()).unwrap();
+        p
+    }
+
+    #[test]
+    fn classify_launch_crash_marks_nonzero_exit_as_launch_crash() {
+        let log = write_temp_log(
+            "crash.log",
+            "java.lang.OutOfMemoryError: Java heap space\n\tat net.minecraft.server.MinecraftServer",
+        );
+        let info = classify_launch_crash(
+            &log,
+            Some(1),
+            "1.20.1",
+            "17.0.1",
+            "fabric",
+            "0.15.0",
+            &[],
+        );
+        assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(!info.message.is_empty());
+        assert!(info.retryable());
+        assert_eq!(info.log_path.as_deref(), Some(log.to_str().unwrap()));
+    }
+
+    #[test]
+    fn classify_launch_crash_handles_missing_log_gracefully() {
+        let missing = std::env::temp_dir()
+            .join("tuffbox_crash_test")
+            .join("does_not_exist.log");
+        let info =
+            classify_launch_crash(&missing, Some(1), "1.20.1", "17", "vanilla", "", &[]);
+        assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(info.retryable());
+        assert_eq!(info.log_path.as_deref(), Some(missing.to_str().unwrap()));
+    }
+
+    #[test]
+    fn classify_launch_crash_lists_likely_causes() {
+        let log = write_temp_log(
+            "lock.log",
+            "java.nio.file.FileSystemException: run/locks: The process cannot access the file because it is being used by another process",
+        );
+        let info = classify_launch_crash(&log, Some(1), "1.20.1", "17", "fabric", "0.15.0", &[]);
+        assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
+        assert!(info.message.contains("Likely cause(s):"));
+        assert!(info.message.contains("File locked by another process"));
+    }
+
     fn ctx() -> AnalysisCtx {
         AnalysisCtx {
             crash_content: vec![

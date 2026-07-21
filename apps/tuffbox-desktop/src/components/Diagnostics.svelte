@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { launchWithFeedback } from "../lib/launch";
   import { onMount } from "svelte";
   import {
     MessageCircle,
@@ -33,6 +34,7 @@
     Ban,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
 
   type Diagnostic = {
     severity: string;
@@ -568,14 +570,14 @@
     launching = true;
     error = null;
     message = "Launching Test profile — reproduce the crash, then come back.";
-    try {
-      await invoke("launch_profile", { path: $projectPath, profile: "client" });
+    const result = await launchWithFeedback(
+      { path: $projectPath, profile: "client" },
+      { onStarted: () => { message = "Test launch started. Re-run Diagnose after it crashes/closes."; } },
+    );
+    if (result) {
       message = "Test launch started. Re-run Diagnose after it crashes/closes.";
-    } catch (e) {
-      error = String(e);
-    } finally {
-      launching = false;
     }
+    launching = false;
   }
 
   /// Opens the project folder in the OS file manager (quick access to
@@ -810,7 +812,7 @@
   {#if loading && !diagnosis}
     <div class="loading">Loading crash diagnosis...</div>
   {:else if !$projectPath}
-    <div class="empty">Open a project to analyze crash reports, latest.log and recent snapshots.</div>
+    <EmptyState icon={Stethoscope} title="No project selected" description="Open a project to analyze crash reports, latest.log and recent snapshots." />
   {:else if diagnosis}
     <section class="diagnosis-summary" class:neutral={!topSuspect}>
       {#if topSuspect}

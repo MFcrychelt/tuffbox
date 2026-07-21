@@ -1,6 +1,6 @@
 //! SNBT (Stringified NBT) parser for FTB Quests.
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QuestBook {
@@ -161,6 +161,146 @@ impl QuestBook {
             }
         }
         errors
+    }
+
+    /// Returns a list of quest-id cycles found in the dependency graph.
+    ///
+    /// FTB Quests detects dependency cycles with a depth-limited DFS so a
+    /// malformed quest pack can't recurse forever; an infinitely deep
+    /// (or simply very large) dependency chain would otherwise hang the
+    /// UI's topological sort. We mirror that: each returned entry is the
+    /// ordered list of quest ids forming one cycle (e.g. `A -> B -> A`).
+    pub fn find_cycles(&self) -> Vec<Vec<String>> {
+        let graph: HashMap<String, Vec<String>> = self
+            .chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter())
+            .map(|q| (q.id.clone(), q.dependencies.clone()))
+            .collect();
+        let mut cycles = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut on_stack: HashSet<String> = HashSet::new();
+        let mut path: Vec<String> = Vec::new();
+
+        // Cap the DFS depth so a pathological pack (or a self-loop chain
+        // thousands deep) cannot blow the stack. Any single cycle longer
+        // than this is reported via a truncation marker instead.
+        const MAX_DEPTH: usize = 1024;
+
+        fn dfs(
+            node: &str,
+            graph: &HashMap<String, Vec<String>>,
+            visited: &mut HashSet<String>,
+            on_stack: &mut HashSet<String>,
+            path: &mut Vec<String>,
+            cycles: &mut Vec<Vec<String>>,
+            depth: usize,
+            max_depth: usize,
+        ) {
+            if depth >= max_depth {
+                return;
+            }
+            if on_stack.contains(node) {
+                // Found a back-edge: extract the cycle portion of the path.
+                if let Some(start) = path.iter().position(|n| n == node) {
+                    let mut cycle: Vec<String> = path[start..].to_vec();
+                    cycle.push(node.to_string());
+                    cycles.push(cycle);
+                }
+                return;
+            }
+            if visited.contains(node) {
+                return;
+            }
+            visited.insert(node.to_string());
+            on_stack.insert(node.to_string());
+            path.push(node.to_string());
+
+            if let Some(neighbors) = graph.get(node) {
+                for next in neighbors {
+                    dfs(
+                        next,
+                        graph,
+                        visited,
+                        on_stack,
+                        path,
+                        cycles,
+                        depth + 1,
+                        max_depth,
+                    );
+                }
+            }
+
+            path.pop();
+            on_stack.remove(node);
+        }
+
+        for start in graph.keys() {
+            dfs(
+                start,
+                &graph,
+                &mut visited,
+                &mut on_stack,
+                &mut path,
+                &mut cycles,
+                0,
+                MAX_DEPTH,
+            );
+        }
+        cycles
+    }
+
+    /// Returns quests ordered so that every dependency precedes the quests
+    /// that depend on it, or `Err` listing the cycles that prevent a
+    /// topological order. Quests with no dependencies (or whose
+    /// dependencies are all satisfied) come first. This is the same
+    /// dependency resolution FTB Quests performs before it lays out the
+    /// quest screen, and it degrades gracefully: a cyclic pack returns the
+    /// cycles instead of looping forever.
+    pub fn topo_order(&self) -> Result<Vec<String>, Vec<Vec<String>>> {
+        let cycles = self.find_cycles();
+        if !cycles.is_empty() {
+            return Err(cycles);
+        }
+
+        let graph: HashMap<String, Vec<String>> = self
+            .chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter())
+            .map(|q| (q.id.clone(), q.dependencies.clone()))
+            .collect();
+        let mut order = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+
+        // Iterative post-order DFS to avoid stack overflow on deep chains.
+        // Each frame is (node, next_child_index). We visit children first;
+        // only when every child index has been handled do we pop the node
+        // into `order`, giving a correct post-order (dependency last).
+        for start in graph.keys() {
+            if visited.contains(start) {
+                continue;
+            }
+            let mut stack: Vec<(String, usize)> = vec![(start.clone(), 0)];
+            while let Some((node, idx)) = stack.last().cloned() {
+                let neighbors = graph.get(&node).cloned().unwrap_or_default();
+                if idx < neighbors.len() {
+                    // Advance this frame's cursor, then push the child (if new).
+                    stack.last_mut().unwrap().1 += 1;
+                    let next = &neighbors[idx];
+                    if !visited.contains(next) && graph.contains_key(next) {
+                        stack.push((next.clone(), 0));
+                    }
+                } else {
+                    stack.pop();
+                    if visited.insert(node.clone()) {
+                        order.push(node);
+                    }
+                }
+            }
+        }
+        // `order` is post-order: a quest's dependencies are all visited and
+        // recorded *before* the quest itself, i.e. dependency-first order.
+        Ok(order)
     }
 }
 
@@ -623,6 +763,188 @@ pub fn serialize_chapter_to_snbt(chapter: &Chapter) -> String {
     lines.join("\n")
 }
 
+// ---------------------------------------------------------------------------
+// Reward tables (FTB Quests loot tables)
+// ---------------------------------------------------------------------------
+//
+// FTB Quests ships a `reward_tables/` directory of `.snbt` tables; a quest
+// reward of type `quest_reward_table` references one by filename. Each table
+// holds weighted entries: rolling the table picks entries by threshold
+// sampling over the summed weight (weight `0` means *always* granted, an
+// optional `empty_weight` lets a roll come up empty). We port that weighted-
+// random algorithm so TuffBox can preview/validate the same reward
+// distributions the game produces.
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RewardTable {
+    pub id: String,
+    pub title: Option<String>,
+    pub entries: Vec<WeightedReward>,
+    #[serde(default)]
+    pub empty_weight: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeightedReward {
+    pub reward_id: String,
+    #[serde(default = "default_weight")]
+    pub weight: f64,
+}
+
+fn default_weight() -> f64 {
+    1.0
+}
+
+impl RewardTable {
+    pub fn load_from_project(project_dir: &std::path::Path) -> Vec<RewardTable> {
+        let mut tables = Vec::new();
+        for rel in [
+            "config/ftbquests/quests/reward_tables",
+            "defaultconfigs/ftbquests/quests/reward_tables",
+        ] {
+            let dir = project_dir.join(rel);
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.extension().map_or(true, |e| e != "snbt") {
+                    continue;
+                }
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Ok(mut t) = parse_snbt_reward_table(&content) {
+                        t.source_file = path
+                            .strip_prefix(project_dir)
+                            .ok()
+                            .map(|p| p.to_string_lossy().replace('\\', "/"));
+                        tables.push(t);
+                    }
+                }
+            }
+        }
+        tables
+    }
+
+    /// Total weight across all entries plus the empty slot (when requested).
+    pub fn total_weight(&self, include_empty: bool) -> f64 {
+        let mut total: f64 = self.entries.iter().map(|e| e.weight.max(0.0)).sum();
+        if include_empty {
+            total += self.empty_weight.max(0.0);
+        }
+        total
+    }
+
+    /// Rolls the table `n_attempts` times using `rng` in `[0,1)`.
+    ///
+    /// Mirrors `RewardTable.generateWeightedRandomRewards`:
+    /// - entries with weight `0` are always granted (auto-included);
+    /// - otherwise a uniform `rng` sample in `[0, total)` walks the
+    ///   cumulative weight until it crosses the threshold.
+    pub fn generate<'a, R, F>(
+        &self,
+        rng: &'a mut R,
+        n_attempts: usize,
+        include_empty: bool,
+        mut sample: F,
+    ) -> Vec<String>
+    where
+        F: FnMut(&mut R) -> f64,
+    {
+        let mut result: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|e| e.weight == 0.0)
+            .map(|e| e.reward_id.clone())
+            .collect();
+
+        let total = self.total_weight(include_empty);
+        if total <= 0.0 {
+            return result;
+        }
+
+        for _ in 0..n_attempts {
+            let threshold = sample(rng) * total;
+            let mut current = if include_empty {
+                self.empty_weight.max(0.0)
+            } else {
+                0.0
+            };
+            if current < threshold {
+                for entry in &self.entries {
+                    current += entry.weight.max(0.0);
+                    if current >= threshold {
+                        result.push(entry.reward_id.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+fn parse_snbt_reward_table(c: &str) -> Result<RewardTable, String> {
+    let j = snbt_to_json(c)?;
+    let m = j.as_object().ok_or("not object")?;
+    let entries = m
+        .get("rewards")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    let rm = r.as_object()?;
+                    let reward_id = gs(rm, "id")?;
+                    let weight = rm
+                        .get("weight")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(1.0);
+                    Some(WeightedReward { reward_id, weight })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(RewardTable {
+        id: gs(m, "id").unwrap_or_else(|| "untitled".into()),
+        title: gs(m, "title"),
+        entries,
+        empty_weight: m
+            .get("empty_weight")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+        source_file: None,
+    })
+}
+
+pub fn serialize_reward_table_to_snbt(table: &RewardTable) -> String {
+    let mut lines = vec!["{".to_string()];
+    lines.push(format!("\tid: {}", snbt_quote(&table.id)));
+    if let Some(title) = &table.title {
+        lines.push(format!("\ttitle: {}", snbt_quote(title)));
+    }
+    if table.empty_weight > 0.0 {
+        lines.push(format!("\tempty_weight: {}d", table.empty_weight));
+    }
+    if !table.entries.is_empty() {
+        lines.push("\trewards: [".to_string());
+        for (i, entry) in table.entries.iter().enumerate() {
+            let mut inner = format!(
+                "\t\t{{ id: {} weight: {}d }}",
+                snbt_quote(&entry.reward_id),
+                entry.weight
+            );
+            if i + 1 != table.entries.len() {
+                inner.push(',');
+            }
+            lines.push(inner);
+        }
+        lines.push("\t]".to_string());
+    }
+    lines.push("}".to_string());
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -635,5 +957,163 @@ mod tests {
         assert_eq!(ch.title, ch2.title);
         assert_eq!(ch.quests.len(), ch2.quests.len());
         assert_eq!(ch.quests[0].id, ch2.quests[0].id);
+    }
+
+    fn q(id: &str, deps: &[&str]) -> Quest {
+        Quest {
+            id: id.to_string(),
+            title: id.to_string(),
+            subtitle: None,
+            description: vec![],
+            x: 0.0,
+            y: 0.0,
+            icon: None,
+            dependencies: deps.iter().map(|s| s.to_string()).collect(),
+            tasks: vec![Task {
+                id: "t".into(),
+                task_type: "item".into(),
+                title: None,
+                value: None,
+                properties: HashMap::new(),
+            }],
+            rewards: vec![],
+            optional: false,
+            shape: None,
+            size: None,
+        }
+    }
+
+    fn book_from_quests(quests: Vec<Quest>) -> QuestBook {
+        QuestBook {
+            chapters: vec![Chapter {
+                id: "c".into(),
+                title: "C".into(),
+                icon: None,
+                quests,
+                group: None,
+                source_file: None,
+            }],
+            title: None,
+            subtitle: None,
+        }
+    }
+
+    #[test]
+    fn detects_simple_cycle() {
+        // A -> B -> A
+        let book = book_from_quests(vec![q("A", &["B"]), q("B", &["A"])]);
+        let cycles = book.find_cycles();
+        assert_eq!(cycles.len(), 1);
+        // Cycle should mention both nodes.
+        assert!(cycles[0].contains(&"A".to_string()));
+        assert!(cycles[0].contains(&"B".to_string()));
+        // topo_order refuses to order a cyclic graph.
+        assert!(book.topo_order().is_err());
+    }
+
+    #[test]
+    fn no_false_positive_on_dag() {
+        // A -> B -> C (no cycle)
+        let book = book_from_quests(vec![q("A", &["B"]), q("B", &["C"]), q("C", &[])]);
+        assert!(book.find_cycles().is_empty());
+        let order = book.topo_order().unwrap();
+        // Dependency-first: C before B before A.
+        let pos = |id: &str| order.iter().position(|x| x == id).unwrap();
+        assert!(pos("C") < pos("B"));
+        assert!(pos("B") < pos("A"));
+    }
+
+    #[test]
+    fn self_loop_is_a_cycle() {
+        let book = book_from_quests(vec![q("A", &["A"])]);
+        let cycles = book.find_cycles();
+        assert_eq!(cycles.len(), 1);
+        assert_eq!(cycles[0][0], "A");
+    }
+
+    #[test]
+    fn topo_order_returns_err_with_cycles() {
+        let book = book_from_quests(vec![q("X", &["Y"]), q("Y", &["X"])]);
+        assert!(book.topo_order().is_err());
+    }
+
+    #[test]
+    fn reward_table_weighted_zero_always_granted() {
+        let table = RewardTable {
+            id: "rt".into(),
+            title: None,
+            entries: vec![
+                WeightedReward { reward_id: "always".into(), weight: 0.0 },
+                WeightedReward { reward_id: "rare".into(), weight: 10.0 },
+            ],
+            empty_weight: 0.0,
+            source_file: None,
+        };
+        // weight-0 entry must always appear regardless of rng.
+        let mut rng = 0u8;
+        let out = table.generate(&mut rng, 5, false, |_| 0.99);
+        assert!(out.contains(&"always".to_string()));
+        // With a 0.99 sample the threshold falls on the rare entry.
+        assert!(out.contains(&"rare".to_string()));
+    }
+
+    #[test]
+    fn reward_table_threshold_sampling_picks_correct_bucket() {
+        // Two equal-weight entries; sample 0.25 (first half) -> first entry.
+        let table = RewardTable {
+            id: "rt".into(),
+            title: None,
+            entries: vec![
+                WeightedReward { reward_id: "first".into(), weight: 1.0 },
+                WeightedReward { reward_id: "second".into(), weight: 1.0 },
+            ],
+            empty_weight: 0.0,
+            source_file: None,
+        };
+        let mut rng = 0u8;
+        // sample 0.25 * 2.0 = 0.5 -> crosses first entry's cumulative 1.0? no,
+        // 0.5 < 1.0 so it lands in "first".
+        let out = table.generate(&mut rng, 1, false, |_| 0.25);
+        assert_eq!(out, vec!["first".to_string()]);
+
+        // sample 0.75 * 2.0 = 1.5 -> past first, lands in "second".
+        let out = table.generate(&mut rng, 1, false, |_| 0.75);
+        assert_eq!(out, vec!["second".to_string()]);
+    }
+
+    #[test]
+    fn reward_table_rolls_empty_when_include_empty_and_sample_low() {
+        let table = RewardTable {
+            id: "rt".into(),
+            title: None,
+            entries: vec![WeightedReward { reward_id: "only".into(), weight: 1.0 }],
+            empty_weight: 1.0,
+            source_file: None,
+        };
+        let mut rng = 0u8;
+        // total = 2.0; sample 0.1 -> threshold 0.2; empty_weight slot is
+        // [0,1.0) so it lands in empty -> no reward granted.
+        let out = table.generate(&mut rng, 1, true, |_| 0.1);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn reward_table_roundtrips_snbt() {
+        let table = RewardTable {
+            id: "loot".into(),
+            title: Some("Loot".into()),
+            entries: vec![
+                WeightedReward { reward_id: "r1".into(), weight: 2.0 },
+                WeightedReward { reward_id: "r2".into(), weight: 1.0 },
+            ],
+            empty_weight: 0.5,
+            source_file: None,
+        };
+        let snbt = serialize_reward_table_to_snbt(&table);
+        let parsed = parse_snbt_reward_table(&snbt).unwrap();
+        assert_eq!(parsed.id, "loot");
+        assert_eq!(parsed.entries.len(), 2);
+        assert_eq!(parsed.empty_weight, 0.5);
+        assert_eq!(parsed.entries[0].reward_id, "r1");
     }
 }

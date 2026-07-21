@@ -161,7 +161,7 @@ impl EnvironmentDetector {
         let archive = zip::ZipArchive::new(file)?;
         let has_marker = archive
             .file_names()
-            .any(|name| name.contains("neoforge") || name == "META-INF/neoforge.mods.toml");
+            .any(|name| name == "META-INF/neoforge.mods.toml");
         Ok(has_marker)
     }
 

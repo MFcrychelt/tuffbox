@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { projectInfo, projectPath, recentProjects } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
   export let onBack: () => void = () => {};
@@ -344,7 +345,7 @@
       </button>
     </div>
   {:else}
-    <div class="empty">Open a project to edit its settings.</div>
+    <EmptyState icon={Cpu} title="No project selected" description="Open a project to edit its settings." />
   {/if}
 </div>
 
@@ -610,15 +611,6 @@
     border-radius: var(--border-radius-md);
     font-size: 13px;
     margin-bottom: 16px;
-  }
-
-  .empty {
-    color: var(--text-muted);
-    padding: 80px;
-    text-align: center;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
   }
 
   .schema-info { display: grid; gap: 12px; }

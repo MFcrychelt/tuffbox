@@ -12,6 +12,7 @@
     Link2,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
 
   let chapters: QuestChapter[] = [];
   let loading = false;
@@ -173,7 +174,7 @@
   {#if message}<div class="notice success"><CheckCircle2 size={14} /> {message}</div>{/if}
 
   {#if !$projectPath}
-    <div class="empty">Open a project to edit FTB Quests chapters.</div>
+    <EmptyState icon={Map} title="No project selected" description="Open a project to edit FTB Quests chapters." />
   {:else if loading && chapters.length === 0}
     <div class="empty"><RefreshCw size={32} class="spin" /><p>Loading quest book…</p></div>
   {:else if chapters.length === 0}

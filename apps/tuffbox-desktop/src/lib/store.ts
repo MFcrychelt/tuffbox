@@ -124,3 +124,13 @@ export const authState = writable<AuthState>({
 });
 
 export const skinPath = writable<string | null>(null);
+
+// ─── UI / navigation state ───────────────────────────────────────
+
+// Drives the "New instance" (AddInstanceModal) from anywhere in the app,
+// including the sidebar's + button which lives outside the Dashboard tree.
+export const newProjectOpen = writable<boolean>(false);
+
+// Global launch state — true while a launch is in progress.
+// Used by Header to show spinner, and by Dashboard to disable play button.
+export const isLaunching = writable<boolean>(false);

@@ -35,6 +35,11 @@
     Package,
   } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import PromptDialog from "./PromptDialog.svelte";
+import ConfirmDialog from "./ConfirmDialog.svelte";
+import EmptyState from "./EmptyState.svelte";
+import { trapFocus } from "../lib/focusTrap";
 
   type ModRow = {
     id: string;
@@ -119,6 +124,10 @@
   let brokenIcons: string[] = [];
   let savedMods: SearchResult[] = [];
   let savedModsLoading = false;
+  let renameTarget = "";
+  let showRenamePrompt = false;
+  let deleteTarget = "";
+  let showDeleteConfirm = false;
 
   // Download progress overlay
   let downloadOpen = false;
@@ -659,7 +668,6 @@
     error = null;
     try {
       await invoke("remove_project_mod", { path: $projectPath, modId: target.id });
-      mods = mods.filter((m) => m.id !== target.id);
       confirmMod = null;
       await load(true);
     } catch (e) {
@@ -1630,7 +1638,7 @@
   {#if loading}
     <div class="loading">Loading mods...</div>
   {:else if !$projectPath}
-    <div class="empty">Open a project to manage mods.</div>
+    <EmptyState icon={Package} title="No project selected" description="Open a project to manage mods." actionLabel="Open project" on:action={() => { open({ directory: true, title: "Select Minecraft instance" }).then(r => { if (r) projectPath.set(r); }); }} />
   {:else if isSavedViewFilter(contentFilter)}
     {#if savedModsLoading}
       <div class="loading">Loading {savedViewLabel(contentFilter).toLowerCase()}...</div>
@@ -1655,8 +1663,8 @@
           <button on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
             <ArrowDown size={16} /> {installingFromList === listName ? "Installing..." : `Install all from "${listName}"`}
           </button>
-          <button class="secondary" on:click={() => { const n = prompt("Rename list:", listName); if (n) renameList(listName, n); }}>Rename</button>
-          <button class="secondary danger" on:click={() => { if (confirm(`Delete list "${listName}"?`)) deleteList(listName); }}>Delete list</button>
+          <button class="secondary" on:click={() => { renameTarget = listName; showRenamePrompt = true; }}>Rename</button>
+          <button class="secondary danger" on:click={() => { deleteTarget = listName; showDeleteConfirm = true; }}>Delete list</button>
         {/if}
         <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse Modrinth</button>
       </div>
@@ -1707,7 +1715,7 @@
       </div>
     {/if}
   {:else if filtered.length === 0}
-    <div class="empty">No mods found.</div>
+    <EmptyState icon={Package} title="No mods found" description="Try adjusting your search or filters." />
   {:else}
     <div class="installed-list">
       {#each filtered as mod, i (mod.id)}
@@ -1766,9 +1774,9 @@
     tabindex="-1"
     aria-label="Confirm remove mod"
     on:click|self={() => { confirmOpen = false; confirmMod = null; }}
-    on:keydown={(event) => event.key === "Escape" && (confirmOpen = false, confirmMod = null)}
+    on:keydown={() => {}}
   >
-    <div class="modal confirm-modal" role="dialog" aria-modal="true">
+    <div class="modal confirm-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { confirmOpen = false; confirmMod = null; } }}>
       <div class="modal-header">
         <div>
           <h2>Remove {confirmMod.name}?</h2>
@@ -1891,9 +1899,9 @@
     tabindex="-1"
     aria-label="Close add mod dialog"
     on:click|self={() => (addOpen = false)}
-    on:keydown={(event) => event.key === "Escape" && (addOpen = false)}
+    on:keydown={() => {}}
   >
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (addOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Add {catalogProvider === "curseforge" ? "CurseForge" : "Modrinth"} {contentFilter}</h2>
@@ -2073,13 +2081,11 @@
             {#if savedModsLoading}
               <div class="loading compact">Loading saved projects...</div>
             {:else if savedMods.length === 0}
-              <div class="empty compact">
-                {#if contentFilter === "favorites"}
-                  No favorites yet.
-                {:else}
-                  This list is empty.
-                {/if}
-              </div>
+              {#if contentFilter === "favorites"}
+                <EmptyState icon={Bookmark} compact={true} title="No favorites yet" description="Favorite mods will appear here." />
+              {:else}
+                <EmptyState icon={Bookmark} compact={true} title="This list is empty" description="Saved projects will appear here." />
+              {/if}
             {:else}
               <div class="results {viewMode}">
                 {#each savedMods as result (result.id)}
@@ -2145,7 +2151,7 @@
               </div>
             {/if}
           {:else if pagedResults.length === 0}
-            <div class="empty compact">No projects found. Adjust filters or search text.</div>
+            <EmptyState icon={Search} compact={true} title="No results" description="Adjust filters or search text." />
           {:else}
             <div class="results {viewMode}">
           {#each pagedResults as result (result.id)}
@@ -2315,7 +2321,7 @@
 <!-- Version picker modal — Modrinth-style: search, filter compatible, channel + confirm -->
 {#if versionPickerMod}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (versionPickerMod = null)} on:keydown={() => {}}>
-    <div class="modal version-modal" role="dialog" aria-modal="true">
+    <div class="modal version-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (versionPickerMod = null) }}>
       <div class="modal-header">
         <div>
           <h2>Change version: {versionPickerMod.name}</h2>
@@ -2332,7 +2338,7 @@
       {#if versionPickerLoading}
         <div class="loading compact"><Loader2 size={20} class="spin" /> Loading versions...</div>
       {:else if availableVersions.length === 0}
-        <div class="empty compact">No versions found for this mod on Modrinth.</div>
+        <EmptyState icon={Package} compact={true} title="No versions found" description="No versions found for this mod on Modrinth." />
       {:else}
         <div class="version-toolbar">
           <div class="search wide">
@@ -2383,7 +2389,7 @@
                 {/if}
               </button>
             {:else}
-              <div class="empty compact">No versions match this filter.</div>
+              <EmptyState icon={Package} compact={true} title="No matching versions" description="No versions match this filter." />
             {/each}
             {#if selectedVersion}
               <div class="version-switch-footer">
@@ -2440,7 +2446,7 @@
                 </button>
               </div>
             {:else}
-              <div class="empty compact">Select a version to preview its changelog.</div>
+              <EmptyState icon={Package} compact={true} title="Select a version" description="Select a version to preview its changelog." />
             {/if}
           </div>
         </div>
@@ -2452,7 +2458,7 @@
 <!-- Post-bulk dependency resolution dialog -->
 {#if dependencyDialogOpen}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} on:keydown={() => {}}>
-    <div class="modal dep-dialog" role="dialog" aria-modal="true">
+    <div class="modal dep-dialog" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (dependencyDialogOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Missing dependencies</h2>
@@ -2481,7 +2487,7 @@
 <!-- Change plan preview modal -->
 {#if planPreviewOpen && planPreviewMod}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (planPreviewOpen = false)} on:keydown={() => {}}>
-    <div class="modal plan-modal" role="dialog" aria-modal="true">
+    <div class="modal plan-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (planPreviewOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Install plan: {planPreviewMod.name}</h2>
@@ -2556,6 +2562,29 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if showRenamePrompt}
+  <PromptDialog
+    title="Rename list"
+    message="Enter a new name for the list."
+    mode="text"
+    defaultValue={renameTarget}
+    confirmLabel="Rename"
+    on:confirm={(e) => { if (e.detail.trim() && renameTarget) { renameList(renameTarget, e.detail.trim()); } showRenamePrompt = false; }}
+    on:cancel={() => (showRenamePrompt = false)}
+  />
+{/if}
+
+{#if showDeleteConfirm}
+  <ConfirmDialog
+    title="Delete list"
+    message={`Delete list "${deleteTarget}"? This cannot be undone.`}
+    danger
+    confirmLabel="Delete"
+    on:confirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
+    on:cancel={() => (showDeleteConfirm = false)}
+  />
 {/if}
 
 <style>
@@ -3657,6 +3686,13 @@
     border-radius: var(--border-radius-lg);
     background: #2d2d2d;
     border: 1px solid var(--border-color);
+    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  }
+
+  .result-card:hover {
+    border-color: var(--bg-active);
+    background: #333;
+    transform: translateY(-1px);
   }
 
   .results.list .result-card {

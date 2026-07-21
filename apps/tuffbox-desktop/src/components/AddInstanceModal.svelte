@@ -5,6 +5,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { projectPath } from "../lib/store";
+  import { trapFocus } from "../lib/focusTrap";
+  import LoadingButton from "./LoadingButton.svelte";
 
   const dispatch = createEventDispatcher<{ close: void; created: string }>();
 
@@ -325,7 +327,7 @@
 </script>
 
 <div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}>
-  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="add-instance-title">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => dispatch("close") }}>
     <div class="modal-header">
       <h2 id="add-instance-title">Add Instance</h2>
       <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close add instance dialog">
@@ -495,22 +497,22 @@
        </div>
      </div>
 
-     <div class="modal-footer">
-       <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
-       {#if mode === "blank"}
-         <button on:click={create} disabled={loading || !blankValid}>
-           {#if loading}<Loader2 size={16} class="spin" /> Creating...{:else}Create instance{/if}
-         </button>
-       {:else if mode === "import"}
-         <button on:click={installFromFile} disabled={loading || !importValid}>
-           {#if loading}<Loader2 size={16} class="spin" /> Installing...{:else}<Download size={16} /> Install pack{/if}
-         </button>
-       {:else}
-         <button on:click={installFromCurseForge} disabled={loading || !cfValid}>
-           {#if loading}<Loader2 size={16} class="spin" /> Installing...{:else}<Download size={16} /> Install from CurseForge{/if}
-         </button>
-       {/if}
-     </div>
+      <div class="modal-footer">
+        <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
+        {#if mode === "blank"}
+          <LoadingButton {loading} disabled={!blankValid} on:click={create}>
+            Create instance
+          </LoadingButton>
+        {:else if mode === "import"}
+          <LoadingButton {loading} disabled={!importValid} on:click={installFromFile}>
+            <Download size={16} /> Install pack
+          </LoadingButton>
+        {:else}
+          <LoadingButton {loading} disabled={!cfValid} on:click={installFromCurseForge}>
+            <Download size={16} /> Install from CurseForge
+          </LoadingButton>
+        {/if}
+      </div>
   </div>
 </div>
 

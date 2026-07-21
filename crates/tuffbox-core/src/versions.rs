@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 use thiserror::Error;
 
 const POPULAR_MINECRAFT: &[&str] = &["1.12.2", "1.16.5", "1.20.1", "1.21.1", "26.1.2", "26.2"];
@@ -22,7 +24,15 @@ pub enum VersionsError {
 
 #[derive(Debug, Deserialize)]
 struct Manifest {
+    #[serde(default)]
+    latest: Option<LatestVersion>,
     versions: Vec<ManifestVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LatestVersion {
+    release: String,
+    snapshot: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +83,204 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
             .collect::<Vec<_>>()
     };
     parse(a).cmp(&parse(b))
+}
+
+/// Resolves a Minecraft version *alias* to a concrete version id.
+///
+/// Mojang's launcher and many importers accept the symbolic versions
+/// `latest` / `release` / `latest-release` (newest stable release) and
+/// `snapshot` / `latest-snapshot` (newest snapshot). TuffBox stored these
+/// verbatim in the past, and `install_game` then did an exact `.find()`
+/// against the version manifest and died with *"Minecraft latest not found
+/// in manifest"*. Resolving up front means a project pinned to `release`
+/// always launches the current stable build, and never trips that cryptic
+/// error. Concrete version strings (e.g. `1.20.1`) pass through untouched,
+/// so no network call is made for the common case.
+pub fn resolve_minecraft_version_alias(alias: &str) -> Result<String, VersionsError> {
+    match alias {
+        "latest" | "release" | "latest-release" => Ok(latest_release()?),
+        "snapshot" | "latest-snapshot" => Ok(latest_snapshot()?),
+        other => Ok(other.to_string()),
+    }
+}
+
+fn fetch_manifest_v2() -> Result<Manifest, VersionsError> {
+    crate::http::get_json_with_context(VERSION_MANIFEST_URL).map_err(VersionsError::Other)
+}
+
+fn latest_release() -> Result<String, VersionsError> {
+    let manifest = fetch_manifest_v2()?;
+    manifest
+        .latest
+        .map(|l| l.release)
+        .ok_or_else(|| VersionsError::Other("version manifest has no 'latest.release'".into()))
+}
+
+fn latest_snapshot() -> Result<String, VersionsError> {
+    let manifest = fetch_manifest_v2()?;
+    manifest
+        .latest
+        .map(|l| l.snapshot)
+        .ok_or_else(|| VersionsError::Other("version manifest has no 'latest.snapshot'".into()))
+}
+
+/// Like [`resolve_minecraft_version_alias`], but when the network is
+/// unavailable it falls back to scanning `<launcher_dir>/versions` for an
+/// already-installed version that satisfies the alias. This lets a project
+/// pinned to `latest` / `snapshot` still launch fully offline, provided it
+/// has been installed before — without this, the manifest fetch at the top
+/// of `install_game` would fail before the on-disk cache could be used.
+pub fn resolve_minecraft_version_alias_offline(
+    alias: &str,
+    launcher_dir: &Path,
+) -> Result<String, VersionsError> {
+    match resolve_minecraft_version_alias(alias) {
+        Ok(v) => Ok(v),
+        Err(net_err) => {
+            // `resolve_minecraft_version_alias` only returns Err for real
+            // aliases (concrete versions never hit the network), so a failure
+            // here means the manifest fetch failed — try the local cache.
+            let kind = if matches!(alias, "snapshot" | "latest-snapshot") {
+                "snapshot"
+            } else {
+                "release"
+            };
+            resolve_alias_offline(alias, launcher_dir, kind).map_err(|_| net_err)
+        }
+    }
+}
+
+/// Scans locally installed version JSONs and returns the newest one whose
+/// Mojang `type` matches `kind` (`release` or `snapshot`).
+fn resolve_alias_offline(
+    alias: &str,
+    launcher_dir: &Path,
+    kind: &str,
+) -> Result<String, VersionsError> {
+    #[derive(Deserialize)]
+    struct MiniVersion {
+        id: String,
+        #[serde(rename = "type")]
+        kind: Option<String>,
+    }
+
+    let versions_dir = launcher_dir.join("versions");
+    let mut best: Option<(String, String)> = None; // (id, id-for-sorting)
+    let Ok(entries) = fs::read_dir(&versions_dir) else {
+        return Err(VersionsError::Other(format!(
+            "no locally installed versions under {} (offline)",
+            versions_dir.display()
+        )));
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let json_path = path.join(format!("{id}.json"));
+        let Ok(contents) = fs::read_to_string(&json_path) else {
+            continue;
+        };
+        let Ok(mini) = serde_json::from_str::<MiniVersion>(&contents) else {
+            continue;
+        };
+        if mini.kind.as_deref() != Some(kind) {
+            continue;
+        }
+        match &best {
+            None => best = Some((mini.id.clone(), id)),
+            Some((_, best_id)) => {
+                if compare_versions(&id, best_id) == std::cmp::Ordering::Greater {
+                    best = Some((mini.id.clone(), id));
+                }
+            }
+        }
+    }
+    best
+        .map(|(id, _)| id)
+        .ok_or_else(|| VersionsError::Other(format!(
+            "no locally installed {kind} version found for alias '{alias}' (offline)"
+        )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concrete_version_passes_through_without_network() {
+        // This must not hit the network: `resolve_minecraft_version_alias`
+        // only queries the version manifest for real aliases, so a concrete
+        // id is returned verbatim and offline launches stay offline.
+        for v in ["1.20.1", "1.12.2", "1.21.1", "26.2"] {
+            assert_eq!(resolve_minecraft_version_alias(v).unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn unknown_aliases_are_not_special_cased() {
+        // Anything that isn't a recognized alias passes through untouched
+        // (e.g. a loader-ish string someone typo'd into the version field).
+        assert_eq!(
+            resolve_minecraft_version_alias("fabric").unwrap(),
+            "fabric"
+        );
+    }
+
+    #[test]
+    #[ignore = "hits the network (Mojang version manifest)"]
+    fn known_aliases_are_recognized() {
+        // We can't assert the resolved value (it changes over time / needs
+        // network), but we can assert each known alias maps to *some*
+        // concrete version and not back to the alias string.
+        for alias in ["latest", "release", "latest-release", "snapshot", "latest-snapshot"] {
+            let resolved = resolve_minecraft_version_alias(alias).unwrap();
+            assert_ne!(resolved, alias, "alias {alias} should resolve to a concrete version");
+        }
+    }
+
+    #[test]
+    fn offline_alias_picks_newest_installed_of_kind() {
+        // Deterministically exercises the local-scan fallback (no network).
+        let base =
+            std::env::temp_dir().join(format!("tuffbox_va_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let versions_dir = base.join("versions");
+        for (id, kind) in [
+            ("1.20.1", "release"),
+            ("1.21.5", "release"),
+            ("25w14craftmine", "snapshot"),
+        ] {
+            let dir = versions_dir.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(format!("{id}.json")),
+                format!("{{\"id\":\"{id}\",\"type\":\"{kind}\"}}"),
+            )
+            .unwrap();
+        }
+
+        // newest installed release wins for `latest`
+        assert_eq!(
+            resolve_alias_offline("latest", &base, "release").unwrap(),
+            "1.21.5"
+        );
+        // snapshots are picked from the snapshot pool only
+        assert_eq!(
+            resolve_alias_offline("snapshot", &base, "snapshot").unwrap(),
+            "25w14craftmine"
+        );
+        // a kind with no installed matches errors rather than cross-contaminating
+        let empty =
+            std::env::temp_dir().join(format!("tuffbox_va_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(empty.join("versions")).unwrap();
+        assert!(resolve_alias_offline("latest", &empty, "release").is_err());
+        let _ = std::fs::remove_dir_all(&empty);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]

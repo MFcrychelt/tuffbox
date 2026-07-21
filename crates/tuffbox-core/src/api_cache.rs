@@ -78,9 +78,10 @@ pub fn get<T: Clone + 'static>(key: &str) -> Option<T> {
 ///
 /// Returns `None` if the key is not in the cache at all.
 pub fn get_stale<T: Clone + 'static>(key: &str) -> Option<T> {
-    let cache = CACHE.lock().expect("api_cache lock poisoned");
-    let entry = cache.entries.get(key)?;
-    let entry = entry.downcast_ref::<CacheEntry<T>>()?;
+    let mut cache = CACHE.lock().expect("api_cache lock poisoned");
+    let entry = cache.entries.get_mut(key)?;
+    let entry = entry.downcast_mut::<CacheEntry<T>>()?;
+    entry.inserted_at = Instant::now();
     Some(entry.value.clone())
 }
 

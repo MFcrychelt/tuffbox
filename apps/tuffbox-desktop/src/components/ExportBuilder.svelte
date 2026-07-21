@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
 
   type ExportResult = {
     path: string;
@@ -95,7 +96,7 @@
   {/if}
 
   {#if !$projectPath}
-    <div class="empty">Open a project to export a modpack.</div>
+    <EmptyState icon={PackageOpen} title="No project selected" description="Open a project to export a modpack." />
   {:else}
     <section class="panel">
       <div class="format-grid">

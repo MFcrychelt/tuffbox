@@ -15,6 +15,7 @@ pub mod importer;
 pub mod item_icons;
 pub mod jre;
 pub mod launcher;
+pub mod launch_error;
 pub mod download_cache;
 pub mod lockfile;
 pub mod manifest;

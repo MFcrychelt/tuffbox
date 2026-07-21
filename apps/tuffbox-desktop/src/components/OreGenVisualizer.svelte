@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Mountain, RefreshCw, Database } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
   import WorldMap from "./WorldMap.svelte";
 
   type OreEntry = {
@@ -62,10 +63,10 @@
     worldsError = null;
     try {
       worlds = (await invoke("list_worlds", { path: $projectPath })) as WorldEntry[];
-      lastWorldsPath = $projectPath;
     } catch (e) {
       worldsError = String(e);
     } finally {
+      lastWorldsPath = $projectPath;
       worldsLoading = false;
     }
   }
@@ -180,12 +181,9 @@
   {#if error}<div class="notice error">{error}</div>{/if}
 
   {#if !$projectPath}
-    <div class="empty">Open a project to scan ore generation.</div>
+    <EmptyState icon={Mountain} title="No project selected" description="Open a project to scan ore generation." />
   {:else if oreBars.length === 0}
-    <div class="empty">
-      <Database size={32} />
-      <p>No ore generation detected. Run "Ore gen scan" from Diagnostics.</p>
-    </div>
+    <EmptyState icon={Database} title="No ore data" description="Run an ore gen scan from Diagnostics to populate this view." />
   {:else}
     <div class="layout">
       <div class="chart-shell">

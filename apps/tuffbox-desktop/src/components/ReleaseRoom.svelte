@@ -4,6 +4,7 @@
   import { Rocket, RefreshCw, Tag, AlertTriangle, CheckCircle2, Camera, Package, Server, FolderOpen, Save, UploadCloud } from "lucide-svelte";
   import { api } from "../lib/api";
   import { projectPath, projectInfo, recentProjects } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
 
   type Issue = { severity: "error" | "warning"; code: string; message: string; target?: string | null };
   type Artifact = { id: string; kind: string; path: string; createdAt: string; fileCount: number; overrideCount: number };
@@ -336,7 +337,7 @@
   {#if message}<div class="notice success"><CheckCircle2 size={16} /> {message}</div>{/if}
 
   {#if !$projectPath}
-    <div class="empty">Open a project to prepare a release.</div>
+    <EmptyState icon={Rocket} title="No project selected" description="Open a project to prepare a release." />
   {:else}
     <div class="layout">
       <section class="panel release-panel">

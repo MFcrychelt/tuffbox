@@ -3,6 +3,8 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
+  import { trapFocus } from "../lib/focusTrap";
   import * as d3 from "d3-force";
   import { onDestroy, onMount } from "svelte";
 
@@ -1569,7 +1571,7 @@
   {#if loading && !graph}
     <div class="loading">Loading graph...</div>
   {:else if error}
-    <div class="empty error">{error}</div>
+    <EmptyState icon={AlertTriangle} title="Failed to load graph" description={error} />
   {:else if graph}
     <div class="stats">
       <div class="stat-card accent">
@@ -2004,13 +2006,13 @@
     {/if}
 
   {:else}
-    <div class="empty">Open a project to view its dependency graph.</div>
+    <EmptyState icon={GitGraph} title="No project selected" description="Open a project to view its dependency graph." />
   {/if}
 </div>
 
 {#if depPreviewOpen}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={(e) => e.key === "Escape" && (depPreviewOpen = false)}>
-    <div class="modal" role="dialog" aria-modal="true">
+  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={() => {}}>
+    <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (depPreviewOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Install dependency: {depPreviewName}</h2>

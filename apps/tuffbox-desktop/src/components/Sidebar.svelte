@@ -3,6 +3,7 @@
     LayoutDashboard,
     Package,
     GitGraph,
+    Globe,
     Stethoscope,
     History,
     Workflow,
@@ -10,24 +11,34 @@
     Plus,
     Library,
   } from "lucide-svelte";
+  import { newProjectOpen } from "../lib/store";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library";
   export let currentView: View;
 
-  const items: { id: View; label: string; icon: any; featured?: boolean }[] = [
-    { id: "dashboard", label: "Launcher", icon: LayoutDashboard },
-    { id: "ide", label: "Open IDE", icon: Workflow, featured: true },
-    { id: "mods", label: "Mods", icon: Package },
-    { id: "graph", label: "Graph", icon: GitGraph },
+  const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string }[] = [
+    { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
+    { id: "ide", label: "Open IDE", icon: Workflow, featured: true, shortcut: "Ctrl+2" },
+    { id: "mods", label: "Mods", icon: Package, shortcut: "Ctrl+3" },
+    { id: "graph", label: "Graph", icon: GitGraph, shortcut: "Ctrl+4" },
+    { id: "world", label: "World", icon: Globe, shortcut: "Ctrl+8" },
     { id: "library", label: "Library", icon: Library },
-    { id: "diagnostics", label: "Diagnostics", icon: Stethoscope },
-    { id: "snapshots", label: "Snapshots", icon: History },
+    { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, shortcut: "Ctrl+6" },
+    { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
   ];
+
+  function openNewProject() {
+    // Dashboard owns the modal, so make sure we're on that view before
+    // raising the flag — otherwise the modal component wouldn't be mounted.
+    currentView = "dashboard";
+    newProjectOpen.set(true);
+  }
 </script>
 
 <aside class="sidebar">
   <div class="brand">
     <div class="logo">T</div>
+    <span class="brand-name">TuffBox</span>
   </div>
 
   <nav class="nav">
@@ -37,14 +48,19 @@
         class:active={currentView === item.id}
         class:featured={item.featured}
         on:click={() => (currentView = item.id)}
-        title={item.label}
+        title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
       >
-        <svelte:component this={item.icon} size={26} />
+        <svelte:component this={item.icon} size={20} />
+        <span class="nav-label">{item.label}</span>
+        {#if item.shortcut}
+          <span class="shortcut">{item.shortcut}</span>
+        {/if}
       </button>
     {/each}
 
-    <button class="nav-item add" title="New project" on:click={() => (currentView = "dashboard")}>
-      <Plus size={26} />
+    <button class="nav-item add" title="New instance" on:click={openNewProject}>
+      <Plus size={20} />
+      <span class="nav-label">New</span>
     </button>
   </nav>
 
@@ -55,60 +71,74 @@
       on:click={() => (currentView = "settings")}
       title="Settings"
     >
-      <Settings size={26} />
+      <Settings size={20} />
+      <span class="nav-label">Settings</span>
     </button>
   </div>
 </aside>
 
 <style>
   .sidebar {
-    width: 72px;
+    width: 212px;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    align-items: center;
-    padding: 20px 0;
+    padding: 16px 12px;
     flex-shrink: 0;
   }
 
   .brand {
-    margin-bottom: 28px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px 18px;
   }
 
   .logo {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
     border-radius: var(--border-radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
     font-weight: 900;
-    font-size: 20px;
+    font-size: 18px;
     color: #000;
     box-shadow: 0 4px 14px rgba(27, 217, 106, 0.35);
+    flex-shrink: 0;
+  }
+
+  .brand-name {
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
   }
 
   .nav {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 8px;
+    gap: 4px;
     flex: 1;
     width: 100%;
   }
 
   .nav-item {
-    width: 52px;
-    height: 52px;
-    padding: 0;
+    position: relative;
+    width: 100%;
+    height: 42px;
+    padding: 0 12px;
     background: transparent;
     color: var(--text-muted);
+    border: 1px solid transparent;
     border-radius: var(--border-radius-md);
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 12px;
+    font-size: 14px;
+    font-weight: 500;
     transition: all 0.15s ease;
   }
 
@@ -122,10 +152,45 @@
     color: var(--accent-primary);
   }
 
+  .nav-item.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 22px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent-primary);
+  }
+
+  .nav-label {
+    flex: 1;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .shortcut {
+    font-size: 11px;
+    color: var(--text-faint, #6b7280);
+    background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
   .nav-item.featured {
-    margin-top: 10px;
+    margin-top: 8px;
     border: 1px solid rgba(27, 217, 106, 0.24);
     background: linear-gradient(135deg, rgba(27, 217, 106, 0.12), rgba(139, 92, 246, 0.08));
+    color: var(--text-secondary);
+  }
+
+  .nav-item.featured:hover {
+    color: var(--accent-primary);
   }
 
   .nav-item.featured.active {
@@ -133,20 +198,20 @@
   }
 
   .nav-item.add {
-    margin-top: 16px;
-    color: var(--text-secondary);
-    border: 1px dashed var(--border-color);
+    margin-top: 8px;
+    color: var(--accent-primary);
+    border: 1px dashed rgba(27, 217, 106, 0.4);
   }
 
   .nav-item.add:hover {
+    background: rgba(27, 217, 106, 0.1);
     border-color: var(--accent-primary);
-    color: var(--accent-primary);
   }
 
   .bottom {
-    margin-top: auto;
+    margin-top: 12px;
     width: 100%;
     display: flex;
-    justify-content: center;
+    flex-direction: column;
   }
 </style>

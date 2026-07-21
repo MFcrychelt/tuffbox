@@ -398,6 +398,267 @@ fn decompress(compression: u8, payload: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// A single chunk's data extracted for clipboard operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkData {
+    /// Region coordinate X.
+    pub region_x: i32,
+    /// Region coordinate Z.
+    pub region_z: i32,
+    /// Local chunk index (0..1024) within the region.
+    pub index: usize,
+    /// The chunk's data (4-byte length + 1-byte compression + compressed NBT).
+    pub data: Vec<u8>,
+    /// Last-modified timestamp.
+    pub last_modified: u32,
+}
+
+/// Clipboard payload containing chunk data for copy/paste operations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChunkClipboard {
+    /// Source world name.
+    pub source_world: String,
+    /// The chunks being copied/cut.
+    pub chunks: Vec<ChunkData>,
+    /// Bounding box in region coordinates (min_x, min_z, max_x, max_z).
+    pub bounds: (i32, i32, i32, i32),
+}
+
+/// Copies the given chunks from a world's region files and returns their data
+/// for clipboard operations.
+///
+/// `chunks` is a list of `r.<rx>.<rz>.mca` region coordinates paired with the
+/// local chunk indices (0..1024) to extract.
+///
+/// Returns the clipboard payload containing the chunk data.
+pub fn copy_world_chunks(
+    world_dir: &Path,
+    world_name: &str,
+    selections: &[(i32, i32, Vec<usize>)],
+) -> Result<ChunkClipboard, String> {
+    let region_dir = world_dir.join("region");
+    if !region_dir.is_dir() {
+        return Err("no region folder".into());
+    }
+
+    let mut chunks = Vec::new();
+    let mut min_rx = i32::MAX;
+    let mut min_rz = i32::MAX;
+    let mut max_rx = i32::MIN;
+    let mut max_rz = i32::MIN;
+
+    for (rx, rz, indices) in selections {
+        if indices.is_empty() {
+            continue;
+        }
+        let file_name = format!("r.{}.{}.mca", rx, rz);
+        let path = region_dir.join(&file_name);
+        if !path.is_file() {
+            continue;
+        }
+        let data = std::fs::read(&path).map_err(|e| e.to_string())?;
+        if data.len() < 8192 {
+            continue;
+        }
+
+        for &index in indices {
+            if index >= 1024 {
+                continue;
+            }
+            let loc_off = index * 5;
+            let offset = ((data[loc_off] as usize) << 16)
+                | ((data[loc_off + 1] as usize) << 8)
+                | (data[loc_off + 2] as usize);
+
+            if offset == 0 {
+                continue; // chunk not present
+            }
+
+            let ts_off = 4096 + index * 4;
+            let last_modified = read_u32(&data, ts_off);
+
+            // Read the chunk's data sectors
+            let base = offset * 4096;
+            if base + 5 > data.len() {
+                continue;
+            }
+            let data_len = read_u32(&data, base) as usize;
+            if data_len == 0 || base + 5 + data_len > data.len() {
+                continue;
+            }
+            let chunk_data = data[base..base + 5 + data_len].to_vec();
+
+            chunks.push(ChunkData {
+                region_x: *rx,
+                region_z: *rz,
+                index,
+                data: chunk_data,
+                last_modified,
+            });
+
+            min_rx = min_rx.min(*rx);
+            min_rz = min_rz.min(*rz);
+            max_rx = max_rx.max(*rx);
+            max_rz = max_rz.max(*rz);
+        }
+    }
+
+    if chunks.is_empty() {
+        return Err("no chunks selected".into());
+    }
+
+    Ok(ChunkClipboard {
+        source_world: world_name.to_string(),
+        chunks,
+        bounds: (min_rx, min_rz, max_rx, max_rz),
+    })
+}
+
+/// Pastes chunk data from clipboard into a world's region files.
+///
+/// `offset_x` and `offset_z` are the region coordinate offsets to apply
+/// when pasting (for cross-world paste or relative positioning).
+///
+/// Returns the number of chunks pasted.
+pub fn paste_world_chunks(
+    world_dir: &Path,
+    clipboard: &ChunkClipboard,
+    offset_x: i32,
+    offset_z: i32,
+) -> Result<usize, String> {
+    let region_dir = world_dir.join("region");
+    if !region_dir.is_dir() {
+        return Err("no region folder".into());
+    }
+
+    // Group chunks by target region
+    let mut by_region: std::collections::HashMap<(i32, i32), Vec<&ChunkData>> =
+        std::collections::HashMap::new();
+    for chunk in &clipboard.chunks {
+        let target_rx = chunk.region_x + offset_x;
+        let target_rz = chunk.region_z + offset_z;
+        by_region
+            .entry((target_rx, target_rz))
+            .or_default()
+            .push(chunk);
+    }
+
+    let mut pasted = 0;
+
+    for ((target_rx, target_rz), chunks) in &by_region {
+        let file_name = format!("r.{}.{}.mca", target_rx, target_rz);
+        let path = region_dir.join(&file_name);
+
+        // Create new region file if it doesn't exist
+        if !path.is_file() {
+            create_region_file(&path)?;
+        }
+
+        let mut data = std::fs::read(&path).map_err(|e| e.to_string())?;
+        if data.len() < 8192 {
+            // Region file too small, recreate
+            create_region_file(&path)?;
+            data = std::fs::read(&path).map_err(|e| e.to_string())?;
+        }
+
+        // Find free sectors for new chunk data
+        let mut used_sectors = std::collections::HashSet::new();
+        used_sectors.insert(0); // sector 0 is unused
+        for i in 0..1024 {
+            let loc_off = i * 5;
+            let offset = ((data[loc_off] as usize) << 16)
+                | ((data[loc_off + 1] as usize) << 8)
+                | (data[loc_off + 2] as usize);
+            let sector_count = data[loc_off + 3] as usize;
+            if offset != 0 {
+                for s in offset..offset + sector_count {
+                    used_sectors.insert(s);
+                }
+            }
+        }
+
+        // Find the first free sector after all existing data
+        let mut next_free_sector = used_sectors.iter().max().map_or(2, |m| m + 1);
+
+        for chunk in chunks {
+            let index = chunk.index;
+            if index >= 1024 {
+                continue;
+            }
+
+            let loc_off = index * 5;
+            let ts_off = 4096 + index * 4;
+
+            // Calculate number of sectors needed for this chunk
+            let chunk_data_len = chunk.data.len();
+            let sector_count = (chunk_data_len + 4095) / 4096;
+
+            // Find contiguous free sectors
+            let start_sector = find_free_sectors(&used_sectors, next_free_sector, sector_count);
+
+            // Write the chunk data to the sectors
+            let data_start = start_sector * 4096;
+            // Ensure the file is large enough
+            let required_len = data_start + sector_count * 4096;
+            if data.len() < required_len {
+                data.resize(required_len, 0);
+            }
+
+            // Copy chunk data into sectors
+            for (i, &byte) in chunk.data.iter().enumerate() {
+                if data_start + i < data.len() {
+                    data[data_start + i] = byte;
+                }
+            }
+
+            // Update location table
+            data[loc_off] = ((start_sector >> 16) & 0xFF) as u8;
+            data[loc_off + 1] = ((start_sector >> 8) & 0xFF) as u8;
+            data[loc_off + 2] = (start_sector & 0xFF) as u8;
+            data[loc_off + 3] = sector_count as u8;
+
+            // Update timestamp
+            data[ts_off..ts_off + 4].copy_from_slice(&chunk.last_modified.to_be_bytes());
+
+            // Mark sectors as used
+            for s in start_sector..start_sector + sector_count {
+                used_sectors.insert(s);
+            }
+            next_free_sector = start_sector + sector_count;
+
+            pasted += 1;
+        }
+
+        std::fs::write(&path, &data).map_err(|e| e.to_string())?;
+    }
+
+    Ok(pasted)
+}
+
+/// Creates a new empty region file with the proper header.
+fn create_region_file(path: &Path) -> Result<(), String> {
+    let data = vec![0u8; 8192]; // location table + timestamp table
+    std::fs::write(path, &data).map_err(|e| e.to_string())
+}
+
+/// Finds contiguous free sectors starting from a given position.
+fn find_free_sectors(used: &std::collections::HashSet<usize>, start: usize, count: usize) -> usize {
+    let mut candidate = start;
+    loop {
+        let mut all_free = true;
+        for s in candidate..candidate + count {
+            if used.contains(&s) {
+                all_free = false;
+                candidate = s + 1;
+                break;
+            }
+        }
+        if all_free {
+            return candidate;
+        }
+    }
+}
+
 /// Deletes the given chunks from a world's region files.
 ///
 /// `chunks` is a list of `r.<rx>.<rz>.mca` region coordinates paired with the

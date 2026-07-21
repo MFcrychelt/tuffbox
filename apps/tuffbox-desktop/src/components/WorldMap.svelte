@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { Map as MapIcon, RefreshCw, Trash2, MousePointer2, Square, Layers, Download, CalendarRange, CheckSquare, XSquare } from "lucide-svelte";
+  import { onMount, onDestroy } from "svelte";
+  import { Map as MapIcon, RefreshCw, Trash2, MousePointer2, Square, Layers, Download, CalendarRange, CheckSquare, XSquare, Copy, Scissors, Clipboard } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
   import { api } from "../lib/api";
-  import type { WorldMap as WorldMapData, RegionInfo, ChunkCell } from "../lib/api";
+  import type { WorldMap as WorldMapData, RegionInfo, ChunkCell, ChunkClipboard } from "../lib/api";
 
   // Status codes returned by the backend (mirror of region.rs).
   const STATUS_UNKNOWN = 0;
@@ -28,6 +30,10 @@
 
   // Hover tooltip
   let hover: { rx: number; rz: number; cx: number; cz: number; status: string; modified: number } | null = null;
+
+  // Clipboard state
+  let clipboard: ChunkClipboard | null = null;
+  let clipboardOrigin: { rx: number; rz: number } | null = null; // Where the original selection started
 
   // Date filter
   let filterFrom = ""; // yyyy-mm-dd
@@ -344,6 +350,85 @@
     }
   }
 
+  async function copySelected() {
+    if (!map || selection.size === 0 || !$projectPath || !worldName) return;
+    const byRegion = new Map<string, { regionX: number; regionZ: number; indices: number[] }>();
+    let minRx = Infinity, minRz = Infinity;
+    for (const key of selection) {
+      const [rx, rz, idx] = key.split(":").map(Number);
+      const k = `${rx}:${rz}`;
+      if (!byRegion.has(k)) byRegion.set(k, { regionX: rx, regionZ: rz, indices: [] });
+      byRegion.get(k)!.indices.push(idx);
+      minRx = Math.min(minRx, rx);
+      minRz = Math.min(minRz, rz);
+    }
+    const payload = Array.from(byRegion.values());
+    error = null;
+    try {
+      clipboard = await api.worlds.copyChunks(worldName, payload, $projectPath);
+      clipboardOrigin = { rx: minRx, rz: minRz };
+      flash(`Copied ${clipboard.chunks.length} chunks`);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function cutSelected() {
+    await copySelected();
+    if (clipboard) {
+      await deleteSelected();
+    }
+  }
+
+  async function pasteFromClipboard(offsetX: number = 0, offsetZ: number = 0) {
+    if (!clipboard || !$projectPath || !worldName) return;
+    error = null;
+    try {
+      const pasted: number = await api.worlds.pasteChunks(worldName, clipboard, offsetX, offsetZ, $projectPath);
+      await load();
+      flash(`Pasted ${pasted} chunks`);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function clearClipboard() {
+    clipboard = null;
+    clipboardOrigin = null;
+  }
+
+  // Keyboard shortcuts
+  function handleKeydown(e: KeyboardEvent) {
+    // Only handle if WorldMap is visible (not in an input/select)
+    if ((e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "SELECT") {
+      return;
+    }
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && e.key === "c") {
+      e.preventDefault();
+      copySelected();
+    } else if (ctrl && e.key === "x") {
+      e.preventDefault();
+      cutSelected();
+    } else if (ctrl && e.key === "v") {
+      e.preventDefault();
+      pasteFromClipboard();
+    } else if (ctrl && e.key === "a") {
+      e.preventDefault();
+      selectAll();
+    } else if (e.key === "Escape") {
+      clearClipboard();
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener("keydown", handleKeydown);
+  });
+
+  onDestroy(() => {
+    window.removeEventListener("keydown", handleKeydown);
+  });
+
   let flashMsg: string | null = null;
   let flashTimer: any;
   function flash(msg: string) {
@@ -374,6 +459,15 @@
       <button class="ghost" class:active={boxSelecting} on:click={() => { boxSelecting = !boxSelecting; selecting = false; }} title="Drag a rectangle (shift = subtract)">
         <Square size={14} /> Box
       </button>
+      <button class="ghost" on:click={copySelected} disabled={selection.size === 0} title="Copy selected chunks (Ctrl+C)">
+        <Copy size={14} /> Copy
+      </button>
+      <button class="ghost" on:click={cutSelected} disabled={selection.size === 0} title="Cut selected chunks (Ctrl+X)">
+        <Scissors size={14} /> Cut
+      </button>
+      <button class="ghost" on:click={() => pasteFromClipboard()} disabled={!clipboard} title="Paste chunks (Ctrl+V)">
+        <Clipboard size={14} /> Paste {clipboard ? `(${clipboard.chunks.length})` : ""}
+      </button>
       <button class="ghost" on:click={exportPng} title="Export map as PNG"><Download size={14} /> PNG</button>
       <button class="ghost danger" on:click={deleteSelected} disabled={selection.size === 0} title="Delete selected chunks (mcaselector-style)">
         <Trash2 size={14} /> Delete {selection.size || ""}
@@ -391,6 +485,9 @@
       <span>RX {map.minRegionX}…{map.maxRegionX}</span>
       <span>RZ {map.minRegionZ}…{map.maxRegionZ}</span>
       <span class="sel">selected: {selection.size}</span>
+      {#if clipboard}
+        <span class="clip">clipboard: {clipboard.chunks.length} chunks</span>
+      {/if}
       {#if flashMsg}<span class="ok">{flashMsg}</span>{/if}
     {:else if error}
       <span class="err">{error}</span>
@@ -434,9 +531,9 @@
         {/if}
       </div>
     {:else if error}
-      <div class="empty">No map yet — generate the world by running the pack, then refresh.</div>
+      <EmptyState icon={MapIcon} title="No map yet" description="Generate the world by running the pack, then refresh." />
     {:else if !loading}
-      <div class="empty">Open a world to view its 2D map.</div>
+      <EmptyState icon={MapIcon} title="No world selected" description="Open a world to view its 2D map." />
     {/if}
   </div>
 
@@ -461,6 +558,7 @@
   .select { padding: 5px 8px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); font-size: 12px; }
   .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); }
   .stats .sel { color: #ff7a7e; }
+  .stats .clip { color: #8fd3ff; }
   .stats .ok { color: var(--accent-primary); }
   .stats .err { color: #fca5a5; }
   .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
@@ -478,7 +576,4 @@
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; border: 1px solid rgba(255,255,255,.1); }
-  .empty { padding: 28px; text-align: center; color: var(--text-muted); }
-  .spin { animation: spin 1s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
 </style>

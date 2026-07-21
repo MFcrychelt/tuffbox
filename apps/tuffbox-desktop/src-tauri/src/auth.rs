@@ -4,11 +4,23 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
 const MICROSOFT_CLIENT_ID: &str = "89484d4e-6ac2-4643-a786-21386f3269c5";
 const MC_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
+
+// Mutex protecting concurrent reads/writes to auth.json and mc_accounts.json.
+// Lock is held only during file I/O (brief), so a std::sync::Mutex is fine
+// even in async context.
+static AUTH_FILE_MUTEX: Mutex<()> = Mutex::new(());
+
+// Cache for mc_get_auth_status: prevents network refresh on every call.
+// The frontend polls this on every focus/navigation, so we skip the refresh
+// if less than 30 seconds have elapsed since the last successful one.
+static LAST_AUTH_REFRESH: Mutex<Option<Instant>> = Mutex::new(None);
+const AUTH_REFRESH_TTL: Duration = Duration::from_secs(30);
 
 // ─── Skin source ─────────────────────────────────────────────────
 
@@ -236,6 +248,7 @@ fn auth_state_path() -> PathBuf {
 }
 
 fn load_accounts_file() -> AccountsFile {
+    let _guard = AUTH_FILE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     fs::read_to_string(accounts_path())
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -243,6 +256,7 @@ fn load_accounts_file() -> AccountsFile {
 }
 
 fn save_accounts_file(data: &AccountsFile) -> Result<(), String> {
+    let _guard = AUTH_FILE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let path = accounts_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -258,6 +272,7 @@ fn save_accounts_file(data: &AccountsFile) -> Result<(), String> {
 }
 
 fn load_auth_state() -> AuthState {
+    let _guard = AUTH_FILE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     fs::read_to_string(auth_state_path())
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -265,6 +280,7 @@ fn load_auth_state() -> AuthState {
 }
 
 fn save_auth_state(state: &AuthState) -> Result<(), String> {
+    let _guard = AUTH_FILE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let path = auth_state_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -282,7 +298,7 @@ fn save_auth_state(state: &AuthState) -> Result<(), String> {
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .unwrap_or_default()
         .as_secs()
 }
 
@@ -957,10 +973,11 @@ pub async fn mc_start_device_code() -> Result<DeviceCodeInfo, String> {
 pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     let device_code = load_token("mc-device-code")?;
     let interval: u64 = load_token("mc-device-interval")?.parse().unwrap_or(5);
-    let _ = clear_token("mc-device-code");
-    let _ = clear_token("mc-device-interval");
 
     let token_resp = poll_device_code_token(&device_code, interval).await?;
+
+    let _ = clear_token("mc-device-code");
+    let _ = clear_token("mc-device-interval");
     let login = complete_microsoft_login(&token_resp.access_token).await?;
 
     // Save per-account tokens
@@ -1065,8 +1082,17 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
     state.accounts = accounts.accounts;
     state.active_account_uuid = accounts.active_account_uuid;
 
-    // Only refresh Microsoft tokens; offline login persists until explicit logout
-    if state.logged_in && state.login_type == LoginType::Microsoft {
+    // Only refresh Microsoft tokens; offline login persists until explicit logout.
+    // Skip the network call if we refreshed recently (frontend polls on every focus).
+    let should_refresh = state.logged_in
+        && state.login_type == LoginType::Microsoft
+        && LAST_AUTH_REFRESH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .map(|t| t.elapsed() >= AUTH_REFRESH_TTL)
+            .unwrap_or(true);
+
+    if should_refresh {
         if let Some(ref uuid) = state.active_account_uuid {
             if let Ok(refresh_token) = load_token(&account_refresh_key(uuid)) {
                 match login_with_refresh_token(&refresh_token).await {
@@ -1079,6 +1105,9 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
                                 download_and_cache_skin(skin_url, &login.profile.uuid).await;
                         }
                         save_auth_state(&state)?;
+                        if let Ok(mut last) = LAST_AUTH_REFRESH.lock() {
+                            *last = Some(Instant::now());
+                        }
                     }
                     Err(_) => {
                         state.logged_in = false;

@@ -10,6 +10,9 @@ use tuffbox_core::{
     TuffboxLockfile,
 };
 use tuffbox_core::crash::FixAction;
+use tuffbox_core::launch_error::{LaunchErrorInfo, LaunchErrorKind};
+use tuffbox_core::process::{OnExit, ProcessExit};
+use tauri::Emitter;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1149,8 +1152,15 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
 
         remove_mod_file_from_disk(&manifest_path, &removed_mod);
         if let Some(ref hash) = sha1 {
-            // Drop any jar with the same bytes (renames / .disabled leftovers).
+            // Drop any jar with the same bytes (renames / .disabled leftovers),
+            // but skip files still tracked by other manifest entries so we
+            // don't accidentally delete a second copy of the same mod.
             if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+                let remaining_names: std::collections::HashSet<&str> = manifest
+                    .mods
+                    .iter()
+                    .filter_map(|m| m.file_name.as_deref())
+                    .collect();
                 let content_dir =
                     tuffbox_core::content_dir_for(&instance_dir, removed_mod.content_type);
                 if let Ok(entries) = std::fs::read_dir(&content_dir) {
@@ -1158,6 +1168,12 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
                         let path = entry.path();
                         if !path.is_file() {
                             continue;
+                        }
+                        // Skip files still referenced by another manifest entry.
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if remaining_names.contains(name) {
+                                continue;
+                            }
                         }
                         if let Ok(actual) = tuffbox_core::sha1_file(&path) {
                             if actual.eq_ignore_ascii_case(hash) {
@@ -3898,6 +3914,9 @@ fn get_mod_info(slug: String) -> Result<Option<serde_json::Value>, String> {
 /// Creates a snapshot before restoring as a safety net.
 #[tauri::command(rename_all = "camelCase")]
 fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
+    if !backup_id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err("invalid backup id".into());
+    }
     let project_dir = manifest_parent(&path)?;
     let zip_path = project_dir
         .join(".tuffbox")
@@ -3921,6 +3940,14 @@ fn restore_backup(path: String, backup_id: String) -> Result<(), String> {
             continue;
         }
         let target = project_dir.join(&name);
+        let canonical = std::fs::canonicalize(&target)
+            .or_else(|_| std::fs::canonicalize(target.parent().unwrap_or(&project_dir)))
+            .map_err(|e| e.to_string())?;
+        if !canonical.starts_with(
+            std::fs::canonicalize(&project_dir).map_err(|e| e.to_string())?
+        ) {
+            return Err(format!("zip entry escapes project directory: {name}"));
+        }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -3975,9 +4002,14 @@ fn get_problematic_mods_config(path: String) -> Result<Vec<serde_json::Value>, S
 /// Launches the server profile and captures the log. Prepares the instance
 /// with server-safe mods, generates server.properties, and starts the JVM.
 #[tauri::command(rename_all = "camelCase")]
-async fn launch_server(path: String) -> Result<tuffbox_core::LaunchResult, String> {
-    record_launch(path.clone())?;
-    launch_profile(path, "server".into()).await
+async fn launch_server(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
+    record_launch(path.clone()).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
+    })?;
+    launch_profile(app, path, "server".into()).await
 }
 
 /// Generates a default server.properties file for the project.
@@ -4312,7 +4344,9 @@ fn backup_world(path: String, world_name: String) -> Result<String, String> {
         }
         Ok(())
     }
-    add_world(&mut zip, opts, &world_dir.parent().unwrap(), &world_dir)?;
+    let parent = world_dir.parent()
+        .ok_or_else(|| "world path has no parent directory".to_string())?;
+    add_world(&mut zip, opts, parent, &world_dir)?;
     zip.finish().map_err(|e| e.to_string())?;
     Ok(zip_path.to_string_lossy().to_string())
 }
@@ -4594,6 +4628,43 @@ fn delete_world_chunks(
         .collect();
     tuffbox_core::region::delete_world_chunks(&world_dir, &pairs)
         .map_err(|e| format!("Failed to delete chunks: {}", e))
+}
+
+/// Copies selected chunks from a world's region files to a clipboard payload.
+#[tauri::command(rename_all = "camelCase")]
+fn copy_world_chunks(
+    path: String,
+    world_name: String,
+    selections: Vec<ChunkSelection>,
+) -> Result<tuffbox_core::region::ChunkClipboard, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let pairs: Vec<(i32, i32, Vec<usize>)> = selections
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    tuffbox_core::region::copy_world_chunks(&world_dir, &world_name, &pairs)
+        .map_err(|e| format!("Failed to copy chunks: {}", e))
+}
+
+/// Pastes chunk data from a clipboard payload into a world's region files.
+#[tauri::command(rename_all = "camelCase")]
+fn paste_world_chunks(
+    path: String,
+    world_name: String,
+    clipboard: tuffbox_core::region::ChunkClipboard,
+    offset_x: Option<i32>,
+    offset_z: Option<i32>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region::paste_world_chunks(
+        &world_dir,
+        &clipboard,
+        offset_x.unwrap_or(0),
+        offset_z.unwrap_or(0),
+    )
+    .map_err(|e| format!("Failed to paste chunks: {}", e))
 }
 
 /// ── Export to GitHub Releases ──────────────────────────────────
@@ -5906,35 +5977,44 @@ fn has_crashed(path: String) -> Result<bool, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 async fn launch_with_quick_play(
+    app: tauri::AppHandle,
     path: String,
     profile: String,
     _quick_play_type: Option<String>,
     _quick_play_value: Option<String>,
-) -> Result<tuffbox_core::LaunchResult, String> {
-    launch_profile(path, profile).await
+) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
+    launch_profile(app, path, profile).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 async fn launch_profile(
+    app: tauri::AppHandle,
     path: String,
     profile: String,
-) -> Result<tuffbox_core::LaunchResult, String> {
+) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
     let log_path = PathBuf::from(&path)
         .parent()
         .map(|p| p.join("logs").join("latest.log"))
-        .ok_or_else(|| "manifest has no parent directory".to_string())?;
+        .ok_or_else(|| {
+            LaunchErrorInfo::new(
+                LaunchErrorKind::Unknown,
+                "manifest has no parent directory",
+            )
+        })?;
 
     {
         use std::io::Write;
         if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
+            })?;
         }
         let mut log = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(&log_path)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
         writeln!(log, "# Launching Minecraft...").ok();
         if let Some(project_dir) = PathBuf::from(&path).parent() {
             let launcher_log = project_dir.join("launcher_log.txt");
@@ -5942,7 +6022,7 @@ async fn launch_profile(
                 .append(true)
                 .create(true)
                 .open(&launcher_log)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
             writeln!(launcher, "# TuffBox launching profile {profile}").ok();
             if let Some(logs_dir) = log_path.parent() {
                 let _ = std::fs::write(
@@ -5953,52 +6033,75 @@ async fn launch_profile(
         }
     }
 
-    append_test_run_record(&path, &profile, &log_path).map_err(|e| e.to_string())?;
+    append_test_run_record(&path, &profile, &log_path).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
+    })?;
 
     let log_path_clone = log_path.clone();
-    let log_path_err = log_path.clone();
-    tokio::task::spawn_blocking(
-        move || match build_and_spawn(path, profile, log_path_clone) {
-            Ok(()) => {}
-            Err(e) => {
-                use std::io::Write;
-                if let Ok(mut log) = std::fs::OpenOptions::new().append(true).open(&log_path_err) {
-                    let _ = writeln!(log, "# Launch error: {e}");
-                }
-            }
-        },
-    );
-
-    Ok(tuffbox_core::LaunchResult {
-        exit_code: None,
-        log_path,
+    // Run the (blocking) install + spawn on a blocking thread, then await the
+    // result so install/prepare failures surface to the UI as a structured,
+    // categorized error instead of being swallowed into the log file.
+    let result = tokio::task::spawn_blocking(move || {
+        build_and_spawn(path, profile, log_path_clone, app)
     })
+    .await
+    .map_err(|e| {
+        LaunchErrorInfo::new(
+            LaunchErrorKind::Unknown,
+            format!("launch task panicked: {e}"),
+        )
+        .with_log(&log_path)
+    })?;
+
+    match result {
+        Ok(()) => Ok(tuffbox_core::LaunchResult {
+            exit_code: None,
+            log_path,
+        }),
+        Err(info) => Err(info),
+    }
 }
 
-fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(), String> {
+fn build_and_spawn(
+    path: String,
+    profile: String,
+    log_path: PathBuf,
+    app: tauri::AppHandle,
+) -> Result<(), LaunchErrorInfo> {
     let _instance_id = profile.clone();
     use tuffbox_core::{LaunchOptions, TestLauncher};
 
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
+    })?;
     let project_profile = manifest
         .profiles
         .iter()
         .find(|p| p.id == profile)
-        .ok_or_else(|| format!("profile {profile} not found"))?
+        .ok_or_else(|| {
+            LaunchErrorInfo::new(LaunchErrorKind::Install, format!("profile {profile} not found"))
+                .with_log(&log_path)
+        })?
         .clone();
 
     let java_path = manifest.java.as_ref().and_then(|j| j.path.clone());
     let java = if let Some(java_path) = java_path {
-        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path))
-            .map_err(|e| e.to_string())?
+        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
+            LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&log_path)
+        })?
     } else {
         // Auto-detect the best Java for this Minecraft version instead of
         // always grabbing whatever JVM happens to be newest on the system
         // — using e.g. Java 21 for Forge 1.20.1 (which needs Java 17)
         // fails deep inside Forge's bootstrap launcher with a confusing
         // module-system error instead of launching at all.
-        TestLauncher::find_java_for_minecraft(&manifest.minecraft.version)
-            .map_err(|e| e.to_string())?
+        TestLauncher::find_java_for_minecraft(&manifest.minecraft.version).map_err(|e| {
+            let kind = match e {
+                tuffbox_core::launcher::LauncherError::JavaNotFound => LaunchErrorKind::JavaMissing,
+                _ => LaunchErrorKind::Install,
+            };
+            LaunchErrorInfo::new(kind, e.to_string()).with_log(&log_path)
+        })?
     };
 
     let progress = tuffbox_core::mc_install::InstallProgress {
@@ -6020,7 +6123,10 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
     let game_dir = PathBuf::from(&path)
         .parent()
         .map(|p| p.to_path_buf())
-        .ok_or_else(|| "manifest has no parent directory".to_string())?;
+        .ok_or_else(|| {
+            LaunchErrorInfo::new(LaunchErrorKind::Unknown, "manifest has no parent directory")
+                .with_log(&log_path)
+        })?;
 
     // launcher_dir = общая папка TuffBox (где versions, libraries, assets)
     let launcher_dir = dirs::data_dir()
@@ -6028,8 +6134,12 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
         .unwrap_or_else(|| PathBuf::from("."))
         .join("TuffBox");
 
-    std::fs::create_dir_all(&launcher_dir).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&game_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&launcher_dir).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
+    })?;
+    std::fs::create_dir_all(&game_dir).map_err(|e| {
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
+    })?;
 
     progress.log(&format!("# Game directory: {}", game_dir.display()));
     progress.log(&format!("# Launcher directory: {}", launcher_dir.display()));
@@ -6081,7 +6191,7 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
 
     let options = LaunchOptions {
         profile_id: profile.clone(),
-        instance_dir: game_dir,
+        instance_dir: game_dir.clone(),
         memory_mb: project_profile.memory_mb.unwrap_or(4096),
         jvm_args: launch_jvm_args,
     };
@@ -6095,14 +6205,83 @@ fn build_and_spawn(path: String, profile: String, log_path: PathBuf) -> Result<(
         &progress,
         mc_token.as_deref(),
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        let msg = e.to_string();
+        let kind = tuffbox_core::launch_error::classify_build_error_kind(&msg);
+        LaunchErrorInfo::new(kind, msg).with_log(&log_path)
+    })?;
 
     progress.log("# Starting Java process...");
 
-    tuffbox_core::process::spawn_and_track_with_cleanup(profile, cmd, &log_path, cleanup_paths)
-        .map_err(|e| e.to_string())?;
+    // Crash callback: when the JVM exits non-zero, run the crash-analysis
+    // engine over the launch log and emit a categorized `launch-crashed`
+    // event the UI can turn into a Retry + "view log" action.
+    let crash_ctx = CrashExitCtx {
+        log_path: log_path.clone(),
+        mc_version: manifest.minecraft.version.clone(),
+        java_version: java.version.clone(),
+        loader_kind: tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string(),
+        loader_version: manifest.loader.version.clone(),
+        game_dir: game_dir.clone(),
+    };
+    let app_for_exit = app.clone();
+    let on_exit: Option<OnExit> = Some(Box::new(move |exit: ProcessExit| {
+        if exit.code == Some(0) {
+            return;
+        }
+        let info = classify_crash(&crash_ctx, exit.code);
+        let _ = app_for_exit.emit("launch-crashed", info);
+    }));
+
+    tuffbox_core::process::spawn_and_track_with_cleanup(profile, cmd, &log_path, cleanup_paths, on_exit)
+        .map_err(|e| {
+            let msg = e.to_string();
+            let kind = tuffbox_core::launch_error::classify_build_error_kind(&msg);
+            LaunchErrorInfo::new(kind, msg).with_log(&log_path)
+        })?;
 
     Ok(())
+}
+
+/// Context captured at launch time, used to analyze a crash when the JVM
+/// exits with a non-zero code.
+struct CrashExitCtx {
+    log_path: PathBuf,
+    mc_version: String,
+    java_version: String,
+    loader_kind: String,
+    loader_version: String,
+    game_dir: PathBuf,
+}
+
+/// Read the installed mod JAR names from a game directory (best-effort).
+fn read_installed_mods(game_dir: &PathBuf) -> Vec<String> {
+    std::fs::read_dir(game_dir.join("mods"))
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|name| name.ends_with(".jar"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Run the crash-analysis engine over the launch log and produce a
+/// user-facing, categorized launch error the UI can surface with a Retry
+/// action. The classification logic lives in `tuffbox_core` so it stays
+/// unit-testable without linking the Tauri runtime.
+fn classify_crash(ctx: &CrashExitCtx, exit_code: Option<i32>) -> LaunchErrorInfo {
+    let installed_mods = read_installed_mods(&ctx.game_dir);
+    tuffbox_core::crash_assistant::classify_launch_crash(
+        &ctx.log_path,
+        exit_code,
+        &ctx.mc_version,
+        &ctx.java_version,
+        &ctx.loader_kind,
+        &ctx.loader_version,
+        &installed_mods,
+    )
 }
 
 #[tauri::command]
@@ -6360,7 +6539,7 @@ async fn install_modpack(
             let folder =
                 curseforge_overrides_folder(&pack_path).unwrap_or_else(|_| "overrides".into());
             let n = extract_curseforge_overrides(&pack_path, &instance_dir, &folder)
-                .unwrap_or(0);
+                .map_err(|e| format!("failed to extract CurseForge overrides: {e}"))?;
             let _ = stash_curseforge_manifest(&pack_path, &instance_dir);
             let _ = app.emit(
                 "modpack-install-progress",
@@ -7101,10 +7280,10 @@ fn collect_tracked_project_files(
         if !path.is_file() {
             continue;
         }
-        let relative = path
-            .strip_prefix(project_dir)
-            .unwrap_or(&path)
-            .to_path_buf();
+        let relative = match path.strip_prefix(project_dir) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => continue,
+        };
         files.push(relative);
     }
     Ok(())
@@ -8729,6 +8908,8 @@ pub fn run() {
             read_world_info,
             read_world_map,
             delete_world_chunks,
+            copy_world_chunks,
+            paste_world_chunks,
             generate_github_release,
             localize,
             list_localizations,

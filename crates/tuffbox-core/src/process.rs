@@ -13,6 +13,17 @@ pub struct RunningProcess {
     pub log_path: PathBuf,
 }
 
+/// Outcome of a spawned process exiting, handed to [`OnExit`] callbacks.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessExit {
+    pub code: Option<i32>,
+}
+
+/// Callback invoked once the spawned process exits. Used by the launcher to
+/// detect JVM crashes and surface a categorized error instead of letting the
+/// game die silently.
+pub type OnExit = Box<dyn FnOnce(ProcessExit) + Send + 'static>;
+
 lazy_static::lazy_static! {
     static ref PROCESSES: Mutex<HashMap<u32, RunningProcess>> = Mutex::new(HashMap::new());
 }
@@ -47,7 +58,7 @@ pub fn spawn_and_track(
     cmd: Command,
     log_path: impl AsRef<Path>,
 ) -> std::io::Result<RunningProcess> {
-    spawn_and_track_with_cleanup(profile_id, cmd, log_path, Vec::new())
+    spawn_and_track_with_cleanup(profile_id, cmd, log_path, Vec::new(), None)
 }
 
 pub fn spawn_and_track_with_cleanup(
@@ -55,6 +66,7 @@ pub fn spawn_and_track_with_cleanup(
     mut cmd: Command,
     log_path: impl AsRef<Path>,
     cleanup_paths: Vec<PathBuf>,
+    on_exit: Option<OnExit>,
 ) -> std::io::Result<RunningProcess> {
     let log_path = log_path.as_ref().to_path_buf();
     if let Some(parent) = log_path.parent() {
@@ -110,13 +122,18 @@ pub fn spawn_and_track_with_cleanup(
         .insert(pid, info.clone());
 
     std::thread::spawn(move || {
-        let _ = child.wait();
+        let exit = child.wait();
         PROCESSES
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&pid);
         for path in cleanup_paths {
             let _ = std::fs::remove_file(path);
+        }
+        if let Some(cb) = on_exit {
+            cb(ProcessExit {
+                code: exit.ok().and_then(|s| s.code()),
+            });
         }
     });
 

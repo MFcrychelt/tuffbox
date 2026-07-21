@@ -16,6 +16,7 @@
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import type { SearchResult } from "../lib/api";
+  import { launchWithFeedback } from "../lib/launch";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library";
 
@@ -59,9 +60,7 @@
     launching = project.path;
     try {
       await invoke("set_last_opened_project", { path: project.path });
-      await invoke("launch_profile", { path: project.path, profile: "client" });
-    } catch (e) {
-      toasts.error(`Launch failed: ${e}`);
+      await launchWithFeedback({ path: project.path, profile: "client" });
     } finally {
       launching = null;
     }

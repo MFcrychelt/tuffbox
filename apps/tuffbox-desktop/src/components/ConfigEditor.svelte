@@ -1,7 +1,9 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch, ChevronRight, ChevronDown, File, Folder, FolderOpen } from "lucide-svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import EmptyState from "./EmptyState.svelte";
   import { projectPath } from "../lib/store";
   import CodeMirror from "svelte-codemirror-editor";
   import { json } from "@codemirror/lang-json";
@@ -318,7 +320,7 @@
   {/if}
 
   {#if !$projectPath}
-    <div class="empty">Open a project to edit configs.</div>
+    <EmptyState icon={FileCode2} title="No project selected" description="Open a project to edit configs." />
   {:else}
     <div class="layout">
       <aside class="file-panel">
@@ -431,10 +433,7 @@
           {/if}
 
         {:else}
-          <div class="empty editor-empty">
-            Select a config file from the tree. Supported: JSON, TOML, JS, ZS, YAML, properties.
-            <br /><small>Ctrl+S to save · syntax highlighting is automatic</small>
-          </div>
+          <EmptyState icon={FileCode2} compact={true} title="No file selected" description="Select a config file from the tree. Supported: JSON, TOML, JS, ZS, YAML, properties." />
         {/if}
       </section>
     </div>

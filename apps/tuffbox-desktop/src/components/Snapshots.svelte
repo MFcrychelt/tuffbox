@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText, Archive, Trash2 } from "lucide-svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import EmptyState from "./EmptyState.svelte";
   import { projectPath } from "../lib/store";
 
   type Snapshot = {
@@ -280,9 +281,9 @@
   {#if loading && snapshots.length === 0}
     <div class="loading">Loading snapshots...</div>
   {:else if !$projectPath}
-    <div class="empty">Open a project to manage snapshots.</div>
+    <EmptyState icon={History} title="No project selected" description="Open a project to manage snapshots." />
   {:else if snapshots.length === 0}
-    <div class="empty">No snapshots yet.</div>
+    <EmptyState icon={History} title="No snapshots yet" description="Create a snapshot to save the current state of your project." />
   {:else}
     {#if snapshots.length >= 2}
       <div class="compare-panel">

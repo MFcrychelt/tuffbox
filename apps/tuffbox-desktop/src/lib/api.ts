@@ -299,9 +299,16 @@ export interface TestRunRecord {
 }
 
 export interface LaunchResult {
-  profileId: string;
-  pid: number;
+  exitCode: number | null;
   logPath: string;
+}
+
+/// Structured launch error returned by the launch Tauri commands
+/// (mirrors `tuffbox_core::launch_error::LaunchErrorInfo`).
+export interface LaunchErrorInfo {
+  kind: string;
+  message: string;
+  logPath?: string;
 }
 
 export interface ExportResult {
@@ -477,6 +484,29 @@ export interface WorldInfo {
   thundering: boolean;
 }
 
+export interface WorldListItem {
+  name: string;
+  size: number;
+  sizeFormatted: string;
+  hasLevelDat: boolean;
+}
+
+export interface WorldDetail {
+  name: string;
+  seed: number;
+  gameType: number;
+  difficulty: number;
+  lastPlayed: string | null;
+  time: number;
+  spawnX: number;
+  spawnY: number;
+  spawnZ: number;
+  hardcore: boolean;
+  cheatsEnabled: boolean;
+  sizeBytes: number;
+  sizeFormatted: string;
+}
+
 export interface ChunkCell {
   present: number;
   lastModified: number;
@@ -500,6 +530,20 @@ export interface WorldMap {
   maxRegionZ: number;
   totalPresent: number;
   regionCount: number;
+}
+
+export interface ChunkData {
+  regionX: number;
+  regionZ: number;
+  index: number;
+  data: number[];
+  lastModified: number;
+}
+
+export interface ChunkClipboard {
+  sourceWorld: string;
+  chunks: ChunkData[];
+  bounds: [number, number, number, number];
 }
 
 export interface JavaRuntime {
@@ -752,12 +796,18 @@ export const api = {
 
   // ── Worlds ────────────────────────────────────────────────────────
   worlds: {
-    list(p?: string) { return cmd<WorldInfo[]>("list_worlds", pathArg(p)); },
-    readInfo(worldName: string, p?: string) { return cmd<WorldInfo>("read_world_info", { ...pathArg(p), worldName }); },
+    list(p?: string) { return cmd<WorldListItem[]>("list_worlds", pathArg(p)); },
+    readInfo(worldName: string, p?: string) { return cmd<WorldDetail>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
     map(worldName: string, p?: string) { return cmd<WorldMap>("read_world_map", { ...pathArg(p), worldName }); },
     deleteChunks(worldName: string, selections: { regionX: number; regionZ: number; indices: number[] }[], p?: string) {
       return cmd<number>("delete_world_chunks", { ...pathArg(p), worldName, selections });
+    },
+    copyChunks(worldName: string, selections: { regionX: number; regionZ: number; indices: number[] }[], p?: string) {
+      return cmd<ChunkClipboard>("copy_world_chunks", { ...pathArg(p), worldName, selections });
+    },
+    pasteChunks(worldName: string, clipboard: ChunkClipboard, offsetX?: number, offsetZ?: number, p?: string) {
+      return cmd<number>("paste_world_chunks", { ...pathArg(p), worldName, clipboard, offsetX: offsetX ?? 0, offsetZ: offsetZ ?? 0 });
     },
   },
 

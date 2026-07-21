@@ -3,6 +3,8 @@
   import { PlayCircle, RefreshCw, Terminal, TimerReset, CheckCircle2, AlertTriangle, XCircle, Shield, Server, FileText } from "lucide-svelte";
   import { onDestroy } from "svelte";
   import { projectPath } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
+  import { launchWithFeedback } from "../lib/launch";
 
   type Profile = {
     id: string;
@@ -83,7 +85,8 @@
     log = "";
     try {
       await invoke("record_launch", { path: $projectPath });
-      await invoke("launch_profile", { path: $projectPath, profile: selectedProfile });
+      const res = await launchWithFeedback({ path: $projectPath, profile: selectedProfile });
+      if (!res) { running = false; return; }
       await loadStats();
       message = `Started profile ${selectedProfile}. Watch latest.log below.`;
       await loadRuns();
@@ -194,7 +197,8 @@
         running = true; startedAt = Date.now(); error = null; message = null; log = "";
         try {
           await invoke("record_launch", { path: $projectPath });
-          await invoke("launch_server", { path: $projectPath });
+          const res = await launchWithFeedback({ path: $projectPath, profile: "server" });
+          if (!res) { running = false; return; }
           message = "Server started. Watch log below.";
           await loadStats();
           startPolling();
@@ -209,7 +213,7 @@
   {#if message}<div class="notice success">{message}</div>{/if}
 
   {#if !$projectPath}
-    <div class="empty">Open a project to run test profiles.</div>
+    <EmptyState icon={PlayCircle} title="No project selected" description="Open a project to run test profiles." />
   {:else if validationReport}
     <div class="validation-report">
       <div class="val-header">

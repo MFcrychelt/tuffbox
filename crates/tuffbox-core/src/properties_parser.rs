@@ -32,6 +32,10 @@ impl PropertiesFile {
             }
             if let Some(eq_pos) = trimmed.find('=') {
                 let key = trimmed[..eq_pos].trim().to_string();
+                if key.is_empty() {
+                    pending_comment.clear();
+                    continue;
+                }
                 let value = trimmed[eq_pos + 1..].trim().to_string();
                 entries.push(PropertyEntry {
                     key,

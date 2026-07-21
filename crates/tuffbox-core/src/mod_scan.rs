@@ -167,6 +167,18 @@ pub fn scan_mod_jar(jar_path: &Path) -> Result<ModScanResult, ModScanError> {
             return Ok(result);
         }
     }
+    // Legacy Forge (1.7–1.12): mcmod.info (JSON array).
+    if let Ok(content) = read_entry(&mut archive, "mcmod.info", &path_str) {
+        if let Some(result) = parse_mcmod_info(&content)? {
+            return Ok(result);
+        }
+    }
+    // Legacy Forge (1.6): mods.info (key=value properties).
+    if let Ok(content) = read_entry(&mut archive, "mods.info", &path_str) {
+        if let Some(result) = parse_mods_info(&content)? {
+            return Ok(result);
+        }
+    }
 
     Err(ModScanError::NoMetadata(path_str))
 }
@@ -226,6 +238,44 @@ fn parse_quilt_mod_json(content: &str, _path: &str) -> Result<Option<ModScanResu
     Ok(Some(ModScanResult {
         side,
         loader_hint: Some("quilt".into()),
+        raw_environment: None,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct McModInfoEntry {
+    #[serde(default, rename = "serverSideOnly")]
+    server_side_only: Option<bool>,
+    #[serde(default, rename = "clientSideOnly")]
+    client_side_only: Option<bool>,
+}
+
+fn parse_mcmod_info(content: &str) -> Result<Option<ModScanResult>, ModScanError> {
+    let entries: Vec<McModInfoEntry> = serde_json::from_str(content)
+        .map_err(|source| ModScanError::Parse { entry: "mcmod.info".into(), source })?;
+    let side = if entries.iter().any(|e| e.client_side_only == Some(true)) && !entries.iter().any(|e| e.server_side_only == Some(true)) {
+        Side::Client
+    } else if entries.iter().any(|e| e.server_side_only == Some(true)) && !entries.iter().any(|e| e.client_side_only == Some(true)) {
+        Side::Server
+    } else {
+        Side::Both
+    };
+    Ok(Some(ModScanResult {
+        side,
+        loader_hint: Some("forge".into()),
+        raw_environment: None,
+    }))
+}
+
+fn parse_mods_info(content: &str) -> Result<Option<ModScanResult>, ModScanError> {
+    let side = content.lines().any(|l| {
+        let lower = l.to_lowercase();
+        (lower.contains("side") && lower.contains("client") && !lower.contains("server"))
+            || lower.contains("clientsideonly=true")
+    });
+    Ok(Some(ModScanResult {
+        side: if side { Side::Client } else { Side::Both },
+        loader_hint: Some("forge".into()),
         raw_environment: None,
     }))
 }

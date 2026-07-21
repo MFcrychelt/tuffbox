@@ -2,6 +2,8 @@
   import { X, Loader2, RotateCcw, FileText, Folder } from "lucide-svelte";
   import { createEventDispatcher, onMount, onDestroy } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { trapFocus } from "../lib/focusTrap";
+  import CopyButton from "./CopyButton.svelte";
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
@@ -145,8 +147,8 @@
   });
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === "Escape" && dispatch("close")}>
-  <div class="modal" role="dialog" aria-modal="true">
+<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={() => {}}>
+  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("close") }}>
     <div class="modal-header">
       <div class="modal-header-left">
         <h2>Launch Log</h2>
@@ -171,9 +173,14 @@
           </div>
         {/if}
       </div>
-      <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
-        <X size={18} />
-      </button>
+      <div class="modal-header-right">
+        {#if log}
+          <CopyButton text={log} label="Copy log" />
+        {/if}
+        <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
+          <X size={18} />
+        </button>
+      </div>
     </div>
 
     <div class="modal-body">
@@ -243,6 +250,12 @@
   .modal-header h2 {
     font-size: 16px;
     font-weight: 800;
+  }
+
+  .modal-header-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   .icon-btn {

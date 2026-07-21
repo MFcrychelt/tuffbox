@@ -12,10 +12,15 @@
   import RecipeBrowser from "./components/RecipeBrowser.svelte";
   import QuestEditor from "./components/QuestEditor.svelte";
   import Library from "./components/Library.svelte";
+  import World from "./components/World.svelte";
   import ToastContainer from "./components/ToastContainer.svelte";
+  import KeyboardHelp from "./components/KeyboardHelp.svelte";
+  import CommandPalette from "./components/CommandPalette.svelte";
+  import ScrollToTopButton from "./components/ScrollToTopButton.svelte";
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { fly, fade } from "svelte/transition";
   import { projectPath, projectInfo, recentProjects } from "./lib/store";
   import { api } from "./lib/api";
 
@@ -24,6 +29,7 @@
     | "ide"
     | "mods"
     | "graph"
+    | "world"
     | "diagnostics"
     | "snapshots"
     | "configs"
@@ -34,6 +40,15 @@
     | "quests"
     | "library";
   let currentView: View = "dashboard";
+  let showShortcuts = false;
+  let showCommandPalette = false;
+  let contentEl: HTMLElement;
+
+  $: if (currentView) {
+    tick().then(() => {
+      document.querySelector(".content")?.scrollTo({ top: 0 });
+    });
+  }
 
   onMount(() => {
     const onOpenGraph = () => {
@@ -65,43 +80,83 @@
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
     };
   });
+
+  const VIEW_SET: Record<string, boolean> = {
+    dashboard: true, ide: true, mods: true, graph: true, world: true,
+    diagnostics: true, snapshots: true, configs: true, settings: true,
+    "project-settings": true, "ore-gen": true, recipes: true, quests: true, library: true,
+  };
+
+  function handleCommandPaletteNavigate(e: CustomEvent<string>) {
+    const id = e.detail;
+    if (id === "new-instance") {
+      import("./lib/store").then(({ newProjectOpen }) => {
+        currentView = "dashboard";
+        newProjectOpen.set(true);
+      });
+    } else if (id === "shortcuts") {
+      showShortcuts = true;
+    } else if (id in VIEW_SET) {
+      currentView = id as View;
+    }
+  }
 </script>
 
 <div class="app-shell">
   <Sidebar bind:currentView />
   <div class="main">
     <Header {currentView} />
-    <main class="content" class:ide-view={currentView === "ide"}>
-      {#if currentView === "dashboard"}
-        <Dashboard bind:currentView />
-      {:else if currentView === "ide"}
-        <IdeWorkspace />
-      {:else if currentView === "mods"}
-        <Mods />
-      {:else if currentView === "graph"}
-        <Graph />
-      {:else if currentView === "diagnostics"}
-        <Diagnostics />
-      {:else if currentView === "snapshots"}
-        <Snapshots />
-      {:else if currentView === "configs"}
-        <ConfigEditor />
-      {:else if currentView === "settings"}
-        <Settings />
-      {:else if currentView === "project-settings"}
-        <ProjectSettings onBack={() => (currentView = "dashboard")} />
-      {:else if currentView === "ore-gen"}
-        <OreGenVisualizer />
-      {:else if currentView === "recipes"}
-        <RecipeBrowser />
-      {:else if currentView === "quests"}
-        <QuestEditor />
-      {:else if currentView === "library"}
-        <Library bind:currentView />
-      {/if}
+    <main class="content" class:ide-view={currentView === "ide"} bind:this={contentEl}>
+      {#key currentView}
+        <div class="view-wrapper" in:fly={{ y: 8, duration: 200 }} out:fade={{ duration: 100 }}>
+          {#if currentView === "dashboard"}
+            <Dashboard bind:currentView />
+          {:else if currentView === "ide"}
+            <IdeWorkspace />
+          {:else if currentView === "mods"}
+            <Mods />
+          {:else if currentView === "graph"}
+            <Graph />
+          {:else if currentView === "diagnostics"}
+            <Diagnostics />
+          {:else if currentView === "snapshots"}
+            <Snapshots />
+          {:else if currentView === "configs"}
+            <ConfigEditor />
+          {:else if currentView === "settings"}
+            <Settings />
+          {:else if currentView === "project-settings"}
+            <ProjectSettings onBack={() => (currentView = "dashboard")} />
+          {:else if currentView === "ore-gen"}
+            <OreGenVisualizer />
+          {:else if currentView === "recipes"}
+            <RecipeBrowser />
+          {:else if currentView === "quests"}
+            <QuestEditor />
+          {:else if currentView === "world"}
+            <World />
+          {:else if currentView === "library"}
+            <Library bind:currentView />
+          {/if}
+        </div>
+      {/key}
     </main>
+    {#if currentView !== "ide"}
+      <ScrollToTopButton container={contentEl} />
+    {/if}
   </div>
 </div>
+
+<ToastContainer />
+{#if showShortcuts}
+  <KeyboardHelp on:close={() => (showShortcuts = false)} />
+{/if}
+{#if showCommandPalette}
+  <CommandPalette
+    on:close={() => (showCommandPalette = false)}
+    on:navigate={handleCommandPaletteNavigate}
+  />
+{/if}
 
 <svelte:window
   on:keydown={(e) => {
@@ -114,7 +169,14 @@
         case '5': currentView = 'configs'; e.preventDefault(); break;
         case '6': currentView = 'diagnostics'; e.preventDefault(); break;
         case '7': currentView = 'snapshots'; e.preventDefault(); break;
+        case '8': currentView = 'world'; e.preventDefault(); break;
       }
+    } else if (e.key === '?' && !showShortcuts) {
+      showShortcuts = true;
+      e.preventDefault();
+    } else if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
+      showCommandPalette = !showCommandPalette;
+      e.preventDefault();
     }
   }}
 />
@@ -143,10 +205,16 @@
     min-height: 0;
     overflow: auto;
     padding: 24px 32px;
+    position: relative;
   }
 
   .content.ide-view {
     overflow: hidden;
     padding: 0;
+  }
+
+  .view-wrapper {
+    height: 100%;
+    width: 100%;
   }
 </style>

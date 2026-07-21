@@ -177,13 +177,34 @@ impl ProgressCallback {
 }
 
 pub fn install_game(
-    mc_version: &str,
+    mc_version_raw: &str,
     loader_kind: &str,
     loader_version: &str,
     launcher_dir: &Path,
     java_path: &Path,
     progress: &InstallProgress,
 ) -> Result<InstalledVersion, InstallError> {
+    // Resolve symbolic versions (`latest`, `release`, `snapshot`, ...) to a
+    // concrete id up front. Without this, manifests that store an alias get
+    // an exact `.find()` against the version manifest and fail with the
+    // cryptic "Minecraft latest not found in manifest". Concrete versions
+    // pass through untouched and make no network call.
+    let resolved = crate::versions::resolve_minecraft_version_alias_offline(mc_version_raw, launcher_dir)
+        .map_err(|e| {
+            InstallError::MissingDownload(format!(
+                "could not resolve Minecraft version '{}': {e}. \
+                 Pin a concrete version (e.g. 1.20.1) or check your network connection.",
+                mc_version_raw
+            ))
+        })?;
+    let mc_version: &str = &resolved;
+    if mc_version != mc_version_raw {
+        progress.log(&format!(
+            "# Resolved Minecraft '{}' -> {}",
+            mc_version_raw, mc_version
+        ));
+    }
+
     let versions_dir = launcher_dir.join("versions");
     let libraries_dir = launcher_dir.join("libraries");
     let assets_dir = launcher_dir.join("assets");

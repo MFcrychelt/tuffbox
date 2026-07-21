@@ -40,25 +40,31 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { recentProjects, projectPath, projectInfo, authState, skinPath, type RecentProject, type SkinSource } from "../lib/store";
+  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, type RecentProject, type SkinSource } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
+  import { launchWithFeedback, registerLaunchCrashListener } from "../lib/launch";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LaunchLogModal from "./LaunchLogModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
+  import PromptDialog from "./PromptDialog.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests";
 
   let selectedPath: string | null = $projectPath;
-  let launching = false;
   let activeMenuPath: string | null = null;
   let menuAnchor: HTMLElement | null = null;
-  let showAddModal = false;
   let showLogModal = false;
   let showLoginModal = false;
   let showAccountManager = false;
+  let showWorldPrompt = false;
+  let worldPromptOptions: string[] = [];
+  let worldPromptTarget: RecentProject | null = null;
+  let showClonePrompt = false;
+  let clonePromptName = "";
+  let cloneTarget: RecentProject | null = null;
 
   $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
 
@@ -77,6 +83,10 @@
     if (selectedPath && !selectedProject && $recentProjects.length > 0) {
       selectProject($recentProjects[0].path);
     }
+
+    // Global handler for JVM crashes that happen after the launch command
+    // has returned "started" — surfaces a categorized, retryable toast.
+    registerLaunchCrashListener();
   });
 
   async function loadProject(path: string) {
@@ -100,16 +110,14 @@
 
   async function launch() {
     if (!selectedPath) return;
-    launching = true;
+    isLaunching.set(true);
     showLogModal = true;
-    try {
-      await invoke("set_last_opened_project", { path: selectedPath });
-      await invoke("launch_profile", { path: selectedPath, profile: "client" });
-    } catch (e) {
-      toasts.error(`Launch failed: ${e}`);
-    } finally {
-      launching = false;
-    }
+    await invoke("set_last_opened_project", { path: selectedPath });
+    await launchWithFeedback(
+      { path: selectedPath, profile: "client" },
+      { onStarted: () => { isLaunching.set(false); } },
+    );
+    isLaunching.set(false);
   }
 
   function openSettings() {
@@ -225,11 +233,9 @@
         try {
           const worlds: any[] = await invoke("list_worlds", { path: project.path });
           if (worlds.length === 0) { toasts.info("No worlds to backup."); break; }
-          const chosen = window.prompt(`Worlds: ${worlds.map((w: any) => w.name).join(", ")}\n\nEnter world name:`, worlds[0].name);
-          if (chosen) {
-            await invoke("backup_world", { path: project.path, worldName: chosen });
-            toasts.success(`World "${chosen}" backed up.`);
-          }
+          worldPromptOptions = worlds.map((w: any) => w.name);
+          worldPromptTarget = project;
+          showWorldPrompt = true;
         } catch (e) { toasts.error(String(e)); }
         finally { actionBusy = false; }
         break;
@@ -245,19 +251,11 @@
         await navigator.clipboard.writeText(project.path);
         toasts.success("Path copied to clipboard");
         break;
-      case "clone": {
-        const newName = window.prompt("Clone name:", `${project.info.name} copy`);
-        if (!newName) break;
-        actionBusy = true;
-        try {
-          const clonedPath = await invoke<string>("clone_project", { path: project.path, newName });
-          const info = await invoke("validate_project", { path: clonedPath });
-          recentProjects.add({ path: clonedPath, info: info as any });
-          toasts.success(`Cloned to: ${clonedPath}`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
+      case "clone":
+        clonePromptName = `${project.info.name} copy`;
+        cloneTarget = project;
+        showClonePrompt = true;
         break;
-      }
       case "share":
         actionBusy = true;
         try {
@@ -341,6 +339,28 @@
   }
 
   $: skinUrl = $authState.profile?.skinUrl ?? null;
+
+  async function confirmBackupWorld(worldName: string) {
+    showWorldPrompt = false;
+    if (!worldPromptTarget) return;
+    try {
+      await invoke("backup_world", { path: worldPromptTarget.path, worldName });
+      toasts.success(`World "${worldName}" backed up.`);
+    } catch (e) { toasts.error(String(e)); }
+  }
+
+  async function confirmClone(newName: string) {
+    showClonePrompt = false;
+    if (!cloneTarget || !newName.trim()) return;
+    actionBusy = true;
+    try {
+      const clonedPath = await invoke<string>("clone_project", { path: cloneTarget.path, newName: newName.trim() });
+      const info = await invoke("validate_project", { path: clonedPath });
+      recentProjects.add({ path: clonedPath, info: info as any });
+      toasts.success(`Cloned to: ${clonedPath}`);
+    } catch (e) { toasts.error(String(e)); }
+    finally { actionBusy = false; }
+  }
 </script>
 
 <svelte:window on:click={closeMenu} />
@@ -404,8 +424,8 @@
       <!-- Hero: Play button + project info -->
       <section class="hero">
         <div class="hero-left">
-          <button class="play-btn" on:click={launch} disabled={!selectedPath || launching}>
-            {#if launching}
+<button class="play-btn" on:click={launch} disabled={!selectedPath || $isLaunching}>
+{#if $isLaunching}
               <span class="spinner"></span>
               <span class="play-text">Launching...</span>
             {:else}
@@ -436,7 +456,7 @@
                 Folder
               </button>
             {/if}
-            <button class="action-btn accent" on:click={() => (showAddModal = true)}>
+            <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
               <Plus size={15} />
               New
             </button>
@@ -469,7 +489,7 @@
             </div>
             <h3>No instances yet</h3>
             <p>Create your first modpack instance to get started.</p>
-            <button class="action-btn accent" on:click={() => (showAddModal = true)}>
+            <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
               <Plus size={16} />
               Create instance
             </button>
@@ -496,7 +516,11 @@
                   <span class="tile-name">{project.info.name}</span>
                   <span class="tile-meta">
                     {project.info.minecraftVersion} · {project.info.loaderKind}
-                    {#if instanceSizes[project.path]} · {instanceSizes[project.path]}{/if}
+                    {#if loadingSizes[project.path]}
+                      <span class="size-loading">···</span>
+                    {:else if instanceSizes[project.path]}
+                      · {instanceSizes[project.path]}
+                    {/if}
                   </span>
                 </div>
                 <button class="tile-pin" class:pinned={pinnedPaths[project.path]} on:click={(e) => togglePin(e, project.path)} title={pinnedPaths[project.path] ? "Unpin" : "Pin"}>
@@ -567,7 +591,7 @@
               </div>
             {/each}
 
-            <button class="project-tile add-tile" on:click={() => (showAddModal = true)}>
+            <button class="project-tile add-tile" on:click={() => (newProjectOpen.set(true))}>
               <div class="tile-icon add-icon">
                 <Plus size={24} />
               </div>
@@ -617,15 +641,40 @@
   <AccountManager on:close={() => (showAccountManager = false)} />
 {/if}
 
-{#if showAddModal}
+{#if $newProjectOpen}
   <AddInstanceModal
-    on:close={() => (showAddModal = false)}
+    on:close={() => (newProjectOpen.set(false))}
     on:created={(e) => loadProject(e.detail)}
   />
 {/if}
 
 {#if showLogModal && selectedPath}
   <LaunchLogModal projectPath={selectedPath} on:close={() => (showLogModal = false)} />
+{/if}
+
+{#if showWorldPrompt}
+  <PromptDialog
+    title="Backup World"
+    message="Select a world to back up."
+    mode="select"
+    options={worldPromptOptions}
+    defaultValue={worldPromptOptions[0]}
+    confirmLabel="Backup"
+    on:confirm={(e) => confirmBackupWorld(e.detail)}
+    on:cancel={() => (showWorldPrompt = false)}
+  />
+{/if}
+
+{#if showClonePrompt}
+  <PromptDialog
+    title="Clone Instance"
+    message="Enter a name for the cloned instance."
+    mode="text"
+    defaultValue={clonePromptName}
+    confirmLabel="Clone"
+    on:confirm={(e) => confirmClone(e.detail)}
+    on:cancel={() => (showClonePrompt = false)}
+  />
 {/if}
 
 <style>
@@ -691,15 +740,6 @@
     background: rgba(27, 217, 106, 0.04);
   }
 
-  .account-avatar-btn.login {
-    padding: 8px 14px;
-    color: var(--text-secondary);
-  }
-
-  .account-avatar-btn.login:hover {
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
-  }
 
   .avatar-img {
     width: 32px;
@@ -956,10 +996,10 @@
   .spinner {
     width: 20px;
     height: 20px;
-    border: 2px solid rgba(0, 0, 0, 0.2);
+    border: 2.5px solid rgba(0, 0, 0, 0.15);
     border-top-color: #000;
     border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+    animation: spin 0.7s linear infinite;
   }
 
   @keyframes spin {
@@ -1064,6 +1104,15 @@
     font-size: 11px;
     color: var(--text-muted);
     text-transform: capitalize;
+  }
+
+  .size-loading {
+    animation: pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
   }
 
   .tile-pin {

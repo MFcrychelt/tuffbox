@@ -3,6 +3,7 @@
   import { createEventDispatcher, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { trapFocus } from "../lib/focusTrap";
 
   const dispatch = createEventDispatcher<{ close: void; selected: string }>();
 
@@ -39,8 +40,8 @@
   }
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === "Escape" && dispatch("close")}>
-  <div class="modal" role="dialog" aria-modal="true">
+<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={() => {}}>
+  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("close") }}>
     <div class="modal-header">
       <h2>
         <Search size={18} />
