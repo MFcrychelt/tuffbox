@@ -4617,15 +4617,28 @@ fn read_world_info(path: String, world_name: String) -> Result<serde_json::Value
 /// per-region 32x32 chunk grids with presence, last-modified time and a
 /// coarse generation status used for coloring.
 #[tauri::command(rename_all = "camelCase")]
-fn read_world_map(path: String, world_name: String) -> Result<serde_json::Value, String> {
+fn read_world_map(
+    path: String,
+    world_name: String,
+    dimension: Option<String>,
+) -> Result<serde_json::Value, String> {
     let project_dir = manifest_parent(&path)?;
     let world_dir = project_dir.join("saves").join(&world_name);
-    let map = tuffbox_core::region::read_world_map(&world_dir)?;
+    let map = tuffbox_core::region::read_world_map(&world_dir, dimension.as_deref())?;
     Ok(serde_json::to_value(&map).map_err(|e| e.to_string())?)
+}
+
+/// Lists dimensions that have a region folder for the given world.
+#[tauri::command(rename_all = "camelCase")]
+fn list_world_dimensions(path: String, world_name: String) -> Result<Vec<String>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    Ok(tuffbox_core::region::list_world_dimensions(&world_dir))
 }
 
 /// A region coordinate paired with the local chunk indices (0..1024) to clear.
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ChunkSelection {
     region_x: i32,
     region_z: i32,
@@ -4639,6 +4652,7 @@ fn delete_world_chunks(
     path: String,
     world_name: String,
     selections: Vec<ChunkSelection>,
+    dimension: Option<String>,
 ) -> Result<usize, String> {
     let project_dir = manifest_parent(&path)?;
     let world_dir = project_dir.join("saves").join(&world_name);
@@ -4646,7 +4660,7 @@ fn delete_world_chunks(
         .into_iter()
         .map(|s| (s.region_x, s.region_z, s.indices))
         .collect();
-    tuffbox_core::region::delete_world_chunks(&world_dir, &pairs)
+    tuffbox_core::region::delete_world_chunks(&world_dir, &pairs, dimension.as_deref())
         .map_err(|e| format!("Failed to delete chunks: {}", e))
 }
 
@@ -4656,6 +4670,7 @@ fn copy_world_chunks(
     path: String,
     world_name: String,
     selections: Vec<ChunkSelection>,
+    dimension: Option<String>,
 ) -> Result<tuffbox_core::region::ChunkClipboard, String> {
     let project_dir = manifest_parent(&path)?;
     let world_dir = project_dir.join("saves").join(&world_name);
@@ -4663,11 +4678,12 @@ fn copy_world_chunks(
         .into_iter()
         .map(|s| (s.region_x, s.region_z, s.indices))
         .collect();
-    tuffbox_core::region::copy_world_chunks(&world_dir, &world_name, &pairs)
+    tuffbox_core::region::copy_world_chunks(&world_dir, &world_name, &pairs, dimension.as_deref())
         .map_err(|e| format!("Failed to copy chunks: {}", e))
 }
 
 /// Pastes chunk data from a clipboard payload into a world's region files.
+/// `offset_x` / `offset_z` are **chunk** coordinate offsets (MCA Selector style).
 #[tauri::command(rename_all = "camelCase")]
 fn paste_world_chunks(
     path: String,
@@ -4675,6 +4691,7 @@ fn paste_world_chunks(
     clipboard: tuffbox_core::region::ChunkClipboard,
     offset_x: Option<i32>,
     offset_z: Option<i32>,
+    dimension: Option<String>,
 ) -> Result<usize, String> {
     let project_dir = manifest_parent(&path)?;
     let world_dir = project_dir.join("saves").join(&world_name);
@@ -4683,8 +4700,272 @@ fn paste_world_chunks(
         &clipboard,
         offset_x.unwrap_or(0),
         offset_z.unwrap_or(0),
+        dimension.as_deref(),
     )
     .map_err(|e| format!("Failed to paste chunks: {}", e))
+}
+
+/// Compacts region files (purge orphaned sectors after deletes).
+#[tauri::command(rename_all = "camelCase")]
+fn purge_world_regions(
+    path: String,
+    world_name: String,
+    dimension: Option<String>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region::purge_world_regions(&world_dir, dimension.as_deref())
+        .map_err(|e| format!("Failed to purge regions: {}", e))
+}
+
+/// Exports selected chunks into a destination folder (mini world).
+#[tauri::command(rename_all = "camelCase")]
+fn export_world_chunks(
+    path: String,
+    world_name: String,
+    selections: Vec<ChunkSelection>,
+    dest_dir: String,
+    dimension: Option<String>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let pairs: Vec<(i32, i32, Vec<usize>)> = selections
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    tuffbox_core::region::export_world_chunks(
+        &world_dir,
+        &pairs,
+        dimension.as_deref(),
+        std::path::Path::new(&dest_dir),
+    )
+    .map_err(|e| format!("Failed to export chunks: {}", e))
+}
+
+/// Import chunks from another world / export folder into the target world.
+#[tauri::command(rename_all = "camelCase")]
+fn import_world_chunks(
+    path: String,
+    world_name: String,
+    source_dir: String,
+    offset_x: Option<i32>,
+    offset_z: Option<i32>,
+    overwrite: Option<bool>,
+    y_offset: Option<i32>,
+    sections: Option<String>,
+    source_selections: Option<Vec<ChunkSelection>>,
+    target_selections: Option<Vec<ChunkSelection>>,
+    source_dimension: Option<String>,
+    dimension: Option<String>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let source_sels: Vec<(i32, i32, Vec<usize>)> = source_selections
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    let target_sels: Option<Vec<(i32, i32, Vec<usize>)>> = target_selections.map(|v| {
+        v.into_iter()
+            .map(|s| (s.region_x, s.region_z, s.indices))
+            .collect()
+    });
+    let opts = tuffbox_core::region::ImportOptions {
+        offset_x: offset_x.unwrap_or(0),
+        offset_z: offset_z.unwrap_or(0),
+        overwrite: overwrite.unwrap_or(true),
+        y_offset: y_offset.unwrap_or(0),
+        sections,
+    };
+    tuffbox_core::region::import_world_chunks(
+        &world_dir,
+        std::path::Path::new(&source_dir),
+        &source_sels,
+        source_dimension.as_deref(),
+        dimension.as_deref(),
+        &opts,
+        target_sels.as_deref(),
+    )
+    .map_err(|e| format!("Failed to import chunks: {}", e))
+}
+
+/// Render world map (or selection) to a PNG file on disk.
+#[tauri::command(rename_all = "camelCase")]
+fn render_world_map_png(
+    path: String,
+    world_name: String,
+    dest_path: String,
+    color_mode: Option<String>,
+    scale: Option<u32>,
+    selections: Option<Vec<ChunkSelection>>,
+    dimension: Option<String>,
+) -> Result<(u32, u32), String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let pairs: Vec<(i32, i32, Vec<usize>)> = selections
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    let mode = tuffbox_core::region::MapColorMode::parse(color_mode.as_deref().unwrap_or("status"));
+    tuffbox_core::region::render_world_map_png(
+        &world_dir,
+        dimension.as_deref(),
+        &pairs,
+        mode,
+        scale.unwrap_or(4),
+        std::path::Path::new(&dest_path),
+    )
+    .map_err(|e| format!("Failed to render map PNG: {}", e))
+}
+
+/// Select chunks by MCA-style map filter query.
+#[tauri::command(rename_all = "camelCase")]
+fn select_world_by_query(
+    path: String,
+    world_name: String,
+    query: String,
+    dimension: Option<String>,
+) -> Result<Vec<tuffbox_core::region_edit::ChunkRef>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region_edit::select_world_by_query(&world_dir, &query, dimension.as_deref())
+        .map_err(|e| format!("Failed to select by query: {}", e))
+}
+
+/// Warm world map region metadata cache.
+#[tauri::command(rename_all = "camelCase")]
+fn warm_world_map_cache(
+    path: String,
+    world_name: String,
+    dimension: Option<String>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region::warm_world_map_cache(&world_dir, dimension.as_deref())
+        .map_err(|e| format!("Failed to warm map cache: {}", e))
+}
+
+/// Clear world map region metadata cache.
+#[tauri::command(rename_all = "camelCase")]
+fn clear_world_map_cache(
+    path: String,
+    world_name: String,
+    dimension: Option<String>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region::clear_world_map_cache(&world_dir, dimension.as_deref())
+        .map_err(|e| format!("Failed to clear map cache: {}", e))
+}
+
+/// Swaps exactly two chunks (useful for repair after corruption).
+#[tauri::command(rename_all = "camelCase")]
+fn swap_world_chunks(
+    path: String,
+    world_name: String,
+    a: ChunkSelection,
+    b: ChunkSelection,
+    dimension: Option<String>,
+) -> Result<(), String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let ai = *a.indices.first().ok_or("chunk A needs one index")?;
+    let bi = *b.indices.first().ok_or("chunk B needs one index")?;
+    tuffbox_core::region::swap_world_chunks(
+        &world_dir,
+        (a.region_x, a.region_z, ai),
+        (b.region_x, b.region_z, bi),
+        dimension.as_deref(),
+    )
+    .map_err(|e| format!("Failed to swap chunks: {}", e))
+}
+
+/// Bulk NBT Changer (MCA Selector).
+#[tauri::command(rename_all = "camelCase")]
+fn change_world_chunks(
+    path: String,
+    world_name: String,
+    selections: Vec<ChunkSelection>,
+    change: tuffbox_core::region_edit::NbtChangeRequest,
+    dimension: Option<String>,
+) -> Result<usize, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let pairs: Vec<(i32, i32, Vec<usize>)> = selections
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    tuffbox_core::region_edit::change_world_chunks(
+        &world_dir,
+        &pairs,
+        &change,
+        dimension.as_deref(),
+    )
+    .map_err(|e| format!("Failed to change chunks: {}", e))
+}
+
+/// Read one chunk as an NBT tree for the Chunk Editor.
+#[tauri::command(rename_all = "camelCase")]
+fn read_chunk_editor(
+    path: String,
+    world_name: String,
+    region_x: i32,
+    region_z: i32,
+    index: usize,
+    dimension: Option<String>,
+    layer: Option<String>,
+) -> Result<tuffbox_core::region_edit::ChunkEditorData, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region_edit::read_chunk_editor(
+        &world_dir,
+        region_x,
+        region_z,
+        index,
+        dimension.as_deref(),
+        layer.as_deref(),
+    )
+    .map_err(|e| format!("Failed to read chunk: {}", e))
+}
+
+/// Write edited NBT tree back to disk.
+#[tauri::command(rename_all = "camelCase")]
+fn write_chunk_editor(
+    path: String,
+    world_name: String,
+    data: tuffbox_core::region_edit::ChunkEditorData,
+    dimension: Option<String>,
+) -> Result<(), String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    tuffbox_core::region_edit::write_chunk_editor(&world_dir, &data, dimension.as_deref())
+        .map_err(|e| format!("Failed to write chunk: {}", e))
+}
+
+/// Advanced content filter (palette / entities / structures).
+#[tauri::command(rename_all = "camelCase")]
+fn filter_world_chunks_advanced(
+    path: String,
+    world_name: String,
+    filter: tuffbox_core::region_edit::AdvancedChunkFilter,
+    selections: Option<Vec<ChunkSelection>>,
+    dimension: Option<String>,
+) -> Result<Vec<tuffbox_core::region_edit::ChunkRef>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let world_dir = project_dir.join("saves").join(&world_name);
+    let pairs: Vec<(i32, i32, Vec<usize>)> = selections
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| (s.region_x, s.region_z, s.indices))
+        .collect();
+    tuffbox_core::region_edit::filter_world_chunks_advanced(
+        &world_dir,
+        &pairs,
+        &filter,
+        dimension.as_deref(),
+    )
+    .map_err(|e| format!("Failed to filter chunks: {}", e))
 }
 
 /// ── Export to GitHub Releases ──────────────────────────────────
@@ -8993,9 +9274,22 @@ pub fn run() {
             integrations::publish_release,
             read_world_info,
             read_world_map,
+            list_world_dimensions,
             delete_world_chunks,
             copy_world_chunks,
             paste_world_chunks,
+            purge_world_regions,
+            export_world_chunks,
+            import_world_chunks,
+            select_world_by_query,
+            render_world_map_png,
+            warm_world_map_cache,
+            clear_world_map_cache,
+            swap_world_chunks,
+            change_world_chunks,
+            read_chunk_editor,
+            write_chunk_editor,
+            filter_world_chunks_advanced,
             generate_github_release,
             localize,
             list_localizations,

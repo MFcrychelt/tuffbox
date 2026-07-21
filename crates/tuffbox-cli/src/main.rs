@@ -44,6 +44,11 @@ enum Command {
         #[arg(short, long)]
         profile: Option<String>,
     },
+    /// MCA Selector-style world tools.
+    World {
+        #[command(subcommand)]
+        command: WorldCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -95,6 +100,141 @@ enum SnapshotCommand {
     },
     /// Rollback project to a snapshot.
     Rollback { project_dir: PathBuf, id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum WorldCommand {
+    /// Print a compact JSON map overview for a world dimension.
+    Map {
+        /// Path to the world save folder (contains region/).
+        world: PathBuf,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+    },
+    /// Delete chunks from a selection CSV (MCA Selector format).
+    Delete {
+        world: PathBuf,
+        #[arg(long)]
+        selection: PathBuf,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+    },
+    /// Export selected chunks to an empty folder.
+    Export {
+        world: PathBuf,
+        #[arg(long)]
+        selection: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+    },
+    /// Change NBT fields (`Status = full, InhabitedTime = 0`).
+    Change {
+        world: PathBuf,
+        #[arg(long)]
+        fields: String,
+        #[arg(long)]
+        selection: Option<PathBuf>,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Content filter → write selection CSV.
+    Filter {
+        world: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        palette: Option<String>,
+        #[arg(long)]
+        entities: Option<String>,
+        #[arg(long)]
+        structures: Option<String>,
+        #[arg(long)]
+        min_entities: Option<u32>,
+        #[arg(long)]
+        selection: Option<PathBuf>,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+        #[arg(long, default_value_t = 0)]
+        radius: i32,
+    },
+    /// Select chunks by map filter query → CSV (`InhabitedTime < 100 AND Status = full`).
+    Select {
+        world: PathBuf,
+        #[arg(long)]
+        query: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+        #[arg(long, default_value_t = 0)]
+        radius: i32,
+    },
+    /// Import chunks from another world / export folder (MCA Selector Chunk Import).
+    Import {
+        /// Target world folder.
+        world: PathBuf,
+        /// Source world or export folder (contains region/).
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        selection: Option<PathBuf>,
+        /// Only import into this target selection (CSV).
+        #[arg(long)]
+        into_selection: Option<PathBuf>,
+        #[arg(long, default_value_t = 0)]
+        offset_x: i32,
+        #[arg(long, default_value_t = 0)]
+        offset_z: i32,
+        /// Vertical section offset (×16 blocks).
+        #[arg(long, default_value_t = 0)]
+        y_offset: i32,
+        /// Keep only these sections (`all`, `:-4`, `0:4`).
+        #[arg(long)]
+        sections: Option<String>,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+        #[arg(long)]
+        source_dim: Option<String>,
+        /// Skip destinations that already have a chunk.
+        #[arg(long)]
+        no_overwrite: bool,
+    },
+    /// Render world/selection as a PNG image.
+    Image {
+        world: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        selection: Option<PathBuf>,
+        #[arg(long, default_value = "status")]
+        mode: String,
+        #[arg(long, default_value_t = 4)]
+        scale: u32,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+    },
+    /// Warm region metadata cache (speeds up subsequent map reads).
+    Cache {
+        world: PathBuf,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+    },
+    /// Clear region metadata cache for a world.
+    CacheClear {
+        world: PathBuf,
+        #[arg(long)]
+        dim: Option<String>,
+    },
+    /// Compact region/entities/poi files.
+    Purge {
+        world: PathBuf,
+        #[arg(long, default_value = "overworld")]
+        dim: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -319,13 +459,13 @@ fn main() -> anyhow::Result<()> {
                 .parent()
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| {
-                    log::warn!("manifest path has no parent directory, falling back to current dir");
+                    eprintln!("warning: manifest path has no parent directory, falling back to current dir");
                     PathBuf::from(".")
                 });
             let launcher_dir = dirs::data_dir()
                 .or_else(dirs::home_dir)
                 .unwrap_or_else(|| {
-                    log::warn!("could not determine data/home directory, falling back to current dir");
+                    eprintln!("warning: could not determine data/home directory, falling back to current dir");
                     PathBuf::from(".")
                 })
                 .join("TuffBox");
@@ -362,8 +502,258 @@ fn main() -> anyhow::Result<()> {
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        Command::World { command } => run_world_command(command)?,
     }
 
+    Ok(())
+}
+
+fn run_world_command(command: WorldCommand) -> anyhow::Result<()> {
+    fn estr(e: String) -> anyhow::Error {
+        anyhow::Error::msg(e)
+    }
+    match command {
+        WorldCommand::Map { world, dim } => {
+            let map = tuffbox_core::region::read_world_map(&world, Some(&dim)).map_err(estr)?;
+            println!(
+                "{}",
+                serde_json::json!({
+                    "dimension": map.dimension,
+                    "regionCount": map.region_count,
+                    "totalPresent": map.total_present,
+                    "minRegionX": map.min_region_x,
+                    "maxRegionX": map.max_region_x,
+                    "minRegionZ": map.min_region_z,
+                    "maxRegionZ": map.max_region_z,
+                })
+            );
+        }
+        WorldCommand::Delete {
+            world,
+            selection,
+            dim,
+        } => {
+            let refs = tuffbox_core::region_edit::load_selection_csv_resolved(
+                &world,
+                &selection,
+                Some(&dim),
+            )
+            .map_err(estr)?;
+            let sels = tuffbox_core::region_edit::chunk_refs_to_selections(&refs);
+            let n = tuffbox_core::region::delete_world_chunks(&world, &sels, Some(&dim))
+                .map_err(estr)?;
+            println!("deleted {n} chunk entries from {}", world.display());
+        }
+        WorldCommand::Export {
+            world,
+            selection,
+            output,
+            dim,
+        } => {
+            let refs = tuffbox_core::region_edit::load_selection_csv_resolved(
+                &world,
+                &selection,
+                Some(&dim),
+            )
+            .map_err(estr)?;
+            let sels = tuffbox_core::region_edit::chunk_refs_to_selections(&refs);
+            let n = tuffbox_core::region::export_world_chunks(&world, &sels, Some(&dim), &output)
+                .map_err(estr)?;
+            println!("exported {n} chunk entries → {}", output.display());
+        }
+        WorldCommand::Change {
+            world,
+            fields,
+            selection,
+            dim,
+            force,
+        } => {
+            let mut change =
+                tuffbox_core::region_edit::parse_change_fields(&fields).map_err(estr)?;
+            if force {
+                change.force = true;
+            }
+            let refs = if let Some(sel) = selection {
+                tuffbox_core::region_edit::load_selection_csv_resolved(&world, &sel, Some(&dim))
+                    .map_err(estr)?
+            } else {
+                tuffbox_core::region_edit::list_present_chunks(&world, Some(&dim)).map_err(estr)?
+            };
+            let sels = tuffbox_core::region_edit::chunk_refs_to_selections(&refs);
+            let n = tuffbox_core::region_edit::change_world_chunks(
+                &world,
+                &sels,
+                &change,
+                Some(&dim),
+            )
+            .map_err(estr)?;
+            println!("changed {n} chunks in {}", world.display());
+        }
+        WorldCommand::Filter {
+            world,
+            output,
+            palette,
+            entities,
+            structures,
+            min_entities,
+            selection,
+            dim,
+            radius,
+        } => {
+            let scope = if let Some(sel) = selection {
+                let refs = tuffbox_core::region_edit::load_selection_csv_resolved(
+                    &world,
+                    &sel,
+                    Some(&dim),
+                )
+                .map_err(estr)?;
+                tuffbox_core::region_edit::chunk_refs_to_selections(&refs)
+            } else {
+                Vec::new()
+            };
+            let filter = tuffbox_core::region_edit::AdvancedChunkFilter {
+                entity_names: entities,
+                structure_names: structures,
+                palette_names: palette,
+                min_entities,
+                max_entities: None,
+            };
+            let mut hits = tuffbox_core::region_edit::filter_world_chunks_advanced(
+                &world,
+                &scope,
+                &filter,
+                Some(&dim),
+            )
+            .map_err(estr)?;
+            if radius > 0 {
+                hits = tuffbox_core::region_edit::expand_chunk_refs(&hits, radius);
+            }
+            let csv = tuffbox_core::region_edit::write_selection_csv(&hits, false);
+            std::fs::write(&output, csv)?;
+            println!("wrote {} chunk(s) → {}", hits.len(), output.display());
+        }
+        WorldCommand::Select {
+            world,
+            query,
+            output,
+            dim,
+            radius,
+        } => {
+            let mut hits = tuffbox_core::region_edit::select_world_by_query(&world, &query, Some(&dim))
+                .map_err(estr)?;
+            if radius > 0 {
+                hits = tuffbox_core::region_edit::expand_chunk_refs(&hits, radius);
+            }
+            let csv = tuffbox_core::region_edit::write_selection_csv(&hits, false);
+            std::fs::write(&output, csv)?;
+            println!("selected {} chunk(s) → {}", hits.len(), output.display());
+        }
+        WorldCommand::Import {
+            world,
+            from,
+            selection,
+            into_selection,
+            offset_x,
+            offset_z,
+            y_offset,
+            sections,
+            dim,
+            source_dim,
+            no_overwrite,
+        } => {
+            let src_dim = source_dim.as_deref().unwrap_or(&dim);
+            let source_sels = if let Some(sel) = selection {
+                let refs = tuffbox_core::region_edit::load_selection_csv_resolved(
+                    &from,
+                    &sel,
+                    Some(src_dim),
+                )
+                .map_err(estr)?;
+                tuffbox_core::region_edit::chunk_refs_to_selections(&refs)
+            } else {
+                Vec::new()
+            };
+            let target_only = if let Some(sel) = into_selection {
+                let refs = tuffbox_core::region_edit::load_selection_csv_resolved(
+                    &world,
+                    &sel,
+                    Some(&dim),
+                )
+                .map_err(estr)?;
+                Some(tuffbox_core::region_edit::chunk_refs_to_selections(&refs))
+            } else {
+                None
+            };
+            let opts = tuffbox_core::region::ImportOptions {
+                offset_x,
+                offset_z,
+                overwrite: !no_overwrite,
+                sections,
+                y_offset,
+            };
+            let n = tuffbox_core::region::import_world_chunks(
+                &world,
+                &from,
+                &source_sels,
+                Some(src_dim),
+                Some(&dim),
+                &opts,
+                target_only.as_deref(),
+            )
+            .map_err(estr)?;
+            println!(
+                "imported {n} chunk entries from {} → {} (offset {offset_x},{offset_z} y={y_offset})",
+                from.display(),
+                world.display()
+            );
+        }
+        WorldCommand::Image {
+            world,
+            output,
+            selection,
+            mode,
+            scale,
+            dim,
+        } => {
+            let sels = if let Some(sel) = selection {
+                let refs = tuffbox_core::region_edit::load_selection_csv_resolved(
+                    &world,
+                    &sel,
+                    Some(&dim),
+                )
+                .map_err(estr)?;
+                tuffbox_core::region_edit::chunk_refs_to_selections(&refs)
+            } else {
+                Vec::new()
+            };
+            let color = tuffbox_core::region::MapColorMode::parse(&mode);
+            let (w, h) = tuffbox_core::region::render_world_map_png(
+                &world,
+                Some(&dim),
+                &sels,
+                color,
+                scale,
+                &output,
+            )
+            .map_err(estr)?;
+            println!("wrote {w}×{h} PNG → {}", output.display());
+        }
+        WorldCommand::Cache { world, dim } => {
+            let n = tuffbox_core::region::warm_world_map_cache(&world, Some(&dim)).map_err(estr)?;
+            let dir = tuffbox_core::region::world_map_cache_dir(&world, &dim).map_err(estr)?;
+            println!("cached {n} region(s) → {}", dir.display());
+        }
+        WorldCommand::CacheClear { world, dim } => {
+            let n = tuffbox_core::region::clear_world_map_cache(&world, dim.as_deref())
+                .map_err(estr)?;
+            println!("cleared {n} cache file(s) for {}", world.display());
+        }
+        WorldCommand::Purge { world, dim } => {
+            let n =
+                tuffbox_core::region::purge_world_regions(&world, Some(&dim)).map_err(estr)?;
+            println!("purged {n} region file(s) in {}", world.display());
+        }
+    }
     Ok(())
 }
 

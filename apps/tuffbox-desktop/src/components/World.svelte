@@ -58,23 +58,27 @@
     }
   }
 
-  function gameTypeLabel(t: number): string {
-    switch (t) {
+  function gameTypeLabel(t: string | number): string {
+    if (typeof t === "string" && t.length > 0 && isNaN(Number(t))) return t;
+    const n = typeof t === "number" ? t : Number(t);
+    switch (n) {
       case 0: return "Survival";
       case 1: return "Creative";
       case 2: return "Adventure";
       case 3: return "Spectator";
-      default: return `Type ${t}`;
+      default: return String(t ?? "—");
     }
   }
 
-  function difficultyLabel(d: number): string {
-    switch (d) {
+  function difficultyLabel(d: string | number): string {
+    if (typeof d === "string" && d.length > 0 && isNaN(Number(d))) return d;
+    const n = typeof d === "number" ? d : Number(d);
+    switch (n) {
       case 0: return "Peaceful";
       case 1: return "Easy";
       case 2: return "Normal";
       case 3: return "Hard";
-      default: return `Level ${d}`;
+      default: return String(d ?? "—");
     }
   }
 

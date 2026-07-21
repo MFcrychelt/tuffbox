@@ -721,10 +721,17 @@
   $: renderedEdges = showAllEdges
     ? displayEdges
     : displayEdges.filter((e) => {
-        // Only the pure-runtime links (loader/minecraft/java) are hidden by
-        // default; reveal them for the selected node. Everything else —
-        // Requires, Optional, Conflicts, BreaksWith, Replaces — is always drawn.
+        // Pure runtime links (loader/minecraft/java) — only for the selected node.
         if (RUNTIME_EDGE_KINDS.includes(e.kind)) {
+          return !!selectedId && (e.from === selectedId || e.to === selectedId);
+        }
+        // Hub fan-in (everything → fabric-api etc.) — hide unless selected.
+        if (e.kind === "Requires" && hubTargetIds.has(e.to)) {
+          return !!selectedId && (e.from === selectedId || e.to === selectedId);
+        }
+        // Optional integrations across the whole pack drown the canvas; keep
+        // them only when a node is selected or when the user opts into "All edges".
+        if (e.kind === "Optional") {
           return !!selectedId && (e.from === selectedId || e.to === selectedId);
         }
         return true;
@@ -1035,7 +1042,11 @@
     return MOD_GROUPS.find((g) => g.key === "qol")!;
   }
 
+  // Bump when layout algorithm parameters change so cached graphs re-seed.
+  const LAYOUT_VERSION = "v3-pitch96";
+
   $: layoutKey = [
+    LAYOUT_VERSION,
     ...displayNodes.map((n) => n.id).sort(),
     ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
     groupMeta.map((g) => g.key).join(","),
@@ -1074,8 +1085,10 @@
       node.kind === "Profile";
 
     // Links that actually shape the layout: real mod-to-mod relations only.
+    // Optional edges are visual-only — including them in the link force pulls
+    // unrelated clusters into each other on large packs.
     const simLinks = displayEdges
-      .filter((e) => !HUB_EDGE_KINDS.includes(e.kind))
+      .filter((e) => !HUB_EDGE_KINDS.includes(e.kind) && e.kind !== "Optional")
       .map((e) => ({ source: e.from, target: e.to, ...e }));
     const linkId = (value: any) => (typeof value === "object" && value ? value.id : value);
     const simDegree = new Map<string, number>();
@@ -1102,17 +1115,20 @@
       })
       .sort((a, b) => groupOrder.indexOf(a.key) - groupOrder.indexOf(b.key));
 
-    // Disc sizing: phyllotaxis radius for a cluster of n members.
-    const SPACING = 58;
-    const discRadius = (n: number) => (SPACING * Math.sqrt(Math.max(1, n))) / 2 + 36;
+    // Center-to-center pitch for sunflower packing (icon 48px + label clearance).
+    // The previous SPACING/2 ≈ 29px packed icons on top of each other.
+    const NODE_PITCH = 96;
+    const discRadius = (n: number) => NODE_PITCH * Math.sqrt(Math.max(1, n)) + 56;
 
-    // Ring placement: each cluster gets an arc proportional to its diameter,
-    // so discs are spaced evenly around the centre and never touch.
-    const arcWidths = clusters.map((c) => 2 * discRadius(c.members.length) + 90);
-    const ringRadius = Math.max(360, arcWidths.reduce((a, b) => a + b, 0) / (2 * Math.PI));
-    const canvasSpan = (ringRadius + Math.max(300, ...clusters.map((c) => discRadius(c.members.length))) + 140) * 2;
-    canvasWidth = Math.max(1500, canvasSpan);
-    canvasHeight = Math.max(1000, canvasSpan);
+    // Ring placement: each cluster gets an arc from its diameter + gap so
+    // neighbouring discs never touch.
+    const CLUSTER_GAP = 160;
+    const arcWidths = clusters.map((c) => 2 * discRadius(c.members.length) + CLUSTER_GAP);
+    const ringRadius = Math.max(420, arcWidths.reduce((a, b) => a + b, 0) / (2 * Math.PI));
+    const maxDisc = Math.max(280, ...clusters.map((c) => discRadius(c.members.length)));
+    const canvasSpan = (ringRadius + maxDisc + 180) * 2;
+    canvasWidth = Math.max(1800, canvasSpan);
+    canvasHeight = Math.max(1200, canvasSpan);
     const cx = canvasWidth / 2;
     const cy = canvasHeight / 2;
 
@@ -1144,7 +1160,7 @@
         color: def.color,
         x: anchor.x,
         y: anchor.y,
-        r: discRadius(cluster.members.length) + 30,
+        r: discRadius(cluster.members.length) + 24,
       };
     });
 
@@ -1156,8 +1172,8 @@
     coreNodes.forEach((node, i) => {
       const angle = (i / Math.max(1, coreNodes.length)) * Math.PI * 2 - Math.PI / 2;
       corePos.set(node.id, {
-        x: cx + Math.cos(angle) * (coreNodes.length > 1 ? 70 : 0),
-        y: cy + Math.sin(angle) * (coreNodes.length > 1 ? 70 : 0),
+        x: cx + Math.cos(angle) * (coreNodes.length > 1 ? 90 : 0),
+        y: cy + Math.sin(angle) * (coreNodes.length > 1 ? 90 : 0),
       });
     });
     const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
@@ -1174,7 +1190,7 @@
       if (!core) {
         const cluster = clusters.find((c) => c.key === clusterOf.get(node.id));
         const idx = Math.max(0, cluster?.members.findIndex((m) => m.id === node.id) ?? 0);
-        const r = (SPACING * Math.sqrt(idx + 0.5)) / 2;
+        const r = NODE_PITCH * Math.sqrt(idx + 0.5);
         const theta = idx * GOLDEN_ANGLE;
         x = anchor.x + Math.cos(theta) * r;
         y = anchor.y + Math.sin(theta) * r;
@@ -1207,38 +1223,34 @@
 
     if (simulation) simulation.stop();
 
-    // Polish-only physics on an already-tidy seed:
-    //  - collide resolves the small spacing slack from the phyllotaxis;
-    //  - strong springs hold every mod at its cluster anchor (0.12 toward its
-    //    own anchor, not the canvas centre — this is what stops the knot);
-    //  - intra-cluster links pull related mods together inside their disc;
-    //  - hub edges are excluded (see HUB_EDGE_KINDS above), charge is weak
-    //    and short-range so neighbouring clusters don't interfere.
-    const margin = 80;
+    // Polish physics on a tidy seed: collide prevents icon/label overlap,
+    // soft springs keep mods near their cluster, weak links refine local groups.
+    const collideRadius = (d: LayoutNode) => nodeSize(d) / 2 + 30;
+    const margin = 100;
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
-      .force("charge", d3.forceManyBody<LayoutNode>().strength(-120).distanceMax(220))
+      .force("charge", d3.forceManyBody<LayoutNode>().strength(-260).distanceMax(320))
       .force(
         "link",
         d3
           .forceLink(simLinks.filter((l) => clusterOf.get(linkId(l.source)) === clusterOf.get(linkId(l.target))))
           .id((d: any) => d.id)
-          .distance(110)
-          .strength(0.15),
+          .distance(NODE_PITCH * 1.35)
+          .strength(0.06),
       )
       .force(
         "collide",
         d3
           .forceCollide<LayoutNode>()
-          .radius((d) => nodeSize(d) / 2 + 12)
-          .strength(0.9)
-          .iterations(2),
+          .radius(collideRadius)
+          .strength(1)
+          .iterations(3),
       )
-      .force("x", d3.forceX<LayoutNode>((d) => d.hubX).strength((d) => (d.isHub ? 0 : 0.12)))
-      .force("y", d3.forceY<LayoutNode>((d) => d.hubY).strength((d) => (d.isHub ? 0 : 0.12)))
-      .alpha(0.7)
-      .alphaDecay(0.08)
-      .velocityDecay(0.5)
+      .force("x", d3.forceX<LayoutNode>((d) => d.hubX).strength((d) => (d.isHub ? 0 : 0.05)))
+      .force("y", d3.forceY<LayoutNode>((d) => d.hubY).strength((d) => (d.isHub ? 0 : 0.05)))
+      .alpha(0.85)
+      .alphaDecay(0.06)
+      .velocityDecay(0.45)
       .on("tick", () => {
         for (const d of simNodes) {
           d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
@@ -1251,6 +1263,21 @@
           d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
           d.y = Math.max(margin, Math.min(canvasHeight - margin, d.y ?? cy));
         }
+        // Refit cluster halos to settled positions so neighbouring blobs don't
+        // sit under the wrong category label.
+        groupMeta = groupMeta.map((group) => {
+          const members = simNodes.filter((n) => n.groupKey === group.key && !n.isHub);
+          if (members.length === 0) return group;
+          const gx = members.reduce((s, n) => s + (n.x ?? 0), 0) / members.length;
+          const gy = members.reduce((s, n) => s + (n.y ?? 0), 0) / members.length;
+          let maxR = 80;
+          for (const n of members) {
+            const dx = (n.x ?? 0) - gx;
+            const dy = (n.y ?? 0) - gy;
+            maxR = Math.max(maxR, Math.hypot(dx, dy) + collideRadius(n) + 12);
+          }
+          return { ...group, x: gx, y: gy, r: maxR };
+        });
         updateGraphDom();
         if (resetViewOnNextLayout) {
           fitToContent();
@@ -1625,9 +1652,11 @@
           class="ghost mini edge-toggle"
           class:active={showAllEdges}
           on:click={() => (showAllEdges = !showAllEdges)}
-          title={showAllEdges ? "Show only hard deps & conflicts" : "Show all edges (runtime, optional, API fan-in)"}
+          title={showAllEdges
+            ? "Hide optional / hub / runtime edges"
+            : "Show optional, hub fan-in and runtime edges"}
         >
-          {showAllEdges ? "Curated edges" : "All edges"}
+          {showAllEdges ? "Fewer edges" : "More edges"}
         </button>
         <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
           {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}

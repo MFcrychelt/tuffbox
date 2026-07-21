@@ -41,6 +41,7 @@ pub mod environment;
 pub mod knowledge;
 pub mod level_dat;
 pub mod region;
+pub mod region_edit;
 pub mod overrides;
 pub mod properties_parser;
 pub mod recipe_layout;

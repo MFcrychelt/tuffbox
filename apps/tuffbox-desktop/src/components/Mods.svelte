@@ -367,6 +367,7 @@ import { trapFocus } from "../lib/focusTrap";
     unlistenProgress?.();
     unlistenBatch?.();
     unlistenUpdateProgress?.();
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   });
 
   let addOpen = false;
@@ -375,6 +376,8 @@ import { trapFocus } from "../lib/focusTrap";
   let searchResults: SearchResult[] = [];
   let searchTotal = 0;
   let searchLoading = false;
+  let searchRequestId = 0;
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedSide = "auto";
   let pendingInstallOptional = true;
   let filterGameVersion = "";
@@ -455,6 +458,10 @@ import { trapFocus } from "../lib/focusTrap";
 
   function canUpdateMod(mod: ModRow): boolean {
     return mod.source === "modrinth" && !!mod.updateAvailable;
+  }
+
+  function canChangeVersion(mod: ModRow): boolean {
+    return mod.source === "modrinth" && !!mod.projectId;
   }
 
   function isCurseForgeResult(result: SearchResult | null | undefined): boolean {
@@ -591,7 +598,11 @@ import { trapFocus } from "../lib/focusTrap";
   $: compatibleVersionCount = availableVersions.filter((v) => v.compatible !== false).length;
 
   async function openVersionPicker(mod: ModRow) {
-    if (!$projectPath || !mod.projectId) return;
+    if (!$projectPath) return;
+    if (!mod.projectId) {
+      toasts.error("Cannot change version: missing Modrinth project ID");
+      return;
+    }
     versionPickerMod = mod;
     versionPickerLoading = true;
     versionPickerError = null;
@@ -667,13 +678,15 @@ import { trapFocus } from "../lib/focusTrap";
     confirmOpen = false;
     mutating = true;
     error = null;
+    // Optimistic local remove so the list stays interactive (no full reload).
+    removeModLocally(target.id);
     try {
       await invoke("remove_project_mod", { path: $projectPath, modId: target.id });
       confirmMod = null;
-      await load(true);
     } catch (e) {
       error = `Failed to remove ${target.name}: ${String(e)}`;
       confirmMod = null;
+      await reloadModsSilent();
     } finally {
       mutating = false;
     }
@@ -743,7 +756,7 @@ import { trapFocus } from "../lib/focusTrap";
         error = `${failedDownloads} download(s) failed — check the progress window.`;
       }
       updateList = [];
-      await load(true);
+      await reloadModsSilent();
     } catch (e) {
       error = String(e);
       downloadStageMessage = "Update failed.";
@@ -782,7 +795,7 @@ import { trapFocus } from "../lib/focusTrap";
       const installed: string[] = await invoke("resolve_missing_dependencies", { path: $projectPath });
       dependencyDialogOpen = false;
       message = installed.length ? `Auto-installed ${installed.length} dependencies: ${installed.join(", ")}` : "No missing dependencies to install.";
-      await load(true);
+      await reloadModsSilent();
     } catch (e) {
       error = String(e);
     } finally {
@@ -956,7 +969,7 @@ import { trapFocus } from "../lib/focusTrap";
         side: "both",
       });
       message = `Installed ${modIds.length} mods from "${listName}"`;
-      await load(true);
+      await reloadModsSilent();
     } catch (e) {
       error = String(e);
       downloadDone = true;
@@ -1000,7 +1013,7 @@ import { trapFocus } from "../lib/focusTrap";
       selectedResultIds = {};
       searchResults = [];
       searchQuery = "";
-      await load(true);
+      await reloadModsSilent();
       checkMissingDepsAfterInstall();
     } catch (e) {
       error = String(e);
@@ -1072,7 +1085,7 @@ import { trapFocus } from "../lib/focusTrap";
     })();
   }
 
-  // Updates a single installed mod row in place (no full-list repaint), so
+  // Updates a single installed mod row in place (no full-list spinner), so
   // changing a version or updating one mod doesn't flash the entire list.
   async function refreshSingleMod(modId: string) {
     if (!$projectPath) return;
@@ -1080,28 +1093,73 @@ import { trapFocus } from "../lib/focusTrap";
       const fresh: ModRow[] = await invoke("list_mods", { path: $projectPath });
       const found = fresh.find((m) => m.id === modId);
       if (found) {
-        mods = mods.map((m) => (m.id === modId ? { ...found } : m));
+        const existing = mods.find((m) => m.id === modId);
+        mods = mods.map((m) =>
+          m.id === modId
+            ? { ...found, updateAvailable: existing?.updateAvailable && found.version === existing.version }
+            : m
+        );
       } else {
         mods = mods.filter((m) => m.id !== modId);
+        updateList = updateList.filter((u) => u.modId !== modId);
       }
-      refreshUpdateDots().catch(() => {});
+      // Only re-check update flag for this mod — avoid remapping the whole list
+      // when check_mod_updates is slow.
+      refreshUpdateDotsFor([modId]).catch(() => {});
     } catch {
-      await load(true);
+      await reloadModsSilent();
     }
+  }
+
+  /** Fetch installed mods without the full-page "Loading mods..." spinner. */
+  async function reloadModsSilent() {
+    if (!$projectPath) return;
+    const path = $projectPath;
+    try {
+      const fresh: ModRow[] = await invoke("list_mods", { path });
+      if ($projectPath !== path) return;
+      const prevFlags = new Map(mods.map((m) => [m.id, m.updateAvailable]));
+      mods = fresh.map((m) => ({
+        ...m,
+        updateAvailable: prevFlags.get(m.id) ?? m.updateAvailable,
+      }));
+      lastLoadedPath = path;
+      brokenIcons = brokenIcons.filter((id) => mods.some((m) => m.id === id));
+      hydrateMissingIcons().catch(() => {});
+      refreshUpdateDots().catch(() => {});
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function removeModLocally(modId: string) {
+    mods = mods.filter((m) => m.id !== modId);
+    updateList = updateList.filter((u) => u.modId !== modId);
   }
 
   // Cross-references the latest available Modrinth versions with the installed
   // ones and flags each mod row that has an update pending (drives the dot).
-  async function refreshUpdateDots() {
+  async function refreshUpdateDots(scopeIds?: string[]) {
     if (!$projectPath) return;
     try {
       const updates: any[] = await invoke("check_mod_updates", { path: $projectPath });
       updateList = updates;
       const ids = new Set(updates.map((u) => u.modId));
-      mods = mods.map((m) => ({ ...m, updateAvailable: ids.has(m.id) }));
+      if (scopeIds?.length) {
+        const scope = new Set(scopeIds);
+        mods = mods.map((m) =>
+          scope.has(m.id) ? { ...m, updateAvailable: ids.has(m.id) } : m
+        );
+      } else {
+        mods = mods.map((m) => ({ ...m, updateAvailable: ids.has(m.id) }));
+      }
     } catch {
       // leave existing flags in place
     }
+  }
+
+  async function refreshUpdateDotsFor(modIds: string[]) {
+    return refreshUpdateDots(modIds);
   }
 
   // Some mods (e.g. local jars with a known Modrinth project id, or entries
@@ -1206,8 +1264,26 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
+  function scheduleSearchMods(targetPage: number = 1, delayMs = 280) {
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      void searchMods(targetPage);
+    }, delayMs);
+  }
+
+  function onSearchQueryInput() {
+    // Typeahead for Add-mod catalog; Enter still forces an immediate search.
+    scheduleSearchMods(1);
+  }
+
   async function searchMods(targetPage: number = 1) {
     if (!$projectPath) return;
+    if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+    const requestId = ++searchRequestId;
     searchLoading = true;
     error = null;
     try {
@@ -1246,6 +1322,7 @@ import { trapFocus } from "../lib/focusTrap";
           sort: sortBy,
         });
       }
+      if (requestId !== searchRequestId) return;
       searchResults = payload.results.map((r) => ({
         ...r,
         provider: r.provider ?? (catalogProvider === "curseforge" ? "curseforge" : "modrinth"),
@@ -1253,11 +1330,14 @@ import { trapFocus } from "../lib/focusTrap";
       searchTotal = payload.total;
       page = targetPage;
     } catch (e) {
+      if (requestId !== searchRequestId) return;
       error = String(e);
       searchResults = [];
       searchTotal = 0;
     } finally {
-      searchLoading = false;
+      if (requestId === searchRequestId) {
+        searchLoading = false;
+      }
     }
   }
 
@@ -1313,7 +1393,7 @@ import { trapFocus } from "../lib/focusTrap";
       selectedResultIds = {};
       searchResults = [];
       searchQuery = "";
-      await load(true);
+      await reloadModsSilent();
       checkMissingDepsAfterInstall();
     } catch (e) {
       error = String(e);
@@ -1358,7 +1438,7 @@ import { trapFocus } from "../lib/focusTrap";
       pendingInstall = null;
       searchResults = [];
       searchQuery = "";
-      await load(true);
+      await reloadModsSilent();
     } catch (e) {
       downloadError = String(e);
       error = downloadError;
@@ -1402,6 +1482,7 @@ import { trapFocus } from "../lib/focusTrap";
         throw new Error(failures.map((failure: any) => failure.error).join("; "));
       }
       updateList = updateList.filter((u) => u.modId !== mod.id);
+      mods = mods.map((m) => (m.id === mod.id ? { ...m, updateAvailable: false } : m));
       message = `Updated ${mod.name}.`;
       await refreshSingleMod(mod.id);
     } catch (e) {
@@ -1469,14 +1550,17 @@ import { trapFocus } from "../lib/focusTrap";
     return (preview?.dependencies ?? []).filter((dep) => depKind(dep).includes("optional"));
   }
 
+  function matchesInstalledQuery(m: ModRow, q: string): boolean {
+    if (!q) return true;
+    const haystacks = [m.name, m.id, m.version, m.fileName, m.projectId];
+    return haystacks.some((value) => (value ?? "").toLowerCase().includes(q));
+  }
+
   $: filtered = isSavedViewFilter(contentFilter)
     ? []
     : mods.filter((m) => {
-        const q = filter.toLowerCase();
-        const matchesText =
-          m.name.toLowerCase().includes(q) ||
-          m.id.toLowerCase().includes(q) ||
-          m.version.toLowerCase().includes(q);
+        const q = filter.trim().toLowerCase();
+        const matchesText = matchesInstalledQuery(m, q);
         const matchesSide = sideFilter === "all" || m.side === sideFilter;
         const matchesContentType = (m.contentType ?? "mod") === contentFilter;
         return matchesText && matchesSide && matchesContentType;
@@ -1627,7 +1711,7 @@ import { trapFocus } from "../lib/focusTrap";
               try {
                 await invoke("add_modrinth_mod_with_dependencies", { path: $projectPath, modId: rec.slug, side: "auto" });
                 recommendations = recommendations.filter((r) => r.slug !== rec.slug);
-                await load(true);
+                await reloadModsSilent();
                 checkMissingDepsAfterInstall();
               } catch(e) { error = String(e); downloadDone = true; }
               finally { mutating = false; }
@@ -1762,7 +1846,7 @@ import { trapFocus } from "../lib/focusTrap";
             <span class="tag source">{mod.source}</span>
           </div>
           <div class="card-actions">
-            <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || !canUpdateMod(mod)} title="Change version">
+            <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || !canChangeVersion(mod)} title="Change version">
               <ArrowUpDown size={16} />
             </button>
             {#if mod.updateAvailable}
@@ -1918,7 +2002,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (addOpen = false) }}>
       <div class="modal-header">
         <div>
-          <h2>Add {catalogProvider === "curseforge" ? "CurseForge" : "Modrinth"} {contentFilter}</h2>
+          <h2>Add {catalogProvider === "both" ? "" : (catalogProvider === "curseforge" ? "CurseForge " : "Modrinth ")}{contentFilter}</h2>
           <p>
             {contentFilter === "mod"
               ? "Search is filtered by the current Minecraft version and loader."
@@ -2049,7 +2133,15 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="browser-topbar">
             <div class="search wide">
               <Search size={16} />
-              <input bind:value={searchQuery} placeholder="Search mods..." on:keydown={(e) => e.key === "Enter" && searchMods(1)} />
+              <input
+                bind:value={searchQuery}
+                placeholder="Search mods..."
+                on:input={onSearchQueryInput}
+                on:keydown={(e) => e.key === "Enter" && searchMods(1)}
+              />
+              {#if searchLoading}
+                <Loader2 size={16} class="spin search-spinner" />
+              {/if}
             </div>
             <div class="topbar-controls">
               <label class="sort-select">Sort by:
@@ -2089,8 +2181,8 @@ import { trapFocus } from "../lib/focusTrap";
             </div>
           </div>
 
-          {#if searchLoading}
-            <div class="loading compact">Loading {catalogProvider === "curseforge" ? "CurseForge" : "Modrinth"} projects...</div>
+          {#if searchLoading && searchResults.length === 0 && !isSavedViewFilter(contentFilter)}
+            <div class="loading compact">Loading {catalogProvider === "both" ? "Modrinth & CurseForge" : (catalogProvider === "curseforge" ? "CurseForge" : "Modrinth")} projects...</div>
           {:else if isSavedViewFilter(contentFilter)}
             {#if savedModsLoading}
               <div class="loading compact">Loading saved projects...</div>
@@ -2114,6 +2206,14 @@ import { trapFocus } from "../lib/focusTrap";
                     <div class="result-main">
                       <div class="result-title">
                         <span class="result-name">{result.name}</span>
+                        {#if catalogProvider === "both"}
+                          <span
+                            class="provider-badge"
+                            class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
+                            class:curseforge={result.provider === "curseforge"}
+                            title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
+                          >{result.provider === "curseforge" ? "CF" : "MR"}</span>
+                        {/if}
                         {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                       </div>
                       <p class="result-desc">{result.description}</p>
@@ -2183,6 +2283,14 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="result-main">
                 <div class="result-title">
                   <span class="result-name">{result.name}</span>
+                  {#if catalogProvider === "both"}
+                    <span
+                      class="provider-badge"
+                      class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
+                      class:curseforge={result.provider === "curseforge"}
+                      title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
+                    >{result.provider === "curseforge" ? "CF" : "MR"}</span>
+                  {/if}
                   {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                 </div>
                 <p class="result-desc">{result.description}</p>
@@ -2748,11 +2856,19 @@ import { trapFocus } from "../lib/focusTrap";
     position: absolute;
     left: 14px;
     color: var(--text-muted);
+    pointer-events: none;
   }
 
   .search input {
     width: 100%;
     padding-left: 40px;
+  }
+
+  .search :global(.search-spinner) {
+    position: absolute;
+    right: 12px;
+    color: var(--text-muted);
+    pointer-events: none;
   }
 
   .actions,
@@ -3435,6 +3551,28 @@ import { trapFocus } from "../lib/focusTrap";
   .provider-toggle button.active {
     background: rgba(27, 217, 106, 0.14);
     color: var(--text-primary);
+  }
+
+  .provider-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+  }
+  .provider-badge.modrinth {
+    background: rgba(27, 217, 106, 0.18);
+    color: #1bd96a;
+  }
+  .provider-badge.curseforge {
+    background: rgba(241, 100, 54, 0.18);
+    color: #f16436;
   }
 
   .confirm-modal {

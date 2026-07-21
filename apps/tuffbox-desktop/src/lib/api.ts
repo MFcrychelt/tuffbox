@@ -496,8 +496,8 @@ export interface WorldListItem {
 export interface WorldDetail {
   name: string;
   seed: number;
-  gameType: number;
-  difficulty: number;
+  gameType: string | number;
+  difficulty: string | number;
   lastPlayed: string | null;
   time: number;
   spawnX: number;
@@ -513,6 +513,12 @@ export interface ChunkCell {
   present: number;
   lastModified: number;
   status: number;
+  inhabitedTime?: number;
+  dataVersion?: number;
+  biomeId?: number;
+  surfaceY?: number;
+  entityCount?: number;
+  structureCount?: number;
 }
 
 export interface RegionInfo {
@@ -524,6 +530,8 @@ export interface RegionInfo {
   chunks: ChunkCell[];
 }
 
+export type WorldDimension = "overworld" | "nether" | "end";
+
 export interface WorldMap {
   regions: RegionInfo[];
   minRegionX: number;
@@ -532,6 +540,7 @@ export interface WorldMap {
   maxRegionZ: number;
   totalPresent: number;
   regionCount: number;
+  dimension?: WorldDimension | string;
 }
 
 export interface ChunkData {
@@ -546,6 +555,57 @@ export interface ChunkClipboard {
   sourceWorld: string;
   chunks: ChunkData[];
   bounds: [number, number, number, number];
+  entities?: ChunkData[];
+  poi?: ChunkData[];
+}
+
+export interface NbtNode {
+  tagType: number;
+  name: string;
+  value?: unknown;
+  children?: NbtNode[];
+  listType?: number;
+}
+
+export interface ChunkEditorData {
+  regionX: number;
+  regionZ: number;
+  index: number;
+  chunkX: number;
+  chunkZ: number;
+  layer: string;
+  root: NbtNode;
+}
+
+export interface NbtChangeRequest {
+  inhabitedTime?: number | null;
+  status?: string | null;
+  dataVersion?: number | null;
+  lightPopulated?: number | null;
+  lastUpdate?: number | null;
+  biome?: string | null;
+  deleteSections?: string | null;
+  replaceBlocks?: string | null;
+  deleteStructureRefs?: string | null;
+  preventRetrogen?: boolean;
+  forceBlend?: boolean;
+  deleteEntities?: boolean;
+  fixStatus?: boolean;
+  force?: boolean;
+}
+
+export interface AdvancedChunkFilter {
+  entityNames?: string | null;
+  structureNames?: string | null;
+  paletteNames?: string | null;
+  minEntities?: number | null;
+  maxEntities?: number | null;
+}
+
+export interface ChunkRef {
+  regionX: number;
+  regionZ: number;
+  index: number;
 }
 
 export interface JavaRuntime {
@@ -802,15 +862,227 @@ export const api = {
     list(p?: string) { return cmd<WorldListItem[]>("list_worlds", pathArg(p)); },
     readInfo(worldName: string, p?: string) { return cmd<WorldDetail>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
-    map(worldName: string, p?: string) { return cmd<WorldMap>("read_world_map", { ...pathArg(p), worldName }); },
-    deleteChunks(worldName: string, selections: { regionX: number; regionZ: number; indices: number[] }[], p?: string) {
-      return cmd<number>("delete_world_chunks", { ...pathArg(p), worldName, selections });
+    dimensions(worldName: string, p?: string) {
+      return cmd<string[]>("list_world_dimensions", { ...pathArg(p), worldName });
     },
-    copyChunks(worldName: string, selections: { regionX: number; regionZ: number; indices: number[] }[], p?: string) {
-      return cmd<ChunkClipboard>("copy_world_chunks", { ...pathArg(p), worldName, selections });
+    map(worldName: string, dimension?: string, p?: string) {
+      return cmd<WorldMap>("read_world_map", { ...pathArg(p), worldName, dimension: dimension ?? "overworld" });
     },
-    pasteChunks(worldName: string, clipboard: ChunkClipboard, offsetX?: number, offsetZ?: number, p?: string) {
-      return cmd<number>("paste_world_chunks", { ...pathArg(p), worldName, clipboard, offsetX: offsetX ?? 0, offsetZ: offsetZ ?? 0 });
+    deleteChunks(
+      worldName: string,
+      selections: { regionX: number; regionZ: number; indices: number[] }[],
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<number>("delete_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        selections,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    copyChunks(
+      worldName: string,
+      selections: { regionX: number; regionZ: number; indices: number[] }[],
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<ChunkClipboard>("copy_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        selections,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    pasteChunks(
+      worldName: string,
+      clipboard: ChunkClipboard,
+      offsetX?: number,
+      offsetZ?: number,
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<number>("paste_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        clipboard,
+        offsetX: offsetX ?? 0,
+        offsetZ: offsetZ ?? 0,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    purge(worldName: string, dimension?: string, p?: string) {
+      return cmd<number>("purge_world_regions", {
+        ...pathArg(p),
+        worldName,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    exportChunks(
+      worldName: string,
+      selections: { regionX: number; regionZ: number; indices: number[] }[],
+      destDir: string,
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<number>("export_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        selections,
+        destDir,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    importChunks(
+      worldName: string,
+      sourceDir: string,
+      opts?: {
+        offsetX?: number;
+        offsetZ?: number;
+        overwrite?: boolean;
+        yOffset?: number;
+        sections?: string;
+        sourceSelections?: { regionX: number; regionZ: number; indices: number[] }[];
+        targetSelections?: { regionX: number; regionZ: number; indices: number[] }[];
+        sourceDimension?: string;
+        dimension?: string;
+      },
+      p?: string,
+    ) {
+      return cmd<number>("import_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        sourceDir,
+        offsetX: opts?.offsetX ?? 0,
+        offsetZ: opts?.offsetZ ?? 0,
+        overwrite: opts?.overwrite ?? true,
+        yOffset: opts?.yOffset ?? 0,
+        sections: opts?.sections,
+        sourceSelections: opts?.sourceSelections ?? [],
+        targetSelections: opts?.targetSelections,
+        sourceDimension: opts?.sourceDimension ?? opts?.dimension ?? "overworld",
+        dimension: opts?.dimension ?? "overworld",
+      });
+    },
+    selectByQuery(worldName: string, query: string, dimension?: string, p?: string) {
+      return cmd<{ regionX: number; regionZ: number; index: number }[]>("select_world_by_query", {
+        ...pathArg(p),
+        worldName,
+        query,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    renderMapPng(
+      worldName: string,
+      destPath: string,
+      opts?: {
+        colorMode?: string;
+        scale?: number;
+        selections?: { regionX: number; regionZ: number; indices: number[] }[];
+        dimension?: string;
+      },
+      p?: string,
+    ) {
+      return cmd<[number, number]>("render_world_map_png", {
+        ...pathArg(p),
+        worldName,
+        destPath,
+        colorMode: opts?.colorMode ?? "status",
+        scale: opts?.scale ?? 4,
+        selections: opts?.selections ?? [],
+        dimension: opts?.dimension ?? "overworld",
+      });
+    },
+    warmCache(worldName: string, dimension?: string, p?: string) {
+      return cmd<number>("warm_world_map_cache", {
+        ...pathArg(p),
+        worldName,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    clearCache(worldName: string, dimension?: string | null, p?: string) {
+      return cmd<number>("clear_world_map_cache", {
+        ...pathArg(p),
+        worldName,
+        dimension: dimension === undefined ? "overworld" : dimension,
+      });
+    },
+    swapChunks(
+      worldName: string,
+      a: { regionX: number; regionZ: number; indices: number[] },
+      b: { regionX: number; regionZ: number; indices: number[] },
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<void>("swap_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        a,
+        b,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    changeChunks(
+      worldName: string,
+      selections: { regionX: number; regionZ: number; indices: number[] }[],
+      change: NbtChangeRequest,
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<number>("change_world_chunks", {
+        ...pathArg(p),
+        worldName,
+        selections,
+        change,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    readChunkEditor(
+      worldName: string,
+      regionX: number,
+      regionZ: number,
+      index: number,
+      dimension?: string,
+      layer?: string,
+      p?: string,
+    ) {
+      return cmd<ChunkEditorData>("read_chunk_editor", {
+        ...pathArg(p),
+        worldName,
+        regionX,
+        regionZ,
+        index,
+        dimension: dimension ?? "overworld",
+        layer: layer ?? "region",
+      });
+    },
+    writeChunkEditor(
+      worldName: string,
+      data: ChunkEditorData,
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<void>("write_chunk_editor", {
+        ...pathArg(p),
+        worldName,
+        data,
+        dimension: dimension ?? "overworld",
+      });
+    },
+    filterAdvanced(
+      worldName: string,
+      filter: AdvancedChunkFilter,
+      selections?: { regionX: number; regionZ: number; indices: number[] }[],
+      dimension?: string,
+      p?: string,
+    ) {
+      return cmd<ChunkRef[]>("filter_world_chunks_advanced", {
+        ...pathArg(p),
+        worldName,
+        filter,
+        selections: selections ?? null,
+        dimension: dimension ?? "overworld",
+      });
     },
   },
 
