@@ -31,8 +31,9 @@
       filters: [{ name: "TuffBox Project", extensions: ["tuffbox.json"] }],
     });
     if (selected && typeof selected === "string") {
-      projectPath.set(selected);
-      const info = await invoke("validate_project", { path: selected });
+      const info = await invoke("validate_project", { path: selected }) as import("../lib/api").ProjectSummary;
+      const manifestPath = info.manifestPath || selected;
+      projectPath.set(manifestPath);
       projectInfo.set(info as any);
     }
   }

@@ -90,12 +90,13 @@
   });
 
   async function loadProject(path: string) {
-    const info = await invoke("validate_project", { path });
-    const project: RecentProject = { path, info: info as any };
+    const info = await invoke("validate_project", { path }) as import("../lib/api").ProjectSummary;
+    const manifestPath = info.manifestPath || path;
+    const project: RecentProject = { path: manifestPath, info: info as any };
     recentProjects.add(project);
-    projectPath.set(path);
+    projectPath.set(manifestPath);
     projectInfo.set(project.info);
-    selectedPath = path;
+    selectedPath = manifestPath;
   }
 
   function selectProject(path: string) {
@@ -355,9 +356,10 @@
     actionBusy = true;
     try {
       const clonedPath = await invoke<string>("clone_project", { path: cloneTarget.path, newName: newName.trim() });
-      const info = await invoke("validate_project", { path: clonedPath });
-      recentProjects.add({ path: clonedPath, info: info as any });
-      toasts.success(`Cloned to: ${clonedPath}`);
+      const info = await invoke("validate_project", { path: clonedPath }) as import("../lib/api").ProjectSummary;
+      const manifestPath = info.manifestPath || clonedPath;
+      recentProjects.add({ path: manifestPath, info: info as any });
+      toasts.success(`Cloned to: ${manifestPath}`);
     } catch (e) { toasts.error(String(e)); }
     finally { actionBusy = false; }
   }
