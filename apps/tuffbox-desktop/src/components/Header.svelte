@@ -12,10 +12,16 @@
     ide: "IDE Workflow",
     mods: "Mods",
     graph: "Dependency Graph",
+    world: "World Map",
+    library: "Library",
     diagnostics: "Health Check",
     snapshots: "Snapshot History",
     configs: "Config Editor",
     settings: "Settings",
+    "project-settings": "Instance Settings",
+    "ore-gen": "Ore Generation",
+    recipes: "Recipe Browser",
+    quests: "Quest Editor",
   };
 
   async function selectProject() {

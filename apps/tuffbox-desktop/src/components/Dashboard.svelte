@@ -424,8 +424,8 @@
       <!-- Hero: Play button + project info -->
       <section class="hero">
         <div class="hero-left">
-<button class="play-btn" on:click={launch} disabled={!selectedPath || $isLaunching}>
-{#if $isLaunching}
+          <button class="play-btn" on:click={launch} disabled={!selectedPath || $isLaunching}>
+            {#if $isLaunching}
               <span class="spinner"></span>
               <span class="play-text">Launching...</span>
             {:else}
@@ -434,32 +434,39 @@
             {/if}
           </button>
 
-          {#if selectedProject}
-            <div class="project-quick-info">
-              <span class="project-name">{selectedProject.info.name}</span>
-              <span class="project-version">{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
-            </div>
-          {/if}
-
-          <div class="hero-actions">
+          <div class="hero-main">
             {#if selectedProject}
-              <button class="action-btn primary" on:click={() => (currentView = "ide")}>
-                <Workflow size={15} />
-                IDE
-              </button>
-              <button class="action-btn" on:click={openSettings}>
-                <Settings size={15} />
-                Settings
-              </button>
-              <button class="action-btn" on:click={() => invoke("open_project_folder", { path: selectedProject.path })}>
-                <FolderOpen size={15} />
-                Folder
-              </button>
+              <div class="project-quick-info">
+                <span class="project-name">{selectedProject.info.name}</span>
+                <span class="project-version">{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
+              </div>
+            {:else}
+              <div class="project-quick-info">
+                <span class="project-name muted">No instance selected</span>
+                <span class="project-version">Select an instance below or create a new one</span>
+              </div>
             {/if}
-            <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
-              <Plus size={15} />
-              New
-            </button>
+
+            <div class="hero-actions">
+              {#if selectedProject}
+                <button class="action-btn primary" on:click={() => (currentView = "ide")}>
+                  <Workflow size={15} />
+                  IDE
+                </button>
+                <button class="action-btn" on:click={openSettings}>
+                  <Settings size={15} />
+                  Settings
+                </button>
+                <button class="action-btn" on:click={() => invoke("open_project_folder", { path: selectedProject.path })}>
+                  <FolderOpen size={15} />
+                  Folder
+                </button>
+              {/if}
+              <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
+                <Plus size={15} />
+                New
+              </button>
+            </div>
           </div>
         </div>
 
@@ -794,6 +801,11 @@
   .left-column {
     flex: 1;
     min-width: 0;
+    /* Own stacking layer above the WebGL skin canvas: without this, a
+       compositing glitch in the 3D preview could make tabs/buttons
+       (quick-nav, hero actions) unclickable in some environments. */
+    position: relative;
+    z-index: 1;
   }
 
   .right-column {
@@ -801,6 +813,7 @@
     flex-shrink: 0;
     position: sticky;
     top: 20px;
+    z-index: 0;
   }
 
   .skin-panel {
@@ -865,7 +878,7 @@
   .hero {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
+    align-items: center;
     padding: 32px;
     background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
     border: 1px solid var(--border-color);
@@ -876,9 +889,18 @@
 
   .hero-left {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 16px;
+    gap: 16px 24px;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .hero-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+    min-width: 0;
   }
 
   .hero-right {
@@ -914,6 +936,7 @@
     border-radius: var(--border-radius-lg);
     box-shadow: 0 8px 24px rgba(27, 217, 106, 0.3);
     padding: 0 24px;
+    flex-shrink: 0;
   }
 
   .play-btn:hover {
@@ -933,6 +956,7 @@
   .project-quick-info {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 2px;
   }
 
@@ -940,6 +964,10 @@
     font-weight: 700;
     font-size: 15px;
     color: var(--text-primary);
+  }
+
+  .project-name.muted {
+    color: var(--text-muted);
   }
 
   .project-version {
