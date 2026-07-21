@@ -77,6 +77,13 @@ jobs:
       working-directory: apps/tuffbox-desktop
       run: npm ci
 
+    - name: Verify frontend production build
+      working-directory: apps/tuffbox-desktop
+      run: |
+        npm run build
+        if (-not (Test-Path dist/index.html)) { throw "dist/index.html missing" }
+        if (-not (Get-ChildItem dist/assets/*.js -ErrorAction SilentlyContinue)) { throw "dist/assets/*.js missing" }
+
     - name: Build JEI runtime bridges
       working-directory: bridges/jei-runtime
       run: .\gradlew.bat syncDesktopResources --no-daemon

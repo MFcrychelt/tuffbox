@@ -20,7 +20,6 @@
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
   import { onMount, tick } from "svelte";
-  import { fly, fade } from "svelte/transition";
   import { projectPath, projectInfo, recentProjects } from "./lib/store";
   import { api } from "./lib/api";
 
@@ -109,7 +108,7 @@
     <Header {currentView} />
     <main class="content" class:ide-view={currentView === "ide"} bind:this={contentEl}>
       {#key currentView}
-        <div class="view-wrapper" in:fly={{ y: 8, duration: 200 }} out:fade={{ duration: 100 }}>
+        <div class="view-wrapper">
           {#if currentView === "dashboard"}
             <Dashboard bind:currentView />
           {:else if currentView === "ide"}
