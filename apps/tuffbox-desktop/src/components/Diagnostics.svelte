@@ -151,6 +151,8 @@
       selectedReportId = data.selectedReport?.summary.id ?? data.reports[0]?.id ?? "";
       plan = null;
       detectWrongLoaderMods();
+      // Also refresh Crash Assistant findings (log-phrase detectors + per-issue fixes).
+      void runCrashAssistant();
     } catch (e) {
       error = String(e);
     } finally {
@@ -561,6 +563,23 @@
     } finally {
       applyingHintId = null;
     }
+  }
+
+  /// One-by-one fix from a Crash Assistant finding card.
+  async function applyCrashFindingFix(finding: any, action: FixAction) {
+    await applyHintFixAction(
+      {
+        id: `ca:${finding.code}`,
+        title: finding.title,
+        severity: finding.severity,
+        detail: finding.description,
+        steps: finding.autoFix ? [finding.autoFix] : [],
+        relatedMods: [],
+        fix: null,
+        fixes: finding.fixes ?? [],
+      },
+      action,
+    );
   }
 
   /// Launches the client (Test) profile so the user can reproduce a crash,
@@ -1340,6 +1359,7 @@
     {#if crashFindings.length > 0}
       <section class="crash-assistant panel">
         <h2><Zap size={16} /> Crash Assistant ({crashFindings.length} finding{crashFindings.length > 1 ? "s" : ""})</h2>
+        <p class="crash-intro">Each card is a log/crash-report match. Apply fixes one at a time, then re-test.</p>
         <div class="crash-list">
           {#each crashFindings as f (f.code + f.title)}
             <div class="crash-card {f.severity}">
@@ -1349,9 +1369,25 @@
                 <code class="crash-code">{f.code}</code>
               </div>
               <p>{f.description}</p>
+              {#if f.evidence}
+                <pre class="crash-evidence">{f.evidence}</pre>
+              {/if}
               {#if f.autoFix}
                 <div class="crash-fix">
-                  <strong>Auto-fix:</strong> {f.autoFix}
+                  <strong>Suggested:</strong> {f.autoFix}
+                </div>
+              {/if}
+              {#if f.fixes?.length}
+                <div class="crash-fix-actions">
+                  {#each f.fixes as action, i (action.kind + (action.modId ?? "") + i)}
+                    <button
+                      class="secondary small"
+                      disabled={!$projectPath || applyingHintId === `ca:${f.code}`}
+                      on:click={() => applyCrashFindingFix(f, action)}
+                    >
+                      {applyingHintId === `ca:${f.code}` ? "Applying…" : action.label}
+                    </button>
+                  {/each}
                 </div>
               {/if}
               {#if f.references?.length}
@@ -1720,6 +1756,7 @@
   .ore-file { font-size: 10px; color: var(--text-muted); }
   .ore-known { font-size: 10px; color: var(--accent-primary); }
   .crash-assistant { margin-top: 16px; border-color: rgba(239,68,68,.3); background: rgba(239,68,68,.02); }
+  .crash-intro { margin: 0 0 10px; color: var(--text-muted); font-size: 12px; }
   .crash-list { display: grid; gap: 8px; }
   .crash-card { padding: 14px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 8px; }
   .crash-card.critical { border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.06); }
@@ -1733,8 +1770,24 @@
   .crash-sev.info { background: rgba(96,165,250,.15); color: #93c5fd; }
   .crash-code { font-size: 11px; color: var(--text-muted); }
   .crash-card p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
+  .crash-evidence {
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #0d0d10;
+    color: #d4d4d8;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, monospace;
+    max-height: 120px;
+    overflow: auto;
+  }
   .crash-fix { padding: 8px 10px; border-radius: 8px; background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.2); font-size: 12px; color: var(--accent-primary); }
   .crash-fix strong { color: var(--accent-primary); }
+  .crash-fix-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .crash-fix-actions .small { font-size: 11px; padding: 5px 10px; }
   .crash-refs { display: flex; gap: 8px; flex-wrap: wrap; }
   .crash-link { font-size: 11px; color: var(--accent-secondary); text-decoration: none; }
   .crash-support { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; align-items: center; }

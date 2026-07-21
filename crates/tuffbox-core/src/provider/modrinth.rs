@@ -387,6 +387,9 @@ struct ModrinthProject {
     date_modified: Option<String>,
     #[serde(default)]
     categories: Vec<String>,
+    /// Secondary Modrinth tags (merged into categories for graph clustering).
+    #[serde(default)]
+    additional_categories: Vec<String>,
     #[serde(default, deserialize_with = "string_or_object")]
     license: Option<String>,
     #[serde(default, deserialize_with = "string_or_object")]
@@ -397,6 +400,12 @@ struct ModrinthProject {
 
 impl From<ModrinthProject> for ProjectInfo {
     fn from(project: ModrinthProject) -> Self {
+        let mut categories = project.categories;
+        for extra in project.additional_categories {
+            if !categories.iter().any(|c| c.eq_ignore_ascii_case(&extra)) {
+                categories.push(extra);
+            }
+        }
         Self {
             id: project.id,
             slug: project.slug,
@@ -408,7 +417,7 @@ impl From<ModrinthProject> for ProjectInfo {
             downloads: project.downloads,
             follows: project.follows,
             date_modified: project.date_modified,
-            categories: project.categories,
+            categories,
             license: project.license,
             client_side: project.client_side,
             server_side: project.server_side,

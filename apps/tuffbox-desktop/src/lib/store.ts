@@ -71,7 +71,8 @@ export const projectInfo = writable<ProjectInfo | null>(null);
 // ─── Minecraft Auth ──────────────────────────────────────────────
 
 export type SkinSource = "mojang" | "elyby" | "tlauncher" | "offline";
-export type LoginType = "microsoft" | "offline";
+export type LoginType = "microsoft" | "offline" | "yggdrasil";
+export type CapeProvider = "mojang" | "optifine" | "tlauncher" | "none";
 
 export interface McCapeEntry {
   id: string;
@@ -94,6 +95,53 @@ export interface AccountEntry {
   loginType: LoginType;
   skinSource: SkinSource;
   addedAt: number;
+  /** Yggdrasil / authlib-injector API root (Ely.by, LittleSkin, custom). */
+  authority?: string | null;
+}
+
+export interface YggdrasilPreset {
+  id: string;
+  label: string;
+  authority: string;
+}
+
+export interface PresenceSettings {
+  discordRpcEnabled: boolean;
+  discordClientId: string;
+}
+
+/** Human label for account provider badges. */
+export function loginTypeLabel(type: LoginType, authority?: string | null): string {
+  if (type === "microsoft") return "Mojang";
+  if (type === "offline") return "Offline";
+  const a = (authority ?? "").toLowerCase();
+  if (a.includes("ely.by")) return "Ely.by";
+  if (a.includes("littleskin")) return "LittleSkin";
+  return "Yggdrasil";
+}
+
+export function formatPlaytime(secs: number): string {
+  const s = Math.max(0, Math.floor(secs || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+}
+
+export interface CapeOffer {
+  provider: CapeProvider;
+  id: string;
+  label: string;
+  url: string;
+  canActivate: boolean;
+  active: boolean;
+}
+
+export interface CapeCatalog {
+  selectedProvider: CapeProvider;
+  displayUrl: string | null;
+  offers: CapeOffer[];
 }
 
 export interface AuthState {
@@ -102,6 +150,7 @@ export interface AuthState {
   expiresAt: number | null;
   loginType: LoginType;
   skinSource: SkinSource;
+  capeProvider: CapeProvider;
   accounts: AccountEntry[];
   activeAccountUuid: string | null;
 }
@@ -119,6 +168,7 @@ export const authState = writable<AuthState>({
   expiresAt: null,
   loginType: "offline",
   skinSource: "mojang",
+  capeProvider: "mojang",
   accounts: [],
   activeAccountUuid: null,
 });

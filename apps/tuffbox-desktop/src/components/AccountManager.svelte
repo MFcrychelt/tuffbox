@@ -18,19 +18,25 @@
   import {
     authState,
     skinPath,
+    loginTypeLabel,
     type AccountEntry,
     type SkinSource,
-    type LoginType,
+    type YggdrasilPreset,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
 
   const dispatch = createEventDispatcher();
 
-  let mode: "list" | "add-select" | "add-offline" = "list";
+  let mode: "list" | "add-select" | "add-offline" | "add-yggdrasil" = "list";
   let accounts: AccountEntry[] = [];
   let activeUuid: string | null = null;
   let offlineUsername = "";
   let offlineSkinSource: SkinSource = "mojang";
+  let yggPresets: YggdrasilPreset[] = [];
+  let yggPresetId = "elyby";
+  let yggAuthority = "";
+  let yggUsername = "";
+  let yggPassword = "";
   let busy = false;
   let errorMsg = "";
 
@@ -59,6 +65,8 @@
         } catch {
           skinPath.set(null);
         }
+      } else {
+        skinPath.set(null);
       }
       toasts.success(`Switched to ${state.profile?.name ?? "account"}`);
     } catch (e) {
@@ -99,6 +107,7 @@
         expiresAt: null,
         loginType: "offline",
         skinSource: offlineSkinSource,
+        capeProvider: $authState.capeProvider ?? "mojang",
         accounts: [...accounts, {
           uuid: result.profile.uuid,
           name: result.profile.name,
@@ -150,6 +159,65 @@
     }
   }
 
+  async function openYggdrasil() {
+    errorMsg = "";
+    try {
+      yggPresets = await api.mcAuth.listYggdrasilPresets();
+    } catch {
+      yggPresets = [
+        { id: "elyby", label: "Ely.by", authority: "https://authserver.ely.by/api/authlib-injector" },
+        { id: "littleskin", label: "LittleSkin", authority: "https://littleskin.cn/api/yggdrasil" },
+        { id: "custom", label: "Custom authlib-injector / Yggdrasil", authority: "" },
+      ];
+    }
+    const preset = yggPresets.find((p) => p.id === yggPresetId) ?? yggPresets[0];
+    yggPresetId = preset?.id ?? "elyby";
+    yggAuthority = preset?.authority ?? "";
+    mode = "add-yggdrasil";
+  }
+
+  function selectYggPreset(id: string) {
+    yggPresetId = id;
+    const preset = yggPresets.find((p) => p.id === id);
+    if (preset && id !== "custom") {
+      yggAuthority = preset.authority;
+    }
+  }
+
+  async function addYggdrasil() {
+    if (!yggUsername.trim() || !yggPassword) {
+      errorMsg = "Enter username and password";
+      return;
+    }
+    if (!yggAuthority.trim()) {
+      errorMsg = "Enter authlib-injector / Yggdrasil authority URL";
+      return;
+    }
+    busy = true;
+    errorMsg = "";
+    try {
+      const result = await api.mcAuth.yggdrasilLogin(
+        yggUsername.trim(),
+        yggPassword,
+        yggAuthority.trim()
+      );
+      await loadAccounts();
+      if (result.profile.skinUrl) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {}
+      }
+      toasts.success(`Added ${result.profile.name}`);
+      mode = "list";
+      yggPassword = "";
+      yggUsername = "";
+    } catch (e) {
+      errorMsg = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   function close() {
     dispatch("close");
   }
@@ -168,7 +236,10 @@
       <div class="modal-title">
         <User size={18} />
         <h3>
-          {#if mode === "list"}Accounts{:else if mode === "add-select"}Add Account{:else}Add Offline Account{/if}
+          {#if mode === "list"}Accounts
+          {:else if mode === "add-select"}Add Account
+          {:else if mode === "add-yggdrasil"}Yggdrasil Login
+          {:else}Add Offline Account{/if}
         </h3>
       </div>
       <button class="close-btn" on:click={close} aria-label="Close">
@@ -193,17 +264,34 @@
                 class="account-item"
                 class:active={account.uuid === activeUuid}
               >
-                <div class="account-avatar">
+                <div
+                  class="account-avatar"
+                  class:ms={account.loginType === "microsoft"}
+                  class:off={account.loginType === "offline"}
+                  class:ygg={account.loginType === "yggdrasil"}
+                >
                   {#if account.loginType === "microsoft"}
                     <Globe size={16} />
+                  {:else if account.loginType === "yggdrasil"}
+                    <Shield size={16} />
                   {:else}
                     <User size={16} />
                   {/if}
                 </div>
                 <div class="account-info">
-                  <span class="account-name">{account.name}</span>
+                  <span class="account-name mc-font">{account.name}</span>
                   <span class="account-meta">
-                    {account.loginType === "microsoft" ? "Microsoft" : "Offline"}
+                    <span
+                      class="type-pill"
+                      class:mojang={account.loginType === "microsoft"}
+                      class:offline={account.loginType === "offline"}
+                      class:ygg={account.loginType === "yggdrasil"}
+                    >
+                      {loginTypeLabel(account.loginType, account.authority)}
+                    </span>
+                    {#if account.loginType === "offline" && account.skinSource !== "offline"}
+                      <span class="skin-src">{account.skinSource}</span>
+                    {/if}
                     {#if account.uuid === activeUuid}
                       <span class="active-badge">Active</span>
                     {/if}
@@ -255,7 +343,59 @@
               <span class="option-desc">Play with custom username</span>
             </div>
           </button>
+
+          <button class="add-option" on:click={openYggdrasil} disabled={busy}>
+            <div class="option-icon ygg"><Shield size={20} /></div>
+            <div class="option-info">
+              <span class="option-title">Ely.by / LittleSkin / Custom</span>
+              <span class="option-desc">authlib-injector Yggdrasil login</span>
+            </div>
+          </button>
         </div>
+
+      {:else if mode === "add-yggdrasil"}
+        <form class="offline-form" on:submit|preventDefault={addYggdrasil}>
+          <div class="skin-source-grid ygg-presets">
+            {#each yggPresets as preset}
+              <button
+                type="button"
+                class="source-option"
+                class:active={yggPresetId === preset.id}
+                on:click={() => selectYggPreset(preset.id)}
+                disabled={busy}
+              >
+                {preset.label}
+              </button>
+            {/each}
+          </div>
+
+          <label class="field">
+            <span>Authority URL</span>
+            <input
+              bind:value={yggAuthority}
+              placeholder="https://…/api/yggdrasil"
+              disabled={busy || yggPresetId !== "custom"}
+            />
+          </label>
+
+          <label class="field">
+            <span>Email / Username</span>
+            <input bind:value={yggUsername} placeholder="account@example.com" autofocus disabled={busy} />
+          </label>
+
+          <label class="field">
+            <span>Password</span>
+            <input type="password" bind:value={yggPassword} placeholder="••••••••" disabled={busy} />
+          </label>
+
+          {#if errorMsg}
+            <div class="error-msg">{errorMsg}</div>
+          {/if}
+
+          <button class="accent-btn full-width" type="submit" disabled={busy || !yggUsername.trim() || !yggPassword}>
+            {busy ? "Signing in..." : "Sign in"}
+          </button>
+        </form>
 
       {:else if mode === "add-offline"}
         <form class="offline-form" on:submit|preventDefault={addOffline}>
@@ -354,10 +494,28 @@
     background: var(--bg-elevated); color: var(--text-muted);
     flex-shrink: 0;
   }
+  .account-avatar.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
+  .account-avatar.off { border: 1px solid rgba(245, 158, 11, 0.35); color: #fde68a; }
+  .account-avatar.ygg { background: rgba(168, 85, 247, 0.18); color: #e9d5ff; }
 
-  .account-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+  .account-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .account-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
-  .account-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .account-name.mc-font {
+    font-family: var(--font-minecraft);
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    text-shadow: 1px 1px 0 #3f3f3f;
+  }
+  .account-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+  .type-pill {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    padding: 1px 6px; border-radius: 4px;
+  }
+  .type-pill.mojang { color: #93c5fd; background: rgba(59, 130, 246, 0.15); }
+  .type-pill.offline { color: #fde68a; background: rgba(245, 158, 11, 0.12); }
+  .type-pill.ygg { color: #e9d5ff; background: rgba(168, 85, 247, 0.15); }
+  .skin-src { font-size: 10px; color: var(--text-muted); }
 
   .active-badge {
     font-size: 10px; font-weight: 700; color: var(--accent-primary);
@@ -393,6 +551,9 @@
   }
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
+  .option-icon.ygg { background: rgba(168, 85, 247, 0.2); color: #e9d5ff; }
+
+  .ygg-presets { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
 
   .option-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
   .option-title { font-weight: 700; font-size: 14px; }

@@ -2,7 +2,9 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
   import { onMount } from "svelte";
-  import { Palette, Info, Moon, Sun, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2 } from "lucide-svelte";
+  import { Palette, Info, Moon, Sun, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2, Gamepad2 } from "lucide-svelte";
+  import { api } from "../lib/api";
+  import type { PresenceSettings } from "../lib/store";
 
   type AiSettings = { provider: string; endpoint: string; model: string };
   type IntegrationSettings = { githubRepository: string; ai: AiSettings };
@@ -52,6 +54,41 @@
   let clearingSecret: string | null = null;
   let testingProvider: string | null = null;
   let testResults: Record<string, string> = {};
+
+  let discordRpcEnabled = false;
+  let discordClientId = "";
+  let discordSaving = false;
+  let discordMessage = "";
+  let discordError = "";
+
+  async function loadPresence() {
+    discordError = "";
+    try {
+      const s = await api.presence.get();
+      discordRpcEnabled = !!s.discordRpcEnabled;
+      discordClientId = s.discordClientId ?? "";
+    } catch (e) {
+      discordError = String(e);
+    }
+  }
+
+  async function savePresence() {
+    discordSaving = true;
+    discordError = "";
+    discordMessage = "";
+    try {
+      const settings: PresenceSettings = {
+        discordRpcEnabled,
+        discordClientId: discordClientId.trim(),
+      };
+      await api.presence.save(settings);
+      discordMessage = "Discord presence settings saved.";
+    } catch (e) {
+      discordError = String(e);
+    } finally {
+      discordSaving = false;
+    }
+  }
 
   async function checkUpdate() {
     updateLoading = true;
@@ -189,6 +226,7 @@
     try { shortcuts = await invoke("get_keyboard_shortcuts"); } catch {}
     await loadAppVersion();
     await loadIntegrations();
+    await loadPresence();
   });
 
   function toggleTheme() {
@@ -408,6 +446,36 @@
 
     <section class="card">
       <div class="card-title">
+        <Gamepad2 size={18} />
+        <h3>Discord Rich Presence</h3>
+      </div>
+      {#if discordError}<div class="notice error"><AlertTriangle size={14} /> {discordError}</div>{/if}
+      {#if discordMessage}<div class="notice success"><CheckCircle2 size={14} /> {discordMessage}</div>{/if}
+      <label class="check-row">
+        <input type="checkbox" bind:checked={discordRpcEnabled} />
+        Show playing status in Discord while Minecraft is running
+      </label>
+      <label>
+        Application Client ID
+        <input
+          bind:value={discordClientId}
+          placeholder="Create an app at discord.com/developers"
+          autocomplete="off"
+        />
+      </label>
+      <p class="hint">
+        Create an application in the Discord Developer Portal and paste its Client ID.
+        Optional asset key <code>tuffbox</code> can be uploaded for a large image.
+      </p>
+      <div class="row-actions">
+        <button on:click={savePresence} disabled={discordSaving}>
+          {discordSaving ? "Saving…" : "Save Discord settings"}
+        </button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">
         <Info size={18} />
         <h3>About</h3>
       </div>
@@ -563,6 +631,16 @@
   .save-row { margin-top: 16px; }
   .mini { padding: 5px 8px; font-size: 11px; }
   .hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    cursor: pointer;
+  }
+  .check-row input { accent-color: var(--accent-primary); }
   .test-ok { color: var(--accent-primary); font-size: 11px; }
   .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }

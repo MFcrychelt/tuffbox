@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 /// Schema version for cache invalidation. Increment when the cache format or
 /// enrichment logic changes so old caches are rebuilt automatically.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -168,7 +168,7 @@ mod tests {
         let mut cache = GraphCache::new(&manifest, manifest.clone());
         cache.cache_version = 0;
         cache.save(&manifest_path).unwrap();
-        // Should be rejected: cache.cache_version (0) != CACHE_VERSION (1)
+        // Should be rejected: cache.cache_version (0) != CACHE_VERSION (2)
         assert!(
             GraphCache::load_if_current(&manifest_path, &manifest)
                 .unwrap()

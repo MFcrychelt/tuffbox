@@ -170,6 +170,9 @@ impl TestLauncher {
         launcher_dir: &Path,
         progress: &InstallProgress,
         mc_access_token: Option<&str>,
+        auth_uuid_override: Option<&str>,
+        auth_user_type: Option<&str>,
+        auth_name_override: Option<&str>,
     ) -> Result<(std::process::Command, PathBuf), LauncherError> {
         if !options.instance_dir.exists() {
             return Err(LauncherError::InstanceNotPrepared);
@@ -194,33 +197,40 @@ impl TestLauncher {
             ))
         })?;
 
-        let auth_player_name = profile
-            .player_name
-            .as_deref()
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or("Player")
-            .to_string();
+        let auth_player_name = auth_name_override
+            .map(|s| s.to_string())
+            .or_else(|| {
+                profile
+                    .player_name
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "Player".to_string());
 
-        // Use real MC access token when available, otherwise offline mode
+        // Prefer real account UUID/token; fall back to offline.
         let (auth_uuid, auth_access_token, user_type) = if let Some(token) = mc_access_token {
             if !token.is_empty() && token != "0" {
                 (
-                    offline_uuid(&auth_player_name),
+                    auth_uuid_override
+                        .filter(|u| !u.is_empty())
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| offline_uuid(&auth_player_name)),
                     token.to_string(),
-                    "msa",
+                    auth_user_type.unwrap_or("msa").to_string(),
                 )
             } else {
                 (
                     offline_uuid(&auth_player_name),
                     "0".to_string(),
-                    "msa",
+                    "legacy".to_string(),
                 )
             }
         } else {
             (
                 offline_uuid(&auth_player_name),
                 "0".to_string(),
-                "msa",
+                "legacy".to_string(),
             )
         };
         let version_type = "release";
@@ -263,12 +273,12 @@ impl TestLauncher {
         cmd.args(&options.jvm_args);
 
         for arg in &game.jvm_args {
-            // Replace spaces with a temporary character to prevent splitting
-            // multi-word arguments, then split on that character after substitution.
-            // This matches how Modrinth's launcher handles arguments like
-            // "-Dfml.ignoreInvalidMinecraftCertificates=true" which may contain spaces.
+            // Keep each profile arg as a single argv entry. Fabric ships
+            // `-DFabricMcEmu= net.minecraft.client.main.Main ` with intentional
+            // spaces; splitting on whitespace turns `Main` into a bare token
+            // before `-cp`, and Java then treats it as the main class
+            // (ClassNotFoundException: net.minecraft.client.main.Main).
             let value = arg
-                .replace(' ', "\n")
                 .replace("${natives_directory}", &natives_dir_s)
                 .replace("${library_directory}", &library_dir_s)
                 .replace("${launcher_name}", "tuffbox")
@@ -276,10 +286,8 @@ impl TestLauncher {
                 .replace("${version_name}", &game.id)
                 .replace("${classpath_separator}", classpath_separator)
                 .replace("${classpath}", &classpath);
-            for part in value.split('\n') {
-                if !part.is_empty() {
-                    cmd.arg(part);
-                }
+            if !value.is_empty() {
+                cmd.arg(value);
             }
         }
 
@@ -307,7 +315,6 @@ impl TestLauncher {
 
         for arg in &game.game_args {
             let value = arg
-                .replace(' ', "\n")
                 .replace("${auth_player_name}", &auth_player_name)
                 .replace("${auth_uuid}", &auth_uuid)
                 .replace("${auth_access_token}", &auth_access_token)
@@ -325,10 +332,8 @@ impl TestLauncher {
                 // Quick play placeholders — empty for now (no quick play support yet)
                 .replace("${quickPlaySingleplayer}", "")
                 .replace("${quickPlayMultiplayer}", "");
-            for part in value.split('\n') {
-                if !part.is_empty() {
-                    cmd.arg(part);
-                }
+            if !value.is_empty() {
+                cmd.arg(value);
             }
         }
 

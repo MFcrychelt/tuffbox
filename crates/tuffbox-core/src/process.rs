@@ -17,6 +17,8 @@ pub struct RunningProcess {
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessExit {
     pub code: Option<i32>,
+    /// Wall-clock seconds the process was alive (best-effort).
+    pub duration_secs: u64,
 }
 
 /// Callback invoked once the spawned process exits. Used by the launcher to
@@ -122,7 +124,9 @@ pub fn spawn_and_track_with_cleanup(
         .insert(pid, info.clone());
 
     std::thread::spawn(move || {
+        let started = std::time::Instant::now();
         let exit = child.wait();
+        let duration_secs = started.elapsed().as_secs();
         PROCESSES
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -133,6 +137,7 @@ pub fn spawn_and_track_with_cleanup(
         if let Some(cb) = on_exit {
             cb(ProcessExit {
                 code: exit.ok().and_then(|s| s.code()),
+                duration_secs,
             });
         }
     });

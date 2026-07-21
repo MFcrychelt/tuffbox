@@ -22,6 +22,7 @@
     "ore-gen": "Ore Generation",
     recipes: "Recipe Browser",
     quests: "Quest Editor",
+    me: "Me",
   };
 
   async function selectProject() {

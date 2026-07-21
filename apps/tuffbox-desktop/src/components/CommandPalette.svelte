@@ -22,6 +22,7 @@
     { id: "snapshots", label: "Snapshots", category: "Views", shortcut: "Ctrl+7" },
     { id: "world", label: "World", category: "Views", shortcut: "Ctrl+8" },
     { id: "library", label: "Library", category: "Views" },
+    { id: "me", label: "Me", category: "Views" },
     { id: "ore-gen", label: "Ore Distribution", category: "Views" },
     { id: "recipes", label: "Recipe Browser", category: "Views" },
     { id: "quests", label: "Quest Editor", category: "Views" },

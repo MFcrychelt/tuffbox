@@ -18,7 +18,7 @@
   import type { SearchResult } from "../lib/api";
   import { launchWithFeedback } from "../lib/launch";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library";
+  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "world";
 
   type Tab = "yours" | "discover";
   let tab: Tab = "yours";

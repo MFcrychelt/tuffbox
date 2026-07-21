@@ -409,7 +409,7 @@ pub fn identify_local_jar_via_modrinth(
             url: file.as_ref().map(|f| f.url.clone()),
             path: None,
             icon_url: project.icon_url.clone(),
-            categories: Vec::new(),
+            categories: project.categories.clone(),
         },
         version: version.version_number,
         file_name: Some(file_name),

@@ -1073,6 +1073,8 @@ import { trapFocus } from "../lib/focusTrap";
       try {
         const synced: ModRow[] = await invoke("sync_mods_folder", { path });
         if ($projectPath !== path) return;
+        // Don't clobber the list mid Update All — sync can reintroduce leftover jars.
+        if (updateApplying) return;
         if (modsFingerprint(synced) !== modsFingerprint(mods)) {
           mods = synced;
         }

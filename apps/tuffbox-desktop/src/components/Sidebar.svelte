@@ -10,14 +10,16 @@
     Settings,
     Plus,
     Library,
+    User,
   } from "lucide-svelte";
   import { newProjectOpen } from "../lib/store";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me";
   export let currentView: View;
 
   const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string }[] = [
     { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
+    { id: "me", label: "Me", icon: User },
     { id: "ide", label: "Open IDE", icon: Workflow, featured: true, shortcut: "Ctrl+2" },
     { id: "mods", label: "Mods", icon: Package, shortcut: "Ctrl+3" },
     { id: "graph", label: "Graph", icon: GitGraph, shortcut: "Ctrl+4" },

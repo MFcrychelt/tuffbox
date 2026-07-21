@@ -19,6 +19,7 @@
   import ScrollToTopButton from "./components/ScrollToTopButton.svelte";
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
+  import Me from "./components/Me.svelte";
   import { onMount, tick } from "svelte";
   import { projectPath, projectInfo, recentProjects } from "./lib/store";
   import { api } from "./lib/api";
@@ -37,7 +38,8 @@
     | "ore-gen"
     | "recipes"
     | "quests"
-    | "library";
+    | "library"
+    | "me";
   let currentView: View = "dashboard";
   let showShortcuts = false;
   let showCommandPalette = false;
@@ -60,6 +62,11 @@
     };
     window.addEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
 
+    const onOpenMe = () => {
+      currentView = "me";
+    };
+    window.addEventListener("tuffbox:open-me", onOpenMe);
+
     void (async () => {
       try {
         const lastPath = await api.session.getLastOpened();
@@ -78,6 +85,7 @@
     return () => {
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
+      window.removeEventListener("tuffbox:open-me", onOpenMe);
     };
   });
 
@@ -85,6 +93,7 @@
     dashboard: true, ide: true, mods: true, graph: true, world: true,
     diagnostics: true, snapshots: true, configs: true, settings: true,
     "project-settings": true, "ore-gen": true, recipes: true, quests: true, library: true,
+    me: true,
   };
 
   function handleCommandPaletteNavigate(e: CustomEvent<string>) {
@@ -137,6 +146,8 @@
             <World />
           {:else if currentView === "library"}
             <Library bind:currentView />
+          {:else if currentView === "me"}
+            <Me />
           {/if}
         </div>
       {/key}

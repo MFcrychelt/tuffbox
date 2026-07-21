@@ -1009,8 +1009,18 @@
     return raw
       .split(",")
       .map((c) => c.trim().toLowerCase())
-      .filter(Boolean);
+      .filter((c) => c && !LOADER_CATEGORY_NOISE.has(c));
   }
+
+  const LOADER_CATEGORY_NOISE = new Set([
+    "fabric", "forge", "neoforge", "quilt", "bukkit", "spigot", "paper", "purpur",
+    "sponge", "bungeecord", "waterfall", "velocity",
+  ]);
+
+  /// Specific Modrinth tags beat catch-alls (qol / library).
+  const GROUP_PRIORITY = [
+    "rendering", "worldgen", "storage", "create", "magic", "adventure", "farming", "decor", "library", "qol",
+  ];
 
   /// Assign every Mod/Missing node to one cluster. Modrinth categories win
   /// (authoritative site taxonomy); mods without cached categories fall back to
@@ -1019,31 +1029,35 @@
   function categorizeMod(node: GraphNode | PositionedNode): ModGroup {
     const id = node.id;
     const label = node.label;
-    // 1) Authoritative: Modrinth categories. Respect MOD_GROUPS order so a mod
-    //    tagged both `technology` and `utility` lands in the more specific
-    //    functional cluster (create) rather than the qol catch-all.
     const cats = nodeCategories(node);
     if (cats.length) {
       const mappedKeys = cats
         .map((c) => MODRINTH_CATEGORY_TO_GROUP[c])
         .filter((k): k is string => !!k);
       if (mappedKeys.length) {
-        for (const group of MOD_GROUPS) {
-          if (mappedKeys.includes(group.key)) return group;
+        let best: ModGroup | null = null;
+        let bestRank = Number.POSITIVE_INFINITY;
+        for (const key of mappedKeys) {
+          const rank = GROUP_PRIORITY.indexOf(key);
+          const r = rank >= 0 ? rank : 999;
+          if (r < bestRank) {
+            bestRank = r;
+            best = MOD_GROUPS.find((g) => g.key === key) ?? null;
+          }
         }
+        if (best) return best;
       }
     }
-    // 2) Fallback: keyword heuristics on slug + label.
     const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
-    for (const group of MOD_GROUPS) {
-      if (group.matches(slug, label)) return group;
+    for (const key of GROUP_PRIORITY) {
+      const group = MOD_GROUPS.find((g) => g.key === key);
+      if (group?.matches(slug, label)) return group;
     }
-    // 3) Last resort: Quality of Life (catch-all interface/utility bucket).
     return MOD_GROUPS.find((g) => g.key === "qol")!;
   }
 
   // Bump when layout algorithm parameters change so cached graphs re-seed.
-  const LAYOUT_VERSION = "v3-pitch96";
+  const LAYOUT_VERSION = "v4-modrinth-cats";
 
   $: layoutKey = [
     LAYOUT_VERSION,

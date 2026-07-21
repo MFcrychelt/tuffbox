@@ -493,7 +493,7 @@ fn main() -> anyhow::Result<()> {
                 jvm_args: profile.jvm_args.clone(),
             };
             let (mut cmd, log_path) =
-                tuffbox_core::TestLauncher::build_command(&manifest, profile, &options, &java, &launcher_dir, &progress, None)?;
+                tuffbox_core::TestLauncher::build_command(&manifest, profile, &options, &java, &launcher_dir, &progress, None, None, None, None)?;
             let mut child = cmd.spawn()?;
             let status = child.wait()?;
             let result = tuffbox_core::LaunchResult {

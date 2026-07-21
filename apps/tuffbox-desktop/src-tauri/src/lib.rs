@@ -1,9 +1,11 @@
 mod auth;
 mod integrations;
+mod presence;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use once_cell::sync::Lazy;
 use tuffbox_core::{
     ContentProvider, DependencyGraph, ModSource, ModSpec, PackBrief, ProjectManifest,
     ProviderFileInfo, ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind,
@@ -13,6 +15,10 @@ use tuffbox_core::crash::FixAction;
 use tuffbox_core::launch_error::{LaunchErrorInfo, LaunchErrorKind};
 use tuffbox_core::process::{OnExit, ProcessExit};
 use tauri::Emitter;
+
+/// Serializes manifest + mods-folder mutations so background `sync_mods_folder`
+/// cannot overwrite an in-flight Update All / single update.
+static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -263,6 +269,9 @@ fn list_profiles(path: String) -> Result<Vec<ProfileSummary>, String> {
 #[tauri::command(rename_all = "camelCase")]
 async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
+        let _guard = MODS_IO_LOCK
+            .lock()
+            .map_err(|_| "mods I/O lock poisoned".to_string())?;
         let manifest_path = std::path::PathBuf::from(&path);
         let mut manifest =
             ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
@@ -387,6 +396,33 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     continue;
                 }
 
+                // Unidentified jar: often a leftover after Update All when the
+                // old filename no longer matches the manifest. If another
+                // tracked mod already owns a live jar and this file looks like
+                // the same slug, delete instead of creating a Local duplicate.
+                let stem = file_name.trim_end_matches(&format!(".{}", ext)).to_lowercase();
+                let superseded = manifest.mods.iter().any(|m| {
+                    if m.source.kind == SourceKind::Local {
+                        return false;
+                    }
+                    let Some(tracked_name) = m.file_name.as_deref() else {
+                        return false;
+                    };
+                    if tracked_name == file_name {
+                        return false;
+                    }
+                    let tracked_path = existing_mod_file_path(&manifest_path, m);
+                    if !tracked_path.as_ref().is_some_and(|p| p.is_file()) {
+                        return false;
+                    }
+                    let id = m.id.to_lowercase().replace('_', "-");
+                    stem.starts_with(&id) || stem.split('-').next() == Some(id.as_str())
+                });
+                if superseded {
+                    let _ = std::fs::remove_file(entry.path());
+                    continue;
+                }
+
                 let id = file_name.trim_end_matches(&format!(".{}", ext)).to_string();
                 manifest.mods.push(tuffbox_core::manifest::ModSpec {
                     id,
@@ -467,6 +503,24 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
         }
 
         if any_changes {
+            // Re-load disk before save so we don't clobber concurrent updates
+            // that finished after our initial load (Update All race).
+            if let Ok(disk) = ProjectManifest::load_from_path(&manifest_path) {
+                for disk_mod in &disk.mods {
+                    if let Some(pid) = disk_mod.source.project_id.as_ref() {
+                        if let Some(idx) = manifest.mods.iter().position(|m| {
+                            m.source.project_id.as_ref() == Some(pid) || m.id == disk_mod.id
+                        }) {
+                            // Prefer the newer file_id / version from disk when present.
+                            if disk_mod.source.file_id != manifest.mods[idx].source.file_id
+                                || disk_mod.version != manifest.mods[idx].version
+                            {
+                                manifest.mods[idx] = disk_mod.clone();
+                            }
+                        }
+                    }
+                }
+            }
             save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         }
         if index_dirty {
@@ -1365,6 +1419,9 @@ async fn update_project_mod(
     version_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
+        let _guard = MODS_IO_LOCK
+            .lock()
+            .map_err(|_| "mods I/O lock poisoned".to_string())?;
         emit_mod_update_progress(
             &app,
             "preparing",
@@ -2268,10 +2325,12 @@ fn get_launch_stats(path: String) -> Result<serde_json::Value, String> {
     let stats = load_stats(&project_dir);
     let mut all_launches = 0u64;
     let mut all_crashes = 0u64;
+    let mut all_playtime = 0u64;
     let mut last = None;
     for (_id, inst) in &stats.instances {
         all_launches += inst.launches;
         all_crashes += inst.crashes;
+        all_playtime += inst.total_playtime_seconds;
         if inst.last_launch.is_some() {
             last = inst.last_launch.clone();
         }
@@ -2279,9 +2338,11 @@ fn get_launch_stats(path: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "totalLaunches": all_launches,
         "totalCrashes": all_crashes,
+        "totalPlaytimeSeconds": all_playtime,
         "lastLaunch": last,
         "byProfile": stats.instances.iter().map(|(id, inst)| serde_json::json!({
             "id": id, "launches": inst.launches, "crashes": inst.crashes,
+            "playtimeSeconds": inst.total_playtime_seconds,
             "lastLaunch": inst.last_launch,
         })).collect::<Vec<_>>(),
     }))
@@ -2603,6 +2664,10 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
 async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         use tauri::Emitter;
+
+        let _guard = MODS_IO_LOCK
+            .lock()
+            .map_err(|_| "mods I/O lock poisoned".to_string())?;
 
         emit_mod_update_progress(
             &app,
@@ -3348,8 +3413,18 @@ fn run_crash_assistant_full(path: String) -> Result<serde_json::Value, String> {
 
     Ok(serde_json::json!({
         "findings": report.findings.iter().map(|f| serde_json::json!({
-            "severity": f.severity,"code": f.code,"title": f.title,
-            "description": f.description,"autoFix": f.auto_fix,"references": f.references,
+            "severity": f.severity,
+            "code": f.code,
+            "title": f.title,
+            "description": f.description,
+            "autoFix": f.auto_fix,
+            "references": f.references,
+            "evidence": f.evidence,
+            "fixes": f.fixes.iter().map(|a| serde_json::json!({
+                "kind": a.kind,
+                "label": a.label,
+                "modId": a.mod_id,
+            })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "supportMessageDiscord": report.support_message_discord,
         "supportMessageGithub": report.support_message_github,
@@ -4318,6 +4393,60 @@ fn list_worlds(path: String) -> Result<Vec<serde_json::Value>, String> {
     }
     worlds.sort_by_key(|w| -(w["size"].as_u64().unwrap_or(0) as i64));
     Ok(worlds)
+}
+
+/// Lists resourcepacks or shaderpacks on disk (zip/folders + `.disabled`).
+#[tauri::command(rename_all = "camelCase")]
+fn list_content_packs(path: String, folder: String) -> Result<Vec<tuffbox_core::content_packs::ContentPackEntry>, String> {
+    if folder != "resourcepacks" && folder != "shaderpacks" {
+        return Err("folder must be resourcepacks or shaderpacks".into());
+    }
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::content_packs::list_content_packs(&project_dir, &folder)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn set_content_pack_enabled(
+    path: String,
+    folder: String,
+    file_name: String,
+    enabled: bool,
+) -> Result<tuffbox_core::content_packs::ContentPackEntry, String> {
+    if folder != "resourcepacks" && folder != "shaderpacks" {
+        return Err("folder must be resourcepacks or shaderpacks".into());
+    }
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::content_packs::set_content_pack_enabled(&project_dir, &folder, &file_name, enabled)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_mc_servers(path: String) -> Result<Vec<tuffbox_core::servers_dat::ServerEntry>, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::servers_dat::list_servers(&project_dir)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn add_mc_server(
+    path: String,
+    name: String,
+    address: String,
+) -> Result<Vec<tuffbox_core::servers_dat::ServerEntry>, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::servers_dat::add_server(&project_dir, &name, &address)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn remove_mc_server(
+    path: String,
+    address: String,
+) -> Result<Vec<tuffbox_core::servers_dat::ServerEntry>, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::servers_dat::remove_server(&project_dir, &address)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn ping_mc_server(address: String) -> Result<tuffbox_core::servers_dat::ServerPingResult, String> {
+    Ok(tuffbox_core::servers_dat::ping_server_address(&address))
 }
 
 /// Backs up a single world as a zip archive.
@@ -5581,13 +5710,119 @@ fn get_crash_diagnosis(
     let mut snapshots = SnapshotStore::new(&project_dir).list().unwrap_or_default();
     snapshots.reverse();
     snapshots.truncate(6);
-    tuffbox_core::crash::build_crash_diagnosis(
+    let mut diagnosis = tuffbox_core::crash::build_crash_diagnosis(
         &project_dir,
         &manifest,
         report_id.as_deref(),
         snapshots,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // Merge Crash Assistant log-phrase findings into hints so each detect
+    // gets one-by-one FixAction buttons in the Problems / Recommended panels.
+    if let Ok(assistant) = run_crash_assistant_analysis(&path, &manifest, &project_dir) {
+        for finding in assistant.findings {
+            let id = format!("ca:{}", finding.code);
+            if diagnosis.hints.iter().any(|h| h.id == id) {
+                continue;
+            }
+            let mut detail = finding.description.clone();
+            if let Some(ev) = finding.evidence.as_ref() {
+                detail.push_str("\n\nLog evidence:\n");
+                detail.push_str(ev);
+            }
+            let steps = finding
+                .auto_fix
+                .clone()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let related: Vec<String> = finding
+                .fixes
+                .iter()
+                .filter_map(|f| f.mod_id.clone())
+                .collect();
+            let fix = finding.fixes.first().cloned();
+            diagnosis.hints.push(tuffbox_core::crash::DiagnosisHint {
+                id,
+                title: finding.title,
+                severity: finding.severity,
+                detail,
+                steps,
+                related_mods: related,
+                fix,
+                fixes: finding.fixes,
+            });
+        }
+    }
+
+    Ok(diagnosis)
+}
+
+fn run_crash_assistant_analysis(
+    path: &str,
+    manifest: &ProjectManifest,
+    project_dir: &Path,
+) -> Result<tuffbox_core::crash_assistant::CrashAnalysisReport, String> {
+    // Shared builder used by get_crash_diagnosis + run_crash_assistant_full.
+    let installed: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
+    let mut crash_content = Vec::new();
+    let mut latest_log = String::new();
+    let mut launcher_log = String::new();
+
+    let cd = project_dir.join("crash-reports");
+    if cd.is_dir() {
+        for e in std::fs::read_dir(&cd).into_iter().flatten().flatten() {
+            if e.path().extension().map_or(false, |e| e == "txt") {
+                if let Ok(ct) = std::fs::read_to_string(e.path()) {
+                    if ct.len() < 4 * 1024 * 1024 {
+                        crash_content.push(ct);
+                    }
+                }
+            }
+        }
+    }
+    let lp = project_dir.join("logs").join("latest.log");
+    if lp.is_file() {
+        latest_log = tuffbox_core::process::read_log_tail(&lp, 1200).unwrap_or_default();
+    }
+    let la = project_dir.join("logs").join("launcher.log");
+    if la.is_file() {
+        launcher_log = std::fs::read_to_string(&la).unwrap_or_default();
+    }
+
+    let jv = manifest
+        .java
+        .as_ref()
+        .and_then(|j| j.path.clone())
+        .unwrap_or_default();
+    let java_version = if !jv.is_empty() {
+        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&jv))
+            .map(|r| r.version)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
+        crash_content,
+        latest_log,
+        launcher_log,
+        installed_mods: installed,
+        previous_mods: Vec::new(),
+        java_version,
+        java_vendor: String::new(),
+        os_name: std::env::consts::OS.to_string(),
+        mc_version: manifest.minecraft.version.clone(),
+        loader: format!("{:?}", manifest.loader.kind).to_lowercase(),
+        loader_version: manifest.loader.version.clone(),
+        cpu_name: String::new(),
+        gpu_names: Vec::new(),
+        total_ram_mb: 0,
+        is_offline: false,
+        win_events: Vec::new(),
+    };
+    let _ = path;
+    Ok(tuffbox_core::crash_assistant::run_full_analysis(&ctx))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -6498,8 +6733,25 @@ fn build_and_spawn(
         Vec::new()
     };
 
-    // Try to load real MC access token from stored auth
-    let mc_token = auth::load_mc_access_token().ok();
+    // Try to load real MC access token / identity from stored auth
+    let identity = auth::load_active_launch_identity();
+    let (mc_token, auth_uuid, auth_user_type, auth_name) = match &identity {
+        Some((uuid, name, token, user_type, _authority)) => (
+            Some(token.as_str()),
+            Some(uuid.as_str()),
+            Some(user_type.as_str()),
+            Some(name.as_str()),
+        ),
+        None => (None, None, None, None),
+    };
+
+    // authlib-injector for Yggdrasil accounts
+    if let Some((_, _, _, _, Some(authority))) = &identity {
+        if let Ok(agent) = ensure_authlib_injector_agent(authority) {
+            launch_jvm_args.push(agent);
+            progress.log("# authlib-injector enabled for third-party auth.");
+        }
+    }
 
     let options = LaunchOptions {
         profile_id: profile.clone(),
@@ -6515,7 +6767,10 @@ fn build_and_spawn(
         &java,
         &launcher_dir,
         &progress,
-        mc_token.as_deref(),
+        mc_token,
+        auth_uuid,
+        auth_user_type,
+        auth_name,
     )
     .map_err(|e| {
         let msg = e.to_string();
@@ -6525,9 +6780,7 @@ fn build_and_spawn(
 
     progress.log("# Starting Java process...");
 
-    // Crash callback: when the JVM exits non-zero, run the crash-analysis
-    // engine over the launch log and emit a categorized `launch-crashed`
-    // event the UI can turn into a Retry + "view log" action.
+    // Crash callback + playtime + Discord presence cleanup
     let crash_ctx = CrashExitCtx {
         log_path: log_path.clone(),
         mc_version: manifest.minecraft.version.clone(),
@@ -6537,10 +6790,25 @@ fn build_and_spawn(
         game_dir: game_dir.clone(),
     };
     let app_for_exit = app.clone();
+    let stats_path_for_exit = path.clone();
+    let instance_label = manifest.project.name.clone();
+    let _ = presence::set_playing_activity(&instance_label, "In Minecraft");
+    let _ = record_launch(path.clone());
     let on_exit: Option<OnExit> = Some(Box::new(move |exit: ProcessExit| {
+        let _ = presence::clear_activity();
+        // Accumulate playtime for every session (including crashes).
+        if let Ok(project_dir) = manifest_parent(&stats_path_for_exit) {
+            let mut stats = load_stats(&project_dir);
+            let entry = stats.instances.entry("client".into()).or_default();
+            entry.total_playtime_seconds = entry
+                .total_playtime_seconds
+                .saturating_add(exit.duration_secs);
+            let _ = save_stats(&project_dir, &stats);
+        }
         if exit.code == Some(0) {
             return;
         }
+        let _ = record_crash(stats_path_for_exit);
         let info = classify_crash(&crash_ctx, exit.code);
         let _ = app_for_exit.emit("launch-crashed", info);
     }));
@@ -6553,6 +6821,56 @@ fn build_and_spawn(
         })?;
 
     Ok(())
+}
+
+fn ensure_authlib_injector_agent(authority: &str) -> Result<String, String> {
+    let dir = dirs::config_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("authlib");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let jar = dir.join("authlib-injector.jar");
+    if !jar.is_file() {
+        // Pin a known release so launches stay reproducible offline after first fetch.
+        let url = "https://github.com/yushijinhun/authlib-injector/releases/download/v1.2.5/authlib-injector-1.2.5.jar";
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let bytes = client
+            .get(url)
+            .send()
+            .map_err(|e| format!("authlib-injector download failed: {e}"))?
+            .bytes()
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&jar, &bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(format!(
+        "-javaagent:{}={}",
+        jar.to_string_lossy().replace('\\', "/"),
+        authority.trim_end_matches('/')
+    ))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_presence_settings() -> Result<presence::PresenceSettings, String> {
+    Ok(presence::load_presence_settings())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn save_presence_settings(settings: presence::PresenceSettings) -> Result<(), String> {
+    presence::save_presence_settings(&settings)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn set_discord_presence(details: String, state: String) -> Result<(), String> {
+    presence::set_playing_activity(&details, &state)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn clear_discord_presence() -> Result<(), String> {
+    presence::clear_activity()
 }
 
 /// Context captured at launch time, used to analyze a crash when the JVM
@@ -8032,6 +8350,18 @@ fn remove_superseded_mod_files(manifest_path: &Path, old_mod: &ModSpec, new_mod:
                 }
             }
         }
+        // Also drop leftover jars that share the mod slug as a filename prefix
+        // (e.g. sodium-fabric-0.5.0.jar after updating to sodium-fabric-0.5.8.jar).
+        if !remove {
+            let id = old_mod.id.to_lowercase().replace('_', "-");
+            let base_l = base.to_lowercase();
+            if !id.is_empty()
+                && (base_l.starts_with(&id) || base_l.starts_with(&format!("{id}-")))
+                && keep_name != Some(base)
+            {
+                remove = true;
+            }
+        }
         if remove {
             let _ = std::fs::remove_file(&path);
         }
@@ -8581,7 +8911,7 @@ fn build_mod_spec(
             url: Some(file.url),
             path: None,
             icon_url: project.icon_url.clone(),
-            categories: Vec::new(),
+            categories: project.categories.clone(),
         },
         version: version.version_number.clone(),
         file_name: Some(file.filename),
@@ -9255,6 +9585,12 @@ pub fn run() {
             save_quest_chapter,
             validate_quest_book,
             list_worlds,
+            list_content_packs,
+            set_content_pack_enabled,
+            list_mc_servers,
+            add_mc_server,
+            remove_mc_server,
+            ping_mc_server,
             backup_world,
             save_as_template,
             list_templates,
@@ -9388,8 +9724,16 @@ pub fn run() {
             auth::mc_remove_account,
             auth::mc_apply_skin,
             auth::mc_apply_cape,
+            auth::mc_list_capes,
+            auth::mc_set_cape_provider,
+            auth::mc_list_yggdrasil_presets,
+            auth::mc_yggdrasil_login,
             auth::mc_check_entitlement,
             auth::mc_get_skin_base64,
+            get_presence_settings,
+            save_presence_settings,
+            set_discord_presence,
+            clear_discord_presence,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -40,7 +40,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, type RecentProject, type SkinSource } from "../lib/store";
+  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, loginTypeLabel, type RecentProject, type SkinSource, type CapeProvider, type CapeCatalog } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { launchWithFeedback, registerLaunchCrashListener } from "../lib/launch";
@@ -50,8 +50,9 @@
   import PromptDialog from "./PromptDialog.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
+  import InstanceHome from "./InstanceHome.svelte";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests";
+  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "world";
 
   let selectedPath: string | null = $projectPath;
   let activeMenuPath: string | null = null;
@@ -65,8 +66,70 @@
   let showClonePrompt = false;
   let clonePromptName = "";
   let cloneTarget: RecentProject | null = null;
+  let capeCatalog: CapeCatalog | null = null;
+  let capeBusy = false;
+  const capeProviderOptions: { id: CapeProvider; label: string }[] = [
+    { id: "mojang", label: "Mojang" },
+    { id: "optifine", label: "OptiFine" },
+    { id: "tlauncher", label: "TLauncher" },
+    { id: "none", label: "None" },
+  ];
 
   $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
+  $: skinUrl = $authState.profile?.skinUrl ?? null;
+  $: capeUrl = $authState.profile?.capeUrl ?? null;
+  $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
+
+  async function refreshCapes() {
+    if (!$authState.loggedIn || !$authState.profile) {
+      capeCatalog = null;
+      return;
+    }
+    try {
+      capeCatalog = await api.mcAuth.listCapes();
+    } catch {
+      capeCatalog = null;
+    }
+  }
+
+  async function selectCapeProvider(provider: CapeProvider) {
+    if (capeBusy) return;
+    capeBusy = true;
+    try {
+      const state = await api.mcAuth.setCapeProvider(provider);
+      authState.set(state);
+      await refreshCapes();
+      toasts.success(`Cape: ${provider === "none" ? "hidden" : provider}`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      capeBusy = false;
+    }
+  }
+
+  async function activateMojangCape(capeId: string) {
+    if (capeBusy) return;
+    capeBusy = true;
+    try {
+      const state = await api.mcAuth.applyCape(capeId);
+      authState.set(state);
+      if (state.profile) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
+        } catch {}
+      }
+      await refreshCapes();
+      toasts.success("Mojang cape activated");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      capeBusy = false;
+    }
+  }
+
+  $: if ($authState.loggedIn && $authState.profile?.uuid) {
+    void refreshCapes();
+  }
 
   onMount(async () => {
     try {
@@ -322,10 +385,12 @@
         expiresAt: null,
         loginType: "offline",
         skinSource: "mojang",
+        capeProvider: $authState.capeProvider ?? "mojang",
         accounts: $authState.accounts,
         activeAccountUuid: $authState.activeAccountUuid,
       });
       skinPath.set(null);
+      capeCatalog = null;
       toasts.info("Logged out");
     } catch (e) {
       toasts.error(String(e));
@@ -338,8 +403,6 @@
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
   }
-
-  $: skinUrl = $authState.profile?.skinUrl ?? null;
 
   async function confirmBackupWorld(worldName: string) {
     showWorldPrompt = false;
@@ -402,7 +465,7 @@
     <!-- Account avatar in top-right (sign-in lives in the skin panel) -->
     <div class="account-avatar-section">
       {#if $authState.loggedIn && $authState.profile}
-        <button class="account-avatar-btn" on:click={() => (showAccountManager = true)} title="Account Manager">
+        <button class="account-avatar-btn" on:click={() => (currentView = "me")} title="Me — account & playtime">
           {#if $skinPath}
             <img src={convertFileSrc($skinPath)} alt={$authState.profile.name} class="avatar-img" />
           {:else}
@@ -411,8 +474,16 @@
             </div>
           {/if}
           <span class="avatar-name">{$authState.profile.name}</span>
-          <span class="avatar-badge" class:microsoft={$authState.loginType === "microsoft"} class:offline={$authState.loginType === "offline"}>
-            {$authState.loginType === "microsoft" ? "MS" : "OFF"}
+          <span
+            class="avatar-badge"
+            class:microsoft={$authState.loginType === "microsoft"}
+            class:offline={$authState.loginType === "offline"}
+            class:ygg={$authState.loginType === "yggdrasil"}
+          >
+            {loginTypeLabel(
+              $authState.loginType,
+              $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority
+            )}
           </span>
         </button>
       {/if}
@@ -483,6 +554,14 @@
           </div>
         {/if}
       </section>
+
+      {#if selectedPath && selectedProject}
+        <InstanceHome
+          projectPath={selectedPath}
+          onOpenMods={() => (currentView = "mods")}
+          onOpenWorld={() => (currentView = "world")}
+        />
+      {/if}
 
       <!-- Instances grid -->
       <section class="projects-section">
@@ -617,15 +696,86 @@
         {#if $authState.loggedIn && $authState.profile}
           <SkinPreview3D
             skinUrl={skinUrl}
+            capeUrl={capeUrl}
+            accountKey={accountKey}
+            playerName={$authState.profile.name}
             width={300}
             height={400}
           />
           <div class="skin-panel-footer">
-            <span class="skin-player-name">{$authState.profile.name}</span>
+            <div class="skin-meta">
+              <span
+                class="type-badge"
+                class:microsoft={$authState.loginType === "microsoft"}
+                class:offline={$authState.loginType === "offline"}
+                class:ygg={$authState.loginType === "yggdrasil"}
+              >
+                {loginTypeLabel(
+                  $authState.loginType,
+                  $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority
+                )}
+              </span>
+              {#if $authState.accounts.length > 1}
+                <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
+                  {$authState.accounts.length} accounts
+                </button>
+              {/if}
+            </div>
             <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
               <Palette size={14} />
-              Change Skin
+              Accounts
             </button>
+          </div>
+
+          <div class="cape-panel">
+            <div class="cape-row-label">Cape provider</div>
+            <div class="cape-provider-grid">
+              {#each capeProviderOptions as opt}
+                <button
+                  type="button"
+                  class="cape-provider-btn"
+                  class:active={($authState.capeProvider ?? "mojang") === opt.id}
+                  disabled={capeBusy}
+                  on:click={() => selectCapeProvider(opt.id)}
+                >
+                  {opt.label}
+                </button>
+              {/each}
+            </div>
+
+            {#if capeCatalog?.offers?.length}
+              <div class="cape-row-label">Available capes</div>
+              <div class="cape-offers">
+                {#each capeCatalog.offers as offer (offer.provider + offer.id)}
+                  <div class="cape-offer" class:active={offer.active || (($authState.capeProvider === offer.provider) && offer.url === capeUrl)}>
+                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
+                    <div class="cape-offer-info">
+                      <strong>{offer.label}</strong>
+                      <span>{offer.provider}</span>
+                    </div>
+                    {#if offer.canActivate && $authState.loginType === "microsoft"}
+                      <button
+                        class="cape-activate"
+                        disabled={capeBusy || offer.active}
+                        on:click={() => activateMojangCape(offer.id)}
+                      >
+                        {offer.active ? "Active" : "Equip"}
+                      </button>
+                    {:else if ($authState.capeProvider ?? "mojang") !== offer.provider}
+                      <button
+                        class="cape-activate"
+                        disabled={capeBusy}
+                        on:click={() => selectCapeProvider(offer.provider)}
+                      >
+                        Show
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="cape-empty">No capes found for this username on the selected sources.</p>
+            {/if}
           </div>
         {:else}
           <div class="skin-panel-empty">
@@ -793,6 +943,11 @@
     background: var(--bg-hover);
   }
 
+  .avatar-badge.ygg {
+    color: #e9d5ff;
+    background: rgba(168, 85, 247, 0.15);
+  }
+
   /* ─── Main Layout ────────────────────────────────── */
   .main-layout {
     display: flex;
@@ -833,6 +988,38 @@
     justify-content: space-between;
     padding: 12px 16px;
     border-top: 1px solid var(--border-color);
+    gap: 8px;
+  }
+
+  .skin-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .type-badge {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border-radius: 6px;
+  }
+  .type-badge.microsoft {
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+  }
+  .type-badge.offline {
+    color: #fde68a;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .type-badge.ygg {
+    color: #e9d5ff;
+    background: rgba(168, 85, 247, 0.15);
+    border: 1px solid rgba(168, 85, 247, 0.35);
   }
 
   .skin-player-name {
@@ -859,8 +1046,65 @@
   .change-skin-btn:hover {
     border-color: var(--accent-primary);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.04);
   }
+
+  .cape-panel {
+    padding: 12px 16px 16px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cape-row-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .cape-provider-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+  .cape-provider-btn {
+    padding: 7px 4px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .cape-provider-btn.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.08);
+  }
+  .cape-provider-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cape-offers { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
+  .cape-offer {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px; border-radius: 8px;
+    border: 1px solid var(--border-color); background: var(--bg-primary);
+  }
+  .cape-offer.active { border-color: var(--accent-primary); }
+  .cape-thumb {
+    width: 36px; height: 28px; object-fit: contain;
+    image-rendering: pixelated; background: #111; border-radius: 4px;
+  }
+  .cape-offer-info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .cape-offer-info strong { font-size: 12px; color: var(--text-primary); }
+  .cape-offer-info span { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+  .cape-activate {
+    padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color);
+    background: var(--bg-elevated); color: var(--text-secondary);
+    font-size: 11px; font-weight: 700; cursor: pointer;
+  }
+  .cape-activate:hover:not(:disabled) { border-color: var(--accent-primary); color: var(--accent-primary); }
+  .cape-activate:disabled { opacity: 0.55; cursor: default; }
+  .cape-empty { margin: 0; font-size: 11px; color: var(--text-muted); }
 
   .skin-panel-empty {
     display: flex;

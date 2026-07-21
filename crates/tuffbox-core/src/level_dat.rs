@@ -28,7 +28,7 @@ pub struct WorldInfo {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) enum NbtTag {
+pub enum NbtTag {
     Byte(i8),
     Short(i16),
     Int(i32),
@@ -44,13 +44,31 @@ pub(crate) enum NbtTag {
     End,
 }
 
+/// Reads NBT from disk — tries gzip first, then uncompressed.
+pub fn read_nbt_auto(path: &std::path::Path) -> Result<NbtTag, String> {
+    let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+    if raw.first() == Some(&0x1f) && raw.get(1) == Some(&0x8b) {
+        let mut decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(&raw));
+        let mut buf = Vec::new();
+        decoder.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+        return parse_nbt_binary(&buf);
+    }
+    // Uncompressed (servers.dat) or already decompressed.
+    if let Ok(tag) = parse_nbt_binary(&raw) {
+        return Ok(tag);
+    }
+    // Fallback: try gzip anyway (some tools wrap oddly).
+    let mut decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(&raw));
+    let mut buf = Vec::new();
+    match decoder.read_to_end(&mut buf) {
+        Ok(_) => parse_nbt_binary(&buf),
+        Err(_) => Err("failed to parse NBT (gzip or raw)".into()),
+    }
+}
+
 /// Reads and decompresses a gzip-compressed NBT file.
 fn read_nbt(path: &std::path::Path) -> Result<NbtTag, String> {
-    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut decoder = flate2::read::GzDecoder::new(file);
-    let mut buf = Vec::new();
-    decoder.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-    parse_nbt_binary(&buf)
+    read_nbt_auto(path)
 }
 
 /// Minimal NBT binary parser — only handles the tag types used in level.dat.

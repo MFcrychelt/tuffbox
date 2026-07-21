@@ -27,8 +27,11 @@
   type Tool = "pan" | "click" | "box" | "radius" | "region";
 
   export let worldName: string = "";
+  /** "top" = horizontal toolbar (OreGen embed); "dock" = left tools panel + large map */
+  export let layout: "top" | "dock" = "top";
 
   let map: WorldMapData | null = null;
+  let filtersOpen = false;
   let loading = false;
   let error: string | null = null;
 
@@ -1334,9 +1337,9 @@
   $: canvasCursor = tool === "pan" ? "grab" : (tool === "click" || tool === "region") ? "pointer" : "crosshair";
 </script>
 
-<div class="world-map">
-  <div class="toolbar">
-    <div class="title"><MapIcon size={18} /> MCA map · {worldName}</div>
+<div class="world-map" class:layout-dock={layout === "dock"} class:layout-top={layout === "top"}>
+  <aside class="tools-panel">
+    <div class="title"><MapIcon size={16} /> MCA map{#if layout === "top"} · {worldName}{/if}</div>
     <div class="tools">
       <select class="ghost select" bind:value={dimension} on:change={load} title="Dimension">
         {#each dimensions as d (d)}
@@ -1354,72 +1357,226 @@
         <option value="biome">by biome</option>
         <option value="height">by height</option>
       </select>
-      <button class="ghost" class:active={tool === "pan"} on:click={() => (tool = "pan")} title="Pan (or Alt+drag / middle mouse)">
-        <Minimize2 size={14} /> Pan
-      </button>
-      <button class="ghost" class:active={tool === "click"} on:click={() => (tool = "click")} title="Click chunks to toggle">
-        <MousePointer2 size={14} /> Click
-      </button>
-      <button class="ghost" class:active={tool === "box"} on:click={() => (tool = "box")} title="Drag rectangle (Shift = subtract)">
-        <Square size={14} /> Box
-      </button>
-      <button class="ghost" class:active={tool === "radius"} on:click={() => (tool = "radius")} title="Drag radius (or click with default radius)">
-        <Circle size={14} /> Radius
-      </button>
-      <button class="ghost" class:active={tool === "region"} on:click={() => (tool = "region")} title="Select whole region (Shift = deselect)">
-        <Layers size={14} /> Region
-      </button>
-      <button class="ghost" on:click={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
-      <button class="ghost" on:click={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
-      <button class="ghost" on:click={() => { fitView(); draw(); }} title="Fit map">Fit</button>
-      <button class="ghost" on:click={copySelected} disabled={selection.size === 0} title="Copy (Ctrl+C)">
-        <Copy size={14} /> Copy
-      </button>
-      <button class="ghost" on:click={cutSelected} disabled={selection.size === 0} title="Cut (Ctrl+X)">
-        <Scissors size={14} /> Cut
-      </button>
-      <button class="ghost" on:click={pasteFromClipboard} disabled={!clipboard} title="Paste (Ctrl+V)">
-        <Clipboard size={14} /> Paste {clipboard ? `(${clipboard.chunks.length})` : ""}
-      </button>
-      <button class="ghost" on:click={swapTwoSelected} disabled={selection.size !== 2} title="Swap two selected chunks">
-        <ArrowLeftRight size={14} /> Swap
-      </button>
-      <button class="ghost" on:click={openChunkEditor} disabled={selection.size !== 1} title="Edit NBT of selected chunk">
-        <Pencil size={14} /> Edit NBT
-      </button>
-      <button class="ghost" on:click={exportSelectedFolder} disabled={selection.size === 0} title="Export selected chunks to folder">
-        <FolderOutput size={14} /> Folder
-      </button>
-      <button class="ghost" on:click={importFromFolder} disabled={!map} title="Import chunks from another world/export folder (uses paste ΔX/ΔZ)">
-        <FolderInput size={14} /> Import
-      </button>
-      <button class="ghost" on:click={exportSelectionCsv} disabled={selection.size === 0} title="Export selection CSV">
-        <FileDown size={14} /> CSV
-      </button>
-      <button class="ghost" on:click={triggerCsvImport} disabled={!map} title="Import selection CSV">
-        <FileUp size={14} /> CSV
-      </button>
-      <button class="ghost" on:click={exportPng} title="Export viewport PNG"><Download size={14} /> PNG</button>
-      <button class="ghost" on:click={exportFullMapPng} disabled={!map} title="Save full dimension/selection map PNG (current color mode)">
-        <Download size={14} /> Map PNG
-      </button>
-      <button class="ghost" on:click={purgeRegions} title="Compact region files after deletes">
-        <Eraser size={14} /> Purge
-      </button>
-      <button class="ghost" on:click={warmMapCache} disabled={!map} title="Warm region metadata cache">
-        Cache
-      </button>
-      <button class="ghost" on:click={clearMapCache} disabled={!map} title="Clear region metadata cache for this dimension">
-        Clear cache
-      </button>
-      <button class="ghost danger" on:click={deleteSelected} disabled={selection.size === 0} title="Delete selected (Del)">
-        <Trash2 size={14} /> Delete {selection.size || ""}
-      </button>
-      <button class="ghost" on:click={load} disabled={loading} title="Reload">
-        <RefreshCw size={14} class={loading ? "spin" : ""} />
-      </button>
+      <div class="tool-group">
+        <button class="ghost" class:active={tool === "pan"} on:click={() => (tool = "pan")} title="Pan (or Alt+drag / middle mouse)">
+          <Minimize2 size={14} /> Pan
+        </button>
+        <button class="ghost" class:active={tool === "click"} on:click={() => (tool = "click")} title="Click chunks to toggle">
+          <MousePointer2 size={14} /> Click
+        </button>
+        <button class="ghost" class:active={tool === "box"} on:click={() => (tool = "box")} title="Drag rectangle (Shift = subtract)">
+          <Square size={14} /> Box
+        </button>
+        <button class="ghost" class:active={tool === "radius"} on:click={() => (tool = "radius")} title="Drag radius (or click with default radius)">
+          <Circle size={14} /> Radius
+        </button>
+        <button class="ghost" class:active={tool === "region"} on:click={() => (tool = "region")} title="Select whole region (Shift = deselect)">
+          <Layers size={14} /> Region
+        </button>
+      </div>
+      <div class="tool-group">
+        <button class="ghost" on:click={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
+        <button class="ghost" on:click={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
+        <button class="ghost" on:click={() => { fitView(); draw(); }} title="Fit map">Fit</button>
+      </div>
+      <div class="tool-group">
+        <button class="ghost" on:click={copySelected} disabled={selection.size === 0} title="Copy (Ctrl+C)">
+          <Copy size={14} /> Copy
+        </button>
+        <button class="ghost" on:click={cutSelected} disabled={selection.size === 0} title="Cut (Ctrl+X)">
+          <Scissors size={14} /> Cut
+        </button>
+        <button class="ghost" on:click={pasteFromClipboard} disabled={!clipboard} title="Paste (Ctrl+V)">
+          <Clipboard size={14} /> Paste {clipboard ? `(${clipboard.chunks.length})` : ""}
+        </button>
+        <button class="ghost danger" on:click={deleteSelected} disabled={selection.size === 0} title="Delete selected (Del)">
+          <Trash2 size={14} /> Delete {selection.size || ""}
+        </button>
+      </div>
+      <div class="tool-group">
+        <button class="ghost" on:click={swapTwoSelected} disabled={selection.size !== 2} title="Swap two selected chunks">
+          <ArrowLeftRight size={14} /> Swap
+        </button>
+        <button class="ghost" on:click={openChunkEditor} disabled={selection.size !== 1} title="Edit NBT of selected chunk">
+          <Pencil size={14} /> Edit NBT
+        </button>
+        <button class="ghost" on:click={exportSelectedFolder} disabled={selection.size === 0} title="Export selected chunks to folder">
+          <FolderOutput size={14} /> Folder
+        </button>
+        <button class="ghost" on:click={importFromFolder} disabled={!map} title="Import chunks from another world/export folder (uses paste ΔX/ΔZ)">
+          <FolderInput size={14} /> Import
+        </button>
+        <button class="ghost" on:click={exportSelectionCsv} disabled={selection.size === 0} title="Export selection CSV">
+          <FileDown size={14} /> CSV↓
+        </button>
+        <button class="ghost" on:click={triggerCsvImport} disabled={!map} title="Import selection CSV">
+          <FileUp size={14} /> CSV↑
+        </button>
+        <button class="ghost" on:click={exportPng} title="Export viewport PNG"><Download size={14} /> PNG</button>
+        <button class="ghost" on:click={exportFullMapPng} disabled={!map} title="Save full dimension/selection map PNG (current color mode)">
+          <Download size={14} /> Map PNG
+        </button>
+      </div>
+      <div class="tool-group">
+        <button class="ghost" on:click={purgeRegions} title="Compact region files after deletes">
+          <Eraser size={14} /> Purge
+        </button>
+        <button class="ghost" on:click={warmMapCache} disabled={!map} title="Warm region metadata cache">
+          Cache
+        </button>
+        <button class="ghost" on:click={clearMapCache} disabled={!map} title="Clear region metadata cache for this dimension">
+          Clear cache
+        </button>
+        <button class="ghost" on:click={load} disabled={loading} title="Reload">
+          <RefreshCw size={14} class={loading ? "spin" : ""} />
+        </button>
+      </div>
     </div>
-  </div>
+
+    {#if layout === "dock"}
+      <button class="filters-toggle" on:click={() => (filtersOpen = !filtersOpen)}>
+        <Filter size={12} /> Filters &amp; NBT {filtersOpen ? "▾" : "▸"}
+      </button>
+    {/if}
+
+    {#if layout === "top" || filtersOpen}
+      <div class="filter-bar">
+        <CalendarRange size={14} />
+        <span>from</span>
+        <input type="date" bind:value={filterFrom} />
+        <span>to</span>
+        <input type="date" bind:value={filterTo} />
+        <button class="mini" on:click={selectByDate} disabled={!map || (!filterFrom && !filterTo)}>Select by date</button>
+        <span class="sep" />
+        <span>status</span>
+        <select class="mini-select" bind:value={statusFilter} title="Only select chunks with this status">
+          <option value="all">all</option>
+          <option value="empty">empty</option>
+          <option value="partial">partial</option>
+          <option value="full">full</option>
+        </select>
+        <span class="sep" />
+        <span>inh</span>
+        <input class="num" type="text" bind:value={inhabitedMin} placeholder="min" title="Min inhabitedTime" />
+        <input class="num" type="text" bind:value={inhabitedMax} placeholder="max" title="Max inhabitedTime" />
+        <span>dv</span>
+        <input class="num" type="text" bind:value={dataVersionMin} placeholder="min" title="Min dataVersion" />
+        <input class="num" type="text" bind:value={dataVersionMax} placeholder="max" title="Max dataVersion" />
+        <span>X</span>
+        <input class="num" type="text" bind:value={xposMin} placeholder="min" title="Min chunk X" />
+        <input class="num" type="text" bind:value={xposMax} placeholder="max" title="Max chunk X" />
+        <span>Z</span>
+        <input class="num" type="text" bind:value={zposMin} placeholder="min" title="Min chunk Z" />
+        <input class="num" type="text" bind:value={zposMax} placeholder="max" title="Max chunk Z" />
+        <span>border</span>
+        <input class="num" type="text" bind:value={borderEmpty} placeholder="≥N" title="Empty neighbor count ≥ N (4-neighbors)" />
+        <span>ents</span>
+        <input class="num" type="text" bind:value={entityCountMin} placeholder="min" title="Min entityCount / minEntities" />
+        <span>structs</span>
+        <input class="num" type="text" bind:value={structureCountMin} placeholder="min" title="Min structureCount" />
+        <span>ent names</span>
+        <input class="num wide" type="text" bind:value={filtEntityNames} placeholder="zombie,…" title="Entity id names (comma-separated)" />
+        <span>struct names</span>
+        <input class="num wide" type="text" bind:value={filtStructureNames} placeholder="village,…" title="Structure names (comma-separated)" />
+        <span>palette</span>
+        <input class="num wide" type="text" bind:value={filtPaletteNames} placeholder="stone,…" title="Block palette names (comma-separated)" />
+        <button class="mini" on:click={applyChunkFilter} disabled={!map} title="Select chunks matching all filters">
+          <Filter size={12} /> Select by filter
+        </button>
+        <button class="mini" on:click={applyContentFilter} disabled={!map || !$projectPath} title="Scan MCA for entity/structure/palette content (empty selection = whole dimension)">
+          <Filter size={12} /> Content filter
+        </button>
+        <span class="sep" />
+        <span>r</span>
+        <input class="num" type="number" min="1" max="128" bind:value={radiusChunks} title="Default radius (chunks)" />
+        <span class="sep" />
+        <span>paste ΔX</span>
+        <input class="num" type="number" bind:value={pasteOffsetX} title="Paste chunk X offset" />
+        <span>ΔZ</span>
+        <input class="num" type="number" bind:value={pasteOffsetZ} title="Paste chunk Z offset" />
+        <label class="chk" title="Overwrite existing chunks on import/paste destinations">
+          <input type="checkbox" bind:checked={importOverwrite} /> overwrite
+        </label>
+        <label class="chk" title="Only import into current selection">
+          <input type="checkbox" bind:checked={importIntoSelection} /> into sel
+        </label>
+        <span>Ysec</span>
+        <input class="num" type="number" bind:value={importYOffset} title="Import vertical section offset (×16 blocks)" />
+        <span>secs</span>
+        <input class="num wide" type="text" bind:value={importSections} placeholder="all / :-4 / 0:4" title="Import only these sections" />
+        <span class="sep" />
+        <span>query</span>
+        <input
+          class="num wide"
+          type="text"
+          bind:value={filterQuery}
+          placeholder="InhabitedTime < 100 AND Status = full"
+          title="MCA-style map filter query"
+        />
+        <button class="mini" on:click={applyQuerySelect} disabled={!map || !$projectPath} title="Select by filter query">
+          <Filter size={12} /> Query
+        </button>
+        <span class="sep" />
+        <button class="mini" on:click={selectAll} disabled={!map}><CheckSquare size={12} /> All</button>
+        <button class="mini" on:click={invertSelection} disabled={!map}><CheckSquare size={12} /> Invert</button>
+        <button class="mini" on:click={invertSelectedRegions} disabled={!map || selection.size === 0} title="Invert only regions that have selection">
+          <CheckSquare size={12} /> Invert regions
+        </button>
+        <button class="mini" on:click={clearSelection} disabled={selection.size === 0}><XSquare size={12} /> Clear</button>
+        <button
+          class="mini"
+          on:click={expandSelection}
+          disabled={!map || selection.size === 0}
+          title="Expand selection by Chebyshev ±r chunks (present cells only; uses r above)"
+        >
+          Expand ±r
+        </button>
+        {#if filterActive}<span class="filttag">filter active</span>{/if}
+      </div>
+
+      <div class="nbt-bar">
+        <button class="mini" on:click={() => (nbtPanelOpen = !nbtPanelOpen)} title="Toggle NBT changer">
+          <Wrench size={12} /> NBT Changer
+        </button>
+        {#if nbtPanelOpen}
+          <span>inhabited</span>
+          <input class="num" type="text" bind:value={chgInhabited} placeholder="ticks" title="Set InhabitedTime" />
+          <span>status</span>
+          <input class="num wide" type="text" bind:value={chgStatus} placeholder="e.g. full" title="Set Status string" />
+          <span>dataVersion</span>
+          <input class="num" type="text" bind:value={chgDataVersion} placeholder="dv" title="Set DataVersion" />
+          <span>light</span>
+          <input class="num" type="text" bind:value={chgLightPopulated} placeholder="0/1" title="Set isLightOn / LightPopulated" />
+          <span>biome</span>
+          <input class="num wide" type="text" bind:value={chgBiome} placeholder="plains" title="Set biome id/name" />
+          <span>del secs</span>
+          <input class="num wide" type="text" bind:value={chgDeleteSections} placeholder="all / :-4" title="Delete sections (e.g. all, :-4, 0:4)" />
+          <span>replace</span>
+          <input class="num wide" type="text" bind:value={chgReplaceBlocks} placeholder="stone=deepslate; oak_log[axis=y]=stripped_oak_log[axis=y]" title="Replace blocks (name or name[prop=val]; comma/semicolon separated)" />
+          <span>del structs</span>
+          <input class="num wide" type="text" bind:value={chgDeleteStructureRefs} placeholder="names" title="Delete structure references" />
+          <label class="chk" title="Prevent retrogen">
+            <input type="checkbox" bind:checked={chgPreventRetrogen} /> no retrogen
+          </label>
+          <label class="chk" title="Force blend (is_blending / blending_data)">
+            <input type="checkbox" bind:checked={chgForceBlend} /> force blend
+          </label>
+          <label class="chk" title="Delete entities in selected chunks">
+            <input type="checkbox" bind:checked={chgDeleteEntities} /> del ents
+          </label>
+          <label class="chk" title="Fix Status from chunk contents">
+            <input type="checkbox" bind:checked={chgFixStatus} /> fix status
+          </label>
+          <label class="chk" title="Force write even if unchanged">
+            <input type="checkbox" bind:checked={chgForce} /> force
+          </label>
+          <button class="mini" on:click={applyNbtChange} disabled={selection.size === 0} title="Apply NBT change to selection">
+            <Wrench size={12} /> NBT Change
+          </button>
+        {/if}
+      </div>
+    {/if}
+  </aside>
 
   <input
     bind:this={csvInput}
@@ -1429,202 +1586,68 @@
     on:change={onCsvImport}
   />
 
-  <div class="stats">
-    {#if map}
-      <span>{dimLabel(dimension)}</span>
-      <span>{map.regionCount} regions</span>
-      <span>{map.totalPresent.toLocaleString()} chunks</span>
-      <span>RX {map.minRegionX}…{map.maxRegionX}</span>
-      <span>RZ {map.minRegionZ}…{map.maxRegionZ}</span>
-      <span>zoom {(zoom * 100).toFixed(0)}%</span>
-      <span class="sel">selected: {selection.size}</span>
-      {#if clipboard}
-        <span class="clip">clipboard: {clipboard.chunks.length}</span>
+  <div class="viewport-col">
+    <div class="stats">
+      {#if map}
+        <span>{dimLabel(dimension)}</span>
+        <span>{map.regionCount} regions</span>
+        <span>{map.totalPresent.toLocaleString()} chunks</span>
+        <span>RX {map.minRegionX}…{map.maxRegionX}</span>
+        <span>RZ {map.minRegionZ}…{map.maxRegionZ}</span>
+        <span>zoom {(zoom * 100).toFixed(0)}%</span>
+        <span class="sel">selected: {selection.size}</span>
+        {#if clipboard}
+          <span class="clip">clipboard: {clipboard.chunks.length}</span>
+        {/if}
+        {#if flashMsg}<span class="ok">{flashMsg}</span>{/if}
+      {:else if error}
+        <span class="err">{error}</span>
+      {:else if loading}
+        <span>loading…</span>
+      {:else}
+        <span>no world map</span>
       {/if}
-      {#if flashMsg}<span class="ok">{flashMsg}</span>{/if}
-    {:else if error}
-      <span class="err">{error}</span>
-    {:else if loading}
-      <span>loading…</span>
-    {:else}
-      <span>no world map</span>
-    {/if}
-  </div>
+    </div>
 
-  <div class="filter-bar">
-    <CalendarRange size={14} />
-    <span>from</span>
-    <input type="date" bind:value={filterFrom} />
-    <span>to</span>
-    <input type="date" bind:value={filterTo} />
-    <button class="mini" on:click={selectByDate} disabled={!map || (!filterFrom && !filterTo)}>Select by date</button>
-    <span class="sep" />
-    <span>status</span>
-    <select class="mini-select" bind:value={statusFilter} title="Only select chunks with this status">
-      <option value="all">all</option>
-      <option value="empty">empty</option>
-      <option value="partial">partial</option>
-      <option value="full">full</option>
-    </select>
-    <span class="sep" />
-    <span>inh</span>
-    <input class="num" type="text" bind:value={inhabitedMin} placeholder="min" title="Min inhabitedTime" />
-    <input class="num" type="text" bind:value={inhabitedMax} placeholder="max" title="Max inhabitedTime" />
-    <span>dv</span>
-    <input class="num" type="text" bind:value={dataVersionMin} placeholder="min" title="Min dataVersion" />
-    <input class="num" type="text" bind:value={dataVersionMax} placeholder="max" title="Max dataVersion" />
-    <span>X</span>
-    <input class="num" type="text" bind:value={xposMin} placeholder="min" title="Min chunk X" />
-    <input class="num" type="text" bind:value={xposMax} placeholder="max" title="Max chunk X" />
-    <span>Z</span>
-    <input class="num" type="text" bind:value={zposMin} placeholder="min" title="Min chunk Z" />
-    <input class="num" type="text" bind:value={zposMax} placeholder="max" title="Max chunk Z" />
-    <span>border</span>
-    <input class="num" type="text" bind:value={borderEmpty} placeholder="≥N" title="Empty neighbor count ≥ N (4-neighbors)" />
-    <span>ents</span>
-    <input class="num" type="text" bind:value={entityCountMin} placeholder="min" title="Min entityCount / minEntities" />
-    <span>structs</span>
-    <input class="num" type="text" bind:value={structureCountMin} placeholder="min" title="Min structureCount" />
-    <span>ent names</span>
-    <input class="num wide" type="text" bind:value={filtEntityNames} placeholder="zombie,…" title="Entity id names (comma-separated)" />
-    <span>struct names</span>
-    <input class="num wide" type="text" bind:value={filtStructureNames} placeholder="village,…" title="Structure names (comma-separated)" />
-    <span>palette</span>
-    <input class="num wide" type="text" bind:value={filtPaletteNames} placeholder="stone,…" title="Block palette names (comma-separated)" />
-    <button class="mini" on:click={applyChunkFilter} disabled={!map} title="Select chunks matching all filters">
-      <Filter size={12} /> Select by filter
-    </button>
-    <button class="mini" on:click={applyContentFilter} disabled={!map || !$projectPath} title="Scan MCA for entity/structure/palette content (empty selection = whole dimension)">
-      <Filter size={12} /> Content filter
-    </button>
-    <span class="sep" />
-    <span>r</span>
-    <input class="num" type="number" min="1" max="128" bind:value={radiusChunks} title="Default radius (chunks)" />
-    <span class="sep" />
-    <span>paste ΔX</span>
-    <input class="num" type="number" bind:value={pasteOffsetX} title="Paste chunk X offset" />
-    <span>ΔZ</span>
-    <input class="num" type="number" bind:value={pasteOffsetZ} title="Paste chunk Z offset" />
-    <label class="chk" title="Overwrite existing chunks on import/paste destinations">
-      <input type="checkbox" bind:checked={importOverwrite} /> overwrite
-    </label>
-    <label class="chk" title="Only import into current selection">
-      <input type="checkbox" bind:checked={importIntoSelection} /> into sel
-    </label>
-    <span>Ysec</span>
-    <input class="num" type="number" bind:value={importYOffset} title="Import vertical section offset (×16 blocks)" />
-    <span>secs</span>
-    <input class="num wide" type="text" bind:value={importSections} placeholder="all / :-4 / 0:4" title="Import only these sections" />
-    <span class="sep" />
-    <span>query</span>
-    <input
-      class="num wide"
-      type="text"
-      bind:value={filterQuery}
-      placeholder='InhabitedTime < 100 AND Status = full'
-      title="MCA-style map filter query"
-    />
-    <button class="mini" on:click={applyQuerySelect} disabled={!map || !$projectPath} title="Select by filter query">
-      <Filter size={12} /> Query
-    </button>
-    <span class="sep" />
-    <button class="mini" on:click={selectAll} disabled={!map}><CheckSquare size={12} /> All</button>
-    <button class="mini" on:click={invertSelection} disabled={!map}><CheckSquare size={12} /> Invert</button>
-    <button class="mini" on:click={invertSelectedRegions} disabled={!map || selection.size === 0} title="Invert only regions that have selection">
-      <CheckSquare size={12} /> Invert regions
-    </button>
-    <button class="mini" on:click={clearSelection} disabled={selection.size === 0}><XSquare size={12} /> Clear</button>
-    <button
-      class="mini"
-      on:click={expandSelection}
-      disabled={!map || selection.size === 0}
-      title="Expand selection by Chebyshev ±r chunks (present cells only; uses r above)"
-    >
-      Expand ±r
-    </button>
-    {#if filterActive}<span class="filttag">filter active</span>{/if}
-  </div>
-
-  <div class="nbt-bar">
-    <button class="mini" on:click={() => (nbtPanelOpen = !nbtPanelOpen)} title="Toggle NBT changer">
-      <Wrench size={12} /> NBT Changer
-    </button>
-    {#if nbtPanelOpen}
-      <span>inhabited</span>
-      <input class="num" type="text" bind:value={chgInhabited} placeholder="ticks" title="Set InhabitedTime" />
-      <span>status</span>
-      <input class="num wide" type="text" bind:value={chgStatus} placeholder="e.g. full" title="Set Status string" />
-      <span>dataVersion</span>
-      <input class="num" type="text" bind:value={chgDataVersion} placeholder="dv" title="Set DataVersion" />
-      <span>light</span>
-      <input class="num" type="text" bind:value={chgLightPopulated} placeholder="0/1" title="Set isLightOn / LightPopulated" />
-      <span>biome</span>
-      <input class="num wide" type="text" bind:value={chgBiome} placeholder="plains" title="Set biome id/name" />
-      <span>del secs</span>
-      <input class="num wide" type="text" bind:value={chgDeleteSections} placeholder="all / :-4" title="Delete sections (e.g. all, :-4, 0:4)" />
-      <span>replace</span>
-      <input class="num wide" type="text" bind:value={chgReplaceBlocks} placeholder="stone=deepslate; oak_log[axis=y]=stripped_oak_log[axis=y]" title="Replace blocks (name or name[prop=val]; comma/semicolon separated)" />
-      <span>del structs</span>
-      <input class="num wide" type="text" bind:value={chgDeleteStructureRefs} placeholder="names" title="Delete structure references" />
-      <label class="chk" title="Prevent retrogen">
-        <input type="checkbox" bind:checked={chgPreventRetrogen} /> no retrogen
-      </label>
-      <label class="chk" title="Force blend (is_blending / blending_data)">
-        <input type="checkbox" bind:checked={chgForceBlend} /> force blend
-      </label>
-      <label class="chk" title="Delete entities in selected chunks">
-        <input type="checkbox" bind:checked={chgDeleteEntities} /> del ents
-      </label>
-      <label class="chk" title="Fix Status from chunk contents">
-        <input type="checkbox" bind:checked={chgFixStatus} /> fix status
-      </label>
-      <label class="chk" title="Force write even if unchanged">
-        <input type="checkbox" bind:checked={chgForce} /> force
-      </label>
-      <button class="mini" on:click={applyNbtChange} disabled={selection.size === 0} title="Apply NBT change to selection">
-        <Wrench size={12} /> NBT Change
-      </button>
-    {/if}
-  </div>
-
-  <div class="map-scroll" bind:this={viewport}>
-    {#if map}
-      <canvas
-        bind:this={canvas}
-        style="cursor: {canvasCursor}"
-        on:mousemove={onMove}
-        on:click={onClick}
-        on:mousedown={onDown}
-        on:mouseup={onUp}
-        on:mouseleave={onLeave}
-        on:wheel|preventDefault={onWheel}
-        on:contextmenu|preventDefault
-      ></canvas>
-      {#if hover}
-        <div class="hover-tip" style="left: {tipX}px; top: {tipY}px">
-          chunk <code>{hover.cx}, {hover.cz}</code> · region {hover.rx},{hover.rz}<br />
-          {hover.status}{#if hover.modified} · {new Date(hover.modified * 1000).toLocaleDateString()}{/if}<br />
-          inhabited {hover.inhabitedTime} · dataVersion {hover.dataVersion}
-          {#if hover.biomeId != null}<br />biome {hover.biomeId}{/if}
-          {#if hover.surfaceY != null}<br />surfaceY {hover.surfaceY}{/if}
-          {#if hover.entityCount != null}<br />entities {hover.entityCount}{/if}
-          {#if hover.structureCount != null}<br />structures {hover.structureCount}{/if}
-        </div>
+    <div class="map-scroll" bind:this={viewport}>
+      {#if map}
+        <canvas
+          bind:this={canvas}
+          style="cursor: {canvasCursor}"
+          on:mousemove={onMove}
+          on:click={onClick}
+          on:mousedown={onDown}
+          on:mouseup={onUp}
+          on:mouseleave={onLeave}
+          on:wheel|preventDefault={onWheel}
+          on:contextmenu|preventDefault
+        ></canvas>
+        {#if hover}
+          <div class="hover-tip" style="left: {tipX}px; top: {tipY}px">
+            chunk <code>{hover.cx}, {hover.cz}</code> · region {hover.rx},{hover.rz}<br />
+            {hover.status}{#if hover.modified} · {new Date(hover.modified * 1000).toLocaleDateString()}{/if}<br />
+            inhabited {hover.inhabitedTime} · dataVersion {hover.dataVersion}
+            {#if hover.biomeId != null}<br />biome {hover.biomeId}{/if}
+            {#if hover.surfaceY != null}<br />surfaceY {hover.surfaceY}{/if}
+            {#if hover.entityCount != null}<br />entities {hover.entityCount}{/if}
+            {#if hover.structureCount != null}<br />structures {hover.structureCount}{/if}
+          </div>
+        {/if}
+      {:else if error}
+        <EmptyState icon={MapIcon} title="No map yet" description="Generate the world by running the pack, then refresh. Switch dimension if you explored Nether/End." />
+      {:else if !loading}
+        <EmptyState icon={MapIcon} title="No world selected" description="Open a world to view its 2D map." />
       {/if}
-    {:else if error}
-      <EmptyState icon={MapIcon} title="No map yet" description="Generate the world by running the pack, then refresh. Switch dimension if you explored Nether/End." />
-    {:else if !loading}
-      <EmptyState icon={MapIcon} title="No world selected" description="Open a world to view its 2D map." />
-    {/if}
-  </div>
+    </div>
 
-  <div class="legend">
-    <span><i style="background:#15171c"></i> absent</span>
-    <span><i style="background:#3b4252"></i> empty</span>
-    <span><i style="background:#b08968"></i> partial</span>
-    <span><i style="background:#2d8c8c"></i> {colorMode === "date" || colorMode === "inhabited" || colorMode === "height" ? "old→new / low→high" : colorMode === "biome" ? "biome hue" : "full (old→new)"}</span>
-    <span><i style="background:rgba(255,90,95,0.7)"></i> selected</span>
-    <span class="hint">Wheel zoom · Alt/middle pan · Shift subtract · N color · Del delete</span>
+    <div class="legend">
+      <span><i style="background:#15171c"></i> absent</span>
+      <span><i style="background:#3b4252"></i> empty</span>
+      <span><i style="background:#b08968"></i> partial</span>
+      <span><i style="background:#2d8c8c"></i> {colorMode === "date" || colorMode === "inhabited" || colorMode === "height" ? "old→new / low→high" : colorMode === "biome" ? "biome hue" : "full (old→new)"}</span>
+      <span><i style="background:rgba(255,90,95,0.7)"></i> selected</span>
+      <span class="hint">Wheel zoom · Alt/middle pan · Shift subtract · N color · Del delete</span>
+    </div>
   </div>
 </div>
 
@@ -1641,36 +1664,207 @@
 {/if}
 
 <style>
-  .world-map { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .title { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text-primary); }
-  .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .world-map {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+    width: 100%;
+  }
+
+  .world-map.layout-dock {
+    flex-direction: row;
+    gap: 0;
+    align-items: stretch;
+  }
+
+  .tools-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .layout-top .tools-panel {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px 12px;
+    align-items: center;
+  }
+  .layout-top .tools-panel > .title { grid-column: 1; }
+  .layout-top .tools-panel > .tools { grid-column: 2; justify-content: flex-end; }
+  .layout-top .tools-panel > .filter-bar,
+  .layout-top .tools-panel > .nbt-bar { grid-column: 1 / -1; }
+
+  .layout-dock .tools-panel {
+    width: 210px;
+    max-width: 220px;
+    min-width: 200px;
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px 8px;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border-color);
+    gap: 8px;
+  }
+
+  .title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 13px;
+    color: var(--text-primary);
+    flex-shrink: 0;
+  }
+
+  .tools {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .layout-dock .tools {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .tool-group {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .layout-dock .tool-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .layout-dock .tool-group .ghost {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .layout-dock .select {
+    width: 100%;
+  }
+
+  .filters-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+  }
+  .filters-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+
   .toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
   .ghost { display: inline-flex; align-items: center; gap: 5px; }
   .ghost.active { background: rgba(120,200,255,0.15); border-color: rgba(120,200,255,0.4); color: #8fd3ff; }
   .ghost.danger:not(:disabled):hover { background: rgba(255,90,95,0.15); border-color: rgba(255,90,95,0.4); color: #ff7a7e; }
   .select { padding: 5px 8px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); font-size: 12px; }
-  .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); }
+
+  .viewport-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+  }
+
+  .layout-dock .viewport-col {
+    padding: 8px 10px 10px;
+    height: 100%;
+  }
+
+  .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
   .stats .sel { color: #ff7a7e; }
   .stats .clip { color: #8fd3ff; }
   .stats .ok { color: var(--accent-primary); }
   .stats .err { color: #fca5a5; }
-  .filter-bar, .nbt-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+
+  .filter-bar, .nbt-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .layout-dock .filter-bar,
+  .layout-dock .nbt-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .layout-dock .filter-bar .sep,
+  .layout-dock .nbt-bar .sep {
+    display: none;
+  }
+
+  .layout-dock .filter-bar .num,
+  .layout-dock .nbt-bar .num,
+  .layout-dock .filter-bar .num.wide,
+  .layout-dock .nbt-bar .num.wide,
+  .layout-dock .filter-bar input[type="date"],
+  .layout-dock .mini-select {
+    width: 100%;
+    box-sizing: border-box;
+  }
+
   .filter-bar input[type="date"] { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 4px 6px; font-size: 12px; color-scheme: dark; }
   .filter-bar .num, .nbt-bar .num { width: 64px; background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 4px 6px; font-size: 12px; }
   .filter-bar .num.wide, .nbt-bar .num.wide { width: 88px; }
-  .nbt-bar .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
+  .nbt-bar .chk, .filter-bar .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; cursor: pointer; }
   .filter-bar .sep { width: 1px; height: 18px; background: var(--border-color); margin: 0 4px; }
   .mini-select { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); padding: 4px 6px; font-size: 11px; }
   .mini { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 4px 8px; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: transparent; color: var(--text-secondary); cursor: pointer; }
   .mini:hover:not(:disabled) { background: var(--bg-tertiary); }
   .mini:disabled { opacity: .4; cursor: default; }
   .filttag { color: #8fd3ff; font-size: 11px; }
-  .map-scroll { position: relative; overflow: hidden; border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: #0e0f13; height: min(60vh, 560px); min-height: 280px; }
+
+  .map-scroll {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: #0e0f13;
+    flex: 1;
+    min-height: 0;
+  }
+
+  .layout-top .map-scroll {
+    height: min(60vh, 560px);
+    min-height: 280px;
+    flex: 1 1 auto;
+  }
+
+  .layout-dock .map-scroll {
+    height: auto;
+    min-height: 0;
+  }
+
   canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
   .hover-tip { position: fixed; pointer-events: none; z-index: 30; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px; font-size: 11px; color: var(--text-secondary); box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   .hover-tip code { color: var(--accent-primary); }
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); align-items: center; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); align-items: center; flex-shrink: 0; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; border: 1px solid rgba(255,255,255,.1); }
   .legend .hint { opacity: 0.7; margin-left: auto; }

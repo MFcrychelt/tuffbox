@@ -115,7 +115,7 @@
             description="Generate a world by launching the game, then refresh."
           />
         {:else}
-          {#each worlds as w}
+          {#each worlds as w (w.name)}
             <button
               class="world-item"
               class:active={selectedWorld === w.name}
@@ -138,10 +138,9 @@
     <!-- Main content -->
     <div class="worlds-main">
       {#if selectedWorld}
-        <!-- World detail header -->
         <div class="world-header">
           <div class="world-title">
-            <Globe size={22} />
+            <Globe size={20} />
             <h2>{selectedWorld}</h2>
           </div>
           <div class="world-actions">
@@ -155,45 +154,50 @@
           <div class="backup-msg">{backupMsg}</div>
         {/if}
 
-        <!-- World info cards -->
-        {#if worldDetail}
-          <div class="info-grid">
-            <div class="info-card">
-              <div class="info-label"><MapPin size={12} /> Seed</div>
-              <div class="info-value seed">{worldDetail.seed?.toString()}</div>
+        <div class="info-strip">
+          {#if worldDetail}
+            <div class="info-chip">
+              <MapPin size={11} />
+              <span class="lbl">Seed</span>
+              <span class="val seed">{worldDetail.seed?.toString()}</span>
             </div>
-            <div class="info-card">
-              <div class="info-label"><Swords size={12} /> Game Mode</div>
-              <div class="info-value">{gameTypeLabel(worldDetail.gameType)}</div>
+            <div class="info-chip">
+              <Swords size={11} />
+              <span class="lbl">Mode</span>
+              <span class="val">{gameTypeLabel(worldDetail.gameType)}</span>
             </div>
-            <div class="info-card">
-              <div class="info-label"><Shield size={12} /> Difficulty</div>
-              <div class="info-value">{difficultyLabel(worldDetail.difficulty)}</div>
+            <div class="info-chip">
+              <Shield size={11} />
+              <span class="lbl">Diff</span>
+              <span class="val">{difficultyLabel(worldDetail.difficulty)}</span>
             </div>
-            <div class="info-card">
-              <div class="info-label"><HardDrive size={12} /> Size</div>
-              <div class="info-value">{worldDetail.sizeFormatted}</div>
+            <div class="info-chip">
+              <HardDrive size={11} />
+              <span class="lbl">Size</span>
+              <span class="val">{worldDetail.sizeFormatted}</span>
             </div>
-            <div class="info-card">
-              <div class="info-label"><Clock size={12} /> Play Time</div>
-              <div class="info-value">{formatTime(worldDetail.time || 0)}</div>
+            <div class="info-chip">
+              <Clock size={11} />
+              <span class="lbl">Play</span>
+              <span class="val">{formatTime(worldDetail.time || 0)}</span>
             </div>
-            <div class="info-card">
-              <div class="info-label"><MapPin size={12} /> Spawn</div>
-              <div class="info-value">{worldDetail.spawnX}, {worldDetail.spawnY}, {worldDetail.spawnZ}</div>
+            <div class="info-chip">
+              <MapPin size={11} />
+              <span class="lbl">Spawn</span>
+              <span class="val">{worldDetail.spawnX}, {worldDetail.spawnY}, {worldDetail.spawnZ}</span>
             </div>
-          </div>
+          {:else if detailLoading}
+            <span class="info-loading">
+              <RefreshCw size={12} class="spin" /> Loading world info…
+            </span>
+          {:else}
+            <span class="info-loading">World info unavailable (map still works from saves/)</span>
+          {/if}
+        </div>
 
-          <!-- World map (mcaselector) -->
-          <div class="map-section">
-            <WorldMap worldName={selectedWorld} />
-          </div>
-        {:else if detailLoading}
-          <div class="loading-state">
-            <RefreshCw size={20} class="spin" />
-            <span>Loading world data…</span>
-          </div>
-        {/if}
+        <div class="map-stage">
+          <WorldMap worldName={selectedWorld} layout="dock" />
+        </div>
       {:else}
         <EmptyState
           icon={Globe}
@@ -297,10 +301,13 @@
   .worlds-main {
     flex: 1;
     min-width: 0;
+    min-height: 0;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    overflow-y: auto;
+    gap: 8px;
+    padding: 12px 14px;
+    overflow: hidden;
   }
 
   .world-header {
@@ -313,12 +320,12 @@
   .world-title {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
   }
 
   .world-title h2 {
     margin: 0;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 700;
     color: var(--text-primary);
   }
@@ -328,61 +335,61 @@
   .backup-msg {
     font-size: 12px;
     color: var(--accent-primary);
-    padding: 6px 12px;
+    padding: 4px 10px;
     background: rgba(27, 217, 106, 0.1);
     border-radius: var(--border-radius-sm);
     border: 1px solid rgba(27, 217, 106, 0.2);
-  }
-
-  .info-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 10px;
     flex-shrink: 0;
   }
 
-  .info-card {
+  .info-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 6px 10px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
-    padding: 12px;
+    flex-shrink: 0;
   }
 
-  .info-label {
-    display: flex;
+  .info-chip {
+    display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-muted);
-    margin-bottom: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
   }
 
-  .info-value {
-    font-size: 14px;
+  .info-chip .lbl {
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    font-size: 10px;
+  }
+
+  .info-chip .val {
     font-weight: 600;
     color: var(--text-primary);
+    font-size: 12px;
   }
 
-  .info-value.seed {
+  .info-chip .val.seed {
     font-family: monospace;
-    font-size: 13px;
-    word-break: break-all;
+    font-size: 11px;
   }
 
-  .map-section {
+  .info-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .map-stage {
     flex: 1;
     min-height: 0;
-  }
-
-  .loading-state {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 40px;
-    color: var(--text-muted);
-    font-size: 14px;
   }
 </style>

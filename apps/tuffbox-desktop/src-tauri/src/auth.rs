@@ -33,6 +33,33 @@ pub enum SkinSource {
     Offline,
 }
 
+/// Which cape texture to show on the 3D preview (only one at a time).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CapeProvider {
+    Mojang,
+    Optifine,
+    TLauncher,
+    None,
+}
+
+impl Default for CapeProvider {
+    fn default() -> Self {
+        Self::Mojang
+    }
+}
+
+impl std::fmt::Display for CapeProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CapeProvider::Mojang => write!(f, "Mojang"),
+            CapeProvider::Optifine => write!(f, "OptiFine"),
+            CapeProvider::TLauncher => write!(f, "TLauncher"),
+            CapeProvider::None => write!(f, "None"),
+        }
+    }
+}
+
 impl Default for SkinSource {
     fn default() -> Self {
         Self::Mojang
@@ -57,6 +84,8 @@ impl std::fmt::Display for SkinSource {
 pub enum LoginType {
     Microsoft,
     Offline,
+    /// Third-party Yggdrasil / authlib-injector (Ely.by, LittleSkin, custom).
+    Yggdrasil,
 }
 
 impl Default for LoginType {
@@ -196,6 +225,9 @@ pub struct AccountEntry {
     pub login_type: LoginType,
     pub skin_source: SkinSource,
     pub added_at: u64,
+    /// Yggdrasil / authlib-injector API root (e.g. Ely.by, LittleSkin).
+    #[serde(default)]
+    pub authority: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,9 +258,34 @@ pub struct AuthState {
     pub login_type: LoginType,
     #[serde(default)]
     pub skin_source: SkinSource,
+    /// Selected cape provider for the 3D preview (mutually exclusive).
+    #[serde(default)]
+    pub cape_provider: CapeProvider,
     #[serde(default)]
     pub accounts: Vec<AccountEntry>,
     pub active_account_uuid: Option<String>,
+}
+
+/// One cape candidate discovered from Mojang / OptiFine / TLauncher.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapeOffer {
+    pub provider: CapeProvider,
+    /// Mojang cape id when `provider == Mojang`, otherwise a stable key.
+    pub id: String,
+    pub label: String,
+    pub url: String,
+    /// True when this cape can be activated on the Mojang account.
+    pub can_activate: bool,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapeCatalog {
+    pub selected_provider: CapeProvider,
+    pub display_url: Option<String>,
+    pub offers: Vec<CapeOffer>,
 }
 
 fn accounts_path() -> PathBuf {
@@ -430,6 +487,181 @@ async fn fetch_skin_for_username(username: &str, source: &SkinSource) -> Option<
             None
         }
         SkinSource::Offline => None,
+    }
+}
+
+/// Probe whether a remote URL returns an image (used for OptiFine / TL capes).
+async fn probe_image_url(url: &str) -> Option<String> {
+    let c = client().ok()?;
+    let resp = c.get(url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if ct.contains("image") || ct.contains("octet-stream") || ct.is_empty() {
+        Some(url.to_string())
+    } else {
+        None
+    }
+}
+
+async fn fetch_cape_optifine(username: &str) -> Option<String> {
+    let https = format!("https://optifine.net/capes/{username}.png");
+    if let Some(u) = probe_image_url(&https).await {
+        return Some(u);
+    }
+    let http = format!("http://s.optifine.net/capes/{username}.png");
+    probe_image_url(&http).await
+}
+
+async fn fetch_cape_tlauncher(username: &str) -> Option<String> {
+    // Preferred: ElyBy-style texture lookup used by TLauncher / CustomSkinLoader.
+    if let Ok(c) = client() {
+        let lookup = format!("https://auth.tlauncher.org/skin/profile/texture/login/{username}");
+        if let Ok(resp) = c.get(&lookup).send().await {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<Value>().await {
+                    if let Some(url) = body
+                        .pointer("/CAPE/url")
+                        .or_else(|| body.pointer("/cape/url"))
+                        .and_then(|v| v.as_str())
+                    {
+                        let url = if url.starts_with("http://") {
+                            url.replacen("http://", "https://", 1)
+                        } else {
+                            url.to_string()
+                        };
+                        if probe_image_url(&url).await.is_some() {
+                            return Some(url);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let direct = format!(
+        "https://auth.tlauncher.org/skin/fileservice/cloaks/cloak_{username}.png"
+    );
+    probe_image_url(&direct).await
+}
+
+async fn fetch_cape_mojang_session(uuid: &str) -> Option<String> {
+    let c = client().ok()?;
+    let resp = c
+        .get(format!(
+            "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
+        ))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: Value = resp.json().await.ok()?;
+    let texture_b64 = body
+        .get("properties")
+        .and_then(|p| p.as_array())
+        .and_then(|props| {
+            props
+                .iter()
+                .find(|p| p.get("name").and_then(|n| n.as_str()) == Some("textures"))
+        })
+        .and_then(|p| p.get("value"))
+        .and_then(|v| v.as_str())?;
+    let decoded = base64_decode(texture_b64)?;
+    let tex: TextureResponse = serde_json::from_str(&decoded).ok()?;
+    tex.textures.cape.map(|c| c.url)
+}
+
+async fn resolve_display_cape(
+    username: &str,
+    uuid: &str,
+    provider: &CapeProvider,
+    mojang_owned: &[McCapeEntry],
+) -> Option<String> {
+    match provider {
+        CapeProvider::None => None,
+        CapeProvider::Mojang => mojang_owned
+            .iter()
+            .find(|c| c.state.eq_ignore_ascii_case("ACTIVE"))
+            .map(|c| c.url.clone())
+            .or_else(|| {
+                mojang_owned
+                    .first()
+                    .map(|c| c.url.clone())
+            })
+            .or(fetch_cape_mojang_session(uuid).await),
+        CapeProvider::Optifine => fetch_cape_optifine(username).await,
+        CapeProvider::TLauncher => fetch_cape_tlauncher(username).await,
+    }
+}
+
+async fn build_cape_catalog(
+    username: &str,
+    uuid: &str,
+    selected: CapeProvider,
+    mojang_owned: &[McCapeEntry],
+) -> CapeCatalog {
+    let mut offers = Vec::new();
+
+    for cape in mojang_owned {
+        offers.push(CapeOffer {
+            provider: CapeProvider::Mojang,
+            id: cape.id.clone(),
+            label: cape
+                .alias
+                .clone()
+                .unwrap_or_else(|| "Mojang cape".into()),
+            url: cape.url.clone(),
+            can_activate: true,
+            active: cape.state.eq_ignore_ascii_case("ACTIVE"),
+        });
+    }
+    if mojang_owned.is_empty() {
+        if let Some(url) = fetch_cape_mojang_session(uuid).await {
+            offers.push(CapeOffer {
+                provider: CapeProvider::Mojang,
+                id: "mojang-session".into(),
+                label: "Mojang cape".into(),
+                url,
+                can_activate: false,
+                active: selected == CapeProvider::Mojang,
+            });
+        }
+    }
+
+    if let Some(url) = fetch_cape_optifine(username).await {
+        offers.push(CapeOffer {
+            provider: CapeProvider::Optifine,
+            id: "optifine".into(),
+            label: "OptiFine cape".into(),
+            url,
+            can_activate: false,
+            active: selected == CapeProvider::Optifine,
+        });
+    }
+
+    if let Some(url) = fetch_cape_tlauncher(username).await {
+        offers.push(CapeOffer {
+            provider: CapeProvider::TLauncher,
+            id: "tlauncher".into(),
+            label: "TLauncher cape".into(),
+            url,
+            can_activate: false,
+            active: selected == CapeProvider::TLauncher,
+        });
+    }
+
+    let display_url = resolve_display_cape(username, uuid, &selected, mojang_owned).await;
+
+    CapeCatalog {
+        selected_provider: selected,
+        display_url,
+        offers,
     }
 }
 
@@ -996,27 +1228,42 @@ pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
         login_type: LoginType::Microsoft,
         skin_source: SkinSource::Mojang,
         added_at: now_secs(),
+        authority: None,
     };
     add_account_to_list(&entry)?;
 
     // Update auth state
+    let mut profile = login.profile.clone();
+    let cape_provider = load_auth_state().cape_provider;
+    profile.cape_url = resolve_display_cape(
+        &profile.name,
+        &profile.uuid,
+        &cape_provider,
+        &profile.capes,
+    )
+    .await;
+
     let accounts = load_accounts_file();
     let state = AuthState {
         logged_in: true,
-        profile: Some(login.profile.clone()),
+        profile: Some(profile.clone()),
         expires_at: Some(now_secs() + 86400),
         login_type: LoginType::Microsoft,
         skin_source: SkinSource::Mojang,
+        cape_provider,
         accounts: accounts.accounts,
         active_account_uuid: accounts.active_account_uuid,
     };
     save_auth_state(&state)?;
 
-    if let Some(ref skin_url) = login.profile.skin_url {
-        let _ = download_and_cache_skin(skin_url, &login.profile.uuid).await;
+    if let Some(ref skin_url) = profile.skin_url {
+        let _ = download_and_cache_skin(skin_url, &profile.uuid).await;
     }
 
-    Ok(login)
+    Ok(LoginResult {
+        profile,
+        mc_access_token: login.mc_access_token,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1035,12 +1282,15 @@ pub async fn mc_offline_login(
     let uuid = offline_uuid(&trimmed);
 
     let skin_url = fetch_skin_for_username(&trimmed, &skin_source).await;
+    let prev = load_auth_state();
+    let cape_provider = prev.cape_provider.clone();
+    let cape_url = resolve_display_cape(&trimmed, &uuid, &cape_provider, &[]).await;
 
     let profile = McProfile {
         uuid: uuid.clone(),
         name: trimmed,
         skin_url: skin_url.clone(),
-        cape_url: None,
+        cape_url,
         capes: vec![],
     };
 
@@ -1054,6 +1304,7 @@ pub async fn mc_offline_login(
         login_type: LoginType::Offline,
         skin_source: skin_source.clone(),
         added_at: now_secs(),
+        authority: None,
     };
     add_account_to_list(&entry)?;
 
@@ -1064,6 +1315,7 @@ pub async fn mc_offline_login(
         expires_at: None,
         login_type: LoginType::Offline,
         skin_source: skin_source.clone(),
+        cape_provider,
         accounts: accounts.accounts,
         active_account_uuid: accounts.active_account_uuid,
     };
@@ -1160,6 +1412,7 @@ pub fn mc_logout() -> Result<(), String> {
         expires_at: None,
         login_type: LoginType::default(),
         skin_source: SkinSource::default(),
+        cape_provider: state.cape_provider,
         accounts: accounts.accounts,
         active_account_uuid: accounts.active_account_uuid,
     };
@@ -1184,6 +1437,7 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
                 expires_at: Some(now_secs() + 86400),
                 login_type: LoginType::Microsoft,
                 skin_source: SkinSource::Mojang,
+                cape_provider: state.cape_provider.clone(),
                 accounts: accounts.accounts,
                 active_account_uuid: accounts.active_account_uuid,
             };
@@ -1193,7 +1447,22 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
                 let _ = download_and_cache_skin(skin_url, &login.profile.uuid).await;
             }
 
-            return Ok(login.profile);
+            // Apply selected display cape provider over Mojang active cape when needed.
+            let mut profile = login.profile;
+            if state.cape_provider != CapeProvider::Mojang {
+                profile.cape_url = resolve_display_cape(
+                    &profile.name,
+                    &profile.uuid,
+                    &state.cape_provider,
+                    &profile.capes,
+                )
+                .await;
+                let mut s = load_auth_state();
+                s.profile = Some(profile.clone());
+                let _ = save_auth_state(&s);
+            }
+
+            return Ok(profile);
         }
     }
 
@@ -1201,10 +1470,19 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     let profile = state.profile.ok_or("Not logged in")?;
     let skin_url = fetch_skin_for_username(&profile.name, &state.skin_source).await;
     if let Some(ref url) = skin_url {
+        let _ = fs::remove_file(cached_skin_path(&profile.uuid));
         let _ = download_and_cache_skin(url, &profile.uuid).await;
     }
+    let cape_url = resolve_display_cape(
+        &profile.name,
+        &profile.uuid,
+        &state.cape_provider,
+        &profile.capes,
+    )
+    .await;
     let updated = McProfile {
         skin_url: skin_url.or_else(|| profile.skin_url.clone()),
+        cape_url,
         ..profile
     };
     let accounts = load_accounts_file();
@@ -1252,6 +1530,264 @@ pub fn mc_set_skin_source(source: SkinSource) -> Result<(), String> {
     save_auth_state(&state)
 }
 
+// ─── Yggdrasil / authlib-injector ────────────────────────────────
+
+pub fn preset_authority(preset: &str) -> &'static str {
+    match preset {
+        "littleskin" | "little-skin" => "https://littleskin.cn/api/yggdrasil",
+        "custom" => "",
+        _ => "https://authserver.ely.by/api/authlib-injector", // elyby default
+    }
+}
+
+fn normalize_authority(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_string()
+}
+
+struct YggAuthResult {
+    access_token: String,
+    client_token: Option<String>,
+    uuid: String,
+    name: String,
+}
+
+async fn yggdrasil_authenticate(
+    authority: &str,
+    username: &str,
+    password: &str,
+) -> Result<YggAuthResult, String> {
+    let authority = normalize_authority(authority);
+    if authority.is_empty() {
+        return Err("Yggdrasil authority URL required".into());
+    }
+    let c = client()?;
+    let url = format!("{authority}/authserver/authenticate");
+    let resp = c
+        .post(&url)
+        .json(&serde_json::json!({
+            "agent": { "name": "Minecraft", "version": 1 },
+            "username": username,
+            "password": password,
+            "requestUser": true
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Yggdrasil auth failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Yggdrasil authenticate error ({status}): {body}"));
+    }
+
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let access_token = body
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .ok_or("missing accessToken")?
+        .to_string();
+    let client_token = body
+        .get("clientToken")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let profile = body
+        .get("selectedProfile")
+        .ok_or("missing selectedProfile — does this account own a Minecraft profile?")?;
+    let uuid = profile
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("missing profile id")?
+        .to_string();
+    let name = profile
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(username)
+        .to_string();
+
+    Ok(YggAuthResult {
+        access_token,
+        client_token,
+        uuid,
+        name,
+    })
+}
+
+async fn yggdrasil_refresh(
+    authority: &str,
+    access_token: &str,
+    client_token: &str,
+) -> Result<YggAuthResult, String> {
+    let authority = normalize_authority(authority);
+    let c = client()?;
+    let url = format!("{authority}/authserver/refresh");
+    let resp = c
+        .post(&url)
+        .json(&serde_json::json!({
+            "accessToken": access_token,
+            "clientToken": client_token,
+            "requestUser": true
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Yggdrasil refresh failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Yggdrasil refresh error ({status}): {body}"));
+    }
+
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let access_token = body
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .ok_or("missing accessToken")?
+        .to_string();
+    let client_token = body
+        .get("clientToken")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let profile = body.get("selectedProfile");
+    let (uuid, name) = if let Some(p) = profile {
+        (
+            p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            p.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Player")
+                .to_string(),
+        )
+    } else {
+        (String::new(), "Player".into())
+    };
+    if uuid.is_empty() {
+        return Err("refresh response missing selectedProfile".into());
+    }
+    Ok(YggAuthResult {
+        access_token,
+        client_token,
+        uuid,
+        name,
+    })
+}
+
+fn skin_source_for_authority(authority: &str) -> SkinSource {
+    let a = authority.to_lowercase();
+    if a.contains("ely.by") {
+        SkinSource::Elyby
+    } else {
+        SkinSource::Mojang
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn mc_list_yggdrasil_presets() -> Result<Vec<serde_json::Value>, String> {
+    Ok(vec![
+        serde_json::json!({
+            "id": "elyby",
+            "label": "Ely.by",
+            "authority": preset_authority("elyby"),
+        }),
+        serde_json::json!({
+            "id": "littleskin",
+            "label": "LittleSkin",
+            "authority": preset_authority("littleskin"),
+        }),
+        serde_json::json!({
+            "id": "custom",
+            "label": "Custom authlib-injector / Yggdrasil",
+            "authority": "",
+        }),
+    ])
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_yggdrasil_login(
+    username: String,
+    password: String,
+    authority: String,
+) -> Result<LoginResult, String> {
+    let authority = normalize_authority(&authority);
+    if authority.is_empty() {
+        return Err("Enter an authlib-injector / Yggdrasil authority URL".into());
+    }
+    let auth = yggdrasil_authenticate(&authority, username.trim(), &password).await?;
+    let skin_source = skin_source_for_authority(&authority);
+    let skin_url = fetch_skin_for_username(&auth.name, &skin_source).await;
+    if let Some(ref url) = skin_url {
+        let _ = download_and_cache_skin(url, &auth.uuid).await;
+    }
+    let prev = load_auth_state();
+    let cape_url =
+        resolve_display_cape(&auth.name, &auth.uuid, &prev.cape_provider, &[]).await;
+
+    let profile = McProfile {
+        uuid: auth.uuid.clone(),
+        name: auth.name.clone(),
+        skin_url,
+        cape_url,
+        capes: vec![],
+    };
+
+    save_token(&account_access_key(&auth.uuid), &auth.access_token)?;
+    save_token("mc-access-token", &auth.access_token)?;
+    if let Some(ref ct) = auth.client_token {
+        save_token(&account_refresh_key(&auth.uuid), ct)?;
+    }
+
+    let entry = AccountEntry {
+        uuid: auth.uuid.clone(),
+        name: auth.name.clone(),
+        login_type: LoginType::Yggdrasil,
+        skin_source: skin_source.clone(),
+        added_at: now_secs(),
+        authority: Some(authority),
+    };
+    add_account_to_list(&entry)?;
+    set_active_account(&auth.uuid)?;
+
+    let accounts = load_accounts_file();
+    let state = AuthState {
+        logged_in: true,
+        profile: Some(profile.clone()),
+        expires_at: Some(now_secs() + 86400),
+        login_type: LoginType::Yggdrasil,
+        skin_source,
+        cape_provider: prev.cape_provider,
+        accounts: accounts.accounts,
+        active_account_uuid: accounts.active_account_uuid,
+    };
+    save_auth_state(&state)?;
+
+    Ok(LoginResult {
+        profile,
+        mc_access_token: auth.access_token,
+    })
+}
+
+/// Returns active account launch identity for the JVM (uuid, name, token, userType, authority).
+pub fn load_active_launch_identity() -> Option<(String, String, String, String, Option<String>)> {
+    let state = load_auth_state();
+    let profile = state.profile?;
+    let token = load_mc_access_token().unwrap_or_else(|_| "0".into());
+    let user_type = match state.login_type {
+        LoginType::Microsoft => "msa",
+        LoginType::Yggdrasil => "mojang",
+        LoginType::Offline => "legacy",
+    };
+    let authority = state
+        .accounts
+        .iter()
+        .find(|a| a.uuid == profile.uuid)
+        .and_then(|a| a.authority.clone());
+    Some((
+        profile.uuid,
+        profile.name,
+        token,
+        user_type.to_string(),
+        authority,
+    ))
+}
+
 // ─── Multi-account commands ──────────────────────────────────────
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1260,11 +1796,170 @@ pub fn mc_list_accounts() -> Result<Vec<AccountEntry>, String> {
     Ok(data.accounts)
 }
 
+/// Switch active account and fully reload skin + display cape for that account.
 #[tauri::command(rename_all = "camelCase")]
-pub fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
+pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
     set_active_account(&uuid)?;
-    sync_auth_state_from_accounts()?;
-    Ok(load_auth_state())
+    let accounts = load_accounts_file();
+    let entry = accounts
+        .accounts
+        .iter()
+        .find(|a| a.uuid == uuid)
+        .cloned()
+        .ok_or_else(|| "Account not found".to_string())?;
+
+    let prev = load_auth_state();
+    let cape_provider = prev.cape_provider.clone();
+
+    // Bust skin cache so the preview reloads for the new account.
+    let _ = fs::remove_file(cached_skin_path(&uuid));
+
+    let mut state = match entry.login_type {
+        LoginType::Microsoft => {
+            let mut profile = None;
+            let mut expires = None;
+            if let Ok(refresh_token) = load_token(&account_refresh_key(&uuid)) {
+                if let Ok(login) = login_with_refresh_token(&refresh_token).await {
+                    let _ = save_token(&account_access_key(&uuid), &login.mc_access_token);
+                    let _ = save_token("mc-access-token", &login.mc_access_token);
+                    if let Some(ref skin_url) = login.profile.skin_url {
+                        let _ = download_and_cache_skin(skin_url, &login.profile.uuid).await;
+                    }
+                    let mut p = login.profile;
+                    p.cape_url = resolve_display_cape(
+                        &p.name,
+                        &p.uuid,
+                        &cape_provider,
+                        &p.capes,
+                    )
+                    .await;
+                    profile = Some(p);
+                    expires = Some(now_secs() + 86400);
+                }
+            }
+            // Fallback: keep a stub profile from the account list if token refresh failed.
+            if profile.is_none() {
+                let skin_url = fetch_skin_for_username(&entry.name, &SkinSource::Mojang).await;
+                if let Some(ref url) = skin_url {
+                    let _ = download_and_cache_skin(url, &uuid).await;
+                }
+                let cape_url =
+                    resolve_display_cape(&entry.name, &uuid, &cape_provider, &[]).await;
+                profile = Some(McProfile {
+                    uuid: uuid.clone(),
+                    name: entry.name.clone(),
+                    skin_url,
+                    cape_url,
+                    capes: vec![],
+                });
+            }
+            AuthState {
+                logged_in: true,
+                profile,
+                expires_at: expires,
+                login_type: LoginType::Microsoft,
+                skin_source: SkinSource::Mojang,
+                cape_provider,
+                accounts: accounts.accounts,
+                active_account_uuid: Some(uuid),
+            }
+        }
+        LoginType::Offline => {
+            let skin_url = fetch_skin_for_username(&entry.name, &entry.skin_source).await;
+            if let Some(ref url) = skin_url {
+                let _ = download_and_cache_skin(url, &uuid).await;
+            }
+            let cape_url = resolve_display_cape(&entry.name, &uuid, &cape_provider, &[]).await;
+            AuthState {
+                logged_in: true,
+                profile: Some(McProfile {
+                    uuid: uuid.clone(),
+                    name: entry.name.clone(),
+                    skin_url,
+                    cape_url,
+                    capes: vec![],
+                }),
+                expires_at: None,
+                login_type: LoginType::Offline,
+                skin_source: entry.skin_source,
+                cape_provider,
+                accounts: accounts.accounts.clone(),
+                active_account_uuid: Some(uuid.clone()),
+            }
+        }
+        LoginType::Yggdrasil => {
+            let authority = entry
+                .authority
+                .clone()
+                .unwrap_or_else(|| preset_authority("elyby").to_string());
+            let mut profile = None;
+            if let Ok(client_token) = load_token(&account_refresh_key(&uuid)) {
+                if let Ok(access) = load_token(&account_access_key(&uuid)) {
+                    if let Ok(refreshed) =
+                        yggdrasil_refresh(&authority, &access, &client_token).await
+                    {
+                        let _ = save_token(&account_access_key(&uuid), &refreshed.access_token);
+                        let _ = save_token("mc-access-token", &refreshed.access_token);
+                        if let Some(ref ct) = refreshed.client_token {
+                            let _ = save_token(&account_refresh_key(&uuid), ct);
+                        }
+                        let skin_url =
+                            fetch_skin_for_username(&refreshed.name, &entry.skin_source).await;
+                        if let Some(ref url) = skin_url {
+                            let _ = download_and_cache_skin(url, &refreshed.uuid).await;
+                        }
+                        let cape_url = resolve_display_cape(
+                            &refreshed.name,
+                            &refreshed.uuid,
+                            &cape_provider,
+                            &[],
+                        )
+                        .await;
+                        profile = Some(McProfile {
+                            uuid: refreshed.uuid.clone(),
+                            name: refreshed.name,
+                            skin_url,
+                            cape_url,
+                            capes: vec![],
+                        });
+                    }
+                }
+            }
+            if profile.is_none() {
+                let skin_url = fetch_skin_for_username(&entry.name, &entry.skin_source).await;
+                if let Some(ref url) = skin_url {
+                    let _ = download_and_cache_skin(url, &uuid).await;
+                }
+                let cape_url =
+                    resolve_display_cape(&entry.name, &uuid, &cape_provider, &[]).await;
+                profile = Some(McProfile {
+                    uuid: uuid.clone(),
+                    name: entry.name.clone(),
+                    skin_url,
+                    cape_url,
+                    capes: vec![],
+                });
+            }
+            AuthState {
+                logged_in: true,
+                profile,
+                expires_at: Some(now_secs() + 86400),
+                login_type: LoginType::Yggdrasil,
+                skin_source: entry.skin_source,
+                cape_provider,
+                accounts: accounts.accounts,
+                active_account_uuid: Some(uuid),
+            }
+        }
+    };
+
+    save_auth_state(&state)?;
+    // Ensure accounts list is current.
+    let fresh = load_accounts_file();
+    state.accounts = fresh.accounts;
+    state.active_account_uuid = fresh.active_account_uuid;
+    save_auth_state(&state)?;
+    Ok(state)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1273,6 +1968,38 @@ pub fn mc_remove_account(uuid: String) -> Result<(), String> {
     let _ = clear_token(&account_access_key(&uuid));
     remove_account_from_list(&uuid)?;
     sync_auth_state_from_accounts()
+}
+
+/// Discover capes from Mojang / OptiFine / TLauncher for the active profile.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_list_capes() -> Result<CapeCatalog, String> {
+    let state = load_auth_state();
+    let profile = state.profile.ok_or("Not logged in")?;
+    Ok(build_cape_catalog(
+        &profile.name,
+        &profile.uuid,
+        state.cape_provider,
+        &profile.capes,
+    )
+    .await)
+}
+
+/// Select which cape provider is shown on the skin preview (only one).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_set_cape_provider(provider: CapeProvider) -> Result<AuthState, String> {
+    let mut state = load_auth_state();
+    state.cape_provider = provider.clone();
+    if let Some(ref mut profile) = state.profile {
+        profile.cape_url = resolve_display_cape(
+            &profile.name,
+            &profile.uuid,
+            &provider,
+            &profile.capes,
+        )
+        .await;
+    }
+    save_auth_state(&state)?;
+    Ok(state)
 }
 
 // ─── Skin upload commands ────────────────────────────────────────
@@ -1284,9 +2011,30 @@ pub async fn mc_apply_skin(skin_url: String, variant: String) -> Result<(), Stri
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub async fn mc_apply_cape(cape_id: String) -> Result<(), String> {
+pub async fn mc_apply_cape(cape_id: String) -> Result<AuthState, String> {
     let access_token = load_mc_access_token()?;
-    apply_minecraft_cape(&access_token, &cape_id).await
+    apply_minecraft_cape(&access_token, &cape_id).await?;
+
+    // Refresh Mojang profile so ACTIVE cape updates, then re-apply display provider.
+    let mut state = load_auth_state();
+    if let Ok(mut profile) = fetch_mc_profile(&access_token).await {
+        if let Some(ref skin_url) = profile.skin_url {
+            let _ = download_and_cache_skin(skin_url, &profile.uuid).await;
+        }
+        // Prefer Mojang display after activating a cape.
+        state.cape_provider = CapeProvider::Mojang;
+        profile.cape_url = resolve_display_cape(
+            &profile.name,
+            &profile.uuid,
+            &CapeProvider::Mojang,
+            &profile.capes,
+        )
+        .await;
+        state.profile = Some(profile);
+        state.logged_in = true;
+        save_auth_state(&state)?;
+    }
+    Ok(load_auth_state())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1341,6 +2089,7 @@ mod tests {
             login_type: LoginType::Microsoft,
             skin_source: SkinSource::Mojang,
             added_at: 12345,
+            authority: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("uuid"));

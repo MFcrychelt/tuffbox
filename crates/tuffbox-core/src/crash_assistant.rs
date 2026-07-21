@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CrashAnalysisFinding {
     pub severity: String,
     pub code: String,
@@ -21,6 +22,12 @@ pub struct CrashAnalysisFinding {
     pub description: String,
     pub auto_fix: Option<String>,
     pub references: Vec<String>,
+    /// Machine-actionable fixes the Diagnose UI can apply one-by-one.
+    #[serde(default)]
+    pub fixes: Vec<crate::crash::FixAction>,
+    /// Matched log / crash-report excerpt that triggered this finding.
+    #[serde(default)]
+    pub evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +105,11 @@ pub fn run_full_analysis(ctx: &AnalysisCtx) -> CrashAnalysisReport {
     findings.extend(check_irlandacore_backdoor(ctx));
     findings.extend(check_class_metadata_not_found(&combined));
     findings.extend(check_mcreator_mods(&ctx.installed_mods));
+    findings.extend(check_conflict_log_phrases(ctx, &combined));
+
+    // Deduplicate by code (keep first / highest-severity order).
+    let mut seen = std::collections::HashSet::new();
+    findings.retain(|f| seen.insert(f.code.clone()));
 
     let suspected = extract_suspected(ctx, &combined);
     let (added, removed) = compute_mod_diff(ctx);
@@ -127,6 +139,19 @@ fn f(
     auto_fix: Option<&str>,
     refs: &[&str],
 ) -> CrashAnalysisFinding {
+    fx(severity, code, title, description, auto_fix, refs, vec![], None)
+}
+
+fn fx(
+    severity: &str,
+    code: &str,
+    title: &str,
+    description: &str,
+    auto_fix: Option<&str>,
+    refs: &[&str],
+    fixes: Vec<crate::crash::FixAction>,
+    evidence: Option<String>,
+) -> CrashAnalysisFinding {
     CrashAnalysisFinding {
         severity: severity.into(),
         code: code.into(),
@@ -134,7 +159,104 @@ fn f(
         description: description.into(),
         auto_fix: auto_fix.map(|s| s.into()),
         references: refs.iter().map(|s| s.to_string()).collect(),
+        fixes,
+        evidence,
     }
+}
+
+fn fix_action(kind: &str, label: &str, mod_id: Option<&str>) -> crate::crash::FixAction {
+    crate::crash::FixAction {
+        kind: kind.into(),
+        label: label.into(),
+        mod_id: mod_id.map(|s| s.into()),
+    }
+}
+
+fn match_mods_in_text(text: &str, installed: &[String]) -> Vec<String> {
+    let lower = text.to_lowercase();
+    let mut hits = Vec::new();
+    for m in installed {
+        let id = m.to_lowercase();
+        if id.len() < 2 {
+            continue;
+        }
+        if lower.contains(&id) || lower.contains(&id.replace('_', "-")) {
+            hits.push(m.clone());
+        }
+    }
+    hits.sort();
+    hits.dedup();
+    hits
+}
+
+fn first_evidence_line<'a>(combined: &'a str, needles: &[&str]) -> Option<&'a str> {
+    for line in combined.lines() {
+        let l = line.to_lowercase();
+        if needles.iter().any(|n| l.contains(&n.to_lowercase())) {
+            return Some(line.trim());
+        }
+    }
+    None
+}
+
+fn extract_required_mod_ids(combined: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in combined.lines() {
+        let lower = line.to_lowercase();
+        if !(lower.contains("requires")
+            || lower.contains("missing")
+            || lower.contains("dependency"))
+        {
+            continue;
+        }
+        for part in line.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+            let p = part.trim().to_lowercase();
+            if p.len() >= 3
+                && p.len() <= 48
+                && !matches!(
+                    p.as_str(),
+                    "requires"
+                        | "missing"
+                        | "mandatory"
+                        | "dependency"
+                        | "dependencies"
+                        | "version"
+                        | "minecraft"
+                        | "fabricloader"
+                        | "forge"
+                        | "neoforge"
+                        | "quilt"
+                        | "which"
+                        | "mod"
+                        | "any"
+                        | "of"
+                        | "but"
+                        | "is"
+                        | "the"
+                        | "and"
+                        | "for"
+                        | "from"
+                        | "with"
+                        | "this"
+                        | "that"
+                        | "error"
+                        | "exception"
+                        | "failed"
+                        | "loading"
+                )
+            {
+                if lower.contains(&format!("'{p}'"))
+                    || lower.contains(&format!("\"{p}\""))
+                    || lower.contains(&format!("`{p}`"))
+                {
+                    if !out.iter().any(|x: &String| x == &p) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+    }
+    out.into_iter().take(12).collect()
 }
 
 fn check_java_version(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
@@ -241,13 +363,39 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
                 suspect, ctx.loader, ctx.mc_version
             ))
         };
-        vec![f(
+        let targets: Vec<String> = if refs.is_empty() {
+            if suspect.is_empty() {
+                Vec::new()
+            } else {
+                vec![suspect.clone()]
+            }
+        } else {
+            refs.clone()
+        };
+        let fixes: Vec<_> = targets
+            .iter()
+            .take(5)
+            .flat_map(|m| {
+                vec![
+                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                    fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        let evidence = first_evidence_line(
+            combined,
+            &["Mixin apply failed", "Mixin", "mixin"],
+        )
+        .map(|s| s.to_string());
+        vec![fx(
             "error",
             "MIXIN_APPLY_FAILED",
             &title_s,
             &desc_s,
             fix_s.as_deref(),
             &[],
+            fixes,
+            evidence,
         )]
     } else {
         vec![]
@@ -258,13 +406,19 @@ fn check_missing_mods(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFin
     let mut out = Vec::new();
     let has = |s: &str| ctx.installed_mods.contains(&s.to_string());
     if has("sodium") && !has("indium") && ctx.loader == "fabric" {
-        out.push(f(
+        out.push(fx(
             "error",
             "MISSING_INDIUM",
             "Indium is missing",
             "Sodium on Fabric needs Indium for Fabric Renderer API.",
             Some("Install Indium from Modrinth."),
             &["https://modrinth.com/mod/indium"],
+            vec![fix_action(
+                "installDependency",
+                "Install Indium",
+                Some("indium"),
+            )],
+            None,
         ));
     }
     if has("oculus")
@@ -999,6 +1153,569 @@ fn compute_mod_diff(ctx: &AnalysisCtx) -> (Vec<String>, Vec<String>) {
     (added, removed)
 }
 
+/// Catalog of real-world Fabric/Forge/NeoForge conflict phrases from latest.log
+/// / crash-reports, each mapped to one or more one-click FixActions.
+fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
+    let mut out = Vec::new();
+    let lower = combined.to_lowercase();
+
+    // --- Duplicate mods ---
+    if lower.contains("found duplicate mods")
+        || lower.contains("duplicatemodsfoundexception")
+        || lower.contains("duplicate mods found")
+        || lower.contains("failed to build unique mod list")
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "Found duplicate mods",
+                "Duplicate mods found",
+                "DuplicateModsFoundException",
+                "Failed to build unique mod list",
+            ],
+        )
+        .map(|s| s.to_string());
+        let mut fixes = Vec::new();
+        for m in mods.iter().take(4) {
+            fixes.push(fix_action(
+                "disableMod",
+                &format!("Disable duplicate candidate `{m}`"),
+                Some(m),
+            ));
+            fixes.push(fix_action(
+                "removeMod",
+                &format!("Remove `{m}`"),
+                Some(m),
+            ));
+        }
+        out.push(fx(
+            "critical",
+            "DUPLICATE_MODS",
+            "Duplicate mods detected",
+            "The loader found two jars claiming the same mod ID (or a dependency jar bundled inside another mod). Keep one copy and remove/disable the rest.",
+            Some("Open mods/ and remove the older jar listed next to the mod ID in latest.log."),
+            &[],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- Missing / unmet dependencies ---
+    if lower.contains("missing or unsupported mandatory")
+        || lower.contains("unmet dependency")
+        || lower.contains("which is missing")
+        || (lower.contains("requires") && lower.contains("but") && lower.contains("missing"))
+        || lower.contains("modresolutionexception")
+        || lower.contains("missingdependencyexception")
+    {
+        let needed = extract_required_mod_ids(combined);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "requires",
+                "which is missing",
+                "mandatory dependency",
+                "ModResolutionException",
+                "MissingDependency",
+            ],
+        )
+        .map(|s| s.to_string());
+        let mut fixes = Vec::new();
+        let known_deps = [
+            "fabric-api",
+            "cloth-config",
+            "architectury",
+            "indium",
+            "forgeconfigapiport",
+            "kotlin-for-forge",
+            "geckolib",
+            "playeranimator",
+            "moonlight",
+            "terrablender",
+        ];
+        let mut candidates = needed.clone();
+        for k in known_deps {
+            if lower.contains(k) && !candidates.iter().any(|c| c.eq_ignore_ascii_case(k)) {
+                candidates.push(k.to_string());
+            }
+        }
+        for dep in candidates {
+            if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case(&dep)) {
+                continue;
+            }
+            fixes.push(fix_action(
+                "installDependency",
+                &format!("Install missing `{dep}`"),
+                Some(&dep),
+            ));
+        }
+        // Also offer updating the dependent mod(s) named in the log.
+        for m in match_mods_in_text(combined, &ctx.installed_mods).into_iter().take(3) {
+            fixes.push(fix_action(
+                "updateMod",
+                &format!("Update `{m}` (may change dependency range)"),
+                Some(&m),
+            ));
+        }
+        out.push(fx(
+            "critical",
+            "MISSING_DEPENDENCY",
+            "Missing or unmet mod dependency",
+            "A mod requires another mod / library that is absent or the wrong version. Fabric usually prints `Mod 'x' requires … which is missing`; Forge prints mandatory dependency tables.",
+            Some("Install the named dependency for the same Minecraft + loader version."),
+            &["https://minefixtools.com/fixes/how-to-fix-missing-mods-on-server"],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- Wrong loader / platform mismatch ---
+    if lower.contains("is for forge")
+        || lower.contains("is for fabric")
+        || (lower.contains("requires forge") && lower.contains("fabric"))
+        || lower.contains("mod file is for forge, but this is fabric")
+        || lower.contains("mod file is for fabric, but this is forge")
+        || lower.contains("incompatiblemodsexception")
+        || lower.contains("wrong loader")
+        || (lower.contains("quilt") && lower.contains("requires fabric") && lower.contains("missing"))
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "is for Forge",
+                "is for Fabric",
+                "Mod file is for",
+                "IncompatibleModsException",
+                "wrong loader",
+            ],
+        )
+        .map(|s| s.to_string());
+        let mut fixes: Vec<_> = mods
+            .iter()
+            .take(4)
+            .flat_map(|m| {
+                vec![
+                    fix_action("disableMod", &format!("Disable wrong-loader `{m}`"), Some(m)),
+                    fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        fixes.push(fix_action(
+            "updateLoader",
+            "Update loader to latest for this Minecraft version",
+            None,
+        ));
+        out.push(fx(
+            "critical",
+            "WRONG_LOADER",
+            "Mod built for a different loader",
+            "A jar targets Forge/Fabric/NeoForge/Quilt while this instance uses another loader. File extension `.jar` does not identify the platform.",
+            Some("Remove the mismatched jar or switch the instance loader."),
+            &["https://minefixtools.com/fixes/how-to-fix-mod-version-mismatch"],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- Version mismatch Minecraft / loader ---
+    if lower.contains("requires minecraft")
+        || (lower.contains("minecraft version")
+            && (lower.contains("incompatible") || lower.contains("mismatch")))
+        || lower.contains("requires fabricloader")
+        || (lower.contains("requires forge") && lower.contains(">="))
+        || lower.contains("unsupported minecraft version")
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "requires Minecraft",
+                "requires fabricloader",
+                "Unsupported Minecraft",
+                "incompatible with",
+            ],
+        )
+        .map(|s| s.to_string());
+        let mut fixes: Vec<_> = mods
+            .iter()
+            .take(4)
+            .map(|m| {
+                fix_action(
+                    "updateMod",
+                    &format!("Update `{m}` for MC {}", ctx.mc_version),
+                    Some(m),
+                )
+            })
+            .collect();
+        fixes.push(fix_action(
+            "updateLoader",
+            "Update Fabric/Forge/NeoForge loader",
+            None,
+        ));
+        out.push(fx(
+            "error",
+            "VERSION_MISMATCH",
+            "Minecraft / loader version mismatch",
+            "A mod declares a Minecraft or loader version range that does not include this instance. Updating the mod or the loader usually fixes it.",
+            Some(&format!(
+                "Match all mods to Minecraft {} + {} {}.",
+                ctx.mc_version, ctx.loader, ctx.loader_version
+            )),
+            &[],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- NoSuchMethod / NoSuchField (API break) ---
+    if lower.contains("nosuchmethoderror")
+        || lower.contains("nosuchfielderror")
+        || lower.contains("abstractmethoderror")
+        || lower.contains("incompatibleclasschangeerror")
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "NoSuchMethodError",
+                "NoSuchFieldError",
+                "AbstractMethodError",
+                "IncompatibleClassChangeError",
+            ],
+        )
+        .map(|s| s.to_string());
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(5)
+            .flat_map(|m| {
+                vec![
+                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                    fix_action("disableMod", &format!("Disable `{m}` to test"), Some(m)),
+                ]
+            })
+            .collect();
+        out.push(fx(
+            "error",
+            "API_BREAK",
+            "Broken mod API (NoSuchMethod/NoSuchField)",
+            "Code expected a method/field that another mod or Minecraft no longer provides — classic sign of mismatched Fabric API / library / Minecraft version.",
+            Some("Update Fabric API and the mods named in the stacktrace together."),
+            &[],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- Entrypoint / ModLoadingException ---
+    if lower.contains("entrypointexception")
+        || (lower.contains("failed to start") && lower.contains("entrypoint"))
+        || lower.contains("modloadingexception")
+        || lower.contains("error loading mods")
+        || lower.contains("failed to load mods")
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "EntrypointException",
+                "entrypoint",
+                "ModLoadingException",
+                "Error loading mods",
+                "Failed to load mods",
+            ],
+        )
+        .map(|s| s.to_string());
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(4)
+            .flat_map(|m| {
+                vec![
+                    fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
+                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                    fix_action("reinstallMod", &format!("Reinstall `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        out.push(fx(
+            "critical",
+            "MOD_LOADING_FAILURE",
+            "Mod failed during loading / entrypoint",
+            "The loader could not initialize a mod (constructor, initializer, or Forge event bus). The first `Caused by` under EntrypointException / ModLoadingException usually names the culprit.",
+            Some("Disable the named mod, then update or replace it."),
+            &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- Duplicate classes / ASM on classpath ---
+    if (lower.contains("duplicate") && lower.contains("classpath"))
+        || lower.contains("duplicate asm")
+        || lower.contains("verifyclasspath")
+        || lower.contains("duplicate classes found")
+    {
+        let evidence = first_evidence_line(
+            combined,
+            &["duplicate", "classpath", "ASM", "LoaderUtil.verifyClasspath"],
+        )
+        .map(|s| s.to_string());
+        out.push(fx(
+            "error",
+            "DUPLICATE_CLASSPATH",
+            "Duplicate libraries on classpath",
+            "Two versions of the same library (often ASM) are on the JVM classpath. Common after loader/Minecraft library version drift.",
+            Some("Reinstall the loader profile / clear libraries cache, then relaunch."),
+            &[],
+            vec![fix_action(
+                "updateLoader",
+                "Re-resolve loader (update loader version)",
+                None,
+            )],
+            evidence,
+        ));
+    }
+
+    // --- JEI / REI conflict ---
+    if (lower.contains("jei") && lower.contains("rei") && (lower.contains("duplicate") || lower.contains("conflict")))
+        || lower.contains("reiplugincompatibilities") && lower.contains("jei")
+    {
+        let mut fixes = Vec::new();
+        if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case("jei")) {
+            fixes.push(fix_action("disableMod", "Disable JEI (keep REI)", Some("jei")));
+        }
+        if ctx.installed_mods.iter().any(|m| m.eq_ignore_ascii_case("roughlyenoughitems") || m.eq_ignore_ascii_case("rei"))
+        {
+            fixes.push(fix_action(
+                "disableMod",
+                "Disable REI (keep JEI)",
+                Some("roughlyenoughitems"),
+            ));
+        }
+        out.push(fx(
+            "warning",
+            "JEI_REI_CONFLICT",
+            "JEI and REI conflict",
+            "JEI and Roughly Enough Items both provide recipe UIs; some compat jars also claim the `jei` mod ID and trigger duplicate-mod errors.",
+            Some("Use either JEI or REI (+ REI Plugin Compatibilities), not both."),
+            &[],
+            fixes,
+            first_evidence_line(combined, &["jei", "rei", "duplicate"]).map(|s| s.to_string()),
+        ));
+    }
+
+    // --- Out of memory ---
+    if lower.contains("outofmemoryerror")
+        || lower.contains("java heap space")
+        || lower.contains("gc overhead limit")
+    {
+        out.push(fx(
+            "critical",
+            "OUT_OF_MEMORY",
+            "Out of memory",
+            "The JVM exhausted heap memory. Heavily modded packs often need 4–8 GB.",
+            Some("Raise allocated memory, then retest."),
+            &[],
+            vec![fix_action(
+                "raiseMemory",
+                "Raise allocated memory to 6 GB",
+                None,
+            )],
+            first_evidence_line(combined, &["OutOfMemoryError", "Java heap space", "GC overhead"])
+                .map(|s| s.to_string()),
+        ));
+    }
+
+    // --- Mixin apply failed (structured fixes; complements check_mixins) ---
+    if lower.contains("mixin apply failed")
+        || (lower.contains("@mixin") && lower.contains("failed"))
+        || lower.contains("mixinprepareerror")
+        || lower.contains("invalidinjectionexception")
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "Mixin apply failed",
+                "MixinPrepareError",
+                "InvalidInjectionException",
+                "mixin",
+            ],
+        )
+        .map(|s| s.to_string());
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(5)
+            .flat_map(|m| {
+                vec![
+                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                    fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        if !fixes.is_empty() {
+            out.push(fx(
+                "error",
+                "MIXIN_CONFLICT",
+                "Mixin apply failed (mod conflict / version)",
+                "A mod tried to inject into Minecraft code and failed — wrong MC version, two mods editing the same target, or a library mismatch. Not usually a broken Fabric loader itself.",
+                Some("Update or disable the mods named next to the mixin config in the log."),
+                &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
+                fixes,
+                evidence,
+            ));
+        }
+    }
+
+    // --- Access transformer / IllegalAccess ---
+    if lower.contains("illegalaccessexception")
+        || lower.contains("inaccessibleobjectexception")
+        || lower.contains("module java.base does not")
+    {
+        out.push(fx(
+            "warning",
+            "MODULE_ACCESS",
+            "Java module access error",
+            "A mod or library tried to reflect into a sealed JDK module. Often fixed by Java flags or using a supported Java major for this Minecraft version.",
+            Some("Ensure the Project Java matches the version recommended for this Minecraft release."),
+            &[],
+            vec![],
+            first_evidence_line(
+                combined,
+                &[
+                    "IllegalAccessException",
+                    "InaccessibleObjectException",
+                    "does not export",
+                ],
+            )
+            .map(|s| s.to_string()),
+        ));
+    }
+
+    // --- Corrupted / zip errors ---
+    if lower.contains("zipexception")
+        || lower.contains("invalid cen header")
+        || lower.contains("unexpected end of zlib")
+        || (lower.contains("truncat") && lower.contains(".jar"))
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(3)
+            .map(|m| fix_action("reinstallMod", &format!("Re-download `{m}`"), Some(m)))
+            .collect();
+        out.push(fx(
+            "error",
+            "CORRUPT_JAR",
+            "Corrupted mod jar",
+            "A jar failed ZIP/deflate validation — incomplete download or disk corruption.",
+            Some("Re-download the named jar(s)."),
+            &[],
+            fixes,
+            first_evidence_line(combined, &["ZipException", "CEN header", "zlib", ".jar"])
+                .map(|s| s.to_string()),
+        ));
+    }
+
+    // --- Non-unique Mixin config (two mods share the same mixins.json name) ---
+    if lower.contains("non-unique mixin config") {
+        let evidence = first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"])
+            .map(|s| s.to_string());
+        let mut mods = match_mods_in_text(combined, &ctx.installed_mods);
+        // Also pull "used by the mods A and B" tokens when present.
+        if let Some(ev) = evidence.as_ref() {
+            if let Some(idx) = ev.to_lowercase().find("used by the mods") {
+                let tail = &ev[idx + "used by the mods".len()..];
+                for token in tail
+                    .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+                    .filter(|t| t.len() > 1)
+                {
+                    if !mods.iter().any(|m| m.eq_ignore_ascii_case(token)) {
+                        mods.push(token.to_string());
+                    }
+                }
+            }
+        }
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(4)
+            .flat_map(|m| {
+                vec![
+                    fix_action(
+                        "disableMod",
+                        &format!("Disable `{m}` (duplicate mixin config)"),
+                        Some(m),
+                    ),
+                    fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        out.push(fx(
+            "critical",
+            "NONUNIQUE_MIXIN_CONFIG",
+            "Non-unique Mixin config name",
+            "Two mods ship the same `*.mixins.json` config name (e.g. thiccpackets vs xlpackets). Fabric refuses to start until one is removed.",
+            Some("Remove one of the conflicting mods; only the mod authors can rename the shared config."),
+            &["https://github.com/FabricMC/fabric-loader/issues/834"],
+            fixes,
+            evidence,
+        ));
+    }
+
+    // --- Forge "mod has failed to load correctly" ---
+    if lower.contains("has failed to load correctly")
+        || lower.contains("error has occurred during loading")
+        || lower.contains("1 error has occurred during loading")
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(4)
+            .flat_map(|m| {
+                vec![
+                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                    fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
+                    fix_action("reinstallMod", &format!("Reinstall `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        out.push(fx(
+            "critical",
+            "MOD_FAILED_LOAD",
+            "Mod failed to load correctly",
+            "Forge/NeoForge reported a mod init failure — often a missing dependency, duplicate jar, corrupt download, or loader mismatch.",
+            Some("Check the first Caused by under the failed mod, then update/disable that mod."),
+            &[],
+            fixes,
+            first_evidence_line(
+                combined,
+                &[
+                    "has failed to load correctly",
+                    "error has occurred during loading",
+                ],
+            )
+            .map(|s| s.to_string()),
+        ));
+    }
+
+    // --- UnsupportedClassVersionError (wrong Java) ---
+    if lower.contains("unsupportedclassversionerror") {
+        out.push(fx(
+            "critical",
+            "WRONG_JAVA_VERSION",
+            "Wrong Java version (UnsupportedClassVersionError)",
+            "A class was compiled for a newer Java than the runtime provides. Modern Minecraft/Fabric often needs Java 17 or 21.",
+            Some("Point the project at a supported Java major for this Minecraft version."),
+            &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
+            vec![],
+            first_evidence_line(combined, &["UnsupportedClassVersionError"]).map(|s| s.to_string()),
+        ));
+    }
+
+    out
+}
+
 fn find_mcreator_mods(mods: &[String]) -> Vec<String> {
     // Heuristic: MCreator mods often have "mod", "mcreator" patterns,
     // or common MCreator mod naming signatures
@@ -1279,5 +1996,55 @@ mod tests {
     fn full_report() {
         let r = run_full_analysis(&ctx());
         assert!(r.findings.len() >= 3);
+    }
+
+    #[test]
+    fn detects_duplicate_mods_phrase() {
+        let mut c = ctx();
+        c.latest_log = "[main/ERROR]: Found duplicate mods:\n\tMod ID: 'sodium' from mod files: a.jar, b.jar\n"
+            .into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "DUPLICATE_MODS"));
+        let f = hits.iter().find(|f| f.code == "DUPLICATE_MODS").unwrap();
+        assert!(!f.fixes.is_empty());
+        assert!(f.fixes.iter().any(|a| a.kind == "disableMod" || a.kind == "removeMod"));
+    }
+
+    #[test]
+    fn detects_missing_dependency_phrase() {
+        let mut c = ctx();
+        c.installed_mods = vec!["create".into()];
+        c.latest_log =
+            "Mod 'create' requires 'fabric-api' which is missing!\nModResolutionException\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "MISSING_DEPENDENCY"));
+        let f = hits.iter().find(|f| f.code == "MISSING_DEPENDENCY").unwrap();
+        assert!(f
+            .fixes
+            .iter()
+            .any(|a| a.kind == "installDependency" && a.mod_id.as_deref() == Some("fabric-api")));
+    }
+
+    #[test]
+    fn detects_nonunique_mixin_config() {
+        let mut c = ctx();
+        c.installed_mods = vec!["thiccpackets".into(), "xlpackets".into()];
+        c.latest_log = "java.lang.RuntimeException: Non-unique Mixin config name xlpackets.mixins.json used by the mods thiccpackets and xlpackets\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "NONUNIQUE_MIXIN_CONFIG"));
+        let f = hits
+            .iter()
+            .find(|f| f.code == "NONUNIQUE_MIXIN_CONFIG")
+            .unwrap();
+        assert!(f.fixes.iter().any(|a| a.mod_id.as_deref() == Some("thiccpackets")));
+    }
+
+    #[test]
+    fn detects_oom_with_raise_memory_fix() {
+        let mut c = ctx();
+        c.latest_log = "java.lang.OutOfMemoryError: Java heap space\n".into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        let f = hits.iter().find(|f| f.code == "OUT_OF_MEMORY").unwrap();
+        assert!(f.fixes.iter().any(|a| a.kind == "raiseMemory"));
     }
 }

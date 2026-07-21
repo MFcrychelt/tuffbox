@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry } from "./store";
+import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings } from "./store";
 import { get } from "svelte/store";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -493,6 +493,29 @@ export interface WorldListItem {
   hasLevelDat: boolean;
 }
 
+export interface ContentPackEntry {
+  name: string;
+  fileName: string;
+  enabled: boolean;
+  kind: string;
+  size: number;
+  sizeFormatted: string;
+}
+
+export interface McServerEntry {
+  name: string;
+  address: string;
+  icon: string | null;
+  acceptTextures: number | null;
+}
+
+export interface McServerPing {
+  address: string;
+  online: boolean;
+  latencyMs: number | null;
+  error: string | null;
+}
+
 export interface WorldDetail {
   name: string;
   seed: number;
@@ -651,10 +674,17 @@ export interface LocalizationEntry {
 }
 
 export interface ProjectStats {
-  launchCount: number;
-  crashCount: number;
-  lastLaunched: string | null;
-  lastCrashed: string | null;
+  totalLaunches: number;
+  totalCrashes: number;
+  totalPlaytimeSeconds: number;
+  lastLaunch: string | null;
+  byProfile: Array<{
+    id: string;
+    launches: number;
+    crashes: number;
+    playtimeSeconds: number;
+    lastLaunch: string | null;
+  }>;
 }
 
 export interface ConfigSearchMatch {
@@ -1200,6 +1230,37 @@ export const api = {
     },
   },
 
+  // ── Content packs (resourcepacks / shaderpacks on disk) ───────────
+  content: {
+    listPacks(folder: "resourcepacks" | "shaderpacks", p?: string) {
+      return cmd<ContentPackEntry[]>("list_content_packs", { ...pathArg(p), folder });
+    },
+    setEnabled(folder: "resourcepacks" | "shaderpacks", fileName: string, enabled: boolean, p?: string) {
+      return cmd<ContentPackEntry>("set_content_pack_enabled", {
+        ...pathArg(p),
+        folder,
+        fileName,
+        enabled,
+      });
+    },
+  },
+
+  // ── Minecraft servers.dat ─────────────────────────────────────────
+  servers: {
+    list(p?: string) {
+      return cmd<McServerEntry[]>("list_mc_servers", pathArg(p));
+    },
+    add(name: string, address: string, p?: string) {
+      return cmd<McServerEntry[]>("add_mc_server", { ...pathArg(p), name, address });
+    },
+    remove(address: string, p?: string) {
+      return cmd<McServerEntry[]>("remove_mc_server", { ...pathArg(p), address });
+    },
+    ping(address: string) {
+      return cmd<McServerPing>("ping_mc_server", { address });
+    },
+  },
+
   // ── Instance ──────────────────────────────────────────────────────
   instance: {
     create(name: string, minecraftVersion: string, loader: string, loaderVersion: string, location: string) {
@@ -1288,8 +1349,28 @@ export const api = {
     switchAccount(uuid: string) { return cmd<AuthState>("mc_switch_account", { uuid }); },
     removeAccount(uuid: string) { return cmd<void>("mc_remove_account", { uuid }); },
     applySkin(skinUrl: string, variant: string) { return cmd<void>("mc_apply_skin", { skinUrl, variant }); },
-    applyCape(capeId: string) { return cmd<void>("mc_apply_cape", { capeId }); },
+    applyCape(capeId: string) { return cmd<AuthState>("mc_apply_cape", { capeId }); },
+    listCapes() { return cmd<CapeCatalog>("mc_list_capes"); },
+    setCapeProvider(provider: CapeProvider) { return cmd<AuthState>("mc_set_cape_provider", { provider }); },
     checkEntitlement() { return cmd<boolean>("mc_check_entitlement"); },
     getSkinBase64(url: string) { return cmd<string>("mc_get_skin_base64", { url }); },
+    listYggdrasilPresets() { return cmd<YggdrasilPreset[]>("mc_list_yggdrasil_presets"); },
+    yggdrasilLogin(username: string, password: string, authority: string) {
+      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_yggdrasil_login", {
+        username,
+        password,
+        authority,
+      });
+    },
+  },
+
+  // ── Discord Rich Presence ─────────────────────────────────────────
+  presence: {
+    get() { return cmd<PresenceSettings>("get_presence_settings"); },
+    save(settings: PresenceSettings) { return cmd<void>("save_presence_settings", { settings }); },
+    setPlaying(details: string, state: string) {
+      return cmd<void>("set_discord_presence", { details, state });
+    },
+    clear() { return cmd<void>("clear_discord_presence"); },
   },
 };
