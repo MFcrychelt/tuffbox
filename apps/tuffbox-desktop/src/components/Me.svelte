@@ -31,12 +31,17 @@
   let playtimeSeconds = 0;
   let busy = false;
   let capeCatalog: CapeCatalog | null = null;
+  let mojangCapeMenuOpen = false;
 
   $: skinUrl = $authState.profile?.skinUrl ?? null;
   $: capeUrl = $authState.profile?.capeUrl ?? null;
   $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
   $: activeAuthority =
     $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority ?? null;
+  $: mojangCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang");
+  $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
+  $: canChangeMojangCape =
+    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
 
   const capeProviders: { id: CapeProvider; label: string }[] = [
     { id: "mojang", label: "Mojang" },
@@ -126,6 +131,10 @@
       const state = await api.mcAuth.setCapeProvider(provider);
       authState.set(state);
       await refreshCapes();
+      mojangCapeMenuOpen =
+        provider === "mojang" &&
+        state.loginType === "microsoft" &&
+        (capeCatalog?.offers ?? []).some((o) => o.provider === "mojang" && o.canActivate);
     } catch (e) {
       toasts.error(String(e));
     }
@@ -135,10 +144,18 @@
     try {
       const state = await api.mcAuth.applyCape(capeId);
       authState.set(state);
+      mojangCapeMenuOpen = true;
       await refreshCapes();
       toasts.success("Cape equipped");
     } catch (e) {
       toasts.error(String(e));
+    }
+  }
+
+  function openMojangCapeMenu() {
+    mojangCapeMenuOpen = true;
+    if (($authState.capeProvider ?? "mojang") !== "mojang") {
+      void setCapeProvider("mojang");
     }
   }
 
@@ -201,7 +218,7 @@
           <h3>Cape source</h3>
         </div>
         <div class="provider-row">
-          {#each capeProviders as opt}
+          {#each capeProviders as opt (opt.id)}
             <button
               class="chip"
               class:active={($authState.capeProvider ?? "mojang") === opt.id}
@@ -212,15 +229,37 @@
             </button>
           {/each}
         </div>
-        {#if capeCatalog?.offers?.length}
+
+        {#if canChangeMojangCape}
+          <button
+            class="mini"
+            disabled={!$authState.loggedIn}
+            on:click={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
+          >
+            {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
+          </button>
+        {/if}
+
+        {#if mojangCapeMenuOpen && canChangeMojangCape}
           <div class="cape-list">
-            {#each capeCatalog.offers as offer}
+            {#each mojangCapeOffers as offer (offer.id)}
               <div class="cape-row" class:active={offer.active}>
                 <span>{offer.label}</span>
-                {#if offer.canActivate && $authState.loginType === "microsoft"}
-                  <button class="mini" on:click={() => applyCape(offer.id)} disabled={offer.active}>
-                    {offer.active ? "Active" : "Equip"}
-                  </button>
+                <button class="mini" on:click={() => applyCape(offer.id)} disabled={offer.active}>
+                  {offer.active ? "Active" : "Equip"}
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if otherCapeOffers.length}
+          <div class="cape-list">
+            {#each otherCapeOffers as offer (offer.provider + offer.id)}
+              <div class="cape-row" class:active={($authState.capeProvider ?? "mojang") === offer.provider}>
+                <span>{offer.label} ({offer.provider})</span>
+                {#if ($authState.capeProvider ?? "mojang") !== offer.provider}
+                  <button class="mini" on:click={() => setCapeProvider(offer.provider)}>Show</button>
                 {/if}
               </div>
             {/each}

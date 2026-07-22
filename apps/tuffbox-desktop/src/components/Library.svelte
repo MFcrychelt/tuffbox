@@ -66,22 +66,101 @@
     }
   }
 
-  // ── Discover (Modrinth modpacks) ────────────────────────────────
+  // ── Discover (Modrinth / CurseForge modpacks) ───────────────────
+  type DiscoverResult = SearchResult & { provider?: "modrinth" | "curseforge" };
+  type DiscoverProvider = "modrinth" | "curseforge" | "both";
+
   let query = "";
-  let results: SearchResult[] = [];
+  let results: DiscoverResult[] = [];
   let loadingDiscover = false;
   let discoverError = "";
   let adding = new Set<string>();
+  let discoverProvider: DiscoverProvider = "modrinth";
 
-  async function search(opts?: { reset?: boolean }) {
+  function resultKey(result: DiscoverResult): string {
+    return `${result.provider ?? "modrinth"}:${result.id}`;
+  }
+
+  function interleaveResults(a: DiscoverResult[], b: DiscoverResult[]): DiscoverResult[] {
+    const out: DiscoverResult[] = [];
+    const max = Math.max(a.length, b.length);
+    for (let i = 0; i < max; i++) {
+      if (i < a.length) out.push(a[i]);
+      if (i < b.length) out.push(b[i]);
+    }
+    return out;
+  }
+
+  async function searchModrinth(): Promise<DiscoverResult[]> {
+    const page = await invoke<{ results: SearchResult[]; total: number }>("search_modrinth_mods", {
+      path: "",
+      query: query.trim(),
+      gameVersion: null,
+      loader: null,
+      category: null,
+      environment: null,
+      license: null,
+      sort: "downloads",
+      contentType: "modpack",
+      page: 1,
+      pageSize: 30,
+    });
+    return (page.results ?? []).map((r) => ({ ...r, provider: "modrinth" as const }));
+  }
+
+  async function searchCurseForge(): Promise<DiscoverResult[]> {
+    const hits = await invoke<Array<{
+      id: number | string;
+      slug: string;
+      name: string;
+      summary?: string | null;
+      iconUrl?: string | null;
+      authors?: string[] | null;
+      downloadCount?: number | null;
+      categories?: string[] | null;
+    }>>("search_curseforge_modpacks", {
+      query: query.trim(),
+      gameVersion: null,
+      offset: 0,
+    });
+    return (hits ?? []).map((h) => ({
+      id: String(h.id),
+      slug: h.slug,
+      name: h.name,
+      description: h.summary ?? "",
+      projectType: "modpack",
+      iconUrl: h.iconUrl,
+      author: h.authors?.[0] ?? null,
+      downloads: h.downloadCount,
+      follows: null,
+      categories: h.categories ?? [],
+      provider: "curseforge" as const,
+    }));
+  }
+
+  async function search(_opts?: { reset?: boolean }) {
     loadingDiscover = true;
     discoverError = "";
     try {
-      const res = await api.mods.search(query.trim(), {
-        contentType: "modpack",
-        sort: "downloads",
-      });
-      results = res;
+      if (discoverProvider === "modrinth") {
+        results = await searchModrinth();
+      } else if (discoverProvider === "curseforge") {
+        results = await searchCurseForge();
+      } else {
+        const settled = await Promise.allSettled([searchModrinth(), searchCurseForge()]);
+        const mr = settled[0].status === "fulfilled" ? settled[0].value : [];
+        const cf = settled[1].status === "fulfilled" ? settled[1].value : [];
+        const errors = settled
+          .filter((s): s is PromiseRejectedResult => s.status === "rejected")
+          .map((s) => String(s.reason));
+        if (mr.length === 0 && cf.length === 0 && errors.length > 0) {
+          throw new Error(errors.join("; "));
+        }
+        if (errors.length > 0) {
+          discoverError = errors.join("; ");
+        }
+        results = interleaveResults(mr, cf);
+      }
     } catch (e) {
       discoverError = String(e);
       results = [];
@@ -90,14 +169,32 @@
     }
   }
 
-  async function addModpack(result: SearchResult) {
-    adding = new Set([...adding, result.id]);
+  function setDiscoverProvider(provider: DiscoverProvider) {
+    if (discoverProvider === provider) return;
+    discoverProvider = provider;
+    search();
+  }
+
+  async function addModpack(result: DiscoverResult) {
+    const key = resultKey(result);
+    adding = new Set([...adding, key]);
     try {
-      const url = await api.modpacks.getModpackUrl(result.id);
       const home = ((await invoke("get_home_dir").catch(() => "")) as string).replace(/\/$/, "");
       const slug = result.slug || result.id;
       const targetDir = `${home}/TuffBox/instances/${slug}`;
-      const res: any = await api.modpacks.install(url, targetDir, result.name);
+      let source: string;
+      if (result.provider === "curseforge") {
+        const files = await invoke<Array<{ id: number }>>("get_curseforge_modpack_files", {
+          modId: Number(result.id),
+          gameVersion: null,
+        });
+        const fileId = files?.[0]?.id;
+        if (fileId == null) throw new Error("No CurseForge files available for this modpack.");
+        source = `cf:${result.id}:${fileId}`;
+      } else {
+        source = await api.modpacks.getModpackUrl(result.id);
+      }
+      const res: any = await api.modpacks.install(source, targetDir, result.name);
       const info = await invoke("validate_project", { path: res.path }) as import("../lib/api").ProjectSummary;
       const manifestPath = info.manifestPath || res.path;
       recentProjects.add({ path: manifestPath, info: info as any });
@@ -107,7 +204,7 @@
       toasts.error(`Could not add ${result.name}: ${e}`);
     } finally {
       const next = new Set(adding);
-      next.delete(result.id);
+      next.delete(key);
       adding = next;
     }
   }
@@ -127,6 +224,13 @@
     if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
     return String(n);
   }
+
+  $: discoverPlaceholder =
+    discoverProvider === "curseforge"
+      ? "Search CurseForge modpacks…"
+      : discoverProvider === "both"
+        ? "Search modpacks…"
+        : "Search Modrinth modpacks…";
 </script>
 
 <div class="library">
@@ -187,12 +291,30 @@
     {/if}
   {:else}
     <div class="discover-bar">
+      <div class="provider-toggle" role="group" aria-label="Catalog provider">
+        <button
+          type="button"
+          class:active={discoverProvider === "modrinth"}
+          on:click={() => setDiscoverProvider("modrinth")}
+        >Modrinth</button>
+        <button
+          type="button"
+          class:active={discoverProvider === "curseforge"}
+          on:click={() => setDiscoverProvider("curseforge")}
+        >CurseForge</button>
+        <button
+          type="button"
+          class:active={discoverProvider === "both"}
+          on:click={() => setDiscoverProvider("both")}
+          title="Search both catalogs at once"
+        >Both</button>
+      </div>
       <div class="search">
         <Search size={16} />
         <input
           aria-label="Search modpacks"
           bind:value={query}
-          placeholder="Search Modrinth modpacks…"
+          placeholder={discoverPlaceholder}
           on:keydown={(e) => e.key === "Enter" && search()}
         />
       </div>
@@ -215,8 +337,8 @@
       </div>
     {:else}
       <div class="pack-grid">
-        {#each results as result (result.id)}
-          <div class="pack-card">
+        {#each results as result (resultKey(result))}
+          <div class="pack-card discover-card">
             <div class="pack-cover" style={result.iconUrl ? `background: #18181b` : `background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug)})`}>
               {#if result.iconUrl}
                 <img class="pack-cover-img" src={result.iconUrl} alt="" />
@@ -225,15 +347,25 @@
               {/if}
             </div>
             <div class="pack-body">
-              <span class="pack-name" title={result.name}>{result.name}</span>
+              <div class="pack-title-row">
+                <span class="pack-name" title={result.name}>{result.name}</span>
+                {#if discoverProvider === "both"}
+                  <span
+                    class="provider-badge"
+                    class:modrinth={(result.provider ?? "modrinth") !== "curseforge"}
+                    class:curseforge={result.provider === "curseforge"}
+                    title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
+                  >{result.provider === "curseforge" ? "CF" : "MR"}</span>
+                {/if}
+              </div>
               <span class="pack-meta">{result.author ?? "Unknown author"}</span>
               <p class="pack-desc">{result.description}</p>
               <div class="pack-stats">
                 <span><Download size={12} /> {formatCount(result.downloads)}</span>
                 <span><Star size={12} /> {formatCount(result.follows)}</span>
               </div>
-              <button class="pack-add" disabled={adding.has(result.id)} on:click={() => addModpack(result)}>
-                {#if adding.has(result.id)}<span class="mini-spinner"></span> Adding…{:else}<Plus size={14} /> Add to TuffBox{/if}
+              <button class="pack-add" disabled={adding.has(resultKey(result))} on:click={() => addModpack(result)}>
+                {#if adding.has(resultKey(result))}<span class="mini-spinner"></span> Adding…{:else}<Plus size={14} /> Add to TuffBox{/if}
               </button>
             </div>
           </div>
@@ -350,17 +482,69 @@
   }
   .add-card:hover .add-cover { color: var(--accent-primary); }
 
-  .discover-bar { display: flex; gap: 10px; margin-bottom: 20px; }
+  .discover-bar {
+    display: flex; gap: 10px; margin-bottom: 20px; align-items: center; flex-wrap: wrap;
+  }
+  .provider-toggle {
+    display: inline-flex;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    flex-shrink: 0;
+  }
+  .provider-toggle button {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .provider-toggle button.active {
+    background: rgba(27, 217, 106, 0.14);
+    color: var(--text-primary);
+  }
   .search {
-    flex: 1; display: flex; align-items: center; gap: 8px;
+    flex: 1; min-width: 180px; display: flex; align-items: center; gap: 8px;
     padding: 0 14px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary);
   }
   .search input { border: 0; background: transparent; color: var(--text-primary); width: 100%; padding: 12px 0; font-size: 14px; }
   .search-btn {
-    padding: 0 18px; border-radius: 10px; font-weight: 700; font-size: 13px;
+    padding: 0 18px; height: 44px; border-radius: 10px; font-weight: 700; font-size: 13px;
     background: var(--accent-primary); color: #000; border: none; cursor: pointer;
   }
   .search-btn:disabled { opacity: 0.6; }
+
+  .discover-card { cursor: default; }
+  .pack-title-row {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .pack-title-row .pack-name { flex: 1; min-width: 0; }
+  .provider-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+  }
+  .provider-badge.modrinth {
+    background: rgba(27, 217, 106, 0.18);
+    color: #1bd96a;
+  }
+  .provider-badge.curseforge {
+    background: rgba(241, 100, 54, 0.18);
+    color: #f16436;
+  }
 
   .mini-spinner {
     width: 14px; height: 14px; border: 2px solid rgba(0, 0, 0, 0.25); border-top-color: #000;

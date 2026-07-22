@@ -40,7 +40,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, loginTypeLabel, type RecentProject, type SkinSource, type CapeProvider, type CapeCatalog } from "../lib/store";
+  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, loginTypeLabel, type RecentProject, type CapeProvider, type CapeCatalog } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { launchWithFeedback, registerLaunchCrashListener } from "../lib/launch";
@@ -68,6 +68,7 @@
   let cloneTarget: RecentProject | null = null;
   let capeCatalog: CapeCatalog | null = null;
   let capeBusy = false;
+  let mojangCapeMenuOpen = false;
   const capeProviderOptions: { id: CapeProvider; label: string }[] = [
     { id: "mojang", label: "Mojang" },
     { id: "optifine", label: "OptiFine" },
@@ -79,6 +80,10 @@
   $: skinUrl = $authState.profile?.skinUrl ?? null;
   $: capeUrl = $authState.profile?.capeUrl ?? null;
   $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
+  $: mojangCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang");
+  $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
+  $: canChangeMojangCape =
+    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
 
   async function refreshCapes() {
     if (!$authState.loggedIn || !$authState.profile) {
@@ -99,6 +104,11 @@
       const state = await api.mcAuth.setCapeProvider(provider);
       authState.set(state);
       await refreshCapes();
+      // Only Mojang owns multiple switchable capes — open the change menu after catalog loads.
+      mojangCapeMenuOpen =
+        provider === "mojang" &&
+        state.loginType === "microsoft" &&
+        (capeCatalog?.offers ?? []).some((o) => o.provider === "mojang" && o.canActivate);
       toasts.success(`Cape: ${provider === "none" ? "hidden" : provider}`);
     } catch (e) {
       toasts.error(String(e));
@@ -113,6 +123,7 @@
     try {
       const state = await api.mcAuth.applyCape(capeId);
       authState.set(state);
+      mojangCapeMenuOpen = true;
       if (state.profile) {
         try {
           skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
@@ -124,6 +135,13 @@
       toasts.error(String(e));
     } finally {
       capeBusy = false;
+    }
+  }
+
+  function openMojangCapeMenu() {
+    mojangCapeMenuOpen = true;
+    if (($authState.capeProvider ?? "mojang") !== "mojang") {
+      void selectCapeProvider("mojang");
     }
   }
 
@@ -730,7 +748,7 @@
           <div class="cape-panel">
             <div class="cape-row-label">Cape provider</div>
             <div class="cape-provider-grid">
-              {#each capeProviderOptions as opt}
+              {#each capeProviderOptions as opt (opt.id)}
                 <button
                   type="button"
                   class="cape-provider-btn"
@@ -743,25 +761,80 @@
               {/each}
             </div>
 
-            {#if capeCatalog?.offers?.length}
-              <div class="cape-row-label">Available capes</div>
+            {#if canChangeMojangCape}
+              <div class="cape-mojang-actions">
+                <button
+                  type="button"
+                  class="cape-activate"
+                  disabled={capeBusy}
+                  on:click={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
+                >
+                  {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
+                </button>
+              </div>
+            {/if}
+
+            {#if mojangCapeMenuOpen && canChangeMojangCape}
+              <div class="cape-row-label">Change Mojang cape</div>
               <div class="cape-offers">
-                {#each capeCatalog.offers as offer (offer.provider + offer.id)}
-                  <div class="cape-offer" class:active={offer.active || (($authState.capeProvider === offer.provider) && offer.url === capeUrl)}>
+                {#each mojangCapeOffers as offer (offer.id)}
+                  <div class="cape-offer" class:active={offer.active}>
+                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
+                    <div class="cape-offer-info">
+                      <strong>{offer.label}</strong>
+                      <span>mojang</span>
+                    </div>
+                    <button
+                      class="cape-activate"
+                      disabled={capeBusy || offer.active}
+                      on:click={() => activateMojangCape(offer.id)}
+                    >
+                      {offer.active ? "Active" : "Equip"}
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {:else if mojangCapeOffers.length && !canChangeMojangCape}
+              <div class="cape-row-label">Mojang cape</div>
+              <div class="cape-offers">
+                {#each mojangCapeOffers as offer (offer.id)}
+                  <div
+                    class="cape-offer"
+                    class:active={($authState.capeProvider ?? "mojang") === "mojang"}
+                  >
+                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
+                    <div class="cape-offer-info">
+                      <strong>{offer.label}</strong>
+                      <span>mojang</span>
+                    </div>
+                    {#if ($authState.capeProvider ?? "mojang") !== "mojang"}
+                      <button
+                        class="cape-activate"
+                        disabled={capeBusy}
+                        on:click={() => selectCapeProvider("mojang")}
+                      >
+                        Show
+                      </button>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
+            {#if otherCapeOffers.length}
+              <div class="cape-row-label">Other sources</div>
+              <div class="cape-offers">
+                {#each otherCapeOffers as offer (offer.provider + offer.id)}
+                  <div
+                    class="cape-offer"
+                    class:active={($authState.capeProvider ?? "mojang") === offer.provider}
+                  >
                     <img src={offer.url} alt={offer.label} class="cape-thumb" />
                     <div class="cape-offer-info">
                       <strong>{offer.label}</strong>
                       <span>{offer.provider}</span>
                     </div>
-                    {#if offer.canActivate && $authState.loginType === "microsoft"}
-                      <button
-                        class="cape-activate"
-                        disabled={capeBusy || offer.active}
-                        on:click={() => activateMojangCape(offer.id)}
-                      >
-                        {offer.active ? "Active" : "Equip"}
-                      </button>
-                    {:else if ($authState.capeProvider ?? "mojang") !== offer.provider}
+                    {#if ($authState.capeProvider ?? "mojang") !== offer.provider}
                       <button
                         class="cape-activate"
                         disabled={capeBusy}
@@ -773,7 +846,7 @@
                   </div>
                 {/each}
               </div>
-            {:else}
+            {:else if !mojangCapeOffers.length}
               <p class="cape-empty">No capes found for this username on the selected sources.</p>
             {/if}
           </div>
@@ -971,6 +1044,8 @@
     position: sticky;
     top: 20px;
     z-index: 0;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
   }
 
   .skin-panel {
@@ -1083,6 +1158,7 @@
     background: rgba(27, 217, 106, 0.08);
   }
   .cape-provider-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .cape-mojang-actions { display: flex; }
   .cape-offers { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
   .cape-offer {
     display: flex; align-items: center; gap: 10px;

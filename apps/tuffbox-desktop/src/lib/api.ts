@@ -165,6 +165,30 @@ export interface KubeJsScript {
   content: string;
 }
 
+export interface CraftDraft {
+  /** shaped | shapeless | smelting | blasting | smoking | campfire | smithing | stonecutting */
+  kind?: string | null;
+  shaped: boolean;
+  /** Row-major 3×3; null = empty. Tags use `#ns:path`. */
+  grid: (string | null)[];
+  output: string;
+  outputCount: number;
+  replaceId?: string | null;
+  input?: string | null;
+  xp?: number | null;
+  cookTime?: number | null;
+  template?: string | null;
+  base?: string | null;
+  addition?: string | null;
+}
+
+export interface TagDraft {
+  tagId: string;
+  add: string[];
+  remove: string[];
+  removeAll?: boolean;
+}
+
 export interface ProfileSummary {
   id: string;
   name: string;
@@ -775,6 +799,18 @@ export const api = {
       return cmd<Record<string, unknown>>("retry_failed_mod_downloads", { ...pathArg(p), modIds });
     },
     recommend(p?: string) { return cmd<Record<string, unknown>[]>("recommend_mods", pathArg(p)); },
+    disable(modId: string, p?: string) {
+      return cmd<{ id: string; disabled: boolean; fileName?: string }>("disable_project_mod", {
+        ...pathArg(p),
+        modId,
+      });
+    },
+    enable(modId: string, p?: string) {
+      return cmd<{ id: string; disabled: boolean; fileName?: string }>("enable_project_mod", {
+        ...pathArg(p),
+        modId,
+      });
+    },
     detectWrongLoader(p?: string) { return cmd<Record<string, unknown>[]>("detect_wrong_loader_mods", pathArg(p)); },
     disableJar(fileName: string, p?: string) { return cmd<string>("disable_wrong_loader_jar", { ...pathArg(p), fileName }); },
     removeLooseJar(fileName: string, p?: string) { return cmd<string>("remove_loose_jar", { ...pathArg(p), fileName }); },
@@ -1130,6 +1166,18 @@ export const api = {
     writeRemoves(recipeIds: string[], p?: string) {
       return cmd<string>("write_kubejs_recipe_removes", { ...pathArg(p), recipeIds });
     },
+    writeCraft(draft: CraftDraft, p?: string) {
+      return cmd<string>("write_kubejs_craft_recipe", { ...pathArg(p), draft });
+    },
+    writeTags(draft: TagDraft, p?: string) {
+      return cmd<string>("write_kubejs_tag_edits", { ...pathArg(p), draft });
+    },
+    listItemTags(p?: string) {
+      return cmd<string[]>("list_item_tags", pathArg(p));
+    },
+    getTagEntries(tagId: string, p?: string) {
+      return cmd<string[]>("get_item_tag_entries", { ...pathArg(p), tagId });
+    },
     generateScript(kind: string, recipeIds: string[], newItem?: string | null, count?: number | null) {
       return cmd<KubeJsScript>("generate_kubejs_recipe_script", {
         kind,
@@ -1153,7 +1201,52 @@ export const api = {
     createCrashFixPlan(reportId?: string | null, p?: string) { return cmd<ChangePlan>("create_crash_fix_plan", { ...pathArg(p), reportId }); },
     applyCrashFixPlan(reportId?: string | null, p?: string) { return cmd<string[]>("apply_crash_fix_plan", { ...pathArg(p), reportId }); },
     runCrashAssistantFull(p?: string) { return cmd<CrashAnalysisReport>("run_crash_assistant_full", pathArg(p)); },
-    buildAiContext(p?: string) { return cmd<Record<string, unknown>>("build_ai_crash_context", pathArg(p)); },
+    buildAiContext(reportId?: string | null, p?: string) {
+      return cmd<Record<string, unknown>>("build_ai_crash_context", {
+        ...pathArg(p),
+        reportId: reportId ?? null,
+      });
+    },
+    analyzeWithAi(reportId?: string | null, p?: string) {
+      return cmd<Record<string, unknown>>("analyze_crash_with_ai", {
+        ...pathArg(p),
+        reportId: reportId ?? null,
+      });
+    },
+    applyActionPlan(plan: Record<string, unknown>, p?: string) {
+      return cmd<Record<string, unknown>>("apply_action_plan", { ...pathArg(p), plan });
+    },
+    recordAiFeedback(
+      feedback: {
+        helped: boolean;
+        fingerprintKey?: string | null;
+        humanExplanation?: string | null;
+        suspectedMods?: string[] | null;
+        recommendedActions?: Record<string, unknown>[] | null;
+        reportId?: string | null;
+      },
+      p?: string,
+    ) {
+      return cmd<string>("record_crash_ai_feedback", { ...pathArg(p), feedback });
+    },
+    draftAuthoredCase(reportId?: string | null, p?: string) {
+      return cmd<Record<string, unknown>>("draft_authored_crash_case", {
+        ...pathArg(p),
+        reportId: reportId ?? null,
+      });
+    },
+    saveAuthoredCase(input: Record<string, unknown>, p?: string) {
+      return cmd<Record<string, unknown>>("save_authored_crash_case", { ...pathArg(p), input });
+    },
+    listAuthoredCases(p?: string) {
+      return cmd<Record<string, unknown>[]>("list_authored_crash_cases", pathArg(p));
+    },
+    getAuthoredCaseExport(caseId: string, p?: string) {
+      return cmd<string>("get_authored_case_export", { ...pathArg(p), caseId });
+    },
+    openAuthoredKbFolder(p?: string) {
+      return cmd<void>("open_authored_kb_folder", pathArg(p));
+    },
     saveProblematicModsConfig(entries: Record<string, unknown>[], p?: string) { return cmd<void>("save_problematic_mods_config", { ...pathArg(p), entries }); },
     getProblematicModsConfig(p?: string) { return cmd<Record<string, unknown>[]>("get_problematic_mods_config", pathArg(p)); },
   },

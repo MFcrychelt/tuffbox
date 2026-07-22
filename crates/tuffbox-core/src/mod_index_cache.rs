@@ -45,6 +45,14 @@ pub struct ModHashIndexEntry {
     pub content_type: Option<String>,
     #[serde(default)]
     pub side: Option<String>,
+    /// Raw Modrinth `client_side` value (`required` / `optional` / `unsupported`).
+    /// Present only after a real Modrinth project lookup — used to avoid
+    /// re-querying and to distinguish "defaulted to both" from a real both.
+    #[serde(default)]
+    pub client_side: Option<String>,
+    /// Raw Modrinth `server_side` value.
+    #[serde(default)]
+    pub server_side: Option<String>,
 }
 
 impl ModHashIndex {
@@ -93,12 +101,25 @@ impl ModHashIndex {
                 sha512: None,
                 content_type: None,
                 side: None,
+                client_side: None,
+                server_side: None,
             },
         );
     }
 
-    pub fn put_modrinth(&mut self, sha1: &str, spec: &ModSpec) {
+    pub fn put_modrinth(
+        &mut self,
+        sha1: &str,
+        spec: &ModSpec,
+        client_side: Option<&str>,
+        server_side: Option<&str>,
+    ) {
         let key = sha1.to_ascii_lowercase();
+        let side = if client_side.is_some() || server_side.is_some() {
+            Side::from_modrinth(client_side, server_side)
+        } else {
+            spec.side
+        };
         self.entries.insert(
             key,
             ModHashIndexEntry {
@@ -118,9 +139,41 @@ impl ModHashIndex {
                     ContentType::Shaderpack => "shader".into(),
                     ContentType::Datapack => "datapack".into(),
                 }),
-                side: Some(format!("{:?}", spec.side).to_lowercase()),
+                side: Some(side.as_str().to_string()),
+                client_side: client_side.map(|s| s.to_string()),
+                server_side: server_side.map(|s| s.to_string()),
             },
         );
+    }
+
+    /// Updates only Modrinth environment fields on an existing (or new stub) entry.
+    pub fn put_sides(
+        &mut self,
+        sha1: &str,
+        client_side: Option<&str>,
+        server_side: Option<&str>,
+    ) {
+        let key = sha1.to_ascii_lowercase();
+        let side = Side::from_modrinth(client_side, server_side);
+        let entry = self.entries.entry(key.clone()).or_insert_with(|| ModHashIndexEntry {
+            status: "modrinth".into(),
+            id: None,
+            name: None,
+            version: None,
+            project_id: None,
+            file_id: None,
+            icon_url: None,
+            download_url: None,
+            sha1: Some(key),
+            sha512: None,
+            content_type: None,
+            side: None,
+            client_side: None,
+            server_side: None,
+        });
+        entry.client_side = client_side.map(|s| s.to_string());
+        entry.server_side = server_side.map(|s| s.to_string());
+        entry.side = Some(side.as_str().to_string());
     }
 
     pub fn remove_sha1(&mut self, sha1: &str) {
@@ -152,13 +205,18 @@ impl ModHashIndexEntry {
             Some("datapack") => ContentType::Datapack,
             _ => ContentType::Mod,
         };
-        let side = match self.side.as_deref() {
-            Some("client") => Side::Client,
-            Some("server") => Side::Server,
-            Some("optional") => Side::Optional,
-            Some("unknown") => Side::Unknown,
-            Some("both") => Side::Both,
-            _ => fallback_side,
+        // Prefer raw Modrinth environment fields when present (post-fix cache).
+        let side = if self.client_side.is_some() || self.server_side.is_some() {
+            Side::from_modrinth(self.client_side.as_deref(), self.server_side.as_deref())
+        } else {
+            match self.side.as_deref() {
+                Some("client") => Side::Client,
+                Some("server") => Side::Server,
+                Some("optional") => Side::Optional,
+                Some("unknown") => Side::Unknown,
+                Some("both") => Side::Both,
+                _ => fallback_side,
+            }
         };
         Some(ModSpec {
             id,

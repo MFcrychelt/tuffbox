@@ -26,15 +26,17 @@
     GitMerge,
     Database,
     Zap,
-    Gauge,
     Copy,
     ChevronDown,
     BadgeCheck,
     CircleHelp,
     Ban,
+    Bot,
+    BookMarked,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import AiConnectionModal from "./AiConnectionModal.svelte";
 
   type Diagnostic = {
     severity: string;
@@ -307,10 +309,6 @@
   let wrongLoaderLoading = false;
   let wrongLoaderFixing: string | null = null;
 
-  // Performance audit state
-  let perfFindings: any[] = [];
-  let perfLoading = false;
-
   // Ore generation scanner state
   let oreFindings: any[] = [];
   let oreLoading = false;
@@ -333,7 +331,10 @@
     if (!$projectPath) return;
     crashLoading = true;
     try {
-      const result: any = await invoke("run_crash_assistant_full", { path: $projectPath });
+      const result: any = await invoke("run_crash_assistant_full", {
+        path: $projectPath,
+        reportId: selectedReportId || null,
+      });
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
       crashClassFinder = result.classFinderResults ?? [];
@@ -358,23 +359,315 @@
   let aiPrompt: string = "";
   let aiShowPrompt = false;
   let aiAnalysis: any = null;
+  let aiFeedbackBusy = false;
+  let aiFeedbackMsg: string | null = null;
+  let aiModalOpen = false;
+  let aiApplyBusy = false;
+
+  // Author KB case form (pack author — crash + resolution)
+  let authorOpen = false;
+  let authorBusy = false;
+  let authorMsg: string | null = null;
+  let authorId = "";
+  let authorSolution = "";
+  let authorSymptoms = "";
+  let authorSuspected = "";
+  let authorNotes = "";
+  let authorActionsJson = "[]";
+  let authorFingerprint: any = null;
+  let authorCases: any[] = [];
+  let authorExportPreview = "";
 
   async function runAiExplain() {
     if (!$projectPath) return;
     aiLoading = true;
     error = null;
+    aiFeedbackMsg = null;
     try {
-      const context: any = await invoke("build_ai_crash_context", { path: $projectPath });
+      const reportId = selectedReportId || null;
+      const context: any = await invoke("build_ai_crash_context", {
+        path: $projectPath,
+        reportId,
+      });
       aiContext = context;
       aiPrompt = context.prompt ?? "";
       aiShowPrompt = false;
-      aiAnalysis = await invoke("analyze_crash_with_ai", { path: $projectPath });
-      message = "AI analysis ready. Review the suggestions before applying any fix plan.";
+      aiAnalysis = await invoke("analyze_crash_with_ai", {
+        path: $projectPath,
+        reportId,
+      });
+      const similar = context.similarCaseCount ?? 0;
+      const model = context.aiModel ?? aiAnalysis?.model ?? "AI";
+      message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}). Review before applying fixes.`;
     } catch (e) {
-      error = String(e);
+      const msg = String(e);
+      if (/ollama|connection refused|failed to fetch|tcp|unreachable/i.test(msg)) {
+        error = `Ollama unavailable — start Ollama and check Settings → AI (endpoint/model). ${msg}`;
+      } else {
+        error = msg;
+      }
       aiAnalysis = null;
     } finally {
       aiLoading = false;
+    }
+  }
+
+  async function sendAiFeedback(helped: boolean) {
+    if (!$projectPath || !aiAnalysis) return;
+    aiFeedbackBusy = true;
+    aiFeedbackMsg = null;
+    try {
+      const path = await invoke<string>("record_crash_ai_feedback", {
+        path: $projectPath,
+        feedback: {
+          helped,
+          fingerprintKey: aiAnalysis.fingerprintKey ?? aiContext?.fingerprintKey ?? null,
+          humanExplanation: aiAnalysis.human_explanation ?? aiAnalysis.humanExplanation ?? null,
+          suspectedMods: aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods ?? [],
+          recommendedActions: aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions ?? [],
+          reportId: selectedReportId || null,
+        },
+      });
+      aiFeedbackMsg = helped
+        ? `Thanks — saved to knowledge base (${path}).`
+        : `Marked as unhelpful — recorded in KB (${path}).`;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      aiFeedbackBusy = false;
+    }
+  }
+
+  function aiPlanActions(analysis: any): any[] {
+    return analysis?.actions ?? analysis?.recommended_actions ?? analysis?.recommendedActions ?? [];
+  }
+
+  async function applyAiPlan() {
+    if (!$projectPath || !aiAnalysis) return;
+    const actions = aiPlanActions(aiAnalysis);
+    if (!actions.length) {
+      error = "No actions in the AI plan to apply.";
+      return;
+    }
+    if (aiAnalysis.validation && aiAnalysis.validation.ok === false) {
+      error = `Plan invalid: ${(aiAnalysis.validation.errors ?? []).join("; ")}`;
+      return;
+    }
+    const ok = confirm(
+      `Apply ${actions.length} action(s) from the AI/KB plan?\nA snapshot will be created first.`,
+    );
+    if (!ok) return;
+    aiApplyBusy = true;
+    error = null;
+    try {
+      const plan = {
+        schemaVersion: aiAnalysis.schemaVersion ?? 1,
+        humanExplanation: aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? "",
+        confidence: aiAnalysis.confidence ?? 0.5,
+        suspectedMods: aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods ?? [],
+        needsUserReview: aiAnalysis.needsUserReview ?? aiAnalysis.needs_user_review ?? true,
+        source: aiAnalysis.source ?? null,
+        matchedCaseIds: aiAnalysis.matchedCaseIds ?? [],
+        actions: (aiAnalysis.actions ?? []).map((a: any) => ({
+          op: a.op ?? a.action_type ?? a.actionType,
+          modId: a.modId ?? a.mod_id ?? null,
+          provider: a.provider ?? null,
+          projectId: a.projectId ?? a.project_id ?? null,
+          version: a.version ?? null,
+          path: a.path ?? null,
+          patchType: a.patchType ?? a.patch_type ?? null,
+          patch: a.patch ?? null,
+          reason: a.reason ?? a.description ?? null,
+          risk: a.risk ?? "medium",
+        })),
+        additionalContext: aiAnalysis.additionalContext ?? aiAnalysis.additional_context ?? null,
+      };
+      // If only legacy recommended_actions exist, map them.
+      if (!plan.actions.length) {
+        plan.actions = (aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions ?? []).map(
+          (a: any) => ({
+            op: a.action_type ?? a.actionType ?? "unknown",
+            modId: a.mod_id ?? a.modId ?? null,
+            provider: null,
+            projectId: null,
+            version: null,
+            path: null,
+            patchType: null,
+            patch: null,
+            reason: a.description ?? null,
+            risk: a.risk ?? "medium",
+          }),
+        );
+      }
+      const result: any = await invoke("apply_action_plan", {
+        path: $projectPath,
+        plan,
+      });
+      const applied = result?.applied ?? [];
+      const errs = result?.errors ?? [];
+      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""}`;
+      if (errs.length) error = errs.join("; ");
+      await loadCrashReports();
+      // Prefill author form from the plan that just worked.
+      await openAuthorForm({ fromAnalysis: true });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      aiApplyBusy = false;
+    }
+  }
+
+  function parseAuthorActions(): any[] {
+    try {
+      const parsed = JSON.parse(authorActionsJson || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      throw new Error("Actions JSON is invalid — expect an array of {op, modId, …}");
+    }
+  }
+
+  async function refreshAuthorCases() {
+    if (!$projectPath) return;
+    try {
+      authorCases = await invoke("list_authored_crash_cases", { path: $projectPath });
+    } catch {
+      authorCases = [];
+    }
+  }
+
+  async function openAuthorForm(opts?: { fromAnalysis?: boolean }) {
+    if (!$projectPath) return;
+    authorOpen = true;
+    authorMsg = null;
+    authorExportPreview = "";
+    authorBusy = true;
+    try {
+      const draft: any = await invoke("draft_authored_crash_case", {
+        path: $projectPath,
+        reportId: selectedReportId || null,
+      });
+      authorFingerprint = draft.fingerprint;
+      authorSymptoms = (draft.symptoms ?? []).join("\n");
+      if (opts?.fromAnalysis && aiAnalysis) {
+        authorSolution =
+          aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? authorSolution;
+        authorSuspected = (
+          aiAnalysis.suspectedMods ??
+          aiAnalysis.suspected_mods ??
+          []
+        ).join(", ");
+        const actions = aiPlanActions(aiAnalysis).map((a: any) => ({
+          op: a.op ?? a.action_type ?? a.actionType,
+          modId: a.modId ?? a.mod_id ?? null,
+          provider: a.provider ?? null,
+          projectId: a.projectId ?? a.project_id ?? null,
+          version: a.version ?? null,
+          path: a.path ?? null,
+          patchType: a.patchType ?? a.patch_type ?? null,
+          patch: a.patch ?? null,
+          reason: a.reason ?? a.description ?? null,
+          risk: a.risk ?? "medium",
+        }));
+        authorActionsJson = JSON.stringify(actions, null, 2);
+        if (!authorId) {
+          const ex = (draft.fingerprint?.exception ?? "case")
+            .replace(/[^a-zA-Z0-9-]+/g, "-")
+            .slice(0, 40)
+            .toLowerCase();
+          authorId = `authored-${ex || "case"}`;
+        }
+      } else if (!authorActionsJson || authorActionsJson === "[]") {
+        authorActionsJson = JSON.stringify(
+          [
+            {
+              op: "disable_mod",
+              modId: "examplemod",
+              reason: "Describe the fix",
+              risk: "low",
+            },
+          ],
+          null,
+          2,
+        );
+      }
+      await refreshAuthorCases();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      authorBusy = false;
+    }
+  }
+
+  async function saveAuthorCase() {
+    if (!$projectPath || !authorFingerprint) return;
+    authorBusy = true;
+    authorMsg = null;
+    error = null;
+    try {
+      const launcherActions = parseAuthorActions();
+      const result: any = await invoke("save_authored_crash_case", {
+        path: $projectPath,
+        input: {
+          id: authorId.trim() || null,
+          fingerprint: authorFingerprint,
+          solution: authorSolution.trim(),
+          symptoms: authorSymptoms
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          suspectedMods: authorSuspected
+            .split(/[,;\n]/)
+            .map((s) => s.trim())
+            .filter(Boolean),
+          launcherActions,
+          actions: [],
+          notes: authorNotes.trim() || null,
+        },
+      });
+      authorMsg = `Saved «${result.caseId}» → KB + export ${result.exportPath}`;
+      authorExportPreview = JSON.stringify(
+        {
+          id: result.case?.id,
+          fingerprint: result.case?.fingerprint,
+          solution: result.case?.solution,
+          actions: result.case?.launcherActions ?? result.case?.launcher_actions,
+        },
+        null,
+        2,
+      );
+      await refreshAuthorCases();
+      message = `KB case saved: ${result.caseId}`;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      authorBusy = false;
+    }
+  }
+
+  async function copyAuthorExport(caseId?: string) {
+    if (!$projectPath) return;
+    try {
+      let text = authorExportPreview;
+      if (caseId) {
+        text = await invoke<string>("get_authored_case_export", {
+          path: $projectPath,
+          caseId,
+        });
+      }
+      if (!text) throw new Error("Nothing to copy");
+      await navigator.clipboard.writeText(text);
+      authorMsg = "Export JSON copied (notes stripped — safe for remote KB).";
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function openAuthorExportFolder() {
+    if (!$projectPath) return;
+    try {
+      await invoke("open_authored_kb_folder", { path: $projectPath });
+    } catch (e) {
+      error = String(e);
     }
   }
 
@@ -392,18 +685,6 @@
       error = String(e);
     } finally {
       oreLoading = false;
-    }
-  }
-
-  async function runPerfAudit() {
-    if (!$projectPath) return;
-    perfLoading = true;
-    try {
-      perfFindings = await invoke("audit_performance", { path: $projectPath });
-    } catch (e) {
-      error = String(e);
-    } finally {
-      perfLoading = false;
     }
   }
 
@@ -798,10 +1079,6 @@
         <Wrench size={16} />
         {planning ? "Creating..." : "Create fix plan"}
       </button>
-      <button class="secondary" on:click={runPerfAudit} disabled={!$projectPath || perfLoading}>
-        <Gauge size={16} />
-        {perfLoading ? "Auditing..." : "Perf audit"}
-      </button>
       <button class="secondary" on:click={scanOreGen} disabled={!$projectPath || oreLoading}>
         <Database size={16} />
         {oreLoading ? "Scanning..." : "Ore gen scan"}
@@ -812,7 +1089,7 @@
       </button>
       <button class="secondary" on:click={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>
         <GitMerge size={16} />
-        {duplicateLoading ? "Scanning..." : "Find dupes"}
+        {duplicateLoading ? "Scanning..." : "Find duplicates"}
       </button>
       <button class="secondary" on:click={generateUnify} disabled={!$projectPath || unifyLoading}>
         <Zap size={16} />
@@ -821,6 +1098,13 @@
       <button class="secondary" on:click={runAiExplain} disabled={!$projectPath || aiLoading}>
         <MessageCircle size={16} />
         {aiLoading ? "Analyzing..." : "AI explain"}
+      </button>
+      <button class="secondary" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy} title="Save crash + fix as a private KB case">
+        <BookMarked size={16} />
+        Save KB case
+      </button>
+      <button class="secondary" on:click={() => (aiModalOpen = true)} title="Configure Ollama or API key">
+        <Bot size={16} /> AI settings
       </button>
     </div>
   </details>
@@ -916,28 +1200,31 @@
         <div class="problems-list">
           {#each problems as problem (problem.id)}
             <div class="problem-row {problem.severity}">
-              <span class="sev-dot" />
-              <div class="problem-main">
+              <span class="sev-dot"></span>
+              <div class="problem-body">
                 <div class="problem-title">
                   <strong>{problem.title}</strong>
                   <small class="problem-source">{problem.source}</small>
                 </div>
                 <p class="problem-detail">{problem.detail}</p>
+                {#if problem.actions.length}
+                  <div class="problem-actions">
+                    {#each problem.actions.slice(0, 4) as action (action.kind + (action.modId ?? ""))}
+                      <button
+                        class="primary small"
+                        on:click={() => applyHintFixAction({ id: problem.id, title: problem.title, severity: problem.severity, detail: problem.detail, steps: [], relatedMods: [], fix: null, fixes: [] }, action)}
+                        disabled={applyingHintId !== null}
+                        title={action.modId ? `Target: ${action.modId}` : "System-level fix"}
+                      >
+                        <Wrench size={13} /> {action.label}
+                      </button>
+                    {/each}
+                    {#if problem.actions.length > 4}
+                      <small class="more-fixes">+{problem.actions.length - 4} more</small>
+                    {/if}
+                  </div>
+                {/if}
               </div>
-              {#if problem.actions.length}
-                <div class="problem-actions">
-                  {#each problem.actions as action (action.kind + (action.modId ?? ""))}
-                    <button
-                      class="primary small"
-                      on:click={() => applyHintFixAction({ id: problem.id, title: problem.title, severity: problem.severity, detail: problem.detail, steps: [], relatedMods: [], fix: null, fixes: [] }, action)}
-                      disabled={applyingHintId !== null}
-                      title={action.modId ? `Target: ${action.modId}` : "System-level fix"}
-                    >
-                      <Wrench size={13} /> {action.label}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
             </div>
           {/each}
         </div>
@@ -1301,12 +1588,17 @@
             <div class="ai-stats">
               <div class="ai-stat"><strong>{Math.round(((aiAnalysis.confidence ?? 0) * 100))}%</strong> confidence</div>
               <div class="ai-stat"><strong>{(aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods ?? []).length}</strong> suspected mods</div>
-              <div class="ai-stat"><strong>{(aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions ?? []).length}</strong> actions</div>
+              <div class="ai-stat"><strong>{aiPlanActions(aiAnalysis).length}</strong> actions</div>
+              {#if aiAnalysis.diagnoseMode}
+                <div class="ai-stat"><strong>{aiAnalysis.diagnoseMode}</strong> mode</div>
+              {/if}
             </div>
-            {#if (aiAnalysis.needs_user_review ?? aiAnalysis.needsUserReview) !== false}
-              <div class="notice warning">AI suggestions require manual review. Nothing was applied automatically.</div>
+            {#if aiAnalysis.validation && aiAnalysis.validation.ok === false}
+              <div class="notice error">Plan validation failed: {(aiAnalysis.validation.errors ?? []).join("; ")}</div>
+            {:else if (aiAnalysis.needs_user_review ?? aiAnalysis.needsUserReview) !== false}
+              <div class="notice warning">Review the plan, then apply. Nothing runs until you confirm.</div>
             {:else}
-              <div class="notice warning">These are suggestions only — nothing was applied automatically.</div>
+              <div class="notice warning">Low-risk plan — still requires explicit apply.</div>
             {/if}
             {#if (aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods)?.length}
               <div class="ai-list">
@@ -1318,21 +1610,39 @@
                 </ul>
               </div>
             {/if}
-            {#if (aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions)?.length}
+            {#if aiPlanActions(aiAnalysis).length}
               <div class="ai-list">
                 <strong>Recommended actions</strong>
                 <ul>
-                  {#each (aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions) as action, aIdx (aIdx)}
+                  {#each aiPlanActions(aiAnalysis) as action, aIdx (aIdx)}
                     <li>
-                      <strong>{action.action_type ?? action.actionType}</strong>
-                      {#if action.mod_id ?? action.modId}<code>{action.mod_id ?? action.modId}</code>{/if}
-                      <span>{action.description}</span>
+                      <strong>{action.op ?? action.action_type ?? action.actionType}</strong>
+                      {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
+                      {#if action.version}<code>@{action.version}</code>{/if}
+                      {#if action.path}<code>{action.path}</code>{/if}
+                      <span>{action.reason ?? action.description ?? ""}</span>
                       <small>risk: {action.risk}</small>
                     </li>
                   {/each}
                 </ul>
               </div>
+              <button
+                class="secondary"
+                disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
+                on:click={applyAiPlan}
+              >
+                {aiApplyBusy ? "Applying…" : "Apply plan"}
+              </button>
             {/if}
+            <div class="ai-feedback">
+              <span>Was this helpful?</span>
+              <button class="secondary" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(true)}>Helped</button>
+              <button class="secondary" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(false)}>Wrong</button>
+              <button class="secondary" disabled={authorBusy} on:click={() => openAuthorForm({ fromAnalysis: true })}>
+                <BookMarked size={14} /> Save as KB case
+              </button>
+              {#if aiFeedbackMsg}<small>{aiFeedbackMsg}</small>{/if}
+            </div>
           </div>
         {:else}
           <p class="ai-desc">AI analysis failed or is incomplete. You can still use the raw prompt fallback below.</p>
@@ -1340,8 +1650,12 @@
         {#if aiContext}
           <div class="ai-stats">
             <div class="ai-stat"><strong>{aiContext.findingsCount}</strong> findings</div>
+            <div class="ai-stat"><strong>{aiContext.similarCaseCount ?? 0}</strong> KB hits</div>
+            <div class="ai-stat"><strong>{aiContext.aiModel ?? "—"}</strong> model</div>
+            <div class="ai-stat"><strong>{aiContext.context?.inventory?.mods?.length ?? aiContext.context?.installedModCount ?? 0}</strong> mods</div>
+            <div class="ai-stat"><strong>{aiContext.context?.inventory?.configFiles?.length ?? 0}</strong> configs</div>
+            <div class="ai-stat"><strong>{(aiContext.context?.inventory?.resourcepacks?.length ?? 0) + (aiContext.context?.inventory?.datapacks?.length ?? 0)}</strong> packs</div>
             <div class="ai-stat"><strong>{aiContext.promptLength}</strong> chars prompt</div>
-            <div class="ai-stat"><strong>{aiContext.context?.installedMods?.length ?? 0}</strong> mods</div>
           </div>
           <button class="secondary" on:click={() => (aiShowPrompt = !aiShowPrompt)}>
             {aiShowPrompt ? "Hide" : "Show"} prompt
@@ -1356,10 +1670,90 @@
       </section>
     {/if}
 
+    {#if authorOpen}
+      <section class="ai-panel panel author-kb-panel">
+        <h2><BookMarked size={16} /> Author KB case</h2>
+        <p class="crash-intro">
+          Pack-author tool: bind the current crash fingerprint to a solution + executable actions.
+          Saved locally under <code>.tuffbox/crash_kb/</code>; export JSON has <strong>no notes</strong> (safe to upload to your private server).
+        </p>
+        {#if authorMsg}<div class="notice success">{authorMsg}</div>{/if}
+        <div class="author-grid">
+          <label>
+            Case id
+            <input bind:value={authorId} placeholder="authored-mixin-create" />
+          </label>
+          <label class="full">
+            Solution (what fixed it)
+            <textarea rows="3" bind:value={authorSolution} placeholder="Install Indium matching Sodium for Fabric 1.20.1"></textarea>
+          </label>
+          <label>
+            Suspected mods (comma-separated)
+            <input bind:value={authorSuspected} placeholder="sodium, indium" />
+          </label>
+          <label>
+            Symptoms (one per line)
+            <textarea rows="3" bind:value={authorSymptoms}></textarea>
+          </label>
+          <label class="full">
+            Actions JSON (executable ActionPlan ops)
+            <textarea class="mono" rows="8" bind:value={authorActionsJson} spellcheck="false"></textarea>
+          </label>
+          <label class="full">
+            Notes (author-only, never exported)
+            <textarea rows="2" bind:value={authorNotes} placeholder="Internal: saw this after updating Iris…"></textarea>
+          </label>
+          {#if authorFingerprint}
+            <div class="full muted-box compact">
+              <strong>Fingerprint</strong>
+              <code>{authorFingerprint.key}</code>
+              <div class="author-fp-meta">
+                <span>{authorFingerprint.exception || "—"}</span>
+                {#if authorFingerprint.modFile}<span>mod: {authorFingerprint.modFile}</span>{/if}
+                {#if authorFingerprint.loader}<span>{authorFingerprint.loader} {authorFingerprint.mcMajor}</span>{/if}
+              </div>
+            </div>
+          {/if}
+        </div>
+        <div class="row-actions" style="gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button disabled={authorBusy || !authorSolution.trim()} on:click={saveAuthorCase}>
+            {authorBusy ? "Saving…" : "Save case"}
+          </button>
+          <button class="secondary" disabled={authorBusy} on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })}>
+            Refresh from crash
+          </button>
+          <button class="secondary" disabled={!authorExportPreview} on:click={() => copyAuthorExport()}>
+            <Copy size={14} /> Copy export JSON
+          </button>
+          <button class="secondary" on:click={openAuthorExportFolder}>
+            <FolderOpen size={14} /> Open export folder
+          </button>
+          <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
+        </div>
+        {#if authorExportPreview}
+          <pre class="ai-prompt-text">{authorExportPreview}</pre>
+        {/if}
+        {#if authorCases.length}
+          <div class="ai-list" style="margin-top:16px">
+            <strong>Authored cases in this project ({authorCases.length})</strong>
+            <ul>
+              {#each authorCases as c (c.id)}
+                <li>
+                  <code>{c.id}</code>
+                  <span>{c.solution}</span>
+                  <button class="ghost mini" on:click={() => copyAuthorExport(c.id)}>Copy JSON</button>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+      </section>
+    {/if}
+
     {#if crashFindings.length > 0}
       <section class="crash-assistant panel">
         <h2><Zap size={16} /> Crash Assistant ({crashFindings.length} finding{crashFindings.length > 1 ? "s" : ""})</h2>
-        <p class="crash-intro">Each card is a log/crash-report match. Apply fixes one at a time, then re-test.</p>
+        <p class="crash-intro">Analyzes the selected crash report, <code>logs/latest.log</code>, and currently installed mods. Apply fixes one at a time, then re-test.</p>
         <div class="crash-list">
           {#each crashFindings as f (f.code + f.title)}
             <div class="crash-card {f.severity}">
@@ -1379,7 +1773,7 @@
               {/if}
               {#if f.fixes?.length}
                 <div class="crash-fix-actions">
-                  {#each f.fixes as action, i (action.kind + (action.modId ?? "") + i)}
+                  {#each f.fixes.slice(0, 6) as action, i (action.kind + (action.modId ?? "") + i)}
                     <button
                       class="secondary small"
                       disabled={!$projectPath || applyingHintId === `ca:${f.code}`}
@@ -1388,6 +1782,9 @@
                       {applyingHintId === `ca:${f.code}` ? "Applying…" : action.label}
                     </button>
                   {/each}
+                  {#if f.fixes.length > 6}
+                    <small class="more-fixes">+{f.fixes.length - 6} more</small>
+                  {/if}
                 </div>
               {/if}
               {#if f.references?.length}
@@ -1494,24 +1891,6 @@
       </section>
     {/if}
 
-    {#if perfFindings.length > 0}
-      <section class="perf-audit panel">
-        <h2><Gauge size={16} /> Performance audit ({perfFindings.length})</h2>
-        <div class="perf-list">
-          {#each perfFindings as finding, pIdx (finding.code + (finding.file ?? '') + pIdx)}
-            <div class="perf-card {finding.severity}">
-              <div class="perf-card-header">
-                <strong>{finding.code}</strong>
-                <span class="perf-severity">{finding.severity}</span>
-              </div>
-              <p>{finding.message}</p>
-              {#if finding.file}<code class="perf-file">{finding.file}</code>{/if}
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
     {#if wrongLoaderJars.length > 0}
       <section class="wrong-loader panel">
         <h2><AlertTriangle size={16} /> Wrong-loader jars in mods/</h2>
@@ -1569,6 +1948,8 @@
     <div class="empty">Press refresh to load diagnosis.</div>
   {/if}
 </div>
+
+<AiConnectionModal bind:open={aiModalOpen} />
 
 <style>
   .diagnostics { max-width: none; width: 100%; }
@@ -1786,8 +2167,12 @@
   }
   .crash-fix { padding: 8px 10px; border-radius: 8px; background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.2); font-size: 12px; color: var(--accent-primary); }
   .crash-fix strong { color: var(--accent-primary); }
-  .crash-fix-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .crash-card > p,
+  .crash-evidence { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+  .crash-fix-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+  .crash-fix-actions button { flex: 0 0 auto; white-space: nowrap; max-width: 100%; }
   .crash-fix-actions .small { font-size: 11px; padding: 5px 10px; }
+  .more-fixes { color: var(--text-muted); font-size: 11px; align-self: center; }
   .crash-refs { display: flex; gap: 8px; flex-wrap: wrap; }
   .crash-link { font-size: 11px; color: var(--accent-secondary); text-decoration: none; }
   .crash-support { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; align-items: center; }
@@ -1802,7 +2187,7 @@
   .class-match { display: flex; gap: 8px; align-items: center; font-size: 11px; }
   .class-match span { color: var(--accent-primary); font-weight: 700; }
   .ai-panel { margin-top: 16px; border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.03); }
-  .ai-stats { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-bottom: 12px; }
+  .ai-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 12px; }
   .ai-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 10px; padding: 10px; text-align: center; }
   .ai-stat strong { font-size: 20px; color: var(--accent-secondary); }
   .ai-human { color: var(--text-primary); font-size: 14px; line-height: 1.5; margin: 0 0 12px; }
@@ -1810,9 +2195,25 @@
   .ai-list ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
   .ai-list li { color: var(--text-secondary); font-size: 12px; }
   .ai-list small { color: var(--text-muted); margin-left: 6px; }
+  .ai-feedback {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-color);
+    font-size: 12px; color: var(--text-muted);
+  }
   .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; }
   .ai-desc { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; line-height: 1.4; }
   .ai-prompt-text { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
+  .author-kb-panel { border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.04); }
+  .author-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .author-grid label { display: grid; gap: 6px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .author-grid label.full { grid-column: 1 / -1; }
+  .author-grid input, .author-grid textarea {
+    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-color);
+    background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-weight: 400;
+  }
+  .author-grid textarea.mono { font-family: ui-monospace, monospace; font-size: 11px; }
+  .author-fp-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: 11px; color: var(--text-muted); }
+  @media (max-width: 720px) { .author-grid { grid-template-columns: 1fr; } }
 
   .crash-support-msg { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 12px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
   .diag-card { display: flex; gap: 12px; border-left: 4px solid var(--text-muted); }
@@ -1876,12 +2277,38 @@
   .problem-row.critical .sev-dot, .problem-row.error .sev-dot { background: #ef4444; }
   .problem-row.warning .sev-dot { background: #eab308; }
   .problem-row.info .sev-dot { background: #3b82f6; }
-  .problem-main { flex: 1; min-width: 0; }
-  .problem-title { display: flex; align-items: center; gap: 8px; }
+  .problem-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .problem-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .problem-title strong { color: var(--text-primary); }
   .problem-source { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); border: 1px solid var(--border-color); border-radius: 10px; padding: 0 7px; }
-  .problem-detail { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
-  .problem-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; align-items: center; }
+  .problem-detail {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-width: 100%;
+  }
+  .problem-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    width: 100%;
+    align-items: center;
+  }
+  .problem-actions button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    max-width: 100%;
+  }
 
   /* --- Find-in-log + section TOC --- */
   .preview-tools { display: flex; align-items: center; gap: 12px; }
@@ -1912,20 +2339,19 @@
   .report-content :global(mark) { background: rgba(234, 179, 8, 0.45); color: inherit; border-radius: 2px; padding: 0 1px; }
 
   /* --- Diagnostics button-group + card spacing hardening ---
-     Prevents action buttons from collapsing to one-letter-wide columns
-     ("text in a vertical stack of single letters") and keeps cards from
-     touching each other. */
+     Actions sit below detail (stacked), so text is never squeezed into
+     single-letter columns by side-by-side flex siblings. */
   .problems-list, .hints-list, .suspects, .diagnostic-list, .signal-groups, .mod-entry-list {
     display: grid;
     gap: 12px;
   }
-  .problem-actions, .hint-actions, .suspect-actions, .conflict-actions, .plan-card ul {
+  .hint-actions, .suspect-actions, .conflict-actions, .plan-card ul {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     align-items: center;
   }
-  .problem-actions button, .hint-actions button, .suspect-actions button, .conflict-actions button {
+  .hint-actions button, .suspect-actions button, .conflict-actions button {
     white-space: nowrap;
     flex: 0 0 auto;
     min-width: 0;
@@ -1935,6 +2361,6 @@
     overflow-wrap: break-word;
     word-break: normal;
   }
-  .problem-main { overflow-wrap: break-word; word-break: normal; }
+  .problem-body { overflow-wrap: break-word; word-break: normal; }
   .suspects { max-height: none; overflow: visible; }
 </style>

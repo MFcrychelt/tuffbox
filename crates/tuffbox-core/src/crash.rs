@@ -1274,7 +1274,27 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
     }
 
     if kinds.contains(&CrashSignalKind::Entrypoint) {
-        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        // Prefer the mod named in "provided by '…'" over every weak suspect.
+        let mut related = Vec::new();
+        for signal in signals {
+            if signal.kind != CrashSignalKind::Entrypoint {
+                continue;
+            }
+            for id in extract_quoted_mod_ids(&signal.text) {
+                if !related.contains(&id) {
+                    related.push(id);
+                }
+            }
+        }
+        for s in suspects.iter().filter(|s| s.known_in_manifest) {
+            if !related.contains(&s.id) {
+                related.push(s.id.clone());
+            }
+            if related.len() >= 3 {
+                break;
+            }
+        }
+        related.truncate(3);
         push(DiagnosisHint {
             id: "entrypoint".into(),
             title: "Mod entrypoint failed".into(),
@@ -1286,20 +1306,29 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 "Update or remove the mod named in the error.".into(),
                 "Check for a missing dependency the mod requires.".into(),
             ],
-            related_mods: names.clone(),
-            fix: top
-                .filter(|s| s.known_in_manifest)
-                .map(|s| FixAction {
-                    kind: "disableMod".into(),
-                    label: format!("Disable {}", s.name),
-                    mod_id: Some(s.id.clone()),
-                }),
-                fixes: vec![],
+            related_mods: related.clone(),
+            fix: related.first().and_then(|id| {
+                suspects
+                    .iter()
+                    .find(|s| &s.id == id && s.known_in_manifest)
+                    .map(|s| FixAction {
+                        kind: "disableMod".into(),
+                        label: format!("Disable {}", s.name),
+                        mod_id: Some(s.id.clone()),
+                    })
+            }),
+            fixes: vec![],
         });
     }
 
     if kinds.contains(&CrashSignalKind::Mixin) {
-        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        let mut related = Vec::new();
+        for s in suspects.iter().filter(|s| s.known_in_manifest) {
+            related.push(s.id.clone());
+            if related.len() >= 3 {
+                break;
+            }
+        }
         push(DiagnosisHint {
             id: "mixin".into(),
             title: "Mixin injection failure".into(),
@@ -1312,7 +1341,7 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                 "If two mods conflict on the same class, keep only one or add a compat patch.".into(),
                 "Verify the mod supports your exact Minecraft + loader version.".into(),
             ],
-            related_mods: names.clone(),
+            related_mods: related,
             fix: top
                 .filter(|s| s.known_in_manifest)
                 .map(|s| FixAction {
@@ -1320,13 +1349,12 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
                     label: format!("Update {}", s.name),
                     mod_id: Some(s.id.clone()),
                 }),
-                fixes: vec![],
+            fixes: vec![],
         });
     }
 
     // For hints that implicate several installed mods, offer a Fix button per
-    // mod instead of only the top suspect. We derive the fix kind + verb from
-    // the hint id and target every known-in-manifest related mod.
+    // related mod (capped). Never expand to the entire mod list.
     let known_by_id: std::collections::HashMap<&str, &SuspectedMod> = suspects
         .iter()
         .filter(|s| s.known_in_manifest)
@@ -1339,14 +1367,15 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
         let Some(kind) = mod_fix_kind_for_hint(&hint.id) else {
             continue;
         };
-        let targets: Vec<&SuspectedMod> = if hint.related_mods.is_empty() {
-            known_by_id.values().copied().collect()
-        } else {
-            hint.related_mods
-                .iter()
-                .filter_map(|id| known_by_id.get(id.as_str()).copied())
-                .collect()
-        };
+        if hint.related_mods.is_empty() {
+            continue;
+        }
+        let targets: Vec<&SuspectedMod> = hint
+            .related_mods
+            .iter()
+            .filter_map(|id| known_by_id.get(id.as_str()).copied())
+            .take(3)
+            .collect();
         if targets.len() <= 1 {
             continue;
         }

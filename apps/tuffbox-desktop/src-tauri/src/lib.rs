@@ -338,27 +338,14 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     continue;
                 };
 
-                let identified = if let Some(cached) = hash_index.get(&sha1) {
-                    cached.to_mod_spec(file_name.clone(), tuffbox_core::manifest::Side::Both)
-                } else {
-                    match tuffbox_core::identify_local_jar_via_modrinth(
-                        &provider,
-                        &entry.path(),
-                        tuffbox_core::manifest::Side::Both,
-                    ) {
-                        Ok(Some(spec)) => {
-                            hash_index.put_modrinth(&sha1, &spec);
-                            index_dirty = true;
-                            Some(spec)
-                        }
-                        Ok(None) => {
-                            hash_index.put_miss(&sha1);
-                            index_dirty = true;
-                            None
-                        }
-                        Err(_) => None,
-                    }
-                };
+                let identified = resolve_mod_from_hash_or_modrinth(
+                    &provider,
+                    &mut hash_index,
+                    &sha1,
+                    &entry.path(),
+                    file_name.clone(),
+                    &mut index_dirty,
+                );
 
                 if let Some(mut identified) = identified {
                     identified.file_name = Some(file_name.clone());
@@ -423,12 +410,15 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     continue;
                 }
 
+                let local_side = tuffbox_core::scan_mod_jar(&entry.path())
+                    .map(|r| r.side)
+                    .unwrap_or(tuffbox_core::manifest::Side::Unknown);
                 let id = file_name.trim_end_matches(&format!(".{}", ext)).to_string();
                 manifest.mods.push(tuffbox_core::manifest::ModSpec {
                     id,
                     name: file_name.clone(),
                     version: "unknown".to_string(),
-                    side: tuffbox_core::manifest::Side::Both,
+                    side: local_side,
                     source: tuffbox_core::manifest::ModSource {
                         kind: tuffbox_core::manifest::SourceKind::Local,
                         project_id: None,
@@ -452,7 +442,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
         }
 
         // Re-identify local-only manifest entries once and cache the result.
-        // Already-indexed Modrinth/CurseForge mods are never re-queried.
+        // Already-indexed Modrinth/CurseForge mods are never re-queried for identity.
         for idx in 0..manifest.mods.len() {
             if manifest.mods[idx].source.project_id.is_some() {
                 continue;
@@ -469,35 +459,71 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
             let Ok(sha1) = tuffbox_core::sha1_file(&file_path) else {
                 continue;
             };
-            if let Some(cached) = hash_index.get(&sha1) {
-                if cached.status == "miss" {
-                    continue;
-                }
-                if let Some(mut spec) =
-                    cached.to_mod_spec(file_name.clone(), manifest.mods[idx].side)
-                {
-                    spec.side = manifest.mods[idx].side;
-                    manifest.mods[idx] = spec;
-                    any_changes = true;
-                }
-                continue;
-            }
-            let identified = tuffbox_core::identify_local_jar_via_modrinth(
+            if let Some(spec) = resolve_mod_from_hash_or_modrinth(
                 &provider,
+                &mut hash_index,
+                &sha1,
                 &file_path,
-                manifest.mods[idx].side,
-            )
-            .ok()
-            .flatten();
-            if let Some(mut spec) = identified {
-                hash_index.put_modrinth(&sha1, &spec);
-                index_dirty = true;
+                file_name.clone(),
+                &mut index_dirty,
+            ) {
+                let mut spec = spec;
                 spec.file_name = Some(file_name);
-                spec.side = manifest.mods[idx].side;
+                // Keep jar-scan side only when Modrinth still reported Unknown.
+                if spec.side == tuffbox_core::manifest::Side::Unknown {
+                    spec.side = manifest.mods[idx].side;
+                }
                 manifest.mods[idx] = spec;
                 any_changes = true;
-            } else {
-                hash_index.put_miss(&sha1);
+            }
+        }
+
+        // One-time (then cached) Modrinth side backfill for already-tracked mods.
+        // Old installs defaulted everything to `both`; refresh until client_side /
+        // server_side are stored in the hash index.
+        for idx in 0..manifest.mods.len() {
+            if manifest.mods[idx].source.kind != SourceKind::Modrinth {
+                continue;
+            }
+            let Some(project_id) = manifest.mods[idx].source.project_id.clone() else {
+                continue;
+            };
+            let sha1 = manifest.mods[idx]
+                .hashes
+                .as_ref()
+                .and_then(|h| h.sha1.clone());
+            if let Some(ref sha1) = sha1 {
+                if let Some(cached) = hash_index.get(sha1) {
+                    if cached.client_side.is_some() || cached.server_side.is_some() {
+                        let side = tuffbox_core::manifest::Side::from_modrinth(
+                            cached.client_side.as_deref(),
+                            cached.server_side.as_deref(),
+                        );
+                        if manifest.mods[idx].side != side {
+                            manifest.mods[idx].side = side;
+                            any_changes = true;
+                        }
+                        continue;
+                    }
+                }
+            }
+            let Ok(project) = provider.get_project(&project_id) else {
+                continue;
+            };
+            let side = tuffbox_core::manifest::Side::from_modrinth(
+                project.client_side.as_deref(),
+                project.server_side.as_deref(),
+            );
+            if manifest.mods[idx].side != side {
+                manifest.mods[idx].side = side;
+                any_changes = true;
+            }
+            if let Some(ref sha1) = sha1 {
+                hash_index.put_sides(
+                    sha1,
+                    project.client_side.as_deref(),
+                    project.server_side.as_deref(),
+                );
                 index_dirty = true;
             }
         }
@@ -531,6 +557,66 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Resolve a jar to a ModSpec via the local hash index, refreshing Modrinth
+/// side fields once if the cache predates client_side/server_side storage.
+fn resolve_mod_from_hash_or_modrinth(
+    provider: &tuffbox_core::ModrinthProvider,
+    hash_index: &mut tuffbox_core::ModHashIndex,
+    sha1: &str,
+    jar_path: &Path,
+    file_name: String,
+    index_dirty: &mut bool,
+) -> Option<tuffbox_core::manifest::ModSpec> {
+    let cached_status = hash_index.get(sha1).map(|c| {
+        (
+            c.status.clone(),
+            c.client_side.is_none() && c.server_side.is_none(),
+            c.project_id.clone(),
+        )
+    });
+    if let Some((status, needs_sides, project_id)) = cached_status {
+        if status == "miss" {
+            return None;
+        }
+        if status == "modrinth" {
+            if needs_sides {
+                if let Some(pid) = project_id {
+                    if let Ok(project) = provider.get_project(&pid) {
+                        hash_index.put_sides(
+                            sha1,
+                            project.client_side.as_deref(),
+                            project.server_side.as_deref(),
+                        );
+                        *index_dirty = true;
+                    }
+                }
+            }
+            return hash_index
+                .get(sha1)
+                .and_then(|c| c.to_mod_spec(file_name, tuffbox_core::manifest::Side::Unknown));
+        }
+    }
+
+    match tuffbox_core::identify_local_jar_via_modrinth(provider, jar_path) {
+        Ok(Some((spec, client_side, server_side))) => {
+            hash_index.put_modrinth(
+                sha1,
+                &spec,
+                client_side.as_deref(),
+                server_side.as_deref(),
+            );
+            *index_dirty = true;
+            Some(spec)
+        }
+        Ok(None) => {
+            hash_index.put_miss(sha1);
+            *index_dirty = true;
+            None
+        }
+        Err(_) => None,
+    }
 }
 
 fn list_mods_impl(path: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -1629,7 +1715,7 @@ async fn change_mod_version(
             .ok_or_else(|| format!("mod {mod_id} not found in project"))?;
 
         let old_mod = manifest.mods[idx].clone();
-        let side = old_mod.side;
+        let side = infer_project_side(Some(&project));
         let previous_deps = old_mod.dependencies.clone();
         let dependencies = provider
             .resolve_dependencies(&version_info.id)
@@ -1798,7 +1884,13 @@ fn apply_mod_update_to_latest(
     let dependencies = provider
         .resolve_dependencies(&version_info.id)
         .unwrap_or_else(|_| old_mod.dependencies.clone());
-    let mut new_spec = build_mod_spec(&project, &version_info, file, dependencies, old_mod.side);
+    let mut new_spec = build_mod_spec(
+        &project,
+        &version_info,
+        file,
+        dependencies,
+        infer_project_side(Some(&project)),
+    );
     new_spec.id = old_mod.id.clone();
     manifest.mods[idx] = new_spec;
     let report = commit_single_mod_update(app, manifest_path, manifest, &old_mod, true)?;
@@ -1864,7 +1956,13 @@ fn apply_mod_reinstall(
         .unwrap_or_default();
     manifest.mods.remove(idx);
     remove_mod_file_from_disk(manifest_path, &old_mod);
-    let mut new_spec = build_mod_spec(&project, &version_info, file, dependencies, old_mod.side);
+    let mut new_spec = build_mod_spec(
+        &project,
+        &version_info,
+        file,
+        dependencies,
+        infer_project_side(Some(&project)),
+    );
     new_spec.id = old_mod.id.clone();
     manifest.mods.push(new_spec);
     let report = commit_single_mod_update(app, manifest_path, manifest, &old_mod, true)?;
@@ -2773,7 +2871,13 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             let dependencies = provider
                 .resolve_dependencies(&latest.id)
                 .unwrap_or(previous_deps);
-            let mut new_spec = build_mod_spec(&project, &latest, file, dependencies, old_mod.side);
+            let mut new_spec = build_mod_spec(
+                &project,
+                &latest,
+                file,
+                dependencies,
+                infer_project_side(Some(&project)),
+            );
             // Keep references and frontend progress scopes valid across an
             // update even when the provider has renamed the project slug.
             new_spec.id = old_mod.id.clone();
@@ -3316,83 +3420,32 @@ fn find_dependents_on_class(
 
 /// Runs the full Crash Assistant analysis and also includes MCreator
 /// mod list, class finder results from crash logs, and Jdeps results.
+///
+/// When `report_id` is set, only that crash report is analyzed (plus
+/// `logs/latest.log` and the current installed mod list). Otherwise the
+/// newest crash report is used — never the entire crash-reports folder.
 #[tauri::command(rename_all = "camelCase")]
-fn run_crash_assistant_full(path: String) -> Result<serde_json::Value, String> {
+fn run_crash_assistant_full(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mods_dir = project_dir.join("mods");
+    let report = run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())?;
 
-    let installed: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
-    let mut crash_content = Vec::new();
-    let mut latest_log = String::new();
-    let mut launcher_log = String::new();
-
-    let cd = project_dir.join("crash-reports");
-    if cd.is_dir() {
-        for e in std::fs::read_dir(&cd).into_iter().flatten().flatten() {
-            if e.path().extension().map_or(false, |e| e == "txt") {
-                if let Ok(ct) = std::fs::read_to_string(e.path()) {
-                    if ct.len() < 4 * 1024 * 1024 {
-                        crash_content.push(ct);
-                    }
-                }
-            }
-        }
-    }
-    let lp = project_dir.join("logs").join("latest.log");
-    if lp.is_file() {
-        latest_log = tuffbox_core::process::read_log_tail(&lp, 900).unwrap_or_default();
-    }
-    let la = project_dir.join("logs").join("launcher.log");
-    if la.is_file() {
-        launcher_log = std::fs::read_to_string(&la).unwrap_or_default();
-    }
-
-    let jv = manifest
-        .java
-        .as_ref()
-        .and_then(|j| j.path.clone())
-        .unwrap_or_default();
-    let java_version = if !jv.is_empty() {
-        tuffbox_core::jre::check_java_at_path(&PathBuf::from(&jv))
-            .map(|r| r.version)
-            .unwrap_or_default()
-    } else {
-        tuffbox_core::jre::find_all_runtimes()
-            .ok()
-            .and_then(|r| r.into_iter().next())
-            .map(|r| r.version)
-            .unwrap_or_default()
-    };
-
-    let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
-        crash_content,
-        latest_log,
-        launcher_log,
-        installed_mods: installed.clone(),
-        previous_mods: Vec::new(),
-        java_version,
-        java_vendor: String::new(),
-        os_name: std::env::consts::OS.to_string(),
-        mc_version: manifest.minecraft.version.clone(),
-        loader: format!("{:?}", manifest.loader.kind).to_lowercase(),
-        loader_version: manifest.loader.version.clone(),
-        cpu_name: String::new(),
-        gpu_names: Vec::new(),
-        total_ram_mb: 0,
-        is_offline: false,
-        win_events: Vec::new(),
-    };
-
-    let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
-
-    // Also run class finder on any NoClassDefFoundError classes found
     let mut class_finder = Vec::new();
-    let combined = ctx.crash_content.join(
-        "
-",
-    ) + "
-" + &ctx.latest_log;
+    let mut combined = String::new();
+    if let Some(text) = load_scoped_crash_report(&project_dir, report_id.as_deref()) {
+        combined.push_str(&text);
+        combined.push('\n');
+    }
+    let latest = project_dir.join("logs").join("latest.log");
+    if latest.is_file() {
+        combined.push_str(
+            &tuffbox_core::process::read_log_tail(&latest, 2000).unwrap_or_default(),
+        );
+    }
     for line in combined.lines() {
         if line.contains("NoClassDefFoundError") || line.contains("ClassNotFoundException") {
             if let Some(cls) = line
@@ -3433,7 +3486,45 @@ fn run_crash_assistant_full(path: String) -> Result<serde_json::Value, String> {
         "mcreatorMods": report.mcreator_mods,
         "classFinderResults": class_finder,
         "findingsCount": report.findings.len(),
+        "scope": {
+            "reportId": report_id,
+            "latestLog": true,
+            "installedMods": true,
+        },
     }))
+}
+
+/// Load a single crash report by id (filename stem / path fragment), or the
+/// newest `.txt` under `crash-reports/` when `report_id` is None.
+fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Option<String> {
+    let cd = project_dir.join("crash-reports");
+    if !cd.is_dir() {
+        return None;
+    }
+    let mut files: Vec<std::fs::DirEntry> = std::fs::read_dir(&cd)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "txt"))
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    if let Some(id) = report_id {
+        if let Some(entry) = files.iter().find(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name == id
+                || name.trim_end_matches(".txt") == id
+                || e.path().to_string_lossy().contains(id)
+        }) {
+            return std::fs::read_to_string(entry.path())
+                .ok()
+                .filter(|c| c.len() < 4 * 1024 * 1024);
+        }
+    }
+    files.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
+    std::fs::read_to_string(files[0].path())
+        .ok()
+        .filter(|c| c.len() < 4 * 1024 * 1024)
 }
 
 /// ── Mod compatibility checker ──────────────────────────────────────
@@ -3729,24 +3820,15 @@ fn delete_backup(path: String, backup_id: String) -> Result<(), String> {
 /// Builds a structured AI context from crash data (but does NOT call any
 /// LLM — the frontend can send this to any AI provider).
 #[tauri::command(rename_all = "camelCase")]
-fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
+fn build_ai_crash_context(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
 
-    let mut crash_content = String::new();
-    let cd = project_dir.join("crash-reports");
-    if cd.is_dir() {
-        for e in std::fs::read_dir(&cd).into_iter().flatten().flatten() {
-            if e.path().extension().map_or(false, |e| e == "txt") {
-                if let Ok(ct) = std::fs::read_to_string(e.path()) {
-                    if ct.len() < 4 * 1024 * 1024 {
-                        crash_content = ct;
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    let crash_content =
+        load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
     let latest = project_dir.join("logs").join("latest.log");
     let latest_log = if latest.is_file() {
         tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
@@ -3767,7 +3849,7 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
         "unknown".into()
     };
 
-    // Get crash assistant findings
+    let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
     let ctx = tuffbox_core::crash_assistant::AnalysisCtx {
         crash_content: vec![crash_content.clone()],
         latest_log: latest_log.clone(),
@@ -3778,7 +3860,7 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
         java_vendor: String::new(),
         os_name: std::env::consts::OS.to_string(),
         mc_version: manifest.minecraft.version.clone(),
-        loader: format!("{:?}", manifest.loader.kind).to_lowercase(),
+        loader: loader.clone(),
         loader_version: manifest.loader.version.clone(),
         cpu_name: String::new(),
         gpu_names: Vec::new(),
@@ -3788,23 +3870,51 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
     };
     let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
 
+    let haystack = format!("{crash_content}\n{latest_log}");
+    let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
+        &haystack,
+        &manifest.minecraft.version,
+        &loader,
+    );
+    let kb_cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
+    let similar = tuffbox_core::crash_kb::search_similar(&kb_cases, &fingerprint, &haystack, 5);
+
+    let inventory =
+        tuffbox_core::project_ai_inventory::collect_project_ai_inventory(&project_dir, &manifest);
+
+    let mut installed_sample: Vec<String> = report.suspected_mods.clone();
+    for id in inventory.mods.iter().map(|m| m.id.clone()) {
+        if installed_sample.len() >= 24 {
+            break;
+        }
+        if !installed_sample.iter().any(|s| s.eq_ignore_ascii_case(&id)) {
+            installed_sample.push(id);
+        }
+    }
+
     let ai_ctx = tuffbox_core::ai_explanation::CrashAiContext {
         mc_version: manifest.minecraft.version.clone(),
-        loader: format!("{:?}", manifest.loader.kind).to_lowercase(),
+        loader: loader.clone(),
         loader_version: manifest.loader.version.clone(),
         java_version,
         os: std::env::consts::OS.to_string(),
-        installed_mods: manifest.mods.iter().map(|m| m.id.clone()).collect(),
-        crash_report_excerpt: crash_content,
-        latest_log_excerpt: latest_log,
-        suspected_mods: report.suspected_mods,
+        installed_mods: installed_sample,
+        installed_mod_count: inventory.mods.len() as u32,
+        crash_report_excerpt: tuffbox_core::crash_kb::smart_excerpt(&crash_content, 6000),
+        latest_log_excerpt: tuffbox_core::crash_kb::smart_excerpt(&latest_log, 4000),
+        suspected_mods: report.suspected_mods.clone(),
         crash_assistant_findings: tuffbox_core::ai_explanation::findings_to_ai(&report.findings),
         recent_changes: Vec::new(),
         graph_diagnostics: Vec::new(),
+        similar_cases: similar,
+        fingerprint_key: fingerprint.key.clone(),
+        report_id: report_id.clone(),
+        inventory: Some(inventory),
     };
 
     let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
     let triage = tuffbox_core::ai_explanation::build_triage_prompt(&ai_ctx);
+    let settings = integrations::get_integration_status().settings;
 
     Ok(serde_json::json!({
         "context": ai_ctx,
@@ -3812,123 +3922,503 @@ fn build_ai_crash_context(path: String) -> Result<serde_json::Value, String> {
         "triagePrompt": triage,
         "promptLength": prompt.len(),
         "findingsCount": report.findings.len(),
+        "similarCaseCount": ai_ctx.similar_cases.len(),
+        "fingerprintKey": fingerprint.key,
+        "aiProvider": settings.ai.provider,
+        "aiModel": settings.ai.model,
+        "aiEndpoint": settings.ai.endpoint,
+        "diagnoseMode": settings.ai.diagnose_mode,
+        "crashKbEndpoint": settings.ai.crash_kb_endpoint,
     }))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-async fn analyze_crash_with_ai(path: String) -> Result<serde_json::Value, String> {
-    let context = build_ai_crash_context(path)?;
-    let prompt = context
-        .get("prompt")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "crash context did not contain an AI prompt".to_string())?;
+async fn analyze_crash_with_ai(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let context = build_ai_crash_context(path.clone(), report_id.clone())?;
     let settings = integrations::get_integration_status().settings;
-    integrations::call_ai(&settings.ai, prompt).await
+    let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
+    let similar_count = context
+        .get("similarCaseCount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    let ai_ctx: tuffbox_core::ai_explanation::CrashAiContext = serde_json::from_value(
+        context
+            .get("context")
+            .cloned()
+            .ok_or_else(|| "crash context missing".to_string())?,
+    )
+    .map_err(|e| format!("invalid crash AI context: {e}"))?;
+
+    let project_dir = manifest_parent(&path)?;
+    let crash_content =
+        load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
+    let latest = project_dir.join("logs").join("latest.log");
+    let latest_log = if latest.is_file() {
+        tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let haystack = format!("{crash_content}\n{latest_log}");
+    let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
+        &haystack,
+        &ai_ctx.mc_version,
+        &ai_ctx.loader,
+    );
+
+    let kb_token = integrations::secret_optional("crash_kb");
+    let kb_endpoint = settings.ai.crash_kb_endpoint.trim().to_string();
+    let online_kb = !kb_endpoint.is_empty();
+
+    let plan = match mode {
+        tuffbox_core::action_plan::DiagnoseMode::Server if online_kb => {
+            let req = tuffbox_core::crash_remote::CrashDiagnoseRequest {
+                fingerprint: fingerprint.clone(),
+                context: Some(serde_json::to_value(&ai_ctx).unwrap_or_default()),
+                excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
+                prefer_kb_only: false,
+            };
+            match tuffbox_core::crash_remote::diagnose_remote_async(
+                &kb_endpoint,
+                kb_token.as_deref(),
+                &req,
+            )
+            .await
+            {
+                Ok(resp) => resp.plan,
+                Err(remote_err) => {
+                    // Fall back to local LLM with thin/local KB already in context.
+                    let prompt = context
+                        .get("prompt")
+                        .and_then(serde_json::Value::as_str)
+                        .ok_or_else(|| {
+                            format!("server diagnose failed ({remote_err}); no local prompt")
+                        })?;
+                    let value =
+                        integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
+                    let raw = serde_json::to_string(&value).unwrap_or_default();
+                    tuffbox_core::action_plan::parse_action_plan(&raw).map_err(|e| {
+                        format!("server diagnose failed ({remote_err}); local parse: {e}")
+                    })?
+                }
+            }
+        }
+        tuffbox_core::action_plan::DiagnoseMode::Local => {
+            let mut ctx = ai_ctx.clone();
+            if online_kb {
+                let req = tuffbox_core::crash_remote::CrashLookupRequest {
+                    fingerprint: fingerprint.clone(),
+                    excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
+                    mc_version: Some(ai_ctx.mc_version.clone()),
+                    loader: Some(ai_ctx.loader.clone()),
+                    limit: 5,
+                };
+                if let Ok(resp) = tuffbox_core::crash_remote::lookup_remote_async(
+                    &kb_endpoint,
+                    kb_token.as_deref(),
+                    &req,
+                )
+                .await
+                {
+                    ctx.similar_cases =
+                        tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
+                }
+            }
+            let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ctx);
+            let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
+            let raw = serde_json::to_string(&value).unwrap_or_default();
+            tuffbox_core::action_plan::parse_action_plan(&raw)?
+        }
+        tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
+            // Prefer remote lookup; else strongest local similar case.
+            if online_kb {
+                let req = tuffbox_core::crash_remote::CrashLookupRequest {
+                    fingerprint: fingerprint.clone(),
+                    excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
+                    mc_version: Some(ai_ctx.mc_version.clone()),
+                    loader: Some(ai_ctx.loader.clone()),
+                    limit: 1,
+                };
+                let resp = tuffbox_core::crash_remote::lookup_remote_async(
+                    &kb_endpoint,
+                    kb_token.as_deref(),
+                    &req,
+                )
+                .await?;
+                let hit = resp
+                    .hits
+                    .first()
+                    .ok_or_else(|| "no remote KB hits for this fingerprint".to_string())?;
+                tuffbox_core::action_plan::plan_from_launcher_actions(
+                    &hit.solution,
+                    &hit.suspected_mods,
+                    hit.actions.clone(),
+                    &hit.id,
+                    hit.score,
+                )
+            } else {
+                let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
+                let similar =
+                    tuffbox_core::crash_kb::search_similar(&cases, &fingerprint, &haystack, 1);
+                let hit = similar
+                    .first()
+                    .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
+                tuffbox_core::action_plan::plan_from_kb_hit(
+                    &hit.solution,
+                    &hit.suspected_mods,
+                    &hit.actions,
+                    &hit.id,
+                    hit.score,
+                )
+            }
+        }
+        // Server mode without KB endpoint → local LLM (same as previous behavior).
+        tuffbox_core::action_plan::DiagnoseMode::Server => {
+            let prompt = context
+                .get("prompt")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "crash context did not contain an AI prompt".to_string())?;
+            let value = integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
+            let raw = serde_json::to_string(&value).unwrap_or_default();
+            tuffbox_core::action_plan::parse_action_plan(&raw)?
+        }
+    };
+
+    let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
+    let legacy = tuffbox_core::action_plan::plan_to_legacy_ai_actions(&plan);
+
+    Ok(serde_json::json!({
+        "schemaVersion": plan.schema_version,
+        "humanExplanation": plan.human_explanation,
+        "human_explanation": plan.human_explanation,
+        "confidence": plan.confidence,
+        "suspectedMods": plan.suspected_mods,
+        "suspected_mods": plan.suspected_mods,
+        "needsUserReview": plan.needs_user_review,
+        "needs_user_review": plan.needs_user_review,
+        "source": plan.source,
+        "matchedCaseIds": plan.matched_case_ids,
+        "actions": plan.actions,
+        "recommendedActions": legacy,
+        "recommended_actions": legacy,
+        "additionalContext": plan.additional_context,
+        "validation": validation,
+        "diagnoseMode": mode.as_str(),
+        "provider": settings.ai.provider,
+        "model": settings.ai.model,
+        "similarCaseCount": similar_count,
+        "fingerprintKey": fingerprint.key,
+    }))
+}
+
+/// Apply a validated ActionPlan (after user confirm). Runs snapshot once, then each op.
+#[tauri::command(rename_all = "camelCase")]
+async fn apply_action_plan(
+    app: tauri::AppHandle,
+    path: String,
+    plan: tuffbox_core::action_plan::ActionPlan,
+) -> Result<serde_json::Value, String> {
+    let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
+    if !validation.ok {
+        return Err(format!(
+            "ActionPlan validation failed: {}",
+            validation.errors.join("; ")
+        ));
+    }
+    let manifest_path = PathBuf::from(&path);
+    auto_snapshot(&manifest_path, "apply-action-plan").map_err(|e| e.to_string())?;
+
+    let mut applied = Vec::new();
+    let mut errors = Vec::new();
+
+    for action in &plan.actions {
+        if action.op == "edit_config" {
+            match apply_launcher_edit_config(&manifest_path, action) {
+                Ok(msg) => applied.push(msg),
+                Err(e) => errors.push(e),
+            }
+            continue;
+        }
+        if action.op == "change_mod_version" {
+            let mod_id = action
+                .mod_id
+                .clone()
+                .unwrap_or_default();
+            let version = action.version.clone().unwrap_or_default();
+            if mod_id.is_empty() || version.is_empty() {
+                errors.push("change_mod_version requires modId and version".into());
+                continue;
+            }
+            let mut manifest =
+                ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+            match update_mod_from_modrinth(
+                &manifest_path,
+                &mut manifest,
+                &mod_id,
+                Some(version.as_str()),
+            ) {
+                Ok(()) => {
+                    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+                    applied.push(format!("changed {mod_id} to {version}"));
+                }
+                Err(e) => errors.push(e.to_string()),
+            }
+            continue;
+        }
+        if let Some(fix) = tuffbox_core::action_plan::launcher_action_to_fix_action(action) {
+            match apply_fix_action(app.clone(), path.clone(), fix).await {
+                Ok(msg) => applied.push(msg),
+                Err(e) => errors.push(e),
+            }
+        } else {
+            errors.push(format!("cannot map op '{}' to a fix action", action.op));
+        }
+    }
+
+    Ok(serde_json::json!({
+        "applied": applied,
+        "errors": errors,
+        "ok": errors.is_empty(),
+    }))
+}
+
+fn apply_launcher_edit_config(
+    manifest_path: &Path,
+    action: &tuffbox_core::action_plan::LauncherAction,
+) -> Result<String, String> {
+    let relative = action
+        .path
+        .as_deref()
+        .ok_or_else(|| "edit_config missing path".to_string())?;
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest has no parent".to_string())?;
+    let target = safe_project_file(project_dir, relative)?;
+    let current = if target.is_file() {
+        std::fs::read_to_string(&target).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let patch_type = action.patch_type.as_deref().unwrap_or("replace_file");
+    let patch = action
+        .patch
+        .as_ref()
+        .ok_or_else(|| "edit_config missing patch".to_string())?;
+    let new_content =
+        tuffbox_core::action_plan::apply_config_patch(&current, relative, patch_type, patch)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&target, new_content).map_err(|e| e.to_string())?;
+    Ok(format!("edited config {relative}"))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CrashAiFeedbackPayload {
+    helped: bool,
+    fingerprint_key: Option<String>,
+    human_explanation: Option<String>,
+    suspected_mods: Option<Vec<String>>,
+    recommended_actions: Option<Vec<tuffbox_core::ai_explanation::AiAction>>,
+    report_id: Option<String>,
+}
+
+/// Record Helped/Wrong feedback into the project crash knowledge base.
+#[tauri::command(rename_all = "camelCase")]
+fn record_crash_ai_feedback(
+    path: String,
+    feedback: CrashAiFeedbackPayload,
+) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
+    let crash = load_scoped_crash_report(&project_dir, feedback.report_id.as_deref())
+        .unwrap_or_default();
+    let mut fp = tuffbox_core::crash_kb::fingerprint_from_text(
+        &crash,
+        &manifest.minecraft.version,
+        &loader,
+    );
+    if let Some(key) = feedback.fingerprint_key.filter(|k| !k.is_empty()) {
+        fp.key = key;
+    }
+    let actions = feedback.recommended_actions.unwrap_or_default();
+    let mods = feedback.suspected_mods.unwrap_or_default();
+    let path = tuffbox_core::crash_kb::record_feedback(
+        &project_dir,
+        &fp,
+        feedback.helped,
+        feedback.human_explanation.as_deref(),
+        &actions,
+        &mods,
+    )?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Author a private KB case from the current crash + your resolution.
+#[tauri::command(rename_all = "camelCase")]
+fn save_authored_crash_case(
+    path: String,
+    input: tuffbox_core::crash_kb::AuthorCaseInput,
+) -> Result<tuffbox_core::crash_kb::AuthorCaseSaveResult, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::crash_kb::save_authored_case(&project_dir, input)
+}
+
+/// Prefill author form: fingerprint + optional draft from AI analysis / report.
+#[tauri::command(rename_all = "camelCase")]
+fn draft_authored_crash_case(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
+    let crash =
+        load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
+    let latest = project_dir.join("logs").join("latest.log");
+    let latest_log = if latest.is_file() {
+        tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let haystack = format!("{crash}\n{latest_log}");
+    let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
+        &haystack,
+        &manifest.minecraft.version,
+        &loader,
+    );
+    let symptoms: Vec<String> = [
+        fingerprint.exception.clone(),
+        fingerprint.mixin.clone().unwrap_or_default(),
+        fingerprint.mod_file.clone().unwrap_or_default(),
+    ]
+    .into_iter()
+    .filter(|s| !s.trim().is_empty())
+    .collect();
+
+    Ok(serde_json::json!({
+        "fingerprint": fingerprint,
+        "symptoms": symptoms,
+        "mcVersion": manifest.minecraft.version,
+        "loader": loader,
+        "reportId": report_id,
+        "authoredCount": tuffbox_core::crash_kb::list_authored_cases(&project_dir).len(),
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_authored_crash_cases(path: String) -> Result<Vec<tuffbox_core::crash_kb::CrashCase>, String> {
+    let project_dir = manifest_parent(&path)?;
+    Ok(tuffbox_core::crash_kb::list_authored_cases(&project_dir))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_authored_case_export(path: String, case_id: String) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    let case = tuffbox_core::crash_kb::list_authored_cases(&project_dir)
+        .into_iter()
+        .find(|c| c.id == case_id)
+        .ok_or_else(|| format!("authored case not found: {case_id}"))?;
+    let public = tuffbox_core::crash_kb::public_case_for_export(&case);
+    serde_json::to_string_pretty(&public).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn open_authored_kb_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    let project_dir = manifest_parent(&path)?;
+    let dir = tuffbox_core::crash_kb::author_export_dir(&project_dir);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    use tauri_plugin_shell::ShellExt;
+    app.shell()
+        .open(dir.to_string_lossy().to_string(), None)
+        .map_err(|e| e.to_string())
 }
 
 /// ── Mod recommendation engine ─────────────────────────────────────
 
-/// Analyzes the current modpack and suggests mods that would fill gaps
-/// or improve the pack based on the knowledge base and common patterns.
-#[tauri::command(rename_all = "camelCase")]
-fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let installed: std::collections::HashSet<String> =
-        manifest.mods.iter().map(|m| m.id.clone()).collect();
-    let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
-    let mut recommendations = Vec::new();
-
-    // Performance mods recommendation
-    let perf_mods = [
-        (
-            "sodium",
-            "Sodium",
-            "Massive FPS boost via modern rendering engine",
-            "optimization",
-        ),
-        (
-            "lithium",
-            "Lithium",
-            "Server-side optimization for tick performance",
-            "optimization",
-        ),
-        (
-            "ferrite-core",
-            "FerriteCore",
-            "Reduces memory usage by optimizing game state",
-            "optimization",
-        ),
-        (
-            "immediatelyfast",
-            "ImmediatelyFast",
-            "Immediate mode rendering optimization",
-            "optimization",
-        ),
-        (
-            "modernfix",
-            "ModernFix",
-            "Fixes hundreds of performance bugs",
-            "optimization",
-        ),
-        (
-            "entityculling",
-            "EntityCulling",
-            "Skips rendering of invisible entities",
-            "optimization",
-        ),
-        (
-            "memoryleakfix",
-            "MemoryLeakFix",
-            "Fixes memory leaks in Minecraft/mod code",
-            "optimization",
-        ),
-        (
-            "smoothboot",
-            "Smooth Boot",
-            "Makes game startup less CPU-intensive",
-            "optimization",
-        ),
-    ];
-
-    let mut missing_perf = Vec::new();
-    for (slug, name, desc, _cat) in &perf_mods {
-        if !installed.contains(*slug) {
-            missing_perf.push((*slug, *name, *desc));
+fn installed_mod_keys(manifest: &ProjectManifest) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    for m in &manifest.mods {
+        keys.insert(m.id.to_lowercase());
+        if let Some(pid) = &m.source.project_id {
+            keys.insert(pid.to_lowercase());
         }
+        keys.insert(m.name.to_lowercase());
     }
-    if !missing_perf.is_empty() {
-        for (slug, name, desc) in missing_perf.iter().take(4) {
-            recommendations.push(serde_json::json!({
-                "reason": "performance", "slug": slug, "name": name,
-                "description": desc, "priority": "high",
-            }));
-        }
-    }
+    keys
+}
 
-    // QoL mods
-    let qol_mods = [
-        (
-            "jei",
-            "JEI",
-            "Recipe viewer — essential for modded Minecraft",
+fn has_installed(keys: &std::collections::HashSet<String>, aliases: &[&str]) -> bool {
+    aliases.iter().any(|a| keys.contains(&a.to_lowercase()))
+}
+
+type RecCandidate = (&'static str, &'static str, &'static str, &'static str);
+
+fn optimization_candidates(loader: &str) -> Vec<RecCandidate> {
+    match loader {
+        "fabric" | "quilt" => vec![
+            ("sodium", "Sodium", "Modern rendering engine — large FPS gains", "optimization"),
+            ("lithium", "Lithium", "General game-logic / tick optimizations", "optimization"),
+            ("ferrite-core", "FerriteCore", "Lowers memory usage of game state", "optimization"),
+            ("immediatelyfast", "ImmediatelyFast", "Faster immediate-mode rendering", "optimization"),
+            ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
+            ("entityculling", "Entity Culling", "Skip rendering of occluded entities", "optimization"),
+            ("iris", "Iris", "Shader loader built for Sodium", "optimization"),
+            ("indium", "Indium", "Fabric Rendering API bridge for Sodium", "optimization"),
+            ("krypton", "Krypton", "Network stack optimizations", "optimization"),
+            ("lazydfu", "LazyDFU", "Speeds up DataFixerUpper init", "optimization"),
+        ],
+        "forge" => vec![
+            ("embeddium", "Embeddium", "Sodium-based renderer for Forge", "optimization"),
+            ("ferritecore", "FerriteCore", "Memory usage reductions", "optimization"),
+            ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
+            ("entityculling", "Entity Culling", "Skip rendering of occluded entities", "optimization"),
+            ("immediatelyfast", "ImmediatelyFast", "Faster immediate-mode rendering", "optimization"),
+            ("oculus", "Oculus", "Iris-like shaders for Forge/Embeddium", "optimization"),
+            ("radium", "Radium", "Lithium-like server/tick optimizations for Forge", "optimization"),
+        ],
+        "neoforge" => vec![
+            ("embeddium", "Embeddium", "Sodium-based renderer for NeoForge", "optimization"),
+            ("ferritecore", "FerriteCore", "Memory usage reductions", "optimization"),
+            ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
+            ("entityculling", "Entity Culling", "Skip rendering of occluded entities", "optimization"),
+            ("immediatelyfast", "ImmediatelyFast", "Faster immediate-mode rendering", "optimization"),
+            ("oculus", "Oculus", "Shader loader compatible with Embeddium", "optimization"),
+        ],
+        _ => vec![
+            ("ferrite-core", "FerriteCore", "Memory usage reductions", "optimization"),
+            ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
+        ],
+    }
+}
+
+fn qol_candidates(loader: &str) -> Vec<RecCandidate> {
+    let recipe_viewer: RecCandidate = match loader {
+        "fabric" | "quilt" => (
+            "emi",
+            "EMI",
+            "Modern recipe viewer (REI/JEI alternative for Fabric)",
             "qol",
         ),
+        _ => ("jei", "JEI", "Recipe viewer — essential for modded Minecraft", "qol"),
+    };
+    vec![
+        recipe_viewer,
         (
             "jade",
             "Jade",
-            "Shows what block/entity you're looking at",
+            "Shows block/entity info when looking at them",
             "qol",
         ),
         (
             "appleskin",
             "AppleSkin",
-            "Shows hunger/saturation values of food",
-            "qol",
-        ),
-        (
-            "controlling",
-            "Controlling",
-            "Search for keybinds easily",
+            "Hunger and saturation overlay for food",
             "qol",
         ),
         (
@@ -3937,53 +4427,280 @@ fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
             "Better inventory mouse handling",
             "qol",
         ),
-    ];
-    for (slug, name, desc, _cat) in &qol_mods {
-        if !installed.contains(*slug) {
-            recommendations.push(serde_json::json!({
-                "reason": "qol", "slug": slug, "name": name,
-                "description": desc, "priority": "medium",
-            }));
+        (
+            "controlling",
+            "Controlling",
+            "Searchable keybind menu",
+            "qol",
+        ),
+    ]
+}
+
+fn push_rec(
+    out: &mut Vec<serde_json::Value>,
+    reason: &str,
+    slug: &str,
+    name: &str,
+    description: &str,
+    priority: &str,
+) {
+    if out.iter().any(|r| r.get("slug").and_then(|v| v.as_str()) == Some(slug)) {
+        return;
+    }
+    out.push(serde_json::json!({
+        "reason": reason,
+        "slug": slug,
+        "name": name,
+        "description": description,
+        "priority": priority,
+    }));
+}
+
+fn heuristic_mod_recommendations(manifest: &ProjectManifest) -> Vec<serde_json::Value> {
+    let keys = installed_mod_keys(manifest);
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mc = manifest.minecraft.version.clone();
+    let mut recommendations = Vec::new();
+
+    for (slug, name, desc, reason) in optimization_candidates(loader) {
+        let aliases: Vec<&str> = match slug {
+            "ferrite-core" | "ferritecore" => vec!["ferrite-core", "ferritecore"],
+            "entityculling" => vec!["entityculling", "entity-culling"],
+            "embeddium" => vec!["embeddium", "rubidium", "sodium"],
+            "rubidium" => vec!["rubidium", "embeddium", "sodium"],
+            "sodium" => vec!["sodium", "embeddium", "rubidium"],
+            "iris" => vec!["iris", "oculus"],
+            "oculus" => vec!["oculus", "iris"],
+            "emi" => vec!["emi", "roughly-enough-items", "jei", "rei"],
+            "jei" => vec!["jei", "emi", "roughly-enough-items", "rei"],
+            other => vec![other],
+        };
+        if !has_installed(&keys, &aliases) {
+            push_rec(&mut recommendations, reason, slug, name, desc, "high");
         }
     }
 
-    // If Fabric, recommend Fabric API
-    if loader == "fabric" && !installed.contains("fabric-api") {
-        recommendations.push(serde_json::json!({
-            "reason": "dependency", "slug": "fabric-api", "name": "Fabric API",
-            "description": "Required by most Fabric mods — core library", "priority": "critical",
-        }));
+    for (slug, name, desc, reason) in qol_candidates(loader) {
+        let aliases: Vec<&str> = match slug {
+            "emi" => vec!["emi", "roughly-enough-items", "jei", "rei"],
+            "jei" => vec!["jei", "emi", "roughly-enough-items", "rei"],
+            other => vec![other],
+        };
+        if !has_installed(&keys, &aliases) {
+            push_rec(&mut recommendations, reason, slug, name, desc, "medium");
+        }
     }
 
-    // If Create is installed, suggest Create addons
-    if installed.contains("create") {
-        let create_addons = [
+    if matches!(loader, "fabric" | "quilt") && !has_installed(&keys, &["fabric-api", "fabric_api"]) {
+        push_rec(
+            &mut recommendations,
+            "dependency",
+            "fabric-api",
+            "Fabric API",
+            "Required by most Fabric/Quilt mods",
+            "critical",
+        );
+    }
+
+    if has_installed(&keys, &["create"]) {
+        for (slug, name, desc) in [
             (
-                "create_enchantment_industry",
-                "Create: Enchantment Industry",
-                "Automated enchanting with Create",
+                "createaddition",
+                "Create Crafts & Additions",
+                "Electricity and extras for Create",
             ),
             (
-                "create_steam_n_rails",
-                "Create: Steam n Rails",
-                "Trains and rail systems",
+                "create-steam-n-rails",
+                "Create: Steam 'n' Rails",
+                "Trains and advanced rails for Create",
             ),
-            (
-                "create_confectionery",
-                "Create: Confectionery",
-                "Food and sweets automation",
-            ),
-        ];
-        for (slug, name, desc) in &create_addons {
-            if !installed.contains(*slug) {
-                recommendations.push(serde_json::json!({
-                    "reason": "synergy", "slug": slug, "name": name,
-                    "description": desc, "priority": "low",
-                }));
+        ] {
+            if !has_installed(&keys, &[slug]) {
+                push_rec(&mut recommendations, "synergy", slug, name, desc, "low");
             }
         }
     }
 
+    // Annotate with pack context so the UI can show why these were picked.
+    for rec in &mut recommendations {
+        if let Some(obj) = rec.as_object_mut() {
+            obj.insert("loader".into(), serde_json::json!(loader));
+            obj.insert("minecraftVersion".into(), serde_json::json!(mc));
+            obj.insert("source".into(), serde_json::json!("heuristic"));
+        }
+    }
+
+    recommendations
+}
+
+fn build_mod_recommendation_prompt(manifest: &ProjectManifest, seed: &[serde_json::Value]) -> String {
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mc = &manifest.minecraft.version;
+    let installed: Vec<String> = manifest
+        .mods
+        .iter()
+        .filter(|m| m.content_type == tuffbox_core::manifest::ContentType::Mod)
+        .take(80)
+        .map(|m| format!("{} ({})", m.id, m.name))
+        .collect();
+    let seed_slugs: Vec<String> = seed
+        .iter()
+        .filter_map(|r| r.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .collect();
+
+    format!(
+        r#"You are a Minecraft modpack optimization advisor.
+Return ONLY valid JSON with this schema:
+{{
+  "recommendations": [
+    {{
+      "slug": "modrinth-slug",
+      "name": "Display Name",
+      "description": "Why this helps this pack",
+      "priority": "critical|high|medium|low",
+      "reason": "optimization|qol|dependency|synergy"
+    }}
+  ]
+}}
+
+Rules:
+- Suggest at most 8 mods.
+- Prefer performance / optimization mods that exist on Modrinth for loader "{loader}" and Minecraft {mc}.
+- Do NOT suggest mods already installed.
+- Do NOT suggest Fabric-only mods for Forge/NeoForge (e.g. no Sodium on Forge — use Embeddium).
+- Do NOT suggest Forge-only mods for Fabric/Quilt.
+- Prefer well-known Modrinth slugs (sodium, lithium, embeddium, modernfix, ferrite-core, iris, oculus, jei, emi).
+- Skip anything incompatible with {loader} {mc}.
+
+Installed mods:
+{}
+
+Heuristic seed suggestions (refine/replace if wrong):
+{}
+"#,
+        installed.join(", "),
+        seed_slugs.join(", ")
+    )
+}
+
+/// Analyzes the current modpack and suggests optimization / QoL mods for the
+/// active loader + Minecraft version. Uses heuristics first, then optionally
+/// refines via the configured AI provider.
+#[tauri::command(rename_all = "camelCase")]
+async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
+    let path_clone = path.clone();
+    let mut recommendations = tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path_clone).map_err(|e| e.to_string())?;
+        Ok::<_, String>(heuristic_mod_recommendations(&manifest))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Best-effort AI refinement — never fail the whole command if AI is offline.
+    let ai_result = tokio::task::spawn_blocking({
+        let path = path.clone();
+        let seed = recommendations.clone();
+        move || -> Result<Vec<serde_json::Value>, String> {
+            let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+            let prompt = build_mod_recommendation_prompt(&manifest, &seed);
+            Ok(vec![serde_json::json!({
+                "_prompt": prompt,
+                "_loader": tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind),
+                "_mc": manifest.minecraft.version,
+            })])
+        }
+    })
+    .await;
+
+    if let Ok(Ok(meta)) = ai_result {
+        if let Some(prompt) = meta
+            .first()
+            .and_then(|v| v.get("_prompt"))
+            .and_then(|v| v.as_str())
+        {
+            let settings = integrations::get_integration_status().settings;
+            if let Ok(ai_json) = integrations::call_ai(&settings.ai, prompt).await {
+                let keys = tokio::task::spawn_blocking({
+                    let path = path.clone();
+                    move || {
+                        ProjectManifest::load_from_path(&path)
+                            .map(|m| installed_mod_keys(&m))
+                            .unwrap_or_default()
+                    }
+                })
+                .await
+                .unwrap_or_default();
+
+                let ai_recs = ai_json
+                    .get("recommendations")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+
+                let mut merged = Vec::new();
+                for rec in ai_recs {
+                    let Some(slug) = rec.get("slug").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    if has_installed(&keys, &[slug]) {
+                        continue;
+                    }
+                    let name = rec
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(slug);
+                    let description = rec
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("AI-suggested optimization mod");
+                    let priority = rec
+                        .get("priority")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("high");
+                    let reason = rec
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("optimization");
+                    let mut obj = serde_json::json!({
+                        "reason": reason,
+                        "slug": slug,
+                        "name": name,
+                        "description": description,
+                        "priority": priority,
+                        "source": "ai",
+                    });
+                    if let Some(map) = obj.as_object_mut() {
+                        if let Some(m) = meta.first().and_then(|v| v.as_object()) {
+                            if let Some(loader) = m.get("_loader") {
+                                map.insert("loader".into(), loader.clone());
+                            }
+                            if let Some(mc) = m.get("_mc") {
+                                map.insert("minecraftVersion".into(), mc.clone());
+                            }
+                        }
+                    }
+                    merged.push(obj);
+                }
+
+                if !merged.is_empty() {
+                    // Prefer AI list, then fill gaps from heuristics.
+                    for h in recommendations {
+                        let slug = h.get("slug").and_then(|v| v.as_str()).unwrap_or("");
+                        if !merged
+                            .iter()
+                            .any(|r| r.get("slug").and_then(|v| v.as_str()) == Some(slug))
+                        {
+                            merged.push(h);
+                        }
+                    }
+                    recommendations = merged;
+                }
+            }
+        }
+    }
+
+    // Cap the list so the panel stays usable.
+    recommendations.truncate(12);
     Ok(recommendations)
 }
 
@@ -4214,15 +4931,26 @@ fn recipe_icon_extra_jars(manifest_path: &Path) -> Result<(PathBuf, Vec<PathBuf>
         .ok_or_else(|| "manifest path has no parent".to_string())?;
     let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
     let mut extra_jars = Vec::new();
-    let launcher_dir = dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("TuffBox");
-    let client_jar = launcher_dir
-        .join("versions")
-        .join(&manifest.minecraft.version)
-        .join(format!("{}.jar", manifest.minecraft.version));
-    if client_jar.is_file() {
-        extra_jars.push(client_jar);
+    let version = &manifest.minecraft.version;
+    let mut roots = Vec::new();
+    if let Some(data) = dirs::data_dir() {
+        roots.push(data.join("TuffBox"));
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        roots.push(PathBuf::from(&appdata).join("TuffBox"));
+        roots.push(PathBuf::from(appdata).join(".minecraft"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(&home).join(".minecraft"));
+    }
+    for root in roots {
+        let client_jar = root
+            .join("versions")
+            .join(version)
+            .join(format!("{version}.jar"));
+        if client_jar.is_file() && !extra_jars.iter().any(|p| p == &client_jar) {
+            extra_jars.push(client_jar);
+        }
     }
     Ok((project_dir.to_path_buf(), extra_jars))
 }
@@ -4285,6 +5013,61 @@ async fn get_recipe_runtime_snapshot(path: String) -> Result<serde_json::Value, 
 fn write_kubejs_recipe_removes(path: String, recipe_ids: Vec<String>) -> Result<String, String> {
     let project_dir = manifest_parent(&path)?;
     tuffbox_core::recipe_scan::write_kubejs_remove(&project_dir, &recipe_ids)
+}
+
+/// Append a shaped/shapeless/cooking/smithing/stonecutting craft to tuffbox_recipe_adds.js.
+#[tauri::command(rename_all = "camelCase")]
+fn write_kubejs_craft_recipe(
+    path: String,
+    draft: tuffbox_core::recipe_scan::CraftDraft,
+) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::recipe_scan::write_kubejs_craft(&project_dir, &draft)
+}
+
+/// Append item-tag edits to kubejs/server_scripts/tuffbox_tag_edits.js.
+#[tauri::command(rename_all = "camelCase")]
+fn write_kubejs_tag_edits(
+    path: String,
+    draft: tuffbox_core::recipe_scan::TagDraft,
+) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::recipe_scan::write_kubejs_tags(&project_dir, &draft)
+}
+
+/// List known item tags (`#ns:path`) from the offline tag index for the recipe palette.
+#[tauri::command(rename_all = "camelCase")]
+async fn list_item_tags(path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let (project_dir, extra_jars) = recipe_icon_extra_jars(&manifest_path)?;
+        let loader = tuffbox_core::recipe_scan::loader_kind_from_manifest(&manifest_path)?;
+        Ok(tuffbox_core::recipe_scan::list_item_tags(
+            &project_dir,
+            loader,
+            &extra_jars,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Direct members of an item tag (not fully expanded).
+#[tauri::command(rename_all = "camelCase")]
+async fn get_item_tag_entries(path: String, tag_id: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        let (project_dir, extra_jars) = recipe_icon_extra_jars(&manifest_path)?;
+        let loader = tuffbox_core::recipe_scan::loader_kind_from_manifest(&manifest_path)?;
+        Ok(tuffbox_core::recipe_scan::get_tag_entries(
+            &project_dir,
+            loader,
+            &extra_jars,
+            &tag_id,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Generate a KubeJS snippet (does not write to disk).
@@ -5720,7 +6503,9 @@ fn get_crash_diagnosis(
 
     // Merge Crash Assistant log-phrase findings into hints so each detect
     // gets one-by-one FixAction buttons in the Problems / Recommended panels.
-    if let Ok(assistant) = run_crash_assistant_analysis(&path, &manifest, &project_dir) {
+    if let Ok(assistant) =
+        run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())
+    {
         for finding in assistant.findings {
             let id = format!("ca:{}", finding.code);
             if diagnosis.hints.iter().any(|h| h.id == id) {
@@ -5762,32 +6547,25 @@ fn run_crash_assistant_analysis(
     path: &str,
     manifest: &ProjectManifest,
     project_dir: &Path,
+    report_id: Option<&str>,
 ) -> Result<tuffbox_core::crash_assistant::CrashAnalysisReport, String> {
-    // Shared builder used by get_crash_diagnosis + run_crash_assistant_full.
+    // Scope: selected crash report (or newest) + latest.log + current mods.
+    // Do not dump every historical crash-report into the analyzer.
     let installed: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
     let mut crash_content = Vec::new();
-    let mut latest_log = String::new();
-    let mut launcher_log = String::new();
-
-    let cd = project_dir.join("crash-reports");
-    if cd.is_dir() {
-        for e in std::fs::read_dir(&cd).into_iter().flatten().flatten() {
-            if e.path().extension().map_or(false, |e| e == "txt") {
-                if let Ok(ct) = std::fs::read_to_string(e.path()) {
-                    if ct.len() < 4 * 1024 * 1024 {
-                        crash_content.push(ct);
-                    }
-                }
-            }
-        }
+    if let Some(text) = load_scoped_crash_report(project_dir, report_id) {
+        crash_content.push(text);
     }
+
+    let mut latest_log = String::new();
     let lp = project_dir.join("logs").join("latest.log");
     if lp.is_file() {
-        latest_log = tuffbox_core::process::read_log_tail(&lp, 1200).unwrap_or_default();
+        latest_log = tuffbox_core::process::read_log_tail(&lp, 2000).unwrap_or_default();
     }
+    let mut launcher_log = String::new();
     let la = project_dir.join("logs").join("launcher.log");
     if la.is_file() {
-        launcher_log = std::fs::read_to_string(&la).unwrap_or_default();
+        launcher_log = tuffbox_core::process::read_log_tail(&la, 400).unwrap_or_default();
     }
 
     let jv = manifest
@@ -8598,8 +9376,41 @@ fn apply_change_action(
                 .map_err(|e| e.to_string())?;
             applied.push(format!("updated {mod_id}"));
         }
-        tuffbox_core::ChangeAction::EditConfig { path, .. } => {
-            applied.push(format!("manual config review required for {path}"));
+        tuffbox_core::ChangeAction::EditConfig { path, patch } => {
+            let envelope: serde_json::Value = serde_json::from_str(&patch).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "patchType": "replace_file",
+                    "patch": patch,
+                })
+            });
+            let patch_type = envelope
+                .get("patchType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("replace_file");
+            let patch_value = envelope
+                .get("patch")
+                .cloned()
+                .unwrap_or(serde_json::Value::String(patch.clone()));
+            let project_dir = manifest_path
+                .parent()
+                .ok_or_else(|| "manifest has no parent".to_string())?;
+            let target = safe_project_file(project_dir, &path)?;
+            let current = if target.is_file() {
+                std::fs::read_to_string(&target).map_err(|e| e.to_string())?
+            } else {
+                String::new()
+            };
+            let new_content = tuffbox_core::action_plan::apply_config_patch(
+                &current,
+                &path,
+                patch_type,
+                &patch_value,
+            )?;
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&target, new_content).map_err(|e| e.to_string())?;
+            applied.push(format!("edited config {path}"));
         }
     }
     Ok(())
@@ -8854,7 +9665,13 @@ fn update_mod_from_modrinth(
     let dependencies = provider
         .resolve_dependencies(&version.id)
         .unwrap_or_else(|_| old_mod.dependencies.clone());
-    let mut new_spec = build_mod_spec(&project, &version, file, dependencies, old_mod.side);
+    let mut new_spec = build_mod_spec(
+        &project,
+        &version,
+        file,
+        dependencies,
+        infer_project_side(Some(&project)),
+    );
     // A manifest id is referenced by UI state, dependency edges, progress
     // scopes and history. Keep it stable even if Modrinth changed the slug.
     new_spec.id = old_mod.id;
@@ -8944,16 +9761,9 @@ fn parse_side(side: Option<&str>, project: Option<&tuffbox_core::ProjectInfo>) -
 
 fn infer_project_side(project: Option<&tuffbox_core::ProjectInfo>) -> Side {
     let Some(project) = project else {
-        return Side::Both;
+        return Side::Unknown;
     };
-    let client = project.client_side.as_deref().unwrap_or("unknown");
-    let server = project.server_side.as_deref().unwrap_or("unknown");
-    match (client, server) {
-        ("required" | "optional", "unsupported") => Side::Client,
-        ("unsupported", "required" | "optional") => Side::Server,
-        ("required" | "optional", "required" | "optional") => Side::Both,
-        _ => Side::Unknown,
-    }
+    Side::from_modrinth(project.client_side.as_deref(), project.server_side.as_deref())
 }
 
 fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
@@ -9567,6 +10377,13 @@ pub fn run() {
             delete_backup,
             build_ai_crash_context,
             analyze_crash_with_ai,
+            apply_action_plan,
+            record_crash_ai_feedback,
+            save_authored_crash_case,
+            draft_authored_crash_case,
+            list_authored_crash_cases,
+            get_authored_case_export,
+            open_authored_kb_folder,
             recommend_mods,
             get_mod_info,
             restore_backup,
@@ -9580,6 +10397,10 @@ pub fn run() {
             get_recipe_runtime_status,
             get_recipe_runtime_snapshot,
             write_kubejs_recipe_removes,
+            write_kubejs_craft_recipe,
+            write_kubejs_tag_edits,
+            list_item_tags,
+            get_item_tag_entries,
             generate_kubejs_recipe_script,
             load_quest_book,
             save_quest_chapter,
@@ -9605,6 +10426,7 @@ pub fn run() {
             integrations::set_integration_secret,
             integrations::clear_integration_secret,
             integrations::test_integration,
+            integrations::list_ollama_models,
             integrations::get_publish_config,
             integrations::save_publish_config,
             integrations::publish_release,

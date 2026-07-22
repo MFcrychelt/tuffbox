@@ -4,95 +4,157 @@
 
 ИИ не является dependency resolver. ИИ не должен сам решать, какие версии модов ставить, удалять или обновлять.
 
-ИИ — это помощник для анализа логов, объяснений и генерации гипотез.
+ИИ — это помощник для анализа логов, объяснений и генерации гипотез. Исполняет изменения только детерминированный код лаунчера после подтверждения пользователя.
+
+## Dual-mode диагностика крашей
+
+Настройка `ai.diagnoseMode` (Settings → Crash KB):
+
+| Режим | Поведение |
+|-------|-----------|
+| **`server`** (default) | `POST /v1/crash/diagnose` на `ai.crashKbEndpoint` — сервер матчит приватную KB ± LLM, клиенту только `ActionPlan`. Без endpoint → локальный LLM (как раньше). |
+| **`local`** | `POST /v1/crash/lookup` → top-N similar cases в prompt → Ollama / openai-compatible → тот же `ActionPlan`. |
+| **`kb_only`** | Только matched case → plan из `actions` кейса, без LLM. |
+
+Приватный корпус KB **никогда не шипится** в лаунчер. Builtin seed в клиенте — тонкий offline fallback.
+
+```text
+Crash logs
+→ local fingerprint + inventory
+→ DiagnoseMode router
+→ ActionPlan JSON (единый контракт)
+→ validate → UI confirm → snapshot → apply
+```
+
+API (ваш сервер):
+
+- `POST /v1/crash/lookup` — fingerprint → hits (`solution`, `actions`, score); без `notes` / полного корпуса
+- `POST /v1/crash/diagnose` — context → готовый `ActionPlan`
+- Auth: bearer token (`crash_kb` в keyring); **нет** bulk dump KB
 
 ## Что делает код
 
-Код отвечает за:
-
-- построение графа зависимостей;
-- чтение metadata модов;
-- проверку версий;
-- проверку loader compatibility;
-- проверку side mismatch;
-- создание snapshots;
-- применение изменений;
-- rollback;
-- экспорт;
-- запуск Minecraft;
-- парсинг логов;
-- извлечение stacktrace.
+- граф зависимостей, metadata, версии, loader/side checks;
+- snapshots, apply, rollback, export, launch;
+- парсинг логов / stacktrace / fingerprint;
+- валидация и применение `ActionPlan`.
 
 ## Что делает ИИ
 
-ИИ отвечает за:
-
-- объяснение stacktrace человеческим языком;
-- предположение причины краша;
-- ранжирование подозрительных модов;
-- предложение плана исправления;
-- генерацию текста changelog;
-- помощь с config values;
-- объяснение предупреждений.
+- объяснение stacktrace;
+- гипотезы и ранжирование подозрительных модов;
+- предложение **структурированного** плана (`ActionPlan`);
+- помощь с config values (через `edit_config`).
 
 ## Что ИИ не должен делать напрямую
 
-- молча удалять моды;
-- молча обновлять моды;
+- молча удалять / обновлять моды;
 - менять loader;
-- переписывать configs без diff;
+- переписывать configs без diff / confirm;
 - применять fixes без snapshot;
 - принимать окончательное решение вместо пользователя.
 
-## Безопасный AI pipeline
+## System prompt (канон)
+
+Текст живёт в `tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT` — один и тот же для server и local:
 
 ```text
-Crash happens
-→ TuffBox collects latest.log/crash-report
-→ local parser extracts stacktrace
-→ graph maps classes/packages to mod nodes
-→ recent changes are attached
-→ AI receives compact context
-→ AI returns structured explanation and proposed plan
-→ resolver validates plan
-→ UI shows diff
-→ user confirms
-→ snapshot is created
-→ deterministic actions are applied
-→ test run starts
+You are TuffBox Crash Planner. You only output ONE JSON object matching schemaVersion 1.
+You do NOT apply fixes. You propose an ActionPlan for the launcher.
+… (см. код)
 ```
 
-## Формат ответа ИИ
+## Формат ответа ИИ — ActionPlan
 
-ИИ должен возвращать JSON, а не свободный текст:
+Единственный executable контракт (`schemaVersion: 1`):
 
 ```json
 {
+  "schemaVersion": 1,
   "humanExplanation": "Игра вылетела во время инициализации рендера. Вероятно, конфликтуют Oculus и Embeddium.",
   "confidence": 0.78,
-  "suspectedNodes": ["oculus", "embeddium"],
-  "recommendedPlan": [
+  "suspectedMods": ["oculus", "embeddium"],
+  "needsUserReview": true,
+  "source": "hybrid",
+  "matchedCaseIds": ["case-oculus-embeddium"],
+  "actions": [
     {
-      "type": "update_mod",
+      "op": "update_mod",
       "modId": "oculus",
-      "targetVersion": "1.7.0",
-      "reason": "Версия 1.6.x часто конфликтует с текущей версией Embeddium."
+      "version": "1.7.0",
+      "reason": "Версия 1.6.x часто конфликтует с текущим Embeddium.",
+      "risk": "medium"
+    },
+    {
+      "op": "install_mod",
+      "modId": "indium",
+      "provider": "modrinth",
+      "reason": "Missing dependency for Sodium",
+      "risk": "low"
+    },
+    {
+      "op": "edit_config",
+      "path": "config/example.toml",
+      "patchType": "toml_set",
+      "patch": { "section.key": "value" },
+      "reason": "Disable conflicting feature",
+      "risk": "low"
     }
-  ],
-  "needsUserReview": true
+  ]
 }
 ```
 
-## Валидация AI-плана
+Допустимые `op`: `install_mod`, `remove_mod`, `disable_mod`, `update_mod`, `change_mod_version`, `reinstall_mod`, `edit_config`.
 
-Перед применением AI-план должен пройти через ResolverService:
+Legacy `recommended_actions` / `action_type` ещё парсятся и нормализуются в `op`.
+
+## Валидация и apply
 
 ```text
-AI plan
-→ normalize actions
-→ check availability
-→ check version constraints
-→ check conflicts
-→ create change plan
-→ show diff
+ActionPlan
+→ validate_action_plan (unknown op = reject)
+→ UI diff / review
+→ user confirms
+→ snapshot
+→ apply_action_plan → FixAction / ChangeAction / edit_config patch
+→ test run
+```
+
+`edit_config.patchType`: `json_merge` | `toml_set` | `properties_set` | `replace_file`.
+
+## Как расширять приватную Crash KB (авторский workflow)
+
+### В IDE (удобно)
+
+1. Открой Diagnostics → выбери crash-report.
+2. (Опционально) **AI explain** / **Apply plan** — чтобы подтянуть solution и actions.
+3. Нажми **Save KB case** (или «Save as KB case» под AI).
+4. Заполни **Solution**, поправь **Actions JSON**, при желании **Notes** (только для тебя).
+5. **Save case** → пишется в `.tuffbox/crash_kb/cases.jsonl` (`source: authored`) и публичный файл в `.tuffbox/crash_kb/export/<id>.json` **без notes**.
+6. **Copy export JSON** / **Open export folder** — залей export на свой сервер KB.
+
+Fingerprint подставляется автоматически из текущего краша.
+
+### Вручную / на сервере
+
+1. Кейсы храните **на сервере** (JSONL/DB), не в релизе лаунчера.
+2. Каждый кейс минимум:
+   - `id`, fingerprint / matchRules
+   - `solution` (текст для UI/RAG)
+   - `actions[]` уже в executable `op`-формате
+   - `notes` / внутренние правила — **не отдавать** клиенту
+3. Сильный матч → `kb_only` / diagnose без LLM.
+4. Opt-in «Helped» пишет в локальный project JSONL; авторский кейс — через форму выше.
+
+Пример кейса (как в export):
+
+```json
+{
+  "id": "mixin-create-flywheel",
+  "fingerprint": { "exception": "MixinTransformerError", "key": "..." },
+  "solution": "Update Create and Flywheel to matching versions for this MC.",
+  "actions": [
+    { "op": "update_mod", "modId": "create", "version": null, "reason": "Latest compatible", "risk": "medium" }
+  ]
+}
 ```

@@ -10,7 +10,7 @@
 //! responsible for keeping each content folder in sync with what the
 //! manifest declares.
 
-use crate::manifest::{ContentType, ModSpec, ProjectManifest, SourceKind};
+use crate::manifest::{ContentType, ModSpec, ProjectManifest, Side, SourceKind};
 use crate::mc_install::{sha1_file, InstallError};
 use crate::provider::{ContentProvider, ModrinthProvider};
 use std::path::{Path, PathBuf};
@@ -373,12 +373,12 @@ pub fn sync_mods_dir_to_manifest(
 
 /// Attempts to identify an untracked local `.jar` file against Modrinth by
 /// content hash, returning a fully-populated [`ModSpec`] if a match is
-/// found.
+/// found. Side is taken from the project's Modrinth `client_side` /
+/// `server_side` fields.
 pub fn identify_local_jar_via_modrinth(
     provider: &ModrinthProvider,
     jar_path: &Path,
-    side: crate::manifest::Side,
-) -> Result<Option<ModSpec>, ModFileError> {
+) -> Result<Option<(ModSpec, Option<String>, Option<String>)>, ModFileError> {
     let sha1 = sha1_file(jar_path)?;
     let Some((project, version)) = provider
         .identify_local_jar(&sha1)
@@ -399,29 +399,38 @@ pub fn identify_local_jar_via_modrinth(
         .resolve_dependencies(&version.id)
         .unwrap_or_default();
 
-    Ok(Some(ModSpec {
-        id: project.slug.clone(),
-        name: project.name,
-        source: crate::manifest::ModSource {
-            kind: SourceKind::Modrinth,
-            project_id: Some(project.id),
-            file_id: Some(version.id),
-            url: file.as_ref().map(|f| f.url.clone()),
-            path: None,
-            icon_url: project.icon_url.clone(),
-            categories: project.categories.clone(),
+    let side = Side::from_modrinth(
+        project.client_side.as_deref(),
+        project.server_side.as_deref(),
+    );
+
+    Ok(Some((
+        ModSpec {
+            id: project.slug.clone(),
+            name: project.name,
+            source: crate::manifest::ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some(project.id),
+                file_id: Some(version.id),
+                url: file.as_ref().map(|f| f.url.clone()),
+                path: None,
+                icon_url: project.icon_url.clone(),
+                categories: project.categories.clone(),
+            },
+            version: version.version_number,
+            file_name: Some(file_name),
+            hashes: Some(crate::manifest::FileHashes {
+                sha1: Some(sha1),
+                sha512: file.and_then(|f| f.hashes.sha512),
+            }),
+            side,
+            dependencies,
+            status: vec!["ok".to_string()],
+            content_type,
         },
-        version: version.version_number,
-        file_name: Some(file_name),
-        hashes: Some(crate::manifest::FileHashes {
-            sha1: Some(sha1),
-            sha512: file.and_then(|f| f.hashes.sha512),
-        }),
-        side,
-        dependencies,
-        status: vec!["ok".to_string()],
-        content_type,
-    }))
+        project.client_side,
+        project.server_side,
+    )))
 }
 
 #[cfg(test)]

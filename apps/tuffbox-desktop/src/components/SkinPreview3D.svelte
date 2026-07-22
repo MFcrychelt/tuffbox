@@ -59,6 +59,52 @@
     return api.mcAuth.getSkinBase64(url);
   }
 
+  /**
+   * skinview3d expects classic 64×32 cape UVs. TLauncher / some OptiFine
+   * cloaks ship as HD animated atlases (e.g. 352×2992) — take the first
+   * frame and scale it down so the preview still shows a cape.
+   */
+  async function normalizeCapeDataUrl(dataUrl: string): Promise<string> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const w = img.width;
+        const h = img.height;
+        const isClassic = w === 64 && (h === 32 || h % 32 === 0);
+        if (isClassic) {
+          resolve(dataUrl);
+          return;
+        }
+        // Prefer a frame whose aspect is near classic cape 2:1.
+        let frameH = h;
+        if (h > w) {
+          const candidates = [32, 64, Math.round(w / 2), 272, 17];
+          for (const c of candidates) {
+            if (c > 0 && h % c === 0 && Math.abs(w / c - 2) < Math.abs(w / frameH - 2)) {
+              frameH = c;
+            }
+          }
+          if (frameH === h && h > w) {
+            frameH = Math.round(w / 2);
+          }
+        }
+        const out = document.createElement("canvas");
+        out.width = 64;
+        out.height = 32;
+        const ctx = out.getContext("2d");
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(img, 0, 0, w, Math.min(frameH, h), 0, 0, 64, 32);
+        resolve(out.toDataURL("image/png"));
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    });
+  }
+
   async function applyTextures() {
     if (!viewer) return;
     loading = true;
@@ -72,7 +118,8 @@
       }
 
       if (capeUrl && capeUrl !== lastCape) {
-        const dataUrl = await toDataUrl(capeUrl);
+        const raw = await toDataUrl(capeUrl);
+        const dataUrl = await normalizeCapeDataUrl(raw);
         await viewer.loadCape(dataUrl);
         lastCape = capeUrl;
       } else if (!capeUrl && lastCape) {

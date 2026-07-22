@@ -790,7 +790,16 @@ fn add_mod_from_modrinth(
 
     let dependencies = provider.resolve_dependencies(&version.id)?;
 
-    let side = parse_side(side.as_deref())?;
+    let side = match side.as_deref() {
+        Some("client") => Side::Client,
+        Some("server") => Side::Server,
+        Some("both") => Side::Both,
+        Some("auto") | None => Side::from_modrinth(
+            project.client_side.as_deref(),
+            project.server_side.as_deref(),
+        ),
+        Some(other) => anyhow::bail!("invalid side '{other}'; expected: client, server, both, auto"),
+    };
 
     let mod_spec = build_mod_spec(&project, &version, file, dependencies, side);
     manifest.mods.push(mod_spec);
@@ -880,16 +889,6 @@ fn build_mod_spec(
         dependencies,
         status: vec!["ok".to_string()],
         content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(&project.project_type),
-    }
-}
-
-fn parse_side(side: Option<&str>) -> anyhow::Result<Side> {
-    match side {
-        Some("client") => Ok(Side::Client),
-        Some("server") => Ok(Side::Server),
-        Some("both") => Ok(Side::Both),
-        Some(other) => anyhow::bail!("invalid side '{other}'; expected: client, server, both"),
-        None => Ok(Side::Both),
     }
 }
 

@@ -111,10 +111,21 @@ impl LoaderAdapter for FabricAdapter {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|v| {
-                        v.as_str().map(|s| TagEntry {
-                            id: s.to_string(),
-                            required: true,
-                        })
+                        if let Some(obj) = v.as_object() {
+                            let id = obj.get("id")?.as_str()?.to_string();
+                            let required = obj
+                                .get("required")
+                                .and_then(|r| r.as_bool())
+                                .unwrap_or(true);
+                            Some(TagEntry { id, required })
+                        } else if let Some(s) = v.as_str() {
+                            Some(TagEntry {
+                                id: s.to_string(),
+                                required: true,
+                            })
+                        } else {
+                            None
+                        }
                     })
                     .collect()
             })

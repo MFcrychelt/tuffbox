@@ -417,21 +417,60 @@ async fn fetch_skin_elyby(username: &str) -> Option<String> {
     None
 }
 
+fn prefer_https(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("http://") {
+        format!("https://{rest}")
+    } else {
+        url.to_string()
+    }
+}
+
+/// TLauncher texture API (CustomSkinLoader / auth.tlauncher.org).
+/// Old `www.tlauncher.org/skins/{name}.png` now returns HTML, not a skin.
+async fn fetch_tlauncher_textures(username: &str) -> (Option<String>, Option<String>) {
+    let Ok(c) = client() else {
+        return (None, None);
+    };
+    let lookup = format!("https://auth.tlauncher.org/skin/profile/texture/login/{username}");
+    let Ok(resp) = c.get(&lookup).send().await else {
+        return (None, None);
+    };
+    if !resp.status().is_success() {
+        return (None, None);
+    }
+    let Ok(body) = resp.json::<Value>().await else {
+        return (None, None);
+    };
+
+    let skin = body
+        .pointer("/SKIN/url")
+        .or_else(|| body.pointer("/skin/url"))
+        .and_then(|v| v.as_str())
+        .map(prefer_https);
+    let cape = body
+        .pointer("/CAPE/url")
+        .or_else(|| body.pointer("/cape/url"))
+        .and_then(|v| v.as_str())
+        .map(prefer_https);
+
+    (skin, cape)
+}
+
 async fn fetch_skin_tlauncher(username: &str) -> Option<String> {
-    let c = client().ok()?;
-    let url = format!("https://www.tlauncher.org/skins/{username}.png");
-    let resp = c.get(&url).send().await.ok()?;
-    if resp.status().is_success() {
-        let ct = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if ct.contains("image") {
+    let (skin, _) = fetch_tlauncher_textures(username).await;
+    if let Some(url) = skin {
+        if probe_image_url(&url).await.is_some() {
             return Some(url);
         }
+        // Texture URL may still be valid even if HEAD/GET probe is picky.
+        return Some(url);
     }
-    None
+    // Fallback: fileservice uses a lowercased nick.
+    let direct = format!(
+        "https://auth.tlauncher.org/skin/fileservice/skins/skin_{}.png",
+        username.to_lowercase()
+    );
+    probe_image_url(&direct).await
 }
 
 async fn fetch_skin_mojang(uuid: &str) -> Option<String> {
@@ -519,32 +558,16 @@ async fn fetch_cape_optifine(username: &str) -> Option<String> {
 }
 
 async fn fetch_cape_tlauncher(username: &str) -> Option<String> {
-    // Preferred: ElyBy-style texture lookup used by TLauncher / CustomSkinLoader.
-    if let Ok(c) = client() {
-        let lookup = format!("https://auth.tlauncher.org/skin/profile/texture/login/{username}");
-        if let Ok(resp) = c.get(&lookup).send().await {
-            if resp.status().is_success() {
-                if let Ok(body) = resp.json::<Value>().await {
-                    if let Some(url) = body
-                        .pointer("/CAPE/url")
-                        .or_else(|| body.pointer("/cape/url"))
-                        .and_then(|v| v.as_str())
-                    {
-                        let url = if url.starts_with("http://") {
-                            url.replacen("http://", "https://", 1)
-                        } else {
-                            url.to_string()
-                        };
-                        if probe_image_url(&url).await.is_some() {
-                            return Some(url);
-                        }
-                    }
-                }
-            }
+    let (_, cape) = fetch_tlauncher_textures(username).await;
+    if let Some(url) = cape {
+        if probe_image_url(&url).await.is_some() {
+            return Some(url);
         }
+        return Some(url);
     }
     let direct = format!(
-        "https://auth.tlauncher.org/skin/fileservice/cloaks/cloak_{username}.png"
+        "https://auth.tlauncher.org/skin/fileservice/cloaks/cloak_{}.png",
+        username.to_lowercase()
     );
     probe_image_url(&direct).await
 }
@@ -1283,7 +1306,10 @@ pub async fn mc_offline_login(
 
     let skin_url = fetch_skin_for_username(&trimmed, &skin_source).await;
     let prev = load_auth_state();
-    let cape_provider = prev.cape_provider.clone();
+    let cape_provider = match skin_source {
+        SkinSource::TLauncher => CapeProvider::TLauncher,
+        _ => prev.cape_provider.clone(),
+    };
     let cape_url = resolve_display_cape(&trimmed, &uuid, &cape_provider, &[]).await;
 
     let profile = McProfile {
@@ -1349,7 +1375,19 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
             if let Ok(refresh_token) = load_token(&account_refresh_key(uuid)) {
                 match login_with_refresh_token(&refresh_token).await {
                     Ok(login) => {
-                        state.profile = Some(login.profile.clone());
+                        let mut profile = login.profile.clone();
+                        // Keep the selected display cape provider (OptiFine / TLauncher / …)
+                        // over the raw Mojang ACTIVE cape from the profile endpoint.
+                        if state.cape_provider != CapeProvider::Mojang {
+                            profile.cape_url = resolve_display_cape(
+                                &profile.name,
+                                &profile.uuid,
+                                &state.cape_provider,
+                                &profile.capes,
+                            )
+                            .await;
+                        }
+                        state.profile = Some(profile);
                         save_token(&account_access_key(uuid), &login.mc_access_token)?;
                         save_token("mc-access-token", &login.mc_access_token)?;
                         if let Some(ref skin_url) = login.profile.skin_url {
@@ -1373,15 +1411,30 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
         }
     }
 
-    // For offline login, refresh skin from selected source
+    // For offline login, refresh skin + display cape from selected sources
     if state.logged_in && state.login_type == LoginType::Offline {
+        // Existing sessions may still have capeProvider=mojang from before
+        // TLauncher skin logins auto-selected the matching cloak.
+        if state.skin_source == SkinSource::TLauncher
+            && state.cape_provider == CapeProvider::Mojang
+        {
+            state.cape_provider = CapeProvider::TLauncher;
+        }
         if let Some(ref profile) = state.profile {
             let skin_url = fetch_skin_for_username(&profile.name, &state.skin_source).await;
             if let Some(ref url) = skin_url {
                 let _ = download_and_cache_skin(url, &profile.uuid).await;
             }
+            let cape_url = resolve_display_cape(
+                &profile.name,
+                &profile.uuid,
+                &state.cape_provider,
+                &profile.capes,
+            )
+            .await;
             let updated_profile = McProfile {
                 skin_url: skin_url.or_else(|| profile.skin_url.clone()),
+                cape_url,
                 ..profile.clone()
             };
             state.profile = Some(updated_profile);
@@ -2072,6 +2125,18 @@ mod tests {
     fn offline_uuid_is_deterministic() {
         assert_eq!(offline_uuid("Steve"), offline_uuid("Steve"));
         assert_ne!(offline_uuid("Steve"), offline_uuid("Alex"));
+    }
+
+    #[test]
+    fn prefer_https_upgrades_http() {
+        assert_eq!(
+            prefer_https("http://auth.tlauncher.org/skin/x.png"),
+            "https://auth.tlauncher.org/skin/x.png"
+        );
+        assert_eq!(
+            prefer_https("https://auth.tlauncher.org/skin/x.png"),
+            "https://auth.tlauncher.org/skin/x.png"
+        );
     }
 
     #[test]

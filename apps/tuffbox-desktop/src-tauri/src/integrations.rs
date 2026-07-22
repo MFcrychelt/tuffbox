@@ -15,6 +15,16 @@ pub struct AiSettings {
     pub provider: String,
     pub endpoint: String,
     pub model: String,
+    /// Crash diagnose transport: `server` (default) | `local` | `kb_only`.
+    #[serde(default = "default_diagnose_mode")]
+    pub diagnose_mode: String,
+    /// Base URL for private crash KB API (`/v1/crash/lookup`, `/v1/crash/diagnose`).
+    #[serde(default)]
+    pub crash_kb_endpoint: String,
+}
+
+fn default_diagnose_mode() -> String {
+    "server".into()
 }
 
 impl Default for AiSettings {
@@ -23,6 +33,8 @@ impl Default for AiSettings {
             provider: "ollama".to_string(),
             endpoint: "http://127.0.0.1:11434".to_string(),
             model: "qwen2.5-coder:7b".to_string(),
+            diagnose_mode: default_diagnose_mode(),
+            crash_kb_endpoint: String::new(),
         }
     }
 }
@@ -60,6 +72,7 @@ pub struct IntegrationStatus {
     pub modrinth_token_set: bool,
     pub curseforge_token_set: bool,
     pub ai_api_key_set: bool,
+    pub crash_kb_token_set: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +141,7 @@ fn keyring_entry(kind: &str) -> Result<keyring::Entry, String> {
         "modrinth" => "modrinth-token",
         "curseforge" => "curseforge-token",
         "ai" => "ai-api-key",
+        "crash_kb" => "crash-kb-token",
         _ => return Err(format!("unknown credential kind: {kind}")),
     };
     keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| e.to_string())
@@ -137,6 +151,10 @@ fn secret(kind: &str) -> Result<String, String> {
     keyring_entry(kind)?
         .get_password()
         .map_err(|_| format!("{kind} credential is not configured"))
+}
+
+pub fn secret_optional(kind: &str) -> Option<String> {
+    secret(kind).ok().filter(|s| !s.trim().is_empty())
 }
 
 fn secret_is_set(kind: &str) -> bool {
@@ -154,11 +172,12 @@ pub fn get_integration_status() -> IntegrationStatus {
         modrinth_token_set: secret_is_set("modrinth"),
         curseforge_token_set: secret_is_set("curseforge"),
         ai_api_key_set: secret_is_set("ai"),
+        crash_kb_token_set: secret_is_set("crash_kb"),
     }
 }
 
 #[tauri::command]
-pub fn save_integration_settings(settings: IntegrationSettings) -> Result<(), String> {
+pub fn save_integration_settings(mut settings: IntegrationSettings) -> Result<(), String> {
     if settings.github_repository.split('/').count() != 2 {
         return Err("GitHub repository must use owner/repository format".to_string());
     }
@@ -171,6 +190,8 @@ pub fn save_integration_settings(settings: IntegrationSettings) -> Result<(), St
     ) {
         return Err("AI provider must be ollama or openai-compatible".to_string());
     }
+    let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
+    settings.ai.diagnose_mode = mode.as_str().to_string();
     write_settings(&settings)
 }
 
@@ -652,6 +673,39 @@ fn ollama_chat_url(endpoint: &str) -> String {
 }
 
 pub async fn call_ai(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
+    call_ai_once(settings, prompt).await
+}
+
+/// Call AI and ensure the response parses as ActionPlan; one repair retry on failure.
+pub async fn call_ai_crash_explain(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
+    match call_ai_once(settings, prompt).await {
+        Ok(value) => {
+            let raw = serde_json::to_string(&value).unwrap_or_default();
+            match tuffbox_core::action_plan::parse_action_plan(&raw) {
+                Ok(plan) => Ok(serde_json::to_value(plan).unwrap_or(value)),
+                Err(_) => Ok(value),
+            }
+        }
+        Err(first_err) => {
+            if !first_err.to_lowercase().contains("invalid json")
+                && !first_err.to_lowercase().contains("did not contain")
+            {
+                return Err(first_err);
+            }
+            let repair = format!(
+                "{prompt}\n\nYour previous answer was invalid JSON ({first_err}).\n{}\nReturn ONLY the JSON object.",
+                tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT
+            );
+            let value = call_ai_once(settings, &repair).await?;
+            let raw = serde_json::to_string(&value).unwrap_or_default();
+            let plan = tuffbox_core::action_plan::parse_action_plan(&raw)
+                .map_err(|e| format!("AI returned invalid JSON after retry: {e}"))?;
+            Ok(serde_json::to_value(plan).map_err(|e| e.to_string())?)
+        }
+    }
+}
+
+async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
     let client = reqwest::Client::new();
     let content = if settings.provider == "ollama" {
         let response = client
@@ -661,13 +715,13 @@ pub async fn call_ai(settings: &AiSettings, prompt: &str) -> Result<Value, Strin
                 "stream": false,
                 "format": "json",
                 "messages": [
-                    {"role": "system", "content": "Return only valid JSON matching the requested schema."},
+                    {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
                     {"role": "user", "content": prompt}
                 ]
             }))
             .send()
             .await
-            .map_err(|e| format!("Ollama request failed: {e}"))?;
+            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
         let status = response.status();
         let body: Value = response.json().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
@@ -679,20 +733,24 @@ pub async fn call_ai(settings: &AiSettings, prompt: &str) -> Result<Value, Strin
             .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
             .to_string()
     } else {
-        let token = secret("ai")?;
-        let response = client
+        // OpenAI-compatible / Hermes-style: API key optional for local endpoints.
+        let token = secret("ai").ok();
+        let mut req = client
             .post(openai_chat_url(&settings.endpoint))
             .header(USER_AGENT, APP_USER_AGENT)
-            .bearer_auth(token)
             .json(&json!({
                 "model": settings.model,
                 "temperature": 0.2,
                 "response_format": {"type": "json_object"},
                 "messages": [
-                    {"role": "system", "content": "Return only valid JSON matching the requested schema."},
+                    {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
                     {"role": "user", "content": prompt}
                 ]
-            }))
+            }));
+        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+            req = req.bearer_auth(token);
+        }
+        let response = req
             .send()
             .await
             .map_err(|e| format!("AI request failed: {e}"))?;
@@ -716,7 +774,51 @@ pub async fn call_ai(settings: &AiSettings, prompt: &str) -> Result<Value, Strin
         .trim_start_matches("```")
         .trim_end_matches("```")
         .trim();
-    serde_json::from_str(trimmed).map_err(|e| format!("AI returned invalid JSON: {e}"))
+    // Prefer ActionPlan parse; fall back to raw JSON.
+    match tuffbox_core::action_plan::parse_action_plan(trimmed) {
+        Ok(plan) => serde_json::to_value(plan).map_err(|e| e.to_string()),
+        Err(_) => match tuffbox_core::ai_explanation::parse_crash_response(trimmed) {
+            Ok(parsed) => serde_json::to_value(parsed).map_err(|e| e.to_string()),
+            Err(_) => {
+                serde_json::from_str(trimmed).map_err(|e| format!("AI returned invalid JSON: {e}"))
+            }
+        },
+    }
+}
+
+/// List local Ollama model names via `/api/tags`.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<String>, String> {
+    let settings = read_settings();
+    let base = endpoint
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| settings.ai.endpoint.clone());
+    let root = base
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .trim_end_matches("/api/chat")
+        .trim_end_matches("/api/tags");
+    let url = format!("{root}/api/tags");
+
+    let response = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach Ollama at {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Ollama /api/tags failed ({})", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|e| e.to_string())?;
+    let mut names = Vec::new();
+    if let Some(models) = body.get("models").and_then(Value::as_array) {
+        for m in models {
+            if let Some(name) = m.get("name").and_then(Value::as_str) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
 }
 
 #[cfg(test)]

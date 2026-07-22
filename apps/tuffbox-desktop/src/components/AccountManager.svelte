@@ -101,23 +101,10 @@
         offlineUsername.trim(),
         offlineSkinSource
       );
-      authState.set({
-        loggedIn: true,
-        profile: result.profile,
-        expiresAt: null,
-        loginType: "offline",
-        skinSource: offlineSkinSource,
-        capeProvider: $authState.capeProvider ?? "mojang",
-        accounts: [...accounts, {
-          uuid: result.profile.uuid,
-          name: result.profile.name,
-          loginType: "offline",
-          skinSource: offlineSkinSource,
-          addedAt: Date.now(),
-        }],
-        activeAccountUuid: result.profile.uuid,
-      });
-      if (result.profile.skinUrl) {
+      const state = await api.mcAuth.getAuthStatus();
+      authState.set(state);
+      await loadAccounts();
+      if (result.profile.skinUrl || state.profile?.skinUrl) {
         try {
           const path = await api.mcAuth.getSkinPath(result.profile.uuid);
           skinPath.set(path);

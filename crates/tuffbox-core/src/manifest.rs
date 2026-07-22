@@ -243,6 +243,20 @@ impl Side {
         }
     }
 
+    /// Maps Modrinth `client_side` / `server_side` environment strings to [`Side`].
+    ///
+    /// Modrinth values are `required`, `optional`, `unsupported`, or `unknown`.
+    pub fn from_modrinth(client_side: Option<&str>, server_side: Option<&str>) -> Self {
+        let client = client_side.unwrap_or("unknown");
+        let server = server_side.unwrap_or("unknown");
+        match (client, server) {
+            ("required" | "optional", "unsupported") => Side::Client,
+            ("unsupported", "required" | "optional") => Side::Server,
+            ("required" | "optional", "required" | "optional") => Side::Both,
+            _ => Side::Unknown,
+        }
+    }
+
     pub fn is_compatible_with_profile(self, profile_side: Side) -> bool {
         match (self, profile_side) {
             (Side::Both, _) => true,
@@ -416,4 +430,42 @@ pub struct OverridesSpec {
     pub resourcepacks: Option<String>,
     #[serde(default)]
     pub shaderpacks: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Side;
+
+    #[test]
+    fn modrinth_client_only_is_client() {
+        assert_eq!(
+            Side::from_modrinth(Some("required"), Some("unsupported")),
+            Side::Client
+        );
+        assert_eq!(
+            Side::from_modrinth(Some("optional"), Some("unsupported")),
+            Side::Client
+        );
+    }
+
+    #[test]
+    fn modrinth_server_only_is_server() {
+        assert_eq!(
+            Side::from_modrinth(Some("unsupported"), Some("required")),
+            Side::Server
+        );
+    }
+
+    #[test]
+    fn modrinth_both_required_is_both() {
+        assert_eq!(
+            Side::from_modrinth(Some("required"), Some("required")),
+            Side::Both
+        );
+    }
+
+    #[test]
+    fn modrinth_missing_is_unknown() {
+        assert_eq!(Side::from_modrinth(None, None), Side::Unknown);
+    }
 }

@@ -49,46 +49,102 @@ fn read_zip_entry(archive: &mut ZipArchive<File>, path: &str) -> Option<Vec<u8>>
     }
 }
 
-fn texture_zip_path(namespace: &str, texture_ref: &str) -> String {
-    let (ns, path) = if let Some((a, b)) = texture_ref.split_once(':') {
-        (a, b)
+fn read_zip_text(archive: &mut ZipArchive<File>, path: &str) -> Option<String> {
+    let mut file = archive.by_name(path).ok()?;
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+    Some(content)
+}
+
+fn split_namespaced<'a>(value: &'a str, default_ns: &'a str) -> (&'a str, &'a str) {
+    if let Some((ns, path)) = value.split_once(':') {
+        (ns, path)
     } else {
-        (namespace, texture_ref)
-    };
-    let full = if path.starts_with("item/") || path.starts_with("block/") {
-        path.to_string()
+        (default_ns, value)
+    }
+}
+
+/// `minecraft:item/generated` → `assets/minecraft/models/item/generated.json`
+/// `item/generated` → `assets/<ns>/models/item/generated.json`
+fn model_zip_path(default_ns: &str, model_ref: &str) -> String {
+    let (ns, path) = split_namespaced(model_ref, default_ns);
+    if path.starts_with("item/") || path.starts_with("block/") {
+        format!("assets/{ns}/models/{path}.json")
     } else {
-        format!("item/{path}")
-    };
-    format!("assets/{ns}/textures/{full}.png")
+        format!("assets/{ns}/models/item/{path}.json")
+    }
+}
+
+fn texture_zip_path(default_ns: &str, texture_ref: &str) -> Vec<String> {
+    let (ns, path) = split_namespaced(texture_ref, default_ns);
+    let mut candidates = Vec::new();
+    if path.starts_with("item/") || path.starts_with("block/") {
+        candidates.push(format!("assets/{ns}/textures/{path}.png"));
+    } else {
+        candidates.push(format!("assets/{ns}/textures/item/{path}.png"));
+        candidates.push(format!("assets/{ns}/textures/block/{path}.png"));
+        candidates.push(format!("assets/{ns}/textures/{path}.png"));
+    }
+    candidates
+}
+
+fn read_png_any(archives: &mut [ZipArchive<File>], zip_path: &str) -> Option<Vec<u8>> {
+    for archive in archives.iter_mut() {
+        if let Some(png) = read_zip_entry(archive, zip_path) {
+            return Some(png);
+        }
+    }
+    None
+}
+
+fn read_text_any(archives: &mut [ZipArchive<File>], zip_path: &str) -> Option<String> {
+    for archive in archives.iter_mut() {
+        if let Some(text) = read_zip_text(archive, zip_path) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 fn resolve_from_model(
-    archive: &mut ZipArchive<File>,
+    archives: &mut [ZipArchive<File>],
     namespace: &str,
     item_path: &str,
     depth: u8,
 ) -> Option<Vec<u8>> {
-    if depth > 5 {
+    if depth > 8 {
         return None;
     }
-    let model_path = format!("assets/{namespace}/models/item/{item_path}.json");
-    let content = {
-        let mut file = archive.by_name(&model_path).ok()?;
-        let mut content = String::new();
-        file.read_to_string(&mut content).ok()?;
-        content
-    };
+    let model_path = model_zip_path(namespace, item_path);
+    let content = read_text_any(archives, &model_path).or_else(|| {
+        // 1.21.4+ item definitions sometimes live under items/, not models/item/.
+        read_text_any(
+            archives,
+            &format!("assets/{namespace}/items/{item_path}.json"),
+        )
+    })?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
 
     if let Some(textures) = json.get("textures").and_then(|value| value.as_object()) {
-        for key in ["layer0", "layer1", "particle", "texture"] {
+        for key in ["layer0", "layer1", "particle", "all", "texture", "side", "end"] {
             let Some(texture_ref) = textures.get(key).and_then(|value| value.as_str()) else {
                 continue;
             };
-            let zip_path = texture_zip_path(namespace, texture_ref);
-            if let Some(png) = read_zip_entry(archive, &zip_path) {
-                return Some(png);
+            for zip_path in texture_zip_path(namespace, texture_ref) {
+                if let Some(png) = read_png_any(archives, &zip_path) {
+                    return Some(png);
+                }
+            }
+        }
+        // Any remaining texture key as a last resort.
+        for (_key, value) in textures {
+            let Some(texture_ref) = value.as_str() else {
+                continue;
+            };
+            for zip_path in texture_zip_path(namespace, texture_ref) {
+                if let Some(png) = read_png_any(archives, &zip_path) {
+                    return Some(png);
+                }
             }
         }
     }
@@ -97,46 +153,56 @@ fn resolve_from_model(
         return None;
     };
 
-    if let Some((parent_ns, parent_path)) = parse_item_id(parent) {
-        return resolve_from_model(archive, &parent_ns, &parent_path, depth + 1);
-    }
-
+    // Block-item parents often point straight at a block texture.
     if let Some(rest) = parent.strip_prefix("minecraft:block/") {
-        return read_zip_entry(
-            archive,
+        return read_png_any(
+            archives,
             &format!("assets/minecraft/textures/block/{rest}.png"),
         );
     }
     if let Some(rest) = parent.strip_prefix("block/") {
-        return read_zip_entry(
-            archive,
-            &format!("assets/{namespace}/textures/block/{rest}.png"),
-        );
-    }
-    if parent.contains('/') {
-        let zip_path = texture_zip_path(namespace, parent);
-        if let Some(png) = read_zip_entry(archive, &zip_path) {
+        if let Some(png) =
+            read_png_any(archives, &format!("assets/{namespace}/textures/block/{rest}.png"))
+        {
             return Some(png);
         }
+        return read_png_any(
+            archives,
+            &format!("assets/minecraft/textures/block/{rest}.png"),
+        );
     }
 
-    None
+    let (parent_ns, parent_path) = split_namespaced(parent, namespace);
+    // Skip abstract parents that never carry textures themselves.
+    if matches!(
+        parent_path,
+        "item/generated"
+            | "item/handheld"
+            | "item/handheld_rod"
+            | "builtin/generated"
+            | "builtin/entity"
+    ) {
+        return None;
+    }
+
+    resolve_from_model(archives, parent_ns, parent_path, depth + 1)
 }
 
-fn find_in_jar(
-    archive: &mut ZipArchive<File>,
+fn find_in_archives(
+    archives: &mut [ZipArchive<File>],
     namespace: &str,
     item_path: &str,
 ) -> Option<Vec<u8>> {
     for candidate in [
         format!("assets/{namespace}/textures/item/{item_path}.png"),
         format!("assets/{namespace}/textures/block/{item_path}.png"),
+        format!("assets/{namespace}/textures/{item_path}.png"),
     ] {
-        if let Some(png) = read_zip_entry(archive, &candidate) {
+        if let Some(png) = read_png_any(archives, &candidate) {
             return Some(png);
         }
     }
-    resolve_from_model(archive, namespace, item_path, 0)
+    resolve_from_model(archives, namespace, item_path, 0)
 }
 
 fn jar_sources(project_dir: &Path, extra_jars: &[PathBuf]) -> Vec<PathBuf> {
@@ -148,6 +214,11 @@ fn jar_sources(project_dir: &Path, extra_jars: &[PathBuf]) -> Vec<PathBuf> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "jar") {
+                    // Prefer enabled jars; skip *.jar.disabled
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if name.ends_with(".disabled") {
+                        continue;
+                    }
                     sources.push(path);
                 }
             }
@@ -174,19 +245,10 @@ pub fn resolve_item_icon_path(
         return Ok(Some(cache_file));
     }
 
-    for jar_path in jar_sources(project_dir, extra_jars) {
-        let file = match File::open(&jar_path) {
-            Ok(file) => file,
-            Err(_) => continue,
-        };
-        let mut archive = match ZipArchive::new(file) {
-            Ok(archive) => archive,
-            Err(_) => continue,
-        };
-        if let Some(png) = find_in_jar(&mut archive, &namespace, &item_path) {
-            std::fs::write(&cache_file, png).map_err(|error| error.to_string())?;
-            return Ok(Some(cache_file));
-        }
+    let mut archives = open_jar_archives(project_dir, extra_jars);
+    if let Some(png) = find_in_archives(&mut archives, &namespace, &item_path) {
+        std::fs::write(&cache_file, png).map_err(|error| error.to_string())?;
+        return Ok(Some(cache_file));
     }
 
     Ok(None)
@@ -215,6 +277,11 @@ pub fn resolve_item_icons_batch(
     let mut pending: Vec<(String, String, String)> = Vec::new();
 
     for item_id in item_ids {
+        // Tags themselves have no single texture — callers should expand first.
+        if item_id.starts_with('#') {
+            out.insert(item_id.clone(), None);
+            continue;
+        }
         let Some((namespace, item_path)) = parse_item_id(item_id) else {
             out.insert(item_id.clone(), None);
             continue;
@@ -233,16 +300,11 @@ pub fn resolve_item_icons_batch(
 
     let mut archives = open_jar_archives(project_dir, extra_jars);
     for (item_id, namespace, item_path) in pending {
-        let mut found = None;
-        for archive in &mut archives {
-            if let Some(png) = find_in_jar(archive, &namespace, &item_path) {
-                let cache_file = cache_file_for(project_dir, &item_id);
-                if std::fs::write(&cache_file, png).is_ok() {
-                    found = Some(cache_file);
-                }
-                break;
-            }
-        }
+        let found = find_in_archives(&mut archives, &namespace, &item_path).and_then(|png| {
+            let cache_file = cache_file_for(project_dir, &item_id);
+            std::fs::write(&cache_file, png).ok()?;
+            Some(cache_file)
+        });
         out.insert(item_id, found);
     }
 
@@ -300,14 +362,26 @@ mod tests {
     }
 
     #[test]
-    fn maps_texture_refs_to_zip_paths() {
+    fn model_paths_do_not_double_item_prefix() {
         assert_eq!(
-            texture_zip_path("thermal", "item/signalum_gear"),
-            "assets/thermal/textures/item/signalum_gear.png"
+            model_zip_path("minecraft", "minecraft:item/generated"),
+            "assets/minecraft/models/item/generated.json"
         );
         assert_eq!(
-            texture_zip_path("minecraft", "minecraft:item/diamond"),
-            "assets/minecraft/textures/item/diamond.png"
+            model_zip_path("croptopia", "item/generated"),
+            "assets/croptopia/models/item/generated.json"
         );
+        assert_eq!(
+            model_zip_path("croptopia", "toast"),
+            "assets/croptopia/models/item/toast.json"
+        );
+    }
+
+    #[test]
+    fn texture_refs_include_item_and_block() {
+        let paths = texture_zip_path("croptopia", "croptopia:item/toast");
+        assert!(paths.contains(&"assets/croptopia/textures/item/toast.png".into()));
+        let bare = texture_zip_path("croptopia", "toast");
+        assert!(bare.contains(&"assets/croptopia/textures/item/toast.png".into()));
     }
 }

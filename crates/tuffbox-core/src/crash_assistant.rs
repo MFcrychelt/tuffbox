@@ -177,10 +177,16 @@ fn match_mods_in_text(text: &str, installed: &[String]) -> Vec<String> {
     let mut hits = Vec::new();
     for m in installed {
         let id = m.to_lowercase();
-        if id.len() < 2 {
+        // Short / generic ids match almost every Fabric "Loading mods:" line.
+        if id.len() < 3 || matches!(id.as_str(), "api" | "lib" | "mod" | "core" | "common") {
             continue;
         }
-        if lower.contains(&id) || lower.contains(&id.replace('_', "-")) {
+        let needle = id.replace('_', "-");
+        let needle_us = id.replace('-', "_");
+        if contains_mod_token(&lower, &id)
+            || contains_mod_token(&lower, &needle)
+            || contains_mod_token(&lower, &needle_us)
+        {
             hits.push(m.clone());
         }
     }
@@ -189,14 +195,62 @@ fn match_mods_in_text(text: &str, installed: &[String]) -> Vec<String> {
     hits
 }
 
+/// True when `needle` appears as a whole mod-id token (not a substring of another word).
+fn contains_mod_token(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut start = 0;
+    while let Some(rel) = haystack[start..].find(needle) {
+        let abs = start + rel;
+        let before_ok = abs == 0
+            || !haystack.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        let end = abs + needle.len();
+        let after_ok = end >= haystack.len()
+            || !haystack.as_bytes()[end].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
+}
+
 fn first_evidence_line<'a>(combined: &'a str, needles: &[&str]) -> Option<&'a str> {
     for line in combined.lines() {
-        let l = line.to_lowercase();
+        let trimmed = line.trim();
+        if trimmed.len() < 8 {
+            continue;
+        }
+        // Skip Fabric/Quilt "Loading X mods: a, b, c, …" inventory dumps.
+        if looks_like_mod_inventory_line(trimmed) {
+            continue;
+        }
+        let l = trimmed.to_lowercase();
         if needles.iter().any(|n| l.contains(&n.to_lowercase())) {
-            return Some(line.trim());
+            return Some(trimmed);
         }
     }
     None
+}
+
+fn looks_like_mod_inventory_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    if lower.contains("loading") && lower.contains("mods:") {
+        return true;
+    }
+    // Long comma-separated mod-id lists with almost no spaces after commas.
+    let commas = line.matches(',').count();
+    commas >= 12 && line.len() > 180
+}
+
+fn truncate_evidence(line: &str) -> String {
+    const MAX: usize = 280;
+    let t = line.trim();
+    if t.len() <= MAX {
+        return t.to_string();
+    }
+    format!("{}…", &t[..MAX])
 }
 
 fn extract_required_mod_ids(combined: &str) -> Vec<String> {
@@ -323,24 +377,38 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
             || combined.contains("Error")
             || combined.contains("Exception"))
     {
+        // Only scan lines that actually mention mixin failure — not the
+        // Fabric "Loading mods:" inventory that substring-matches short ids.
+        let mixin_lines: String = combined
+            .lines()
+            .filter(|l| {
+                let lower = l.to_lowercase();
+                (lower.contains("mixin") || lower.contains("@inject") || lower.contains("@redirect"))
+                    && !looks_like_mod_inventory_line(l)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let search = if mixin_lines.is_empty() {
+            combined
+        } else {
+            mixin_lines.as_str()
+        };
+
         let mut suspect = String::new();
         for m in &ctx.installed_mods {
-            if combined.to_lowercase().contains(&m.to_lowercase()) {
+            if contains_mod_token(&search.to_lowercase(), &m.to_lowercase()) {
                 suspect = m.clone();
                 break;
             }
         }
         let mut refs = Vec::new();
-        // Find all mods that appear near the mixin failure
         let mut seen = std::collections::HashSet::new();
-        for line in combined
-            .lines()
-            .filter(|l| l.contains("Mixin") || l.contains("mixin"))
-        {
-            for m in &ctx.installed_mods {
-                if line.to_lowercase().contains(&m.to_lowercase()) && seen.insert(m) {
-                    refs.push(m.clone());
-                }
+        for m in match_mods_in_text(search, &ctx.installed_mods) {
+            if seen.insert(m.clone()) {
+                refs.push(m);
+            }
+            if refs.len() >= 5 {
+                break;
             }
         }
         let title_s = format!(
@@ -370,11 +438,10 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
                 vec![suspect.clone()]
             }
         } else {
-            refs.clone()
+            refs.iter().take(3).cloned().collect()
         };
         let fixes: Vec<_> = targets
             .iter()
-            .take(5)
             .flat_map(|m| {
                 vec![
                     fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
@@ -383,10 +450,10 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
             })
             .collect();
         let evidence = first_evidence_line(
-            combined,
-            &["Mixin apply failed", "Mixin", "mixin"],
+            search,
+            &["Mixin apply failed", "Mixin", "@Inject", "mixin"],
         )
-        .map(|s| s.to_string());
+        .map(truncate_evidence);
         vec![fx(
             "error",
             "MIXIN_APPLY_FAILED",
@@ -1127,13 +1194,28 @@ fn find_classes_in_crashes(_ctx: &AnalysisCtx, combined: &str) -> Vec<ClassMatch
 // Helpers
 
 fn extract_suspected(ctx: &AnalysisCtx, combined: &str) -> Vec<String> {
-    let mut s = Vec::new();
-    for m in &ctx.installed_mods {
-        if combined.to_lowercase().contains(&m.to_lowercase()) && !s.contains(m) {
-            s.push(m.clone());
+    let mut s = match_mods_in_text(combined, &ctx.installed_mods);
+    // Prefer mods that appear on error/exception lines.
+    let error_blob: String = combined
+        .lines()
+        .filter(|l| {
+            let lower = l.to_lowercase();
+            (lower.contains("error")
+                || lower.contains("exception")
+                || lower.contains("caused by")
+                || lower.contains("mixin")
+                || lower.contains("provided by"))
+                && !looks_like_mod_inventory_line(l)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !error_blob.is_empty() {
+        let on_errors = match_mods_in_text(&error_blob, &ctx.installed_mods);
+        if !on_errors.is_empty() {
+            s = on_errors;
         }
     }
-    s.truncate(15);
+    s.truncate(10);
     s
 }
 
@@ -1174,8 +1256,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "DuplicateModsFoundException",
                 "Failed to build unique mod list",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let mut fixes = Vec::new();
         for m in mods.iter().take(4) {
             fixes.push(fix_action(
@@ -1219,8 +1300,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "ModResolutionException",
                 "MissingDependency",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let mut fixes = Vec::new();
         let known_deps = [
             "fabric-api",
@@ -1290,8 +1370,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "IncompatibleModsException",
                 "wrong loader",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let mut fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1336,8 +1415,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Unsupported Minecraft",
                 "incompatible with",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let mut fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1384,8 +1462,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "AbstractMethodError",
                 "IncompatibleClassChangeError",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(5)
@@ -1425,8 +1502,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Error loading mods",
                 "Failed to load mods",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(4)
@@ -1459,8 +1535,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         let evidence = first_evidence_line(
             combined,
             &["duplicate", "classpath", "ASM", "LoaderUtil.verifyClasspath"],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         out.push(fx(
             "error",
             "DUPLICATE_CLASSPATH",
@@ -1501,7 +1576,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             Some("Use either JEI or REI (+ REI Plugin Compatibilities), not both."),
             &[],
             fixes,
-            first_evidence_line(combined, &["jei", "rei", "duplicate"]).map(|s| s.to_string()),
+            first_evidence_line(combined, &["jei", "rei", "duplicate"]).map(truncate_evidence),
         ));
     }
 
@@ -1522,8 +1597,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "Raise allocated memory to 6 GB",
                 None,
             )],
-            first_evidence_line(combined, &["OutOfMemoryError", "Java heap space", "GC overhead"])
-                .map(|s| s.to_string()),
+            first_evidence_line(combined, &["OutOfMemoryError", "Java heap space", "GC overhead"]).map(truncate_evidence),
         ));
     }
 
@@ -1542,8 +1616,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                 "InvalidInjectionException",
                 "mixin",
             ],
-        )
-        .map(|s| s.to_string());
+        ).map(truncate_evidence);
         let fixes: Vec<_> = mods
             .iter()
             .take(5)
@@ -1588,8 +1661,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                     "InaccessibleObjectException",
                     "does not export",
                 ],
-            )
-            .map(|s| s.to_string()),
+            ).map(truncate_evidence),
         ));
     }
 
@@ -1613,15 +1685,13 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             Some("Re-download the named jar(s)."),
             &[],
             fixes,
-            first_evidence_line(combined, &["ZipException", "CEN header", "zlib", ".jar"])
-                .map(|s| s.to_string()),
+            first_evidence_line(combined, &["ZipException", "CEN header", "zlib", ".jar"]).map(truncate_evidence),
         ));
     }
 
     // --- Non-unique Mixin config (two mods share the same mixins.json name) ---
     if lower.contains("non-unique mixin config") {
-        let evidence = first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"])
-            .map(|s| s.to_string());
+        let evidence = first_evidence_line(combined, &["Non-unique Mixin config", "non-unique mixin"]).map(truncate_evidence);
         let mut mods = match_mods_in_text(combined, &ctx.installed_mods);
         // Also pull "used by the mods A and B" tokens when present.
         if let Some(ev) = evidence.as_ref() {
@@ -1694,8 +1764,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
                     "has failed to load correctly",
                     "error has occurred during loading",
                 ],
-            )
-            .map(|s| s.to_string()),
+            ).map(truncate_evidence),
         ));
     }
 
@@ -1709,7 +1778,7 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
             Some("Point the project at a supported Java major for this Minecraft version."),
             &["https://minefixtools.com/fixes/how-to-read-fabric-crash-reports"],
             vec![],
-            first_evidence_line(combined, &["UnsupportedClassVersionError"]).map(|s| s.to_string()),
+            first_evidence_line(combined, &["UnsupportedClassVersionError"]).map(truncate_evidence),
         ));
     }
 

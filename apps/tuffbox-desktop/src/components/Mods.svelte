@@ -33,6 +33,8 @@
     Link,
     Check,
     Package,
+    Power,
+    PowerOff,
   } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -55,6 +57,7 @@ import { trapFocus } from "../lib/focusTrap";
     serverSide?: string | null;
     contentType?: "mod" | "resourcepack" | "datapack" | "shader" | string;
     updateAvailable?: boolean;
+    disabled?: boolean;
   };
 
   type SearchResult = {
@@ -253,13 +256,18 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  onMount(() =>
-    projectPath.subscribe((path) => {
+  onMount(() => {
+    const unsub = projectPath.subscribe((path) => {
       if (path && lastLoadedPath !== path) {
         void load(true);
+      } else if (!path) {
+        mods = [];
+        lastLoadedPath = null;
+        clearSelection();
       }
-    })
-  );
+    });
+    return unsub;
+  });
 
   onMount(async () => {
     unlistenBatch = await listen<DownloadBatch>(
@@ -695,13 +703,178 @@ import { trapFocus } from "../lib/focusTrap";
   // Mod recommendations
   let recommendations: any[] = [];
   let recsLoading = false;
+  let recsError: string | null = null;
 
   async function loadRecommendations() {
     if (!$projectPath) return;
     recsLoading = true;
-    try { recommendations = await invoke("recommend_mods", { path: $projectPath }); }
-    catch { recommendations = []; }
-    finally { recsLoading = false; }
+    recsError = null;
+    try {
+      recommendations = await api.mods.recommend($projectPath);
+      if (!recommendations.length) {
+        message = "No missing optimization suggestions for this loader/version.";
+      }
+    } catch (e) {
+      recommendations = [];
+      recsError = String(e);
+      error = `Suggestions failed: ${String(e)}`;
+    } finally {
+      recsLoading = false;
+    }
+  }
+
+  // Multi-select (right-click enters selection mode; then LMB/RMB toggle)
+  let selectionMode = false;
+  let selectedModIds: Record<string, boolean> = {};
+
+  $: selectedMods = filtered.filter((m) => selectedModIds[m.id]);
+  $: selectedCount = selectedMods.length;
+
+  function clearSelection() {
+    selectionMode = false;
+    selectedModIds = {};
+  }
+
+  function toggleModSelected(modId: string) {
+    selectedModIds = { ...selectedModIds, [modId]: !selectedModIds[modId] };
+    if (!Object.values(selectedModIds).some(Boolean)) {
+      selectionMode = false;
+      selectedModIds = {};
+    }
+  }
+
+  function onCardContextMenu(e: MouseEvent, mod: ModRow) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!selectionMode) {
+      selectionMode = true;
+      selectedModIds = { [mod.id]: true };
+      return;
+    }
+    toggleModSelected(mod.id);
+  }
+
+  function onCardClick(e: MouseEvent, mod: ModRow) {
+    if (!selectionMode) return;
+    // Ignore clicks on action buttons — they use stopPropagation.
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button")) return;
+    e.preventDefault();
+    toggleModSelected(mod.id);
+  }
+
+  async function toggleDisabled(mod: ModRow) {
+    if (!$projectPath || mutating) return;
+    mutating = true;
+    error = null;
+    try {
+      if (mod.disabled) {
+        await api.mods.enable(mod.id, $projectPath);
+      } else {
+        await api.mods.disable(mod.id, $projectPath);
+      }
+      await refreshSingleMod(mod.id);
+      // Ensure disabled flag is reflected even if list_mods is briefly stale.
+      mods = mods.map((m) =>
+        m.id === mod.id ? { ...m, disabled: !mod.disabled } : m
+      );
+    } catch (e) {
+      error = String(e);
+      await reloadModsSilent();
+    } finally {
+      mutating = false;
+    }
+  }
+
+  async function bulkDisableSelected() {
+    if (!$projectPath || selectedMods.length === 0) return;
+    mutating = true;
+    error = null;
+    const targets = selectedMods.filter((m) => !m.disabled);
+    try {
+      for (const mod of targets) {
+        await api.mods.disable(mod.id, $projectPath);
+      }
+      await reloadModsSilent();
+      message = `Disabled ${targets.length} item${targets.length === 1 ? "" : "s"}.`;
+      clearSelection();
+    } catch (e) {
+      error = String(e);
+      await reloadModsSilent();
+    } finally {
+      mutating = false;
+    }
+  }
+
+  async function bulkEnableSelected() {
+    if (!$projectPath || selectedMods.length === 0) return;
+    mutating = true;
+    error = null;
+    const targets = selectedMods.filter((m) => m.disabled);
+    try {
+      for (const mod of targets) {
+        await api.mods.enable(mod.id, $projectPath);
+      }
+      await reloadModsSilent();
+      message = `Enabled ${targets.length} item${targets.length === 1 ? "" : "s"}.`;
+      clearSelection();
+    } catch (e) {
+      error = String(e);
+      await reloadModsSilent();
+    } finally {
+      mutating = false;
+    }
+  }
+
+  async function bulkDeleteSelected() {
+    if (!$projectPath || selectedMods.length === 0) return;
+    const ok = await confirm(
+      `Remove ${selectedMods.length} selected item${selectedMods.length === 1 ? "" : "s"}? A snapshot is taken first.`
+    );
+    if (!ok) return;
+    mutating = true;
+    error = null;
+    const ids = selectedMods.map((m) => m.id);
+    try {
+      for (const id of ids) {
+        removeModLocally(id);
+        await invoke("remove_project_mod", { path: $projectPath, modId: id });
+      }
+      message = `Removed ${ids.length} item${ids.length === 1 ? "" : "s"}.`;
+      clearSelection();
+    } catch (e) {
+      error = String(e);
+      await reloadModsSilent();
+    } finally {
+      mutating = false;
+    }
+  }
+
+  async function bulkUpdateSelected() {
+    if (!$projectPath || selectedMods.length === 0) return;
+    const updatable = selectedMods.filter((m) => m.updateAvailable && canUpdateMod(m));
+    if (updatable.length === 0) {
+      message = "No selected items have updates available.";
+      return;
+    }
+    mutating = true;
+    error = null;
+    openDownloadOverlay(`Updating ${updatable.length} selected`, updatable.map((m) => m.id));
+    try {
+      for (const mod of updatable) {
+        await invoke("update_project_mod", { path: $projectPath, modId: mod.id, versionId: null });
+      }
+      await reloadModsSilent();
+      message = `Updated ${updatable.length} item${updatable.length === 1 ? "" : "s"}.`;
+      clearSelection();
+    } catch (e) {
+      error = String(e);
+      downloadDone = true;
+      await reloadModsSilent();
+    } finally {
+      mutating = false;
+      downloadDone = true;
+    }
   }
 
   // Batch update state (no separate update panel — badges + toolbar only)
@@ -1043,7 +1216,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   function modsFingerprint(list: ModRow[]): string {
     return list
-      .map((m) => `${m.id}|${m.version}|${m.projectId ?? ""}|${m.source}`)
+      .map((m) => `${m.id}|${m.version}|${m.projectId ?? ""}|${m.source}|${m.disabled ? 1 : 0}|${m.fileName ?? ""}`)
       .join(";");
   }
 
@@ -1051,11 +1224,14 @@ import { trapFocus } from "../lib/focusTrap";
     if (!$projectPath) return;
     if (!force && lastLoadedPath === $projectPath && mods.length > 0) return;
     const path = $projectPath;
-    loading = true;
+    const showSpinner = mods.length === 0 || lastLoadedPath !== path;
+    if (showSpinner) loading = true;
     error = null;
     try {
       // Fast path: list known mods from disk/index and paint immediately.
-      mods = await invoke("list_mods", { path });
+      const listed: ModRow[] = await invoke("list_mods", { path });
+      if ($projectPath !== path) return;
+      mods = listed;
       lastLoadedPath = path;
       brokenIcons = [];
       await loadUserState();
@@ -1076,7 +1252,14 @@ import { trapFocus } from "../lib/focusTrap";
         // Don't clobber the list mid Update All — sync can reintroduce leftover jars.
         if (updateApplying) return;
         if (modsFingerprint(synced) !== modsFingerprint(mods)) {
-          mods = synced;
+          // Preserve disabled/update flags for rows that only change icon metadata.
+          const prev = new Map(mods.map((m) => [m.id, m]));
+          mods = synced.map((m) => {
+            const old = prev.get(m.id);
+            return old
+              ? { ...m, updateAvailable: old.updateAvailable, disabled: m.disabled ?? old.disabled }
+              : m;
+          });
         }
       } catch {
         // Keep the fast list; offline or sync failures shouldn't wipe the UI.
@@ -1228,6 +1411,7 @@ import { trapFocus } from "../lib/focusTrap";
   function switchContentFilter(next: string) {
     contentFilter = next;
     filter = "";
+    clearSelection();
     if (addOpen) searchMods(1);
     if (isSavedViewFilter(next)) {
       loadUserState().then(() => loadSavedModsView()).catch(() => {});
@@ -1558,14 +1742,18 @@ import { trapFocus } from "../lib/focusTrap";
     return haystacks.some((value) => (value ?? "").toLowerCase().includes(q));
   }
 
+  $: contentScopedMods = isSavedViewFilter(contentFilter)
+    ? []
+    : mods.filter((m) => (m.contentType ?? "mod") === contentFilter);
+
   $: filtered = isSavedViewFilter(contentFilter)
     ? []
-    : mods.filter((m) => {
+    : contentScopedMods.filter((m) => {
         const q = filter.trim().toLowerCase();
         const matchesText = matchesInstalledQuery(m, q);
-        const matchesSide = sideFilter === "all" || m.side === sideFilter;
-        const matchesContentType = (m.contentType ?? "mod") === contentFilter;
-        return matchesText && matchesSide && matchesContentType;
+        const matchesSide =
+          contentFilter !== "mod" || sideFilter === "all" || m.side === sideFilter;
+        return matchesText && matchesSide;
       });
 
   $: listTabNames = Object.keys(userState.lists).sort((a, b) => a.localeCompare(b));
@@ -1595,10 +1783,26 @@ import { trapFocus } from "../lib/focusTrap";
   $: selectedResults = searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result));
 
   $: counts = {
-    all: mods.length,
-    client: mods.filter((m) => m.side === "client").length,
-    server: mods.filter((m) => m.side === "server").length,
-    both: mods.filter((m) => m.side === "both").length,
+    all: contentScopedMods.length,
+    client: contentScopedMods.filter((m) => m.side === "client").length,
+    server: contentScopedMods.filter((m) => m.side === "server").length,
+    both: contentScopedMods.filter((m) => m.side === "both").length,
+  };
+
+  $: contentNoun =
+    contentFilter === "resourcepack"
+      ? "resource packs"
+      : contentFilter === "datapack"
+        ? "datapacks"
+        : contentFilter === "shader"
+          ? "shaders"
+          : "mods";
+
+  $: tabCounts = {
+    mod: mods.filter((m) => (m.contentType ?? "mod") === "mod").length,
+    resourcepack: mods.filter((m) => m.contentType === "resourcepack").length,
+    datapack: mods.filter((m) => m.contentType === "datapack").length,
+    shader: mods.filter((m) => m.contentType === "shader").length,
   };
 
 </script>
@@ -1628,10 +1832,10 @@ import { trapFocus } from "../lib/focusTrap";
 
   <div class="toolbar">
     <div class="tabs content-tabs">
-      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods</button>
-      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
-      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
-      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => switchContentFilter("shader")}>Shaders</button>
+      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
+      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span></button>
+      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks <span class="tab-count">{tabCounts.datapack}</span></button>
+      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => switchContentFilter("shader")}>Shaders <span class="tab-count">{tabCounts.shader}</span></button>
       <button class={contentFilter === "favorites" ? "primary" : "secondary"} on:click={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
         <Heart size={14} /> Favorites
       </button>
@@ -1653,11 +1857,14 @@ import { trapFocus } from "../lib/focusTrap";
           Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
         </button>
         <button class="secondary" on:click={async () => {
+          if (!$projectPath) return;
           loading = true;
           try {
-            mods = await invoke("sync_mods_folder", { path: $projectPath });
+            const synced: ModRow[] = await invoke("sync_mods_folder", { path: $projectPath });
+            mods = synced;
             brokenIcons = [];
             hydrateMissingIcons().catch(() => {});
+            refreshUpdateDots().catch(() => {});
           } catch(e) {
             error = String(e);
           } finally {
@@ -1666,7 +1873,7 @@ import { trapFocus } from "../lib/focusTrap";
         }} disabled={!$projectPath || loading} title="Scan all content folders (mods/, resourcepacks/, shaderpacks/, datapacks/)">
           <RotateCw size={16} /> Sync
         </button>
-        <button class="secondary glow-btn" on:click={applyAllUpdates} disabled={!$projectPath || updateApplying || updateCheckLoading} title="Update all mods to the latest build for this Minecraft version">
+        <button class="secondary glow-btn" on:click={applyAllUpdates} disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"} title="Update all mods to the latest build for this Minecraft version">
           <Sparkles size={16} />
           {#if updateApplying}
             Updating...
@@ -1678,16 +1885,16 @@ import { trapFocus } from "../lib/focusTrap";
             Update all
           {/if}
         </button>
-        <button class="secondary" on:click={loadRecommendations} disabled={!$projectPath || recsLoading} title="Get mod recommendations">
+        <button class="secondary" on:click={loadRecommendations} disabled={!$projectPath || recsLoading || contentFilter !== "mod"} title="Suggest optimization mods for this loader, Minecraft version, and pack">
           <Lightbulb size={16} />
-          {recsLoading ? "..." : "Suggestions"}
+          {recsLoading ? "Analyzing..." : "Suggestions"}
         </button>
       </div>
     </div>
   </div>
 
   <div class="quick-filters" aria-label="Side filters">
-    {#if !isSavedViewFilter(contentFilter)}
+    {#if contentFilter === "mod"}
     <button class:active={sideFilter === "all"} on:click={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
     <button class:active={sideFilter === "both"} on:click={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
     <button class:active={sideFilter === "client"} on:click={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
@@ -1695,16 +1902,44 @@ import { trapFocus } from "../lib/focusTrap";
     {/if}
   </div>
 
+  {#if selectionMode}
+    <div class="selection-bar">
+      <span class="selection-count">{selectedCount} selected</span>
+      <div class="selection-actions">
+        <button class="secondary mini" on:click={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
+          <RotateCw size={14} /> Update
+        </button>
+        <button class="secondary mini" on:click={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
+          <PowerOff size={14} /> Disable
+        </button>
+        <button class="secondary mini" on:click={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
+          <Power size={14} /> Enable
+        </button>
+        <button class="secondary mini danger" on:click={bulkDeleteSelected} disabled={mutating}>
+          <Trash2 size={14} /> Delete
+        </button>
+        <button class="ghost mini" on:click={clearSelection}>Cancel</button>
+      </div>
+    </div>
+  {/if}
+
   {#if recommendations.length > 0}
     <div class="recs-panel">
-      <div class="recs-header"><h3><Lightbulb size={16} /> Recommendations ({recommendations.length})</h3></div>
+      <div class="recs-header">
+        <h3><Lightbulb size={16} /> Suggestions ({recommendations.length})</h3>
+        <button class="ghost mini" on:click={() => (recommendations = [])}><X size={14} /></button>
+      </div>
       <div class="recs-list">
         {#each recommendations as rec (rec.slug)}
           <div class="recs-row">
             <div class="recs-main">
               <span class="recs-prio {rec.priority}">{rec.priority}</span>
+              {#if rec.source}<span class="recs-source">{rec.source}</span>{/if}
               <strong>{rec.name}</strong>
               <span>{rec.description}</span>
+              {#if rec.loader || rec.minecraftVersion}
+                <span class="recs-meta">{[rec.loader, rec.minecraftVersion].filter(Boolean).join(" · ")}</span>
+              {/if}
             </div>
             <button class="secondary mini" on:click={async () => {
               if (!$projectPath) return;
@@ -1736,9 +1971,9 @@ import { trapFocus } from "../lib/focusTrap";
   {/if}
 
   {#if loading}
-    <div class="loading">Loading mods...</div>
+    <div class="loading">Loading {contentNoun}...</div>
   {:else if !$projectPath}
-    <EmptyState icon={Package} title="No project selected" description="Open a project to manage mods." actionLabel="Open project" on:action={openProjectFolder} />
+    <EmptyState icon={Package} title="No project selected" description="Open a project to manage content." actionLabel="Open project" on:action={openProjectFolder} />
   {:else if isSavedViewFilter(contentFilter)}
     {#if savedModsLoading}
       <div class="loading">Loading {savedViewLabel(contentFilter).toLowerCase()}...</div>
@@ -1815,12 +2050,34 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
     {/if}
   {:else if filtered.length === 0}
-    <EmptyState icon={Package} title="No mods found" description="Try adjusting your search or filters." />
+    <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} on:action={openAddModal} />
   {:else}
-    <div class="installed-list">
+    <div class="installed-list" class:selecting={selectionMode}>
       {#each filtered as mod, i (mod.id)}
-        <article class="installed-card" class:has-update={mod.updateAvailable} style="--i: {i}">
+        <article
+          class="installed-card"
+          class:has-update={mod.updateAvailable}
+          class:disabled={mod.disabled}
+          class:selected={!!selectedModIds[mod.id]}
+          style="--i: {i}"
+          role={selectionMode ? "button" : undefined}
+          tabindex={selectionMode ? 0 : undefined}
+          on:contextmenu={(e) => onCardContextMenu(e, mod)}
+          on:click={(e) => onCardClick(e, mod)}
+          on:keydown={(e) => {
+            if (!selectionMode) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleModSelected(mod.id);
+            }
+          }}
+        >
           <div class="mod-icon">
+            {#if selectionMode}
+              <span class="select-check" class:on={!!selectedModIds[mod.id]} aria-hidden="true">
+                {#if selectedModIds[mod.id]}<Check size={14} />{/if}
+              </span>
+            {/if}
             {#if mod.updateAvailable}
               <span class="update-dot" title="Update available"></span>
             {/if}
@@ -1833,6 +2090,9 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="installed-main">
             <div class="installed-title">
               <strong>{mod.name}</strong>
+              {#if mod.disabled}
+                <span class="disabled-badge">Disabled</span>
+              {/if}
               {#if mod.updateAvailable}
                 <span class="update-badge">Update</span>
               {/if}
@@ -1840,7 +2100,7 @@ import { trapFocus } from "../lib/focusTrap";
             </div>
             <div class="installed-meta">
               <span class="version">{mod.version}</span>
-              {#if mod.fileName}<span class="filename">{mod.fileName}</span>{/if}
+              {#if mod.fileName}<span class="filename">{mod.fileName}{mod.disabled && !String(mod.fileName).endsWith('.disabled') ? '.disabled' : ''}</span>{/if}
             </div>
           </div>
           <div class="installed-tags">
@@ -1848,16 +2108,29 @@ import { trapFocus } from "../lib/focusTrap";
             <span class="tag source">{mod.source}</span>
           </div>
           <div class="card-actions">
-            <button class="icon-btn" on:click={() => openVersionPicker(mod)} disabled={mutating || !canChangeVersion(mod)} title="Change version">
+            <button
+              class="icon-btn"
+              class:warn={mod.disabled}
+              on:click|stopPropagation={() => toggleDisabled(mod)}
+              disabled={mutating}
+              title={mod.disabled ? "Enable (remove .disabled)" : "Disable (rename to *.disabled)"}
+            >
+              {#if mod.disabled}
+                <Power size={16} />
+              {:else}
+                <PowerOff size={16} />
+              {/if}
+            </button>
+            <button class="icon-btn" on:click|stopPropagation={() => openVersionPicker(mod)} disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
               <ArrowUpDown size={16} />
             </button>
             {#if mod.updateAvailable}
-              <button class="icon-btn update-btn hot" on:click={() => updateMod(mod)} disabled={mutating} title="Update to latest from Modrinth">
+              <button class="icon-btn update-btn hot" on:click|stopPropagation={() => updateMod(mod)} disabled={mutating || selectionMode} title="Update to latest from Modrinth">
                 <RotateCw size={16} />
                 <span class="update-text">Update</span>
               </button>
             {/if}
-            <button class="icon-btn danger" on:click={() => showRemoveConfirm(mod)} disabled={mutating} title="Remove with snapshot">
+            <button class="icon-btn danger" on:click|stopPropagation={() => showRemoveConfirm(mod)} disabled={mutating || selectionMode} title="Remove with snapshot">
               <Trash2 size={16} />
             </button>
           </div>
@@ -2951,6 +3224,10 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 10px;
   }
 
+  .installed-list.selecting .installed-card {
+    cursor: pointer;
+  }
+
   .installed-card {
     min-height: 76px;
     display: grid;
@@ -2962,13 +3239,6 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid var(--border-color);
     border-radius: 16px;
     transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
-    animation: card-in 0.35s ease both;
-    animation-delay: calc(var(--i, 0) * 18ms);
-  }
-
-  @keyframes card-in {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: none; }
   }
 
   .installed-card:hover {
@@ -2985,6 +3255,73 @@ import { trapFocus } from "../lib/focusTrap";
       var(--bg-secondary);
   }
 
+  .installed-card.disabled {
+    opacity: 0.72;
+    border-style: dashed;
+  }
+
+  .installed-card.selected {
+    border-color: var(--accent-primary);
+    background:
+      linear-gradient(90deg, rgba(27, 217, 106, 0.12), transparent 40%),
+      var(--bg-secondary);
+    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.25);
+  }
+
+  .select-check {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1px solid rgba(255,255,255,0.35);
+    background: rgba(0,0,0,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    z-index: 2;
+  }
+  .select-check.on {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: #04140a;
+  }
+
+  .disabled-badge {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 999px;
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+  }
+
+  .selection-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(27, 217, 106, 0.35);
+    background: rgba(27, 217, 106, 0.08);
+  }
+  .selection-count { font-weight: 700; font-size: 13px; color: var(--accent-primary); }
+  .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .selection-actions .mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .icon-btn.warn { color: #fbbf24; }
+
   .mod-icon,
   .result-icon {
     width: 52px;
@@ -2993,6 +3330,7 @@ import { trapFocus } from "../lib/focusTrap";
     overflow: hidden;
     background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
     display: flex;
+    position: relative;
     align-items: center;
     justify-content: center;
     color: #fff;
@@ -4091,12 +4429,15 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
 
   .recs-panel { margin-bottom: 16px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.02); }
-  .recs-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-secondary); margin: 0 0 10px; font-size: 14px; }
+  .recs-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+  .recs-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-secondary); margin: 0; font-size: 14px; }
   .recs-list { display: grid; gap: 6px; }
   .recs-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .recs-main { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
+  .recs-main { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
-  .recs-main span { color: var(--text-muted); font-size: 11px; grid-column: 2; }
+  .recs-main span { color: var(--text-muted); font-size: 11px; }
+  .recs-meta { opacity: 0.8; }
+  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: rgba(139,92,246,.12); color: #c4b5fd; }
   .recs-prio { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
   .recs-prio.high { background: rgba(27,217,106,.12); color: var(--accent-primary); }

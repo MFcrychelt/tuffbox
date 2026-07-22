@@ -2,11 +2,18 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
   import { onMount } from "svelte";
-  import { Palette, Info, Moon, Sun, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2, Gamepad2 } from "lucide-svelte";
+  import { Palette, Info, Moon, Sun, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2, Gamepad2, Bot } from "lucide-svelte";
   import { api } from "../lib/api";
   import type { PresenceSettings } from "../lib/store";
+  import AiConnectionModal from "./AiConnectionModal.svelte";
 
-  type AiSettings = { provider: string; endpoint: string; model: string };
+  type AiSettings = {
+    provider: string;
+    endpoint: string;
+    model: string;
+    diagnoseMode?: string;
+    crashKbEndpoint?: string;
+  };
   type IntegrationSettings = { githubRepository: string; ai: AiSettings };
   type IntegrationStatus = {
     settings: IntegrationSettings;
@@ -14,6 +21,7 @@
     modrinthTokenSet: boolean;
     curseforgeTokenSet: boolean;
     aiApiKeySet: boolean;
+    crashKbTokenSet?: boolean;
   };
   type UpdateCheck = {
     currentVersion: string;
@@ -38,16 +46,20 @@
   let aiProvider: "ollama" | "openai-compatible" = "ollama";
   let aiEndpoint = "";
   let aiModel = "";
+  let diagnoseMode: "server" | "local" | "kb_only" = "server";
+  let crashKbEndpoint = "";
   let githubTokenSet = false;
   let modrinthTokenSet = false;
   let curseforgeTokenSet = false;
   let aiApiKeySet = false;
+  let crashKbTokenSet = false;
 
   // Masked password drafts — never prefilled with real secrets
   let githubTokenDraft = "";
   let modrinthTokenDraft = "";
   let curseforgeTokenDraft = "";
   let aiApiKeyDraft = "";
+  let crashKbTokenDraft = "";
 
   let savingSettings = false;
   let savingSecret: string | null = null;
@@ -60,6 +72,7 @@
   let discordSaving = false;
   let discordMessage = "";
   let discordError = "";
+  let aiModalOpen = false;
 
   async function loadPresence() {
     discordError = "";
@@ -120,14 +133,19 @@
       aiProvider = (status.settings?.ai?.provider === "openai-compatible" ? "openai-compatible" : "ollama");
       aiEndpoint = status.settings?.ai?.endpoint ?? "";
       aiModel = status.settings?.ai?.model ?? "";
+      const dm = status.settings?.ai?.diagnoseMode ?? "server";
+      diagnoseMode = dm === "local" || dm === "kb_only" ? dm : "server";
+      crashKbEndpoint = status.settings?.ai?.crashKbEndpoint ?? "";
       githubTokenSet = !!status.githubTokenSet;
       modrinthTokenSet = !!status.modrinthTokenSet;
       curseforgeTokenSet = !!status.curseforgeTokenSet;
       aiApiKeySet = !!status.aiApiKeySet;
+      crashKbTokenSet = !!status.crashKbTokenSet;
       githubTokenDraft = "";
       modrinthTokenDraft = "";
       curseforgeTokenDraft = "";
       aiApiKeyDraft = "";
+      crashKbTokenDraft = "";
     } catch (e) {
       integrationsError = String(e);
     } finally {
@@ -147,6 +165,8 @@
             provider: aiProvider,
             endpoint: aiEndpoint.trim(),
             model: aiModel.trim(),
+            diagnoseMode,
+            crashKbEndpoint: crashKbEndpoint.trim(),
           },
         },
       });
@@ -174,6 +194,7 @@
       if (kind === "modrinth") modrinthTokenDraft = "";
       if (kind === "curseforge") curseforgeTokenDraft = "";
       if (kind === "ai") aiApiKeyDraft = "";
+      if (kind === "crash_kb") crashKbTokenDraft = "";
       await loadIntegrations();
     } catch (e) {
       integrationsError = String(e);
@@ -388,51 +409,55 @@
           <div class="provider-head">
             <strong>AI</strong>
             <span class:ok={aiProvider === "ollama" || aiApiKeySet}>
-              {aiProvider === "ollama" ? "Ollama (key optional)" : statusLabel(aiApiKeySet)}
+              {aiProvider === "ollama" ? "Ollama" : aiApiKeySet ? "API key set" : "API (no key)"}
             </span>
           </div>
-          <label>
-            Provider
-            <select bind:value={aiProvider}>
-              <option value="ollama">Ollama</option>
-              <option value="openai-compatible">OpenAI-compatible</option>
-            </select>
-          </label>
-          <label>
-            Endpoint
-            <input bind:value={aiEndpoint} placeholder={aiProvider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1"} autocomplete="off" />
-          </label>
-          <label>
-            Model
-            <input bind:value={aiModel} placeholder={aiProvider === "ollama" ? "qwen2.5-coder:7b" : "gpt-4o-mini"} autocomplete="off" />
-          </label>
-          {#if aiProvider === "openai-compatible"}
-            <label>
-              <KeyRound size={12} /> API key
-              <input
-                type="password"
-                bind:value={aiApiKeyDraft}
-                placeholder={aiApiKeySet ? "•••••••• (enter new to replace)" : "sk-…"}
-                autocomplete="new-password"
-              />
-            </label>
-            <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("ai", aiApiKeyDraft)} disabled={!!savingSecret || !aiApiKeyDraft.trim()}>
-                {savingSecret === "ai" ? "Saving…" : "Save key"}
-              </button>
-              <button class="ghost mini" on:click={() => clearSecret("ai")} disabled={!aiApiKeySet || !!clearingSecret}>
-                {clearingSecret === "ai" ? "Clearing…" : "Clear"}
-              </button>
-            </div>
-          {:else}
-            <p class="hint">Ollama does not require an API key. Configure endpoint and model only.</p>
-          {/if}
+          <p class="hint">
+            Provider: <code>{aiProvider}</code>
+            · Endpoint: <code>{aiEndpoint || "—"}</code>
+            · Model: <code>{aiModel || "—"}</code>
+          </p>
           <div class="row-actions">
-            <button class="ghost mini" on:click={() => testProvider("ai")} disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet)}>
+            <button type="button" class="secondary mini" on:click={() => (aiModalOpen = true)}>
+              <Bot size={14} /> Configure AI connection…
+            </button>
+            <button class="ghost mini" on:click={() => testProvider("ai")} disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}>
               {testingProvider === "ai" ? "Testing…" : "Test AI"}
             </button>
           </div>
           {#if testResults.ai}<small class="test-ok">{testResults.ai}</small>{/if}
+        </div>
+
+        <div class="provider-block">
+          <div class="provider-head">
+            <strong>Crash KB</strong>
+            <span class:ok={!!crashKbEndpoint}>{crashKbEndpoint ? diagnoseMode : "offline seed"}</span>
+          </div>
+          <p class="hint">Private crash knowledge base. Full corpus stays on your server; launcher only gets matched plans/hits.</p>
+          <label>
+            Diagnose mode
+            <select bind:value={diagnoseMode}>
+              <option value="server">server (default) — remote diagnose + LLM</option>
+              <option value="local">local — remote lookup + your Ollama/API</option>
+              <option value="kb_only">kb_only — matched case actions, no LLM</option>
+            </select>
+          </label>
+          <label>
+            Crash KB API base URL
+            <input bind:value={crashKbEndpoint} placeholder="https://kb.example.com" />
+          </label>
+          <label>
+            Crash KB token
+            <input type="password" bind:value={crashKbTokenDraft} placeholder={crashKbTokenSet ? "•••••••• (set)" : "optional bearer token"} autocomplete="off" />
+          </label>
+          <div class="row-actions">
+            <button class="mini" disabled={savingSecret === "crash_kb" || !crashKbTokenDraft.trim()} on:click={() => saveSecret("crash_kb", crashKbTokenDraft)}>
+              {savingSecret === "crash_kb" ? "Saving…" : "Save token"}
+            </button>
+            <button class="ghost mini" disabled={clearingSecret === "crash_kb" || !crashKbTokenSet} on:click={() => clearSecret("crash_kb")}>
+              Clear
+            </button>
+          </div>
         </div>
       </div>
 
@@ -508,6 +533,8 @@
     </section>
   </div>
 </div>
+
+<AiConnectionModal bind:open={aiModalOpen} on:saved={loadIntegrations} />
 
 <style>
   .settings {

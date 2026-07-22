@@ -7,6 +7,8 @@
     type RecipeScanResult,
     type RecipeRuntimeStatus,
     type RuntimeRecipeCategory,
+    type CraftDraft,
+    type TagDraft,
   } from "../lib/api";
   import {
     Search,
@@ -30,6 +32,10 @@
     Keyboard,
     Radio,
     Play,
+    Plus,
+    Pencil,
+    Save,
+    Eraser,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
 
@@ -42,10 +48,31 @@
     useCount: number;
   };
   type ItemFocusCounts = { recipes: number; uses: number };
+  type PaletteMode = "items" | "tags";
+  type EditorKind =
+    | "crafting"
+    | "smelting"
+    | "blasting"
+    | "smoking"
+    | "campfire"
+    | "smithing"
+    | "stonecutting"
+    | "tags";
 
   const ITEMS_PER_PAGE = 60;
   const ICON_BATCH_SIZE = 48;
   const BOOKMARK_KEY = "tuffbox.jei.bookmarks";
+  const DRAG_MIME = "application/x-tuffbox-item";
+  const EDITOR_KINDS: { id: EditorKind; label: string }[] = [
+    { id: "crafting", label: "Craft" },
+    { id: "smelting", label: "Smelt" },
+    { id: "blasting", label: "Blast" },
+    { id: "smoking", label: "Smoke" },
+    { id: "campfire", label: "Campfire" },
+    { id: "smithing", label: "Smith" },
+    { id: "stonecutting", label: "Cut" },
+    { id: "tags", label: "Tags" },
+  ];
 
   let recipes: ScannedRecipe[] = [];
   let items: ItemEntry[] = [];
@@ -75,6 +102,30 @@
   let runtimeStatus: RecipeRuntimeStatus | null = null;
   let runtimeCategories: RuntimeRecipeCategory[] = [];
   let runtimePoller: ReturnType<typeof setInterval> | null = null;
+
+  let editorOpen = false;
+  let editorKind: EditorKind = "crafting";
+  let editGrid: (string | null)[] = Array(9).fill(null);
+  let editOutput: string | null = null;
+  let editCount = 1;
+  let editShaped = true;
+  let editInput: string | null = null;
+  let editXp = 0;
+  let editCookTime = 200;
+  let editTemplate: string | null = null;
+  let editBase: string | null = null;
+  let editAddition: string | null = null;
+  let replaceRecipeId: string | null = null;
+  let editorSaving = false;
+  let paletteMode: PaletteMode = "items";
+  let knownTags: string[] = [];
+  let tagsLoading = false;
+  let editTagId = "";
+  let tagMembers: string[] = [];
+  let tagAdd: string[] = [];
+  let tagRemove: string[] = [];
+  let tagRemoveAll = false;
+  let tagLoadingMembers = false;
 
   type IconState = "loading" | "missing" | string;
   let iconCache: Record<string, IconState> = {};
@@ -189,7 +240,7 @@
     }
     cycleTimer = setInterval(() => {
       cycleTick = (cycleTick + 1) % 1000;
-    }, 1200);
+    }, 1000);
     window.addEventListener("keydown", onKey);
     runtimePoller = setInterval(checkRuntimeTransition, 5000);
   });
@@ -465,7 +516,7 @@
 
   function resolveSlot(ing: IngredientDisplay | null): IngredientDisplay | null {
     if (!ing) return null;
-    if (ing.kind === "one_of" && ing.alts && ing.alts.length > 0) {
+    if (ing.alts && ing.alts.length > 0) {
       return ing.alts[cycleTick % ing.alts.length] ?? ing;
     }
     return ing;
@@ -474,14 +525,23 @@
   function slotLabel(ing: IngredientDisplay | null): string {
     const r = resolveSlot(ing);
     if (!r) return "";
+    if (ing?.alts && ing.alts.length > 0) {
+      if (r.kind === "tag" || r.id.startsWith("#")) {
+        const bare = r.id.replace(/^#/, "");
+        const path = bare.split(":").pop() ?? bare;
+        return path.slice(0, 2);
+      }
+      return prettifyItem(r.id).slice(0, 3);
+    }
     if (r.kind === "tag" || r.id.startsWith("#")) return "#";
     return prettifyItem(r.id).slice(0, 3);
   }
 
   function slotTitle(ing: IngredientDisplay | null): string {
     if (!ing) return "";
-    if (ing.kind === "one_of" && ing.alts) {
-      return ing.alts.map((a) => a.id).join("\n");
+    if (ing.alts && ing.alts.length > 0) {
+      const head = ing.kind === "tag" || ing.id.startsWith("#") ? `${ing.id}\n` : "";
+      return head + ing.alts.map((a) => a.id).join("\n");
     }
     return ing.id;
   }
@@ -507,6 +567,323 @@
       error = String(e);
     }
   }
+
+  function ingredientIdForEdit(ing: IngredientDisplay | null): string | null {
+    if (!ing) return null;
+    if (ing.kind === "tag" || ing.id.startsWith("#")) {
+      return ing.id.startsWith("#") ? ing.id : `#${ing.id}`;
+    }
+    return ing.id || null;
+  }
+
+  function resetEditorDraft() {
+    editGrid = Array(9).fill(null);
+    editOutput = null;
+    editCount = 1;
+    editShaped = true;
+    editInput = null;
+    editXp = 0;
+    editCookTime = 200;
+    editTemplate = null;
+    editBase = null;
+    editAddition = null;
+    replaceRecipeId = null;
+    editTagId = "";
+    tagMembers = [];
+    tagAdd = [];
+    tagRemove = [];
+    tagRemoveAll = false;
+  }
+
+  async function ensureTagsLoaded() {
+    if (!$projectPath || knownTags.length > 0 || tagsLoading) return;
+    tagsLoading = true;
+    try {
+      knownTags = await api.recipes.listItemTags($projectPath);
+    } catch (e) {
+      console.warn("listItemTags failed", e);
+      knownTags = [];
+    } finally {
+      tagsLoading = false;
+    }
+  }
+
+  async function loadTagMembers(tagId: string) {
+    if (!$projectPath || !tagId.trim()) {
+      tagMembers = [];
+      return;
+    }
+    tagLoadingMembers = true;
+    try {
+      tagMembers = await api.recipes.getTagEntries(tagId.trim(), $projectPath);
+    } catch (e) {
+      console.warn("getTagEntries failed", e);
+      tagMembers = [];
+    } finally {
+      tagLoadingMembers = false;
+    }
+  }
+
+  async function selectEditTag(tagId: string) {
+    const bare = tagId.replace(/^#/, "");
+    editTagId = bare;
+    tagAdd = [];
+    tagRemove = [];
+    tagRemoveAll = false;
+    await loadTagMembers(bare.startsWith("#") ? bare : `#${bare}`);
+  }
+
+  async function openNewRecipeEditor(kind: EditorKind = "crafting") {
+    resetEditorDraft();
+    editorKind = kind;
+    editorOpen = true;
+    paletteMode = kind === "tags" ? "tags" : "items";
+    await ensureTagsLoaded();
+    message =
+      kind === "tags"
+        ? "Pick or type a tag, drag items to add, click members to remove, then Save."
+        : `Drag ingredients for ${kind}, then Add.`;
+  }
+
+  function cookingKindFromType(recipeType: string): EditorKind {
+    const t = recipeType.replace(/^minecraft:/, "");
+    if (t === "blasting") return "blasting";
+    if (t === "smoking") return "smoking";
+    if (t === "campfire_cooking") return "campfire";
+    return "smelting";
+  }
+
+  async function openEditRecipe(r: ScannedRecipe) {
+    const cat = r.layout.category;
+    if (cat === "crafting") {
+      const grid = Array(9).fill(null) as (string | null)[];
+      for (let i = 0; i < 9; i++) {
+        grid[i] = ingredientIdForEdit(r.layout.grid[i] ?? null);
+      }
+      resetEditorDraft();
+      editGrid = grid;
+      editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
+      editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
+      editShaped = !r.layout.shapeless;
+      editorKind = "crafting";
+      replaceRecipeId = r.id;
+    } else if (cat === "cooking") {
+      resetEditorDraft();
+      editorKind = cookingKindFromType(r.recipeType);
+      editInput = ingredientIdForEdit(r.layout.grid[4] ?? null);
+      editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
+      editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
+      editCookTime = r.layout.cookTime ?? 200;
+      editXp = r.layout.experience ?? 0;
+      replaceRecipeId = r.id;
+    } else if (cat === "smithing") {
+      resetEditorDraft();
+      editorKind = "smithing";
+      editTemplate = ingredientIdForEdit(r.layout.grid[3] ?? null);
+      editBase = ingredientIdForEdit(r.layout.grid[4] ?? null);
+      editAddition = ingredientIdForEdit(r.layout.grid[5] ?? null);
+      editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
+      editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
+      replaceRecipeId = r.id;
+    } else if (cat === "stonecutting") {
+      resetEditorDraft();
+      editorKind = "stonecutting";
+      const inputSlot =
+        r.layout.grid.find((s) => !!s) ?? r.layout.grid[0] ?? r.layout.grid[4] ?? null;
+      editInput = ingredientIdForEdit(inputSlot);
+      editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
+      editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
+      replaceRecipeId = r.id;
+    } else {
+      message = "This recipe type cannot be edited here yet.";
+      return;
+    }
+    editorOpen = true;
+    paletteMode = "items";
+    await ensureTagsLoaded();
+    message = `Editing ${r.id} — Save writes event.remove + new KubeJS recipe.`;
+  }
+
+  function closeEditor() {
+    editorOpen = false;
+    editorKind = "crafting";
+    resetEditorDraft();
+  }
+
+  function clearEditorGrid() {
+    if (editorKind === "tags") {
+      tagAdd = [];
+      tagRemove = [];
+      tagRemoveAll = false;
+      return;
+    }
+    editGrid = Array(9).fill(null);
+    editOutput = null;
+    editCount = 1;
+    editInput = null;
+    editTemplate = null;
+    editBase = null;
+    editAddition = null;
+    editXp = 0;
+    editCookTime = 200;
+  }
+
+  function setEditSlot(index: number, id: string | null) {
+    const next = [...editGrid];
+    next[index] = id;
+    editGrid = next;
+  }
+
+  function onDragStartItem(e: DragEvent, id: string) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(DRAG_MIME, id);
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
+  function onDragOverSlot(e: DragEvent) {
+    if (!editorOpen) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  }
+
+  function readDragId(e: DragEvent): string | null {
+    const raw = e.dataTransfer?.getData(DRAG_MIME) || e.dataTransfer?.getData("text/plain") || "";
+    const id = raw.trim();
+    return id || null;
+  }
+
+  function onDropGrid(e: DragEvent, index: number) {
+    if (!editorOpen || editorKind !== "crafting") return;
+    e.preventDefault();
+    const id = readDragId(e);
+    if (id) setEditSlot(index, id);
+  }
+
+  function onDropOutput(e: DragEvent) {
+    if (!editorOpen || editorKind === "tags") return;
+    e.preventDefault();
+    const id = readDragId(e);
+    if (!id || id.startsWith("#")) {
+      message = "Output must be an item id (not a tag).";
+      return;
+    }
+    editOutput = id;
+  }
+
+  function onDropSingleInput(e: DragEvent) {
+    if (!editorOpen) return;
+    e.preventDefault();
+    const id = readDragId(e);
+    if (id) editInput = id;
+  }
+
+  function onDropSmithing(e: DragEvent, slot: "template" | "base" | "addition") {
+    if (!editorOpen || editorKind !== "smithing") return;
+    e.preventDefault();
+    const id = readDragId(e);
+    if (!id) return;
+    if (slot === "template") editTemplate = id;
+    else if (slot === "base") editBase = id;
+    else editAddition = id;
+  }
+
+  function onDropTagAdd(e: DragEvent) {
+    if (!editorOpen || editorKind !== "tags") return;
+    e.preventDefault();
+    const id = readDragId(e);
+    if (!id) return;
+    if (!tagAdd.includes(id)) tagAdd = [...tagAdd, id];
+    tagRemove = tagRemove.filter((x) => x !== id);
+  }
+
+  function toggleTagRemove(id: string) {
+    if (tagRemove.includes(id)) tagRemove = tagRemove.filter((x) => x !== id);
+    else tagRemove = [...tagRemove, id];
+    tagAdd = tagAdd.filter((x) => x !== id);
+  }
+
+  function removePendingAdd(id: string) {
+    tagAdd = tagAdd.filter((x) => x !== id);
+  }
+
+  function onOutputClick(e: MouseEvent) {
+    if (!editorOpen || !editOutput || editorKind === "tags") return;
+    if (e.shiftKey) {
+      e.preventDefault();
+      editCount = editCount >= 64 ? 1 : editCount + 1;
+    }
+  }
+
+  function isCookingKind(k: EditorKind): boolean {
+    return k === "smelting" || k === "blasting" || k === "smoking" || k === "campfire";
+  }
+
+  function editorCanSave(): boolean {
+    if (editorKind === "tags") {
+      const tag = editTagId.trim();
+      if (!tag.includes(":")) return false;
+      return tagRemoveAll || tagAdd.length > 0 || tagRemove.length > 0;
+    }
+    if (!editOutput) return false;
+    if (editorKind === "crafting") return editGrid.some((s) => !!s);
+    if (isCookingKind(editorKind) || editorKind === "stonecutting") return !!editInput;
+    if (editorKind === "smithing") return !!editBase && !!editAddition;
+    return false;
+  }
+
+  async function saveCraftRecipe() {
+    if (!$projectPath || !editorCanSave()) return;
+    editorSaving = true;
+    error = null;
+    try {
+      if (editorKind === "tags") {
+        const draft: TagDraft = {
+          tagId: editTagId.trim().replace(/^#/, ""),
+          add: [...tagAdd],
+          remove: [...tagRemove],
+          removeAll: tagRemoveAll,
+        };
+        const path = await api.recipes.writeTags(draft, $projectPath);
+        message = `Saved tag edits → ${path}`;
+        knownTags = [];
+        await ensureTagsLoaded();
+        closeEditor();
+        return;
+      }
+      if (!editOutput) return;
+      const kind =
+        editorKind === "crafting" ? (editShaped ? "shaped" : "shapeless") : editorKind;
+      const draft: CraftDraft = {
+        kind,
+        shaped: editShaped,
+        grid: [...editGrid],
+        output: editOutput,
+        outputCount: Math.min(64, Math.max(1, editCount || 1)),
+        replaceId: replaceRecipeId,
+        input: editInput,
+        xp: isCookingKind(editorKind) ? editXp : null,
+        cookTime: isCookingKind(editorKind) ? editCookTime : null,
+        template: editTemplate,
+        base: editBase,
+        addition: editAddition,
+      };
+      const path = await api.recipes.writeCraft(draft, $projectPath);
+      message = replaceRecipeId ? `Saved edit → ${path}` : `Added ${kind} recipe → ${path}`;
+      closeEditor();
+      await loadRecipes(false, true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      editorSaving = false;
+    }
+  }
+
+  $: filteredTags = (() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return knownTags;
+    return knownTags.filter((t) => t.toLowerCase().includes(q));
+  })();
 
   function navigateSlot(ing: IngredientDisplay | null, mode: FocusMode) {
     const r = resolveSlot(ing);
@@ -632,8 +1009,11 @@
       })
     : [];
   $: totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
-  $: if (itemPage >= totalItemPages) itemPage = Math.max(0, totalItemPages - 1);
+  $: totalTagPages = Math.max(1, Math.ceil(filteredTags.length / ITEMS_PER_PAGE));
+  $: overlayPageCount = editorOpen && paletteMode === "tags" ? totalTagPages : totalItemPages;
+  $: if (itemPage >= overlayPageCount) itemPage = Math.max(0, overlayPageCount - 1);
   $: pageItems = filteredItems.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE);
+  $: pageTags = filteredTags.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE);
   $: activeRecipes = recipesForItem(selectedItem, focusMode);
   $: categories = buildCategories();
   $: if (!categories.includes(categoryFilter)) categoryFilter = "all";
@@ -650,12 +1030,25 @@
     preloadIcons([
       currentRecipe.outputId,
       currentRecipe.layout.output?.id,
-      ...currentRecipe.layout.grid.map((slot) => resolveSlot(slot)?.id),
-      ...(currentRecipe.layout.slots ?? []).flatMap((slot) => slot.ingredients.map((ingredient) => ingredient.id)),
+      ...(currentRecipe.layout.output?.alts?.map((a) => a.id) ?? []),
+      ...currentRecipe.layout.grid.flatMap((slot) => [
+        resolveSlot(slot)?.id,
+        ...(slot?.alts?.map((a) => a.id) ?? []),
+      ]),
+      ...(currentRecipe.layout.slots ?? []).flatMap((slot) =>
+        slot.ingredients.flatMap((ingredient) => [
+          ingredient.id,
+          ...(ingredient.alts?.map((a) => a.id) ?? []),
+        ])
+      ),
       ...(runtimeCategory(currentRecipe.category)?.stations ?? []).map((station) => station.id),
     ]);
   }
-  $: if ($projectPath && $projectPath !== lastLoadedPath) loadRecipes();
+  $: if ($projectPath && $projectPath !== lastLoadedPath) {
+    knownTags = [];
+    closeEditor();
+    loadRecipes();
+  }
   $: if (filter) itemPage = 0;
 </script>
 
@@ -692,6 +1085,12 @@
           <Play size={15} /> Launch JEI Live
         </button>
       {/if}
+      <button class="ghost" on:click={() => openNewRecipeEditor("crafting")} disabled={!$projectPath || loading} title="New recipe or tag edit">
+        <Plus size={16} /> New recipe
+      </button>
+      <button class="ghost" on:click={() => openNewRecipeEditor("tags")} disabled={!$projectPath || loading} title="Edit item tags">
+        <Bookmark size={16} /> Edit tags
+      </button>
       <button class="primary-scan" on:click={() => loadRecipes(true, true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         {loading ? "Loading…" : recipeSource === "runtime" ? "Refresh live" : "Rescan"}
@@ -707,6 +1106,7 @@
       <span><kbd>←</kbd><kbd>→</kbd> Recipe pages</span>
       <span><kbd>Backspace</kbd> History back</span>
       <span>LMB = Recipes · RMB = Uses</span>
+      <span>New recipe: drag items/tags onto the craft grid</span>
       <button class="ghost tiny" on:click={() => (showHelp = false)}><X size={14} /></button>
     </div>
   {/if}
@@ -740,18 +1140,21 @@
       <h3>Open a project</h3>
       <p>Scan mod JARs, datapacks and KubeJS data like JEI.</p>
     </div>
-  {:else if loading || !catalogReady}
+  {:else if (loading || !catalogReady) && !editorOpen}
     <div class="empty">
       <RefreshCw size={40} class="spin" />
       <h3>Indexing recipes…</h3>
       <p>Reading JAR data packs — this can take a moment on large packs.</p>
     </div>
-  {:else if recipes.length === 0}
+  {:else if recipes.length === 0 && !editorOpen}
     <div class="empty">
       <Grid3x3 size={40} />
       <h3>No recipes found</h3>
       <p>Put mods in <code>mods/</code> or datapacks under <code>datapacks/</code>.</p>
-      <button on:click={() => loadRecipes()}>Scan now</button>
+      <div class="empty-actions">
+        <button on:click={() => loadRecipes()}>Scan now</button>
+        <button class="secondary" on:click={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
+      </div>
     </div>
   {:else}
     <div class="jei-body" class:with-bookmarks={showBookmarks}>
@@ -787,7 +1190,300 @@
 
       <!-- Recipe GUI -->
       <main class="jei-gui">
-        {#if !selectedItem}
+        {#if editorOpen}
+          <div class="recipe-view editor-view">
+            <div class="gui-top">
+              <div class="focus-item">
+                <span class="mc-slot mini" style="--hue: {itemHue(editOutput ?? editTagId)}">
+                  {#if editorKind === "tags"}
+                    <span class="letter">#</span>
+                  {:else if editOutput && iconSrc(editOutput)}
+                    <img src={iconSrc(editOutput)} alt="" class="slot-icon" />
+                  {:else}
+                    <Plus size={14} />
+                  {/if}
+                </span>
+                <div>
+                  <strong>
+                    {#if editorKind === "tags"}
+                      {editTagId ? `Tag #${editTagId}` : "Edit item tags"}
+                    {:else}
+                      {replaceRecipeId ? "Edit recipe" : "New recipe"}
+                    {/if}
+                  </strong>
+                  <small>{replaceRecipeId ?? (editorKind === "tags" ? "ServerEvents.tags('item')" : `KubeJS ${editorKind}`)}</small>
+                </div>
+              </div>
+            </div>
+
+            {#if !replaceRecipeId}
+              <div class="editor-kind-row">
+                {#each EDITOR_KINDS as k}
+                  <button
+                    type="button"
+                    class="mode-btn"
+                    class:on={editorKind === k.id}
+                    on:click={() => {
+                      editorKind = k.id;
+                      if (k.id === "tags") paletteMode = "tags";
+                      else paletteMode = "items";
+                    }}
+                  >{k.label}</button>
+                {/each}
+              </div>
+            {/if}
+
+            {#if editorKind === "crafting"}
+              <div class="editor-toggles">
+                <button type="button" class="mode-btn" class:on={editShaped} on:click={() => (editShaped = true)}>Shaped</button>
+                <button type="button" class="mode-btn" class:on={!editShaped} on:click={() => (editShaped = false)}>Shapeless</button>
+              </div>
+              <div class="mc-panel" data-cat="crafting">
+                <div class="panel-title">Crafting Table {#if !editShaped}<span class="badge shapeless">Shapeless</span>{/if}</div>
+                <div class="panel-body craft">
+                  <div class="craft-grid">
+                    {#each editGrid as slotId, i (i)}
+                      <button
+                        type="button"
+                        class="mc-slot"
+                        class:empty={!slotId}
+                        class:tag={!!slotId && slotId.startsWith("#")}
+                        class:drop-target={true}
+                        style="--hue: {itemHue(slotId ?? '')}"
+                        title={slotId ?? "Drop ingredient"}
+                        on:dragover={onDragOverSlot}
+                        on:drop={(e) => onDropGrid(e, i)}
+                        on:contextmenu|preventDefault={() => setEditSlot(i, null)}
+                        on:click={() => setEditSlot(i, null)}
+                      >
+                        {#if slotId && iconSrc(slotId)}
+                          <img src={iconSrc(slotId)} alt="" class="slot-icon" on:error={() => onIconError(slotId)} />
+                        {:else if slotId}
+                          <span class="letter">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
+                        {/if}
+                      </button>
+                    {/each}
+                  </div>
+                  <ArrowRight size={22} class="arr" />
+                  <button
+                    type="button"
+                    class="mc-slot out"
+                    class:empty={!editOutput}
+                    class:drop-target={true}
+                    style="--hue: {itemHue(editOutput ?? '')}"
+                    title={editOutput ? `${editOutput}\nShift+click: stack count` : "Drop output item"}
+                    on:dragover={onDragOverSlot}
+                    on:drop={onDropOutput}
+                    on:contextmenu|preventDefault={() => { editOutput = null; editCount = 1; }}
+                    on:click={onOutputClick}
+                  >
+                    {#if editOutput && iconSrc(editOutput)}
+                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" on:error={() => onIconError(editOutput)} />
+                    {:else if editOutput}
+                      <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
+                    {/if}
+                    {#if editOutput && editCount > 1}
+                      <em class="stack">{editCount}</em>
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            {:else if isCookingKind(editorKind) || editorKind === "stonecutting"}
+              <div class="mc-panel" data-cat={editorKind === "stonecutting" ? "stonecutting" : "cooking"}>
+                <div class="panel-title">
+                  {editorKind === "stonecutting" ? "Stonecutter" : editorKind}
+                </div>
+                <div class="panel-body cook">
+                  <button
+                    type="button"
+                    class="mc-slot large"
+                    class:empty={!editInput}
+                    class:tag={!!editInput && editInput.startsWith("#")}
+                    class:drop-target={true}
+                    style="--hue: {itemHue(editInput ?? '')}"
+                    title={editInput ?? "Drop input"}
+                    on:dragover={onDragOverSlot}
+                    on:drop={onDropSingleInput}
+                    on:contextmenu|preventDefault={() => (editInput = null)}
+                    on:click={() => (editInput = null)}
+                  >
+                    {#if editInput && iconSrc(editInput)}
+                      <img src={iconSrc(editInput)} alt="" class="slot-icon" on:error={() => onIconError(editInput)} />
+                    {:else if editInput}
+                      <span class="letter">{editInput.startsWith("#") ? "#" : prettifyItem(editInput).slice(0, 3)}</span>
+                    {/if}
+                  </button>
+                  {#if isCookingKind(editorKind)}
+                    <div class="flame-col">
+                      <Flame size={26} class="flame" />
+                      <label class="editor-field">XP <input type="number" min="0" step="0.05" bind:value={editXp} /></label>
+                      <label class="editor-field">Ticks <input type="number" min="1" bind:value={editCookTime} /></label>
+                    </div>
+                  {:else}
+                    <Scissors size={22} class="arr" />
+                  {/if}
+                  <ArrowRight size={28} class="arr" />
+                  <button
+                    type="button"
+                    class="mc-slot out large"
+                    class:empty={!editOutput}
+                    class:drop-target={true}
+                    style="--hue: {itemHue(editOutput ?? '')}"
+                    title={editOutput ? `${editOutput}\nShift+click: stack` : "Drop output"}
+                    on:dragover={onDragOverSlot}
+                    on:drop={onDropOutput}
+                    on:contextmenu|preventDefault={() => { editOutput = null; editCount = 1; }}
+                    on:click={onOutputClick}
+                  >
+                    {#if editOutput && iconSrc(editOutput)}
+                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" on:error={() => onIconError(editOutput)} />
+                    {:else if editOutput}
+                      <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
+                    {/if}
+                    {#if editOutput && editCount > 1}
+                      <em class="stack">{editCount}</em>
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            {:else if editorKind === "smithing"}
+              <div class="mc-panel" data-cat="smithing">
+                <div class="panel-title">Smithing Table</div>
+                <div class="panel-body smith">
+                  {#each [
+                    { key: "template" as const, label: "Template", val: editTemplate },
+                    { key: "base" as const, label: "Base", val: editBase },
+                    { key: "addition" as const, label: "Addition", val: editAddition },
+                  ] as slot, i}
+                    <button
+                      type="button"
+                      class="mc-slot large"
+                      class:empty={!slot.val}
+                      class:drop-target={true}
+                      style="--hue: {itemHue(slot.val ?? '')}"
+                      title={slot.val ?? slot.label}
+                      on:dragover={onDragOverSlot}
+                      on:drop={(e) => onDropSmithing(e, slot.key)}
+                      on:contextmenu|preventDefault={() => {
+                        if (slot.key === "template") editTemplate = null;
+                        else if (slot.key === "base") editBase = null;
+                        else editAddition = null;
+                      }}
+                      on:click={() => {
+                        if (slot.key === "template") editTemplate = null;
+                        else if (slot.key === "base") editBase = null;
+                        else editAddition = null;
+                      }}
+                    >
+                      {#if slot.val && iconSrc(slot.val)}
+                        <img src={iconSrc(slot.val)} alt="" class="slot-icon" on:error={() => onIconError(slot.val)} />
+                      {:else if slot.val}
+                        <span class="letter">{prettifyItem(slot.val).slice(0, 3)}</span>
+                      {:else}
+                        <span class="letter">{slot.label.slice(0, 1)}</span>
+                      {/if}
+                    </button>
+                    {#if i < 2}<span class="plus">+</span>{/if}
+                  {/each}
+                  <ArrowRight size={28} class="arr" />
+                  <button
+                    type="button"
+                    class="mc-slot out large"
+                    class:empty={!editOutput}
+                    class:drop-target={true}
+                    style="--hue: {itemHue(editOutput ?? '')}"
+                    on:dragover={onDragOverSlot}
+                    on:drop={onDropOutput}
+                    on:contextmenu|preventDefault={() => { editOutput = null; editCount = 1; }}
+                    on:click={onOutputClick}
+                  >
+                    {#if editOutput && iconSrc(editOutput)}
+                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" on:error={() => onIconError(editOutput)} />
+                    {:else if editOutput}
+                      <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
+                    {/if}
+                  </button>
+                </div>
+              </div>
+            {:else if editorKind === "tags"}
+              <div class="mc-panel tag-editor-panel">
+                <div class="panel-title">Item tags</div>
+                <div class="tag-editor">
+                  <label class="editor-field wide">
+                    Tag id
+                    <input
+                      type="text"
+                      placeholder="c:apples"
+                      bind:value={editTagId}
+                      on:change={() => editTagId && loadTagMembers(editTagId)}
+                      on:blur={() => editTagId && loadTagMembers(editTagId)}
+                    />
+                  </label>
+                  <label class="editor-check">
+                    <input type="checkbox" bind:checked={tagRemoveAll} />
+                    removeAll (clear tag before adds)
+                  </label>
+                  <div
+                    class="tag-drop-zone"
+                    role="region"
+                    aria-label="Drop items to add to tag"
+                    on:dragover={onDragOverSlot}
+                    on:drop={onDropTagAdd}
+                  >
+                    Drop items/tags here to <strong>add</strong>
+                    {#if tagAdd.length === 0}
+                      <span class="muted"> — empty</span>
+                    {:else}
+                      <div class="tag-chip-row">
+                        {#each tagAdd as id}
+                          <button type="button" class="tag-chip add" title={id} on:click={() => removePendingAdd(id)}>
+                            + {id} ×
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                  <div class="tag-members">
+                    <div class="overlay-h">Current members {tagLoadingMembers ? "…" : `(${tagMembers.length})`}</div>
+                    <div class="tag-chip-row">
+                      {#each tagMembers as id}
+                        <button
+                          type="button"
+                          class="tag-chip"
+                          class:remove={tagRemove.includes(id)}
+                          title={tagRemove.includes(id) ? "Will be removed" : "Click to remove"}
+                          on:click={() => toggleTagRemove(id)}
+                        >
+                          {tagRemove.includes(id) ? "− " : ""}{id}
+                        </button>
+                      {/each}
+                      {#if !tagLoadingMembers && tagMembers.length === 0}
+                        <span class="muted">No known members (new tag or empty)</span>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            {/if}
+
+            <div class="editor-hint">
+              {#if editorKind === "tags"}
+                Select a tag from the Tags palette or type an id · Drag items to add · Click members to remove
+              {:else}
+                Drag from the item/tag palette · Click or right-click to clear · Shift+click output for count (1–64)
+              {/if}
+            </div>
+
+            <div class="recipe-actions">
+              <button class="primary-scan" disabled={!editorCanSave() || editorSaving} on:click={saveCraftRecipe}>
+                <Save size={14} />
+                {editorSaving ? "Writing…" : (replaceRecipeId || editorKind === "tags") ? "Save" : "Add"}
+              </button>
+              <button class="secondary" on:click={clearEditorGrid}><Eraser size={14} /> Clear</button>
+              <button class="secondary" on:click={closeEditor}><X size={14} /> Cancel</button>
+            </div>
+          </div>
+        {:else if !selectedItem}
           <div class="gui-empty">
             <div class="mc-panel preview">
               <div class="craft-grid dim">
@@ -799,8 +1495,9 @@
               <div class="mc-slot out"></div>
             </div>
             <h3>Select an item</h3>
-            <p>Click an item on the right — like JEI’s ingredient list.</p>
+            <p>Or create a new crafting recipe with KubeJS.</p>
             <p class="hint">Right-click for Uses · Press <kbd>R</kbd> / <kbd>U</kbd></p>
+            <button class="secondary" on:click={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
           </div>
         {:else}
           <div class="gui-top">
@@ -920,11 +1617,11 @@
                 {:else if currentRecipe.layout.category === "crafting"}
                   <div class="panel-body craft">
                     <div class="craft-grid">
-                      {#each currentRecipe.layout.grid as slot}
+                      {#each currentRecipe.layout.grid as slot, i (i)}
                         <button
                           class="mc-slot"
                           class:empty={!slot}
-                          class:tag={resolveSlot(slot)?.kind === "tag" || resolveSlot(slot)?.id?.startsWith("#")}
+                          class:tag={slot?.kind === "tag" || slot?.id?.startsWith("#")}
                           style={slot ? `--hue: ${itemHue(resolveSlot(slot)?.id ?? "")}` : ""}
                           title={slotTitle(slot)}
                           disabled={!slot}
@@ -938,7 +1635,7 @@
                             {:else}
                               <span class="letter">{slotLabel(slot)}</span>
                             {/if}
-                            {#if slot.kind === "one_of" && slot.alts && slot.alts.length > 1}
+                            {#if slot.alts && slot.alts.length > 1}
                               <span class="cycle-dot"></span>
                             {/if}
                           {/if}
@@ -1085,6 +1782,11 @@
               <code class="recipe-id">{currentRecipe.id}</code>
 
               <div class="recipe-actions">
+                {#if ["crafting", "cooking", "smithing", "stonecutting"].includes(currentRecipe.layout.category)}
+                  <button class="secondary" on:click={() => openEditRecipe(currentRecipe)}>
+                    <Pencil size={14} /> Edit
+                  </button>
+                {/if}
                 <button class="secondary" on:click={() => copyKubeJS(currentRecipe)}>
                   <Copy size={14} /> Copy KubeJS
                 </button>
@@ -1116,8 +1818,10 @@
                   class:sel={selectedItem === item.id}
                   style="--hue: {itemHue(item.id)}"
                   title={item.id}
-                  on:click={() => selectItem(item.id, "recipes")}
-                  on:contextmenu|preventDefault={() => selectItem(item.id, "uses")}
+                  draggable={editorOpen ? "true" : "false"}
+                  on:dragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
+                  on:click={() => !editorOpen && selectItem(item.id, "recipes")}
+                  on:contextmenu|preventDefault={() => !editorOpen && selectItem(item.id, "uses")}
                 >
                   {#if iconSrc(item.id)}
                     <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
@@ -1133,48 +1837,101 @@
         {/if}
 
         <div class="overlay-h">
-          <span>Items</span>
-          <small>{filteredItems.length}</small>
+          {#if editorOpen}
+            <div class="palette-tabs">
+              <button
+                type="button"
+                class="mode-btn"
+                class:on={paletteMode === "items"}
+                on:click={() => { paletteMode = "items"; itemPage = 0; }}
+              >Items</button>
+              <button
+                type="button"
+                class="mode-btn"
+                class:on={paletteMode === "tags"}
+                on:click={() => { paletteMode = "tags"; itemPage = 0; ensureTagsLoaded(); }}
+              >Tags</button>
+            </div>
+            <small>{paletteMode === "tags" ? filteredTags.length : filteredItems.length}</small>
+          {:else}
+            <span>Items</span>
+            <small>{filteredItems.length}</small>
+          {/if}
         </div>
         <div class="item-grid">
-          {#each pageItems as item (item.id)}
-            <button
-              class="item-slot"
-              class:sel={selectedItem === item.id}
-              class:bookmarked={bookmarks.includes(item.id)}
-              style="--hue: {itemHue(item.id)}"
-              title="{item.id}\nR: {item.recipeCount} · U: {item.useCount}"
-              on:click={() => selectItem(item.id, "recipes")}
-              on:contextmenu|preventDefault={() => selectItem(item.id, "uses")}
-              on:auxclick={(e) => {
-                if (e.button === 1) {
-                  e.preventDefault();
-                  toggleBookmark(item.id);
-                }
-              }}
-            >
-              {#if iconSrc(item.id)}
-                <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
-              {:else if iconCache[item.id] === "loading"}
-                <span class="item-letter icon-pending"></span>
-              {:else}
-                <span class="item-letter">{item.name.slice(0, 2)}</span>
-              {/if}
-              {#if focusCountForItem(item) > 0}
-                <span class="item-count">{focusCountForItem(item)}</span>
-              {/if}
-            </button>
-          {/each}
+          {#if editorOpen && paletteMode === "tags"}
+            {#if tagsLoading}
+              <div class="palette-empty">Loading tags…</div>
+            {:else if pageTags.length === 0}
+              <div class="palette-empty">No tags match</div>
+            {:else}
+              {#each pageTags as tagId (tagId)}
+                <button
+                  type="button"
+                  class="item-slot tag-slot"
+                  class:sel={editorKind === "tags" && editTagId === tagId.replace(/^#/, "")}
+                  draggable="true"
+                  style="--hue: 180"
+                  title={tagId}
+                  on:dragstart={(e) => onDragStartItem(e, tagId)}
+                  on:click={() => {
+                    if (editorKind === "tags") selectEditTag(tagId);
+                  }}
+                >
+                  <span class="item-letter">#</span>
+                  <span class="tag-path">{tagId.replace(/^#/, "").slice(0, 6)}</span>
+                </button>
+              {/each}
+            {/if}
+          {:else}
+            {#each pageItems as item (item.id)}
+              <button
+                type="button"
+                class="item-slot"
+                class:sel={selectedItem === item.id}
+                class:bookmarked={bookmarks.includes(item.id)}
+                style="--hue: {itemHue(item.id)}"
+                title="{item.id}\nR: {item.recipeCount} · U: {item.useCount}"
+                draggable={editorOpen ? "true" : "false"}
+                on:dragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
+                on:click={() => !editorOpen && selectItem(item.id, "recipes")}
+                on:contextmenu|preventDefault={() => !editorOpen && selectItem(item.id, "uses")}
+                on:auxclick={(e) => {
+                  if (e.button === 1) {
+                    e.preventDefault();
+                    toggleBookmark(item.id);
+                  }
+                }}
+              >
+                {#if iconSrc(item.id)}
+                  <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
+                {:else if iconCache[item.id] === "loading"}
+                  <span class="item-letter icon-pending"></span>
+                {:else}
+                  <span class="item-letter">{item.name.slice(0, 2)}</span>
+                {/if}
+                {#if !editorOpen && focusCountForItem(item) > 0}
+                  <span class="item-count">{focusCountForItem(item)}</span>
+                {/if}
+              </button>
+            {/each}
+          {/if}
         </div>
         <div class="overlay-pager">
-          <button class="nav-btn" disabled={itemPage === 0} on:click={() => (itemPage = Math.max(0, itemPage - 1))}>
-            <ChevronLeft size={14} />
-          </button>
-          <span>{itemPage + 1} / {totalItemPages}</span>
           <button
             class="nav-btn"
-            disabled={itemPage >= totalItemPages - 1}
-            on:click={() => (itemPage = Math.min(totalItemPages - 1, itemPage + 1))}
+            disabled={itemPage === 0}
+            on:click={() => (itemPage = Math.max(0, itemPage - 1))}
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <span>
+            {itemPage + 1} / {overlayPageCount}
+          </span>
+          <button
+            class="nav-btn"
+            disabled={itemPage >= overlayPageCount - 1}
+            on:click={() => (itemPage = Math.min(overlayPageCount - 1, itemPage + 1))}
           >
             <ChevronRight size={14} />
           </button>
@@ -1374,7 +2131,8 @@
     color: var(--accent-primary);
   }
   .focus-item { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-  .focus-item strong { display: block; font-size: 14px; }
+  .focus-item small { display: block; font-size: 10px; color: var(--text-muted); }
+  .editor-view .gui-top { justify-content: space-between; }
   .focus-item code { font-size: 10px; color: var(--text-muted); }
   .star {
     background: transparent; border: 1px solid var(--border-color); border-radius: 8px;
@@ -1498,6 +2256,144 @@
     color: var(--text-secondary); cursor: pointer;
   }
   .recipe-actions .secondary.on { color: var(--jei-gold); border-color: rgba(251, 191, 36, 0.4); }
+
+  .editor-view .editor-toggles,
+  .palette-tabs {
+    display: flex;
+    gap: 4px;
+  }
+  .editor-kind-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 8px;
+  }
+  .editor-toggles {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 8px;
+  }
+  .editor-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 10px;
+    color: #222;
+  }
+  .editor-field input {
+    width: 72px;
+    padding: 2px 4px;
+    border: 1px solid #555;
+    border-radius: 4px;
+  }
+  .editor-field.wide {
+    width: 100%;
+  }
+  .editor-field.wide input {
+    width: 100%;
+    font-family: ui-monospace, monospace;
+  }
+  .editor-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #222;
+  }
+  .tag-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 320px;
+  }
+  .tag-drop-zone {
+    border: 2px dashed #555;
+    border-radius: 6px;
+    padding: 10px;
+    min-height: 48px;
+    background: rgba(0, 0, 0, 0.08);
+    font-size: 12px;
+    color: #222;
+  }
+  .tag-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .tag-chip {
+    border: 1px solid #555;
+    background: #eee;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-family: ui-monospace, monospace;
+    cursor: pointer;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tag-chip.add { background: #d1fae5; border-color: #059669; }
+  .tag-chip.remove { background: #fee2e2; border-color: #dc2626; text-decoration: line-through; }
+  .tag-members .overlay-h { color: #333; border: none; padding: 0; text-transform: none; }
+  .muted { opacity: 0.65; font-size: 11px; }
+  .mc-panel.tag-editor-panel { max-width: 480px; }
+  .mode-btn {
+    border: 1px solid var(--border-color, #3a3a40);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--text-muted);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .mode-btn.on {
+    color: #1a1200;
+    background: linear-gradient(145deg, #fbbf24, #d97706);
+    border-color: transparent;
+    font-weight: 700;
+  }
+  .editor-hint {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 8px 0 4px;
+  }
+  .mc-slot.drop-target {
+    outline: 1px dashed rgba(251, 191, 36, 0.35);
+  }
+  .empty-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .palette-empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 16px 8px;
+  }
+  .item-slot.tag-slot {
+    flex-direction: column;
+    gap: 2px;
+    border-style: dashed;
+    border-color: #67e8f9;
+  }
+  .tag-path {
+    font-size: 8px;
+    line-height: 1;
+    color: #a5f3fc;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .item-slot[draggable="true"] { cursor: grab; }
 
   .jei-overlay {
     background: #0e0e10; border: 1px solid var(--border-color);

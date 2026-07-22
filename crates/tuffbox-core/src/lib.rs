@@ -3,8 +3,10 @@
 //! This crate contains deterministic project, graph and resolver logic.
 //! AI must not be used inside this crate.
 
+pub mod action_plan;
 pub mod change_plan;
 pub mod crash;
+pub mod crash_remote;
 pub mod diagnostics;
 pub mod exporter;
 pub mod forge_install;
@@ -29,6 +31,7 @@ pub mod process;
 pub mod provider;
 pub mod resolver;
 pub mod snapshot;
+pub mod tag_index;
 pub mod time_util;
 pub mod updater;
 pub mod versions;
@@ -37,6 +40,8 @@ pub mod adapters;
 pub mod ai_explanation;
 pub mod api_cache;
 pub mod crash_assistant;
+pub mod crash_kb;
+pub mod project_ai_inventory;
 pub mod environment;
 pub mod knowledge;
 pub mod level_dat;
@@ -53,8 +58,10 @@ pub mod registry;
 pub mod tag_normalizer;
 pub mod unified;
 
+pub use action_plan::*;
 pub use change_plan::*;
 pub use crash::*;
+pub use crash_remote::*;
 pub use diagnostics::*;
 pub use exporter::*;
 pub use forge_install::*;

@@ -114,17 +114,9 @@
     errorMsg = "";
     try {
       const result = await api.mcAuth.offlineLogin(offlineUsername.trim(), skinSource);
-      authState.set({
-        loggedIn: true,
-        profile: result.profile,
-        expiresAt: null,
-        loginType: "offline",
-        skinSource,
-        capeProvider: $authState.capeProvider ?? "mojang",
-        accounts: $authState.accounts,
-        activeAccountUuid: result.profile.uuid,
-      });
-      if (result.profile.skinUrl) {
+      const state = await api.mcAuth.getAuthStatus();
+      authState.set(state);
+      if (result.profile.skinUrl || state.profile?.skinUrl) {
         try {
           const path = await api.mcAuth.getSkinPath(result.profile.uuid);
           skinPath.set(path);

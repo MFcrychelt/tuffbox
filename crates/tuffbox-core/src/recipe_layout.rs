@@ -91,7 +91,11 @@ fn ingredient_to_display(ing: &crate::unified::recipe::UnifiedIngredient) -> Ing
             alts: None,
         },
         UnifiedIngredient::Tag(tag) => IngredientDisplay {
-            id: tag.clone(),
+            id: if tag.starts_with('#') {
+                tag.clone()
+            } else {
+                format!("#{tag}")
+            },
             kind: "tag".into(),
             alts: None,
         },
@@ -104,6 +108,55 @@ fn ingredient_to_display(ing: &crate::unified::recipe::UnifiedIngredient) -> Ing
             }
         }
     }
+}
+
+/// Fill `alts` for tag ingredients from an offline [`TagIndex`] so the UI can
+/// cycle member icons. Nested one_of entries are expanded recursively.
+pub fn expand_layout_tags(
+    layout: &mut RecipeLayout,
+    tags: &crate::tag_index::TagIndex,
+) {
+    for slot in &mut layout.grid {
+        if let Some(ing) = slot {
+            expand_ingredient_tags(ing, tags);
+        }
+    }
+    expand_ingredient_tags(&mut layout.output, tags);
+}
+
+fn expand_ingredient_tags(
+    ing: &mut IngredientDisplay,
+    tags: &crate::tag_index::TagIndex,
+) {
+    if let Some(alts) = ing.alts.as_mut() {
+        for alt in alts.iter_mut() {
+            expand_ingredient_tags(alt, tags);
+        }
+    }
+    let is_tag = ing.kind == "tag" || ing.id.starts_with('#');
+    if !is_tag {
+        return;
+    }
+    if ing.alts.as_ref().is_some_and(|a| !a.is_empty()) {
+        return;
+    }
+    let members = tags.expand_items(&ing.id);
+    if members.is_empty() {
+        return;
+    }
+    // Cap cycling set — huge tags (e.g. #minecraft:logs) would thrash the UI.
+    const MAX_ALTS: usize = 64;
+    ing.alts = Some(
+        members
+            .into_iter()
+            .take(MAX_ALTS)
+            .map(|id| IngredientDisplay {
+                id,
+                kind: "item".into(),
+                alts: None,
+            })
+            .collect(),
+    );
 }
 
 fn json_ingredient_to_display(value: &serde_json::Value) -> Option<IngredientDisplay> {
@@ -411,11 +464,14 @@ pub fn collect_item_ids(layout: &RecipeLayout) -> (Vec<String>, String) {
 
 fn collect_ingredient_ids(ing: &IngredientDisplay, out: &mut Vec<String>) {
     match ing.kind.as_str() {
-        "one_of" => {
+        "one_of" | "tag" => {
             if let Some(alts) = &ing.alts {
                 for alt in alts {
                     collect_ingredient_ids(alt, out);
                 }
+            }
+            if ing.kind == "tag" || ing.id.starts_with('#') {
+                out.push(ing.id.clone());
             }
         }
         _ => out.push(ing.id.clone()),

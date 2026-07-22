@@ -1370,7 +1370,11 @@
   let viewY = 0;
   let viewScale = 1;
   let isPanning = false;
+  let isNodeDragging = false;
   let panStart = { x: 0, y: 0, viewX: 0, viewY: 0 };
+  let panPointerId: number | null = null;
+  let nodeDragPointerId: number | null = null;
+  let endNodeDrag: (() => void) | null = null;
   $: viewBoxHeight = canvasHeight / viewScale;
   $: viewBoxWidth = canvasWidth / viewScale;
   $: viewBoxString = `${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`;
@@ -1402,19 +1406,51 @@
   }
 
   let panMoved = false;
-  function handleBackgroundMouseDown(event: MouseEvent) {
-    if (event.button !== 0) return;
-    if (isPanning) return;
-    isPanning = true;
-    panMoved = false;
-    panStart = { x: event.clientX, y: event.clientY, viewX, viewY };
-    window.addEventListener("mousemove", handleBackgroundMouseMove);
-    window.addEventListener("mouseup", handleBackgroundMouseUp);
+
+  function endBackgroundPan(event?: PointerEvent) {
+    if (!isPanning) return;
+    isPanning = false;
+    if (
+      event &&
+      panPointerId != null &&
+      viewportEl?.hasPointerCapture?.(panPointerId)
+    ) {
+      try {
+        viewportEl.releasePointerCapture(panPointerId);
+      } catch {
+        /* already released */
+      }
+    }
+    panPointerId = null;
+    window.removeEventListener("pointermove", handleBackgroundPointerMove);
+    window.removeEventListener("pointerup", handleBackgroundPointerUp);
+    window.removeEventListener("pointercancel", handleBackgroundPointerUp);
   }
 
-  function handleBackgroundMouseMove(event: MouseEvent) {
+  function handleBackgroundPointerDown(event: PointerEvent) {
+    if (event.button !== 0) return;
+    if (isPanning || isNodeDragging) return;
+    // Only pan on empty canvas — nodes stopPropagation on their own pointerdown.
+    event.preventDefault();
+    isPanning = true;
+    panMoved = false;
+    panPointerId = event.pointerId;
+    panStart = { x: event.clientX, y: event.clientY, viewX, viewY };
+    try {
+      viewportEl?.setPointerCapture?.(event.pointerId);
+    } catch {
+      /* ignore */
+    }
+    window.addEventListener("pointermove", handleBackgroundPointerMove);
+    window.addEventListener("pointerup", handleBackgroundPointerUp);
+    window.addEventListener("pointercancel", handleBackgroundPointerUp);
+  }
+
+  function handleBackgroundPointerMove(event: PointerEvent) {
     if (!isPanning || !viewportEl) return;
+    if (panPointerId != null && event.pointerId !== panPointerId) return;
     const rect = viewportEl.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
     const dx = ((event.clientX - panStart.x) / rect.width) * viewBoxWidth;
     const dy = ((event.clientY - panStart.y) / rect.height) * viewBoxHeight;
     if (Math.abs(event.clientX - panStart.x) > 3 || Math.abs(event.clientY - panStart.y) > 3) {
@@ -1424,10 +1460,14 @@
     viewY = panStart.viewY - dy;
   }
 
-  function handleBackgroundMouseUp() {
-    isPanning = false;
-    window.removeEventListener("mousemove", handleBackgroundMouseMove);
-    window.removeEventListener("mouseup", handleBackgroundMouseUp);
+  function handleBackgroundPointerUp(event: PointerEvent) {
+    if (panPointerId != null && event.pointerId !== panPointerId) return;
+    endBackgroundPan(event);
+  }
+
+  function abortGraphPointers() {
+    endBackgroundPan();
+    endNodeDrag?.();
   }
 
   function fitToContent(padding = 80) {
@@ -1491,6 +1531,13 @@
   }
 
   onMount(() => {
+    const onBlur = () => abortGraphPointers();
+    const onVis = () => {
+      if (document.hidden) abortGraphPointers();
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVis);
+
     void listen<DownloadProgress>("mod-download-progress", (event) => {
       if (depInstallStatus !== "downloading") return;
       depInstallBatchSeen = true;
@@ -1520,26 +1567,48 @@
     }).then((unlisten) => {
       unlistenDownloadBatch = unlisten;
     });
+
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVis);
+      abortGraphPointers();
+    };
   });
 
   onDestroy(() => {
+    abortGraphPointers();
     unlistenDownloadProgress?.();
     unlistenDownloadBatch?.();
     simulation?.stop();
   });
 
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
-  function handleNodeMouseDown(event: MouseEvent, node: PositionedNode) {
+  function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
     event.stopPropagation();
+    if (event.button !== 0) return;
+    event.preventDefault();
     selectedId = node.id;
-    if (!simulation) return;
+    if (!simulation || isNodeDragging) return;
     const sim = simNodes.find((n) => n.id === node.id);
     if (!sim) return;
+    // Don't start a canvas pan while dragging a node.
+    endBackgroundPan();
     const layoutNode = sim;
     const keepPinned = !!layoutNode.isHub;
+    const pointerId = event.pointerId;
+    const target = event.currentTarget as Element | null;
+    isNodeDragging = true;
+    nodeDragPointerId = pointerId;
     layoutNode.fx = layoutNode.x;
     layoutNode.fy = layoutNode.y;
-    const onMouseMove = (ev: MouseEvent) => {
+    try {
+      target?.setPointerCapture?.(pointerId);
+    } catch {
+      /* ignore */
+    }
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       const p = clientToSvgPoint(ev.clientX, ev.clientY);
       layoutNode.fx = p.x;
       layoutNode.fy = p.y;
@@ -1559,18 +1628,34 @@
       }
       simulation?.alpha(0.1).restart();
     };
-    const onMouseUp = () => {
+
+    const finish = (ev?: PointerEvent) => {
+      if (ev && ev.pointerId !== pointerId) return;
       // Hubs stay pinned (modrinth-extras root behavior); others rejoin the sim.
       if (!keepPinned) {
         layoutNode.fx = null;
         layoutNode.fy = null;
       }
       simulation?.alphaTarget(0);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", onMouseUp);
+      if (target?.hasPointerCapture?.(pointerId)) {
+        try {
+          target.releasePointerCapture(pointerId);
+        } catch {
+          /* already released */
+        }
+      }
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      isNodeDragging = false;
+      nodeDragPointerId = null;
+      endNodeDrag = null;
     };
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", onMouseUp);
+
+    endNodeDrag = () => finish();
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   }
 </script>
 
@@ -1714,12 +1799,13 @@
         role="img"
         aria-label="Dependency graph"
         class:panning={isPanning}
+        class:dragging={isNodeDragging}
         on:wheel={handleWheel}
-        on:mousedown={handleBackgroundMouseDown}
-        on:click={(e) => {
+        on:pointerdown={handleBackgroundPointerDown}
+        on:click={() => {
           // Click on empty canvas (not a node — those stopPropagation) clears
           // the current selection, but only if the user wasn't panning.
-          if (!panMoved) selectedId = null;
+          if (!panMoved && !isNodeDragging) selectedId = null;
         }}
         on:dblclick={resetView}
         on:keydown={() => {}}
@@ -1782,7 +1868,7 @@
             class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime")}
             role="button"
             tabindex="0"
-            on:mousedown={(e) => handleNodeMouseDown(e, node)}
+            on:pointerdown={(e) => handleNodeMouseDown(e, node)}
             on:click|stopPropagation={() => handleNodeClick(node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
             aria-label={node.label}
@@ -1839,7 +1925,7 @@
               <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
             {:else}
               <text class="node-label-text" y={half + 14} text-anchor="middle">{node.label.length > 18 ? node.label.slice(0, 17) + "…" : node.label}</text>
-              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" on:mousedown|stopPropagation={() => {}} on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" on:pointerdown|stopPropagation={() => {}} on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
                 <circle cx={half - 2} cy={-half + 2} r="8" />
                 <text x={half - 2} y={-half + 6} text-anchor="middle" class="remove-x">×</text>
               </g>
@@ -2247,6 +2333,9 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
 
   .graph-canvas svg {
@@ -2255,6 +2344,8 @@
     display: block;
     cursor: grab;
     touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   .graph-canvas:fullscreen {
@@ -2268,8 +2359,16 @@
     height: 100vh;
   }
 
-  .graph-canvas svg.panning {
+  .graph-canvas svg.panning,
+  .graph-canvas svg.dragging {
     cursor: grabbing;
+  }
+
+  .graph-canvas svg text,
+  .graph-canvas svg tspan {
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: none;
   }
 
   .canvas-controls {
@@ -2349,7 +2448,7 @@
     transition: fill-opacity 120ms ease;
   }
   /* Cluster spotlight: hovered halo brightens; the rest fade back. */
-  .graph-group { cursor: pointer; transition: opacity 120ms ease; }
+  .graph-group { cursor: pointer; transition: opacity 120ms ease; user-select: none; }
   .graph-group.active .group-halo {
     fill-opacity: 0.14;
     stroke-opacity: 0.6;
@@ -2463,8 +2562,13 @@
   }
 
   .svg-node {
-    cursor: pointer;
+    cursor: grab;
     transition: opacity 120ms ease;
+    user-select: none;
+  }
+  .graph-canvas svg.dragging .svg-node,
+  .svg-node:active {
+    cursor: grabbing;
   }
 
   /* Installed dependency — third color (amber) */
