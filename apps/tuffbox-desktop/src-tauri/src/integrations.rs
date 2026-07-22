@@ -44,6 +44,8 @@ impl Default for AiSettings {
 pub struct IntegrationSettings {
     pub github_repository: String,
     pub ai: AiSettings,
+    #[serde(default)]
+    pub swarm: tuffbox_core::swarm::SwarmSettings,
 }
 
 impl Default for IntegrationSettings {
@@ -51,6 +53,7 @@ impl Default for IntegrationSettings {
         Self {
             github_repository: DEFAULT_GITHUB_REPOSITORY.to_string(),
             ai: AiSettings::default(),
+            swarm: tuffbox_core::swarm::SwarmSettings::default(),
         }
     }
 }
@@ -135,6 +138,105 @@ fn write_settings(settings: &IntegrationSettings) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Current swarm settings from integrations.json.
+pub fn swarm_settings() -> tuffbox_core::swarm::SwarmSettings {
+    read_settings().swarm
+}
+
+pub fn swarm_enabled() -> bool {
+    swarm_settings().enabled
+}
+
+/// Prefer TuffSwarm hub URL, else private Crash KB endpoint.
+pub fn swarm_network_base() -> Option<String> {
+    let s = read_settings();
+    tuffbox_core::swarm::resolve_swarm_network_base(&s.swarm.hub_url, &s.ai.crash_kb_endpoint)
+}
+
+/// Machine-wide durable capsule store (shared across projects on this PC).
+pub fn global_capsule_library() -> tuffbox_core::swarm::CapsuleLibrary {
+    let path = dirs::config_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("swarm")
+        .join("capsules.jsonl");
+    tuffbox_core::swarm::CapsuleLibrary::open(path)
+}
+
+pub fn require_swarm_enabled() -> Result<(), String> {
+    if swarm_enabled() {
+        Ok(())
+    } else {
+        Err(
+            "TuffSwarm network is disabled. Enable it in Settings → Use TuffSwarm network."
+                .into(),
+        )
+    }
+}
+
+/// Complete first-run onboarding and set enabled flag.
+#[tauri::command(rename_all = "camelCase")]
+pub fn complete_swarm_onboarding(enabled: bool) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.enabled = enabled;
+    settings.swarm.onboarding_done = true;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_swarm_settings() -> tuffbox_core::swarm::SwarmSettings {
+    swarm_settings()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_enabled(enabled: bool) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.enabled = enabled;
+    settings.swarm.onboarding_done = true;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_share_prompts(enabled: bool) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.share_prompts_enabled = enabled;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_hub_url(hub_url: String) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.hub_url = hub_url.trim().trim_end_matches('/').to_string();
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_p2p(
+    enabled: bool,
+    control_url: Option<String>,
+) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.p2p_enabled = enabled;
+    settings.swarm.onboarding_done = true;
+    if let Some(url) = control_url {
+        let url = url.trim().trim_end_matches('/').to_string();
+        if !url.is_empty() {
+            settings.swarm.p2p_control_url = url;
+        }
+    }
+    if settings.swarm.p2p_control_url.trim().is_empty() {
+        settings.swarm.p2p_control_url = tuffbox_core::swarm::SwarmSettings::default()
+            .p2p_control_url;
+    }
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
 fn keyring_entry(kind: &str) -> Result<keyring::Entry, String> {
     let account = match kind {
         "github" => "github-token",
@@ -192,6 +294,11 @@ pub fn save_integration_settings(mut settings: IntegrationSettings) -> Result<()
     }
     let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
     settings.ai.diagnose_mode = mode.as_str().to_string();
+    // Preserve swarm when older clients omit the field (serde default).
+    let existing = read_settings();
+    if !settings.swarm.onboarding_done && existing.swarm.onboarding_done {
+        settings.swarm = existing.swarm;
+    }
     write_settings(&settings)
 }
 

@@ -44,7 +44,7 @@ static CIRCUIT: LazyLock<Mutex<CircuitBreakerState>> = LazyLock::new(|| {
 
 /// Returns `Ok(())` if the request may proceed, or `Err` if the
 /// circuit breaker has tripped for this host.
-fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
+pub(crate) fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     let now = Instant::now();
     let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
@@ -73,7 +73,7 @@ fn circuit_check(host: &str) -> Result<(), CircuitBreakerOpen> {
 }
 
 /// Must be called after a *successful* request to the host.
-fn circuit_record_success(host: &str) {
+pub(crate) fn circuit_record_success(host: &str) {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     if let Some(entry) = cb.hosts.get_mut(host) {
         entry.failures.clear();
@@ -82,7 +82,7 @@ fn circuit_record_success(host: &str) {
 }
 
 /// Must be called after a *failed* request to the host.
-fn circuit_record_failure(host: &str) {
+pub(crate) fn circuit_record_failure(host: &str) {
     let mut cb = CIRCUIT.lock().expect("circuit breaker lock poisoned");
     let now = Instant::now();
     let entry = cb.hosts.entry(host.to_string()).or_insert_with(|| HostBreaker {
@@ -101,8 +101,8 @@ fn circuit_record_failure(host: &str) {
 
 #[derive(Debug)]
 pub struct CircuitBreakerOpen {
-    host: String,
-    retry_after_secs: u64,
+    pub host: String,
+    pub retry_after_secs: u64,
 }
 
 impl std::fmt::Display for CircuitBreakerOpen {
@@ -118,7 +118,7 @@ impl std::fmt::Display for CircuitBreakerOpen {
 impl std::error::Error for CircuitBreakerOpen {}
 
 /// Extracts the hostname from a URL for circuit-breaker tracking.
-fn host_from_url(url: &str) -> &str {
+pub(crate) fn host_from_url(url: &str) -> &str {
     url.split("://")
         .nth(1)
         .and_then(|rest| rest.split('/').next())
@@ -375,78 +375,24 @@ pub fn download_streaming(
     url: &str,
     dest: &std::path::Path,
     expected_sha1: Option<&str>,
-    mut progress: Option<Box<dyn FnMut(u64, u64) + Send>>,
+    progress: Option<Box<dyn FnMut(u64, u64) + Send>>,
 ) -> Result<(), StreamingDownloadError> {
-    use sha1::{Digest, Sha1};
-    use std::io::{Read, Write};
-
-    let host = host_from_url(url);
-    circuit_check(host).map_err(|e| {
-        StreamingDownloadError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("circuit breaker open for {}: retry in {}s", e.host, e.retry_after_secs),
-        ))
-    })?;
-
-    let response = fetch_with_redirects(url).map_err(StreamingDownloadError::Http)?;
-    if !response.status().is_success() {
-        circuit_record_failure(host);
-        return Err(StreamingDownloadError::Http(
-            response.error_for_status().unwrap_err(),
-        ));
-    }
-    circuit_record_success(host);
-
-    let total_size = response.content_length().unwrap_or(0);
-    let mut hasher = Sha1::new();
-    let mut received: u64 = 0;
-
-    // Keep the temporary file in the destination directory. `NamedTempFile`
-    // uses the platform replace primitive when persisted, unlike
-    // `std::fs::rename`, which refuses to replace an existing file on
-    // Windows. A failed download therefore leaves the previous jar intact.
-    let parent = dest.parent().unwrap_or_else(|| std::path::Path::new("."));
-    std::fs::create_dir_all(parent).map_err(StreamingDownloadError::Io)?;
-    let mut file = tempfile::Builder::new()
-        .prefix(".tuffbox-download-")
-        .suffix(".part")
-        .tempfile_in(parent)
-        .map_err(StreamingDownloadError::Io)?;
-
-    let mut stream = response;
-    let mut buffer = vec![0u8; 64 * 1024]; // 64KB chunks
-    loop {
-        let n = stream
-            .read(&mut buffer)
-            .map_err(StreamingDownloadError::Io)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-        file.write_all(&buffer[..n])
-            .map_err(StreamingDownloadError::Io)?;
-        received += n as u64;
-        if let Some(ref mut cb) = progress {
-            cb(received, total_size);
-        }
-    }
-    file.flush().map_err(StreamingDownloadError::Io)?;
-    file.as_file()
-        .sync_all()
-        .map_err(StreamingDownloadError::Io)?;
-
-    let actual = format!("{:x}", hasher.finalize());
-    if let Some(expected) = expected_sha1 {
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(StreamingDownloadError::ChecksumMismatch {
-                expected: expected.to_string(),
-                actual,
-            });
-        }
-    }
-
-    persist_replacing(file, dest)?;
-    Ok(())
+    let expected = expected_sha1.map(|s| (s, crate::download_engine::ChecksumKind::Sha1));
+    crate::download_engine::download_resumable(url, dest, expected, progress, None).map_err(
+        |e| match e {
+            crate::download_engine::DownloadEngineError::Http(err) => {
+                StreamingDownloadError::Http(err)
+            }
+            crate::download_engine::DownloadEngineError::Io(err) => StreamingDownloadError::Io(err),
+            crate::download_engine::DownloadEngineError::ChecksumMismatch { expected, actual } => {
+                StreamingDownloadError::ChecksumMismatch { expected, actual }
+            }
+            other => StreamingDownloadError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                other.to_string(),
+            )),
+        },
+    )
 }
 
 fn persist_replacing(

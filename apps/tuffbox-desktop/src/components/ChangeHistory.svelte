@@ -17,6 +17,9 @@
     preview: string;
     diff: string;
     canOpen: boolean;
+    tags?: string[];
+    crashFingerprintKey?: string | null;
+    planSource?: string | null;
   };
 
   let entries: ChangeEntry[] = [];
@@ -291,6 +294,9 @@
               <div class="preview-header">
                 <div>
                   <span class="eyebrow">{entry.category} · {entry.kind.replace("_", " ")}</span>
+                  {#if entry.tags?.includes("crash_fix")}
+                    <span class="crash-fix-badge">crash_fix{#if entry.planSource} · {entry.planSource}{/if}</span>
+                  {/if}
                   <h2><FileText size={18} /> {entry.path}</h2>
                   <p>{entry.createdAt} · {entry.reason}</p>
                 </div>
@@ -402,6 +408,15 @@
   .preview-actions { gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
   .preview-header h2 { gap: 10px; margin: 4px 0; font-size: 20px; }
   .eyebrow { color: var(--accent-primary); text-transform: uppercase; letter-spacing: .1em; font-weight: 900; }
+  .crash-fix-badge {
+    display: inline-block;
+    margin: 4px 0 6px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.12);
+  }
   .summary-card, .diff-card { padding: 14px; margin-bottom: 14px; background: var(--bg-tertiary); }
   .summary-card strong, .diff-title { display: block; color: var(--text-secondary); margin-bottom: 10px; font-weight: 800; }
   pre { overflow: auto; white-space: pre-wrap; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; color: #d4d4d8; }

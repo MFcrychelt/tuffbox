@@ -4,6 +4,8 @@
 
 Начата Stage 1–3 разработка.
 
+**TuffSwarm (федеративная сеть):** не реализована. Foundation — локальный ActionPlan, Crash KB / authored export и opt-in remote KB client. Архитектура сети: [`13-tuffswarm-network.md`](13-tuffswarm-network.md).
+
 Добавлен Rust workspace:
 
 ```text

@@ -1,0 +1,196 @@
+/* Extra themes (GDLauncher Carbon palettes remapped to TuffBox tokens).
+   Default TuffBox dark lives in :root; light in [data-theme="light"] / tuffbox-light. */
+
+[data-theme="tuffbox"] {
+  /* alias of :root — kept for explicit selection */
+}
+
+[data-theme="tuffbox-light"],
+[data-theme="light"] {
+  --bg-primary: #f8f9fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #f1f3f5;
+  --bg-elevated: #e9ecef;
+  --bg-hover: #dee2e6;
+  --bg-active: #ced4da;
+  --text-primary: #212529;
+  --text-secondary: #495057;
+  --text-muted: #868e96;
+  --accent-primary: #0ca84c;
+  --accent-hover: #09913f;
+  --accent-secondary: #6d3cd6;
+  --border-color: #dee2e6;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="carbon"] {
+  --bg-primary: #15181e;
+  --bg-secondary: #1e2129;
+  --bg-tertiary: #272a35;
+  --bg-elevated: #333947;
+  --bg-hover: #404759;
+  --bg-active: #4d556a;
+  --text-primary: #ffffff;
+  --text-secondary: #c4c8d4;
+  --text-muted: #959cb2;
+  --accent-primary: #3e85d0;
+  --accent-hover: #2b6bb1;
+  --accent-secondary: #8cb6e3;
+  --border-color: #333947;
+}
+
+[data-theme="inferno"] {
+  --bg-primary: #120a0a;
+  --bg-secondary: #1c1010;
+  --bg-tertiary: #261616;
+  --bg-elevated: #301c1c;
+  --bg-hover: #3a2323;
+  --bg-active: #4a2d2d;
+  --text-primary: #fffaf5;
+  --text-secondary: #ff9678;
+  --text-muted: #dc3c2d;
+  --accent-primary: #ff5722;
+  --accent-hover: #f44336;
+  --accent-secondary: #ffc107;
+  --border-color: #301c1c;
+}
+
+[data-theme="aether"] {
+  --bg-primary: #1e0d3c;
+  --bg-secondary: #27114d;
+  --bg-tertiary: #31155f;
+  --bg-elevated: #3a1870;
+  --bg-hover: #4c1d95;
+  --bg-active: #5b21b6;
+  --text-primary: #ffffff;
+  --text-secondary: #e9d5ff;
+  --text-muted: #c084fc;
+  --accent-primary: #c084fc;
+  --accent-hover: #a855f7;
+  --accent-secondary: #22c55e;
+  --border-color: #3a1870;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
+}
+
+[data-theme="frost"] {
+  --bg-primary: #0c4c7a;
+  --bg-secondary: #075e99;
+  --bg-tertiary: #0388d2;
+  --bg-elevated: #0ea5e9;
+  --bg-hover: #38bdf8;
+  --bg-active: #7dd3fc;
+  --text-primary: #ffffff;
+  --text-secondary: #e0f2fe;
+  --text-muted: #bae6fd;
+  --accent-primary: #06b6d4;
+  --accent-hover: #0891b2;
+  --accent-secondary: #fbbf24;
+  --border-color: #0284c7;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
+}
+
+[data-theme="pixelato"] {
+  --bg-primary: #101010;
+  --bg-secondary: #202020;
+  --bg-tertiary: #303030;
+  --bg-elevated: #404040;
+  --bg-hover: #505050;
+  --bg-active: #606060;
+  --text-primary: #ffffff;
+  --text-secondary: #b4b4b4;
+  --text-muted: #787878;
+  --accent-primary: #4caf50;
+  --accent-hover: #43a047;
+  --accent-secondary: #4169e1;
+  --border-color: #404040;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
+  --font-sans: var(--font-minecraft), ui-monospace, monospace;
+}
+
+[data-theme="win95"] {
+  --bg-primary: #a5a5a5;
+  --bg-secondary: #c0c0c0;
+  --bg-tertiary: #dfdfdf;
+  --bg-elevated: #c0c0c0;
+  --bg-hover: #d4d4d4;
+  --bg-active: #808080;
+  --text-primary: #000000;
+  --text-secondary: #404040;
+  --text-muted: #808080;
+  --accent-primary: #000080;
+  --accent-hover: #0000c0;
+  --accent-secondary: #008080;
+  --border-color: #808080;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
+  --shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
+  --shadow-md: inset -2px -2px 0 #000, inset 2px 2px 0 #fff;
+}
+
+[data-theme="win95"] button:not(.ghost):not(.secondary) {
+  color: #000;
+  border: 2px solid;
+  border-color: #dfdfdf #000 #000 #dfdfdf;
+  background: #c0c0c0;
+}
+
+[data-theme="win95"] button:not(.ghost):not(.secondary):active {
+  border-color: #000 #dfdfdf #dfdfdf #000;
+}
+
+/* Motion (disabled under html.potato-pc) */
+:root {
+  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  --motion-fast: 160ms;
+  --motion-med: 280ms;
+}
+
+.press-effect {
+  transition: transform var(--motion-fast) var(--ease-spring);
+}
+.press-effect:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.hover-lift {
+  transition: transform var(--motion-med) var(--ease-spring), box-shadow var(--motion-med) ease;
+}
+.hover-lift:hover {
+  transform: translateY(-2px) scale(1.02);
+}
+
+.fade-slide-in {
+  animation: fade-slide-in var(--motion-med) var(--ease-spring) both;
+}
+
+@keyframes fade-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.theme-swatch {
+  transition: transform var(--motion-med) var(--ease-spring), box-shadow var(--motion-med) ease;
+}
+.theme-swatch:hover,
+.theme-swatch.active {
+  transform: scale(1.05);
+}

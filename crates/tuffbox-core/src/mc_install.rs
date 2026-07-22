@@ -662,26 +662,50 @@ fn download_tasks_with_sequential_retry(
     progress.log(&format!("# Downloading {total} {label}s in parallel..."));
     let counter = AtomicUsize::new(0);
 
-    let failed: Vec<(DownloadTask, String)> = tasks
-        .into_par_iter()
-        .filter_map(|task| {
-            if let Some(parent) = task.path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    return Some((task, e.to_string()));
-                }
-            }
-            match download_task(&task) {
-                Ok(()) => {
+    let failed: Vec<(DownloadTask, String)> = {
+        let jobs: Vec<(String, PathBuf, Option<String>)> = tasks
+            .iter()
+            .map(|t| {
+                (
+                    t.urls.first().cloned().unwrap_or_default(),
+                    t.path.clone(),
+                    t.sha1.clone(),
+                )
+            })
+            .collect();
+        // Prefer bounded batch when every task has a primary URL; fall back per-task on errors.
+        let _ = crate::download_engine::download_batch_limited(
+            &jobs,
+            crate::download_engine::configured_concurrency(),
+        );
+        tasks
+            .into_par_iter()
+            .filter_map(|task| {
+                if task.path.exists() {
                     let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
                     if n % log_every == 0 || n == total {
                         progress.log(&format!("# {label}s: {n}/{total}..."));
                     }
-                    None
+                    return None;
                 }
-                Err(e) => Some((task, e.to_string())),
-            }
-        })
-        .collect();
+                if let Some(parent) = task.path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        return Some((task, e.to_string()));
+                    }
+                }
+                match download_task(&task) {
+                    Ok(()) => {
+                        let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                        if n % log_every == 0 || n == total {
+                            progress.log(&format!("# {label}s: {n}/{total}..."));
+                        }
+                        None
+                    }
+                    Err(e) => Some((task, e.to_string())),
+                }
+            })
+            .collect()
+    };
 
     if failed.is_empty() {
         return Ok(());

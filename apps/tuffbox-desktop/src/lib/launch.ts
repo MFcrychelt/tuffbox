@@ -76,6 +76,24 @@ export async function launchWithFeedback(
     const result = await doLaunch(params);
     if (opts?.showSuccess) toasts.success("Launch started");
     opts?.onStarted?.(result);
+    // After a successful start, offer to share a recent crash→fix capsule (swarm opt-in).
+    void (async () => {
+      try {
+        const prompt = await invoke<{
+          fingerprintKey?: string;
+          humanExplanation?: string;
+        } | null>("get_share_prompt_after_launch", { path: params.path });
+        if (prompt) {
+          window.dispatchEvent(
+            new CustomEvent("tuffbox:share-capsule", {
+              detail: { path: params.path, marker: prompt },
+            }),
+          );
+        }
+      } catch {
+        // ignore — share is optional
+      }
+    })();
     return result;
   } catch (e) {
     showLaunchError(e, () => launchWithFeedback(params, opts));

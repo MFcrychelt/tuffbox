@@ -1,6 +1,10 @@
 mod auth;
 mod integrations;
+mod launcher_settings;
 mod presence;
+mod swarm_api;
+mod swarm_node;
+mod task_progress_api;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -80,6 +84,12 @@ struct ProjectChangeEntry {
     preview: String,
     diff: String,
     can_open: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    crash_fingerprint_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    plan_source: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -3969,62 +3979,133 @@ async fn analyze_crash_with_ai(
         &ai_ctx.loader,
     );
 
-    let kb_token = integrations::secret_optional("crash_kb");
-    let kb_endpoint = settings.ai.crash_kb_endpoint.trim().to_string();
-    let online_kb = !kb_endpoint.is_empty();
+    let swarm_on = integrations::swarm_enabled();
+    // Network Fix Mode: P2P control (Phase C) and/or hub/KB (Phase B fallback).
+    let transport_bases = if swarm_on {
+        swarm_node::capsule_transport_bases().await
+    } else {
+        Vec::new()
+    };
+    let online_kb = !transport_bases.is_empty();
+    let mut network_used = false;
+
+    // Merge durable shared capsules (machine-wide) into local RAG context when swarm is on.
+    let mut ai_ctx = ai_ctx;
+    if swarm_on {
+        let global_hits = integrations::global_capsule_library().lookup(
+            &fingerprint,
+            &haystack,
+            5,
+        );
+        if !global_hits.is_empty() {
+            let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits);
+            merged.extend(ai_ctx.similar_cases.drain(..));
+            // Dedup by id, keep highest score order.
+            let mut seen = std::collections::HashSet::new();
+            merged.retain(|h| seen.insert(h.id.clone()));
+            ai_ctx.similar_cases = merged;
+        }
+    }
 
     let plan = match mode {
         tuffbox_core::action_plan::DiagnoseMode::Server if online_kb => {
+            network_used = true;
             let req = tuffbox_core::crash_remote::CrashDiagnoseRequest {
                 fingerprint: fingerprint.clone(),
                 context: Some(serde_json::to_value(&ai_ctx).unwrap_or_default()),
                 excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
                 prefer_kb_only: false,
             };
-            match tuffbox_core::crash_remote::diagnose_remote_async(
-                &kb_endpoint,
-                kb_token.as_deref(),
-                &req,
-            )
-            .await
+            match swarm_node::diagnose_across_transports(&req).await
             {
-                Ok(resp) => resp.plan,
+                Ok(resp) => {
+                    // Cache remote capsules locally so solutions survive hub downtime.
+                    for id in &resp.plan.matched_case_ids {
+                        let _ = id;
+                    }
+                    if let Ok(capsule) = tuffbox_core::swarm::ExperienceCapsule::from_public_value(
+                        &serde_json::json!({
+                            "id": resp.plan.matched_case_ids.first().cloned().unwrap_or_else(|| format!("remote-{}", fingerprint.key)),
+                            "fingerprint": fingerprint,
+                            "solution": resp.plan.human_explanation,
+                            "actions": resp.plan.actions,
+                            "successScore": resp.plan.confidence,
+                            "successCount": 1u32,
+                            "failCount": 0u32,
+                        }),
+                    ) {
+                        let _ = integrations::global_capsule_library().publish(&capsule);
+                    }
+                    resp.plan
+                }
                 Err(remote_err) => {
-                    // Fall back to local LLM with thin/local KB already in context.
-                    let prompt = context
-                        .get("prompt")
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(|| {
-                            format!("server diagnose failed ({remote_err}); no local prompt")
-                        })?;
-                    let value =
-                        integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
-                    let raw = serde_json::to_string(&value).unwrap_or_default();
-                    tuffbox_core::action_plan::parse_action_plan(&raw).map_err(|e| {
-                        format!("server diagnose failed ({remote_err}); local parse: {e}")
-                    })?
+                    // Fall back: global shared library, then local LLM.
+                    if let Some(plan) = integrations::global_capsule_library()
+                        .diagnose_best(&fingerprint, &haystack)
+                    {
+                        plan
+                    } else {
+                        let prompt = context
+                            .get("prompt")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| {
+                                format!("server diagnose failed ({remote_err}); no local prompt")
+                            })?;
+                        let value =
+                            integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
+                        let raw = serde_json::to_string(&value).unwrap_or_default();
+                        tuffbox_core::action_plan::parse_action_plan(&raw).map_err(|e| {
+                            format!("server diagnose failed ({remote_err}); local parse: {e}")
+                        })?
+                    }
                 }
             }
         }
         tuffbox_core::action_plan::DiagnoseMode::Local => {
             let mut ctx = ai_ctx.clone();
             if online_kb {
+                network_used = true;
                 let req = tuffbox_core::crash_remote::CrashLookupRequest {
                     fingerprint: fingerprint.clone(),
                     excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
-                    mc_version: Some(ai_ctx.mc_version.clone()),
-                    loader: Some(ai_ctx.loader.clone()),
+                    mc_version: Some(ctx.mc_version.clone()),
+                    loader: Some(ctx.loader.clone()),
                     limit: 5,
                 };
-                if let Ok(resp) = tuffbox_core::crash_remote::lookup_remote_async(
-                    &kb_endpoint,
-                    kb_token.as_deref(),
-                    &req,
-                )
-                .await
+                if let Some(resp) = swarm_node::lookup_across_transports(&req).await
                 {
-                    ctx.similar_cases =
+                    // Persist peer solutions into the global library.
+                    for hit in &resp.hits {
+                        if let Ok(capsule) =
+                            tuffbox_core::swarm::ExperienceCapsule::from_public_value(
+                                &serde_json::json!({
+                                    "id": hit.id,
+                                    "fingerprint": {
+                                        "exception": fingerprint.exception,
+                                        "frames": fingerprint.frames,
+                                        "modFile": fingerprint.mod_file,
+                                        "mixin": fingerprint.mixin,
+                                        "mcMajor": fingerprint.mc_major,
+                                        "loader": fingerprint.loader,
+                                        "key": hit.fingerprint_key,
+                                    },
+                                    "solution": hit.solution,
+                                    "actions": hit.actions,
+                                    "successScore": hit.score,
+                                    "successCount": 1u32,
+                                    "failCount": 0u32,
+                                }),
+                            )
+                        {
+                            let _ = integrations::global_capsule_library().publish(&capsule);
+                        }
+                    }
+                    let mut remote =
                         tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
+                    remote.extend(ctx.similar_cases.drain(..));
+                    let mut seen = std::collections::HashSet::new();
+                    remote.retain(|h| seen.insert(h.id.clone()));
+                    ctx.similar_cases = remote;
                 }
             }
             let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ctx);
@@ -4033,8 +4114,8 @@ async fn analyze_crash_with_ai(
             tuffbox_core::action_plan::parse_action_plan(&raw)?
         }
         tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
-            // Prefer remote lookup; else strongest local similar case.
             if online_kb {
+                network_used = true;
                 let req = tuffbox_core::crash_remote::CrashLookupRequest {
                     fingerprint: fingerprint.clone(),
                     excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
@@ -4042,23 +4123,82 @@ async fn analyze_crash_with_ai(
                     loader: Some(ai_ctx.loader.clone()),
                     limit: 1,
                 };
-                let resp = tuffbox_core::crash_remote::lookup_remote_async(
-                    &kb_endpoint,
-                    kb_token.as_deref(),
-                    &req,
-                )
-                .await?;
-                let hit = resp
-                    .hits
-                    .first()
-                    .ok_or_else(|| "no remote KB hits for this fingerprint".to_string())?;
-                tuffbox_core::action_plan::plan_from_launcher_actions(
-                    &hit.solution,
-                    &hit.suspected_mods,
-                    hit.actions.clone(),
-                    &hit.id,
-                    hit.score,
-                )
+                match swarm_node::lookup_across_transports(&req).await
+                {
+                    Some(resp) => {
+                        let hit = resp.hits.first().ok_or_else(|| {
+                            "no remote KB hits for this fingerprint".to_string()
+                        })?;
+                        if let Ok(capsule) =
+                            tuffbox_core::swarm::ExperienceCapsule::from_public_value(
+                                &serde_json::json!({
+                                    "id": hit.id,
+                                    "fingerprint": fingerprint,
+                                    "solution": hit.solution,
+                                    "actions": hit.actions,
+                                    "successScore": hit.score,
+                                    "successCount": 1u32,
+                                    "failCount": 0u32,
+                                }),
+                            )
+                        {
+                            let _ = integrations::global_capsule_library().publish(&capsule);
+                        }
+                        tuffbox_core::action_plan::plan_from_launcher_actions(
+                            &hit.solution,
+                            &hit.suspected_mods,
+                            hit.actions.clone(),
+                            &hit.id,
+                            hit.score,
+                        )
+                    }
+                    None => {
+                        if let Some(plan) = integrations::global_capsule_library()
+                            .diagnose_best(&fingerprint, &haystack)
+                        {
+                            plan
+                        } else {
+                            let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
+                            let similar = tuffbox_core::crash_kb::search_similar(
+                                &cases,
+                                &fingerprint,
+                                &haystack,
+                                1,
+                            );
+                            let hit = similar.first().ok_or_else(|| {
+                                "no local KB hits for this fingerprint".to_string()
+                            })?;
+                            tuffbox_core::action_plan::plan_from_kb_hit(
+                                &hit.solution,
+                                &hit.suspected_mods,
+                                &hit.actions,
+                                &hit.id,
+                                hit.score,
+                            )
+                        }
+                    }
+                }
+            } else if swarm_on {
+                if let Some(plan) = integrations::global_capsule_library()
+                    .diagnose_best(&fingerprint, &haystack)
+                {
+                    network_used = true;
+                    plan
+                } else {
+                    let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
+                    let similar =
+                        tuffbox_core::crash_kb::search_similar(&cases, &fingerprint, &haystack, 1);
+                    let hit = similar
+                        .first()
+                        .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
+                    tuffbox_core::action_plan::plan_from_kb_hit(
+                        &hit.solution,
+                        &hit.suspected_mods,
+                        &hit.actions,
+                        &hit.id,
+                        hit.score,
+                    )
+                }
             } else {
                 let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
                 let similar =
@@ -4075,18 +4215,43 @@ async fn analyze_crash_with_ai(
                 )
             }
         }
-        // Server mode without KB endpoint → local LLM (same as previous behavior).
+        // Server mode without network → local LLM (previous behavior).
         tuffbox_core::action_plan::DiagnoseMode::Server => {
-            let prompt = context
-                .get("prompt")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| "crash context did not contain an AI prompt".to_string())?;
-            let value = integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
-            let raw = serde_json::to_string(&value).unwrap_or_default();
-            tuffbox_core::action_plan::parse_action_plan(&raw)?
+            // Still prefer durable shared capsules when swarm is on.
+            if swarm_on {
+                if let Some(plan) = integrations::global_capsule_library()
+                    .diagnose_best(&fingerprint, &haystack)
+                {
+                    if plan.confidence >= tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
+                        network_used = true;
+                        plan
+                    } else {
+                        let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
+                        let value =
+                            integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
+                        let raw = serde_json::to_string(&value).unwrap_or_default();
+                        tuffbox_core::action_plan::parse_action_plan(&raw)?
+                    }
+                } else {
+                    let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
+                    let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
+                    let raw = serde_json::to_string(&value).unwrap_or_default();
+                    tuffbox_core::action_plan::parse_action_plan(&raw)?
+                }
+            } else {
+                let prompt = context
+                    .get("prompt")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "crash context did not contain an AI prompt".to_string())?;
+                let value = integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
+                let raw = serde_json::to_string(&value).unwrap_or_default();
+                tuffbox_core::action_plan::parse_action_plan(&raw)?
+            }
         }
     };
 
+    let pending_path =
+        swarm_api::maybe_persist_pending_from_plan(&project_dir, &plan, network_used);
     let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
     let legacy = tuffbox_core::action_plan::plan_to_legacy_ai_actions(&plan);
 
@@ -4111,6 +4276,9 @@ async fn analyze_crash_with_ai(
         "model": settings.ai.model,
         "similarCaseCount": similar_count,
         "fingerprintKey": fingerprint.key,
+        "swarmEnabled": swarm_on,
+        "networkUsed": network_used,
+        "pendingPlanPath": pending_path.map(|p| p.to_string_lossy().to_string()),
     }))
 }
 
@@ -4120,6 +4288,7 @@ async fn apply_action_plan(
     app: tauri::AppHandle,
     path: String,
     plan: tuffbox_core::action_plan::ActionPlan,
+    fingerprint_key: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
     if !validation.ok {
@@ -4129,7 +4298,11 @@ async fn apply_action_plan(
         ));
     }
     let manifest_path = PathBuf::from(&path);
-    auto_snapshot(&manifest_path, "apply-action-plan").map_err(|e| e.to_string())?;
+    let snapshot = swarm_api::auto_snapshot_crash_fix(
+        &manifest_path,
+        &plan,
+        fingerprint_key.as_deref(),
+    )?;
 
     let mut applied = Vec::new();
     let mut errors = Vec::new();
@@ -4178,10 +4351,17 @@ async fn apply_action_plan(
         }
     }
 
+    // Record co-occurrence after successful crash-fix apply (swarm only).
+    if errors.is_empty() && integrations::swarm_enabled() {
+        let _ = swarm_api::record_project_cooccurrence(path.clone());
+    }
+
     Ok(serde_json::json!({
         "applied": applied,
         "errors": errors,
         "ok": errors.is_empty(),
+        "snapshotId": snapshot.id,
+        "snapshotTags": snapshot.tags,
     }))
 }
 
@@ -6629,15 +6809,30 @@ async fn apply_crash_fix_plan(
 ) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let diagnosis = get_crash_diagnosis(path.clone(), report_id)?;
+        let project_dir = manifest_parent(&path)?;
+        let diagnosis = get_crash_diagnosis(path.clone(), report_id.clone())?;
         let plan = diagnosis.fix_plan;
 
         if plan.actions.is_empty() {
             return Ok(Vec::new());
         }
 
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
+        let crash = load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
+        let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
+            &crash,
+            &manifest.minecraft.version,
+            &loader,
+        );
+
         if plan.requires_snapshot {
-            auto_snapshot(&manifest_path, "apply-crash-fix-plan").map_err(|e| e.to_string())?;
+            swarm_api::auto_snapshot_crash_fix_heuristic(
+                &manifest_path,
+                Some(fingerprint.key.as_str()),
+                &plan.summary,
+                report_id.as_deref(),
+            )?;
         }
 
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -6647,6 +6842,9 @@ async fn apply_crash_fix_plan(
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods(&manifest_path, &manifest);
+        if integrations::swarm_enabled() {
+            let _ = swarm_api::record_project_cooccurrence(path.clone());
+        }
         Ok(applied)
     })
     .await
@@ -6723,6 +6921,9 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 preview: diff_preview(&diff),
                 diff,
                 can_open: after_path.is_file() && is_editable_config_path(&after_path),
+                tags: snapshot.tags.clone(),
+                crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
+                plan_source: snapshot.plan_source.clone(),
             });
         }
     }
@@ -7409,7 +7610,19 @@ fn build_and_spawn(
         })?
         .clone();
 
-    let java_path = manifest.java.as_ref().and_then(|j| j.path.clone());
+    let launch_settings = launcher_settings::load_launcher_settings();
+
+    let java_path = manifest
+        .java
+        .as_ref()
+        .and_then(|j| j.path.clone())
+        .or_else(|| {
+            launch_settings
+                .default_java_path
+                .as_ref()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        });
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
             LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&log_path)
@@ -7453,11 +7666,8 @@ fn build_and_spawn(
                 .with_log(&log_path)
         })?;
 
-    // launcher_dir = общая папка TuffBox (где versions, libraries, assets)
-    let launcher_dir = dirs::data_dir()
-        .or_else(dirs::home_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("TuffBox");
+    // launcher_dir = shared game data (versions, libraries, assets)
+    let launcher_dir = launcher_settings::resolve_runtime_path();
 
     std::fs::create_dir_all(&launcher_dir).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
@@ -7468,6 +7678,10 @@ fn build_and_spawn(
 
     progress.log(&format!("# Game directory: {}", game_dir.display()));
     progress.log(&format!("# Launcher directory: {}", launcher_dir.display()));
+
+    if let Err(e) = launcher_settings::run_hook(launch_settings.pre_launch_hook.as_deref(), "pre-launch hook") {
+        return Err(LaunchErrorInfo::new(LaunchErrorKind::Unknown, e).with_log(&log_path));
+    }
 
     // Safety net: make sure every mod declared in the manifest actually has
     // its .jar on disk before we launch. Mods can end up missing here if
@@ -7503,6 +7717,9 @@ fn build_and_spawn(
         }
     };
     let mut launch_jvm_args = project_profile.jvm_args.clone();
+    launch_jvm_args.extend(launcher_settings::split_custom_jvm_args(
+        launch_settings.java_custom_args.as_deref(),
+    ));
     let cleanup_paths = if let Some(bridge) = bridge {
         progress.log("# JEI live recipe bridge enabled.");
         launch_jvm_args.extend(bridge.jvm_args);
@@ -7538,7 +7755,7 @@ fn build_and_spawn(
         jvm_args: launch_jvm_args,
     };
 
-    let (cmd, _) = TestLauncher::build_command(
+    let (mut cmd, _) = TestLauncher::build_command(
         &manifest,
         &project_profile,
         &options,
@@ -7556,6 +7773,13 @@ fn build_and_spawn(
         LaunchErrorInfo::new(kind, msg).with_log(&log_path)
     })?;
 
+    if let Some(res) = &launch_settings.game_resolution {
+        cmd.arg("--width").arg(res.width.to_string());
+        cmd.arg("--height").arg(res.height.to_string());
+    }
+
+    let cmd = launcher_settings::wrap_java_command(cmd, launch_settings.wrapper_command.as_deref());
+
     progress.log("# Starting Java process...");
 
     // Crash callback + playtime + Discord presence cleanup
@@ -7569,11 +7793,15 @@ fn build_and_spawn(
     };
     let app_for_exit = app.clone();
     let stats_path_for_exit = path.clone();
+    let post_exit_hook = launch_settings.post_exit_hook.clone();
     let instance_label = manifest.project.name.clone();
     let _ = presence::set_playing_activity(&instance_label, "In Minecraft");
     let _ = record_launch(path.clone());
     let on_exit: Option<OnExit> = Some(Box::new(move |exit: ProcessExit| {
         let _ = presence::clear_activity();
+        if let Some(ref hook) = post_exit_hook {
+            let _ = launcher_settings::run_hook(Some(hook), "post-exit hook");
+        }
         // Accumulate playtime for every session (including crashes).
         if let Ok(project_dir) = manifest_parent(&stats_path_for_exit) {
             let mut stats = load_stats(&project_dir);
@@ -7852,6 +8080,11 @@ async fn install_modpack(
             "modpack-install-progress",
             serde_json::json!({ "phase": "resolving", "message": "Preparing modpack…" }),
         );
+        let task_id = tuffbox_core::task_progress::start_task(
+            format!("modpack-{}", tuffbox_core::time_util::compact_now()),
+            "Install modpack",
+        );
+        tuffbox_core::task_progress::set_progress(&task_id, 0.05, Some("Preparing…".into()));
 
         // Remote CF file: source is "cf:<modId>:<fileId>" or a direct URL.
         let pack_path = if let Some(rest) = source.strip_prefix("cf:") {
@@ -7978,6 +8211,10 @@ async fn install_modpack(
                 "message": "Modpack installed",
                 "failed": report.failed.len(),
             }),
+        );
+        tuffbox_core::task_progress::succeed(
+            &task_id,
+            Some(format!("{} mods", manifest.mods.len())),
         );
 
         Ok(serde_json::json!({
@@ -8954,6 +9191,9 @@ fn mod_change_entries(
                 ),
                 diff: format!("+ {} {} ({:?})", module.name, module.version, module.side),
                 can_open: false,
+                tags: snapshot.tags.clone(),
+                crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
+                plan_source: snapshot.plan_source.clone(),
             });
         }
     }
@@ -8975,6 +9215,9 @@ fn mod_change_entries(
                 ),
                 diff: format!("- {} {} ({:?})", module.name, module.version, module.side),
                 can_open: false,
+                tags: snapshot.tags.clone(),
+                crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
+                plan_source: snapshot.plan_source.clone(),
             });
         }
     }
@@ -9010,6 +9253,9 @@ fn mod_change_entries(
                     after_module.side
                 ),
                 can_open: false,
+                tags: snapshot.tags.clone(),
+                crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
+                plan_source: snapshot.plan_source.clone(),
             });
         }
     }
@@ -10297,6 +10543,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            let _ = launcher_settings::load_launcher_settings();
             use tauri::Manager;
             if let Ok(resources) = app.path().resource_dir() {
                 std::env::set_var("TUFFBOX_JEI_BRIDGE_DIR", resources.join("jei-bridge"));
@@ -10384,6 +10631,27 @@ pub fn run() {
             list_authored_crash_cases,
             get_authored_case_export,
             open_authored_kb_folder,
+            swarm_api::get_pending_action_plan,
+            swarm_api::clear_pending_network_plan,
+            swarm_api::write_pending_network_plan,
+            swarm_api::get_share_prompt_after_launch,
+            swarm_api::dismiss_share_prompt,
+            swarm_api::publish_experience_capsule,
+            swarm_api::record_project_cooccurrence,
+            swarm_api::get_local_cooccurrence,
+            swarm_api::get_creation_trends,
+            swarm_api::suggest_mods_from_trends,
+            integrations::complete_swarm_onboarding,
+            integrations::get_swarm_settings,
+            integrations::set_swarm_enabled,
+            integrations::set_swarm_share_prompts,
+            integrations::set_swarm_hub_url,
+            integrations::set_swarm_p2p,
+            swarm_node::get_p2p_node_status,
+            swarm_node::ensure_p2p_node,
+            task_progress_api::list_background_tasks,
+            task_progress_api::dismiss_background_task,
+            task_progress_api::start_background_task,
             recommend_mods,
             get_mod_info,
             restore_backup,
@@ -10545,6 +10813,8 @@ pub fn run() {
             auth::mc_switch_account,
             auth::mc_remove_account,
             auth::mc_apply_skin,
+            auth::mc_upload_skin,
+            auth::mc_upload_skin_file,
             auth::mc_apply_cape,
             auth::mc_list_capes,
             auth::mc_set_cape_provider,
@@ -10554,6 +10824,10 @@ pub fn run() {
             auth::mc_get_skin_base64,
             get_presence_settings,
             save_presence_settings,
+            launcher_settings::get_launcher_settings,
+            launcher_settings::save_launcher_settings_cmd,
+            launcher_settings::get_runtime_path_info,
+            launcher_settings::validate_runtime_path_cmd,
             set_discord_presence,
             clear_discord_presence,
         ])

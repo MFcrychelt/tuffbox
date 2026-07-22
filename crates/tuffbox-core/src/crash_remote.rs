@@ -306,3 +306,82 @@ pub async fn diagnose_remote_async(
         })
     }
 }
+
+/// POST /v1/crash/capsules — publish ExperienceCapsule (Phase B HTTP).
+pub async fn publish_capsule_async(
+    base_url: &str,
+    token: Option<&str>,
+    capsule: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    if base_url.trim().is_empty() {
+        return Err("crash KB endpoint is not configured".into());
+    }
+    let url = join_url(base_url, "/v1/crash/capsules");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.post(&url).json(capsule);
+    if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(token);
+    }
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("capsule publish failed: {e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("capsule publish {status}: {msg}"));
+    }
+    Ok(body)
+}
+
+/// POST /v1/mods/cooccurrence — optional network stats for Creation trends.
+pub async fn fetch_cooccurrence_async(
+    base_url: &str,
+    token: Option<&str>,
+    mc_version: &str,
+    loader: &str,
+    limit: u32,
+) -> Result<serde_json::Value, String> {
+    if base_url.trim().is_empty() {
+        return Err("crash KB endpoint is not configured".into());
+    }
+    let url = join_url(base_url, "/v1/mods/cooccurrence");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = json!({
+        "mcVersion": mc_version,
+        "loader": loader,
+        "limit": limit,
+    });
+    let mut req = client.post(&url).json(&payload);
+    if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(token);
+    }
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("cooccurrence fetch failed: {e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("cooccurrence {status}: {msg}"));
+    }
+    Ok(body)
+}

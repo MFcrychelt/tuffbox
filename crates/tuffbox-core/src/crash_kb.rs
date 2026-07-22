@@ -102,11 +102,13 @@ pub struct AuthorCaseSaveResult {
 }
 
 /// Extract a stable fingerprint from crash report / log text.
+/// Scrubs absolute paths and UUID-like tokens before hashing (ReDoS-aware linear patterns).
 pub fn fingerprint_from_text(text: &str, mc_version: &str, loader: &str) -> CrashFingerprint {
-    let exception = extract_exception(text);
-    let frames = extract_top_frames(text, 5);
-    let mod_file = extract_mod_file(text);
-    let mixin = extract_mixin(text);
+    let scrubbed = scrub_privacy_sensitive(text);
+    let exception = extract_exception(&scrubbed);
+    let frames = extract_top_frames(&scrubbed, 5);
+    let mod_file = extract_mod_file(&scrubbed);
+    let mixin = extract_mixin(&scrubbed);
     let mc_major = mc_major(mc_version);
     let loader = loader.to_ascii_lowercase();
     let key = format!(
@@ -129,6 +131,130 @@ pub fn fingerprint_from_text(text: &str, mc_version: &str, loader: &str) -> Cras
         loader,
         key,
     }
+}
+
+/// Replace home/user paths and UUID-like tokens so fingerprints do not leak identity.
+/// Uses linear scans only (no nested regex quantifiers) to avoid ReDoS.
+pub fn scrub_privacy_sensitive(text: &str) -> String {
+    let mut out = scrub_windows_users(text);
+    out = replace_unix_home(&out);
+    scrub_uuids(&out)
+}
+
+fn scrub_windows_users(text: &str) -> String {
+    // Case-insensitive scan for `X:\Users\<name>` / `X:/Users/<name>`.
+    let lower = text.to_ascii_lowercase();
+    let marker = "\\users\\";
+    let marker_fwd = "/users/";
+    let bytes = text.as_bytes();
+    let lower_bytes = lower.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let is_drive = i + 3 < bytes.len()
+            && bytes[i].is_ascii_alphabetic()
+            && bytes[i + 1] == b':'
+            && (bytes[i + 2] == b'\\' || bytes[i + 2] == b'/');
+        if is_drive {
+            let after_drive = i + 2;
+            let rest_lower = &lower_bytes[after_drive..];
+            let matched = if rest_lower.starts_with(marker.as_bytes()) {
+                Some((marker.len(), b'\\'))
+            } else if rest_lower.starts_with(marker_fwd.as_bytes()) {
+                Some((marker_fwd.len(), b'/'))
+            } else {
+                None
+            };
+            if let Some((mlen, sep)) = matched {
+                let name_start = after_drive + mlen;
+                let mut name_end = name_start;
+                while name_end < bytes.len() {
+                    let c = bytes[name_end];
+                    if c == b'\\' || c == b'/' || c == b' ' || c == b'\t' || c == b'\n' || c == b'\r'
+                    {
+                        break;
+                    }
+                    name_end += 1;
+                }
+                out.push(bytes[i] as char);
+                out.push(':');
+                out.push(sep as char);
+                out.push_str("Users");
+                out.push(sep as char);
+                out.push_str("%USER_HOME%");
+                i = name_end;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+fn replace_unix_home(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let scrubbed = if let Some(rest) = line.strip_prefix("/home/") {
+            let name_end = rest.find('/').unwrap_or(rest.len());
+            format!("/home/%USER_HOME%{}", &rest[name_end..])
+        } else if let Some(rest) = line.strip_prefix("/Users/") {
+            let name_end = rest.find('/').unwrap_or(rest.len());
+            format!("/Users/%USER_HOME%{}", &rest[name_end..])
+        } else {
+            line.to_string()
+        };
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&scrubbed);
+    }
+    // Preserve trailing newline if present.
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn scrub_uuids(text: &str) -> String {
+    // Manual linear scan for 8-4-4-4-12 hex groups to avoid heavy regex engine edge cases.
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(len) = match_uuid_at(bytes, i) {
+            out.push_str("%UUID%");
+            i += len;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+fn match_uuid_at(bytes: &[u8], i: usize) -> Option<usize> {
+    // 8-4-4-4-12 = 36 chars
+    if i + 36 > bytes.len() {
+        return None;
+    }
+    let slice = &bytes[i..i + 36];
+    let is_hex = |b: u8| b.is_ascii_hexdigit();
+    let groups: &[(usize, usize)] = &[(0, 8), (9, 4), (14, 4), (19, 4), (24, 12)];
+    let dashes = [8usize, 13, 18, 23];
+    for &d in &dashes {
+        if slice[d] != b'-' {
+            return None;
+        }
+    }
+    for &(start, len) in groups {
+        for b in &slice[start..start + len] {
+            if !is_hex(*b) {
+                return None;
+            }
+        }
+    }
+    Some(36)
 }
 
 /// Builtin seed cases (from common Crash Assistant patterns).
@@ -838,5 +964,21 @@ mod tests {
         let hits = search_similar(&cases, &fp, "java heap space oom", 3);
         assert!(!hits.is_empty());
         assert!(hits[0].solution.to_lowercase().contains("ram") || hits[0].solution.to_lowercase().contains("memory"));
+    }
+
+    #[test]
+    fn scrub_paths_and_uuids() {
+        let raw = "C:\\Users\\alice\\AppData\\Roaming\\.minecraft\\mods\\foo.jar\n\
+/home/bob/.minecraft/logs/latest.log\n\
+session=550e8400-e29b-41d4-a716-446655440000\n\
+at com.example.Mod.init(Mod.java:42)\n";
+        let scrubbed = scrub_privacy_sensitive(raw);
+        assert!(scrubbed.contains("%USER_HOME%"), "{scrubbed}");
+        assert!(!scrubbed.to_ascii_lowercase().contains("alice"));
+        assert!(!scrubbed.contains("bob"));
+        assert!(scrubbed.contains("%UUID%"));
+        assert!(!scrubbed.contains("550e8400"));
+        let fp = fingerprint_from_text(raw, "1.20.1", "fabric");
+        assert!(!fp.key.to_ascii_lowercase().contains("alice"));
     }
 }

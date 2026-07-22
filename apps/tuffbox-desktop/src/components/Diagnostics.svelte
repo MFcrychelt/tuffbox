@@ -363,6 +363,9 @@
   let aiFeedbackMsg: string | null = null;
   let aiModalOpen = false;
   let aiApplyBusy = false;
+  let pendingPlan: any = null;
+  let pendingBusy = false;
+  let swarmEnabled = false;
 
   // Author KB case form (pack author — crash + resolution)
   let authorOpen = false;
@@ -396,6 +399,8 @@
         path: $projectPath,
         reportId,
       });
+      swarmEnabled = !!aiAnalysis?.swarmEnabled;
+      await loadPendingPlan();
       const similar = context.similarCaseCount ?? 0;
       const model = context.aiModel ?? aiAnalysis?.model ?? "AI";
       message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}). Review before applying fixes.`;
@@ -502,6 +507,7 @@
       const result: any = await invoke("apply_action_plan", {
         path: $projectPath,
         plan,
+        fingerprintKey: aiAnalysis.fingerprintKey ?? aiContext?.fingerprintKey ?? null,
       });
       const applied = result?.applied ?? [];
       const errs = result?.errors ?? [];
@@ -514,6 +520,55 @@
       error = String(e);
     } finally {
       aiApplyBusy = false;
+    }
+  }
+
+  async function loadPendingPlan() {
+    pendingPlan = null;
+    if (!$projectPath) return;
+    try {
+      const swarm = await invoke<{ enabled?: boolean }>("get_swarm_settings");
+      swarmEnabled = !!swarm?.enabled;
+      if (!swarmEnabled) return;
+      pendingPlan = await invoke("get_pending_action_plan", { path: $projectPath });
+    } catch {
+      pendingPlan = null;
+    }
+  }
+
+  async function applyPendingNetworkFix() {
+    if (!$projectPath || !pendingPlan) return;
+    if (!swarmEnabled) {
+      error = "Enable TuffSwarm network in Settings to apply network fixes.";
+      return;
+    }
+    const actions = pendingPlan.actions ?? [];
+    if (!actions.length) {
+      error = "Pending network plan has no actions.";
+      return;
+    }
+    const ok = confirm(
+      `Apply network fix with ${actions.length} action(s)?\nA snapshot will be created first. Nothing runs without this confirm.`,
+    );
+    if (!ok) return;
+    pendingBusy = true;
+    error = null;
+    try {
+      const result: any = await invoke("apply_action_plan", {
+        path: $projectPath,
+        plan: pendingPlan,
+        fingerprintKey: pendingPlan.matchedCaseIds?.[0] ?? null,
+      });
+      const applied = result?.applied ?? [];
+      const errs = result?.errors ?? [];
+      message = `Network fix applied (${applied.length}).${errs.length ? ` Errors: ${errs.join("; ")}` : ""}`;
+      if (errs.length) error = errs.join("; ");
+      await invoke("clear_pending_network_plan", { path: $projectPath });
+      pendingPlan = null;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      pendingBusy = false;
     }
   }
 
@@ -1034,7 +1089,10 @@
       void load(true);
     };
     window.addEventListener("tuffbox:open-diagnostics", reload);
-    if ($projectPath) void load(true);
+    if ($projectPath) {
+      void load(true);
+      void loadPendingPlan();
+    }
     return () => window.removeEventListener("tuffbox:open-diagnostics", reload);
   });
 </script>
@@ -1095,9 +1153,18 @@
         <Zap size={16} />
         {unifyLoading ? "Generating..." : "Unify config"}
       </button>
-      <button class="secondary" on:click={runAiExplain} disabled={!$projectPath || aiLoading}>
+      <button class="secondary" on:click={runAiExplain} disabled={!$projectPath || aiLoading} title={!swarmEnabled ? "Local AI always available; network KB requires TuffSwarm in Settings" : "AI explain (uses network KB when swarm is on)"}>
         <MessageCircle size={16} />
         {aiLoading ? "Analyzing..." : "AI explain"}
+      </button>
+      <button
+        class="secondary"
+        on:click={applyPendingNetworkFix}
+        disabled={!$projectPath || pendingBusy || !pendingPlan || !swarmEnabled}
+        title={swarmEnabled ? "Apply pending_action_plan.json from network match" : "Enable TuffSwarm network in Settings"}
+      >
+        <Download size={16} />
+        {pendingBusy ? "Applying…" : "Apply network fix"}
       </button>
       <button class="secondary" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy} title="Save crash + fix as a private KB case">
         <BookMarked size={16} />
@@ -1111,6 +1178,16 @@
 
   {#if error}<div class="notice error">{error}</div>{/if}
   {#if message}<div class="notice success">{message}</div>{/if}
+  {#if pendingPlan && swarmEnabled}
+    <div class="notice warning">
+      Network pending plan ready ({(pendingPlan.actions ?? []).length} action(s), confidence {Math.round((pendingPlan.confidence ?? 0) * 100)}%).
+      Review then use <strong>Apply network fix</strong> — nothing auto-applies.
+    </div>
+  {:else if !swarmEnabled}
+    <div class="notice" style="opacity:0.85">
+      TuffSwarm network is off — Creation Mode and network Fix Mode are disabled. Local Crash Assistant still works. Enable in Settings.
+    </div>
+  {/if}
 
   {#if loading && !diagnosis}
     <div class="loading">Loading crash diagnosis...</div>
@@ -1591,6 +1668,14 @@
               <div class="ai-stat"><strong>{aiPlanActions(aiAnalysis).length}</strong> actions</div>
               {#if aiAnalysis.diagnoseMode}
                 <div class="ai-stat"><strong>{aiAnalysis.diagnoseMode}</strong> mode</div>
+              {/if}
+              {#if aiAnalysis.networkUsed}
+                <div class="ai-stat"><strong>network</strong> used</div>
+              {:else if aiAnalysis.swarmEnabled === false}
+                <div class="ai-stat"><strong>local-only</strong> (swarm off)</div>
+              {/if}
+              {#if aiAnalysis.pendingPlanPath}
+                <div class="ai-stat"><strong>pending</strong> plan saved</div>
               {/if}
             </div>
             {#if aiAnalysis.validation && aiAnalysis.validation.ok === false}

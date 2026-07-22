@@ -2,6 +2,8 @@
 members = [
   "crates/tuffbox-core",
   "crates/tuffbox-cli",
+  "crates/tuffswarm-hub",
+  "crates/tuffswarm-node",
   "apps/tuffbox-desktop/src-tauri"
 ]
 resolver = "2"

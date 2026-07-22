@@ -252,3 +252,25 @@ select:focus {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--bg-active);
 }
+
+/* Potato PC mode — strip motion cost (GDLauncher Carbon–inspired). */
+html.potato-pc *,
+html.potato-pc *::before,
+html.potato-pc *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+/* Subtle press feedback on interactive controls */
+button {
+  transition: transform var(--motion-fast, 160ms) var(--ease-spring, ease),
+    background 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+html.potato-pc button:active:not(:disabled) {
+  transform: none;
+}
+

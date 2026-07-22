@@ -3,6 +3,7 @@
   import {
     User,
     LogIn,
+    LogOut,
     Clock,
     Shield,
     Plus,
@@ -10,7 +11,11 @@
     Trash2,
     Globe,
     Monitor,
+    ArrowLeft,
+    Upload,
+    Link2,
   } from "lucide-svelte";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "../lib/api";
   import {
     authState,
@@ -26,12 +31,18 @@
   import AccountManager from "./AccountManager.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
 
+  export let onBack: () => void = () => {};
+
   let showAccountManager = false;
   let showLogin = false;
   let playtimeSeconds = 0;
   let busy = false;
   let capeCatalog: CapeCatalog | null = null;
   let mojangCapeMenuOpen = false;
+
+  let skinUrlInput = "";
+  let skinVariant: "classic" | "slim" = "classic";
+  let skinBusy = false;
 
   $: skinUrl = $authState.profile?.skinUrl ?? null;
   $: capeUrl = $authState.profile?.capeUrl ?? null;
@@ -42,6 +53,7 @@
   $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
   $: canChangeMojangCape =
     $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
+  $: canChangeMojangSkin = $authState.loginType === "microsoft" && $authState.loggedIn;
 
   const capeProviders: { id: CapeProvider; label: string }[] = [
     { id: "mojang", label: "Mojang" },
@@ -50,17 +62,22 @@
     { id: "none", label: "None" },
   ];
 
+  async function applyAuthState(state: Awaited<ReturnType<typeof api.mcAuth.getAuthStatus>>) {
+    authState.set(state);
+    if (state.profile?.uuid) {
+      try {
+        skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
+      } catch {
+        skinPath.set(null);
+      }
+    } else {
+      skinPath.set(null);
+    }
+  }
+
   async function refreshAuth() {
     try {
-      const state = await api.mcAuth.getAuthStatus();
-      authState.set(state);
-      if (state.profile?.uuid) {
-        try {
-          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
-        } catch {
-          skinPath.set(null);
-        }
-      }
+      await applyAuthState(await api.mcAuth.getAuthStatus());
     } catch {}
   }
 
@@ -94,17 +111,9 @@
     if (uuid === $authState.activeAccountUuid) return;
     busy = true;
     try {
-      const state = await api.mcAuth.switchAccount(uuid);
-      authState.set(state);
-      if (state.profile?.uuid) {
-        try {
-          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
-        } catch {
-          skinPath.set(null);
-        }
-      }
+      await applyAuthState(await api.mcAuth.switchAccount(uuid));
       await refreshCapes();
-      toasts.success(`Switched to ${state.profile?.name ?? "account"}`);
+      toasts.success(`Switched to ${$authState.profile?.name ?? "account"}`);
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -115,8 +124,7 @@
   async function removeAccount(uuid: string) {
     busy = true;
     try {
-      await api.mcAuth.removeAccount(uuid);
-      await refreshAuth();
+      await applyAuthState(await api.mcAuth.removeAccount(uuid));
       await refreshCapes();
       toasts.info("Account removed");
     } catch (e) {
@@ -126,14 +134,26 @@
     }
   }
 
+  async function logout() {
+    busy = true;
+    try {
+      await applyAuthState(await api.mcAuth.logout());
+      await refreshCapes();
+      toasts.info("Signed out");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      busy = false;
+    }
+  }
+
   async function setCapeProvider(provider: CapeProvider) {
     try {
-      const state = await api.mcAuth.setCapeProvider(provider);
-      authState.set(state);
+      await applyAuthState(await api.mcAuth.setCapeProvider(provider));
       await refreshCapes();
       mojangCapeMenuOpen =
         provider === "mojang" &&
-        state.loginType === "microsoft" &&
+        $authState.loginType === "microsoft" &&
         (capeCatalog?.offers ?? []).some((o) => o.provider === "mojang" && o.canActivate);
     } catch (e) {
       toasts.error(String(e));
@@ -142,8 +162,7 @@
 
   async function applyCape(capeId: string) {
     try {
-      const state = await api.mcAuth.applyCape(capeId);
-      authState.set(state);
+      await applyAuthState(await api.mcAuth.applyCape(capeId));
       mojangCapeMenuOpen = true;
       await refreshCapes();
       toasts.success("Cape equipped");
@@ -159,6 +178,44 @@
     }
   }
 
+  async function applySkinFromUrl() {
+    const url = skinUrlInput.trim();
+    if (!url) {
+      toasts.error("Enter a skin PNG URL");
+      return;
+    }
+    skinBusy = true;
+    try {
+      await applyAuthState(await api.mcAuth.applySkin(url, skinVariant));
+      toasts.success("Skin updated");
+      skinUrlInput = "";
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      skinBusy = false;
+    }
+  }
+
+  async function uploadSkinFile() {
+    skinBusy = true;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Skin PNG", extensions: ["png"] }],
+      });
+      if (!selected || Array.isArray(selected)) {
+        skinBusy = false;
+        return;
+      }
+      await applyAuthState(await api.mcAuth.uploadSkinFile(selected, skinVariant));
+      toasts.success("Skin uploaded");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      skinBusy = false;
+    }
+  }
+
   onMount(() => {
     void refreshAuth();
     void refreshPlaytime();
@@ -167,6 +224,26 @@
 </script>
 
 <div class="me-page">
+  <div class="me-top">
+    <button class="back-btn" on:click={onBack} title="Back">
+      <ArrowLeft size={18} />
+      <span>Back</span>
+    </button>
+    <h1 class="me-title">Me</h1>
+    <div class="me-top-actions">
+      {#if $authState.loggedIn}
+        <button class="ghost-btn danger" disabled={busy} on:click={logout} title="Sign out">
+          <LogOut size={16} />
+          Sign out
+        </button>
+      {/if}
+      <button class="ghost-btn" on:click={() => (showLogin = true)}>
+        <Plus size={16} />
+        Add account
+      </button>
+    </div>
+  </div>
+
   <div class="me-hero">
     <div class="skin-col">
       {#if $authState.loggedIn && $authState.profile}
@@ -175,6 +252,7 @@
           {capeUrl}
           {accountKey}
           playerName={$authState.profile.name}
+          showName={false}
           width={280}
           height={380}
         />
@@ -211,6 +289,46 @@
           <p class="hint">Open an instance to track playtime.</p>
         {/if}
       </section>
+
+      {#if canChangeMojangSkin}
+        <section class="card">
+          <div class="card-head">
+            <Upload size={16} />
+            <h3>Change skin</h3>
+          </div>
+          <div class="skin-form">
+            <div class="variant-row">
+              <button
+                class="chip"
+                class:active={skinVariant === "classic"}
+                on:click={() => (skinVariant = "classic")}
+              >Classic</button>
+              <button
+                class="chip"
+                class:active={skinVariant === "slim"}
+                on:click={() => (skinVariant = "slim")}
+              >Slim</button>
+            </div>
+            <div class="url-row">
+              <input
+                class="skin-input"
+                type="url"
+                placeholder="https://…/skin.png"
+                bind:value={skinUrlInput}
+                disabled={skinBusy}
+              />
+              <button class="mini" disabled={skinBusy} on:click={applySkinFromUrl} title="Apply URL">
+                <Link2 size={14} />
+              </button>
+            </div>
+            <button class="accent-btn wide" disabled={skinBusy} on:click={uploadSkinFile}>
+              <Upload size={16} />
+              Upload PNG
+            </button>
+            <p class="hint">Microsoft accounts only. PNG must be a valid Minecraft skin.</p>
+          </div>
+        </section>
+      {/if}
 
       <section class="card">
         <div class="card-head">
@@ -271,8 +389,11 @@
         <div class="card-head">
           <User size={16} />
           <h3>Accounts</h3>
-          <button class="ghost-icon" title="Manage accounts" on:click={() => (showAccountManager = true)}>
+          <button class="ghost-icon" title="Add account" on:click={() => (showLogin = true)}>
             <Plus size={16} />
+          </button>
+          <button class="ghost-icon" title="Manage accounts" on:click={() => (showAccountManager = true)}>
+            <ArrowLeftRight size={16} />
           </button>
         </div>
 
@@ -285,24 +406,31 @@
           <div class="account-list">
             {#each $authState.accounts as account (account.uuid)}
               <div class="account-item" class:active={account.uuid === $authState.activeAccountUuid}>
-                <div
-                  class="account-ico"
-                  class:ms={account.loginType === "microsoft"}
-                  class:off={account.loginType === "offline"}
-                  class:ygg={account.loginType === "yggdrasil"}
+                <button
+                  class="account-main"
+                  disabled={busy || account.uuid === $authState.activeAccountUuid}
+                  on:click={() => switchAccount(account.uuid)}
+                  title={account.uuid === $authState.activeAccountUuid ? "Active" : "Switch"}
                 >
-                  {#if account.loginType === "microsoft"}
-                    <Globe size={14} />
-                  {:else if account.loginType === "yggdrasil"}
-                    <Monitor size={14} />
-                  {:else}
-                    <User size={14} />
-                  {/if}
-                </div>
-                <div class="account-text">
-                  <span class="mc-font name">{account.name}</span>
-                  <span class="meta">{loginTypeLabel(account.loginType, account.authority)}</span>
-                </div>
+                  <div
+                    class="account-ico"
+                    class:ms={account.loginType === "microsoft"}
+                    class:off={account.loginType === "offline"}
+                    class:ygg={account.loginType === "yggdrasil"}
+                  >
+                    {#if account.loginType === "microsoft"}
+                      <Globe size={14} />
+                    {:else if account.loginType === "yggdrasil"}
+                      <Monitor size={14} />
+                    {:else}
+                      <User size={14} />
+                    {/if}
+                  </div>
+                  <div class="account-text">
+                    <span class="mc-font name">{account.name}</span>
+                    <span class="meta">{loginTypeLabel(account.loginType, account.authority)}</span>
+                  </div>
+                </button>
                 <div class="actions">
                   {#if account.uuid !== $authState.activeAccountUuid}
                     <button
@@ -356,6 +484,71 @@
     max-width: 980px;
     margin: 0 auto;
     padding: 8px 4px 32px;
+  }
+
+  .me-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .back-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+  }
+
+  .me-title {
+    flex: 1;
+    margin: 0;
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--text-primary);
+  }
+
+  .me-top-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .ghost-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .ghost-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+
+  .ghost-btn.danger:hover {
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.08);
   }
 
   .me-hero {
@@ -442,6 +635,38 @@
     margin: 6px 0 0;
   }
 
+  .skin-form {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .variant-row {
+    display: flex;
+    gap: 6px;
+  }
+
+  .url-row {
+    display: flex;
+    gap: 6px;
+  }
+
+  .skin-input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+
+  .accent-btn.wide {
+    justify-content: center;
+    width: 100%;
+  }
+
   .provider-row {
     display: flex;
     flex-wrap: wrap;
@@ -502,6 +727,9 @@
     background: var(--accent-primary);
     color: #000;
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
 
   .mini:disabled {
@@ -518,8 +746,8 @@
   .account-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 4px 6px 4px 4px;
     border-radius: var(--border-radius-md);
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -528,6 +756,29 @@
   .account-item.active {
     border-color: var(--accent-primary);
     background: rgba(27, 217, 106, 0.04);
+  }
+
+  .account-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .account-main:disabled {
+    cursor: default;
+  }
+
+  .account-main:not(:disabled):hover {
+    background: var(--bg-hover);
   }
 
   .account-ico {
@@ -645,6 +896,11 @@
 
   .accent-btn:hover {
     background: var(--accent-hover);
+  }
+
+  .accent-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .mc-font {

@@ -158,6 +158,8 @@ struct DeviceCodeResponse {
     device_code: String,
     user_code: String,
     verification_uri: String,
+    #[serde(default)]
+    verification_uri_complete: Option<String>,
     expires_in: u64,
     interval: u64,
 }
@@ -725,74 +727,83 @@ pub async fn start_device_code_flow() -> Result<(DeviceCodeInfo, String, u64), S
     }
 
     let data: DeviceCodeResponse = resp.json().await.map_err(|e| e.to_string())?;
+    let verification_uri = data
+        .verification_uri_complete
+        .clone()
+        .filter(|u| !u.trim().is_empty())
+        .unwrap_or_else(|| data.verification_uri.clone());
     let info = DeviceCodeInfo {
         user_code: data.user_code.clone(),
-        verification_uri: data.verification_uri.clone(),
+        verification_uri: verification_uri.clone(),
         message: format!(
             "Go to {} and enter code: {}",
             data.verification_uri, data.user_code
         ),
         expires_in: data.expires_in,
     };
-    Ok((info, data.device_code, data.interval))
+    Ok((info, data.device_code, data.interval.max(1)))
+}
+
+/// One token poll attempt. Returns `Err("authorization_pending")` while the user
+/// has not finished the device-code flow yet (frontend should retry).
+pub async fn poll_device_code_token_once(device_code: &str) -> Result<TokenResponse, String> {
+    let c = client()?;
+    let resp = c
+        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+        .form(&[
+            ("client_id", MICROSOFT_CLIENT_ID),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("device_code", device_code),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("token poll failed: {e}"))?;
+
+    let status = resp.status();
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    if status.is_success() {
+        return serde_json::from_value(body).map_err(|e| e.to_string());
+    }
+
+    let error = body
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    match error {
+        "authorization_pending" | "slow_down" => Err("authorization_pending".into()),
+        "authorization_declined" => Err("Login was declined".to_string()),
+        "expired_token" => Err("Device code expired".to_string()),
+        "bad_verification_code" => Err("Invalid device code".to_string()),
+        _ => {
+            let desc = body
+                .get("error_description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Err(format!("Login error: {error}: {desc}"))
+        }
+    }
 }
 
 pub async fn poll_device_code_token(
     device_code: &str,
     interval: u64,
 ) -> Result<TokenResponse, String> {
-    let c = client()?;
     let start = Instant::now();
     let max_wait = Duration::from_secs(900);
+    let step = interval.max(1);
 
     loop {
         if start.elapsed() > max_wait {
             return Err("Login timed out".to_string());
         }
-
-        tokio::time::sleep(Duration::from_secs(interval)).await;
-
-        let resp = c
-            .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
-            .form(&[
-                ("client_id", MICROSOFT_CLIENT_ID),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-                ("device_code", device_code),
-            ])
-            .send()
-            .await
-            .map_err(|e| format!("token poll failed: {e}"))?;
-
-        let status = resp.status();
-        let body: Value = resp.json().await.map_err(|e| e.to_string())?;
-
-        if status.is_success() {
-            let token_response: TokenResponse =
-                serde_json::from_value(body).map_err(|e| e.to_string())?;
-            return Ok(token_response);
-        }
-
-        let error = body
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-
-        match error {
-            "authorization_pending" => continue,
-            "slow_down" => {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
+        match poll_device_code_token_once(device_code).await {
+            Ok(token) => return Ok(token),
+            Err(e) if e == "authorization_pending" => {
+                tokio::time::sleep(Duration::from_secs(step)).await;
             }
-            "authorization_declined" => return Err("Login was declined".to_string()),
-            "expired_token" => return Err("Device code expired".to_string()),
-            "bad_verification_code" => return Err("Invalid device code".to_string()),
-            _ => {
-                let desc = body
-                    .get("error_description")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown error");
-                return Err(format!("Login error: {error}: {desc}"));
-            }
+            Err(e) => return Err(e),
         }
     }
 }
@@ -1020,6 +1031,52 @@ pub async fn apply_minecraft_skin(
     Ok(())
 }
 
+/// Upload a local PNG skin (base64, with or without data-URL prefix).
+pub async fn upload_minecraft_skin_bytes(
+    mc_token: &str,
+    png_base64: &str,
+    variant: &str,
+) -> Result<(), String> {
+    use base64::Engine;
+    let raw = png_base64
+        .split(',')
+        .next_back()
+        .unwrap_or(png_base64)
+        .trim();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw)
+        .map_err(|e| format!("invalid skin base64: {e}"))?;
+    if bytes.len() < 100 || bytes.len() > 8 * 1024 * 1024 {
+        return Err("Skin file size is invalid".into());
+    }
+
+    let form = reqwest::multipart::Form::new()
+        .text("variant", variant.to_string())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(bytes)
+                .file_name("skin.png")
+                .mime_str("image/png")
+                .map_err(|e| e.to_string())?,
+        );
+
+    let c = client()?;
+    let resp = c
+        .post(format!("{MC_PROFILE_URL}/skins"))
+        .bearer_auth(mc_token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("skin upload failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("skin upload error ({status}): {body}"));
+    }
+    Ok(())
+}
+
 pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), String> {
     let c = client()?;
     let resp = c
@@ -1174,9 +1231,8 @@ fn add_account_to_list(entry: &AccountEntry) -> Result<(), String> {
     let mut data = load_accounts_file();
     data.accounts.retain(|a| a.uuid != entry.uuid);
     data.accounts.push(entry.clone());
-    if data.active_account_uuid.is_none() {
-        data.active_account_uuid = Some(entry.uuid.clone());
-    }
+    // New login always becomes the active account.
+    data.active_account_uuid = Some(entry.uuid.clone());
     save_accounts_file(&data)
 }
 
@@ -1204,11 +1260,22 @@ fn sync_auth_state_from_accounts() -> Result<(), String> {
     state.accounts = accounts.accounts.clone();
     state.active_account_uuid = accounts.active_account_uuid.clone();
 
-    // Sync active account profile
-    if let Some(ref uuid) = accounts.active_account_uuid {
-        if let Some(entry) = accounts.accounts.iter().find(|a| &a.uuid == uuid) {
-            state.login_type = entry.login_type.clone();
-            state.skin_source = entry.skin_source.clone();
+    match accounts.active_account_uuid.as_ref() {
+        Some(uuid) => {
+            if let Some(entry) = accounts.accounts.iter().find(|a| &a.uuid == uuid) {
+                state.login_type = entry.login_type.clone();
+                state.skin_source = entry.skin_source.clone();
+                // Keep profile if it matches; otherwise leave for switch/refresh to fill.
+                if state.profile.as_ref().map(|p| &p.uuid) != Some(uuid) {
+                    state.profile = None;
+                    state.logged_in = false;
+                }
+            }
+        }
+        None => {
+            state.logged_in = false;
+            state.profile = None;
+            state.expires_at = None;
         }
     }
     save_auth_state(&state)
@@ -1227,9 +1294,10 @@ pub async fn mc_start_device_code() -> Result<DeviceCodeInfo, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     let device_code = load_token("mc-device-code")?;
-    let interval: u64 = load_token("mc-device-interval")?.parse().unwrap_or(5);
 
-    let token_resp = poll_device_code_token(&device_code, interval).await?;
+    // Single attempt — frontend polls on an interval. Avoids stacking
+    // long-running blocking polls that race on the same device code.
+    let token_resp = poll_device_code_token_once(&device_code).await?;
 
     let _ = clear_token("mc-device-code");
     let _ = clear_token("mc-device-interval");
@@ -1443,33 +1511,6 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
     }
 
     Ok(state)
-}
-
-#[tauri::command(rename_all = "camelCase")]
-pub fn mc_logout() -> Result<(), String> {
-    // Clear current account tokens
-    let state = load_auth_state();
-    if let Some(ref uuid) = state.active_account_uuid {
-        let _ = clear_token(&account_refresh_key(uuid));
-        let _ = clear_token(&account_access_key(uuid));
-    }
-    let _ = clear_token("mc-refresh-token");
-    let _ = clear_token("mc-access-token");
-    let _ = clear_token("mc-device-code");
-    let _ = clear_token("mc-device-interval");
-
-    let accounts = load_accounts_file();
-    let new_state = AuthState {
-        logged_in: false,
-        profile: None,
-        expires_at: None,
-        login_type: LoginType::default(),
-        skin_source: SkinSource::default(),
-        cape_provider: state.cape_provider,
-        accounts: accounts.accounts,
-        active_account_uuid: accounts.active_account_uuid,
-    };
-    save_auth_state(&new_state)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2016,11 +2057,29 @@ pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn mc_remove_account(uuid: String) -> Result<(), String> {
+pub async fn mc_remove_account(uuid: String) -> Result<AuthState, String> {
+    let state = load_auth_state();
+    let was_active = state.active_account_uuid.as_deref() == Some(uuid.as_str());
     let _ = clear_token(&account_refresh_key(&uuid));
     let _ = clear_token(&account_access_key(&uuid));
     remove_account_from_list(&uuid)?;
-    sync_auth_state_from_accounts()
+    sync_auth_state_from_accounts()?;
+
+    if was_active {
+        let accounts = load_accounts_file();
+        if let Some(next) = accounts.active_account_uuid {
+            return mc_switch_account(next).await;
+        }
+        let mut cleared = load_auth_state();
+        cleared.logged_in = false;
+        cleared.profile = None;
+        cleared.active_account_uuid = None;
+        cleared.expires_at = None;
+        let _ = clear_token("mc-access-token");
+        save_auth_state(&cleared)?;
+        return Ok(cleared);
+    }
+    Ok(load_auth_state())
 }
 
 /// Discover capes from Mojang / OptiFine / TLauncher for the active profile.
@@ -2057,10 +2116,79 @@ pub async fn mc_set_cape_provider(provider: CapeProvider) -> Result<AuthState, S
 
 // ─── Skin upload commands ────────────────────────────────────────
 
+async fn refresh_profile_after_skin_change(access_token: &str) -> Result<AuthState, String> {
+    let mut state = load_auth_state();
+    if let Ok(mut profile) = fetch_mc_profile(access_token).await {
+        if let Some(ref url) = profile.skin_url {
+            let _ = download_and_cache_skin(url, &profile.uuid).await;
+        }
+        profile.cape_url = resolve_display_cape(
+            &profile.name,
+            &profile.uuid,
+            &state.cape_provider,
+            &profile.capes,
+        )
+        .await;
+        state.profile = Some(profile);
+        state.logged_in = true;
+        save_auth_state(&state)?;
+    }
+    Ok(load_auth_state())
+}
+
 #[tauri::command(rename_all = "camelCase")]
-pub async fn mc_apply_skin(skin_url: String, variant: String) -> Result<(), String> {
+pub async fn mc_apply_skin(skin_url: String, variant: String) -> Result<AuthState, String> {
     let access_token = load_mc_access_token()?;
-    apply_minecraft_skin(&access_token, &skin_url, &variant).await
+    apply_minecraft_skin(&access_token, &skin_url, &variant).await?;
+    refresh_profile_after_skin_change(&access_token).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_upload_skin(png_base64: String, variant: String) -> Result<AuthState, String> {
+    let access_token = load_mc_access_token()?;
+    upload_minecraft_skin_bytes(&access_token, &png_base64, &variant).await?;
+    refresh_profile_after_skin_change(&access_token).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_upload_skin_file(path: String, variant: String) -> Result<AuthState, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("cannot read skin file: {e}"))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let access_token = load_mc_access_token()?;
+    upload_minecraft_skin_bytes(&access_token, &b64, &variant).await?;
+    refresh_profile_after_skin_change(&access_token).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_logout() -> Result<AuthState, String> {
+    let state = load_auth_state();
+    if let Some(uuid) = state.active_account_uuid.clone() {
+        let _ = clear_token(&account_access_key(&uuid));
+        let _ = clear_token(&account_refresh_key(&uuid));
+        let _ = remove_account_from_list(&uuid);
+    }
+    let _ = clear_token("mc-access-token");
+    let _ = clear_token("mc-refresh-token");
+    let _ = clear_token("mc-device-code");
+    let _ = clear_token("mc-device-interval");
+
+    let accounts = load_accounts_file();
+    if let Some(next) = accounts.active_account_uuid.clone() {
+        return mc_switch_account(next).await;
+    }
+    let new_state = AuthState {
+        logged_in: false,
+        profile: None,
+        expires_at: None,
+        login_type: LoginType::default(),
+        skin_source: SkinSource::default(),
+        cape_provider: state.cape_provider,
+        accounts: accounts.accounts,
+        active_account_uuid: None,
+    };
+    save_auth_state(&new_state)?;
+    Ok(new_state)
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -110,6 +110,25 @@ export interface PresenceSettings {
   discordClientId: string;
 }
 
+export interface GameResolution {
+  width: number;
+  height: number;
+}
+
+export interface LauncherSettings {
+  theme: string;
+  potatoPc: boolean;
+  concurrentDownloads: number;
+  gameResolution: GameResolution | null;
+  preLaunchHook: string | null;
+  postExitHook: string | null;
+  wrapperCommand: string | null;
+  runtimePath: string | null;
+  defaultJavaPath: string | null;
+  javaCustomArgs: string | null;
+  defaultMemoryMb: number;
+}
+
 /** Human label for account provider badges. */
 export function loginTypeLabel(type: LoginType, authority?: string | null): string {
   if (type === "microsoft") return "Mojang";

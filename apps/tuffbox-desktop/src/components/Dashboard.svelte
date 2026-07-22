@@ -36,10 +36,10 @@
     HardDrive,
     Palette,
   } from "lucide-svelte";
+  import HeadAvatar from "./HeadAvatar.svelte";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { convertFileSrc } from "@tauri-apps/api/core";
   import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, loginTypeLabel, type RecentProject, type CapeProvider, type CapeCatalog } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -396,20 +396,19 @@
 
   async function handleLogout() {
     try {
-      await api.mcAuth.logout();
-      authState.set({
-        loggedIn: false,
-        profile: null,
-        expiresAt: null,
-        loginType: "offline",
-        skinSource: "mojang",
-        capeProvider: $authState.capeProvider ?? "mojang",
-        accounts: $authState.accounts,
-        activeAccountUuid: $authState.activeAccountUuid,
-      });
-      skinPath.set(null);
+      const state = await api.mcAuth.logout();
+      authState.set(state);
+      if (state.profile?.uuid) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
+        } catch {
+          skinPath.set(null);
+        }
+      } else {
+        skinPath.set(null);
+      }
       capeCatalog = null;
-      toasts.info("Logged out");
+      toasts.info(state.loggedIn ? `Switched to ${state.profile?.name ?? "account"}` : "Logged out");
     } catch (e) {
       toasts.error(String(e));
     }
@@ -484,13 +483,7 @@
     <div class="account-avatar-section">
       {#if $authState.loggedIn && $authState.profile}
         <button class="account-avatar-btn" on:click={() => (currentView = "me")} title="Me — account & playtime">
-          {#if $skinPath}
-            <img src={convertFileSrc($skinPath)} alt={$authState.profile.name} class="avatar-img" />
-          {:else}
-            <div class="avatar-fallback">
-              <User size={18} />
-            </div>
-          {/if}
+          <HeadAvatar skinSrc={$skinPath} size={32} alt={$authState.profile.name} />
           <span class="avatar-name">{$authState.profile.name}</span>
           <span
             class="avatar-badge"

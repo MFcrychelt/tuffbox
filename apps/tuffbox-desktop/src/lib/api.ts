@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings } from "./store";
+import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings, type LauncherSettings } from "./store";
 import { get } from "svelte/store";
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -1213,8 +1213,12 @@ export const api = {
         reportId: reportId ?? null,
       });
     },
-    applyActionPlan(plan: Record<string, unknown>, p?: string) {
-      return cmd<Record<string, unknown>>("apply_action_plan", { ...pathArg(p), plan });
+    applyActionPlan(plan: Record<string, unknown>, p?: string, fingerprintKey?: string | null) {
+      return cmd<Record<string, unknown>>("apply_action_plan", {
+        ...pathArg(p),
+        plan,
+        fingerprintKey: fingerprintKey ?? null,
+      });
     },
     recordAiFeedback(
       feedback: {
@@ -1430,7 +1434,7 @@ export const api = {
       return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_offline_login", { username, skinSource });
     },
     getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
-    logout() { return cmd<void>("mc_logout"); },
+    logout() { return cmd<AuthState>("mc_logout"); },
     refreshProfile() { return cmd<McProfile>("mc_refresh_profile"); },
     getSkinPath(uuid: string) { return cmd<string>("mc_get_skin_path", { uuid }); },
     fetchSkinUrl(uuid: string) { return cmd<string | null>("mc_fetch_skin_url", { uuid }); },
@@ -1440,8 +1444,10 @@ export const api = {
     setSkinSource(source: SkinSource) { return cmd<void>("mc_set_skin_source", { source }); },
     listAccounts() { return cmd<AccountEntry[]>("mc_list_accounts"); },
     switchAccount(uuid: string) { return cmd<AuthState>("mc_switch_account", { uuid }); },
-    removeAccount(uuid: string) { return cmd<void>("mc_remove_account", { uuid }); },
-    applySkin(skinUrl: string, variant: string) { return cmd<void>("mc_apply_skin", { skinUrl, variant }); },
+    removeAccount(uuid: string) { return cmd<AuthState>("mc_remove_account", { uuid }); },
+    applySkin(skinUrl: string, variant: string) { return cmd<AuthState>("mc_apply_skin", { skinUrl, variant }); },
+    uploadSkin(pngBase64: string, variant: string) { return cmd<AuthState>("mc_upload_skin", { pngBase64, variant }); },
+    uploadSkinFile(path: string, variant: string) { return cmd<AuthState>("mc_upload_skin_file", { path, variant }); },
     applyCape(capeId: string) { return cmd<AuthState>("mc_apply_cape", { capeId }); },
     listCapes() { return cmd<CapeCatalog>("mc_list_capes"); },
     setCapeProvider(provider: CapeProvider) { return cmd<AuthState>("mc_set_cape_provider", { provider }); },
@@ -1465,5 +1471,18 @@ export const api = {
       return cmd<void>("set_discord_presence", { details, state });
     },
     clear() { return cmd<void>("clear_discord_presence"); },
+  },
+
+  launcher: {
+    get() { return cmd<LauncherSettings>("get_launcher_settings"); },
+    save(settings: LauncherSettings) {
+      return cmd<LauncherSettings>("save_launcher_settings_cmd", { settings });
+    },
+    runtimePathInfo() {
+      return cmd<{ current: string; default: string }>("get_runtime_path_info");
+    },
+    validateRuntimePath(path: string) {
+      return cmd<boolean>("validate_runtime_path_cmd", { path });
+    },
   },
 };

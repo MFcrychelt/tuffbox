@@ -11,6 +11,9 @@
     createdAt: string;
     reason: string;
     changedFiles: string[];
+    tags?: string[];
+    crashFingerprintKey?: string | null;
+    planSource?: string | null;
   };
 
   type SnapshotDiff = {
@@ -390,6 +393,13 @@
             <h3>{s.name}</h3>
             <span class="badge">{s.id}</span>
           </div>
+          {#if s.tags?.includes("crash_fix")}
+            <div class="tag-row">
+              <span class="tag crash-fix">crash_fix</span>
+              {#if s.planSource}<span class="tag">{s.planSource}</span>{/if}
+              {#if s.crashFingerprintKey}<span class="tag mono" title={s.crashFingerprintKey}>{s.crashFingerprintKey.slice(0, 28)}…</span>{/if}
+            </div>
+          {/if}
           <p class="reason">{s.reason}</p>
           <div class="changed">{s.changedFiles?.length ?? 0} tracked changed files</div>
           <div class="card-footer">
@@ -461,6 +471,10 @@
   .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   .card-header h3 { font-size: 16px; font-weight: 700; }
   .badge { font-size: 11px; color: var(--text-muted); background: var(--bg-elevated); padding: 3px 8px; border-radius: 4px; font-family: ui-monospace, monospace; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+  .tag { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--bg-elevated); color: var(--text-muted); }
+  .tag.crash-fix { color: var(--accent-primary); background: rgba(27, 217, 106, 0.12); }
+  .tag.mono { font-family: ui-monospace, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
   .reason { color: var(--text-secondary); font-size: 13px; flex: 1; }
   .card-footer { display: flex; justify-content: space-between; align-items: center; padding-top: 12px; border-top: 1px solid var(--border-color); }
   .date { font-size: 12px; color: var(--text-muted); }

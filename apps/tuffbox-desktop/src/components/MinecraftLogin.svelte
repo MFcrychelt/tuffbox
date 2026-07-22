@@ -66,43 +66,52 @@
     }
   }
 
+  let pollInFlight = false;
+
   function startPolling() {
     if (pollTimer) clearInterval(pollTimer);
     polling = true;
+    pollInFlight = false;
     pollTimer = setInterval(async () => {
+      if (pollInFlight) return;
+      pollInFlight = true;
       try {
         const result = await api.mcAuth.pollDeviceCode();
         polling = false;
         if (pollTimer) clearInterval(pollTimer);
-        authState.set({
-          loggedIn: true,
-          profile: result.profile,
-          expiresAt: Date.now() + 86400000,
-          loginType: "microsoft",
-          skinSource: "mojang",
-          capeProvider: $authState.capeProvider ?? "mojang",
-          accounts: $authState.accounts,
-          activeAccountUuid: result.profile.uuid,
-        });
-        if (result.profile.skinUrl) {
+        const state = await api.mcAuth.getAuthStatus();
+        authState.set(state);
+        if (result.profile.uuid) {
           try {
-            const path = await api.mcAuth.getSkinPath(result.profile.uuid);
-            skinPath.set(path);
-          } catch {}
+            skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+          } catch {
+            skinPath.set(null);
+          }
         }
         toasts.success(`Logged in as ${result.profile.name}`);
         mode = "select";
         setTimeout(() => dispatch("close"), 800);
       } catch (e) {
         const msg = String(e);
-        if (msg.includes("timed out") || msg.includes("expired")) {
+        // Single-shot backend poll — keep waiting until the user finishes.
+        if (msg.includes("authorization_pending") || msg.includes("slow_down")) {
+          return;
+        }
+        if (
+          msg.includes("timed out") ||
+          msg.includes("expired") ||
+          msg.includes("declined") ||
+          msg.includes("Invalid device")
+        ) {
           polling = false;
           if (pollTimer) clearInterval(pollTimer);
           errorMsg = msg;
           mode = "select";
         }
+      } finally {
+        pollInFlight = false;
       }
-    }, 5000);
+    }, 3500);
   }
 
   async function handleOfflineLogin() {

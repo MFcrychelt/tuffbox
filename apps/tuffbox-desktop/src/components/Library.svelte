@@ -10,6 +10,7 @@
     Star,
     Compass,
     LayoutGrid,
+    Sparkles,
   } from "lucide-svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
@@ -17,11 +18,22 @@
   import { api } from "../lib/api";
   import type { SearchResult } from "../lib/api";
   import { launchWithFeedback } from "../lib/launch";
+  import CreationTrends from "./CreationTrends.svelte";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "world";
 
-  type Tab = "yours" | "discover";
+  type Tab = "yours" | "discover" | "create";
   let tab: Tab = "yours";
+  let swarmEnabled = false;
+
+  async function loadSwarm() {
+    try {
+      const s = await invoke<{ enabled?: boolean }>("get_swarm_settings");
+      swarmEnabled = !!s?.enabled;
+    } catch {
+      swarmEnabled = false;
+    }
+  }
 
   // ── Your packs (local instances) ────────────────────────────────
   let instanceSizes: Record<string, string> = {};
@@ -210,12 +222,14 @@
   }
 
   onMount(() => {
+    void loadSwarm();
     if (tab === "discover") search();
   });
 
   function switchTab(t: Tab) {
     tab = t;
     if (t === "discover" && results.length === 0) search();
+    if (t === "create") void loadSwarm();
   }
 
   function formatCount(n?: number | null): string {
@@ -245,6 +259,9 @@
       </button>
       <button class:active={tab === "discover"} on:click={() => switchTab("discover")}>
         <Compass size={15} /> Discover
+      </button>
+      <button class:active={tab === "create"} on:click={() => switchTab("create")} title={swarmEnabled ? "Creation trends" : "Requires TuffSwarm"}>
+        <Sparkles size={15} /> Create
       </button>
     </div>
   </div>
@@ -289,7 +306,7 @@
         </button>
       </div>
     {/if}
-  {:else}
+  {:else if tab === "discover"}
     <div class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
         <button
@@ -372,6 +389,8 @@
         {/each}
       </div>
     {/if}
+  {:else if tab === "create"}
+    <CreationTrends {swarmEnabled} />
   {/if}
 </div>
 

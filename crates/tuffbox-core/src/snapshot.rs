@@ -30,6 +30,22 @@ pub enum SnapshotError {
     },
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotMeta {
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub crash_fingerprint_key: Option<String>,
+    #[serde(default)]
+    pub report_id: Option<String>,
+    /// `ai` | `kb` | `swarm` | `manual`
+    #[serde(default)]
+    pub plan_source: Option<String>,
+    #[serde(default)]
+    pub matched_case_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -40,6 +56,16 @@ pub struct Snapshot {
     pub manifest_path: PathBuf,
     pub lockfile_path: Option<PathBuf>,
     pub changed_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub crash_fingerprint_key: Option<String>,
+    #[serde(default)]
+    pub report_id: Option<String>,
+    #[serde(default)]
+    pub plan_source: Option<String>,
+    #[serde(default)]
+    pub matched_case_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -76,6 +102,25 @@ impl SnapshotStore {
         manifest_path: impl AsRef<Path>,
         lockfile_path: Option<impl AsRef<Path>>,
         changed_files: &[impl AsRef<Path>],
+    ) -> Result<Snapshot, SnapshotError> {
+        self.create_with_meta(
+            name,
+            reason,
+            manifest_path,
+            lockfile_path,
+            changed_files,
+            SnapshotMeta::default(),
+        )
+    }
+
+    pub fn create_with_meta(
+        &self,
+        name: impl Into<String>,
+        reason: impl Into<String>,
+        manifest_path: impl AsRef<Path>,
+        lockfile_path: Option<impl AsRef<Path>>,
+        changed_files: &[impl AsRef<Path>],
+        meta: SnapshotMeta,
     ) -> Result<Snapshot, SnapshotError> {
         self.ensure_snapshots_dir()?;
 
@@ -119,6 +164,11 @@ impl SnapshotStore {
             manifest_path: manifest_dst,
             lockfile_path: lockfile_dst,
             changed_files: copied_changed_files,
+            tags: meta.tags,
+            crash_fingerprint_key: meta.crash_fingerprint_key,
+            report_id: meta.report_id,
+            plan_source: meta.plan_source,
+            matched_case_ids: meta.matched_case_ids,
         };
 
         let meta_path = snapshot_dir.join("snapshot.json");

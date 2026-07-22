@@ -79,8 +79,19 @@
   async function removeAccount(uuid: string) {
     busy = true;
     try {
-      await api.mcAuth.removeAccount(uuid);
-      await loadAccounts();
+      const state = await api.mcAuth.removeAccount(uuid);
+      authState.set(state);
+      accounts = state.accounts;
+      activeUuid = state.activeAccountUuid;
+      if (state.profile?.uuid) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
+        } catch {
+          skinPath.set(null);
+        }
+      } else {
+        skinPath.set(null);
+      }
       toasts.info("Account removed");
     } catch (e) {
       toasts.error(String(e));
@@ -125,22 +136,36 @@
     errorMsg = "";
     try {
       const info = await api.mcAuth.startDeviceCode();
-      // Open browser
       try {
         const { open } = await import("@tauri-apps/plugin-shell");
         await open(info.verificationUri);
       } catch {}
 
-      // Poll until success
-      const result = await api.mcAuth.pollDeviceCode();
-      await loadAccounts();
-      toasts.success(`Added ${result.profile.name}`);
-      mode = "list";
-    } catch (e) {
-      const msg = String(e);
-      if (!msg.includes("timed out") && !msg.includes("expired")) {
-        errorMsg = msg;
+      const deadline = Date.now() + 15 * 60 * 1000;
+      while (Date.now() < deadline) {
+        try {
+          const result = await api.mcAuth.pollDeviceCode();
+          await loadAccounts();
+          if (result.profile.uuid) {
+            try {
+              skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+            } catch {}
+          }
+          toasts.success(`Added ${result.profile.name}`);
+          mode = "list";
+          return;
+        } catch (e) {
+          const msg = String(e);
+          if (msg.includes("authorization_pending") || msg.includes("slow_down")) {
+            await new Promise((r) => setTimeout(r, 3500));
+            continue;
+          }
+          throw e;
+        }
       }
+      errorMsg = "Login timed out";
+    } catch (e) {
+      errorMsg = String(e);
     } finally {
       busy = false;
     }

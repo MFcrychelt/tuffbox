@@ -17,6 +17,7 @@
 │ - CrashService                        │
 │ - ExportService                       │
 │ - AiAssistantService                  │
+│ - TuffSwarmService (future)           │
 ├───────────────────────────────────────┤
 │ Domain Core                           │
 │ - Project model                       │
@@ -24,6 +25,7 @@
 │ - Version constraints                 │
 │ - Compatibility rules                 │
 │ - Lockfile                            │
+│ - ActionPlan / Crash fingerprint      │
 ├───────────────────────────────────────┤
 │ Infrastructure                        │
 │ - SQLite                              │
@@ -31,6 +33,8 @@
 │ - Download/cache                      │
 │ - External APIs                       │
 │ - Minecraft process runner            │
+│ - Remote Crash KB client (opt-in)     │
+│ - TuffSwarm P2P (future)              │
 └───────────────────────────────────────┘
 ```
 
@@ -102,9 +106,19 @@
 
 - объяснение ошибок;
 - формирование гипотез;
-- предложение плана исправления.
+- предложение плана исправления (`ActionPlan` JSON).
 
 ИИ не применяет изменения напрямую.
+
+### TuffSwarmService (future)
+
+Будущий слой федеративной сети узлов:
+
+- Knowledge Torrent — gossip / DHT `ExperienceCapsule` по fingerprint;
+- Creation Marketplace — маршрутизация задач генерации + PoUW-награды;
+- никогда не обходит snapshot / confirm / deterministic apply.
+
+Спецификация: [`13-tuffswarm-network.md`](13-tuffswarm-network.md).
 
 ### ExportService
 

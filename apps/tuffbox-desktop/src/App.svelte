@@ -20,9 +20,14 @@
   import Settings from "./components/Settings.svelte";
   import ProjectSettings from "./components/ProjectSettings.svelte";
   import Me from "./components/Me.svelte";
+  import SwarmOnboarding from "./components/SwarmOnboarding.svelte";
+  import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
+  import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
   import { onMount, tick } from "svelte";
   import { projectPath, projectInfo, recentProjects } from "./lib/store";
   import { api } from "./lib/api";
+  import { invoke } from "@tauri-apps/api/core";
+  import { toasts } from "./lib/toast";
 
   type View =
     | "dashboard"
@@ -44,6 +49,11 @@
   let showShortcuts = false;
   let showCommandPalette = false;
   let contentEl: HTMLElement;
+  let showSwarmOnboarding = false;
+  let shareCapsuleOpen = false;
+  let shareCapsulePath = "";
+  let shareCapsuleExplanation = "";
+  let shareBusy = false;
 
   $: if (currentView) {
     tick().then(() => {
@@ -52,6 +62,20 @@
   }
 
   onMount(() => {
+    if (localStorage.getItem("tuffbox-reduced-motion") === "1") {
+      document.documentElement.classList.add("potato-pc");
+    }
+    // Sync potato + concurrency from persisted launcher settings (best-effort).
+    void api.launcher.get().then((s) => {
+      if (s.potatoPc) {
+        localStorage.setItem("tuffbox-reduced-motion", "1");
+        document.documentElement.classList.add("potato-pc");
+      }
+      if (s.theme) {
+        localStorage.setItem("tuffbox-theme", s.theme);
+        document.documentElement.setAttribute("data-theme", s.theme === "light" ? "tuffbox-light" : s.theme);
+      }
+    }).catch(() => {});
     const onOpenGraph = () => {
       currentView = "graph";
     };
@@ -67,7 +91,28 @@
     };
     window.addEventListener("tuffbox:open-me", onOpenMe);
 
+    const onShareCapsule = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as {
+        path?: string;
+        marker?: { humanExplanation?: string };
+      };
+      shareCapsulePath = detail?.path ?? "";
+      shareCapsuleExplanation = detail?.marker?.humanExplanation ?? "";
+      shareCapsuleOpen = true;
+    };
+    window.addEventListener("tuffbox:share-capsule", onShareCapsule);
+
     void (async () => {
+      try {
+        const swarm = await invoke<{ onboardingDone?: boolean; enabled?: boolean }>(
+          "get_swarm_settings",
+        );
+        if (!swarm?.onboardingDone) {
+          showSwarmOnboarding = true;
+        }
+      } catch {
+        // ignore
+      }
       try {
         const lastPath = await api.session.getLastOpened();
         if (lastPath) {
@@ -86,8 +131,67 @@
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
+      window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
     };
   });
+
+  async function finishSwarmOnboarding(enabled: boolean) {
+    try {
+      await invoke("complete_swarm_onboarding", { enabled });
+      toasts.success(
+        enabled
+          ? "TuffSwarm network enabled"
+          : "Network disabled — enable anytime in Settings",
+      );
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      showSwarmOnboarding = false;
+    }
+  }
+
+  async function shareCapsule() {
+    if (!shareCapsulePath) {
+      shareCapsuleOpen = false;
+      return;
+    }
+    shareBusy = true;
+    try {
+      const result: any = await invoke("publish_experience_capsule", {
+        path: shareCapsulePath,
+        fingerprintKey: null,
+        humanExplanation: shareCapsuleExplanation || null,
+        actions: null,
+      });
+      if (result?.published) {
+        toasts.success("Fix shared with the swarm hub — other clients can reuse it");
+      } else if (result?.sharedLocal) {
+        toasts.success(
+          result?.hubConfigured
+            ? `Saved on this PC; hub publish failed: ${result?.error ?? "unknown"}`
+            : "Saved to shared local capsule store (set Swarm hub URL to sync with other PCs)",
+        );
+      } else {
+        toasts.success("Capsule saved");
+      }
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      shareBusy = false;
+      shareCapsuleOpen = false;
+    }
+  }
+
+  async function dismissShareCapsule() {
+    if (shareCapsulePath) {
+      try {
+        await invoke("dismiss_share_prompt", { path: shareCapsulePath });
+      } catch {
+        // ignore
+      }
+    }
+    shareCapsuleOpen = false;
+  }
 
   const VIEW_SET: Record<string, boolean> = {
     dashboard: true, ide: true, mods: true, graph: true, world: true,
@@ -147,7 +251,7 @@
           {:else if currentView === "library"}
             <Library bind:currentView />
           {:else if currentView === "me"}
-            <Me />
+            <Me onBack={() => (currentView = "dashboard")} />
           {/if}
         </div>
       {/key}
@@ -159,6 +263,7 @@
 </div>
 
 <ToastContainer />
+<TaskProgressPanel />
 {#if showShortcuts}
   <KeyboardHelp on:close={() => (showShortcuts = false)} />
 {/if}
@@ -166,6 +271,21 @@
   <CommandPalette
     on:close={() => (showCommandPalette = false)}
     on:navigate={handleCommandPaletteNavigate}
+  />
+{/if}
+
+{#if showSwarmOnboarding}
+  <SwarmOnboarding
+    on:enable={() => finishSwarmOnboarding(true)}
+    on:skip={() => finishSwarmOnboarding(false)}
+  />
+{/if}
+
+{#if shareCapsuleOpen}
+  <ShareCapsuleDialog
+    explanation={shareCapsuleExplanation}
+    on:share={shareCapsule}
+    on:dismiss={dismissShareCapsule}
   />
 {/if}
 
