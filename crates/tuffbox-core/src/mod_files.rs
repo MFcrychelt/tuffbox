@@ -110,7 +110,7 @@ pub fn materialize_mod_file_with_progress(
                 module.source.file_id.as_ref().and_then(|s| s.parse().ok()),
             ) {
                 if let Ok(info) = crate::provider::CurseForgeProvider::new().get_file(pid, fid) {
-                    if let Some(url) = info.download_url.filter(|u| !u.is_empty()) {
+                    if let Some(url) = info.resolved_download_url() {
                         resolved_url = Some(url);
                     }
                 }

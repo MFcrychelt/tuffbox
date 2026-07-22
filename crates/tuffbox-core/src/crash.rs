@@ -1694,7 +1694,14 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
         }
         return Some(CrashSignalKind::MissingDependency);
     }
-    if lower.contains("could not execute entrypoint") || lower.contains("provided by '") {
+    if lower.contains("could not execute entrypoint")
+        || (lower.contains("provided by '")
+            && (lower.contains("due to errors")
+                || lower.contains("could not execute")
+                || lower.contains("exception")
+                || lower.contains("failed to")
+                || lower.contains("fatal")))
+    {
         return Some(CrashSignalKind::Entrypoint);
     }
     if lower.contains("nosuchmethoderror")
@@ -2281,6 +2288,43 @@ mod tests {
         assert!(
             !suspects.iter().any(|s| s.id == "cosy-critters"),
             "Cosy Critters should not match crittersandcompanions via substring 'critters'"
+        );
+    }
+
+    #[test]
+    fn ignores_benign_provided_by_without_failure() {
+        let mut manifest = manifest();
+        manifest.mods.push(ModSpec {
+            id: "critters-and-companions".to_string(),
+            name: "Critters and Companions".to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("critters-and-companions".to_string()),
+                file_id: None,
+                url: None,
+                path: None,
+                icon_url: None,
+                categories: Vec::new(),
+            },
+            version: "2.1.0".to_string(),
+            file_name: Some("crittersandcompanions-fabric-2.1.0.jar".to_string()),
+            hashes: None,
+            side: Side::Both,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: crate::manifest::ContentType::Mod,
+        });
+        let text = "[Fabric] Loading 120 mods:\n\t- crittersandcompanions 2.1.0 provided by 'crittersandcompanions'\nDone.";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "logs/latest.log", &manifest);
+        assert!(
+            !signals.iter().any(|s| s.kind == CrashSignalKind::Entrypoint),
+            "benign 'provided by' must not be Entrypoint"
+        );
+        assert!(
+            suspects.is_empty(),
+            "healthy log must not suspect Critters: {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
         );
     }
 

@@ -7513,57 +7513,54 @@ async fn launch_profile(
     .to_string_lossy()
     .to_string();
 
-    let log_path = PathBuf::from(&path)
+    let project_dir = PathBuf::from(&path)
         .parent()
-        .map(|p| p.join("logs").join("latest.log"))
+        .map(|p| p.to_path_buf())
         .ok_or_else(|| {
             LaunchErrorInfo::new(
                 LaunchErrorKind::Unknown,
                 "manifest has no parent directory",
             )
         })?;
+    let logs_dir = project_dir.join("logs");
+    // Minecraft (log4j) owns `latest.log`. We must NOT truncate it — that wiped
+    // real crash evidence and raced the game writer. Console capture goes to a
+    // separate TuffBox file; diagnose still reads `logs/latest.log`.
+    let console_log = logs_dir.join("tuffbox-console.log");
+    let latest_log = logs_dir.join("latest.log");
 
     {
         use std::io::Write;
-        if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
-            })?;
-        }
-        let mut log = std::fs::OpenOptions::new()
+        std::fs::create_dir_all(&logs_dir).map_err(|e| {
+            LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
+        })?;
+        let mut console = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&log_path)
+            .open(&console_log)
             .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
-        writeln!(log, "# Launching Minecraft...").ok();
-        if let Some(project_dir) = PathBuf::from(&path).parent() {
-            let launcher_log = project_dir.join("launcher_log.txt");
-            let mut launcher = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&launcher_log)
-                .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
-            writeln!(launcher, "# TuffBox launching profile {profile}").ok();
-            if let Some(logs_dir) = log_path.parent() {
-                let _ = std::fs::write(
-                    logs_dir.join("launcher_log.txt"),
-                    format!("# TuffBox launching profile {profile}\n"),
-                );
-            }
-        }
+        writeln!(console, "# TuffBox launching profile {profile}").ok();
+        let launcher_log = project_dir.join("launcher_log.txt");
+        let mut launcher = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&launcher_log)
+            .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
+        writeln!(launcher, "# TuffBox launching profile {profile}").ok();
     }
 
-    append_test_run_record(&path, &profile, &log_path).map_err(|e| {
+    append_test_run_record(&path, &profile, &latest_log).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
     })?;
 
-    let log_path_clone = log_path.clone();
+    let console_log_clone = console_log.clone();
+    let latest_log_clone = latest_log.clone();
     // Run the (blocking) install + spawn on a blocking thread, then await the
     // result so install/prepare failures surface to the UI as a structured,
     // categorized error instead of being swallowed into the log file.
     let result = tokio::task::spawn_blocking(move || {
-        build_and_spawn(path, profile, log_path_clone, app)
+        build_and_spawn(path, profile, console_log_clone, latest_log_clone, app)
     })
     .await
     .map_err(|e| {
@@ -7571,13 +7568,13 @@ async fn launch_profile(
             LaunchErrorKind::Unknown,
             format!("launch task panicked: {e}"),
         )
-        .with_log(&log_path)
+        .with_log(&latest_log)
     })?;
 
     match result {
         Ok(()) => Ok(tuffbox_core::LaunchResult {
             exit_code: None,
-            log_path,
+            log_path: latest_log,
         }),
         Err(info) => Err(info),
     }
@@ -7586,19 +7583,20 @@ async fn launch_profile(
 fn build_and_spawn(
     path: String,
     profile: String,
-    log_path: PathBuf,
+    console_log: PathBuf,
+    latest_log: PathBuf,
     app: tauri::AppHandle,
 ) -> Result<(), LaunchErrorInfo> {
     let _instance_id = profile.clone();
     use tuffbox_core::{LaunchOptions, TestLauncher};
 
     let manifest_path = resolve_manifest_path(&path).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Install, e).with_log(&log_path)
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e).with_log(&console_log)
     })?;
     let path = manifest_path.to_string_lossy().to_string();
 
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&console_log)
     })?;
     let project_profile = manifest
         .profiles
@@ -7606,7 +7604,7 @@ fn build_and_spawn(
         .find(|p| p.id == profile)
         .ok_or_else(|| {
             LaunchErrorInfo::new(LaunchErrorKind::Install, format!("profile {profile} not found"))
-                .with_log(&log_path)
+                .with_log(&console_log)
         })?
         .clone();
 
@@ -7625,7 +7623,7 @@ fn build_and_spawn(
         });
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
-            LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&log_path)
+            LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&console_log)
         })?
     } else {
         // Auto-detect the best Java for this Minecraft version instead of
@@ -7638,12 +7636,12 @@ fn build_and_spawn(
                 tuffbox_core::launcher::LauncherError::JavaNotFound => LaunchErrorKind::JavaMissing,
                 _ => LaunchErrorKind::Install,
             };
-            LaunchErrorInfo::new(kind, e.to_string()).with_log(&log_path)
+            LaunchErrorInfo::new(kind, e.to_string()).with_log(&console_log)
         })?
     };
 
     let progress = tuffbox_core::mc_install::InstallProgress {
-        log_path: log_path.clone(),
+        log_path: console_log.clone(),
     };
 
     progress.log(&format!("# Java: {} (major {})", java.path, java.major));
@@ -7663,24 +7661,24 @@ fn build_and_spawn(
         .map(|p| p.to_path_buf())
         .ok_or_else(|| {
             LaunchErrorInfo::new(LaunchErrorKind::Unknown, "manifest has no parent directory")
-                .with_log(&log_path)
+                .with_log(&console_log)
         })?;
 
     // launcher_dir = shared game data (versions, libraries, assets)
     let launcher_dir = launcher_settings::resolve_runtime_path();
 
     std::fs::create_dir_all(&launcher_dir).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&console_log)
     })?;
     std::fs::create_dir_all(&game_dir).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&log_path)
+        LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&console_log)
     })?;
 
     progress.log(&format!("# Game directory: {}", game_dir.display()));
     progress.log(&format!("# Launcher directory: {}", launcher_dir.display()));
 
     if let Err(e) = launcher_settings::run_hook(launch_settings.pre_launch_hook.as_deref(), "pre-launch hook") {
-        return Err(LaunchErrorInfo::new(LaunchErrorKind::Unknown, e).with_log(&log_path));
+        return Err(LaunchErrorInfo::new(LaunchErrorKind::Unknown, e).with_log(&console_log));
     }
 
     // Safety net: make sure every mod declared in the manifest actually has
@@ -7770,7 +7768,7 @@ fn build_and_spawn(
     .map_err(|e| {
         let msg = e.to_string();
         let kind = tuffbox_core::launch_error::classify_build_error_kind(&msg);
-        LaunchErrorInfo::new(kind, msg).with_log(&log_path)
+        LaunchErrorInfo::new(kind, msg).with_log(&console_log)
     })?;
 
     if let Some(res) = &launch_settings.game_resolution {
@@ -7784,7 +7782,7 @@ fn build_and_spawn(
 
     // Crash callback + playtime + Discord presence cleanup
     let crash_ctx = CrashExitCtx {
-        log_path: log_path.clone(),
+        log_path: latest_log.clone(),
         mc_version: manifest.minecraft.version.clone(),
         java_version: java.version.clone(),
         loader_kind: tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string(),
@@ -7819,11 +7817,12 @@ fn build_and_spawn(
         let _ = app_for_exit.emit("launch-crashed", info);
     }));
 
-    tuffbox_core::process::spawn_and_track_with_cleanup(profile, cmd, &log_path, cleanup_paths, on_exit)
+    // Tee JVM stdout/stderr to TuffBox console log; Minecraft owns logs/latest.log.
+    tuffbox_core::process::spawn_and_track_with_cleanup(profile, cmd, &console_log, cleanup_paths, on_exit)
         .map_err(|e| {
             let msg = e.to_string();
             let kind = tuffbox_core::launch_error::classify_build_error_kind(&msg);
-            LaunchErrorInfo::new(kind, msg).with_log(&log_path)
+            LaunchErrorInfo::new(kind, msg).with_log(&console_log)
         })?;
 
     Ok(())
@@ -7909,8 +7908,23 @@ fn read_installed_mods(game_dir: &PathBuf) -> Vec<String> {
 /// unit-testable without linking the Tauri runtime.
 fn classify_crash(ctx: &CrashExitCtx, exit_code: Option<i32>) -> LaunchErrorInfo {
     let installed_mods = read_installed_mods(&ctx.game_dir);
+    // Prefer Minecraft's own latest.log; fall back to our console capture if
+    // log4j never wrote anything (very early JVM death).
+    let mut log_path = ctx.log_path.clone();
+    let usable = log_path.is_file()
+        && std::fs::metadata(&log_path)
+            .map(|m| m.len() > 32)
+            .unwrap_or(false);
+    if !usable {
+        if let Some(parent) = ctx.log_path.parent() {
+            let console = parent.join("tuffbox-console.log");
+            if console.is_file() {
+                log_path = console;
+            }
+        }
+    }
     tuffbox_core::crash_assistant::classify_launch_crash(
-        &ctx.log_path,
+        &log_path,
         exit_code,
         &ctx.mc_version,
         &ctx.java_version,
@@ -8035,9 +8049,11 @@ async fn get_curseforge_modpack_files(
 ) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
         let provider = tuffbox_core::CurseForgeProvider::new();
-        let files = provider
+        let mut files = provider
             .get_mod_files(mod_id, game_version.as_deref())
             .map_err(|e| e.to_string())?;
+        // Newest first so Discover "Add" picks a current pack version.
+        files.sort_by(|a, b| b.file_date.cmp(&a.file_date).then_with(|| b.id.cmp(&a.id)));
         Ok(files
             .into_iter()
             .map(|f| {
@@ -8046,11 +8062,11 @@ async fn get_curseforge_modpack_files(
                     "modId": f.mod_id,
                     "displayName": f.display_name,
                     "fileName": f.file_name,
-                    "downloadUrl": f.download_url,
+                    "downloadUrl": f.resolved_download_url(),
                     "releaseType": f.release_type,
                     "gameVersions": f.game_versions,
                     "fileDate": f.file_date,
-                    "blocked": f.blocked,
+                    "blocked": f.blocked && f.resolved_download_url().is_none(),
                 })
             })
             .collect())
@@ -8096,19 +8112,20 @@ async fn install_modpack(
             let file_id: u64 = parts[1].parse().map_err(|_| "invalid file id")?;
             let provider = CurseForgeProvider::new();
             let file = provider.get_file(mod_id, file_id).map_err(|e| e.to_string())?;
-            let url = file
-                .download_url
-                .filter(|u| !u.is_empty())
-                .ok_or_else(|| {
-                    "CurseForge blocked this pack download URL. Open the file on CurseForge and import the zip manually.".to_string()
-                })?;
+            let urls = file.resolved_download_urls();
+            if urls.is_empty() {
+                return Err(format!(
+                    "CurseForge returned no download URL for {} (file {}). Try importing the zip manually from CurseForge.",
+                    file.file_name, file_id
+                ));
+            }
             let _ = app.emit(
                 "modpack-install-progress",
                 serde_json::json!({ "phase": "downloading-pack", "message": format!("Downloading {}", file.file_name) }),
             );
             let tmp = std::env::temp_dir().join(format!("tuffbox-pack-{}-{}.zip", mod_id, file_id));
-            tuffbox_core::provider::curseforge::download_curseforge_url(
-                &url,
+            tuffbox_core::provider::curseforge::download_curseforge_url_candidates(
+                &urls,
                 &tmp,
                 file.hashes.sha1.as_deref(),
             )
@@ -9802,15 +9819,11 @@ fn add_mod_from_curseforge(
             file = resolved;
         }
     }
-    let download_url = file
-        .download_url
-        .clone()
-        .filter(|u| !u.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "CurseForge withheld the download URL for {slug}. Install the file manually or mirror it via Modrinth."
-            )
-        })?;
+    let download_url = file.resolved_download_url().ok_or_else(|| {
+        anyhow::anyhow!(
+            "CurseForge withheld the download URL for {slug}. Install the file manually or mirror it via Modrinth."
+        )
+    })?;
 
     let content_type = match hit.class_id.unwrap_or(6) {
         12 => tuffbox_core::manifest::ContentType::Resourcepack,
@@ -10695,6 +10708,10 @@ pub fn run() {
             integrations::clear_integration_secret,
             integrations::test_integration,
             integrations::list_ollama_models,
+            integrations::detect_ollama,
+            integrations::pull_ollama_model,
+            integrations::import_ollama_gguf,
+            integrations::ensure_ollama_model,
             integrations::get_publish_config,
             integrations::save_publish_config,
             integrations::publish_release,
@@ -10827,7 +10844,9 @@ pub fn run() {
             launcher_settings::get_launcher_settings,
             launcher_settings::save_launcher_settings_cmd,
             launcher_settings::get_runtime_path_info,
+            launcher_settings::get_instances_path_info,
             launcher_settings::validate_runtime_path_cmd,
+            launcher_settings::validate_instances_path_cmd,
             set_discord_presence,
             clear_discord_presence,
         ])

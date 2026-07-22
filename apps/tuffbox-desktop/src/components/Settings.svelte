@@ -25,6 +25,7 @@
     model: string;
     diagnoseMode?: string;
     crashKbEndpoint?: string;
+    ollamaBinaryPath?: string;
   };
   type SwarmSettings = {
     enabled?: boolean;
@@ -67,6 +68,7 @@
   let aiProvider: "ollama" | "openai-compatible" = "ollama";
   let aiEndpoint = "";
   let aiModel = "";
+  let ollamaBinaryPath = "";
   let diagnoseMode: "server" | "local" | "kb_only" = "server";
   let crashKbEndpoint = "";
   let githubTokenSet = false;
@@ -111,6 +113,7 @@
     postExitHook: null,
     wrapperCommand: null,
     runtimePath: null,
+    instancesPath: null,
     defaultJavaPath: null,
     javaCustomArgs: null,
     defaultMemoryMb: 4096,
@@ -120,6 +123,8 @@
   let launcherErr = "";
   let defaultRuntimePath = "";
   let runtimeDraft = "";
+  let defaultInstancesPath = "";
+  let instancesDraft = "";
   let showJavaPicker = false;
   let resMode: "default" | "1080p" | "720p" | "custom" = "default";
   let customW = 1280;
@@ -163,6 +168,9 @@
       const info = await api.launcher.runtimePathInfo();
       defaultRuntimePath = info.default;
       runtimeDraft = launcher.runtimePath?.trim() || info.current;
+      const inst = await api.launcher.instancesPathInfo();
+      defaultInstancesPath = inst.default;
+      instancesDraft = launcher.instancesPath?.trim() || inst.current;
     } catch (e) {
       launcherErr = String(e);
     }
@@ -268,6 +276,7 @@
       aiProvider = (status.settings?.ai?.provider === "openai-compatible" ? "openai-compatible" : "ollama");
       aiEndpoint = status.settings?.ai?.endpoint ?? "";
       aiModel = status.settings?.ai?.model ?? "";
+      ollamaBinaryPath = status.settings?.ai?.ollamaBinaryPath ?? "";
       const dm = status.settings?.ai?.diagnoseMode ?? "server";
       diagnoseMode = dm === "local" || dm === "kb_only" ? dm : "server";
       crashKbEndpoint = status.settings?.ai?.crashKbEndpoint ?? "";
@@ -313,6 +322,7 @@
             model: aiModel.trim(),
             diagnoseMode,
             crashKbEndpoint: crashKbEndpoint.trim(),
+            ollamaBinaryPath: ollamaBinaryPath.trim(),
           },
           swarm: {
             enabled: swarmEnabled,
@@ -516,10 +526,32 @@
     }
   }
 
+  async function browseInstances() {
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: "Select modpack / instances folder",
+    });
+    if (typeof selected === "string") {
+      instancesDraft = selected;
+    }
+  }
+
   async function applyRuntimePath() {
     try {
       await api.launcher.validateRuntimePath(runtimeDraft);
       await persistLauncher({ runtimePath: runtimeDraft.trim() || null });
+    } catch (e) {
+      launcherErr = String(e);
+    }
+  }
+
+  async function applyInstancesPath() {
+    try {
+      await api.launcher.validateInstancesPath(instancesDraft);
+      await persistLauncher({ instancesPath: instancesDraft.trim() || null });
+      instancesDraft = launcher.instancesPath?.trim() || defaultInstancesPath;
+      launcherMsg = "Modpack download folder saved.";
     } catch (e) {
       launcherErr = String(e);
     }
@@ -801,6 +833,40 @@
           </button>
         </div>
       </section>
+
+      <section class="card card-wide">
+        <div class="card-title">
+          <HardDrive size={18} />
+          <h3>Modpacks / instances folder</h3>
+        </div>
+        <p class="hint">
+          Where Discover and Add Instance download modpacks by default.
+          Default: <code>{defaultInstancesPath || "…"}</code>
+        </p>
+        <label>
+          Download directory
+          <div class="path-row">
+            <input bind:value={instancesDraft} placeholder={defaultInstancesPath || "Instances path"} />
+            <button type="button" class="secondary" on:click={browseInstances}>Browse…</button>
+          </div>
+        </label>
+        <div class="row-actions">
+          <button type="button" on:click={applyInstancesPath} disabled={launcherSaving}>
+            {launcherSaving ? "Saving…" : "Apply path"}
+          </button>
+          <button
+            type="button"
+            class="ghost"
+            disabled={!defaultInstancesPath}
+            on:click={() => {
+              instancesDraft = defaultInstancesPath;
+              void applyInstancesPath();
+            }}
+          >
+            Reset to default
+          </button>
+        </div>
+      </section>
     {/if}
 
     {#if tab === "integrations"}
@@ -916,6 +982,9 @@
               Provider: <code>{aiProvider}</code>
               · Endpoint: <code>{aiEndpoint || "—"}</code>
               · Model: <code>{aiModel || "—"}</code>
+              {#if aiProvider === "ollama"}
+                · Path: <code>{ollamaBinaryPath || "auto"}</code>
+              {/if}
             </p>
             <div class="row-actions">
               <button type="button" class="secondary mini" on:click={() => (aiModalOpen = true)}>

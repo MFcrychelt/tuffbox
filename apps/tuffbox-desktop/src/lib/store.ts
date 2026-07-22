@@ -124,6 +124,7 @@ export interface LauncherSettings {
   postExitHook: string | null;
   wrapperCommand: string | null;
   runtimePath: string | null;
+  instancesPath: string | null;
   defaultJavaPath: string | null;
   javaCustomArgs: string | null;
   defaultMemoryMb: number;

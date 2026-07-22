@@ -1481,8 +1481,14 @@ export const api = {
     runtimePathInfo() {
       return cmd<{ current: string; default: string }>("get_runtime_path_info");
     },
+    instancesPathInfo() {
+      return cmd<{ current: string; default: string }>("get_instances_path_info");
+    },
     validateRuntimePath(path: string) {
       return cmd<boolean>("validate_runtime_path_cmd", { path });
+    },
+    validateInstancesPath(path: string) {
+      return cmd<boolean>("validate_instances_path_cmd", { path });
     },
   },
 };

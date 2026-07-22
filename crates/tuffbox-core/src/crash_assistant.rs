@@ -1195,17 +1195,29 @@ fn find_classes_in_crashes(_ctx: &AnalysisCtx, combined: &str) -> Vec<ClassMatch
 
 fn extract_suspected(ctx: &AnalysisCtx, combined: &str) -> Vec<String> {
     let mut s = match_mods_in_text(combined, &ctx.installed_mods);
-    // Prefer mods that appear on error/exception lines.
+    // Prefer mods that appear on real failure lines — not Fabric inventory dumps
+    // or harmless "provided by 'modid'" mentions from mixin/debug chatter.
     let error_blob: String = combined
         .lines()
         .filter(|l| {
             let lower = l.to_lowercase();
-            (lower.contains("error")
-                || lower.contains("exception")
+            if looks_like_mod_inventory_line(l) {
+                return false;
+            }
+            let hard_fail = lower.contains("exception")
                 || lower.contains("caused by")
-                || lower.contains("mixin")
-                || lower.contains("provided by"))
-                && !looks_like_mod_inventory_line(l)
+                || lower.contains("could not execute entrypoint")
+                || lower.contains("due to errors")
+                || lower.contains("mixin apply failed")
+                || lower.contains("fatal")
+                || (lower.contains("error")
+                    && !lower.contains("error_reporter")
+                    && !lower.contains("errors=")
+                    && !lower.contains("errorlevel")
+                    && !lower.contains("no errors"));
+            // "provided by" alone is too noisy (normal Fabric logs); only keep
+            // it when the same line already looks like a failure.
+            hard_fail
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -1213,7 +1225,14 @@ fn extract_suspected(ctx: &AnalysisCtx, combined: &str) -> Vec<String> {
         let on_errors = match_mods_in_text(&error_blob, &ctx.installed_mods);
         if !on_errors.is_empty() {
             s = on_errors;
+        } else {
+            // No installed-mod tokens on failure lines → don't invent suspects
+            // from the full log (avoids false "fix Critters…" while the pack runs).
+            s.clear();
         }
+    } else {
+        // Healthy / warning-only log: don't surface suspects.
+        s.clear();
     }
     s.truncate(10);
     s

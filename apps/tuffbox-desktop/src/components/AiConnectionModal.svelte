@@ -1,7 +1,19 @@
 <script lang="ts">
   import { createEventDispatcher, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { X, Bot, KeyRound, RefreshCw, CheckCircle2, AlertTriangle, Plug } from "lucide-svelte";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import {
+    X,
+    Bot,
+    KeyRound,
+    RefreshCw,
+    CheckCircle2,
+    AlertTriangle,
+    Plug,
+    FolderOpen,
+    Download,
+    FileUp,
+  } from "lucide-svelte";
 
   export let open = false;
 
@@ -9,21 +21,50 @@
 
   type AiProvider = "ollama" | "openai-compatible";
   type IntegrationStatus = {
-    settings: { githubRepository: string; ai: { provider: string; endpoint: string; model: string } };
+    settings: {
+      githubRepository: string;
+      ai: {
+        provider: string;
+        endpoint: string;
+        model: string;
+        diagnoseMode?: string;
+        crashKbEndpoint?: string;
+        ollamaBinaryPath?: string;
+      };
+    };
     aiApiKeySet: boolean;
+  };
+
+  type OllamaDetect = {
+    installed: boolean;
+    running: boolean;
+    binaryPath: string;
+    endpoint: string;
+    models: string[];
+    needsModel: boolean;
+    error?: string | null;
+    suggestedModels: string[];
   };
 
   type PresetId = "ollama" | "openai" | "openrouter" | "hermes" | "custom";
 
-  const PRESETS: { id: PresetId; label: string; provider: AiProvider; endpoint: string; model: string; needsKey: boolean; hint: string }[] = [
+  const PRESETS: {
+    id: PresetId;
+    label: string;
+    provider: AiProvider;
+    endpoint: string;
+    model: string;
+    needsKey: boolean;
+    hint: string;
+  }[] = [
     {
       id: "ollama",
       label: "Ollama (local)",
       provider: "ollama",
       endpoint: "http://127.0.0.1:11434",
-      model: "qwen2.5-coder:7b",
+      model: "",
       needsKey: false,
-      hint: "Local models via Ollama. No API key.",
+      hint: "Local models via Ollama. TuffBox detects your install — you choose which model to download.",
     },
     {
       id: "openai",
@@ -66,17 +107,26 @@
   let preset: PresetId = "ollama";
   let provider: AiProvider = "ollama";
   let endpoint = "http://127.0.0.1:11434";
-  let model = "qwen2.5-coder:7b";
+  let model = "";
+  let ollamaBinaryPath = "";
+  let diagnoseMode = "server";
+  let crashKbEndpoint = "";
   let apiKeyDraft = "";
   let apiKeySet = false;
   let loading = false;
   let saving = false;
   let testing = false;
   let listingModels = false;
+  let detecting = false;
+  let pulling = false;
+  let importing = false;
   let error = "";
   let message = "";
   let testResult = "";
   let ollamaModels: string[] = [];
+  let detect: OllamaDetect | null = null;
+  let pullName = "llama3.2:3b";
+  let ggufName = "";
 
   $: if (open) {
     void load();
@@ -92,11 +142,16 @@
       provider = status.settings?.ai?.provider === "openai-compatible" ? "openai-compatible" : "ollama";
       endpoint = status.settings?.ai?.endpoint || (provider === "ollama" ? "http://127.0.0.1:11434" : "");
       model = status.settings?.ai?.model || "";
+      ollamaBinaryPath = status.settings?.ai?.ollamaBinaryPath ?? "";
+      diagnoseMode = status.settings?.ai?.diagnoseMode || "server";
+      crashKbEndpoint = status.settings?.ai?.crashKbEndpoint ?? "";
       apiKeySet = !!status.aiApiKeySet;
       apiKeyDraft = "";
       preset = detectPreset(provider, endpoint);
       if (provider === "ollama") {
-        await refreshOllamaModels();
+        await probeOllama();
+      } else {
+        detect = null;
       }
     } catch (e) {
       error = String(e);
@@ -122,18 +177,173 @@
     if (p.endpoint) endpoint = p.endpoint;
     if (p.model) model = p.model;
     testResult = "";
-    if (provider === "ollama") void refreshOllamaModels();
+    if (provider === "ollama") void probeOllama();
+    else detect = null;
+  }
+
+  async function probeOllama() {
+    detecting = true;
+    listingModels = true;
+    try {
+      detect = await invoke<OllamaDetect>("detect_ollama", {
+        endpoint: endpoint || null,
+        binaryPath: ollamaBinaryPath || null,
+      });
+      ollamaModels = detect?.models ?? [];
+      if (detect?.binaryPath && !ollamaBinaryPath.trim()) {
+        ollamaBinaryPath = detect.binaryPath;
+      }
+      if (detect?.suggestedModels?.length && !pullName.trim()) {
+        pullName = detect.suggestedModels[0];
+      }
+      if (!model.trim() && ollamaModels.length > 0) {
+        model = ollamaModels[0];
+      }
+      if (detect?.installed && detect.needsModel) {
+        message = "Ollama is installed. Pick a model name below and click Install model.";
+      } else if (detect?.installed && detect.running) {
+        message = `Ollama is ready (${ollamaModels.length} model${ollamaModels.length === 1 ? "" : "s"}).`;
+      }
+    } catch (e) {
+      detect = null;
+      ollamaModels = [];
+      error = String(e);
+    } finally {
+      detecting = false;
+      listingModels = false;
+    }
   }
 
   async function refreshOllamaModels() {
-    listingModels = true;
-    try {
-      ollamaModels = await invoke<string[]>("list_ollama_models", { endpoint: endpoint || null });
-    } catch {
-      ollamaModels = [];
-    } finally {
-      listingModels = false;
+    await probeOllama();
+  }
+
+  async function installModel() {
+    const name = (pullName || model).trim();
+    if (!name) {
+      error = "Enter a model name (e.g. llama3.2:3b) or choose a suggestion.";
+      return;
     }
+    pulling = true;
+    error = "";
+    message = `Downloading ${name}… this can take several minutes.`;
+    try {
+      // Persist path/endpoint first so pull uses the same config.
+      await persistAiSettings(name);
+      const result = await invoke<{ ok: boolean; model: string; models: string[] }>("pull_ollama_model", {
+        model: name,
+        endpoint: endpoint || null,
+        binaryPath: ollamaBinaryPath || null,
+      });
+      model = result.model;
+      pullName = result.model;
+      ollamaModels = result.models ?? [];
+      message = `Model “${result.model}” installed and selected.`;
+      await probeOllama();
+      dispatch("saved");
+    } catch (e) {
+      error = String(e);
+      message = "";
+    } finally {
+      pulling = false;
+    }
+  }
+
+  async function pickGgufAndImport() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: "Select local model file (.gguf)",
+        filters: [
+          { name: "GGUF model", extensions: ["gguf"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+      if (typeof selected !== "string" || !selected) return;
+
+      importing = true;
+      error = "";
+      const stem =
+        ggufName.trim() ||
+        selected
+          .replace(/^.*[\\/]/, "")
+          .replace(/\.gguf$/i, "")
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-") ||
+        "local-model";
+      message = `Importing ${selected} as “${stem}”…`;
+      await persistAiSettings(stem);
+      const result = await invoke<{ ok: boolean; model: string; models: string[] }>("import_ollama_gguf", {
+        filePath: selected,
+        modelName: stem,
+        binaryPath: ollamaBinaryPath || null,
+      });
+      model = result.model;
+      ggufName = result.model;
+      ollamaModels = result.models ?? [];
+      message = `Imported “${result.model}” from local file.`;
+      await probeOllama();
+      dispatch("saved");
+    } catch (e) {
+      error = String(e);
+      message = "";
+    } finally {
+      importing = false;
+    }
+  }
+
+  async function pickOllamaPath() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: "Select ollama executable",
+        filters: [
+          { name: "Ollama", extensions: ["exe"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+      if (typeof selected === "string" && selected) {
+        ollamaBinaryPath = selected;
+        await probeOllama();
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function pickOllamaFolder() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        title: "Select Ollama install folder",
+      });
+      if (typeof selected === "string" && selected) {
+        ollamaBinaryPath = selected;
+        await probeOllama();
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function persistAiSettings(activeModel: string) {
+    const status = await invoke<IntegrationStatus>("get_integration_status");
+    await invoke("save_integration_settings", {
+      settings: {
+        githubRepository: status.settings?.githubRepository ?? "",
+        ai: {
+          provider,
+          endpoint: endpoint.trim(),
+          model: activeModel.trim(),
+          diagnoseMode,
+          crashKbEndpoint,
+          ollamaBinaryPath: ollamaBinaryPath.trim(),
+        },
+      },
+    });
   }
 
   async function save() {
@@ -141,17 +351,7 @@
     error = "";
     message = "";
     try {
-      const status = await invoke<IntegrationStatus>("get_integration_status");
-      await invoke("save_integration_settings", {
-        settings: {
-          githubRepository: status.settings?.githubRepository ?? "",
-          ai: {
-            provider,
-            endpoint: endpoint.trim(),
-            model: model.trim(),
-          },
-        },
-      });
+      await persistAiSettings(model.trim());
       if (apiKeyDraft.trim()) {
         await invoke("set_integration_secret", { kind: "ai", value: apiKeyDraft.trim() });
         apiKeyDraft = "";
@@ -181,7 +381,6 @@
     error = "";
     testResult = "";
     try {
-      // Persist current fields first so Test hits the right endpoint.
       await save();
       const result = await invoke<string>("test_integration", { provider: "ai" });
       testResult = result;
@@ -244,6 +443,8 @@
             on:change={() => {
               preset = detectPreset(provider, endpoint);
               if (provider === "ollama" && !endpoint) endpoint = "http://127.0.0.1:11434";
+              if (provider === "ollama") void probeOllama();
+              else detect = null;
             }}
           >
             <option value="ollama">Ollama</option>
@@ -260,30 +461,98 @@
           />
         </label>
 
-        <label>
-          Model
-          {#if provider === "ollama" && ollamaModels.length > 0}
+        {#if provider === "ollama"}
+          <label>
+            Ollama install path
             <div class="model-row">
-              <select bind:value={model}>
-                {#each ollamaModels as m}
-                  <option value={m}>{m}</option>
-                {/each}
-              </select>
-              <button class="ghost mini" type="button" on:click={refreshOllamaModels} disabled={listingModels}>
-                <RefreshCw size={14} class={listingModels ? "spin" : ""} />
+              <input
+                bind:value={ollamaBinaryPath}
+                placeholder="ollama.exe or install folder (empty = auto-detect)"
+                autocomplete="off"
+              />
+              <button class="ghost mini" type="button" title="Pick ollama.exe" on:click={pickOllamaPath}>
+                <FolderOpen size={14} />
+              </button>
+              <button class="ghost mini" type="button" title="Pick install folder" on:click={pickOllamaFolder}>
+                Folder
+              </button>
+              <button class="ghost mini" type="button" title="Re-detect" on:click={probeOllama} disabled={detecting}>
+                <RefreshCw size={14} class={detecting ? "spin" : ""} />
               </button>
             </div>
-          {:else}
-            <div class="model-row">
-              <input bind:value={model} placeholder={provider === "ollama" ? "qwen2.5-coder:7b" : "gpt-4o-mini"} autocomplete="off" />
-              {#if provider === "ollama"}
-                <button class="ghost mini" type="button" on:click={refreshOllamaModels} disabled={listingModels} title="List Ollama models">
-                  <RefreshCw size={14} class={listingModels ? "spin" : ""} />
-                </button>
+          </label>
+
+          {#if detect}
+            <div class="status" class:ok={detect.installed && detect.running} class:warn={detect.installed && !detect.running} class:bad={!detect.installed}>
+              {#if detect.installed && detect.running}
+                Ollama found{detect.binaryPath ? ` at ${detect.binaryPath}` : ""} · running · {detect.models.length} model{detect.models.length === 1 ? "" : "s"}
+              {:else if detect.installed}
+                Ollama found{detect.binaryPath ? ` at ${detect.binaryPath}` : ""}, but the API is not responding. Open the Ollama app, then refresh.
+              {:else}
+                Ollama not found. Install from <a href="https://ollama.com" target="_blank" rel="noreferrer">ollama.com</a> or set the path above.
               {/if}
             </div>
           {/if}
-        </label>
+
+          {#if detect?.installed}
+            <div class="install-box">
+              <strong>Install a model</strong>
+              <p class="hint">Enter the Ollama tag you want (you choose), or import a local <code>.gguf</code> file.</p>
+              <label>
+                Model name / tag
+                <div class="model-row">
+                  <input bind:value={pullName} placeholder="e.g. llama3.2:3b" autocomplete="off" />
+                  <button type="button" on:click={installModel} disabled={pulling || importing || !pullName.trim()}>
+                    <Download size={14} />
+                    {pulling ? "Installing…" : "Install model"}
+                  </button>
+                </div>
+              </label>
+              {#if detect.suggestedModels?.length}
+                <div class="suggestions">
+                  {#each detect.suggestedModels as s}
+                    <button type="button" class="chip" class:on={pullName === s} on:click={() => (pullName = s)}>{s}</button>
+                  {/each}
+                </div>
+              {/if}
+              <label>
+                Local model file (optional)
+                <div class="model-row">
+                  <input bind:value={ggufName} placeholder="Name after import (optional)" autocomplete="off" />
+                  <button class="ghost" type="button" on:click={pickGgufAndImport} disabled={pulling || importing}>
+                    <FileUp size={14} />
+                    {importing ? "Importing…" : "Import .gguf"}
+                  </button>
+                </div>
+              </label>
+            </div>
+          {/if}
+
+          <label>
+            Active model
+            {#if ollamaModels.length > 0}
+              <div class="model-row">
+                <select bind:value={model}>
+                  {#each ollamaModels as m}
+                    <option value={m}>{m}</option>
+                  {/each}
+                </select>
+                <button class="ghost mini" type="button" on:click={refreshOllamaModels} disabled={listingModels}>
+                  <RefreshCw size={14} class={listingModels ? "spin" : ""} />
+                </button>
+              </div>
+            {:else}
+              <div class="model-row">
+                <input bind:value={model} placeholder="Install a model above first" autocomplete="off" />
+              </div>
+            {/if}
+          </label>
+        {:else}
+          <label>
+            Model
+            <input bind:value={model} placeholder="gpt-4o-mini" autocomplete="off" />
+          </label>
+        {/if}
 
         {#if provider === "openai-compatible"}
           <label>
@@ -298,18 +567,16 @@
           {#if apiKeySet}
             <button class="ghost mini" type="button" on:click={clearKey}>Clear saved key</button>
           {/if}
-        {:else}
-          <p class="hint">Ollama does not need an API key. Use <code>ollama pull &lt;model&gt;</code> then refresh the model list.</p>
         {/if}
 
         <footer>
-          <button class="ghost" type="button" on:click={test} disabled={testing || saving}>
+          <button class="ghost" type="button" on:click={test} disabled={testing || saving || pulling || importing}>
             <Plug size={14} />
             {testing ? "Testing…" : "Test connection"}
           </button>
           <div class="spacer"></div>
           <button class="ghost" type="button" on:click={close}>Cancel</button>
-          <button type="button" on:click={save} disabled={saving || !endpoint.trim() || !model.trim()}>
+          <button type="button" on:click={save} disabled={saving || !endpoint.trim() || (provider === "openai-compatible" && !model.trim())}>
             {saving ? "Saving…" : "Save"}
           </button>
         </footer>
@@ -327,7 +594,9 @@
     padding: 16px;
   }
   .modal {
-    width: min(520px, 100%);
+    width: min(560px, 100%);
+    max-height: min(92vh, 820px);
+    overflow: auto;
     background: var(--bg-secondary, #16161a);
     border: 1px solid var(--border-color, #2a2a32);
     border-radius: 14px;
@@ -357,10 +626,34 @@
     border-radius: 8px; padding: 8px 10px; color: var(--text-primary); font-size: 13px;
   }
   .model-row { display: flex; gap: 6px; align-items: center; }
-  .model-row input, .model-row select { flex: 1; }
+  .model-row input, .model-row select { flex: 1; min-width: 0; }
   .hint { margin: 0; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
   .hint code { font-size: 10px; }
   .muted { color: var(--text-muted); }
+  .status {
+    font-size: 12px; line-height: 1.4; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--border-color); background: var(--bg-primary);
+    color: var(--text-secondary); word-break: break-word;
+  }
+  .status.ok { border-color: rgba(34, 197, 94, 0.35); color: #86efac; }
+  .status.warn { border-color: rgba(251, 191, 36, 0.4); color: #fde68a; }
+  .status.bad { border-color: rgba(239, 68, 68, 0.35); color: #fca5a5; }
+  .status a { color: inherit; }
+  .install-box {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 10px 12px; border-radius: 10px;
+    border: 1px dashed var(--border-color); background: rgba(251, 191, 36, 0.06);
+  }
+  .install-box strong { font-size: 13px; color: var(--text-primary); }
+  .suggestions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    border: 1px solid var(--border-color); background: var(--bg-tertiary);
+    color: var(--text-secondary); border-radius: 999px; padding: 4px 9px; font-size: 11px;
+    cursor: pointer; font-weight: 500;
+  }
+  .chip.on {
+    background: linear-gradient(145deg, #fbbf24, #d97706); color: #1a1200; border-color: transparent; font-weight: 700;
+  }
   footer { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
   .spacer { flex: 1; }
   button {
@@ -368,17 +661,18 @@
     border-radius: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer;
     border: 1px solid transparent; background: linear-gradient(145deg, #fbbf24, #d97706); color: #1a1200; font-weight: 700;
   }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
   button.ghost {
     background: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-secondary); font-weight: 500;
   }
   button.mini { padding: 6px 8px; }
-  button:disabled { opacity: 0.55; cursor: not-allowed; }
   .notice {
-    display: flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 8px; padding: 8px 10px;
+    display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.35;
+    padding: 8px 10px; border-radius: 8px;
   }
-  .notice.error { background: rgba(239,68,68,.12); color: #fecaca; border: 1px solid rgba(239,68,68,.3); }
-  .notice.ok { background: rgba(34,197,94,.1); color: #bbf7d0; border: 1px solid rgba(34,197,94,.28); }
+  .notice.error { background: rgba(239, 68, 68, 0.12); color: #fca5a5; }
+  .notice.ok { background: rgba(34, 197, 94, 0.12); color: #86efac; }
   .test-ok { color: #86efac; font-size: 11px; }
-  :global(.spin) { animation: spin 0.8s linear infinite; }
+  :global(.spin) { animation: spin 0.9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>

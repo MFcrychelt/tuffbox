@@ -8,6 +8,8 @@ use tuffbox_core::ProjectManifest;
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
 const DEFAULT_GITHUB_REPOSITORY: &str = "MFcrychelt/tuffbox";
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
+/// Suggested default when the user opens the install UI (not auto-pulled).
+pub const DEFAULT_OLLAMA_MODEL: &str = "llama3.2:3b";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,6 +23,10 @@ pub struct AiSettings {
     /// Base URL for private crash KB API (`/v1/crash/lookup`, `/v1/crash/diagnose`).
     #[serde(default)]
     pub crash_kb_endpoint: String,
+    /// Optional path to `ollama` / `ollama.exe`, or the install folder that contains it.
+    /// Empty = look up `ollama` on PATH / default install locations.
+    #[serde(default)]
+    pub ollama_binary_path: String,
 }
 
 fn default_diagnose_mode() -> String {
@@ -32,9 +38,10 @@ impl Default for AiSettings {
         Self {
             provider: "ollama".to_string(),
             endpoint: "http://127.0.0.1:11434".to_string(),
-            model: "qwen2.5-coder:7b".to_string(),
+            model: String::new(),
             diagnose_mode: default_diagnose_mode(),
             crash_kb_endpoint: String::new(),
+            ollama_binary_path: String::new(),
         }
     }
 }
@@ -283,8 +290,11 @@ pub fn save_integration_settings(mut settings: IntegrationSettings) -> Result<()
     if settings.github_repository.split('/').count() != 2 {
         return Err("GitHub repository must use owner/repository format".to_string());
     }
-    if settings.ai.endpoint.trim().is_empty() || settings.ai.model.trim().is_empty() {
-        return Err("AI endpoint and model are required".to_string());
+    if settings.ai.endpoint.trim().is_empty() {
+        return Err("AI endpoint is required".to_string());
+    }
+    if settings.ai.provider != "ollama" && settings.ai.model.trim().is_empty() {
+        return Err("AI model is required".to_string());
     }
     if !matches!(
         settings.ai.provider.as_str(),
@@ -779,6 +789,474 @@ fn ollama_chat_url(endpoint: &str) -> String {
     }
 }
 
+fn ollama_root(endpoint: &str) -> String {
+    endpoint
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .trim_end_matches("/api/chat")
+        .trim_end_matches("/api/tags")
+        .trim_end_matches("/api/pull")
+        .to_string()
+}
+
+fn model_name_matches(installed: &str, wanted: &str) -> bool {
+    let a = installed.trim().to_lowercase();
+    let b = wanted.trim().to_lowercase();
+    if a == b {
+        return true;
+    }
+    // `llama3.2:3b` matches `llama3.2:3b-instruct-q4_K_M` or tags without digest
+    let a_base = a.split(':').next().unwrap_or(&a);
+    let b_base = b.split(':').next().unwrap_or(&b);
+    if a_base == b_base {
+        // Same family: accept if tags equal or one is latest / missing tag
+        let a_tag = a.split_once(':').map(|(_, t)| t).unwrap_or("latest");
+        let b_tag = b.split_once(':').map(|(_, t)| t).unwrap_or("latest");
+        return a_tag == b_tag
+            || a_tag.starts_with(b_tag)
+            || b_tag.starts_with(a_tag)
+            || a_tag == "latest"
+            || b_tag == "latest";
+    }
+    false
+}
+
+async fn ollama_list_models(root: &str) -> Result<Vec<String>, String> {
+    let url = format!("{root}/api/tags");
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Cannot reach Ollama at {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Ollama /api/tags failed ({})", response.status()));
+    }
+    let body: Value = response.json().await.map_err(|e| e.to_string())?;
+    let mut names = Vec::new();
+    if let Some(models) = body.get("models").and_then(Value::as_array) {
+        for m in models {
+            if let Some(name) = m.get("name").and_then(Value::as_str) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    Ok(names)
+}
+
+fn try_start_ollama(binary_hint: &str) {
+    let exe = resolve_ollama_binary(binary_hint);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new(&exe)
+            .arg("serve")
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new(&exe)
+            .arg("serve")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+    }
+}
+
+/// Resolve a user-configured Ollama path to an executable.
+/// Accepts empty (PATH), a file path, or an install directory.
+pub fn resolve_ollama_binary(hint: &str) -> PathBuf {
+    let trimmed = hint.trim();
+    if trimmed.is_empty() {
+        return default_ollama_binary_candidates()
+            .into_iter()
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| PathBuf::from("ollama"));
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_file() {
+        return path;
+    }
+    if path.is_dir() {
+        #[cfg(windows)]
+        let candidates = ["ollama.exe", "ollama"];
+        #[cfg(not(windows))]
+        let candidates = ["ollama", "bin/ollama"];
+        for name in candidates {
+            let candidate = path.join(name);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    // Path might not exist yet / be a custom name — still try it as-is.
+    path
+}
+
+fn default_ollama_binary_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    #[cfg(windows)]
+    {
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            out.push(PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe"));
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            out.push(PathBuf::from(pf).join("Ollama").join("ollama.exe"));
+        }
+        out.push(PathBuf::from(r"C:\Program Files\Ollama\ollama.exe"));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        out.push(PathBuf::from("/usr/local/bin/ollama"));
+        out.push(PathBuf::from("/opt/homebrew/bin/ollama"));
+        out.push(PathBuf::from("/Applications/Ollama.app/Contents/Resources/ollama"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        out.push(PathBuf::from("/usr/local/bin/ollama"));
+        out.push(PathBuf::from("/usr/bin/ollama"));
+        if let Ok(home) = std::env::var("HOME") {
+            out.push(PathBuf::from(home).join(".local/bin/ollama"));
+        }
+    }
+    out
+}
+
+async fn ollama_pull_model(root: &str, model: &str) -> Result<(), String> {
+    let url = format!("{root}/api/pull");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60 * 45))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .post(&url)
+        .json(&json!({ "name": model, "stream": false }))
+        .send()
+        .await
+        .map_err(|e| format!("Ollama pull failed for '{model}': {e}"))?;
+    let status = response.status();
+    let body: Value = response
+        .json()
+        .await
+        .unwrap_or_else(|_| json!({ "error": "empty response" }));
+    if !status.is_success() {
+        return Err(api_error("Ollama pull", status, &body));
+    }
+    if let Some(err) = body.get("error").and_then(Value::as_str) {
+        if !err.is_empty() {
+            return Err(format!("Ollama pull error: {err}"));
+        }
+    }
+    Ok(())
+}
+
+/// Ensure Ollama is reachable and the configured model is already installed.
+/// Does **not** auto-pull — the user must pick/install a model in Settings.
+/// Returns the model name that should be used for the next request.
+pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String> {
+    let root = ollama_root(&settings.endpoint);
+    if root.is_empty() {
+        return Err("Ollama endpoint is empty".into());
+    }
+
+    let mut last_err = String::new();
+    let mut models = None;
+    for attempt in 0..4 {
+        match ollama_list_models(&root).await {
+            Ok(list) => {
+                models = Some(list);
+                break;
+            }
+            Err(e) => {
+                last_err = e;
+                if attempt == 0 {
+                    try_start_ollama(&settings.ollama_binary_path);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(700 + attempt * 400)).await;
+            }
+        }
+    }
+    let installed = models.ok_or_else(|| {
+        let hint_path = settings.ollama_binary_path.trim();
+        let resolved = resolve_ollama_binary(hint_path);
+        if !ollama_binary_exists(hint_path) {
+            format!(
+                "{last_err}. Ollama is not installed (or not found). Install from https://ollama.com, then set the path in Settings → AI."
+            )
+        } else if hint_path.is_empty() {
+            format!(
+                "{last_err}. Ollama was found at {} but is not responding. Open the Ollama app once, or set the binary path in Settings → AI.",
+                resolved.display()
+            )
+        } else {
+            format!(
+                "{last_err}. Could not start Ollama from '{}'. Check Settings → AI → Ollama path (resolved to {}).",
+                hint_path,
+                resolved.display()
+            )
+        }
+    })?;
+
+    let wanted_raw = settings.model.trim();
+    if wanted_raw.is_empty() {
+        if let Some(first) = installed.first() {
+            return Ok(first.clone());
+        }
+        return Err(
+            "Ollama is running but no model is installed. Open Settings → AI, enter a model name (or pick a .gguf file), and click Install model."
+                .into(),
+        );
+    }
+
+    let has = |list: &[String], name: &str| list.iter().any(|m| model_name_matches(m, name));
+    if has(&installed, wanted_raw) {
+        return Ok(wanted_raw.to_string());
+    }
+    if let Some(local) = installed
+        .iter()
+        .find(|m| model_name_matches(m, wanted_raw))
+        .cloned()
+    {
+        return Ok(local);
+    }
+
+    Err(format!(
+        "Model '{wanted_raw}' is not installed in Ollama. Open Settings → AI, enter the model name you want (e.g. llama3.2:3b), and click Install model. Installed: {}.",
+        if installed.is_empty() {
+            "none".into()
+        } else {
+            installed.join(", ")
+        }
+    ))
+}
+
+fn ollama_binary_exists(hint: &str) -> bool {
+    let resolved = resolve_ollama_binary(hint);
+    if resolved.is_file() {
+        return true;
+    }
+    // PATH lookup: try `ollama --version` quickly
+    std::process::Command::new(if hint.trim().is_empty() {
+        "ollama"
+    } else {
+        resolved.to_str().unwrap_or("ollama")
+    })
+    .arg("--version")
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .status()
+    .map(|s| s.success())
+    .unwrap_or(false)
+}
+
+/// Probe whether Ollama is installed / running and list local models.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn detect_ollama(
+    endpoint: Option<String>,
+    binary_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let settings = read_settings();
+    let hint = binary_path
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
+    let resolved = resolve_ollama_binary(&hint);
+    let installed_bin = ollama_binary_exists(&hint);
+    let root = ollama_root(
+        &endpoint
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| settings.ai.endpoint.clone()),
+    );
+
+    let mut running = false;
+    let mut models = Vec::new();
+    let mut api_error = None;
+    match ollama_list_models(&root).await {
+        Ok(list) => {
+            running = true;
+            models = list;
+        }
+        Err(e) => {
+            api_error = Some(e);
+            if installed_bin {
+                try_start_ollama(&hint);
+                tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+                match ollama_list_models(&root).await {
+                    Ok(list) => {
+                        running = true;
+                        models = list;
+                        api_error = None;
+                    }
+                    Err(e2) => api_error = Some(e2),
+                }
+            }
+        }
+    }
+
+    Ok(json!({
+        "installed": installed_bin || running,
+        "running": running,
+        "binaryPath": if resolved.exists() { resolved.to_string_lossy().to_string() } else { String::new() },
+        "endpoint": root,
+        "models": models,
+        "needsModel": running && models.is_empty(),
+        "error": api_error,
+        "suggestedModels": [DEFAULT_OLLAMA_MODEL, "qwen2.5:1.5b", "gemma2:2b", "phi3:mini"],
+    }))
+}
+
+/// Explicitly pull a model the user chose (by Ollama tag name).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn pull_ollama_model(
+    model: String,
+    endpoint: Option<String>,
+    binary_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let name = model.trim().to_string();
+    if name.is_empty() {
+        return Err("Enter a model name to install (e.g. llama3.2:3b)".into());
+    }
+    // Reject obvious filesystem paths here — use import_ollama_gguf instead.
+    if name.contains('\\') || name.contains('/') || name.ends_with(".gguf") {
+        return Err(
+            "That looks like a file path. Use “Import .gguf” for local model files, or enter an Ollama tag like llama3.2:3b."
+                .into(),
+        );
+    }
+
+    let settings = read_settings();
+    let hint = binary_path.unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
+    let root = ollama_root(
+        &endpoint
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| settings.ai.endpoint.clone()),
+    );
+
+    // Make sure the daemon is up before pulling.
+    if ollama_list_models(&root).await.is_err() {
+        try_start_ollama(&hint);
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    }
+
+    ollama_pull_model(&root, &name).await?;
+    let models = ollama_list_models(&root).await.unwrap_or_default();
+
+    // Persist as active model when pull succeeds.
+    let mut next = read_settings();
+    next.ai.provider = "ollama".into();
+    next.ai.model = name.clone();
+    if next.ai.endpoint.trim().is_empty() {
+        next.ai.endpoint = root.clone();
+    }
+    let _ = write_settings(&next);
+
+    Ok(json!({
+        "ok": true,
+        "model": name,
+        "models": models,
+    }))
+}
+
+/// Import a local GGUF (or similar) file into Ollama under a user-chosen name.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn import_ollama_gguf(
+    file_path: String,
+    model_name: String,
+    binary_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let path = PathBuf::from(file_path.trim());
+    if !path.is_file() {
+        return Err(format!("Model file not found: {}", path.display()));
+    }
+    let mut name = model_name.trim().to_string();
+    if name.is_empty() {
+        name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("local-model")
+            .to_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '-' })
+            .collect();
+    }
+    if name.is_empty() {
+        return Err("Enter a name for the imported model".into());
+    }
+
+    let settings = read_settings();
+    let hint = binary_path.unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
+    let exe = resolve_ollama_binary(&hint);
+    if !ollama_binary_exists(&hint) {
+        return Err("Ollama is not installed. Install it first, then import the model.".into());
+    }
+
+    let abs = std::fs::canonicalize(&path).unwrap_or(path.clone());
+    let from_line = format!("FROM {}", abs.display());
+    let tmp = std::env::temp_dir().join(format!("tuffbox-modelfile-{name}"));
+    fs::write(&tmp, format!("{from_line}\n")).map_err(|e| e.to_string())?;
+
+    let output = tokio::process::Command::new(&exe)
+        .arg("create")
+        .arg(&name)
+        .arg("-f")
+        .arg(&tmp)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ollama create: {e}"))?;
+    let _ = fs::remove_file(&tmp);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "ollama create failed: {}",
+            if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            }
+        ));
+    }
+
+    let mut next = read_settings();
+    next.ai.provider = "ollama".into();
+    next.ai.model = name.clone();
+    let _ = write_settings(&next);
+
+    let root = ollama_root(&next.ai.endpoint);
+    let models = ollama_list_models(&root).await.unwrap_or_default();
+    Ok(json!({
+        "ok": true,
+        "model": name,
+        "models": models,
+    }))
+}
+
+/// Status helper for Settings / Diagnostics (does not pull).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn ensure_ollama_model() -> Result<serde_json::Value, String> {
+    let settings = read_settings();
+    if settings.ai.provider != "ollama" {
+        return Ok(json!({
+            "ok": true,
+            "provider": settings.ai.provider,
+            "skipped": true,
+        }));
+    }
+    let model = ensure_ollama_ready(&settings.ai).await?;
+    Ok(json!({
+        "ok": true,
+        "provider": "ollama",
+        "model": model,
+        "endpoint": ollama_root(&read_settings().ai.endpoint),
+    }))
+}
+
 pub async fn call_ai(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
     call_ai_once(settings, prompt).await
 }
@@ -813,12 +1291,16 @@ pub async fn call_ai_crash_explain(settings: &AiSettings, prompt: &str) -> Resul
 }
 
 async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
     let content = if settings.provider == "ollama" {
+        let model = ensure_ollama_ready(settings).await?;
         let response = client
             .post(ollama_chat_url(&settings.endpoint))
             .json(&json!({
-                "model": settings.model,
+                "model": model,
                 "stream": false,
                 "format": "json",
                 "messages": [
@@ -830,7 +1312,10 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
             .await
             .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
         let status = response.status();
-        let body: Value = response.json().await.map_err(|e| e.to_string())?;
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+            json!({ "error": body_text.chars().take(500).collect::<String>() })
+        });
         if !status.is_success() {
             return Err(api_error("Ollama", status, &body));
         }
@@ -862,7 +1347,10 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
             .await
             .map_err(|e| format!("AI request failed: {e}"))?;
         let status = response.status();
-        let body: Value = response.json().await.map_err(|e| e.to_string())?;
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+            json!({ "error": body_text.chars().take(500).collect::<String>() })
+        });
         if !status.is_success() {
             return Err(api_error("AI provider", status, &body));
         }
@@ -900,32 +1388,11 @@ pub async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<String>,
     let base = endpoint
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| settings.ai.endpoint.clone());
-    let root = base
-        .trim_end_matches('/')
-        .trim_end_matches("/v1")
-        .trim_end_matches("/api/chat")
-        .trim_end_matches("/api/tags");
-    let url = format!("{root}/api/tags");
-
-    let response = reqwest::Client::new()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Cannot reach Ollama at {url}: {e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("Ollama /api/tags failed ({})", response.status()));
-    }
-    let body: Value = response.json().await.map_err(|e| e.to_string())?;
-    let mut names = Vec::new();
-    if let Some(models) = body.get("models").and_then(Value::as_array) {
-        for m in models {
-            if let Some(name) = m.get("name").and_then(Value::as_str) {
-                names.push(name.to_string());
-            }
-        }
-    }
-    names.sort();
-    Ok(names)
+    let root = ollama_root(&base);
+    ollama_list_models(&root).await.map(|mut names| {
+        names.sort();
+        names
+    })
 }
 
 #[cfg(test)]

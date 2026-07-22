@@ -13,6 +13,7 @@
     Sparkles,
   } from "lucide-svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -88,6 +89,52 @@
   let discoverError = "";
   let adding = new Set<string>();
   let discoverProvider: DiscoverProvider = "modrinth";
+  let downloadDir = "";
+  let defaultDownloadDir = "";
+
+  async function loadDownloadDir() {
+    try {
+      const info = await api.launcher.instancesPathInfo();
+      defaultDownloadDir = info.default;
+      const settings = await api.launcher.get();
+      downloadDir = (settings.instancesPath?.trim() || info.current || info.default).replace(/[\\/]+$/, "");
+    } catch {
+      downloadDir = "";
+    }
+  }
+
+  async function browseDownloadDir() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Select folder for downloaded modpacks",
+    });
+    if (typeof selected !== "string" || !selected) return;
+    downloadDir = selected;
+    try {
+      const settings = await api.launcher.get();
+      await api.launcher.save({ ...settings, instancesPath: selected });
+      toasts.success("Download folder saved.");
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  async function applyDownloadDir() {
+    const path = downloadDir.trim();
+    if (!path) {
+      toasts.error("Pick a download folder first.");
+      return;
+    }
+    try {
+      await api.launcher.validateInstancesPath(path);
+      const settings = await api.launcher.get();
+      await api.launcher.save({ ...settings, instancesPath: path });
+      toasts.success("Download folder saved.");
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
 
   function resultKey(result: DiscoverResult): string {
     return `${result.provider ?? "modrinth"}:${result.id}`;
@@ -191,18 +238,26 @@
     const key = resultKey(result);
     adding = new Set([...adding, key]);
     try {
-      const home = ((await invoke("get_home_dir").catch(() => "")) as string).replace(/\/$/, "");
-      const slug = result.slug || result.id;
-      const targetDir = `${home}/TuffBox/instances/${slug}`;
+      if (!downloadDir && !defaultDownloadDir) {
+        await loadDownloadDir();
+      }
+      const parent = (downloadDir || defaultDownloadDir).replace(/[\\/]+$/, "");
+      if (!parent) {
+        throw new Error("Choose a download folder first (Download to).");
+      }
+      // install_modpack creates `<targetDir>/<instanceId>` — pass the parent folder only.
+      const targetDir = parent;
       let source: string;
       if (result.provider === "curseforge") {
-        const files = await invoke<Array<{ id: number }>>("get_curseforge_modpack_files", {
+        toasts.info(`Resolving CurseForge files for ${result.name}…`);
+        const files = await invoke<Array<{ id: number; fileName?: string }>>("get_curseforge_modpack_files", {
           modId: Number(result.id),
           gameVersion: null,
         });
         const fileId = files?.[0]?.id;
         if (fileId == null) throw new Error("No CurseForge files available for this modpack.");
         source = `cf:${result.id}:${fileId}`;
+        toasts.info(`Downloading ${files[0]?.fileName || result.name}…`);
       } else {
         source = await api.modpacks.getModpackUrl(result.id);
       }
@@ -210,7 +265,7 @@
       const info = await invoke("validate_project", { path: res.path }) as import("../lib/api").ProjectSummary;
       const manifestPath = info.manifestPath || res.path;
       recentProjects.add({ path: manifestPath, info: info as any });
-      toasts.success(`Added "${result.name}" to your library.`);
+      toasts.success(`Added "${result.name}" to ${targetDir}.`);
       search();
     } catch (e) {
       toasts.error(`Could not add ${result.name}: ${e}`);
@@ -223,12 +278,16 @@
 
   onMount(() => {
     void loadSwarm();
+    void loadDownloadDir();
     if (tab === "discover") search();
   });
 
   function switchTab(t: Tab) {
     tab = t;
-    if (t === "discover" && results.length === 0) search();
+    if (t === "discover") {
+      void loadDownloadDir();
+      if (results.length === 0) search();
+    }
     if (t === "create") void loadSwarm();
   }
 
@@ -338,6 +397,21 @@
       <button class="search-btn" on:click={() => search()} disabled={loadingDiscover}>
         {loadingDiscover ? "Searching…" : "Search"}
       </button>
+    </div>
+
+    <div class="download-path">
+      <label for="lib-download-dir">Download to</label>
+      <div class="path-row">
+        <input
+          id="lib-download-dir"
+          bind:value={downloadDir}
+          placeholder={defaultDownloadDir || "Choose a folder for modpacks"}
+        />
+        <button type="button" class="path-btn" on:click={browseDownloadDir} title="Browse">
+          <FolderOpen size={15} />
+        </button>
+        <button type="button" class="path-btn save" on:click={applyDownloadDir}>Save</button>
+      </div>
     </div>
 
     {#if discoverError}
@@ -537,6 +611,52 @@
     background: var(--accent-primary); color: #000; border: none; cursor: pointer;
   }
   .search-btn:disabled { opacity: 0.6; }
+
+  .download-path {
+    display: grid;
+    gap: 6px;
+    margin: -8px 0 18px;
+  }
+  .download-path label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .path-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .path-row input {
+    flex: 1;
+    min-width: 0;
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .path-btn {
+    height: 40px;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .path-btn.save {
+    background: rgba(27, 217, 106, 0.12);
+    border-color: rgba(27, 217, 106, 0.35);
+    color: var(--accent-primary);
+  }
 
   .discover-card { cursor: default; }
   .pack-title-row {

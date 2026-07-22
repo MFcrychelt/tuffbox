@@ -836,24 +836,49 @@
   .ghost-icon {
     width: 28px;
     height: 28px;
-    display: flex;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 !important;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    border: none;
+    border: none !important;
     border-radius: 6px;
-    background: transparent;
-    color: var(--text-muted);
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    box-shadow: none !important;
     cursor: pointer;
+    flex-shrink: 0;
+    transform: none !important;
+  }
+
+  .ghost-icon :global(svg) {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    flex-shrink: 0;
   }
 
   .ghost-icon:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+    background: var(--bg-hover) !important;
+    color: var(--text-primary) !important;
+    transform: none !important;
   }
 
   .ghost-icon.danger:hover {
-    background: rgba(239, 68, 68, 0.12);
-    color: #ef4444;
+    background: rgba(239, 68, 68, 0.12) !important;
+    color: #ef4444 !important;
+  }
+
+  .back-btn {
+    padding: 8px 12px !important;
+    background: var(--bg-secondary) !important;
+    color: var(--text-secondary) !important;
+  }
+
+  .back-btn:hover {
+    transform: none !important;
+    background: var(--bg-hover) !important;
   }
 
   .type-badge {

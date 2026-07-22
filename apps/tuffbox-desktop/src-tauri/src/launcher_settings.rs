@@ -31,6 +31,9 @@ pub struct LauncherSettings {
     /// Override for shared game data (versions/libraries/assets). Empty = default.
     #[serde(default)]
     pub runtime_path: Option<String>,
+    /// Where new instances / downloaded modpacks are created. Empty = ~/TuffBox/instances.
+    #[serde(default)]
+    pub instances_path: Option<String>,
     /// Preferred Java binary when project has no java.path.
     #[serde(default)]
     pub default_java_path: Option<String>,
@@ -62,6 +65,7 @@ impl Default for LauncherSettings {
             post_exit_hook: None,
             wrapper_command: None,
             runtime_path: None,
+            instances_path: None,
             default_java_path: None,
             java_custom_args: None,
             default_memory_mb: default_memory(),
@@ -123,6 +127,28 @@ pub fn resolve_runtime_path() -> PathBuf {
     default_runtime_path()
 }
 
+/// Default folder for new instances / downloaded modpacks.
+pub fn default_instances_path() -> PathBuf {
+    dirs::home_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("instances")
+}
+
+pub fn resolve_instances_path() -> PathBuf {
+    let settings = load_launcher_settings();
+    if let Some(p) = settings
+        .instances_path
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return PathBuf::from(p);
+    }
+    default_instances_path()
+}
+
 pub fn validate_runtime_path(path: &str) -> Result<bool, String> {
     let p = Path::new(path);
     if path.trim().is_empty() {
@@ -132,6 +158,10 @@ pub fn validate_runtime_path(path: &str) -> Result<bool, String> {
         return Err("path exists but is not a directory".into());
     }
     Ok(true)
+}
+
+pub fn validate_instances_path(path: &str) -> Result<bool, String> {
+    validate_runtime_path(path)
 }
 
 /// Run a hook command via the platform shell. Empty/whitespace is a no-op.
@@ -220,6 +250,19 @@ pub fn get_runtime_path_info() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn get_instances_path_info() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "current": resolve_instances_path().to_string_lossy(),
+        "default": default_instances_path().to_string_lossy(),
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn validate_runtime_path_cmd(path: String) -> Result<bool, String> {
     validate_runtime_path(&path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn validate_instances_path_cmd(path: String) -> Result<bool, String> {
+    validate_instances_path(&path)
 }

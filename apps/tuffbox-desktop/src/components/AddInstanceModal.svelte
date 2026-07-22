@@ -102,13 +102,23 @@
   });
 
   function guessLocation(): string {
-    const home = (defaultHome ?? "").replace(/\/$/, "");
-    return `${home}/TuffBox/instances/${slugify(activeName())}`;
+    const home = (defaultHome ?? "").replace(/[\\/]+$/, "");
+    if (mode === "import" || mode === "curseforge") {
+      // Pack install uses this as the parent folder; instance subfolder is created inside.
+      return home;
+    }
+    return `${home}/${slugify(activeName())}`;
   }
 
   let defaultHome = "";
   async function loadDefaultHome() {
-    defaultHome = (await invoke("get_home_dir").catch(() => "")) as string;
+    try {
+      const info = await invoke<{ current: string; default: string }>("get_instances_path_info");
+      defaultHome = info.current || info.default || "";
+    } catch {
+      defaultHome = ((await invoke("get_home_dir").catch(() => "")) as string);
+      if (defaultHome) defaultHome = `${defaultHome.replace(/[\\/]+$/, "")}/TuffBox/instances`;
+    }
   }
 
   async function loadLoaderVersions() {
@@ -137,9 +147,12 @@
     const selected = await open({
       multiple: false,
       directory: true,
-      title: "Select instance folder",
+      title: "Select folder for this instance",
+      defaultPath: defaultHome || undefined,
     });
     if (selected && typeof selected === "string") {
+      // For blank create, location is the instance folder itself.
+      // For pack install we strip the leaf name — keep full path here and let install* use parent.
       location = selected;
     }
   }
@@ -224,10 +237,10 @@
     error = "";
     installMessage = "Installing pack…";
     try {
-      const parent = location.replace(/\\/g, "/").replace(/\/[^\/]+$/, "") || location;
+      const targetDir = location.replace(/[\\/]+$/, "") || defaultHome;
       const result: any = await invoke("install_modpack", {
         source: importPath,
-        targetDir: parent,
+        targetDir,
         instanceName: importName,
       });
       const failed = result?.download?.failed?.length ?? 0;
@@ -300,10 +313,10 @@
     error = "";
     installMessage = "Downloading CurseForge modpack…";
     try {
-      const parent = location.replace(/\\/g, "/").replace(/\/[^\/]+$/, "") || location;
+      const targetDir = location.replace(/[\\/]+$/, "") || defaultHome;
       const result: any = await invoke("install_modpack", {
         source: `cf:${cfSelected.id}:${cfFileId}`,
-        targetDir: parent,
+        targetDir,
         instanceName: cfName,
       });
       const failed = result?.download?.failed?.length ?? 0;
@@ -336,9 +349,9 @@
     </div>
 
     <div class="tabs">
-      <button class:active={mode === "blank"} on:click={() => (mode = "blank")}>Blank</button>
-      <button class:active={mode === "import"} on:click={() => (mode = "import")}>Import pack</button>
-       <button class:active={mode === "curseforge"} on:click={() => (mode = "curseforge")}>CurseForge</button>
+      <button class:active={mode === "blank"} on:click={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
+      <button class:active={mode === "import"} on:click={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
+       <button class:active={mode === "curseforge"} on:click={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
      </div>
 
      <div class="modal-body">
@@ -489,11 +502,14 @@
        {/if}
 
        <div class="field">
-         <label for="inst-location">Location</label>
+         <label for="inst-location">{mode === "blank" ? "Instance folder" : "Download folder"}</label>
          <div class="input-row">
-           <input id="inst-location" bind:value={location} />
-           <button class="secondary" on:click={selectLocation} aria-label="Choose instance location"><Folder size={16} /></button>
+           <input id="inst-location" bind:value={location} placeholder={mode === "blank" ? "Folder for this instance" : "Parent folder for the modpack"} />
+           <button class="secondary" on:click={selectLocation} aria-label="Choose location"><Folder size={16} /></button>
          </div>
+         {#if mode !== "blank"}
+           <span class="path-hint">The modpack will be installed as a new folder inside this path.</span>
+         {/if}
        </div>
      </div>
 
@@ -578,6 +594,7 @@
     background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.25); color: var(--accent-primary);
   }
   .muted { color: var(--text-muted); font-size: 13px; }
+  .path-hint { font-size: 11px; color: var(--text-muted); }
   .muted.compact { padding: 16px; text-align: center; }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
    .template-btn { align-self: flex-start; }

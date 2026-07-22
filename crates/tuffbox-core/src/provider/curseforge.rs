@@ -357,14 +357,20 @@ fn cf_post_json<B: Serialize, T: serde::de::DeserializeOwned>(
     serde_json::from_str(&text).map_err(ProviderError::Parse)
 }
 
-/// Returns true when a download URL should carry the CurseForge API key
-/// (API host or forge CDN), matching Prism's `ApiHeaderProxy`.
+/// Returns true when a download URL should carry the CurseForge API key.
+/// Only `edge.forgecdn.net` (and the API host) require it — `mediafilez` /
+/// `media` are open CDNs (same rule as GDLauncher Carbon).
 pub fn url_needs_curseforge_key(url: &str) -> bool {
     let lower = url.to_ascii_lowercase();
-    lower.contains("://api.curseforge.com")
-        || lower.contains("forgecdn.net")
-        || lower.contains("://media.forgecdn.net")
-        || lower.contains("://edge.forgecdn.net")
+    if let Some(rest) = lower.strip_prefix("https://") {
+        let host = rest.split('/').next().unwrap_or("");
+        return host == "api.curseforge.com" || host == "edge.forgecdn.net";
+    }
+    if let Some(rest) = lower.strip_prefix("http://") {
+        let host = rest.split('/').next().unwrap_or("");
+        return host == "api.curseforge.com" || host == "edge.forgecdn.net";
+    }
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -408,6 +414,46 @@ impl CurseForgeFileInfo {
             _ => "mods",
         }
     }
+
+    /// Prefer the API URL; if CurseForge withheld it, reconstruct forgecdn paths
+    /// (Prism / GDLauncher style) from file id + file name.
+    pub fn resolved_download_urls(&self) -> Vec<String> {
+        let mut urls = Vec::new();
+        if let Some(u) = self
+            .download_url
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            urls.push(u.to_string());
+        }
+        if !self.file_name.trim().is_empty() {
+            for candidate in curseforge_cdn_urls(self.id, &self.file_name) {
+                if !urls.iter().any(|u| u == &candidate) {
+                    urls.push(candidate);
+                }
+            }
+        }
+        urls
+    }
+
+    pub fn resolved_download_url(&self) -> Option<String> {
+        self.resolved_download_urls().into_iter().next()
+    }
+}
+
+/// Reconstruct CurseForge CDN download URLs from file id + filename when the
+/// API returns a null `downloadUrl` (common for third-party clients).
+pub fn curseforge_cdn_urls(file_id: u64, file_name: &str) -> Vec<String> {
+    let encoded = urlencoding_minimal(file_name);
+    let a = file_id / 1000;
+    let b = file_id % 1000;
+    // mediafilez is usually open; edge requires x-api-key (see url_needs_curseforge_key).
+    vec![
+        format!("https://mediafilez.forgecdn.net/files/{a}/{b}/{encoded}"),
+        format!("https://edge.forgecdn.net/files/{a}/{b}/{encoded}"),
+        format!("https://media.forgecdn.net/files/{a}/{b}/{encoded}"),
+    ]
 }
 
 #[derive(Debug, Deserialize)]
@@ -536,7 +582,7 @@ impl From<CfFile> for CurseForgeFileInfo {
         }
         let url = f.download_url.filter(|u| !u.trim().is_empty());
         let blocked = url.is_none();
-        Self {
+        let mut info = Self {
             id: f.id,
             mod_id: f.mod_id,
             display_name: if f.display_name.is_empty() {
@@ -552,7 +598,16 @@ impl From<CfFile> for CurseForgeFileInfo {
             file_date: f.file_date,
             blocked,
             class_id: None,
+        };
+        // Prefer a reconstructed CDN URL so callers that only read `download_url`
+        // still work when CurseForge withholds the official link.
+        if info.download_url.is_none() {
+            if let Some(reconstructed) = info.resolved_download_url() {
+                info.download_url = Some(reconstructed);
+                info.blocked = false;
+            }
         }
+        info
     }
 }
 
@@ -562,8 +617,23 @@ pub fn download_curseforge_url(
     dest: &std::path::Path,
     expected_sha1: Option<&str>,
 ) -> Result<(), ProviderError> {
+    download_curseforge_url_candidates(&[url.to_string()], dest, expected_sha1)
+}
+
+/// Try several CurseForge CDN candidates until one succeeds.
+pub fn download_curseforge_url_candidates(
+    urls: &[String],
+    dest: &std::path::Path,
+    expected_sha1: Option<&str>,
+) -> Result<(), ProviderError> {
     use sha1::{Digest, Sha1};
     use std::io::{Read, Write};
+
+    if urls.is_empty() {
+        return Err(ProviderError::NetworkContext(
+            "no CurseForge download URLs to try".into(),
+        ));
+    }
 
     let provider = CurseForgeProvider::new();
     let client = reqwest::blocking::Client::builder()
@@ -573,45 +643,139 @@ pub fn download_curseforge_url(
         .build()
         .map_err(|e| ProviderError::NetworkContext(e.to_string()))?;
 
-    let mut request = client.get(url);
-    if url_needs_curseforge_key(url) {
-        request = request.header("x-api-key", provider.api_key());
-    }
-    let response = request.send().map_err(ProviderError::Network)?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(ProviderError::Api {
-            status: status.as_u16(),
-            message: format!("download failed for {url}"),
-        });
-    }
-
     let parent = dest.parent().unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)?;
-    let mut file = tempfile::Builder::new()
-        .prefix(".tuffbox-download-")
-        .suffix(".part")
-        .tempfile_in(parent)?;
-    let mut hasher = Sha1::new();
-    let mut stream = response;
-    let mut buffer = vec![0u8; 64 * 1024];
-    loop {
-        let n = stream.read(&mut buffer)?;
-        if n == 0 {
-            break;
+
+    let mut last_err = None;
+    for url in urls {
+        let mut request = client.get(url);
+        if url_needs_curseforge_key(url) {
+            request = request.header("x-api-key", provider.api_key());
         }
-        hasher.update(&buffer[..n]);
-        file.write_all(&buffer[..n])?;
-    }
-    file.flush()?;
-    let actual = format!("{:x}", hasher.finalize());
-    if let Some(expected) = expected_sha1 {
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(ProviderError::NetworkContext(format!(
-                "sha1 mismatch: expected {expected}, got {actual}"
-            )));
+        let response = match request.send() {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = Some(ProviderError::Network(e));
+                continue;
+            }
+        };
+        let status = response.status();
+        if !status.is_success() {
+            last_err = Some(ProviderError::Api {
+                status: status.as_u16(),
+                message: format!("download failed for {url}"),
+            });
+            continue;
         }
+
+        let mut file = match tempfile::Builder::new()
+            .prefix(".tuffbox-download-")
+            .suffix(".part")
+            .tempfile_in(parent)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                last_err = Some(ProviderError::Io(e));
+                continue;
+            }
+        };
+        let mut hasher = Sha1::new();
+        let mut stream = response;
+        let mut buffer = vec![0u8; 64 * 1024];
+        let mut read_err = false;
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    hasher.update(&buffer[..n]);
+                    if let Err(e) = file.write_all(&buffer[..n]) {
+                        last_err = Some(ProviderError::Io(e));
+                        read_err = true;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    last_err = Some(ProviderError::Io(e));
+                    read_err = true;
+                    break;
+                }
+            }
+        }
+        if read_err {
+            continue;
+        }
+        if let Err(e) = file.flush() {
+            last_err = Some(ProviderError::Io(e));
+            continue;
+        }
+        let actual = format!("{:x}", hasher.finalize());
+        if let Some(expected) = expected_sha1 {
+            if !actual.eq_ignore_ascii_case(expected) {
+                last_err = Some(ProviderError::NetworkContext(format!(
+                    "sha1 mismatch for {url}: expected {expected}, got {actual}"
+                )));
+                continue;
+            }
+        }
+        file.persist(dest).map_err(|e| ProviderError::Io(e.error))?;
+        return Ok(());
     }
-    file.persist(dest).map_err(|e| ProviderError::Io(e.error))?;
-    Ok(())
+
+    Err(last_err.unwrap_or_else(|| {
+        ProviderError::NetworkContext("all CurseForge CDN candidates failed".into())
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconstructs_cdn_urls_from_file_id() {
+        // Prism/GDLauncher: files/{id/1000}/{id%1000}/{name}
+        let urls = curseforge_cdn_urls(5_432_101, "My Pack-1.0.zip");
+        assert!(urls[0].contains("/files/5432/101/"));
+        assert!(urls[0].contains("My%20Pack-1.0.zip") || urls[0].ends_with("My Pack-1.0.zip") == false);
+        assert!(urls.iter().any(|u| u.contains("mediafilez.forgecdn.net")));
+        assert!(urls.iter().any(|u| u.contains("edge.forgecdn.net")));
+    }
+
+    #[test]
+    fn api_key_only_for_edge_and_api() {
+        assert!(url_needs_curseforge_key(
+            "https://edge.forgecdn.net/files/1/2/a.zip"
+        ));
+        assert!(url_needs_curseforge_key(
+            "https://api.curseforge.com/v1/mods/1"
+        ));
+        assert!(!url_needs_curseforge_key(
+            "https://mediafilez.forgecdn.net/files/1/2/a.zip"
+        ));
+        assert!(!url_needs_curseforge_key(
+            "https://media.forgecdn.net/files/1/2/a.zip"
+        ));
+    }
+
+    #[test]
+    fn resolved_urls_fill_when_api_withheld() {
+        let info = CurseForgeFileInfo {
+            id: 3272032,
+            mod_id: 1,
+            display_name: "jei".into(),
+            file_name: "jei.jar".into(),
+            download_url: None,
+            release_type: 1,
+            game_versions: vec![],
+            hashes: ProviderFileHashes {
+                sha1: None,
+                sha512: None,
+            },
+            file_date: None,
+            blocked: true,
+            class_id: None,
+        };
+        let urls = info.resolved_download_urls();
+        assert!(!urls.is_empty());
+        assert!(urls[0].contains("/files/3272/32/jei.jar"));
+    }
 }

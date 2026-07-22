@@ -387,6 +387,19 @@
     error = null;
     aiFeedbackMsg = null;
     try {
+      try {
+        const prep = await invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
+          "ensure_ollama_model",
+        );
+        if (prep?.model) {
+          message = `AI ready (${prep.model}). Analyzing crash…`;
+        } else {
+          message = "Preparing local AI…";
+        }
+      } catch (prepErr) {
+        // Still try analyze — it also ensures Ollama; surface prep hint if that fails too.
+        console.warn("[AI] ensure_ollama_model:", prepErr);
+      }
       const reportId = selectedReportId || null;
       const context: any = await invoke("build_ai_crash_context", {
         path: $projectPath,
@@ -406,8 +419,12 @@
       message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}). Review before applying fixes.`;
     } catch (e) {
       const msg = String(e);
-      if (/ollama|connection refused|failed to fetch|tcp|unreachable/i.test(msg)) {
-        error = `Ollama unavailable — start Ollama and check Settings → AI (endpoint/model). ${msg}`;
+      if (/not installed|Install model|no model|Settings → AI/i.test(msg)) {
+        error = `${msg} Open Settings → Integrations → Configure AI to install a model.`;
+      } else if (/model.*(not found)|pull|download/i.test(msg)) {
+        error = `Local AI model missing: ${msg}`;
+      } else if (/ollama|connection refused|failed to fetch|tcp|unreachable/i.test(msg)) {
+        error = `Ollama unavailable — install from https://ollama.com, set the path in Settings → AI, then install a model there. ${msg}`;
       } else {
         error = msg;
       }

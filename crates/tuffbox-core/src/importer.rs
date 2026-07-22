@@ -413,7 +413,8 @@ pub fn resolve_curseforge_pack_files(
         }
         module.file_name = Some(info.file_name.clone());
         module.version = info.display_name.clone();
-        module.source.url = info.download_url.clone();
+        // Prefer API URL, then reconstructed CDN / Modrinth fallback already applied above.
+        module.source.url = info.resolved_download_url().or_else(|| info.download_url.clone());
         module.hashes = Some(FileHashes {
             sha1: info.hashes.sha1.clone(),
             sha512: info.hashes.sha512.clone(),
@@ -424,7 +425,7 @@ pub fn resolve_curseforge_pack_files(
             "datapacks" => crate::manifest::ContentType::Datapack,
             _ => crate::manifest::ContentType::Mod,
         };
-        if info.download_url.is_some() {
+        if module.source.url.is_some() {
             resolved += 1;
             module.status = vec!["ok".into()];
         } else {

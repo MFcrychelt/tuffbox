@@ -537,13 +537,16 @@
   .account-actions { display: flex; gap: 4px; }
 
   .icon-btn.small {
-    width: 28px; height: 28px; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    border-radius: 6px; background: transparent; border: none;
-    color: var(--text-muted); cursor: pointer;
+    width: 28px; height: 28px; min-width: 28px; min-height: 28px;
+    padding: 0 !important;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 6px; background: transparent !important; border: none !important;
+    color: var(--text-muted) !important; cursor: pointer;
+    box-shadow: none !important; transform: none !important;
   }
-  .icon-btn.small:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .icon-btn.small.danger:hover { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+  .icon-btn.small :global(svg) { width: 14px; height: 14px; stroke: currentColor; }
+  .icon-btn.small:hover { background: var(--bg-hover) !important; color: var(--text-primary) !important; transform: none !important; }
+  .icon-btn.small.danger:hover { background: rgba(239, 68, 68, 0.12) !important; color: #ef4444 !important; }
 
   /* ─── Add Options ───────────────────────── */
   .add-options { display: flex; flex-direction: column; gap: 10px; }
