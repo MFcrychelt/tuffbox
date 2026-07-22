@@ -221,7 +221,7 @@
     <Header {currentView} />
     <main class="content" class:ide-view={currentView === "ide"} bind:this={contentEl}>
       {#key currentView}
-        <div class="view-wrapper">
+        <div class="view-wrapper tb-view-enter">
           {#if currentView === "dashboard"}
             <Dashboard bind:currentView />
           {:else if currentView === "ide"}

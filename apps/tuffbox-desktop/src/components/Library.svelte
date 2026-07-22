@@ -11,9 +11,11 @@
     Compass,
     LayoutGrid,
     Sparkles,
+    ExternalLink,
   } from "lucide-svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { open as openExternal } from "@tauri-apps/plugin-shell";
   import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -138,6 +140,31 @@
 
   function resultKey(result: DiscoverResult): string {
     return `${result.provider ?? "modrinth"}:${result.id}`;
+  }
+
+  function modpackPageUrl(result: DiscoverResult): string {
+    const slugOrId = (result.slug || result.id || "").trim();
+    if (!slugOrId) return "";
+    if (result.provider === "curseforge") {
+      if (/^\d+$/.test(slugOrId) && (!result.slug || result.slug === result.id)) {
+        return `https://www.curseforge.com/projects/${slugOrId}`;
+      }
+      return `https://www.curseforge.com/minecraft/modpacks/${slugOrId}`;
+    }
+    return `https://modrinth.com/modpack/${slugOrId}`;
+  }
+
+  async function openModpackPage(result: DiscoverResult) {
+    const url = modpackPageUrl(result);
+    if (!url) {
+      toasts.error("No catalog page for this modpack.");
+      return;
+    }
+    try {
+      await openExternal(url);
+    } catch (e) {
+      toasts.error(`Could not open link: ${e}`);
+    }
   }
 
   function interleaveResults(a: DiscoverResult[], b: DiscoverResult[]): DiscoverResult[] {
@@ -306,7 +333,7 @@
         : "Search Modrinth modpacks…";
 </script>
 
-<div class="library">
+<div class="library fade-slide-in">
   <div class="library-header">
     <div class="title-row">
       <LibraryIcon size={22} />
@@ -333,13 +360,13 @@
         <p>Create or import a modpack to build your library.</p>
       </div>
     {:else}
-      <div class="pack-grid">
-        {#each $recentProjects as project (project.path)}
-          <div class="pack-card" role="button" tabindex="0"
+      <div class="pack-grid tb-stagger">
+        {#each $recentProjects as project, i (project.path)}
+          <div class="pack-card tb-card" style={`--i: ${i}`} role="button" tabindex="0"
             on:click={() => openPack(project)}
             on:keydown={(e) => e.key === "Enter" && openPack(project)}>
             <div class="pack-cover" style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}>
-              <span class="pack-cover-letter">{project.info.name[0]}</span>
+              <span class="pack-cover-letter tb-cover-media">{project.info.name[0]}</span>
               <button class="pack-play" class:busy={launching === project.path}
                 on:click|stopPropagation={() => launchPack(project)}
                 title="Play" aria-label="Play {project.info.name}">
@@ -359,8 +386,8 @@
           </div>
         {/each}
 
-        <button class="pack-card add-card" on:click={() => (currentView = "dashboard")}>
-          <div class="pack-cover add-cover"><Plus size={28} /></div>
+        <button class="pack-card add-card tb-card" style={`--i: ${$recentProjects.length}`} on:click={() => (currentView = "dashboard")}>
+          <div class="pack-cover add-cover"><Plus size={28} class="tb-cover-media" /></div>
           <div class="pack-body"><span class="pack-name">New pack</span></div>
         </button>
       </div>
@@ -427,19 +454,24 @@
         <p>Try a different search.</p>
       </div>
     {:else}
-      <div class="pack-grid">
-        {#each results as result (resultKey(result))}
-          <div class="pack-card discover-card">
+      <div class="pack-grid tb-stagger">
+        {#each results as result, i (resultKey(result))}
+          <div class="pack-card discover-card tb-card" style={`--i: ${i}`}>
             <div class="pack-cover" style={result.iconUrl ? `background: #18181b` : `background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug)})`}>
               {#if result.iconUrl}
-                <img class="pack-cover-img" src={result.iconUrl} alt="" />
+                <img class="pack-cover-img tb-cover-media" src={result.iconUrl} alt="" />
               {:else}
-                <span class="pack-cover-letter">{result.name[0]}</span>
+                <span class="pack-cover-letter tb-cover-media">{result.name[0]}</span>
               {/if}
             </div>
             <div class="pack-body">
               <div class="pack-title-row">
-                <span class="pack-name" title={result.name}>{result.name}</span>
+                <button
+                  type="button"
+                  class="pack-name linkish"
+                  title="Open on {result.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
+                  on:click={() => openModpackPage(result)}
+                >{result.name}</button>
                 {#if discoverProvider === "both"}
                   <span
                     class="provider-badge"
@@ -455,9 +487,19 @@
                 <span><Download size={12} /> {formatCount(result.downloads)}</span>
                 <span><Star size={12} /> {formatCount(result.follows)}</span>
               </div>
-              <button class="pack-add" disabled={adding.has(resultKey(result))} on:click={() => addModpack(result)}>
-                {#if adding.has(resultKey(result))}<span class="mini-spinner"></span> Adding…{:else}<Plus size={14} /> Add to TuffBox{/if}
-              </button>
+              <div class="pack-actions">
+                <button
+                  type="button"
+                  class="pack-page"
+                  title="Open catalog page"
+                  on:click={() => openModpackPage(result)}
+                >
+                  <ExternalLink size={14} /> Page
+                </button>
+                <button class="pack-add" disabled={adding.has(resultKey(result))} on:click={() => addModpack(result)}>
+                  {#if adding.has(resultKey(result))}<span class="mini-spinner"></span> Adding…{:else}<Plus size={14} /> Add to TuffBox{/if}
+                </button>
+              </div>
             </div>
           </div>
         {/each}
@@ -488,9 +530,14 @@
     padding: 8px 14px; border-radius: 999px;
     background: var(--bg-secondary); border: 1px solid var(--border-color);
     color: var(--text-secondary); font-size: 13px; font-weight: 600; cursor: pointer;
-    transition: all 0.15s ease;
+    transition:
+      transform var(--motion-fast) var(--ease-spring),
+      background var(--motion-fast) var(--ease-out),
+      border-color var(--motion-fast) var(--ease-out),
+      color var(--motion-fast) var(--ease-out);
   }
   .tabs button:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .tabs button:active:not(:disabled) { transform: scale(0.96); }
   .tabs button.active {
     border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.1); color: var(--accent-primary);
   }
@@ -507,16 +554,16 @@
     border-radius: var(--border-radius-lg);
     overflow: hidden;
     text-align: left;
-    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
     cursor: pointer;
     display: flex; flex-direction: column;
   }
-  .pack-card:hover { transform: translateY(-2px); border-color: var(--bg-hover); background: var(--bg-tertiary); }
+  .pack-card:hover { background: var(--bg-tertiary); }
 
   .pack-cover {
     position: relative;
     height: 120px;
     display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
   }
   .pack-cover-letter {
     font-size: 44px; font-weight: 900; color: #fff;
@@ -530,15 +577,23 @@
     display: flex; align-items: center; justify-content: center;
     background: var(--accent-primary); color: #000; border: none; cursor: pointer;
     box-shadow: 0 6px 16px rgba(27, 217, 106, 0.4);
-    transition: transform 0.12s ease;
+    transition: transform var(--motion-fast) var(--ease-spring);
   }
-  .pack-play:hover { transform: scale(1.08); }
+  .pack-play:hover { transform: scale(1.1); }
   .pack-play.busy { opacity: 0.8; cursor: default; }
 
   .pack-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
   .pack-name {
     font-weight: 700; font-size: 14px; color: var(--text-primary);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  button.pack-name.linkish {
+    background: none; border: none; padding: 0; margin: 0;
+    cursor: pointer; text-align: left; font: inherit; font-weight: 700; font-size: 14px;
+    color: var(--text-primary); max-width: 100%;
+  }
+  button.pack-name.linkish:hover {
+    color: var(--accent-primary); text-decoration: underline;
   }
   .pack-meta { font-size: 12px; color: var(--text-muted); text-transform: capitalize; }
   .pack-desc {
@@ -559,8 +614,19 @@
   .pack-stats { display: flex; gap: 12px; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
   .pack-stats span { display: inline-flex; align-items: center; gap: 4px; }
 
-  .pack-add {
+  .pack-actions {
     margin-top: 10px;
+    display: flex; gap: 8px; align-items: stretch;
+  }
+  .pack-page {
+    display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    padding: 8px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    background: var(--bg-tertiary); border: 1px solid var(--border-color);
+    color: var(--text-secondary); cursor: pointer; flex-shrink: 0;
+  }
+  .pack-page:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+  .pack-add {
+    flex: 1;
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     padding: 8px 12px; border-radius: 8px; font-size: 12px; font-weight: 700;
     background: var(--accent-primary); color: #000; border: none; cursor: pointer;

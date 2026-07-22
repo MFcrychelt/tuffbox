@@ -35,10 +35,12 @@
     Package,
     Power,
     PowerOff,
+    ExternalLink,
   } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
   import { toasts } from "../lib/toast";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import PromptDialog from "./PromptDialog.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
 import EmptyState from "./EmptyState.svelte";
@@ -1026,13 +1028,84 @@ import { trapFocus } from "../lib/focusTrap";
   let copiedLinkId: string | null = null;
   let copiedLinkTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function modrinthProjectUrl(result: SearchResult): string {
-    const type = result.projectType || "mod";
-    return `https://modrinth.com/${type}/${result.slug || result.id}`;
+  function modrinthTypePath(projectType?: string | null): string {
+    const t = (projectType || "mod").toLowerCase();
+    if (t === "resourcepack" || t === "resourcepacks") return "resourcepack";
+    if (t === "datapack" || t === "datapacks") return "datapack";
+    if (t === "shader" || t === "shaders" || t === "shaderpack") return "shader";
+    if (t === "modpack" || t === "modpacks") return "modpack";
+    return "mod";
+  }
+
+  function curseforgeTypePath(projectType?: string | null): string {
+    const t = (projectType || "mod").toLowerCase();
+    if (t === "resourcepack" || t === "resourcepacks") return "texture-packs";
+    if (t === "datapack" || t === "datapacks") return "data-packs";
+    if (t === "shader" || t === "shaders" || t === "shaderpack") return "shaders";
+    if (t === "modpack" || t === "modpacks") return "modpacks";
+    return "mc-mods";
+  }
+
+  /** Public catalog page for a search hit (Modrinth or CurseForge). */
+  function projectPageUrl(result: SearchResult): string {
+    const slugOrId = (result.slug || result.id || "").trim();
+    if (!slugOrId) return "";
+    if (isCurseForgeResult(result)) {
+      // Prefer slug path; numeric id still works via /projects/{id} fallback.
+      if (/^\d+$/.test(slugOrId) && (!result.slug || result.slug === result.id)) {
+        return `https://www.curseforge.com/projects/${slugOrId}`;
+      }
+      return `https://www.curseforge.com/minecraft/${curseforgeTypePath(result.projectType)}/${slugOrId}`;
+    }
+    return `https://modrinth.com/${modrinthTypePath(result.projectType)}/${slugOrId}`;
+  }
+
+  function installedModPageUrl(mod: ModRow): string | null {
+    const source = (mod.source || "").toLowerCase();
+    if (source === "modrinth") {
+      const id = (mod.projectId || mod.id || "").trim();
+      if (!id) return null;
+      return `https://modrinth.com/${modrinthTypePath(mod.contentType)}/${id}`;
+    }
+    if (source === "curseforge") {
+      const id = (mod.projectId || "").trim() || (mod.id || "").trim();
+      if (!id) return null;
+      if (/^\d+$/.test(id)) return `https://www.curseforge.com/projects/${id}`;
+      return `https://www.curseforge.com/minecraft/${curseforgeTypePath(mod.contentType)}/${id}`;
+    }
+    return null;
+  }
+
+  async function openExternalUrl(url: string) {
+    if (!url) return;
+    try {
+      await openExternal(url);
+    } catch (e) {
+      toasts.error(`Could not open link: ${e}`);
+    }
+  }
+
+  async function openProjectPage(result: SearchResult) {
+    const url = projectPageUrl(result);
+    if (!url) {
+      toasts.error("No catalog page for this project.");
+      return;
+    }
+    await openExternalUrl(url);
+  }
+
+  async function openInstalledModPage(mod: ModRow) {
+    const url = installedModPageUrl(mod);
+    if (!url) {
+      toasts.error("This mod has no Modrinth/CurseForge page.");
+      return;
+    }
+    await openExternalUrl(url);
   }
 
   async function copyProjectLink(result: SearchResult) {
-    const url = modrinthProjectUrl(result);
+    const url = projectPageUrl(result);
+    if (!url) return;
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -1823,7 +1896,7 @@ import { trapFocus } from "../lib/focusTrap";
 
 </script>
 
-<div class="mods">
+<div class="mods fade-slide-in">
   <header class="content-hero">
     <div class="content-hero-copy">
       <div class="content-kicker"><Package size={14} /> Content library</div>
@@ -2005,19 +2078,19 @@ import { trapFocus } from "../lib/focusTrap";
         {/if}
         <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse Modrinth</button>
       </div>
-      <div class="results list saved-results">
-        {#each filteredSavedMods as result (result.id)}
-          <article class="result-card" class:installed={isInstalled(result)} class:list={true}>
+      <div class="results list saved-results tb-stagger">
+        {#each filteredSavedMods as result, i (result.id)}
+          <article class="result-card tb-card" style={`--i: ${i}`} class:installed={isInstalled(result)} class:list={true}>
             <div class="result-icon">
               {#if result.iconUrl}
-                <img src={result.iconUrl} alt="" loading="lazy" />
+                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
               {:else}
-                <span>{iconFallback(result.name)}</span>
+                <span class="tb-cover-media">{iconFallback(result.name)}</span>
               {/if}
             </div>
             <div class="result-main">
               <div class="result-title">
-                <span class="result-name">{result.name}</span>
+                <button type="button" class="result-name linkish" title="Open on {isCurseForgeResult(result) ? 'CurseForge' : 'Modrinth'}" on:click|stopPropagation={() => openProjectPage(result)}>{result.name}</button>
                 {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                 {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
               </div>
@@ -2034,7 +2107,10 @@ import { trapFocus } from "../lib/focusTrap";
                 {#if contentFilter.startsWith("list:")}
                   <button class="qa danger" title="Remove from list" on:click|stopPropagation={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
                 {/if}
-                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy Modrinth link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                <button class="qa" title="Open page" on:click|stopPropagation={() => openProjectPage(result)}>
+                  <ExternalLink size={15} />
+                </button>
+                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
                   {#if copiedLinkId === result.id}
                     <Check size={15} />
                   {:else}
@@ -2054,10 +2130,10 @@ import { trapFocus } from "../lib/focusTrap";
   {:else if filtered.length === 0}
     <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} on:action={openAddModal} />
   {:else}
-    <div class="installed-list" class:selecting={selectionMode}>
+    <div class="installed-list tb-stagger" class:selecting={selectionMode}>
       {#each filtered as mod, i (mod.id)}
         <article
-          class="installed-card"
+          class="installed-card tb-card"
           class:has-update={mod.updateAvailable}
           class:disabled={mod.disabled}
           class:selected={!!selectedModIds[mod.id]}
@@ -2084,14 +2160,18 @@ import { trapFocus } from "../lib/focusTrap";
               <span class="update-dot" title="Update available"></span>
             {/if}
             {#if mod.iconUrl && !brokenIcons.includes(mod.id)}
-              <img src={mod.iconUrl} alt="" loading="lazy" on:error={() => handleIconError(mod)} />
+              <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" on:error={() => handleIconError(mod)} />
             {:else}
-              <span>{iconFallback(mod.name)}</span>
+              <span class="tb-cover-media">{iconFallback(mod.name)}</span>
             {/if}
           </div>
           <div class="installed-main">
             <div class="installed-title">
-              <strong>{mod.name}</strong>
+              {#if installedModPageUrl(mod)}
+                <button type="button" class="installed-name linkish" title="Open catalog page" on:click|stopPropagation={() => openInstalledModPage(mod)}>{mod.name}</button>
+              {:else}
+                <strong>{mod.name}</strong>
+              {/if}
               {#if mod.disabled}
                 <span class="disabled-badge">Disabled</span>
               {/if}
@@ -2110,6 +2190,15 @@ import { trapFocus } from "../lib/focusTrap";
             <span class="tag source">{mod.source}</span>
           </div>
           <div class="card-actions">
+            {#if installedModPageUrl(mod)}
+              <button
+                class="icon-btn"
+                on:click|stopPropagation={() => openInstalledModPage(mod)}
+                title="Open on {(mod.source || '').toLowerCase() === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
+              >
+                <ExternalLink size={16} />
+              </button>
+            {/if}
             <button
               class="icon-btn"
               class:warn={mod.disabled}
@@ -2470,19 +2559,19 @@ import { trapFocus } from "../lib/focusTrap";
                 <EmptyState icon={Bookmark} compact={true} title="This list is empty" description="Saved projects will appear here." />
               {/if}
             {:else}
-              <div class="results {viewMode}">
-                {#each savedMods as result (result.id)}
-                  <article class="result-card" class:installed={isInstalled(result)} class:list={viewMode === "list"}>
+              <div class="results {viewMode} tb-stagger">
+                {#each savedMods as result, i (result.id)}
+                  <article class="result-card tb-card" style={`--i: ${i}`} class:installed={isInstalled(result)} class:list={viewMode === "list"}>
                     <div class="result-icon">
                       {#if result.iconUrl}
-                        <img src={result.iconUrl} alt="" loading="lazy" />
+                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
                       {:else}
-                        <span>{iconFallback(result.name)}</span>
+                        <span class="tb-cover-media">{iconFallback(result.name)}</span>
                       {/if}
                     </div>
                     <div class="result-main">
                       <div class="result-title">
-                        <span class="result-name">{result.name}</span>
+                        <button type="button" class="result-name linkish" title="Open on {isCurseForgeResult(result) ? 'CurseForge' : 'Modrinth'}" on:click|stopPropagation={() => openProjectPage(result)}>{result.name}</button>
                         {#if catalogProvider === "both"}
                           <span
                             class="provider-badge"
@@ -2523,7 +2612,10 @@ import { trapFocus } from "../lib/focusTrap";
                             </div>
                           {/if}
                         </div>
-                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy Modrinth link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                        <button class="qa" title="Open page" on:click|stopPropagation={() => openProjectPage(result)}>
+                          <ExternalLink size={15} />
+                        </button>
+                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
                           {#if copiedLinkId === result.id}
                             <Check size={15} />
                           {:else}
@@ -2544,22 +2636,22 @@ import { trapFocus } from "../lib/focusTrap";
           {:else if pagedResults.length === 0}
             <EmptyState icon={Search} compact={true} title="No results" description="Adjust filters or search text." />
           {:else}
-            <div class="results {viewMode}">
-          {#each pagedResults as result (result.id)}
-            <article class="result-card" class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"}>
+            <div class="results {viewMode} tb-stagger">
+          {#each pagedResults as result, i (result.id)}
+            <article class="result-card tb-card" style={`--i: ${i}`} class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"}>
               <label class="select-result" title="Select for bulk install">
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
               </label>
               <div class="result-icon">
                 {#if result.iconUrl}
-                  <img src={result.iconUrl} alt="" loading="lazy" />
+                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
                 {:else}
-                  <span>{iconFallback(result.name)}</span>
+                  <span class="tb-cover-media">{iconFallback(result.name)}</span>
                 {/if}
               </div>
               <div class="result-main">
                 <div class="result-title">
-                  <span class="result-name">{result.name}</span>
+                  <button type="button" class="result-name linkish" title="Open on {isCurseForgeResult(result) ? 'CurseForge' : 'Modrinth'}" on:click|stopPropagation={() => openProjectPage(result)}>{result.name}</button>
                   {#if catalogProvider === "both"}
                     <span
                       class="provider-badge"
@@ -2614,7 +2706,10 @@ import { trapFocus } from "../lib/focusTrap";
                       </div>
                     {/if}
                   </div>
-                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy Modrinth link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                  <button class="qa" title="Open page" on:click|stopPropagation={() => openProjectPage(result)}>
+                    <ExternalLink size={15} />
+                  </button>
+                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
                     {#if copiedLinkId === result.id}
                       <Check size={15} />
                     {:else}
@@ -2650,7 +2745,13 @@ import { trapFocus } from "../lib/focusTrap";
         <div class="install-plan-panel">
           <div>
             <span class="plan-eyebrow">Install plan</span>
-            <h3>{pendingInstall.name} ({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</h3>
+            <h3>
+              <button type="button" class="plan-title-link" title="Open catalog page" on:click={() => openProjectPage(pendingInstall)}>
+                {pendingInstall.name}
+                <ExternalLink size={14} />
+              </button>
+              <span class="plan-slug">({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</span>
+            </h3>
             {#if isCurseForgeResult(pendingInstall)}
               <p class="muted">CurseForge installs the selected project directly (no dependency resolution).</p>
             {:else if previews[pendingInstall.id]}
@@ -3240,14 +3341,10 @@ import { trapFocus } from "../lib/focusTrap";
     background: linear-gradient(135deg, rgba(255,255,255,0.02), transparent 40%), var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: 16px;
-    transition: border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
   }
 
   .installed-card:hover {
-    border-color: rgba(27, 217, 106, 0.35);
     background: rgba(255,255,255,0.03);
-    transform: translateY(-1px);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.22);
   }
 
   .installed-card.has-update {
@@ -4180,13 +4277,10 @@ import { trapFocus } from "../lib/focusTrap";
     border-radius: var(--border-radius-lg);
     background: #2d2d2d;
     border: 1px solid var(--border-color);
-    transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
   }
 
   .result-card:hover {
-    border-color: var(--bg-active);
     background: #333;
-    transform: translateY(-1px);
   }
 
   .results.list .result-card {
@@ -4223,7 +4317,19 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex; align-items: center; justify-content: center;
     color: #fff; font-weight: 900; font-size: 22px;
   }
-  .result-icon img { width: 100%; height: 100%; object-fit: cover; }
+  .result-icon img,
+  .result-icon .tb-cover-media {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .result-icon span.tb-cover-media {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+  }
 
   .result-main { grid-area: main; min-width: 0; }
 
@@ -4234,6 +4340,39 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 8px;
   }
   .result-name { color: var(--text-primary); font-weight: 800; font-size: 15px; }
+  button.result-name.linkish,
+  button.installed-name.linkish {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    font-weight: 800;
+    font-size: 15px;
+    color: var(--text-primary);
+  }
+  button.result-name.linkish:hover,
+  button.installed-name.linkish:hover {
+    color: var(--accent-primary);
+    text-decoration: underline;
+  }
+  .plan-title-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+  }
+  .plan-title-link:hover { color: var(--accent-primary); }
+  .plan-slug { color: var(--text-muted); font-weight: 500; margin-left: 6px; }
   .result-author { color: #60a5fa; font-size: 12px; cursor: pointer; }
   .result-author:hover { text-decoration: underline; }
   .result-desc {

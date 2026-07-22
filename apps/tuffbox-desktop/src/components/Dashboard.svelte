@@ -447,7 +447,7 @@
 
 <svelte:window on:click={closeMenu} />
 
-<div class="home">
+<div class="home fade-slide-in">
   <!-- Top bar: Quick actions left, Avatar right -->
   <div class="top-bar">
     <div class="quick-nav">
@@ -594,10 +594,11 @@
             </button>
           </div>
         {:else}
-          <div class="projects-grid">
-            {#each $recentProjects as project (project.path)}
+          <div class="projects-grid tb-stagger">
+            {#each $recentProjects as project, i (project.path)}
               <div
-                class="project-tile"
+                class="project-tile tb-card"
+                style={`--i: ${i}`}
                 class:active={selectedPath === project.path}
                 role="button"
                 tabindex="0"
@@ -606,7 +607,7 @@
                 on:contextmenu|preventDefault={(e) => toggleMenu(e, project.path)}
               >
                 <div
-                  class="tile-icon"
+                  class="tile-icon tb-cover-media"
                   style="background: linear-gradient(135deg, {gradientFrom(project.info.name)}, {gradientFrom(project.info.id)})"
                 >
                   {project.info.name[0]}
@@ -1392,14 +1393,11 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     text-align: left;
-    transition: all 0.15s ease;
     cursor: pointer;
   }
 
   .project-tile:hover {
-    border-color: var(--bg-hover);
     background: var(--bg-tertiary);
-    transform: translateY(-1px);
   }
 
   .project-tile.active {
@@ -1412,12 +1410,13 @@
     height: 44px;
     border-radius: var(--border-radius-md);
     display: flex;
+    overflow: hidden;
+    flex-shrink: 0;
     align-items: center;
     justify-content: center;
     font-weight: 900;
     font-size: 18px;
     color: #fff;
-    flex-shrink: 0;
   }
 
   .tile-icon.add-icon {

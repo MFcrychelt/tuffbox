@@ -1,4 +1,4 @@
-/** Theme catalog inspired by GDLauncher Carbon palettes (recreated for TuffBox CSS vars). */
+/** Theme catalog (recreated for TuffBox CSS vars). */
 
 export type ThemeId =
   | "tuffbox"

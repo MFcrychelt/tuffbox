@@ -1,4 +1,4 @@
-/* Extra themes (GDLauncher Carbon palettes remapped to TuffBox tokens).
+/* Extra themes (launcher palettes remapped to TuffBox tokens).
    Default TuffBox dark lives in :root; light in [data-theme="light"] / tuffbox-light. */
 
 [data-theme="tuffbox"] {
@@ -151,35 +151,51 @@
   border-color: #000 #dfdfdf #dfdfdf #000;
 }
 
-/* Motion (disabled under html.potato-pc) */
+/* Motion — launcher-style roles, TuffBox curves (softer overshoot).
+   Disabled under html.potato-pc and prefers-reduced-motion. */
 :root {
-  --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  /* Structure / chrome leave */
+  --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Delight enter / hover (lighter bounce than typical “spring”) */
+  --ease-spring: cubic-bezier(0.22, 1.15, 0.36, 1);
+  --ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
+  --motion-micro: 110ms;
   --motion-fast: 160ms;
-  --motion-med: 280ms;
+  --motion-med: 240ms;
+  --motion-enter: 280ms;
+  --motion-page: 260ms;
+  --stagger-step: 42ms;
 }
 
 .press-effect {
-  transition: transform var(--motion-fast) var(--ease-spring);
+  transition: transform var(--motion-fast) var(--ease-spring),
+    background var(--motion-fast) var(--ease-out),
+    border-color var(--motion-fast) var(--ease-out),
+    color var(--motion-fast) var(--ease-out);
 }
 .press-effect:active:not(:disabled) {
-  transform: scale(0.96);
+  transform: scale(0.95);
 }
 
 .hover-lift {
-  transition: transform var(--motion-med) var(--ease-spring), box-shadow var(--motion-med) ease;
+  transition:
+    transform var(--motion-med) var(--ease-spring),
+    box-shadow var(--motion-med) var(--ease-out),
+    border-color var(--motion-med) var(--ease-out);
 }
 .hover-lift:hover {
-  transform: translateY(-2px) scale(1.02);
+  transform: translateY(-3px) scale(1.015);
+  box-shadow: var(--shadow-md);
 }
 
 .fade-slide-in {
-  animation: fade-slide-in var(--motion-med) var(--ease-spring) both;
+  animation: fade-slide-in var(--motion-enter) var(--ease-spring) both;
 }
 
 @keyframes fade-slide-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
@@ -187,8 +203,107 @@
   }
 }
 
+/* Staggered grid/list pop-in (set --i on children) */
+.tb-stagger > * {
+  animation: tb-pop-in var(--motion-enter) var(--ease-spring) both;
+  animation-delay: calc(var(--i, 0) * var(--stagger-step));
+}
+/* Cap cascade so long lists don’t crawl */
+.tb-stagger > *:nth-child(n + 16) {
+  animation-delay: calc(15 * var(--stagger-step));
+}
+
+@keyframes tb-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Catalog / library cards: cover zoom + action reveal */
+.tb-card {
+  transition:
+    transform var(--motion-med) var(--ease-spring),
+    border-color var(--motion-med) var(--ease-out),
+    box-shadow var(--motion-med) var(--ease-out),
+    background var(--motion-med) var(--ease-out);
+}
+.tb-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+.tb-card .tb-cover-media {
+  transition: transform var(--motion-enter) var(--ease-soft), filter var(--motion-enter) var(--ease-out);
+  transform: scale(1);
+  will-change: transform;
+}
+.tb-card:hover .tb-cover-media {
+  transform: scale(1.07);
+  filter: brightness(1.05);
+}
+.tb-card .tb-reveal {
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity var(--motion-med) var(--ease-out),
+    transform var(--motion-med) var(--ease-spring);
+  pointer-events: none;
+}
+.tb-card:hover .tb-reveal,
+.tb-card:focus-within .tb-reveal {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* Modal shell — utility classes + common launcher modal markup */
+.tb-modal-backdrop,
+.modal-backdrop,
+.backdrop {
+  animation: tb-backdrop-in var(--motion-fast) var(--ease-out) both;
+}
+.tb-modal-panel,
+.modal-backdrop > .modal,
+.backdrop > .modal {
+  animation: tb-modal-in var(--motion-enter) var(--ease-spring) both;
+}
+@keyframes tb-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes tb-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* View panel enter (content swap) */
+.tb-view-enter {
+  animation: tb-view-enter var(--motion-page) var(--ease-out) both;
+}
+@keyframes tb-view-enter {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 .theme-swatch {
-  transition: transform var(--motion-med) var(--ease-spring), box-shadow var(--motion-med) ease;
+  transition: transform var(--motion-med) var(--ease-spring), box-shadow var(--motion-med) var(--ease-out);
 }
 .theme-swatch:hover,
 .theme-swatch.active {

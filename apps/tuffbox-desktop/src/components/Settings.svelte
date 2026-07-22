@@ -592,7 +592,7 @@
           <input type="checkbox" checked={reducedMotion} on:change={toggleReducedMotion} />
           Potato PC mode (reduce motion / animations)
         </label>
-        <p class="hint">Disables CSS animations and transitions for weaker machines — inspired by GDLauncher Carbon.</p>
+        <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
       </section>
     {/if}
 

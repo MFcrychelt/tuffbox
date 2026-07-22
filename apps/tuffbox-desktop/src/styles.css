@@ -253,7 +253,7 @@ select:focus {
   background: var(--bg-active);
 }
 
-/* Potato PC mode — strip motion cost (GDLauncher Carbon–inspired). */
+/* Potato PC mode — strip motion cost on weak machines. */
 html.potato-pc *,
 html.potato-pc *::before,
 html.potato-pc *::after {
