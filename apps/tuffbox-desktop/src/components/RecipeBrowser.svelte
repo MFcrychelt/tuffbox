@@ -1351,9 +1351,9 @@
                 <div class="panel-title">Smithing Table</div>
                 <div class="panel-body smith">
                   {#each [
-                    { key: "template" as const, label: "Template", val: editTemplate },
-                    { key: "base" as const, label: "Base", val: editBase },
-                    { key: "addition" as const, label: "Addition", val: editAddition },
+                    { key: "template", label: "Template", val: editTemplate },
+                    { key: "base", label: "Base", val: editBase },
+                    { key: "addition", label: "Addition", val: editAddition },
                   ] as slot, i}
                     <button
                       type="button"

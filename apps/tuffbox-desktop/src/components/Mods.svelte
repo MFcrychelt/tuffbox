@@ -1700,6 +1700,22 @@ import { trapFocus } from "../lib/focusTrap";
     return name?.[0]?.toUpperCase() ?? "?";
   }
 
+  async function syncModsFolderFromUi() {
+    if (!$projectPath) return;
+    loading = true;
+    try {
+      const synced: ModRow[] = await invoke("sync_mods_folder", { path: $projectPath });
+      mods = synced;
+      brokenIcons = [];
+      hydrateMissingIcons().catch(() => {});
+      refreshUpdateDots().catch(() => {});
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
   function stripHtml(html: string) {
     return html?.replace(/<[^>]*>/g, "").replace(/&[a-z]+;/gi, " ").trim() ?? "";
   }
@@ -1856,21 +1872,7 @@ import { trapFocus } from "../lib/focusTrap";
           <Plus size={16} />
           Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
         </button>
-        <button class="secondary" on:click={async () => {
-          if (!$projectPath) return;
-          loading = true;
-          try {
-            const synced: ModRow[] = await invoke("sync_mods_folder", { path: $projectPath });
-            mods = synced;
-            brokenIcons = [];
-            hydrateMissingIcons().catch(() => {});
-            refreshUpdateDots().catch(() => {});
-          } catch(e) {
-            error = String(e);
-          } finally {
-            loading = false;
-          }
-        }} disabled={!$projectPath || loading} title="Scan all content folders (mods/, resourcepacks/, shaderpacks/, datapacks/)">
+        <button class="secondary" on:click={syncModsFolderFromUi} disabled={!$projectPath || loading} title="Scan all content folders (mods/, resourcepacks/, shaderpacks/, datapacks/)">
           <RotateCw size={16} /> Sync
         </button>
         <button class="secondary glow-btn" on:click={applyAllUpdates} disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"} title="Update all mods to the latest build for this Minecraft version">
