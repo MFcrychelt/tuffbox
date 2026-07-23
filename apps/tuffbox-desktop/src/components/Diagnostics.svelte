@@ -35,6 +35,7 @@
     BookMarked,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
+  import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
 
@@ -134,6 +135,11 @@
   let diagnosis: CrashDiagnosis | null = null;
   let selectedReportId = "";
   let preferLatestLog = true;
+  /// Sentinel: force latest.log analysis (never auto-pick a crash file).
+  const LATEST_LOG_SOURCE = "__latest_log__";
+  let analysisBusy = false;
+  let aiSoftError: string | null = null;
+  let sharingLog = false;
   let loading = false;
   let planning = false;
   let applying = false;
@@ -146,34 +152,50 @@
   let plan: any | null = null;
   let lastLoadedPath: string | null = null;
 
+  async function shareCurrentLog() {
+    if (!$projectPath || sharingLog) return;
+    sharingLog = true;
+    try {
+      const name = selectedReport?.summary?.name;
+      await shareCrashLogWithFeedback($projectPath, preferLatestLog ? "latest.log" : name ?? null);
+    } finally {
+      sharingLog = false;
+    }
+  }
+
   async function load(force = false) {
     if (!$projectPath) return;
     if (!force && lastLoadedPath === $projectPath && diagnosis) return;
     loading = true;
     error = null;
+    const requestedLatest = preferLatestLog;
     try {
-      const reportId = preferLatestLog ? null : (selectedReportId || null);
+      const reportId = preferLatestLog ? LATEST_LOG_SOURCE : selectedReportId || null;
       const data: CrashDiagnosis = await invoke("get_crash_diagnosis", {
         path: $projectPath,
         reportId,
       });
       diagnosis = data;
-      // Keep selection only when backend actually analyzed that report.
-      // Do NOT fall back to reports[0] — that re-locks Diagnose onto a stale crash.
-      selectedReportId = data.selectedReport?.summary.id ?? "";
-      preferLatestLog = !selectedReportId || data.analysisSource === "latest_log";
+      if (requestedLatest || data.analysisSource === "latest_log") {
+        preferLatestLog = true;
+        selectedReportId = "";
+      } else {
+        preferLatestLog = false;
+        selectedReportId = data.selectedReport?.summary.id ?? selectedReportId;
+      }
       plan = null;
       detectWrongLoaderMods();
       if (data.sessionHealthy && preferLatestLog) {
-        // Successful relaunch — don't re-run crash-phrase detectors on leftover ERROR lines.
         crashFindings = [];
         crashMcreator = [];
         crashClassFinder = [];
         crashSupportMsg = null;
-        // Record resolved crash in History when a prior fix was applied.
+        aiAnalysis = null;
+        aiContext = null;
+        aiSoftError = null;
         void invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath }).catch(() => {});
       } else {
-        void runCrashAssistant();
+        void runUnifiedAnalysis();
       }
     } catch (e) {
       error = String(e);
@@ -203,7 +225,7 @@
   }
 
   function activeReportId(): string | null {
-    return preferLatestLog ? null : (selectedReportId || null);
+    return preferLatestLog ? LATEST_LOG_SOURCE : selectedReportId || null;
   }
 
   async function createFixPlan() {
@@ -366,18 +388,69 @@
     try {
       const result: any = await invoke("run_crash_assistant_full", {
         path: $projectPath,
-        reportId: preferLatestLog ? null : (selectedReportId || null),
+        reportId: activeReportId(),
       });
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
       crashClassFinder = result.classFinderResults ?? [];
       crashSupportMsg = result.supportMessageDiscord || result.supportMessageGithub || null;
       crashShowSupport = false;
+      enrichCrashFindingsWithAi();
     } catch (e) {
       error = String(e);
     } finally {
       crashLoading = false;
     }
+  }
+
+  /** Crash Assistant first, then AI — equal analysis cards. */
+  async function runUnifiedAnalysis() {
+    if (!$projectPath || analysisBusy) return;
+    analysisBusy = true;
+    aiSoftError = null;
+    try {
+      await runCrashAssistant();
+      try {
+        await runAiExplain({ quiet: true });
+      } catch (aiErr) {
+        aiSoftError = String(aiErr);
+        console.warn("[Diagnose] AI explain soft-fail:", aiErr);
+      }
+    } finally {
+      analysisBusy = false;
+    }
+  }
+
+  function enrichCrashFindingsWithAi() {
+    if (!aiAnalysis || !crashFindings.length) return;
+    const actions = aiPlanActions(aiAnalysis);
+    const suspected = new Set(
+      (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods ?? []).map((m: string) =>
+        String(m).toLowerCase(),
+      ),
+    );
+    crashFindings = crashFindings.map((f: any) => {
+      const fixIds = (f.fixes ?? [])
+        .map((x: any) => String(x.modId ?? "").toLowerCase())
+        .filter(Boolean);
+      const blob = `${f.title ?? ""} ${f.description ?? ""} ${f.code ?? ""}`.toLowerCase();
+      const matched = actions.find((a: any) => {
+        const mid = String(a.modId ?? a.mod_id ?? "").toLowerCase();
+        if (!mid) return false;
+        return fixIds.includes(mid) || blob.includes(mid) || suspected.has(mid);
+      });
+      if (!matched && !fixIds.some((id: string) => suspected.has(id))) {
+        return { ...f, aiAgree: false, aiHint: null };
+      }
+      return {
+        ...f,
+        aiAgree: true,
+        aiHint:
+          matched?.reason ??
+          matched?.description ??
+          (aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? null),
+      };
+    });
   }
 
   async function copySupportMsg() {
@@ -414,23 +487,22 @@
   let authorCases: any[] = [];
   let authorExportPreview = "";
 
-  async function runAiExplain() {
+  async function runAiExplain(opts: { quiet?: boolean } = {}) {
     if (!$projectPath) return;
     aiLoading = true;
-    error = null;
+    if (!opts.quiet) error = null;
+    aiSoftError = null;
     aiFeedbackMsg = null;
     try {
       try {
         const prep = await invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
           "ensure_ollama_model",
         );
-        if (prep?.model) {
-          message = `AI ready (${prep.model}). Analyzing crash…`;
-        } else {
-          message = "Preparing local AI…";
+        if (!opts.quiet) {
+          if (prep?.model) message = `AI ready (${prep.model}). Analyzing crash…`;
+          else message = "Preparing local AI…";
         }
       } catch (prepErr) {
-        // Still try analyze — it also ensures Ollama; surface prep hint if that fails too.
         console.warn("[AI] ensure_ollama_model:", prepErr);
       }
       const reportId = activeReportId();
@@ -446,14 +518,23 @@
         reportId,
       });
       swarmEnabled = !!aiAnalysis?.swarmEnabled;
+      enrichCrashFindingsWithAi();
       await loadPendingPlan();
-      const similar = context.similarCaseCount ?? 0;
-      const model = context.aiModel ?? aiAnalysis?.model ?? "AI";
-      message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}). Review before applying fixes.`;
+      if (!opts.quiet) {
+        const similar = context.similarCaseCount ?? 0;
+        const model = context.aiModel ?? aiAnalysis?.model ?? "AI";
+        message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}). Review before applying.`;
+      }
     } catch (e) {
       const msg = String(e);
+      aiAnalysis = null;
+      if (opts.quiet) {
+        aiSoftError = msg;
+        throw e;
+      }
       if (/not installed|Install model|no model|Settings → AI/i.test(msg)) {
         error = `${msg} Open Settings → Integrations → Configure AI to install a model.`;
+        aiModalOpen = true;
       } else if (/model.*(not found)|pull|download/i.test(msg)) {
         error = `Local AI model missing: ${msg}`;
       } else if (/ollama|connection refused|failed to fetch|tcp|unreachable/i.test(msg)) {
@@ -461,7 +542,6 @@
       } else {
         error = msg;
       }
-      aiAnalysis = null;
     } finally {
       aiLoading = false;
     }
@@ -495,6 +575,92 @@
 
   function aiPlanActions(analysis: any): any[] {
     return analysis?.actions ?? analysis?.recommended_actions ?? analysis?.recommendedActions ?? [];
+  }
+
+  function aiActionLabel(action: any): string {
+    const op = String(action?.op ?? action?.action_type ?? action?.actionType ?? "").toLowerCase();
+    switch (op) {
+      case "install_mod":
+      case "install":
+        return "Install";
+      case "remove_mod":
+      case "remove":
+        return "Remove";
+      case "disable_mod":
+      case "disable":
+        return "Disable";
+      case "update_mod":
+      case "update":
+        return "Update";
+      case "change_mod_version":
+        return "Change version";
+      case "reinstall_mod":
+      case "reinstall":
+        return "Reinstall";
+      case "edit_config":
+      case "config_change":
+        return "Edit config";
+      default:
+        return op || "Action";
+    }
+  }
+
+  function aiActionVersion(action: any): string | null {
+    const v = String(action?.version ?? "").trim();
+    if (!v) return null;
+    const fake = new Set(["1.2.3", "0.0.0", "x.y.z", "latest", "version", "unknown", "null", "string"]);
+    if (fake.has(v.toLowerCase()) || v === "X.Y.Z" || v === "<version>" || v === "{{version}}") return null;
+    return v;
+  }
+
+  type MergedRec = {
+    id: string;
+    source: "rules" | "ai";
+    label: string;
+    detail: string;
+    risk: string;
+    modId: string | null;
+    apply: () => void;
+  };
+
+  $: mergedRecommendations = buildMergedRecommendations(crashFindings, aiAnalysis);
+
+  function buildMergedRecommendations(findings: any[], analysis: any): MergedRec[] {
+    const out: MergedRec[] = [];
+    const seen = new Set<string>();
+    for (const f of findings ?? []) {
+      for (const fix of f.fixes ?? []) {
+        const key = `rules:${fix.kind}:${fix.modId ?? fix.label}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          id: key,
+          source: "rules",
+          label: fix.label ?? fix.kind,
+          detail: f.aiHint ? `${f.title} — AI: ${f.aiHint}` : f.title ?? f.code ?? "",
+          risk: f.severity === "error" || f.severity === "critical" ? "high" : "medium",
+          modId: fix.modId ?? null,
+          apply: () => void applyCrashFindingFix(f, fix),
+        });
+      }
+    }
+    for (const a of aiPlanActions(analysis)) {
+      const mid = a.modId ?? a.mod_id ?? null;
+      const op = a.op ?? a.action_type ?? a.actionType ?? "action";
+      const key = `ai:${op}:${mid ?? a.reason ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        id: key,
+        source: "ai",
+        label: `${aiActionLabel(a)}${mid ? ` ${mid}` : ""}`,
+        detail: a.reason ?? a.description ?? "",
+        risk: a.risk ?? "medium",
+        modId: mid,
+        apply: () => void applyAiPlan(),
+      });
+    }
+    return out.slice(0, 12);
   }
 
   async function applyAiPlan() {
@@ -563,7 +729,7 @@
       const errs = result?.errors ?? [];
       message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""}`;
       if (errs.length) error = errs.join("; ");
-      await loadCrashReports();
+      await load(true);
       // Prefill author form from the plan that just worked.
       await openAuthorForm({ fromAnalysis: true });
     } catch (e) {
@@ -1154,321 +1320,74 @@
   });
 </script>
 
+
 <div class="diagnostics">
   <div class="toolbar">
     <div class="title">
       <Stethoscope size={18} />
-      <span>Diagnose 2.0</span>
+      <span>Diagnose</span>
+      {#if analysisBusy || crashLoading || aiLoading}
+        <span class="analyzing-pill">Analyzing…</span>
+      {/if}
     </div>
     <div class="primary-actions">
       <button class="primary" on:click={runTest} disabled={!$projectPath || launching || loading}>
         <Play size={16} class={launching ? "spin" : ""} />
         {launching ? "Launching…" : "Test launch"}
       </button>
-      <button class="secondary" on:click={createFixPlan} disabled={!$projectPath || planning}>
-        <Wrench size={16} />
-        {planning ? "Creating…" : "Create fix plan"}
+      <button
+        class="secondary"
+        on:click={() => runUnifiedAnalysis()}
+        disabled={!$projectPath || analysisBusy || loading || (diagnosis?.sessionHealthy && preferLatestLog)}
+        title="Re-run Crash Assistant + AI"
+      >
+        <RefreshCw size={16} class={analysisBusy ? "spin" : ""} />
+        {analysisBusy ? "Analyzing…" : "Re-analyze"}
       </button>
-      <button class="secondary" on:click={applyFix} disabled={!$projectPath || applying || !diagnosis?.fixPlan || diagnosis.fixPlan.actions?.length === 0}>
-        <CheckCircle size={16} />
-        {applying ? "Applying…" : "Apply fix plan"}
+      <button class="ghost" on:click={() => load(true)} disabled={!$projectPath || loading}>
+        <RefreshCw size={16} class={loading ? "spin" : ""} />
+        Refresh
       </button>
       <button class="ghost" on:click={openFolder} disabled={!$projectPath}>
         <FolderOpen size={16} />
         Folder
       </button>
-      <button class="refresh" on:click={() => load(true)} disabled={!$projectPath || loading}>
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
-        {loading ? "Refreshing…" : "Refresh"}
-      </button>
     </div>
   </div>
 
-  <details class="analysis-tools">
-    <summary>
-      <span><Wrench size={16} /> Analysis tools</span>
-      <span class="tools-hint">Scanners, fix planning and export <ChevronDown size={15} /></span>
-    </summary>
-    <div class="actions">
-      <button class="secondary" on:click={createFixPlan} disabled={!$projectPath || planning}>
-        <Wrench size={16} />
-        {planning ? "Creating..." : "Create fix plan"}
-      </button>
-      <button class="secondary" on:click={scanOreGen} disabled={!$projectPath || oreLoading}>
-        <Database size={16} />
-        {oreLoading ? "Scanning..." : "Ore gen scan"}
-      </button>
-      <button class="secondary" on:click={runCrashAssistant} disabled={!$projectPath || crashLoading}>
-        <Zap size={16} />
-        {crashLoading ? "Analyzing..." : "Crash Assistant"}
-      </button>
-      <button class="secondary" on:click={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>
-        <GitMerge size={16} />
-        {duplicateLoading ? "Scanning..." : "Find duplicates"}
-      </button>
-      <button class="secondary" on:click={generateUnify} disabled={!$projectPath || unifyLoading}>
-        <Zap size={16} />
-        {unifyLoading ? "Generating..." : "Unify config"}
-      </button>
-      <button class="secondary" on:click={runAiExplain} disabled={!$projectPath || aiLoading} title={!swarmEnabled ? "Local AI always available; network KB requires TuffSwarm in Settings" : "AI explain (uses network KB when swarm is on)"}>
-        <MessageCircle size={16} />
-        {aiLoading ? "Analyzing..." : "AI explain"}
-      </button>
-      <button
-        class="secondary"
-        on:click={applyPendingNetworkFix}
-        disabled={!$projectPath || pendingBusy || !pendingPlan || !swarmEnabled}
-        title={swarmEnabled ? "Apply pending_action_plan.json from network match" : "Enable TuffSwarm network in Settings"}
-      >
-        <Download size={16} />
-        {pendingBusy ? "Applying…" : "Apply network fix"}
-      </button>
-      <button class="secondary" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy} title="Save crash + fix as a private KB case">
-        <BookMarked size={16} />
-        Save KB case
-      </button>
-      <button class="secondary" on:click={() => (aiModalOpen = true)} title="Configure Ollama or API key">
-        <Bot size={16} /> AI settings
-      </button>
-    </div>
-  </details>
-
   {#if error}<div class="notice error">{error}</div>{/if}
   {#if message}<div class="notice success">{message}</div>{/if}
+  {#if aiSoftError}
+    <div class="notice warning">
+      AI unavailable: {aiSoftError}
+      <button class="ghost mini" type="button" on:click={() => (aiModalOpen = true)}>AI settings</button>
+    </div>
+  {/if}
   {#if pendingPlan && swarmEnabled}
     <div class="notice warning">
-      Network pending plan ready ({(pendingPlan.actions ?? []).length} action(s), confidence {Math.round((pendingPlan.confidence ?? 0) * 100)}%).
-      Review then use <strong>Apply network fix</strong> — nothing auto-applies.
-    </div>
-  {:else if !swarmEnabled}
-    <div class="notice" style="opacity:0.85">
-      TuffSwarm network is off — Creation Mode and network Fix Mode are disabled. Local Crash Assistant still works. Enable in Settings.
+      Network pending plan ready ({(pendingPlan.actions ?? []).length} action(s)).
+      <button class="secondary small" on:click={applyPendingNetworkFix} disabled={pendingBusy}>
+        {pendingBusy ? "Applying…" : "Apply network fix"}
+      </button>
     </div>
   {/if}
 
   {#if loading && !diagnosis}
     <div class="loading">Loading crash diagnosis...</div>
   {:else if !$projectPath}
-    <EmptyState icon={Stethoscope} title="No project selected" description="Open a project to analyze crash reports, latest.log and recent snapshots." />
+    <EmptyState icon={Stethoscope} title="No project selected" description="Open a project to analyze crash reports and latest.log." />
   {:else if diagnosis}
     {#if diagnosis.sessionHealthy && preferLatestLog}
-      <div class="muted-box stale-warn" style="border-color: rgba(27, 217, 106, 0.35); margin-bottom: 12px;">
-        <CheckCircle size={16} style="vertical-align: -3px; color: var(--success, #1bd96a);" />
-        Minecraft launched successfully — <code>latest.log</code> has no fresh crash markers.
-        Crash-log fix suggestions are paused. Graph conflicts below still apply.
+      <div class="muted-box stale-warn ok-banner">
+        <CheckCircle size={16} />
+        Minecraft launched successfully — crash analysis paused. Graph conflicts below still apply.
       </div>
     {/if}
-    <section class="diagnosis-summary" class:neutral={!topSuspect || diagnosis.sessionHealthy}>
-      {#if diagnosis.sessionHealthy && preferLatestLog && !topSuspect}
-        <div class="summary-icon"><CheckCircle size={22} /></div>
-        <div class="summary-body">
-          <span class="eyebrow">Session status</span>
-          <h1>Build is healthy</h1>
-          <p class="summary-copy">
-            The current instance reached a successful Minecraft session. Historical crash-reports stay listed for reference,
-            but Diagnose will not ask you to apply crash-log fixes until a new failure appears.
-          </p>
-        </div>
-      {:else if topSuspect}
-        <div class="summary-icon"><AlertTriangle size={22} /></div>
-        <div class="summary-body">
-          <span class="eyebrow">Likely crash source</span>
-          <div class="summary-heading">
-            <h1>{heroCulpritLabel || topSuspect.name}</h1>
-            <strong>{topSuspect.confidence}% confidence</strong>
-          </div>
-          <div class="summary-meta">
-            <code>{topSuspect.id}{topSuspect.version ? ` · ${topSuspect.version}` : ""}</code>
-            {#if topSuspect.blameRole}
-              <span class="role-pill {topSuspect.blameRole}">{topSuspect.blameRole}</span>
-            {/if}
-            <span class:installed={topSuspect.knownInManifest}>
-              {#if topSuspect.knownInManifest}<BadgeCheck size={14} />{:else}<CircleHelp size={14} />{/if}
-              {topSuspect.knownInManifest ? "Installed mod" : "Inferred from logs"}
-            </span>
-          </div>
-          {#if topSuspect.authors?.length}
-            <p class="mapping-note">Author{topSuspect.authors.length > 1 ? "s" : ""}: {topSuspect.authors.join(", ")}</p>
-          {/if}
-          {#if primarySuspects.length > 1}
-            <p class="mapping-note">
-              Multiple primary culprits:
-              {primarySuspects.map((m) => m.id).join(", ")}
-            </p>
-          {/if}
-          {#if providedByEvidence && topSuspect.knownInManifest}
-            <p class="mapping-note">
-              The crash log’s <code>provided by</code> identifier was mapped to this installed mod.
-            </p>
-          {/if}
-          {#if strongestEvidence}
-            <div class="summary-evidence">
-              <span>Strongest evidence · {strongestEvidence.source}:{strongestEvidence.lineNumber}</span>
-              <p>{strongestEvidence.text}</p>
-            </div>
-          {:else}
-            <p class="summary-copy">This mod has the highest combined diagnostic confidence, but no raw evidence line was returned.</p>
-          {/if}
-          {#if topSuspect.knownInManifest}
-            <div class="summary-actions">
-              <button
-                class="secondary"
-                on:click={() => fixDisableMod(topSuspect.id)}
-                disabled={disablingModId !== null || fixingIdx !== null}
-                title="Rename jar to .disabled so the loader skips it"
-              >
-                <Ban size={15} />
-                {disablingModId === topSuspect.id ? "Disabling…" : "Disable mod"}
-              </button>
-              <button
-                class="secondary"
-                on:click={() => applyTopSuspectUpdate()}
-                disabled={disablingModId !== null || fixingIdx !== null}
-                title="Update to the latest compatible version"
-              >
-                <ArrowUpCircle size={15} /> Update mod
-              </button>
-              <button
-                class="ghost danger"
-                on:click={() => fixRemoveMod(topSuspect.id, -1)}
-                disabled={disablingModId !== null || fixingIdx !== null}
-                title="Remove from manifest and delete the jar"
-              >
-                <Trash2 size={15} /> Remove mod
-              </button>
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <div class="summary-icon"><CircleHelp size={22} /></div>
-        <div class="summary-body">
-          <span class="eyebrow">Diagnosis summary</span>
-          <h1>No likely mod identified yet</h1>
-          <p class="summary-copy">Select a crash report or run Minecraft once, then refresh. Diagnose will compare crash-log identifiers with installed manifest mods.</p>
-        </div>
-      {/if}
-    </section>
 
-    {#if problems.length > 0}
-      <section class="problems-panel panel">
-        <div class="problems-head">
-          <h2><ListChecks size={16} /> Problems <span class="count">{problems.length}</span></h2>
-          <div class="problems-legend">
-            {#each ["critical", "error", "warning", "info"] as sev}
-              {@const n = problems.filter((p) => p.severity === sev).length}
-              {#if n > 0}<span class="legend-pill {sev}">{n} {sev}</span>{/if}
-            {/each}
-          </div>
-        </div>
-        <div class="problems-list">
-          {#each problems as problem (problem.id)}
-            <div class="problem-row {problem.severity}">
-              <span class="sev-dot"></span>
-              <div class="problem-body">
-                <div class="problem-title">
-                  <strong>{problem.title}</strong>
-                  <small class="problem-source">{problem.source}</small>
-                </div>
-                <p class="problem-detail">{problem.detail}</p>
-                {#if problem.actions.length}
-                  <div class="problem-actions">
-                    {#each problem.actions.slice(0, 4) as action (action.kind + (action.modId ?? ""))}
-                      <button
-                        class="primary small"
-                        on:click={() => applyHintFixAction({ id: problem.id, title: problem.title, severity: problem.severity, detail: problem.detail, steps: [], relatedMods: [], fix: null, fixes: [] }, action)}
-                        disabled={applyingHintId !== null}
-                        title={action.modId ? `Target: ${action.modId}` : "System-level fix"}
-                      >
-                        <Wrench size={13} /> {action.label}
-                      </button>
-                    {/each}
-                    {#if problem.actions.length > 4}
-                      <small class="more-fixes">+{problem.actions.length - 4} more</small>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
-    <div class="stats">
-      <div class="stat-card" class:danger={diagnosis.reports.length > 0}>
-        <strong>{diagnosis.reports.length}</strong>
-        <span>Crash reports</span>
-      </div>
-      <div class="stat-card" class:danger={suspected.length > 0}>
-        <strong>{suspected.length}</strong>
-        <span>Suspected mods</span>
-      </div>
-      <div class="stat-card" class:danger={errorCount > 0} class:warning={errorCount === 0 && warningCount > 0}>
-        <strong>{errorCount + warningCount}</strong>
-        <span>Graph issues</span>
-      </div>
-      <div class="stat-card" class:accent={diagnosis.latestLog.exists}>
-        <strong>{diagnosis.latestLog.exists ? diagnosis.latestLog.signals.length : 0}</strong>
-        <span>latest.log signals</span>
-      </div>
-    </div>
-
-    {#if dedupedHints.length > 0}
-      <section class="hints-panel panel">
-        <h2><Lightbulb size={16} /> Recommended fixes</h2>
-        <div class="hints-list">
-          {#each dedupedHints as hint (hint.id)}
-            <div class="hint-card {hint.severity.toLowerCase()}">
-              <div class="hint-head">
-                <strong>{hint.title}</strong>
-                {#if applyingHintId === hint.id}
-                  <span class="fixing-spinner">Applying…</span>
-                {/if}
-              </div>
-              <p class="hint-detail">{hint.detail}</p>
-              {#if hint.steps?.length}
-                <ol class="hint-steps">
-                  {#each hint.steps as step (step)}
-                    <li>{step}</li>
-                  {/each}
-                </ol>
-              {/if}
-              {#if hint.relatedMods?.length}
-                <div class="related-mods">
-                  {#each hint.relatedMods as modId (modId)}
-                    <span class="mod-pill">{modId}</span>
-                  {/each}
-                </div>
-              {/if}
-              {#if (hint.fixes && hint.fixes.length) || hint.fix}
-                <div class="hint-actions">
-                  {#each (hint.fixes && hint.fixes.length ? hint.fixes : hint.fix ? [hint.fix] : []) as action (action.kind + (action.modId ?? ""))}
-                    <button
-                      class="primary small"
-                      on:click={() => applyHintFixAction(hint, action)}
-                      disabled={applyingHintId !== null}
-                      title={action.modId ? `Target: ${action.modId}` : "System-level fix"}
-                    >
-                      <Wrench size={14} />
-                      {action.label}
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
-    <div class="diagnose-grid">
-      <aside class="reports panel">
-        <h2><Bug size={16} /> Crash reports</h2>
-        {#if diagnosis.crashReportStale}
-          <div class="muted-box stale-warn">
-            Newest crash-report is older than <code>logs/latest.log</code> (game launched since). Analyzing the live log — click a report below only if you want that historical crash.
-          </div>
-        {/if}
+    <!-- 1. Source picker -->
+    <section class="source-bar panel">
+      <h2><Bug size={16} /> Log source</h2>
+      <div class="source-cards">
         <button
           type="button"
           class="report-card"
@@ -1478,680 +1397,308 @@
           <strong>logs/latest.log</strong>
           <span>
             {#if diagnosis.latestLog.exists}
-              Live session · {diagnosis.latestLog.signals.length} signals
+              Live · {diagnosis.latestLog.signals.length} signals
             {:else}
               Missing
             {/if}
           </span>
         </button>
-        {#if diagnosis.reports.length === 0}
-          <div class="muted-box">No files in <code>crash-reports/*.txt</code>.</div>
-        {:else}
-          {#each diagnosis.reports as report (report.id)}
-            <button class="report-card" class:selected={!preferLatestLog && selectedReportId === report.id} on:click={() => chooseReport(report.id)}>
-              <strong>{report.name}</strong>
-              <span>{formatBytes(report.size)} · {formatDate(report.modified)}</span>
-            </button>
-          {/each}
-        {/if}
+        {#each diagnosis.reports.slice(0, 6) as report (report.id)}
+          <button
+            type="button"
+            class="report-card"
+            class:selected={!preferLatestLog && selectedReportId === report.id}
+            on:click={() => chooseReport(report.id)}
+          >
+            <strong>{report.name}</strong>
+            <span>{formatBytes(report.size)} · {formatDate(report.modified)}</span>
+          </button>
+        {/each}
+      </div>
+      {#if diagnosis.crashReportStale}
+        <p class="muted-inline">Newest crash-report is older than latest.log — analyzing the live log.</p>
+      {/if}
+    </section>
 
-        <h2 class="log-title"><Terminal size={16} /> latest.log status</h2>
-        {#if diagnosis.latestLog.exists}
-          <div class="log-status ok">Found · {diagnosis.latestLog.signals.length} parser signals</div>
-        {:else}
-          <div class="log-status">Missing: run a Test profile to create logs/latest.log.</div>
-        {/if}
-
-        <h2 class="log-title"><Terminal size={16} /> launcher.log</h2>
-        {#if diagnosis.launcherLog.exists}
-          <div class="log-status ok">Found · {diagnosis.launcherLog.signals.length} parser signals</div>
-        {:else}
-          <div class="log-status">Placeholder will be created by Diagnose.</div>
-        {/if}
-
-        {#if graphDiagnostics.length > 0}
-          <h2 class="log-title"><AlertTriangle size={16} /> Conflicts & Issues</h2>
-          {#each graphDiagnostics as diag, idx (`${diag.code}-${idx}`)}
-            <div class="conflict-card {diag.severity.toLowerCase()}">
-              <div class="conflict-header">
-                <strong>{diag.code}</strong>
-                {#if fixingIdx === idx}
-                  <span class="fixing-spinner">Fixing...</span>
-                {/if}
-              </div>
-              <p style="font-size: 12px; margin: 4px 0; color: var(--text-muted);">{diag.message}</p>
-              {#if diag.relatedNodes && diag.relatedNodes.length > 0}
-                <div class="related-mods">
-                  {#each diag.relatedNodes as node (node)}
-                    <span class="mod-pill">{node}</span>
-                  {/each}
-                </div>
-              {/if}
-              <div class="conflict-actions">
-                {#if diag.code === "MISSING_DEPENDENCY" && diag.relatedNodes?.length >= 2}
-                  {@const missingModId = diag.relatedNodes[1].startsWith("mod:") ? diag.relatedNodes[1].slice(4) : diag.relatedNodes[1]}
-                  <button class="ghost mini" on:click={() => fixMissingDependency(missingModId, idx)} disabled={fixingIdx !== null}>
-                    <Download size={14} /> Install {missingModId}
-                  </button>
-                {:else if diag.code === "MOD_CONFLICT" && diag.relatedNodes?.length >= 2}
-                  {@const modA = diag.relatedNodes[0].startsWith("mod:") ? diag.relatedNodes[0].slice(4) : diag.relatedNodes[0]}
-                  {@const modB = diag.relatedNodes[1].startsWith("mod:") ? diag.relatedNodes[1].slice(4) : diag.relatedNodes[1]}
-                  <button class="ghost mini" on:click={() => fixDisableMod(modA, idx)} disabled={fixingIdx !== null || disablingModId !== null} title="Rename to .jar.disabled">
-                    <Ban size={14} /> Disable {modA}
-                  </button>
-                  <button class="ghost mini" on:click={() => fixDisableMod(modB, idx)} disabled={fixingIdx !== null || disablingModId !== null} title="Rename to .jar.disabled">
-                    <Ban size={14} /> Disable {modB}
-                  </button>
-                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modA, idx)} disabled={fixingIdx !== null || disablingModId !== null}>
-                    <Trash2 size={14} /> Remove {modA}
-                  </button>
-                  <button class="ghost mini danger" on:click={() => fixRemoveMod(modB, idx)} disabled={fixingIdx !== null || disablingModId !== null}>
-                    <Trash2 size={14} /> Remove {modB}
-                  </button>
-                {:else if diag.code === "DUPLICATE_MOD"}
-                  <button class="ghost mini" on:click={() => fixDeduplicate(idx)} disabled={fixingIdx !== null}>
-                    <GitMerge size={14} /> Review duplicates
-                  </button>
-                {:else}
-                  <button class="ghost mini" on:click={() => createFixPlan()} disabled={fixingIdx !== null}>
-                    <Wrench size={14} /> Create fix plan
-                  </button>
-                {/if}
-              </div>
-            </div>
-          {/each}
-        {/if}
-      </aside>
-
-      <section class="reader panel">
-        <div class="panel-header">
-          <div>
-            <h2><FileText size={16} /> {selectedReport?.summary.name ?? "logs/latest.log"}</h2>
-            <p>
-              {#if selectedReport}
-                {selectedReport.signals.length} parser signals · {selectedReport.suspectedMods.length} report suspects
-              {:else if diagnosis.latestLog.exists}
-                Analyzing live <code>logs/latest.log</code> · {diagnosis.latestLog.signals.length} signals · {diagnosis.latestLog.suspectedMods.length} suspects
-              {:else}
-                Run Minecraft to create logs/latest.log, or select a crash-report.
-              {/if}
-            </p>
+    <!-- Hero: top suspect only when useful -->
+    {#if topSuspect && !(diagnosis.sessionHealthy && preferLatestLog)}
+      <section class="diagnosis-summary">
+        <div class="summary-icon"><AlertTriangle size={22} /></div>
+        <div class="summary-body">
+          <span class="eyebrow">Top suspect</span>
+          <div class="summary-heading">
+            <h1>{heroCulpritLabel || topSuspect.name}</h1>
+            <strong>{topSuspect.confidence}%</strong>
           </div>
+          <div class="summary-meta">
+            <code>{topSuspect.id}</code>
+            {#if topSuspect.blameRole}<span class="role-pill {topSuspect.blameRole}">{topSuspect.blameRole}</span>{/if}
+          </div>
+          {#if strongestEvidence}
+            <div class="summary-evidence"><code>{strongestEvidence}</code></div>
+          {/if}
+          {#if topSuspect.knownInManifest}
+            <div class="summary-actions">
+              <button class="secondary" on:click={() => fixDisableMod(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
+                {disablingModId === topSuspect.id ? "Disabling…" : "Disable"}
+              </button>
+              <button class="ghost" on:click={() => applyTopSuspectUpdate()} disabled={fixingIdx === -1}>
+                {fixingIdx === -1 ? "Updating…" : "Update"}
+              </button>
+              <button class="ghost danger" on:click={() => fixRemoveMod(topSuspect.id, -1)} disabled={fixingIdx === -2 || fixingIdx === -1}>
+                Remove
+              </button>
+            </div>
+          {/if}
         </div>
+      </section>
+    {/if}
 
-        {#if selectedReport}
-          <div class="crash-preview">
-            <div class="crash-preview-bar">
-              <span>Crash log preview</span>
-              <div class="preview-tools">
-                <div class="find-box">
-                  <Search size={13} />
-                  <input
-                    class="find-input"
-                    placeholder="Find in log…"
-                    bind:value={logQuery}
-                    on:input={() => recomputeLogMatches(selectedReport?.content ?? "")}
-                  />
-                  {#if logQuery}
-                    <span class="find-count">{logMatches.length ? `${activeMatch + 1}/${logMatches.length}` : "0/0"}</span>
-                    <button class="find-nav" on:click={() => jumpToMatch(-1)} disabled={!logMatches.length} title="Previous">↑</button>
-                    <button class="find-nav" on:click={() => jumpToMatch(1)} disabled={!logMatches.length} title="Next">↓</button>
-                    <button class="find-nav" on:click={() => { logQuery = ""; logMatches = []; activeMatch = 0; }} title="Clear">✕</button>
-                  {/if}
-                </div>
-                <small>{formatBytes(selectedReport.summary.size)}</small>
+    <!-- 2. Unified recommendations -->
+    {#if mergedRecommendations.length > 0}
+      <section class="merged-recs panel">
+        <h2><Lightbulb size={16} /> Recommended actions</h2>
+        <p class="muted-inline">Rules (Crash Assistant) and AI plan, deduplicated. Nothing applies until you confirm.</p>
+        <ul class="merged-list">
+          {#each mergedRecommendations as rec (rec.id)}
+            <li class="merged-item {rec.source}">
+              <span class="src-tag">{rec.source === "ai" ? "AI" : "Rules"}</span>
+              <div class="merged-body">
+                <strong>{rec.label}</strong>
+                {#if rec.detail}<span>{rec.detail}</span>{/if}
+                <small>risk: {rec.risk}</small>
               </div>
-            </div>
-            {#if selectedReport.sections && selectedReport.sections.length}
-              <div class="toc">
-                {#each selectedReport.sections as section (section.title + section.startLine)}
-                  <button class="toc-item" on:click={() => scrollLogToLine(section.startLine)} title={section.preview}>
-                    {section.title}
-                  </button>
-                {/each}
-              </div>
-            {/if}
-            <pre class="report-content" bind:this={logPreEl}>
-              {#each selectedReport.content.split("\n") as line, i}
-                <div
-                  class="log-line"
-                  class:active={logQuery && i === logMatches[activeMatch]?.line}
-                  class:signal={signalLineMap.has(i + 1)}
-                  data-sig={signalLineMap.get(i + 1) ?? ""}
-                >
-                  {#if signalLineMap.has(i + 1)}<span class="sig-marker" title={signalLineMap.get(i + 1)??""}>{signalLineMap.get(i + 1) ?? ""}</span>{/if}{@html highlightLog(line, logQuery)}
-                </div>
-              {/each}
-            </pre>
-          </div>
-        {:else}
-          <div class="empty inline">No crash report to open yet.</div>
+              <button class="primary small" type="button" on:click={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
+                <Wrench size={13} /> Apply
+              </button>
+            </li>
+          {/each}
+        </ul>
+        {#if aiAnalysis && aiPlanActions(aiAnalysis).length}
+          <button class="secondary" on:click={applyAiPlan} disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}>
+            {aiApplyBusy ? "Applying…" : "Apply full AI plan"}
+          </button>
         {/if}
+      </section>
+    {/if}
 
-        <details class="raw-section latest-log">
-          <summary>
-            <span><Terminal size={16} /> latest.log tail</span>
-            <small>{diagnosis.latestLog.exists ? "last parser window" : "missing"}</small>
-          </summary>
-          <pre class="log-content">{diagnosis.latestLog.tail || "logs/latest.log will appear here after a Test run."}</pre>
-        </details>
-
-        <details class="raw-section latest-log">
-          <summary>
-            <span><Terminal size={16} /> launcher.log tail</span>
-            <small>{diagnosis.launcherLog.exists ? "launcher parser window" : "missing"}</small>
-          </summary>
-          <pre class="log-content">{diagnosis.launcherLog.tail || "launcher.log will appear here after launcher events."}</pre>
-        </details>
+    <!-- 3. Equal CA + AI cards -->
+    <div class="analysis-equal">
+      <section class="panel analysis-card">
+        <h2>
+          <Zap size={16} /> Crash Assistant
+          {#if crashLoading}<span class="analyzing-pill">Running…</span>{/if}
+          {#if crashFindings.length}<span class="count">{crashFindings.length}</span>{/if}
+        </h2>
+        {#if crashFindings.length === 0 && !crashLoading}
+          <div class="muted-box">No rule-based findings for this source.</div>
+        {:else}
+          <div class="findings-stack">
+            {#each crashFindings.slice(0, 8) as f, fIdx (f.code + f.title + fIdx)}
+              <article class="finding-card {f.severity}" class:ai-agree={f.aiAgree}>
+                <header>
+                  <strong>{f.title}</strong>
+                  <code>{f.code}</code>
+                  {#if f.aiAgree}<span class="ai-agree-badge" title={f.aiHint ?? ""}>AI agrees</span>{/if}
+                </header>
+                <p>{f.description}</p>
+                {#if f.aiHint}<p class="ai-hint">AI: {f.aiHint}</p>{/if}
+                {#if f.autoFix}<p class="auto-fix">{f.autoFix}</p>{/if}
+                {#if f.fixes?.length}
+                  <div class="finding-actions">
+                    {#each f.fixes.slice(0, 4) as action (action.kind + (action.modId ?? "") + action.label)}
+                      <button class="secondary small" on:click={() => applyCrashFindingFix(f, action)} disabled={applyingHintId !== null}>
+                        {action.label}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        {/if}
       </section>
 
-      <aside class="inspector panel">
-        {#if signalGroups.length > 0}
-          <h2><Stethoscope size={16} /> Signal groups</h2>
-          <div class="signal-groups">
-            {#each signalGroups as group (group.title)}
-              <div class="signal-group">
-                <strong>{group.title}</strong>
-                <span>{group.hint}</span>
-                <small>{group.items.length} signal(s)</small>
-                <p>{hypothesisForGroup(group.title)}</p>
-                <code>{group.items[0].source}:{group.items[0].lineNumber}</code>
-              </div>
-            {/each}
+      <section class="panel analysis-card ai-card">
+        <h2>
+          <MessageCircle size={16} /> AI / KB
+          {#if aiLoading}<span class="analyzing-pill">Running…</span>{/if}
+          {#if aiAnalysis?.source}<span class="ai-source-badge">{aiAnalysis.source}</span>{/if}
+          {#if aiAnalysis?.compactPromptUsed}<span class="ai-source-badge">compact</span>{/if}
+          {#if aiAnalysis?.kbShortCircuit}<span class="ai-source-badge">KB</span>{/if}
+        </h2>
+        {#if aiLoading && !aiAnalysis}
+          <div class="muted-box">Neural model is analyzing this crash…</div>
+        {:else if !aiAnalysis}
+          <div class="muted-box">
+            {aiSoftError ? "AI failed — use Crash Assistant results, or fix Ollama in AI settings." : "Waiting for AI…"}
+            <button class="ghost mini" type="button" on:click={() => runAiExplain()}>Retry AI</button>
           </div>
-        {/if}
-
-        {#if selectedReport?.modEntries?.length}
-          <h2><FileText size={16} /> Crash Mods section</h2>
-          <div class="mod-entry-list">
-            {#each selectedReport.modEntries.slice(0, 18) as entry (`${entry.id}-${entry.version ?? ""}`)}
-              <div class="mod-entry">
-                <strong>{entry.id}</strong>
-                <span>{entry.name ?? "unknown name"}</span>
-                <code>{entry.version ?? "unknown version"}</code>
-              </div>
-            {/each}
-          </div>
-        {/if}
-
-        <h2><AlertTriangle size={16} /> Suspected mods</h2>
-        {#if suspected.length === 0}
-          <div class="muted-box">No suspected mods extracted yet. Parser watches <code>Mod File</code>, <code>Caused by</code>, <code>Mixin</code>, <code>Exception</code>, <code>OpenGL</code>, performance and resource-warning lines.</div>
         {:else}
-          <div class="suspects">
-            {#each suspected as mod (mod.id)}
-              <div class="suspect-card" class:unresolved={!mod.knownInManifest}>
-                <div class="suspect-head">
-                  <div>
-                    <strong>{mod.name}</strong>
-                    <span class="suspect-identity">{mod.id}{mod.version ? ` · ${mod.version}` : ""}</span>
-                    {#if mod.authors?.length}
-                      <span class="suspect-identity">by {mod.authors.join(", ")}</span>
-                    {/if}
-                  </div>
-                  <b>{mod.confidence}%</b>
-                </div>
-                <div class="badges">
-                  {#if mod.blameRole}
-                    <small class="role-pill {mod.blameRole}">{mod.blameRole}</small>
-                  {/if}
-                  <small class:known={mod.knownInManifest}>
-                    {#if mod.knownInManifest}<BadgeCheck size={13} />{:else}<CircleHelp size={13} />{/if}
-                    {mod.knownInManifest ? "Installed mod" : "Unresolved log identifier"}
-                  </small>
-                  {#if mod.fileName}<small>{mod.fileName}</small>{/if}
-                  {#each (mod.matchSources ?? []).slice(0, 4) as src (src)}
-                    <small class="match-src">{src}</small>
-                  {/each}
-                </div>
-                {#each mod.evidence.slice(0, 3) as item (`${item.source}-${item.lineNumber}-${item.kind}`)}
-                  <div class="evidence">
-                    <code>{item.kind} · {item.source}:{item.lineNumber}</code>
-                    <p>{item.text}</p>
-                  </div>
+          <p class="ai-human">{aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation}</p>
+          <div class="ai-stats compact">
+            <div class="ai-stat"><strong>{Math.round((aiAnalysis.confidence ?? 0) * 100)}%</strong> conf</div>
+            <div class="ai-stat"><strong>{aiPlanActions(aiAnalysis).length}</strong> actions</div>
+            {#if aiAnalysis.model}<div class="ai-stat"><strong>{aiAnalysis.model}</strong></div>{/if}
+          </div>
+          {#if aiAnalysis.normalizeNotes?.length}
+            <div class="notice warning tight">Adjusted: {aiAnalysis.normalizeNotes.join("; ")}</div>
+          {/if}
+          {#if aiAnalysis.additionalContext ?? aiAnalysis.additional_context}
+            <div class="notice warning tight">{aiAnalysis.additionalContext ?? aiAnalysis.additional_context}</div>
+          {/if}
+          {#if (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods)?.length}
+            <div class="ai-list">
+              <strong>Suspected</strong>
+              <div class="crash-tags">
+                {#each (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods) as modId (modId)}
+                  <code>{modId}</code>
                 {/each}
-                {#if mod.knownInManifest}
-                  <div class="suspect-actions">
-                    <button
-                      class="ghost mini"
-                      on:click={() => fixDisableMod(mod.id)}
-                      disabled={disablingModId !== null || fixingIdx !== null}
-                      title="Rename jar to .disabled"
-                    >
-                      <Ban size={13} />
-                      {disablingModId === mod.id ? "Disabling…" : "Disable"}
-                    </button>
-                    <button
-                      class="ghost mini danger"
-                      on:click={() => fixRemoveMod(mod.id, -1)}
-                      disabled={disablingModId !== null || fixingIdx !== null}
-                    >
-                      <Trash2 size={13} /> Remove
-                    </button>
-                  </div>
-                {/if}
               </div>
-            {/each}
-          </div>
-        {/if}
-
-        <h2 class="changes-title"><History size={16} /> Last changes</h2>
-        {#if diagnosis.recentSnapshots.length === 0}
-          <div class="muted-box">No snapshots yet. Risky changes should create snapshots before edits.</div>
-        {:else}
-          <div class="snapshot-list">
-            {#each diagnosis.recentSnapshots as snapshot (snapshot.id)}
-              <div class="snapshot-row">
-                <strong>{snapshot.name}</strong>
-                <span>{snapshot.createdAt} · {snapshot.reason}</span>
-                {#if snapshot.changedFiles?.length}
-                  <small>{snapshot.changedFiles.length} tracked files: {snapshot.changedFiles.slice(0, 3).join(", ")}</small>
-                {:else}
-                  <small>manifest/lockfile snapshot</small>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
-
-        {#if plan}
-          <div class="plan-card">
-            <h2><Wrench size={16} /> Fix plan</h2>
-            <p>{plan.summary}</p>
-            <div class="plan-meta">
-              <span>Risk: {plan.risk}</span>
-              <span>{plan.requiresSnapshot ? "Snapshot required" : "No snapshot required"}</span>
             </div>
-            {#if plan.actions?.length}
+          {/if}
+          {#if aiPlanActions(aiAnalysis).length}
+            <div class="ai-list">
+              <strong>ActionPlan</strong>
               <ul>
-                {#each plan.actions as action, actionIdx (actionIdx)}
-                  <li>{actionLabel(action)}</li>
+                {#each aiPlanActions(aiAnalysis) as action, aIdx (aIdx)}
+                  <li>
+                    <strong>{aiActionLabel(action)}</strong>
+                    {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
+                    {#if aiActionVersion(action)}<span class="ai-ver">v{aiActionVersion(action)}</span>{/if}
+                    <span>{action.reason ?? action.description ?? ""}</span>
+                  </li>
                 {/each}
               </ul>
-              <button on:click={applyFix} disabled={applying}>
-                {applying ? "Applying..." : "Apply fix plan"}
-              </button>
-            {:else}
-              <div class="muted-box compact">No deterministic file operation proposed. Use the notes as an investigation checklist.</div>
-            {/if}
+            </div>
+          {/if}
+          <div class="ai-feedback">
+            <button class="secondary small" disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)} on:click={applyAiPlan}>
+              {aiApplyBusy ? "Applying…" : "Apply plan"}
+            </button>
+            <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(true)}>Helped</button>
+            <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(false)}>Wrong</button>
+            {#if aiFeedbackMsg}<small>{aiFeedbackMsg}</small>{/if}
           </div>
         {/if}
-      </aside>
+      </section>
     </div>
 
-    {#if aiContext || aiAnalysis}
-      <section class="ai-panel panel">
-        <h2><MessageCircle size={16} /> AI Crash Explanation</h2>
-        {#if aiAnalysis}
-          <div class="ai-analysis">
-            <p class="ai-human">{aiAnalysis.human_explanation ?? aiAnalysis.humanExplanation}</p>
-            <div class="ai-stats">
-              <div class="ai-stat"><strong>{Math.round(((aiAnalysis.confidence ?? 0) * 100))}%</strong> confidence</div>
-              <div class="ai-stat"><strong>{(aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods ?? []).length}</strong> suspected mods</div>
-              <div class="ai-stat"><strong>{aiPlanActions(aiAnalysis).length}</strong> actions</div>
-              {#if aiAnalysis.diagnoseMode}
-                <div class="ai-stat"><strong>{aiAnalysis.diagnoseMode}</strong> mode</div>
-              {/if}
-              {#if aiAnalysis.networkUsed}
-                <div class="ai-stat"><strong>network</strong> used</div>
-              {:else if aiAnalysis.swarmEnabled === false}
-                <div class="ai-stat"><strong>local-only</strong> (swarm off)</div>
-              {/if}
-              {#if aiAnalysis.pendingPlanPath}
-                <div class="ai-stat"><strong>pending</strong> plan saved</div>
-              {/if}
-            </div>
-            {#if aiAnalysis.validation && aiAnalysis.validation.ok === false}
-              <div class="notice error">Plan validation failed: {(aiAnalysis.validation.errors ?? []).join("; ")}</div>
-            {:else if (aiAnalysis.needs_user_review ?? aiAnalysis.needsUserReview) !== false}
-              <div class="notice warning">Review the plan, then apply. Nothing runs until you confirm.</div>
-            {:else}
-              <div class="notice warning">Low-risk plan — still requires explicit apply.</div>
-            {/if}
-            {#if (aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods)?.length}
-              <div class="ai-list">
-                <strong>Suspected mods</strong>
-                <ul>
-                  {#each (aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods) as modId (modId)}
-                    <li><code>{modId}</code></li>
-                  {/each}
-                </ul>
-              </div>
-            {/if}
-            {#if aiPlanActions(aiAnalysis).length}
-              <div class="ai-list">
-                <strong>Recommended actions</strong>
-                <ul>
-                  {#each aiPlanActions(aiAnalysis) as action, aIdx (aIdx)}
-                    <li>
-                      <strong>{action.op ?? action.action_type ?? action.actionType}</strong>
-                      {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
-                      {#if action.version}<code>@{action.version}</code>{/if}
-                      {#if action.path}<code>{action.path}</code>{/if}
-                      <span>{action.reason ?? action.description ?? ""}</span>
-                      <small>risk: {action.risk}</small>
-                    </li>
-                  {/each}
-                </ul>
-              </div>
-              <button
-                class="secondary"
-                disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
-                on:click={applyAiPlan}
-              >
-                {aiApplyBusy ? "Applying…" : "Apply plan"}
-              </button>
-            {/if}
-            <div class="ai-feedback">
-              <span>Was this helpful?</span>
-              <button class="secondary" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(true)}>Helped</button>
-              <button class="secondary" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(false)}>Wrong</button>
-              <button class="secondary" disabled={authorBusy} on:click={() => openAuthorForm({ fromAnalysis: true })}>
-                <BookMarked size={14} /> Save as KB case
-              </button>
-              {#if aiFeedbackMsg}<small>{aiFeedbackMsg}</small>{/if}
-            </div>
-          </div>
-        {:else}
-          <p class="ai-desc">AI analysis failed or is incomplete. You can still use the raw prompt fallback below.</p>
-        {/if}
-        {#if aiContext}
-          <div class="ai-stats">
-            <div class="ai-stat"><strong>{aiContext.findingsCount}</strong> findings</div>
-            <div class="ai-stat"><strong>{aiContext.similarCaseCount ?? 0}</strong> KB hits</div>
-            <div class="ai-stat"><strong>{aiContext.aiModel ?? "—"}</strong> model</div>
-            <div class="ai-stat"><strong>{aiContext.inventorySummary?.mods ?? aiContext.context?.installedModCount ?? 0}</strong> mods</div>
-            <div class="ai-stat"><strong>{aiContext.inventorySummary?.configs ?? aiContext.context?.inventory?.configFiles?.length ?? 0}</strong> configs</div>
-            <div class="ai-stat"><strong>{aiContext.inventorySummary?.packs ?? ((aiContext.context?.inventory?.resourcepacks?.length ?? 0) + (aiContext.context?.inventory?.datapacks?.length ?? 0))}</strong> packs</div>
-            <div class="ai-stat"><strong>{aiContext.promptLength}</strong> chars prompt</div>
-          </div>
-          <button class="secondary" on:click={() => (aiShowPrompt = !aiShowPrompt)}>
-            {aiShowPrompt ? "Hide" : "Show"} prompt
-          </button>
-          <button class="secondary" on:click={copyAiPrompt}>
-            <Copy size={14} /> Copy prompt
-          </button>
-          {#if aiShowPrompt}
-            <pre class="ai-prompt-text">{aiPrompt}</pre>
-          {/if}
-        {/if}
-      </section>
-    {/if}
-
-    {#if authorOpen}
-      <section class="ai-panel panel author-kb-panel">
-        <h2><BookMarked size={16} /> Author KB case</h2>
-        <p class="crash-intro">
-          Pack-author tool: bind the current crash fingerprint to a solution + executable actions.
-          Saved locally under <code>.tuffbox/crash_kb/</code>; export JSON has <strong>no notes</strong> (safe to upload to your private server).
-        </p>
-        {#if authorMsg}<div class="notice success">{authorMsg}</div>{/if}
-        <div class="author-grid">
-          <label>
-            Case id
-            <input bind:value={authorId} placeholder="authored-mixin-create" />
-          </label>
-          <label class="full">
-            Solution (what fixed it)
-            <textarea rows="3" bind:value={authorSolution} placeholder="Install Indium matching Sodium for Fabric 1.20.1"></textarea>
-          </label>
-          <label>
-            Suspected mods (comma-separated)
-            <input bind:value={authorSuspected} placeholder="sodium, indium" />
-          </label>
-          <label>
-            Symptoms (one per line)
-            <textarea rows="3" bind:value={authorSymptoms}></textarea>
-          </label>
-          <label class="full">
-            Actions JSON (executable ActionPlan ops)
-            <textarea class="mono" rows="8" bind:value={authorActionsJson} spellcheck="false"></textarea>
-          </label>
-          <label class="full">
-            Notes (author-only, never exported)
-            <textarea rows="2" bind:value={authorNotes} placeholder="Internal: saw this after updating Iris…"></textarea>
-          </label>
-          {#if authorFingerprint}
-            <div class="full muted-box compact">
-              <strong>Fingerprint</strong>
-              <code>{authorFingerprint.key}</code>
-              <div class="author-fp-meta">
-                <span>{authorFingerprint.exception || "—"}</span>
-                {#if authorFingerprint.modFile}<span>mod: {authorFingerprint.modFile}</span>{/if}
-                {#if authorFingerprint.loader}<span>{authorFingerprint.loader} {authorFingerprint.mcMajor}</span>{/if}
-              </div>
-            </div>
-          {/if}
-        </div>
-        <div class="row-actions" style="gap:8px;flex-wrap:wrap;margin-top:12px">
-          <button disabled={authorBusy || !authorSolution.trim()} on:click={saveAuthorCase}>
-            {authorBusy ? "Saving…" : "Save case"}
-          </button>
-          <button class="secondary" disabled={authorBusy} on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })}>
-            Refresh from crash
-          </button>
-          <button class="secondary" disabled={!authorExportPreview} on:click={() => copyAuthorExport()}>
-            <Copy size={14} /> Copy export JSON
-          </button>
-          <button class="secondary" on:click={openAuthorExportFolder}>
-            <FolderOpen size={14} /> Open export folder
-          </button>
-          <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
-        </div>
-        {#if authorExportPreview}
-          <pre class="ai-prompt-text">{authorExportPreview}</pre>
-        {/if}
-        {#if authorCases.length}
-          <div class="ai-list" style="margin-top:16px">
-            <strong>Authored cases in this project ({authorCases.length})</strong>
-            <ul>
-              {#each authorCases as c (c.id)}
-                <li>
-                  <code>{c.id}</code>
-                  <span>{c.solution}</span>
-                  <button class="ghost mini" on:click={() => copyAuthorExport(c.id)}>Copy JSON</button>
-                </li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
-      </section>
-    {/if}
-
-    {#if crashFindings.length > 0 && !(diagnosis.sessionHealthy && preferLatestLog)}
-      <section class="crash-assistant panel">
-        <h2><Zap size={16} /> Crash Assistant ({crashFindings.length} finding{crashFindings.length > 1 ? "s" : ""})</h2>
-        <p class="crash-intro">Analyzes the selected crash report, <code>logs/latest.log</code>, and currently installed mods. Apply fixes one at a time, then re-test.</p>
-        <div class="crash-list">
-          {#each crashFindings as f (f.code + f.title)}
-            <div class="crash-card {f.severity}">
-              <div class="crash-card-header">
-                <span class="crash-sev {f.severity}">{f.severity}</span>
-                <strong>{f.title}</strong>
-                <code class="crash-code">{f.code}</code>
-              </div>
-              <p>{f.description}</p>
-              {#if f.evidence}
-                <pre class="crash-evidence">{f.evidence}</pre>
-              {/if}
-              {#if f.autoFix}
-                <div class="crash-fix">
-                  <strong>Suggested:</strong> {f.autoFix}
-                </div>
-              {/if}
-              {#if f.fixes?.length}
-                <div class="crash-fix-actions">
-                  {#each f.fixes.slice(0, 6) as action, i (action.kind + (action.modId ?? "") + i)}
-                    <button
-                      class="secondary small"
-                      disabled={!$projectPath || applyingHintId === `ca:${f.code}`}
-                      on:click={() => applyCrashFindingFix(f, action)}
-                    >
-                      {applyingHintId === `ca:${f.code}` ? "Applying…" : action.label}
-                    </button>
-                  {/each}
-                  {#if f.fixes.length > 6}
-                    <small class="more-fixes">+{f.fixes.length - 6} more</small>
-                  {/if}
-                </div>
-              {/if}
-              {#if f.references?.length}
-                <div class="crash-refs">
-                  {#each f.references as ref (ref)}
-                    <a href={ref} target="_blank" class="crash-link">{ref}</a>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {#if crashMcreator.length > 0}
-          <div class="crash-mcreator">
-            <strong>MCreator mods detected ({crashMcreator.length})</strong>
-            <p>These mods were built with MCreator and may have compatibility issues:</p>
-            <div class="crash-tags">{#each crashMcreator as m (m)}<code>{m}</code>{/each}</div>
-          </div>
-        {/if}
-
-        {#if crashClassFinder.length > 0}
-          <div class="crash-classfinder">
-            <strong>Class finder results</strong>
-            <p>Missing classes found in crash logs and their owning mods:</p>
-            <div class="crash-tags">
-              {#each crashClassFinder as cf (cf.className + cf.modId)}
-                <div class="class-match"><code>{cf.className}</code> → <span>{cf.modId}</span></div>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if crashSupportMsg}
-          <div class="crash-support">
-            <button on:click={() => (crashShowSupport = !crashShowSupport)}>
-              {crashShowSupport ? "Hide" : "Show"} support message
-            </button>
-            <button on:click={copySupportMsg} class="secondary">Copy to clipboard</button>
-            {#if crashShowSupport}
-              <pre class="crash-support-msg">{crashSupportMsg}</pre>
-            {/if}
-          </div>
-        {/if}
-      </section>
-    {/if}
-
-    {#if oreFindings.length > 0}
-      <section class="ore-gen panel">
-        <h2><Database size={16} /> Ore generation scan ({oreFindings.length})</h2>
-        <div class="ore-list">
-          {#each oreFindings as ore (ore.configFile + ore.resource + (ore.enabledKey ?? ''))}
-            <div class="ore-card">
-              <div class="ore-header">
-                <strong>{ore.resource}</strong>
-                <span class="ore-conf">{ore.confidence}</span>
-              </div>
-              <div class="ore-key">{ore.enabledKey} = {ore.enabledValue}</div>
-              <div class="ore-meta">
-                {#if ore.veinSize}<span>vein: {ore.veinSize[1]}</span>{/if}
-                {#if ore.minHeight}<span>y: {ore.minHeight[1]}–{ore.maxHeight?.[1] ?? "?"}</span>{/if}
-                {#if ore.spawnsPerChunk}<span>/chunk: {ore.spawnsPerChunk[1]}</span>{/if}
-              </div>
-              <code class="ore-file">{ore.configFile}</code>
-              {#if ore.knownMod}<small class="ore-known">known: {ore.knownMod}</small>{/if}
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
-    {#if duplicateFindings.length > 0}
-      <section class="duplicates panel">
-        <h2><GitMerge size={16} /> Duplicate items ({duplicateFindings.length})</h2>
-        <div class="duplicate-list">
-          {#each duplicateFindings as dup (dup.material + dup.itemType + (dup.dominantItem ?? ''))}
-            <div class="duplicate-card">
-              <strong>{dup.material}</strong>
-              <span class="dup-type">{dup.itemType}</span>
-              {#if dup.dominantItem}
-                <code class="dup-dominant">{dup.dominantItem}</code>
-              {/if}
-              {#if dup.alternatives?.length}
-                <div class="dup-alts">
-                  {#each dup.alternatives as alt (alt.itemId)}
-                    <span class="dup-alt">{alt.itemId}</span>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
-    {#if unifyConfigResult}
-      <section class="unify-result panel">
-        <h2><Zap size={16} /> Unify config generated</h2>
-        <div class="unify-meta">
-          <p>Materials: {unifyConfigResult.materials?.length ?? 0}</p>
-          <p>Item types: {unifyConfigResult.itemTypes?.length ?? 0}</p>
-          <p>Scripts: {unifyConfigResult.scripts?.length ?? 0}</p>
-        </div>
-        <pre class="unify-preview">{JSON.stringify(unifyConfigResult, null, 2)}</pre>
-      </section>
-    {/if}
-
-    {#if wrongLoaderJars.length > 0}
-      <section class="wrong-loader panel">
-        <h2><AlertTriangle size={16} /> Wrong-loader jars in mods/</h2>
-        <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px;">
-          These .jar files were detected as built for a different mod loader than your project uses. They can cause crashes or silent failures.
-        </p>
-        <div class="wrong-loader-list">
-          {#each wrongLoaderJars as jar (jar.fileName)}
-            <div class="wrong-loader-card">
-              <div class="wrong-loader-main">
-                <strong>{jar.fileName}</strong>
-                <span class="wrong-reason">{jar.reason}</span>
-              </div>
-              <div class="wrong-loader-actions">
-                <button class="ghost mini" on:click={() => disableWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>
-                  {wrongLoaderFixing === jar.fileName ? "..." : "Disable (.jar.disabled)"}
-                </button>
-                <button class="ghost mini danger" on:click={() => removeWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>
-                  <Trash2 size={14} /> Remove
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      </section>
-    {/if}
-
+    <!-- 4. Graph once -->
     <section class="graph-health panel">
-      <h2><Stethoscope size={16} /> Graph diagnostics</h2>
+      <h2><GitMerge size={16} /> Graph conflicts <span class="count">{graphDiagnostics.length}</span></h2>
       {#if graphDiagnostics.length === 0}
-        <div class="empty success">
-          <AlertCircle size={28} color="#1bd96a" />
-          <p>No dependency graph issues found.</p>
-        </div>
+        <div class="muted-box">No graph diagnostics.</div>
       {:else}
-        <div class="diagnostic-list">
-          {#each graphDiagnostics as d, dIdx (`${d.code}-${dIdx}`)}
-            <div class="diag-card {d.severity.toLowerCase()}">
-              <div class="diag-icon">
-                <svelte:component this={icon(d.severity)} size={20} />
-              </div>
+        <div class="diag-list">
+          {#each graphDiagnostics as d, idx (d.code + d.message + idx)}
+            <div class="diag-row {String(d.severity).toLowerCase()}">
               <div>
-                <div class="meta">
-                  <span class="severity">{d.severity}</span>
-                  <span class="code">{d.code}</span>
-                </div>
+                <strong>{d.code}</strong>
                 <p>{d.message}</p>
+              </div>
+              <div class="diag-actions">
+                {#if /MISSING|DEPEND/i.test(d.code + d.message)}
+                  {@const mid = (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1]}
+                  {#if mid}
+                    <button class="secondary small" on:click={() => fixMissingDependency(mid, idx)} disabled={fixingIdx === idx}>
+                      Install {mid}
+                    </button>
+                  {/if}
+                {/if}
               </div>
             </div>
           {/each}
         </div>
       {/if}
     </section>
+
+    {#if wrongLoaderJars.length > 0}
+      <section class="panel">
+        <h2><AlertTriangle size={16} /> Wrong-loader jars</h2>
+        {#each wrongLoaderJars as jar (jar.fileName)}
+          <div class="diag-row warning">
+            <div>
+              <strong>{jar.fileName}</strong>
+              <p>{jar.reason ?? jar.detectedLoader ?? "Wrong loader"}</p>
+            </div>
+            <div class="diag-actions">
+              <button class="ghost mini" on:click={() => disableWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Disable</button>
+              <button class="ghost mini danger" on:click={() => removeWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Remove</button>
+            </div>
+          </div>
+        {/each}
+      </section>
+    {/if}
+
+    <!-- Logs collapsible -->
+    <details class="panel collapsible-block">
+      <summary><Terminal size={16} /> Log reader <ChevronDown size={14} /></summary>
+      <div class="log-reader-body">
+        {#if selectedReport}
+          <pre class="log-pre">{selectedReport.content.slice(0, 40000)}</pre>
+        {:else if diagnosis.latestLog.exists}
+          <pre class="log-pre">{(diagnosis.latestLog.tail ?? "").slice(0, 40000)}</pre>
+        {:else}
+          <div class="muted-box">No log content for the selected source.</div>
+        {/if}
+        {#if $projectPath && (selectedReport || diagnosis.latestLog.exists)}
+          <button class="secondary small" on:click={shareCurrentLog} disabled={sharingLog}>
+            {sharingLog ? "Sharing…" : "Share log (mclo.gs)"}
+          </button>
+        {/if}
+      </div>
+    </details>
+
+    <!-- More tools -->
+    <details class="panel collapsible-block analysis-tools">
+      <summary>
+        <span><Wrench size={16} /> More tools</span>
+        <span class="tools-hint">Pack scanners, KB, AI settings <ChevronDown size={14} /></span>
+      </summary>
+      <div class="actions">
+        <button class="secondary" on:click={createFixPlan} disabled={planning}>{planning ? "…" : "Create fix plan"}</button>
+        <button class="secondary" on:click={scanOreGen} disabled={oreLoading}>{oreLoading ? "…" : "Ore gen scan"}</button>
+        <button class="secondary" on:click={scanDuplicateItems} disabled={duplicateLoading}>{duplicateLoading ? "…" : "Find duplicates"}</button>
+        <button class="secondary" on:click={generateUnify} disabled={unifyLoading}>{unifyLoading ? "…" : "Unify config"}</button>
+        <button class="secondary" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={authorBusy}>Save KB case</button>
+        <button class="secondary" on:click={() => (aiModalOpen = true)}><Bot size={14} /> AI settings</button>
+        {#if aiPrompt}
+          <button class="ghost" on:click={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
+        {/if}
+      </div>
+      {#if aiShowPrompt && aiPrompt}
+        <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
+      {/if}
+      {#if plan}
+        <div class="plan-card">
+          <h2>Fix plan</h2>
+          <p>{plan.summary}</p>
+          <button class="primary" on:click={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply fix plan"}</button>
+        </div>
+      {/if}
+      {#if oreFindings?.length}
+        <div class="muted-box"><strong>Ore gen</strong>: {oreFindings.length} finding(s)</div>
+      {/if}
+      {#if duplicateFindings?.length}
+        <div class="muted-box"><strong>Duplicates</strong>: {duplicateFindings.length} finding(s)</div>
+      {/if}
+      {#if unifyConfigResult}
+        <div class="muted-box"><pre>{JSON.stringify(unifyConfigResult, null, 2).slice(0, 4000)}</pre></div>
+      {/if}
+      {#if authorOpen}
+        <div class="author-form">
+          <h2>Save KB case</h2>
+          <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
+          <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
+          <div class="actions">
+            <button class="primary" on:click={saveAuthorCase} disabled={authorBusy}>Save</button>
+            <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
+          </div>
+          {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
+        </div>
+      {/if}
+    </details>
   {:else}
     <div class="empty">Press refresh to load diagnosis.</div>
   {/if}
@@ -2594,4 +2141,49 @@
   }
   .problem-body { overflow-wrap: break-word; word-break: normal; }
   .suspects { max-height: none; overflow: visible; }
+
+  .analyzing-pill { margin-left: 8px; font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 999px; padding: 2px 8px; }
+  .ok-banner { display: flex; align-items: center; gap: 8px; border-color: rgba(27, 217, 106, 0.35) !important; margin-bottom: 12px; }
+  .source-bar { margin-bottom: 14px; }
+  .source-cards { display: flex; flex-wrap: wrap; gap: 8px; }
+  .source-cards .report-card { min-width: 140px; max-width: 220px; text-align: left; }
+  .muted-inline { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+  .summary-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .merged-recs { margin-bottom: 14px; }
+  .merged-list { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; }
+  .merged-item { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-tertiary); }
+  .merged-item.ai { border-color: rgba(139,92,246,.35); }
+  .src-tag { font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 7px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-muted); }
+  .merged-item.ai .src-tag { color: #c4b5fd; background: rgba(139,92,246,.15); }
+  .merged-body { display: grid; gap: 2px; min-width: 0; }
+  .merged-body strong { color: var(--text-primary); font-size: 13px; }
+  .merged-body span { color: var(--text-secondary); font-size: 12px; }
+  .merged-body small { color: var(--text-muted); }
+  .analysis-equal { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  @media (max-width: 1100px) { .analysis-equal { grid-template-columns: 1fr; } }
+  .analysis-card { min-height: 200px; }
+  .analysis-card.ai-card { border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.03); }
+  .findings-stack { display: grid; gap: 8px; }
+  .finding-card { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
+  .finding-card header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .finding-card p { margin: 0 0 6px; font-size: 12px; color: var(--text-secondary); }
+  .finding-card.ai-agree { border-color: rgba(139,92,246,.4); }
+  .ai-agree-badge { font-size: 10px; font-weight: 700; color: #c4b5fd; background: rgba(139,92,246,.15); padding: 2px 6px; border-radius: 999px; }
+  .ai-hint, .auto-fix { font-size: 11px !important; color: var(--text-muted) !important; }
+  .finding-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ai-stats.compact { margin-bottom: 8px; }
+  .notice.tight { padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
+  .collapsible-block { margin-top: 14px; }
+  .collapsible-block > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; color: var(--text-secondary); font-size: 13px; }
+  .collapsible-block > summary::-webkit-details-marker { display: none; }
+  .log-reader-body { margin-top: 10px; }
+  .log-pre { max-height: 320px; overflow: auto; font-size: 11px; background: var(--bg-elevated); padding: 10px; border-radius: 8px; white-space: pre-wrap; }
+  .diag-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .author-form { display: grid; gap: 8px; margin-top: 12px; }
+  .author-form label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
+  .author-form input, .author-form textarea { background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 8px; padding: 8px; }
+  button.mini { padding: 4px 8px; font-size: 11px; }
+  .count { margin-left: 6px; font-size: 11px; color: var(--text-muted); font-weight: 600; }
+  .ai-source-badge { margin-left: 6px; font-size: 10px; font-weight: 700; color: var(--accent-secondary); background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 999px; padding: 2px 8px; }
+  .ai-ver { color: var(--text-muted); margin-left: 4px; font-size: 11px; }
 </style>

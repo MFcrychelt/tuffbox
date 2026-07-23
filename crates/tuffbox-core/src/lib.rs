@@ -5,6 +5,7 @@
 
 pub mod action_plan;
 pub mod change_plan;
+pub mod create_mode;
 pub mod crash;
 pub mod crash_remote;
 pub mod diagnostics;
@@ -24,6 +25,7 @@ pub mod lockfile;
 pub mod manifest;
 pub mod mc_install;
 pub mod mc_manifest;
+pub mod mclo_gs;
 pub mod mod_files;
 pub mod mod_index_cache;
 pub mod mod_scan;

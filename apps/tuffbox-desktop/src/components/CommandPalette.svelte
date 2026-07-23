@@ -23,6 +23,7 @@
     { id: "snapshots", label: "Snapshots", category: "Views", shortcut: "Ctrl+7" },
     { id: "world", label: "World", category: "Views", shortcut: "Ctrl+8" },
     { id: "library", label: "Library", category: "Views" },
+    { id: "chats", label: "Chats", category: "Views" },
     { id: "me", label: "Me", category: "Views" },
     { id: "ore-gen", label: "Ore Distribution", category: "Views" },
     { id: "recipes", label: "Recipe Browser", category: "Views" },
@@ -83,8 +84,8 @@
   });
 </script>
 
-<div class="cmd-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("close")} on:keydown={() => {}}>
-  <div class="cmd-dialog" role="dialog" aria-modal="true" aria-label="Command palette" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="cmd-backdrop tb-modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("close")} on:keydown={() => {}}>
+  <div class="cmd-dialog tb-anim-search-enter" role="dialog" aria-modal="true" aria-label="Command palette" use:trapFocus={{ onEscape: () => dispatch("close") }}>
     <div class="cmd-input-wrap">
       <Search size={18} class="cmd-search-icon" />
       <input

@@ -3,7 +3,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { toasts } from "./toast";
 import type { LaunchResult, LaunchErrorInfo } from "./api";
-import { isLaunching, openLaunchLog } from "./store";
+import { isLaunching, openLaunchLog, projectPath } from "./store";
+import { shareCrashLogWithFeedback } from "./mclogs";
+import { get } from "svelte/store";
 
 export type { LaunchErrorInfo };
 
@@ -127,8 +129,19 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
         window.dispatchEvent(new Event("tuffbox:open-diagnostics"));
       },
     });
+    actions.push({
+      label: "Share log",
+      run: () => {
+        const path = get(projectPath);
+        if (!path) {
+          toasts.warning("Open a project to share the crash log");
+          return;
+        }
+        void shareCrashLogWithFeedback(path);
+      },
+    });
   }
-  toasts.error(info.message, 12000, actions);
+  toasts.error(info.message, 14000, actions);
 }
 
 let crashListener: Promise<UnlistenFn> | null = null;

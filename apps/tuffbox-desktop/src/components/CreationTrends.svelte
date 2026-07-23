@@ -32,12 +32,15 @@
     loading = true;
     error = "";
     try {
-      await invoke("record_project_cooccurrence", { path: $projectPath });
+      await invoke("report_mod_cooccurrence", {
+        path: $projectPath,
+        source: "library_trends_refresh",
+      });
       const trends: any = await invoke("get_creation_trends", {
         path: $projectPath,
         limit: 20,
       });
-      pairs = trends?.localPairs ?? [];
+      pairs = trends?.mergedPairs ?? trends?.localPairs ?? [];
       suggestions = await invoke("suggest_mods_from_trends", {
         path: $projectPath,
         limit: 8,

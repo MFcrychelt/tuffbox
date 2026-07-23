@@ -23,7 +23,7 @@
   import { launchWithFeedback } from "../lib/launch";
   import CreationTrends from "./CreationTrends.svelte";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "world";
+  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
 
   type Tab = "yours" | "discover" | "create";
   let tab: Tab = "yours";

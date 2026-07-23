@@ -50,7 +50,7 @@
   import AccountManager from "./AccountManager.svelte";
   import InstanceHome from "./InstanceHome.svelte";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "world";
+  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world";
 
   let selectedPath: string | null = $projectPath;
   let activeMenuPath: string | null = null;

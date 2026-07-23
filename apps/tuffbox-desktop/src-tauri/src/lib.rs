@@ -1,4 +1,5 @@
 mod auth;
+mod create_mode_api;
 mod integrations;
 mod launcher_settings;
 mod presence;
@@ -3566,10 +3567,47 @@ fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Opti
     load_scoped_crash_report_with_path(project_dir, report_id).map(|(_, text)| text)
 }
 
+/// True when the caller selected a real crash-report file (not latest.log).
+fn is_explicit_crash_report_id(report_id: Option<&str>) -> bool {
+    matches!(report_id, Some(id) if !id.is_empty() && id != "__latest_log__")
+}
+
+/// Load a crash-report only when `report_id` is an explicit file id/name.
+/// Does **not** fall back to the newest crash — that broke "AI explain on
+/// latest.log" by always injecting the previous crash text into the prompt.
 fn load_scoped_crash_report_with_path(
     project_dir: &Path,
     report_id: Option<&str>,
 ) -> Option<(PathBuf, String)> {
+    let id = report_id.filter(|s| !s.is_empty() && *s != "__latest_log__")?;
+    let cd = project_dir.join("crash-reports");
+    if !cd.is_dir() {
+        return None;
+    }
+    let files: Vec<std::fs::DirEntry> = std::fs::read_dir(&cd)
+        .ok()?
+        .flatten()
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "txt"))
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    let entry = files.iter().find(|e| {
+        let name = e.file_name().to_string_lossy().to_string();
+        name == id
+            || name.trim_end_matches(".txt") == id
+            || e.path().to_string_lossy().contains(id)
+    })?;
+    let path = entry.path();
+    let text = std::fs::read_to_string(&path)
+        .ok()
+        .filter(|c| c.len() < 4 * 1024 * 1024)?;
+    Some((path, text))
+}
+
+/// Newest `crash-reports/*.txt` by mtime (for flows that intentionally want
+/// "last crash" rather than a user-selected report or latest.log).
+fn load_newest_crash_report(project_dir: &Path) -> Option<(PathBuf, String)> {
     let cd = project_dir.join("crash-reports");
     if !cd.is_dir() {
         return None;
@@ -3581,20 +3619,6 @@ fn load_scoped_crash_report_with_path(
         .collect();
     if files.is_empty() {
         return None;
-    }
-    if let Some(id) = report_id {
-        if let Some(entry) = files.iter().find(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            name == id
-                || name.trim_end_matches(".txt") == id
-                || e.path().to_string_lossy().contains(id)
-        }) {
-            let path = entry.path();
-            let text = std::fs::read_to_string(&path)
-                .ok()
-                .filter(|c| c.len() < 4 * 1024 * 1024)?;
-            return Some((path, text));
-        }
     }
     files.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
     let path = files[0].path();
@@ -3907,11 +3931,17 @@ fn prepare_ai_crash_context(
     let crash_content =
         load_scoped_crash_report(&project_dir, report_id).unwrap_or_default();
     let latest = project_dir.join("logs").join("latest.log");
+    // When explaining latest.log (no crash report selected), pull a larger tail
+    // so the model sees the live session instead of an empty crash excerpt.
+    let using_crash_file = is_explicit_crash_report_id(report_id);
+    let latest_line_budget = if using_crash_file { 900 } else { 2500 };
     let latest_log = if latest.is_file() {
-        tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
+        tuffbox_core::process::read_log_tail(&latest, latest_line_budget).unwrap_or_default()
     } else {
         String::new()
     };
+    let crash_excerpt_budget = if using_crash_file { 6000 } else { 800 };
+    let latest_excerpt_budget = if using_crash_file { 4000 } else { 7000 };
 
     let jv = manifest
         .java
@@ -4037,8 +4067,14 @@ fn prepare_ai_crash_context(
         os: std::env::consts::OS.to_string(),
         installed_mods: installed_sample,
         installed_mod_count: inventory.mods.len() as u32,
-        crash_report_excerpt: tuffbox_core::crash_kb::smart_excerpt(&crash_content, 6000),
-        latest_log_excerpt: tuffbox_core::crash_kb::smart_excerpt(&latest_log, 4000),
+        crash_report_excerpt: tuffbox_core::crash_kb::smart_excerpt(
+            &crash_content,
+            crash_excerpt_budget,
+        ),
+        latest_log_excerpt: tuffbox_core::crash_kb::smart_excerpt(
+            &latest_log,
+            latest_excerpt_budget,
+        ),
         suspected_mods: culprit_details.iter().map(|c| c.id.clone()).collect(),
         culprit_details,
         crash_assistant_findings: tuffbox_core::ai_explanation::findings_to_ai(&report.findings),
@@ -4149,7 +4185,6 @@ async fn analyze_crash_with_ai(
     let settings = integrations::get_integration_status().settings;
     let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
     let similar_count = ai_ctx.similar_cases.len() as u64;
-    let prompt_for_fallback = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
 
     let project_dir = manifest_parent(&path)?;
     let crash_content =
@@ -4175,6 +4210,8 @@ async fn analyze_crash_with_ai(
     };
     let online_kb = !transport_bases.is_empty();
     let mut network_used = false;
+    let mut compact_prompt_used = false;
+    let mut kb_short_circuit = false;
 
     if swarm_on {
         let global_hits =
@@ -4188,7 +4225,15 @@ async fn analyze_crash_with_ai(
         }
     }
 
-    let plan = match mode {
+    let inventory_ids: Vec<String> = ai_ctx
+        .inventory
+        .as_ref()
+        .map(|inv| inv.mods.iter().map(|m| m.id.clone()).collect())
+        .unwrap_or_default();
+    let missing_ids =
+        tuffbox_core::ai_explanation::missing_dep_hints_from_graph(&ai_ctx.graph_diagnostics);
+
+    let mut plan = match mode {
         tuffbox_core::action_plan::DiagnoseMode::Server if online_kb => {
             network_used = true;
             let req = tuffbox_core::crash_remote::CrashDiagnoseRequest {
@@ -4200,20 +4245,26 @@ async fn analyze_crash_with_ai(
             match swarm_node::diagnose_across_transports(&req).await {
                 Ok(resp) => {
                     // Explain may read the network; MUST NOT persist peer capsules here.
-                    // Publish is only via post-resolution distill → user Confirm.
                     resp.plan
                 }
                 Err(remote_err) => {
                     if let Some(plan) = integrations::global_capsule_library()
                         .diagnose_best(&fingerprint, &haystack)
                     {
+                        kb_short_circuit = true;
+                        plan
+                    } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
+                        kb_short_circuit = true;
                         plan
                     } else {
-                        let value = integrations::call_ai_crash_explain(
-                            &settings.ai,
-                            &prompt_for_fallback,
-                        )
-                        .await?;
+                        let (prompt, compact) =
+                            integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                        compact_prompt_used = compact;
+                        let value = integrations::call_ai_crash_explain(&settings.ai, &prompt)
+                            .await
+                            .map_err(|e| {
+                                format!("server diagnose failed ({remote_err}); local AI: {e}")
+                            })?;
                         let raw = serde_json::to_string(&value).unwrap_or_default();
                         tuffbox_core::action_plan::parse_action_plan(&raw).map_err(|e| {
                             format!("server diagnose failed ({remote_err}); local parse: {e}")
@@ -4233,9 +4284,7 @@ async fn analyze_crash_with_ai(
                     loader: Some(ctx.loader.clone()),
                     limit: 5,
                 };
-                if let Some(resp) = swarm_node::lookup_across_transports(&req).await
-                {
-                    // In-memory for this Explain session only — no durable publish.
+                if let Some(resp) = swarm_node::lookup_across_transports(&req).await {
                     let mut remote =
                         tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
                     remote.extend(ctx.similar_cases.drain(..));
@@ -4244,10 +4293,24 @@ async fn analyze_crash_with_ai(
                     ctx.similar_cases = remote;
                 }
             }
-            let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ctx);
-            let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
-            let raw = serde_json::to_string(&value).unwrap_or_default();
-            tuffbox_core::action_plan::parse_action_plan(&raw)?
+            // Prefer strong KB/capsule hit before tiny Ollama models.
+            if let Some(plan) = integrations::global_capsule_library()
+                .diagnose_best(&fingerprint, &haystack)
+                .filter(|p| p.confidence >= tuffbox_core::swarm::STRONG_MATCH_THRESHOLD)
+            {
+                network_used = swarm_on || network_used;
+                kb_short_circuit = true;
+                plan
+            } else if let Some(plan) = strong_plan_from_similar(&ctx) {
+                kb_short_circuit = true;
+                plan
+            } else {
+                let (prompt, compact) = integrations::crash_explain_prompt_for(&settings.ai, &ctx);
+                compact_prompt_used = compact;
+                let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
+                let raw = serde_json::to_string(&value).unwrap_or_default();
+                tuffbox_core::action_plan::parse_action_plan(&raw)?
+            }
         }
         tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
             if online_kb {
@@ -4259,13 +4322,12 @@ async fn analyze_crash_with_ai(
                     loader: Some(ai_ctx.loader.clone()),
                     limit: 1,
                 };
-                match swarm_node::lookup_across_transports(&req).await
-                {
+                match swarm_node::lookup_across_transports(&req).await {
                     Some(resp) => {
                         let hit = resp.hits.first().ok_or_else(|| {
                             "no remote KB hits for this fingerprint".to_string()
                         })?;
-                        // Session-only plan from network hit — do not publish capsule here.
+                        kb_short_circuit = true;
                         tuffbox_core::action_plan::plan_from_launcher_actions(
                             &hit.solution,
                             &hit.suspected_mods,
@@ -4278,6 +4340,7 @@ async fn analyze_crash_with_ai(
                         if let Some(plan) = integrations::global_capsule_library()
                             .diagnose_best(&fingerprint, &haystack)
                         {
+                            kb_short_circuit = true;
                             plan
                         } else {
                             let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
@@ -4290,6 +4353,7 @@ async fn analyze_crash_with_ai(
                             let hit = similar.first().ok_or_else(|| {
                                 "no local KB hits for this fingerprint".to_string()
                             })?;
+                            kb_short_circuit = true;
                             tuffbox_core::action_plan::plan_from_kb_hit(
                                 &hit.solution,
                                 &hit.suspected_mods,
@@ -4305,6 +4369,7 @@ async fn analyze_crash_with_ai(
                     .diagnose_best(&fingerprint, &haystack)
                 {
                     network_used = true;
+                    kb_short_circuit = true;
                     plan
                 } else {
                     let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
@@ -4313,6 +4378,7 @@ async fn analyze_crash_with_ai(
                     let hit = similar
                         .first()
                         .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
+                    kb_short_circuit = true;
                     tuffbox_core::action_plan::plan_from_kb_hit(
                         &hit.solution,
                         &hit.suspected_mods,
@@ -4328,6 +4394,7 @@ async fn analyze_crash_with_ai(
                 let hit = similar
                     .first()
                     .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
+                kb_short_circuit = true;
                 tuffbox_core::action_plan::plan_from_kb_hit(
                     &hit.solution,
                     &hit.suspected_mods,
@@ -4337,41 +4404,79 @@ async fn analyze_crash_with_ai(
                 )
             }
         }
-        // Server mode without network → local LLM (previous behavior).
+        // Server mode without network → strong KB first, else local LLM.
         tuffbox_core::action_plan::DiagnoseMode::Server => {
-            // Still prefer durable shared capsules when swarm is on.
             if swarm_on {
                 if let Some(plan) = integrations::global_capsule_library()
                     .diagnose_best(&fingerprint, &haystack)
                 {
                     if plan.confidence >= tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
                         network_used = true;
+                        kb_short_circuit = true;
+                        plan
+                    } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
+                        kb_short_circuit = true;
                         plan
                     } else {
-                        let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
+                        let (prompt, compact) =
+                            integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                        compact_prompt_used = compact;
                         let value =
                             integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
                         let raw = serde_json::to_string(&value).unwrap_or_default();
                         tuffbox_core::action_plan::parse_action_plan(&raw)?
                     }
+                } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
+                    kb_short_circuit = true;
+                    plan
                 } else {
-                    let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
+                    let (prompt, compact) =
+                        integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                    compact_prompt_used = compact;
                     let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
                     let raw = serde_json::to_string(&value).unwrap_or_default();
                     tuffbox_core::action_plan::parse_action_plan(&raw)?
                 }
+            } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
+                kb_short_circuit = true;
+                plan
             } else {
-                let value =
-                    integrations::call_ai_crash_explain(&settings.ai, &prompt_for_fallback).await?;
+                let (prompt, compact) =
+                    integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                compact_prompt_used = compact;
+                let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
                 let raw = serde_json::to_string(&value).unwrap_or_default();
                 tuffbox_core::action_plan::parse_action_plan(&raw)?
             }
         }
     };
 
+    // Inventory grounding + Crash Assistant overlay (all modes).
+    let grounded = tuffbox_core::action_plan::ground_action_plan(
+        plan,
+        &inventory_ids,
+        &missing_ids,
+    );
+    let normalize_notes = grounded.notes;
+    plan = tuffbox_core::action_plan::overlay_crash_assistant_findings(
+        grounded.plan,
+        &ai_ctx.crash_assistant_findings,
+    );
+    if plan.source.is_none() {
+        plan.source = Some(if kb_short_circuit {
+            "kb".into()
+        } else {
+            "ai".into()
+        });
+    }
+
     let pending_path =
         swarm_api::maybe_persist_pending_from_plan(&project_dir, &plan, network_used);
-    let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+        &plan,
+        &inventory_ids,
+        &missing_ids,
+    );
     let legacy = tuffbox_core::action_plan::plan_to_legacy_ai_actions(&plan);
 
     Ok(serde_json::json!({
@@ -4397,8 +4502,36 @@ async fn analyze_crash_with_ai(
         "fingerprintKey": fingerprint.key,
         "swarmEnabled": swarm_on,
         "networkUsed": network_used,
+        "compactPromptUsed": compact_prompt_used,
+        "kbShortCircuit": kb_short_circuit,
+        "normalizeNotes": normalize_notes,
         "pendingPlanPath": pending_path.map(|p| p.to_string_lossy().to_string()),
     }))
+}
+
+fn strong_plan_from_similar(
+    ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+) -> Option<tuffbox_core::action_plan::ActionPlan> {
+    let hit = ctx
+        .similar_cases
+        .iter()
+        .max_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+    if hit.score < tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
+        return None;
+    }
+    let mut plan = tuffbox_core::action_plan::plan_from_kb_hit(
+        &hit.solution,
+        &hit.suspected_mods,
+        &hit.actions,
+        &hit.id,
+        hit.score,
+    );
+    plan.source = Some("kb".into());
+    Some(plan)
 }
 
 /// Apply a validated ActionPlan (after user confirm). Runs snapshot once, then each op.
@@ -4470,9 +4603,9 @@ async fn apply_action_plan(
         }
     }
 
-    // Record co-occurrence after successful crash-fix apply (swarm only).
-    if errors.is_empty() && integrations::swarm_enabled() {
-        let _ = swarm_api::record_project_cooccurrence(path.clone());
+    // Record co-occurrence after successful crash-fix apply (local + optional Supabase).
+    if errors.is_empty() {
+        let _ = swarm_api::record_and_upload_cooccurrence(&path, &[], "crash_fix_apply").await;
     }
 
     Ok(serde_json::json!({
@@ -6869,7 +7002,7 @@ fn run_crash_assistant_analysis(
         if let Some(text) = load_scoped_crash_report(project_dir, Some(id)) {
             crash_content.push(text);
         }
-    } else if let Some((report_path, text)) = load_scoped_crash_report_with_path(project_dir, None) {
+    } else if let Some((report_path, text)) = load_newest_crash_report(project_dir) {
         let stale = tuffbox_core::crash::latest_log_supersedes_crash(
             project_dir,
             Some(report_path.as_path()),
@@ -6945,14 +7078,14 @@ async fn apply_crash_fix_plan(
     path: String,
     report_id: Option<String>,
 ) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         let project_dir = manifest_parent(&path)?;
         let diagnosis = get_crash_diagnosis(path.clone(), report_id.clone())?;
         let plan = diagnosis.fix_plan;
 
         if plan.actions.is_empty() {
-            return Ok(Vec::new());
+            return Ok((path, Vec::new()));
         }
 
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -6997,13 +7130,21 @@ async fn apply_crash_fix_plan(
             Some(fingerprint.key.as_str()),
         );
 
-        if integrations::swarm_enabled() {
-            let _ = swarm_api::record_project_cooccurrence(path.clone());
-        }
-        Ok(applied)
+        let _ = swarm_api::record_project_cooccurrence(path.clone());
+        Ok::<_, String>((path, applied))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    let (path, applied) = result;
+    // Best-effort Supabase upload (local already recorded above).
+    let _ = swarm_api::record_and_upload_cooccurrence_opts(
+        &path,
+        &[],
+        "crash_assistant_fix",
+        false,
+    )
+    .await;
+    Ok(applied)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -8896,6 +9037,125 @@ fn get_launch_log(path: String) -> Result<String, String> {
     tuffbox_core::process::read_log_tail(&log_path, 2500).map_err(|e| e.to_string())
 }
 
+/// Upload a crash / instance log to mclo.gs and return the public share URL.
+/// Prefer a named crash-report when `logName` is set; otherwise auto-pick
+/// latest crash-report, then latest.log, then tuffbox-console.log.
+#[tauri::command(rename_all = "camelCase")]
+fn share_log_mclogs(
+    path: String,
+    log_name: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let logs_dir = project_dir.join("logs");
+    let crashes_dir = project_dir.join("crash-reports");
+
+    let log_path = if let Some(name) = log_name.as_deref().filter(|n| !n.is_empty()) {
+        let candidate = if name.starts_with("crash-") || name.ends_with(".txt") {
+            crashes_dir.join(name)
+        } else {
+            logs_dir.join(name)
+        };
+        if !candidate.exists() {
+            return Err(format!("log not found: {name}"));
+        }
+        candidate
+    } else {
+        pick_shareable_crash_log(&logs_dir, &crashes_dir)
+            .ok_or_else(|| "no crash report or latest.log found to share".to_string())?
+    };
+
+    // Read more than the UI tail so the shared paste has useful context.
+    let content = tuffbox_core::process::read_log_tail(&log_path, 20_000)
+        .map_err(|e| e.to_string())?;
+    if content.trim().is_empty() {
+        return Err("log file is empty".into());
+    }
+
+    let manifest = ProjectManifest::load_from_path(&path).ok();
+    let mut metadata = Vec::new();
+    if let Some(m) = &manifest {
+        metadata.push(tuffbox_core::mclo_gs::MetadataEntry {
+            key: "minecraft".into(),
+            value: serde_json::json!(m.minecraft.version),
+            label: Some("Minecraft".into()),
+            visible: Some(true),
+        });
+        metadata.push(tuffbox_core::mclo_gs::MetadataEntry {
+            key: "loader".into(),
+            value: serde_json::json!(format!("{} {}", m.loader.kind.as_str(), m.loader.version)),
+            label: Some("Loader".into()),
+            visible: Some(true),
+        });
+        metadata.push(tuffbox_core::mclo_gs::MetadataEntry {
+            key: "project".into(),
+            value: serde_json::json!(m.project.name),
+            label: Some("Project".into()),
+            visible: Some(true),
+        });
+    }
+    metadata.push(tuffbox_core::mclo_gs::MetadataEntry {
+        key: "file".into(),
+        value: serde_json::json!(log_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("log")),
+        label: Some("File".into()),
+        visible: Some(true),
+    });
+
+    let shared = tuffbox_core::mclo_gs::upload_log(&content, "TuffBox IDE", metadata)
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "id": shared.id,
+        "url": shared.url,
+        "rawUrl": shared.raw_url,
+        "lines": shared.lines,
+        "size": shared.size,
+        // Intentionally omit token from the renderer — keep deletion capability
+        // out of the webview attack surface.
+        "fileName": log_path.file_name().and_then(|n| n.to_str()),
+    }))
+}
+
+fn pick_shareable_crash_log(logs_dir: &Path, crashes_dir: &Path) -> Option<PathBuf> {
+    // Newest crash-report first (best match for "I just crashed").
+    if let Ok(rd) = std::fs::read_dir(crashes_dir) {
+        let mut reports: Vec<_> = rd
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|e| e.eq_ignore_ascii_case("txt"))
+            })
+            .collect();
+        reports.sort_by_key(|p| {
+            std::cmp::Reverse(
+                p.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            )
+        });
+        if let Some(first) = reports.into_iter().next() {
+            return Some(first);
+        }
+    }
+    let latest = logs_dir.join("latest.log");
+    if latest.exists() {
+        return Some(latest);
+    }
+    let console = logs_dir.join("tuffbox-console.log");
+    if console.exists() {
+        return Some(console);
+    }
+    None
+}
+
 /// Analyze an arbitrary log/console text against the installed mods of a
 /// project and return the suspected mods together with the exact line numbers
 /// where they were referenced, so the UI can highlight those lines.
@@ -9206,7 +9466,7 @@ fn resolve_manifest_path(path: &str) -> Result<PathBuf, String> {
     ))
 }
 
-fn manifest_parent(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn manifest_parent(path: &str) -> Result<PathBuf, String> {
     PathBuf::from(path)
         .parent()
         .map(|p| p.to_path_buf())
@@ -9923,6 +10183,15 @@ fn install_modrinth_with_dependencies(
     mod_ids: &[String],
     side: &str,
 ) -> Vec<String> {
+    install_modrinth_with_dependencies_rounds(manifest, mod_ids, side, 50)
+}
+
+pub(crate) fn install_modrinth_with_dependencies_rounds(
+    manifest: &mut ProjectManifest,
+    mod_ids: &[String],
+    side: &str,
+    max_rounds: usize,
+) -> Vec<String> {
     let mut installed = Vec::new();
     for mod_id in mod_ids {
         if manifest
@@ -9938,7 +10207,7 @@ fn install_modrinth_with_dependencies(
     }
 
     let mut failed = std::collections::HashSet::new();
-    for _ in 0..50 {
+    for _ in 0..max_rounds {
         let missing = manifest
             .mods
             .iter()
@@ -10270,7 +10539,7 @@ fn infer_project_side(project: Option<&tuffbox_core::ProjectInfo>) -> Side {
     Side::from_modrinth(project.client_side.as_deref(), project.server_side.as_deref())
 }
 
-fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
+pub(crate) fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
     auto_snapshot_with_changed_files(manifest_path, operation, &[])
 }
 
@@ -10300,7 +10569,7 @@ fn auto_snapshot_with_changed_files(
     )?)
 }
 
-fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> {
+pub(crate) fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(manifest)?;
     let parent = path
         .parent()
@@ -10572,7 +10841,7 @@ fn emit_mod_download_status(
 /// Downloads missing mod files while streaming per-mod byte progress to the
 /// frontend via `mod-download-progress` / `mod-download-batch` events and the
 /// `DOWNLOAD_PROGRESS` snapshot map.
-fn download_project_mods_tracked(
+pub(crate) fn download_project_mods_tracked(
     app: &tauri::AppHandle,
     manifest_path: &Path,
     manifest: &ProjectManifest,
@@ -10851,6 +11120,15 @@ pub fn run() {
             add_modrinth_mod,
             add_modrinth_mod_with_dependencies,
             add_modrinth_mods_with_dependencies,
+            create_mode_api::create_mode_chat,
+            create_mode_api::assemble_pack_draft,
+            create_mode_api::preview_pack_draft,
+            create_mode_api::install_pack_draft,
+            create_mode_api::list_create_chats,
+            create_mode_api::save_create_chat,
+            create_mode_api::load_create_chat,
+            create_mode_api::delete_create_chat,
+            create_mode_api::new_create_chat,
             add_curseforge_mod,
             remove_project_mod,
             disable_project_mod,
@@ -10902,6 +11180,7 @@ pub fn run() {
             swarm_api::vote_community_crash_capsule,
             swarm_api::propose_community_capsule_plan,
             swarm_api::record_project_cooccurrence,
+            swarm_api::report_mod_cooccurrence,
             swarm_api::get_local_cooccurrence,
             swarm_api::get_creation_trends,
             swarm_api::suggest_mods_from_trends,
@@ -11059,6 +11338,7 @@ pub fn run() {
             get_java_version,
             get_default_java_version,
             get_launch_log,
+            share_log_mclogs,
             analyze_log_text,
             list_instance_logs,
             read_instance_log,

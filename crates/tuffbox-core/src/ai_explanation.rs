@@ -95,9 +95,94 @@ pub const CRASH_JSON_SCHEMA_HINT: &str = crate::action_plan::ACTION_PLAN_JSON_SC
 /// Builds a structured prompt for the AI to explain a crash.
 pub fn build_crash_prompt(ctx: &CrashAiContext) -> String {
     let mut p = String::new();
-
     p.push_str(crate::action_plan::ACTION_PLAN_SYSTEM_PROMPT);
-    p.push_str("\n\n## System Context\n");
+    p.push_str("\n\n");
+    p.push_str(&crash_prompt_body(ctx, CrashPromptBudget::full()));
+    p
+}
+
+/// Compact prompt for small local models: no system-prompt duplication (caller
+/// puts rules in the chat `system` message), no full inventory dump.
+pub fn build_compact_crash_prompt(ctx: &CrashAiContext) -> String {
+    crash_prompt_body(ctx, CrashPromptBudget::compact())
+}
+
+/// True when the configured provider/model should use the compact Explain prompt.
+pub fn prefers_compact_crash_prompt(provider: &str, model: &str) -> bool {
+    if !provider.eq_ignore_ascii_case("ollama") {
+        return false;
+    }
+    is_small_local_model(model)
+}
+
+fn is_small_local_model(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    if m.is_empty() {
+        return true; // unknown Ollama model → be conservative
+    }
+    // Explicit small tags from Settings suggestions / common pulls.
+    const SMALL: &[&str] = &[
+        "llama3.2:1b",
+        "llama3.2:3b",
+        "llama3.2",
+        "qwen2.5:0.5b",
+        "qwen2.5:1.5b",
+        "qwen2.5:3b",
+        "gemma2:2b",
+        "gemma3:1b",
+        "gemma3:4b",
+        "phi3:mini",
+        "phi3:3.8b",
+        "tinydolphin",
+        "tinyllama",
+    ];
+    if SMALL.iter().any(|s| m == *s || m.starts_with(&format!("{s}-"))) {
+        return true;
+    }
+    // Heuristic: parameter tags under 7b.
+    for part in m.split([':', '-', '_', '/']) {
+        if let Some(num) = part.strip_suffix('b').and_then(|n| n.parse::<f32>().ok()) {
+            if num > 0.0 && num < 7.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+struct CrashPromptBudget {
+    include_full_inventory: bool,
+    crash_excerpt: usize,
+    log_excerpt: usize,
+    similar_cases: usize,
+    graph_lines: usize,
+}
+
+impl CrashPromptBudget {
+    fn full() -> Self {
+        Self {
+            include_full_inventory: true,
+            crash_excerpt: 4500,
+            log_excerpt: 3200,
+            similar_cases: usize::MAX,
+            graph_lines: usize::MAX,
+        }
+    }
+    fn compact() -> Self {
+        Self {
+            include_full_inventory: false,
+            crash_excerpt: 2200,
+            log_excerpt: 1800,
+            similar_cases: 3,
+            graph_lines: 8,
+        }
+    }
+}
+
+fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String {
+    let mut p = String::new();
+
+    p.push_str("## System Context\n");
     p.push_str(&format!("- Minecraft: {}\n", ctx.mc_version));
     p.push_str(&format!("- Loader: {} {}\n", ctx.loader, ctx.loader_version));
     p.push_str(&format!("- Java: {}\n", ctx.java_version));
@@ -161,7 +246,7 @@ pub fn build_crash_prompt(ctx: &CrashAiContext) -> String {
     if !ctx.similar_cases.is_empty() {
         p.push_str("## Similar known cases (from local knowledge base)\n");
         p.push_str("Prefer these solutions when they match. Do not invent mods outside the project inventory.\n");
-        for (i, c) in ctx.similar_cases.iter().enumerate() {
+        for (i, c) in ctx.similar_cases.iter().take(budget.similar_cases).enumerate() {
             p.push_str(&format!(
                 "{}. score={:.2} source={} key={}\n   Solution: {}\n",
                 i + 1,
@@ -185,16 +270,39 @@ pub fn build_crash_prompt(ctx: &CrashAiContext) -> String {
         p.push('\n');
     }
 
-    if let Some(ref inv) = ctx.inventory {
-        p.push_str(&crate::project_ai_inventory::format_inventory_for_prompt(
-            inv, 14000,
-        ));
+    if budget.include_full_inventory {
+        if let Some(ref inv) = ctx.inventory {
+            p.push_str(&crate::project_ai_inventory::format_inventory_for_prompt(
+                inv, 14000,
+            ));
+            p.push('\n');
+        }
+    } else {
+        p.push_str("## Relevant mod ids (compact — not full inventory)\n");
+        let mut ids: Vec<String> = ctx.suspected_mods.clone();
+        for c in &ctx.culprit_details {
+            if !ids.iter().any(|x| x.eq_ignore_ascii_case(&c.id)) {
+                ids.push(c.id.clone());
+            }
+        }
+        for d in missing_dep_hints_from_graph(&ctx.graph_diagnostics) {
+            if !ids.iter().any(|x| x.eq_ignore_ascii_case(&d)) {
+                ids.push(d);
+            }
+        }
+        if ids.is_empty() {
+            p.push_str("(none listed — use Crash Assistant findings)\n");
+        } else {
+            for id in ids.iter().take(24) {
+                p.push_str(&format!("- {id}\n"));
+            }
+        }
         p.push('\n');
     }
 
     if !ctx.graph_diagnostics.is_empty() {
         p.push_str("## Graph Diagnostics\n");
-        for d in &ctx.graph_diagnostics {
+        for d in ctx.graph_diagnostics.iter().take(budget.graph_lines) {
             p.push_str(&format!("- {d}\n"));
         }
         p.push('\n');
@@ -202,25 +310,80 @@ pub fn build_crash_prompt(ctx: &CrashAiContext) -> String {
 
     if !ctx.recent_changes.is_empty() {
         p.push_str("## Recent Changes (may have caused the crash)\n");
-        for c in &ctx.recent_changes {
+        for c in ctx.recent_changes.iter().take(if budget.include_full_inventory {
+            usize::MAX
+        } else {
+            6
+        }) {
             p.push_str(&format!("- {c}\n"));
         }
         p.push('\n');
     }
 
     p.push_str("## Crash Report (excerpt)\n```\n");
-    p.push_str(&truncate(&smart_excerpt(&ctx.crash_report_excerpt, 4500), 4500));
+    p.push_str(&truncate(
+        &smart_excerpt(&ctx.crash_report_excerpt, budget.crash_excerpt),
+        budget.crash_excerpt,
+    ));
     p.push_str("\n```\n\n");
 
     p.push_str("## Latest Log (excerpt)\n```\n");
-    p.push_str(&truncate(&smart_excerpt(&ctx.latest_log_excerpt, 3200), 3200));
+    p.push_str(&truncate(
+        &smart_excerpt(&ctx.latest_log_excerpt, budget.log_excerpt),
+        budget.log_excerpt,
+    ));
     p.push_str("\n```\n\n");
 
     p.push_str("## Instructions\n");
     p.push_str(CRASH_JSON_SCHEMA_HINT);
-    p.push_str("\n\nFollow the system rules above. Prefer `actions` with `op` fields over legacy recommended_actions.\n");
+    p.push_str("\n\nFollow the system rules. Prefer `actions` with `op` fields over legacy recommended_actions.\n");
+    if !budget.include_full_inventory {
+        p.push_str(
+            "Compact mode: do not invent mods, versions, or paths. Prefer disable_mod for culprits.\n",
+        );
+        p.push_str(
+            "Every action MUST use op in {install_mod,remove_mod,disable_mod,update_mod,reinstall_mod,edit_config} with modId and reason. Leave version null unless known from KB.\n",
+        );
+    }
 
     p
+}
+
+/// Pull likely missing-dependency mod ids from graph diagnostic lines.
+pub fn missing_dep_hints_from_graph(diags: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in diags {
+        let lower = line.to_ascii_lowercase();
+        if !(lower.contains("missing") || lower.contains("requires") || lower.contains("depend")) {
+            continue;
+        }
+        for token in line.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_') {
+            let t = token.trim();
+            if t.len() < 3 || t.len() > 64 {
+                continue;
+            }
+            let tl = t.to_ascii_lowercase();
+            if matches!(
+                tl.as_str(),
+                "missing"
+                    | "dependency"
+                    | "requires"
+                    | "required"
+                    | "mod"
+                    | "error"
+                    | "warning"
+                    | "info"
+                    | "graph"
+                    | "null"
+            ) {
+                continue;
+            }
+            if !out.iter().any(|x: &String| x.eq_ignore_ascii_case(t)) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out.into_iter().take(16).collect()
 }
 
 /// Context for post-resolution distill (user already fixed the crash).
@@ -347,6 +510,36 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_compact_prompt_without_system_dup() {
+        let ctx = CrashAiContext {
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            loader_version: "0.15".into(),
+            java_version: "17".into(),
+            os: "Windows 11".into(),
+            installed_mods: vec!["sodium".into()],
+            installed_mod_count: 2,
+            crash_report_excerpt: "NoClassDefFoundError".into(),
+            latest_log_excerpt: "fail".into(),
+            suspected_mods: vec!["sodium".into()],
+            culprit_details: vec![],
+            crash_assistant_findings: vec![],
+            recent_changes: vec![],
+            graph_diagnostics: vec!["[Error] MissingDependency: sodium requires indium".into()],
+            similar_cases: vec![],
+            fingerprint_key: "test".into(),
+            report_id: None,
+            inventory: None,
+        };
+        let prompt = build_compact_crash_prompt(&ctx);
+        assert!(!prompt.starts_with("You are TuffBox"));
+        assert!(prompt.contains("Relevant mod ids") || prompt.contains("indium"));
+        assert!(prefers_compact_crash_prompt("ollama", "llama3.2:3b"));
+        assert!(!prefers_compact_crash_prompt("ollama", "qwen2.5:7b"));
+        assert!(!prefers_compact_crash_prompt("openai-compatible", "gpt-4o-mini"));
+    }
 
     #[test]
     fn builds_prompt() {

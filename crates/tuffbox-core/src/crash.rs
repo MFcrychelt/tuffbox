@@ -411,17 +411,21 @@ pub fn build_crash_diagnosis(
     let latest_log = analyze_latest_log(project_dir, manifest);
     let launcher_log = analyze_launcher_log(project_dir, manifest);
 
-    // Explicit user pick always wins. Auto-pick the newest crash report only
-    // when latest.log does not supersede it (game launched successfully after).
+    // Explicit user pick always wins. Special id `__latest_log__` forces live-log
+    // analysis (AI Explain / Diagnose sidebar) and never auto-selects a crash file.
+    // Auto-pick the newest crash report only when latest.log does not supersede it.
+    let force_latest_log = selected_report_id == Some("__latest_log__");
     let explicit = selected_report_id
-        .filter(|id| !id.is_empty())
+        .filter(|id| !id.is_empty() && *id != "__latest_log__")
         .filter(|id| reports.iter().any(|report| report.id == *id));
     let newest = reports.first();
     let stale = newest
         .map(|r| latest_log_supersedes_crash(project_dir, Some(r.path.as_path()), &latest_log.tail))
         .unwrap_or(false);
 
-    let selected_id = if let Some(id) = explicit {
+    let selected_id = if force_latest_log {
+        None
+    } else if let Some(id) = explicit {
         Some(id)
     } else if stale {
         None

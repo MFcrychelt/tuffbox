@@ -8,8 +8,32 @@ use tuffbox_core::ProjectManifest;
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
 const DEFAULT_GITHUB_REPOSITORY: &str = "MFcrychelt/tuffbox";
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
-/// Suggested default when the user opens the install UI (not auto-pulled).
-pub const DEFAULT_OLLAMA_MODEL: &str = "llama3.2:3b";
+/// Default Ollama tag for crash plans (smarter; user still must pull once).
+pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:7b";
+/// Alias kept for call sites that talk about “recommended crash model”.
+pub const RECOMMENDED_OLLAMA_CRASH_MODEL: &str = DEFAULT_OLLAMA_MODEL;
+
+/// Pick full vs compact crash Explain prompt for the configured AI settings.
+pub fn crash_explain_prompt_for(
+    settings: &AiSettings,
+    ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+) -> (String, bool) {
+    let compact = tuffbox_core::ai_explanation::prefers_compact_crash_prompt(
+        &settings.provider,
+        &settings.model,
+    );
+    if compact {
+        (
+            tuffbox_core::ai_explanation::build_compact_crash_prompt(ctx),
+            true,
+        )
+    } else {
+        (
+            tuffbox_core::ai_explanation::build_crash_prompt(ctx),
+            false,
+        )
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +51,10 @@ pub struct AiSettings {
     /// Empty = look up `ollama` on PATH / default install locations.
     #[serde(default)]
     pub ollama_binary_path: String,
+    /// Directory where Ollama stores models (`OLLAMA_MODELS`). Empty = Ollama default
+    /// (`~/.ollama/models` / `%USERPROFILE%\.ollama\models`).
+    #[serde(default)]
+    pub ollama_models_path: String,
 }
 
 fn default_diagnose_mode() -> String {
@@ -38,10 +66,11 @@ impl Default for AiSettings {
         Self {
             provider: "ollama".to_string(),
             endpoint: "http://127.0.0.1:11434".to_string(),
-            model: String::new(),
+            model: DEFAULT_OLLAMA_MODEL.to_string(),
             diagnose_mode: default_diagnose_mode(),
             crash_kb_endpoint: String::new(),
             ollama_binary_path: String::new(),
+            ollama_models_path: String::new(),
         }
     }
 }
@@ -123,7 +152,7 @@ fn settings_path() -> PathBuf {
         .join("integrations.json")
 }
 
-fn read_settings() -> IntegrationSettings {
+pub(crate) fn read_settings() -> IntegrationSettings {
     fs::read_to_string(settings_path())
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -902,26 +931,53 @@ async fn ollama_list_models(root: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn try_start_ollama(binary_hint: &str) {
+fn try_start_ollama(binary_hint: &str, models_path: &str) {
     let exe = resolve_ollama_binary(binary_hint);
+    let models = models_path.trim();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new(&exe)
-            .arg("serve")
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.arg("serve")
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        if !models.is_empty() {
+            cmd.env("OLLAMA_MODELS", models);
+        }
+        let _ = cmd.spawn();
     }
     #[cfg(not(windows))]
     {
-        let _ = std::process::Command::new(&exe)
-            .arg("serve")
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.arg("serve")
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
+            .stderr(std::process::Stdio::null());
+        if !models.is_empty() {
+            cmd.env("OLLAMA_MODELS", models);
+        }
+        let _ = cmd.spawn();
     }
+}
+
+/// Default Ollama models directory when `OLLAMA_MODELS` is unset.
+pub fn default_ollama_models_dir() -> PathBuf {
+    if let Ok(custom) = std::env::var("OLLAMA_MODELS") {
+        let p = PathBuf::from(custom.trim());
+        if !p.as_os_str().is_empty() {
+            return p;
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            return PathBuf::from(home).join(".ollama").join("models");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".ollama").join("models");
+    }
+    PathBuf::from(".ollama").join("models")
 }
 
 /// Resolve a user-configured Ollama path to an executable.
@@ -1031,7 +1087,7 @@ pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String
             Err(e) => {
                 last_err = e;
                 if attempt == 0 {
-                    try_start_ollama(&settings.ollama_binary_path);
+                    try_start_ollama(&settings.ollama_binary_path, &settings.ollama_models_path);
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(700 + attempt * 400)).await;
             }
@@ -1082,7 +1138,7 @@ pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String
     }
 
     Err(format!(
-        "Model '{wanted_raw}' is not installed in Ollama. Open Settings → AI, enter the model name you want (e.g. llama3.2:3b), and click Install model. Installed: {}.",
+        "Model '{wanted_raw}' is not installed in Ollama. Open Settings → AI, enter the model name you want (e.g. qwen2.5:7b), and click Install model. Installed: {}.",
         if installed.is_empty() {
             "none".into()
         } else {
@@ -1120,6 +1176,14 @@ pub async fn detect_ollama(
     let hint = binary_path
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
+    let models_dir = {
+        let custom = settings.ai.ollama_models_path.trim();
+        if custom.is_empty() {
+            default_ollama_models_dir()
+        } else {
+            PathBuf::from(custom)
+        }
+    };
     let resolved = resolve_ollama_binary(&hint);
     let installed_bin = ollama_binary_exists(&hint);
     let root = ollama_root(
@@ -1139,7 +1203,7 @@ pub async fn detect_ollama(
         Err(e) => {
             api_error = Some(e);
             if installed_bin {
-                try_start_ollama(&hint);
+                try_start_ollama(&hint, &settings.ai.ollama_models_path);
                 tokio::time::sleep(std::time::Duration::from_millis(900)).await;
                 match ollama_list_models(&root).await {
                     Ok(list) => {
@@ -1157,11 +1221,25 @@ pub async fn detect_ollama(
         "installed": installed_bin || running,
         "running": running,
         "binaryPath": if resolved.exists() { resolved.to_string_lossy().to_string() } else { String::new() },
+        "modelsPath": models_dir.to_string_lossy().to_string(),
+        "modelsPathConfigured": !settings.ai.ollama_models_path.trim().is_empty(),
+        "defaultModel": DEFAULT_OLLAMA_MODEL,
         "endpoint": root,
         "models": models,
         "needsModel": running && models.is_empty(),
         "error": api_error,
-        "suggestedModels": [DEFAULT_OLLAMA_MODEL, "qwen2.5:1.5b", "gemma2:2b", "phi3:mini"],
+        "suggestedModels": [
+            DEFAULT_OLLAMA_MODEL,
+            "llama3.1:8b",
+            "llama3.2:3b",
+            "phi3:mini"
+        ],
+        "suggestedModelNotes": {
+            "qwen2.5:7b": "Default — better crash plans",
+            "llama3.1:8b": "Strong alternative",
+            "llama3.2:3b": "Fast / weaker plans",
+            "phi3:mini": "Fast / weaker plans"
+        },
     }))
 }
 
@@ -1174,12 +1252,12 @@ pub async fn pull_ollama_model(
 ) -> Result<serde_json::Value, String> {
     let name = model.trim().to_string();
     if name.is_empty() {
-        return Err("Enter a model name to install (e.g. llama3.2:3b)".into());
+        return Err("Enter a model name to install (e.g. qwen2.5:7b)".into());
     }
     // Reject obvious filesystem paths here — use import_ollama_gguf instead.
     if name.contains('\\') || name.contains('/') || name.ends_with(".gguf") {
         return Err(
-            "That looks like a file path. Use “Import .gguf” for local model files, or enter an Ollama tag like llama3.2:3b."
+            "That looks like a file path. Use “Import .gguf” for local model files, or enter an Ollama tag like qwen2.5:7b."
                 .into(),
         );
     }
@@ -1192,9 +1270,9 @@ pub async fn pull_ollama_model(
             .unwrap_or_else(|| settings.ai.endpoint.clone()),
     );
 
-    // Make sure the daemon is up before pulling.
+    // Make sure the daemon is up before pulling (honors custom models dir).
     if ollama_list_models(&root).await.is_err() {
-        try_start_ollama(&hint);
+        try_start_ollama(&hint, &settings.ai.ollama_models_path);
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
     }
 
@@ -1255,11 +1333,13 @@ pub async fn import_ollama_gguf(
     let tmp = std::env::temp_dir().join(format!("tuffbox-modelfile-{name}"));
     fs::write(&tmp, format!("{from_line}\n")).map_err(|e| e.to_string())?;
 
-    let output = tokio::process::Command::new(&exe)
-        .arg("create")
-        .arg(&name)
-        .arg("-f")
-        .arg(&tmp)
+    let mut cmd = tokio::process::Command::new(&exe);
+    cmd.arg("create").arg(&name).arg("-f").arg(&tmp);
+    let models_dir = settings.ai.ollama_models_path.trim();
+    if !models_dir.is_empty() {
+        cmd.env("OLLAMA_MODELS", models_dir);
+    }
+    let output = cmd
         .output()
         .await
         .map_err(|e| format!("Failed to run ollama create: {e}"))?;
@@ -1314,6 +1394,120 @@ pub async fn ensure_ollama_model() -> Result<serde_json::Value, String> {
 
 pub async fn call_ai(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
     call_ai_once(settings, prompt).await
+}
+
+/// Multi-turn chat with a custom system prompt (no crash ActionPlan baked in).
+/// When `json_mode` is true, providers are asked for JSON and the content is parsed.
+pub async fn call_ai_messages(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let mut api_messages = Vec::with_capacity(messages.len() + 1);
+    api_messages.push(json!({"role": "system", "content": system}));
+    for m in messages {
+        api_messages.push(m.clone());
+    }
+
+    let content = if settings.provider == "ollama" {
+        let model = ensure_ollama_ready(settings).await?;
+        let mut body = json!({
+            "model": model,
+            "stream": false,
+            "messages": api_messages,
+        });
+        if json_mode {
+            body["format"] = json!("json");
+        }
+        let response = client
+            .post(ollama_chat_url(&settings.endpoint))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+            json!({ "error": body_text.chars().take(500).collect::<String>() })
+        });
+        if !status.is_success() {
+            return Err(api_error("Ollama", status, &body));
+        }
+        body.get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
+            .to_string()
+    } else {
+        let token = secret("ai").ok();
+        let mut payload = json!({
+            "model": settings.model,
+            "temperature": 0.3,
+            "messages": api_messages,
+        });
+        if json_mode {
+            payload["response_format"] = json!({"type": "json_object"});
+        }
+        let mut req = client
+            .post(openai_chat_url(&settings.endpoint))
+            .header(USER_AGENT, APP_USER_AGENT)
+            .json(&payload);
+        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+            req = req.bearer_auth(token);
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|e| format!("AI request failed: {e}"))?;
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+            json!({ "error": body_text.chars().take(500).collect::<String>() })
+        });
+        if !status.is_success() {
+            return Err(api_error("AI provider", status, &body));
+        }
+        body.get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "AI response did not contain choices[0].message.content".to_string())?
+            .to_string()
+    };
+
+    let trimmed = content
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    if json_mode {
+        serde_json::from_str(trimmed)
+            .or_else(|_| {
+                // Some models wrap JSON in prose; try extracting outermost object.
+                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                    if end > start {
+                        return serde_json::from_str(&trimmed[start..=end]);
+                    }
+                }
+                Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "not an object",
+                )))
+            })
+            .map_err(|e| format!("AI returned invalid JSON: {e}"))
+    } else {
+        Ok(json!({ "content": trimmed }))
+    }
 }
 
 /// Call AI and ensure the response parses as ActionPlan; one repair retry on failure.

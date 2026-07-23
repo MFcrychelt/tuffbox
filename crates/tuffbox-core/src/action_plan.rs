@@ -25,7 +25,9 @@ Rules:
 6. Set needsUserReview true unless all actions are risk=low and grounded in a matched case.
 7. confidence 0.0–1.0; lower if no KB match or ambiguous stacktrace.
 8. Do not invent Modrinth project IDs; omit projectId if unknown (launcher resolves by modId).
-9. Return JSON only. No markdown fences."#;
+9. Never invent version numbers or file paths. If the exact version is unknown, set "version" and "path" to null (launcher resolves). Do not use placeholders like 1.2.3, 0.0.1, or /game/mods/….
+10. If a mod is a suspected culprit / already installed, prefer disable_mod or remove_mod — never install_mod for that mod.
+11. Return JSON only. No markdown fences."#;
 
 /// Post-resolution distill: compress a user's trial-and-error fix path into a
 /// minimal ActionPlan suitable for sharing as an ExperienceCapsule.
@@ -289,22 +291,251 @@ fn legacy_action_type_to_op(action_type: &str) -> String {
     }
 }
 
-fn normalize_plan(mut plan: ActionPlan) -> ActionPlan {
+fn normalize_plan(plan: ActionPlan) -> ActionPlan {
+    ground_action_plan(plan, &[], &[]).plan
+}
+
+/// Result of polarity / inventory grounding after LLM or KB parse.
+#[derive(Debug, Clone)]
+pub struct GroundingResult {
+    pub plan: ActionPlan,
+    /// Human-readable rewrite notes for UI (e.g. install→disable).
+    pub notes: Vec<String>,
+}
+
+/// Normalize placeholders / polarity, then ground against inventory + missing deps.
+pub fn ground_action_plan(
+    mut plan: ActionPlan,
+    inventory_mod_ids: &[String],
+    missing_dep_ids: &[String],
+) -> GroundingResult {
+    let mut notes = Vec::new();
     plan.confidence = plan.confidence.clamp(0.0, 1.0);
     if plan.schema_version == 0 {
         plan.schema_version = ACTION_PLAN_SCHEMA_VERSION;
     }
-    for a in &mut plan.actions {
+    let suspected: Vec<String> = plan
+        .suspected_mods
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let inventory_l: Vec<String> = inventory_mod_ids
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let missing_l: Vec<String> = missing_dep_ids
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let has_inventory = !inventory_l.is_empty();
+
+    let mut kept = Vec::with_capacity(plan.actions.len());
+    for mut a in plan.actions.drain(..) {
         a.op = legacy_action_type_to_op(&a.op);
         if a.risk.is_empty() {
             a.risk = "medium".into();
         }
+        if is_placeholder_version(a.version.as_deref()) {
+            notes.push(format!(
+                "stripped placeholder version on {}",
+                a.mod_id.as_deref().unwrap_or(&a.op)
+            ));
+            a.version = None;
+        }
+        if is_invented_mod_path(a.path.as_deref()) {
+            notes.push(format!(
+                "stripped invented path on {}",
+                a.mod_id.as_deref().unwrap_or(&a.op)
+            ));
+            a.path = None;
+        }
+
+        let id_l = a
+            .mod_id
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .filter(|s| !s.is_empty());
+
+        if a.op == "install_mod" {
+            if let Some(ref id) = id_l {
+                if suspected.iter().any(|s| s == id) {
+                    a.op = "disable_mod".into();
+                    let note = "rewrote install→disable: mod is a suspected culprit";
+                    notes.push(format!("{id}: {note}"));
+                    a.reason = Some(match a.reason.take() {
+                        Some(r) if !r.is_empty() => format!("{r} ({note})"),
+                        _ => note.into(),
+                    });
+                    if a.risk.eq_ignore_ascii_case("low") {
+                        a.risk = "medium".into();
+                    }
+                } else if has_inventory && inventory_l.iter().any(|s| s == id) {
+                    // Already installed and not a suspect → reinstall instead of install.
+                    a.op = "reinstall_mod".into();
+                    let note = "rewrote install→reinstall: mod already in inventory";
+                    notes.push(format!("{id}: {note}"));
+                    a.reason = Some(match a.reason.take() {
+                        Some(r) if !r.is_empty() => format!("{r} ({note})"),
+                        _ => note.into(),
+                    });
+                }
+            }
+        }
+
+        // Drop mutating mod ops that reference unknown ids (not installed, not missing dep).
+        if has_inventory
+            && matches!(
+                a.op.as_str(),
+                "install_mod"
+                    | "remove_mod"
+                    | "disable_mod"
+                    | "update_mod"
+                    | "change_mod_version"
+                    | "reinstall_mod"
+            )
+        {
+            if let Some(ref id) = id_l {
+                let in_inv = inventory_l.iter().any(|s| s == id);
+                let in_missing = missing_l.iter().any(|s| s == id);
+                let in_suspect = suspected.iter().any(|s| s == id);
+                let allowed = match a.op.as_str() {
+                    "install_mod" => {
+                        if missing_l.is_empty() {
+                            // No explicit missing list → keep installs of mods not already present
+                            // (validate will warn). Drop only if somehow still marked installed.
+                            !in_inv
+                        } else {
+                            in_missing
+                        }
+                    }
+                    _ => in_inv || in_suspect,
+                };
+                if !allowed {
+                    notes.push(format!(
+                        "dropped {}:{} — not in inventory / missing deps",
+                        a.op, id
+                    ));
+                    continue;
+                }
+            }
+        }
+
+        kept.push(a);
+    }
+    plan.actions = kept;
+    GroundingResult { plan, notes }
+}
+
+/// Overlay high-signal Crash Assistant findings onto a weak / conflicting AI plan.
+pub fn overlay_crash_assistant_findings(
+    mut plan: ActionPlan,
+    findings: &[crate::ai_explanation::CrashAiFinding],
+) -> ActionPlan {
+    const JAVA_CODES: &[&str] = &[
+        "UNSUPPORTED_CLASS_VERSION",
+        "JAVA_VERSION_MISMATCH",
+        "WRONG_JAVA_VERSION",
+    ];
+    let java = findings
+        .iter()
+        .find(|f| JAVA_CODES.iter().any(|c| f.code.eq_ignore_ascii_case(c)));
+    let Some(java) = java else {
+        return plan;
+    };
+
+    let auto = java
+        .auto_fix
+        .clone()
+        .unwrap_or_else(|| java.description.clone());
+    let java_note = format!(
+        "Crash Assistant [{}]: {} — {}",
+        java.code, java.title, auto
+    );
+
+    let only_mod_churn = !plan.actions.is_empty()
+        && plan.actions.iter().all(|a| {
+            matches!(
+                a.op.as_str(),
+                "install_mod" | "remove_mod" | "disable_mod" | "update_mod" | "reinstall_mod"
+            )
+        });
+    if only_mod_churn {
+        plan.needs_user_review = true;
+        plan.confidence = plan.confidence.min(0.55);
+        let ctx = match plan.additional_context.take() {
+            Some(c) if !c.is_empty() => format!("{c}\n{java_note}"),
+            _ => java_note.clone(),
+        };
+        plan.additional_context = Some(ctx);
+        if !plan.human_explanation.to_ascii_lowercase().contains("java") {
+            plan.human_explanation = format!(
+                "{}\n\nAlso check Java: {} ({})",
+                plan.human_explanation.trim(),
+                java.title,
+                auto
+            );
+        }
+    } else {
+        let ctx = match plan.additional_context.take() {
+            Some(c) if !c.is_empty() => format!("{c}\n{java_note}"),
+            _ => java_note,
+        };
+        plan.additional_context = Some(ctx);
     }
     plan
 }
 
+fn is_placeholder_version(version: Option<&str>) -> bool {
+    let Some(v) = version.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    matches!(
+        v,
+        "1.2.3"
+            | "0.0.0"
+            | "x.y.z"
+            | "X.Y.Z"
+            | "latest"
+            | "VERSION"
+            | "version"
+            | "<version>"
+            | "{{version}}"
+    ) || v.eq_ignore_ascii_case("null")
+        || v.eq_ignore_ascii_case("unknown")
+        || v.eq_ignore_ascii_case("example")
+        || v.eq_ignore_ascii_case("string")
+}
+
+/// Paths like `/game/mods/foo/1.2.3` are not instance-relative and come from model fluff.
+fn is_invented_mod_path(path: Option<&str>) -> bool {
+    let Some(p) = path.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    let lower = p.to_ascii_lowercase();
+    if lower.starts_with("/game/") || lower.starts_with("game/mods/") {
+        return true;
+    }
+    // Absolute-looking invent: mods/<id>/<placeholder-version>
+    let segs: Vec<&str> = p.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    segs.len() >= 3
+        && segs.iter().any(|s| s.eq_ignore_ascii_case("mods"))
+        && segs.iter().any(|s| is_placeholder_version(Some(s)))
+}
+
 /// Structural validation before apply. Unknown ops are errors (not applied).
 pub fn validate_action_plan(plan: &ActionPlan) -> ActionPlanValidation {
+    validate_action_plan_with_inventory(plan, &[], &[])
+}
+
+/// Like [`validate_action_plan`], plus inventory grounding warnings/errors.
+pub fn validate_action_plan_with_inventory(
+    plan: &ActionPlan,
+    inventory_mod_ids: &[String],
+    missing_dep_ids: &[String],
+) -> ActionPlanValidation {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
 
@@ -314,6 +545,18 @@ pub fn validate_action_plan(plan: &ActionPlan) -> ActionPlanValidation {
     if plan.actions.is_empty() {
         warnings.push("actions array is empty".into());
     }
+
+    let inventory_l: Vec<String> = inventory_mod_ids
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let missing_l: Vec<String> = missing_dep_ids
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let has_inventory = !inventory_l.is_empty();
 
     for (i, a) in plan.actions.iter().enumerate() {
         let label = format!("actions[{i}]");
@@ -332,6 +575,46 @@ pub fn validate_action_plan(plan: &ActionPlan) -> ActionPlanValidation {
                     .trim();
                 if id.is_empty() {
                     errors.push(format!("{label}: {} requires modId or projectId", a.op));
+                } else if has_inventory {
+                    let id_l = id.to_ascii_lowercase();
+                    let in_inv = inventory_l.iter().any(|s| s == &id_l);
+                    let in_missing = missing_l.iter().any(|s| s == &id_l);
+                    match a.op.as_str() {
+                        "install_mod" => {
+                            if !in_missing && !missing_l.is_empty() {
+                                errors.push(format!(
+                                    "{label}: install_mod '{id}' is not an explicit missing dependency"
+                                ));
+                            } else if !in_missing && missing_l.is_empty() && !in_inv {
+                                warnings.push(format!(
+                                    "{label}: install_mod '{id}' not listed as a missing dependency — verify before apply"
+                                ));
+                            }
+                        }
+                        "update_mod" | "change_mod_version" => {
+                            if !in_inv {
+                                errors.push(format!(
+                                    "{label}: {} '{id}' is not in project inventory",
+                                    a.op
+                                ));
+                            }
+                            if a.op == "update_mod"
+                                && a.version.as_deref().unwrap_or("").trim().is_empty()
+                            {
+                                warnings.push(format!(
+                                    "{label}: update_mod has no version (launcher will pick latest)"
+                                ));
+                            }
+                        }
+                        _ => {
+                            if !in_inv {
+                                warnings.push(format!(
+                                    "{label}: {} '{id}' may not be in project inventory",
+                                    a.op
+                                ));
+                            }
+                        }
+                    }
                 }
                 if a.op == "change_mod_version"
                     && a.version.as_deref().unwrap_or("").trim().is_empty()
@@ -776,6 +1059,108 @@ mod tests {
         let plan = parse_action_plan(json).unwrap();
         assert_eq!(plan.actions[0].op, "install_mod");
         assert_eq!(plan.actions[0].mod_id.as_deref(), Some("indium"));
+    }
+
+    #[test]
+    fn strips_placeholder_version_and_flips_install_on_suspect() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Critters crashed",
+          "confidence": 0.7,
+          "suspectedMods": ["crittersandcompanions"],
+          "needsUserReview": true,
+          "actions": [
+            {
+              "op":"install_mod",
+              "modId":"crittersandcompanions",
+              "version":"1.2.3",
+              "path":"/game/mods/crittersandcompanions/1.2.3",
+              "reason":"Install fix",
+              "risk":"low"
+            }
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        assert_eq!(plan.actions[0].op, "disable_mod");
+        assert_eq!(plan.actions[0].version, None);
+        assert_eq!(plan.actions[0].path, None);
+        assert!(plan.actions[0]
+            .reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("install→disable"));
+    }
+
+    #[test]
+    fn grounds_install_missing_indium_and_drops_invented() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Missing Indium",
+          "confidence": 0.9,
+          "suspectedMods": ["sodium"],
+          "needsUserReview": true,
+          "actions": [
+            {"op":"install_mod","modId":"indium","reason":"Install Indium","risk":"low"},
+            {"op":"install_mod","modId":"madeupmod","reason":"Invented","risk":"low"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        let grounded = ground_action_plan(
+            plan,
+            &["sodium".into(), "fabric-api".into()],
+            &["indium".into()],
+        );
+        assert_eq!(grounded.plan.actions.len(), 1);
+        assert_eq!(grounded.plan.actions[0].mod_id.as_deref(), Some("indium"));
+        assert_eq!(grounded.plan.actions[0].op, "install_mod");
+        assert!(grounded.notes.iter().any(|n| n.contains("madeupmod")));
+        let v = validate_action_plan_with_inventory(
+            &grounded.plan,
+            &["sodium".into(), "fabric-api".into()],
+            &["indium".into()],
+        );
+        assert!(v.ok, "{:?}", v.errors);
+    }
+
+    #[test]
+    fn overlays_java_finding_on_mod_only_plan() {
+        let plan = ActionPlan {
+            schema_version: 1,
+            human_explanation: "Mod X is broken".into(),
+            confidence: 0.8,
+            suspected_mods: vec!["x".into()],
+            needs_user_review: false,
+            source: Some("ai".into()),
+            matched_case_ids: vec![],
+            actions: vec![LauncherAction {
+                op: "disable_mod".into(),
+                mod_id: Some("x".into()),
+                provider: None,
+                project_id: None,
+                version: None,
+                path: None,
+                patch_type: None,
+                patch: None,
+                reason: Some("disable".into()),
+                risk: "medium".into(),
+            }],
+            additional_context: None,
+        };
+        let findings = vec![crate::ai_explanation::CrashAiFinding {
+            code: "UNSUPPORTED_CLASS_VERSION".into(),
+            title: "Needs Java 24".into(),
+            description: "class 68".into(),
+            auto_fix: Some("Install Java 24+".into()),
+        }];
+        let out = overlay_crash_assistant_findings(plan, &findings);
+        assert!(out.needs_user_review);
+        assert!(out.confidence <= 0.55);
+        assert!(out.human_explanation.to_ascii_lowercase().contains("java"));
+        assert!(out
+            .additional_context
+            .as_deref()
+            .unwrap_or("")
+            .contains("UNSUPPORTED_CLASS_VERSION"));
     }
 
     #[test]

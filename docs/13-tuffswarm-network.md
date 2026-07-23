@@ -57,6 +57,10 @@ Clients **do not** upload raw `crash-report` / `latest.log` by default. They exc
 2. Apply migration: [`supabase/migrations/001_experience_capsules.sql`](../supabase/migrations/001_experience_capsules.sql)
 3. Deploy function: `supabase functions deploy publish-capsule` (see [`supabase/functions/publish-capsule`](../supabase/functions/publish-capsule))
 4. In TuffBox Settings → **TuffSwarm**: enable the network. Community URL + publishable key are **built into the client** (no user setup). Optional Advanced override for self-hosted Supabase.
+5. **Crash Votes Auth redirects:** Site URL must not stay on `http://localhost:3000` for end users. In Supabase → Authentication → URL Configuration:
+   - Site URL: the confirm landing page [`docs/auth-confirmed.html`](auth-confirmed.html) (e.g. jsDelivr `https://cdn.jsdelivr.net/gh/MFcrychelt/tuffbox@master/docs/auth-confirmed.html`) or your own HTTPS page
+   - Redirect URLs: add that same URL
+   - Desktop signup passes `emailRedirectTo` to this page so mail clients (Zen, etc.) do not open a dead localhost server
 
 Ingest policy (Edge Function):
 
@@ -137,13 +141,13 @@ flowchart LR
 1. **Snapshots / History** — meta: `tags: ["crash_fix"]`, `crashFingerprintKey`, `planSource` (`ai|kb|swarm|manual|distill`), `matchedCaseIds`. UI badges.
 2. **Distill after success** — если swarm on + share prompts: auto distill from user action timeline → review UI → Confirm/Edit → signed `ExperienceCapsule` → Supabase `publish-capsule` (else optional hub `POST /v1/crash/capsules` / local only).
 3. **Peer pending plan** — сильный network/KB match → `.tuffbox/pending_action_plan.json` → Diagnostics **Apply network fix** (confirm обязателен; **MUST NOT** auto-apply).
-4. **Creation co-occurrence** — локальные пары модов + optional hub `POST /v1/mods/cooccurrence`; Library → Create → preview → confirm → Modrinth install.
+4. **Creation co-occurrence** — локальные пары модов + **Supabase** `mod_cooccurrence_pairs` (Edge `report-cooccurrence`) + optional hub `POST /v1/mods/cooccurrence`. Сигнал пишется после Confirm install в Create Mode / успешного fix apply; Create Mode AI получает `promptHint` из merge local+network.
 
 ### Remote transports (start = Supabase)
 
 | Transport | Write | Read | Notes |
 |-----------|-------|------|-------|
-| **Supabase** | `POST /functions/v1/publish-capsule` | `GET /rest/v1/experience_capsules?fingerprint_key=eq.…` | **Built-in** community project; optional Settings override |
+| **Supabase** | `POST /functions/v1/publish-capsule` + `report-cooccurrence` | `GET /rest/v1/experience_capsules?…` + `mod_cooccurrence_pairs` | **Built-in** community project; optional Settings override |
 | HTTP hub | `POST /v1/crash/capsules` | `POST /v1/crash/lookup` (+ diagnose) | Optional self-host / team |
 | P2P node | control HTTP publish | control HTTP lookup | Phase C opt-in; code kept |
 

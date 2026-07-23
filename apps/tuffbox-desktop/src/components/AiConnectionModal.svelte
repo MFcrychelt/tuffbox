@@ -30,6 +30,7 @@
         diagnoseMode?: string;
         crashKbEndpoint?: string;
         ollamaBinaryPath?: string;
+        ollamaModelsPath?: string;
       };
     };
     aiApiKeySet: boolean;
@@ -39,11 +40,15 @@
     installed: boolean;
     running: boolean;
     binaryPath: string;
+    modelsPath?: string;
+    modelsPathConfigured?: boolean;
+    defaultModel?: string;
     endpoint: string;
     models: string[];
     needsModel: boolean;
     error?: string | null;
     suggestedModels: string[];
+    suggestedModelNotes?: Record<string, string>;
   };
 
   type PresetId = "ollama" | "openai" | "openrouter" | "hermes" | "custom";
@@ -109,6 +114,7 @@
   let endpoint = "http://127.0.0.1:11434";
   let model = "";
   let ollamaBinaryPath = "";
+  let ollamaModelsPath = "";
   let diagnoseMode = "server";
   let crashKbEndpoint = "";
   let apiKeyDraft = "";
@@ -125,7 +131,7 @@
   let testResult = "";
   let ollamaModels: string[] = [];
   let detect: OllamaDetect | null = null;
-  let pullName = "llama3.2:3b";
+  let pullName = "qwen2.5:7b";
   let ggufName = "";
 
   $: if (open) {
@@ -143,6 +149,10 @@
       endpoint = status.settings?.ai?.endpoint || (provider === "ollama" ? "http://127.0.0.1:11434" : "");
       model = status.settings?.ai?.model || "";
       ollamaBinaryPath = status.settings?.ai?.ollamaBinaryPath ?? "";
+      ollamaModelsPath = status.settings?.ai?.ollamaModelsPath ?? "";
+      if (!model.trim() && provider === "ollama") {
+        model = "qwen2.5:7b";
+      }
       diagnoseMode = status.settings?.ai?.diagnoseMode || "server";
       crashKbEndpoint = status.settings?.ai?.crashKbEndpoint ?? "";
       apiKeySet = !!status.aiApiKeySet;
@@ -196,6 +206,14 @@
       if (detect?.suggestedModels?.length && !pullName.trim()) {
         pullName = detect.suggestedModels[0];
       }
+      if (detect?.defaultModel && !model.trim()) {
+        model = detect.defaultModel;
+        pullName = detect.defaultModel;
+      }
+      if (detect?.modelsPath && !ollamaModelsPath.trim()) {
+        // Show default path as placeholder value only when user hasn't configured one —
+        // keep field empty so "auto" remains clear; placeholder shows detect.modelsPath.
+      }
       if (!model.trim() && ollamaModels.length > 0) {
         model = ollamaModels[0];
       }
@@ -221,7 +239,7 @@
   async function installModel() {
     const name = (pullName || model).trim();
     if (!name) {
-      error = "Enter a model name (e.g. llama3.2:3b) or choose a suggestion.";
+      error = "Enter a model name (e.g. qwen2.5:7b) or choose a suggestion.";
       return;
     }
     pulling = true;
@@ -329,6 +347,22 @@
     }
   }
 
+  async function pickOllamaModelsFolder() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        title: "Select Ollama models folder (OLLAMA_MODELS)",
+      });
+      if (typeof selected === "string" && selected) {
+        ollamaModelsPath = selected;
+        message = "Models path set. Restart Ollama (or Re-detect) so pulls use this folder.";
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
   async function persistAiSettings(activeModel: string) {
     const status = await invoke<IntegrationStatus>("get_integration_status");
     await invoke("save_integration_settings", {
@@ -337,10 +371,11 @@
         ai: {
           provider,
           endpoint: endpoint.trim(),
-          model: activeModel.trim(),
+          model: activeModel.trim() || "qwen2.5:7b",
           diagnoseMode,
           crashKbEndpoint,
           ollamaBinaryPath: ollamaBinaryPath.trim(),
+          ollamaModelsPath: ollamaModelsPath.trim(),
         },
       },
     });
@@ -482,6 +517,24 @@
             </div>
           </label>
 
+          <label>
+            Models install folder
+            <div class="model-row">
+              <input
+                bind:value={ollamaModelsPath}
+                placeholder={detect?.modelsPath || "%USERPROFILE%\\.ollama\\models (empty = default)"}
+                autocomplete="off"
+              />
+              <button class="ghost mini" type="button" title="Pick models folder" on:click={pickOllamaModelsFolder}>
+                <FolderOpen size={14} />
+              </button>
+            </div>
+            <p class="hint">
+              Where Ollama stores downloaded weights (<code>OLLAMA_MODELS</code>).
+              After changing, stop the Ollama app and click Re-detect so TuffBox starts it with the new path.
+            </p>
+          </label>
+
           {#if detect}
             <div class="status" class:ok={detect.installed && detect.running} class:warn={detect.installed && !detect.running} class:bad={!detect.installed}>
               {#if detect.installed && detect.running}
@@ -501,7 +554,7 @@
               <label>
                 Model name / tag
                 <div class="model-row">
-                  <input bind:value={pullName} placeholder="e.g. llama3.2:3b" autocomplete="off" />
+                  <input bind:value={pullName} placeholder="e.g. qwen2.5:7b" autocomplete="off" />
                   <button type="button" on:click={installModel} disabled={pulling || importing || !pullName.trim()}>
                     <Download size={14} />
                     {pulling ? "Installing…" : "Install model"}
@@ -511,9 +564,21 @@
               {#if detect.suggestedModels?.length}
                 <div class="suggestions">
                   {#each detect.suggestedModels as s}
-                    <button type="button" class="chip" class:on={pullName === s} on:click={() => (pullName = s)}>{s}</button>
+                    <button
+                      type="button"
+                      class="chip"
+                      class:on={pullName === s}
+                      title={detect.suggestedModelNotes?.[s] ?? s}
+                      on:click={() => (pullName = s)}
+                    >
+                      {s}
+                      {#if detect.suggestedModelNotes?.[s]}
+                        <small>{detect.suggestedModelNotes[s]}</small>
+                      {/if}
+                    </button>
                   {/each}
                 </div>
+                <p class="hint">Default is <code>qwen2.5:7b</code> (better crash plans). Use <code>llama3.2:3b</code> only if you need a smaller/faster model.</p>
               {/if}
               <label>
                 Local model file (optional)
@@ -650,7 +715,10 @@
     border: 1px solid var(--border-color); background: var(--bg-tertiary);
     color: var(--text-secondary); border-radius: 999px; padding: 4px 9px; font-size: 11px;
     cursor: pointer; font-weight: 500;
+    display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    border-radius: 10px;
   }
+  .chip small { font-size: 9px; font-weight: 500; opacity: 0.8; max-width: 140px; text-align: left; }
   .chip.on {
     background: linear-gradient(145deg, #fbbf24, #d97706); color: #1a1200; border-color: transparent; font-weight: 700;
   }

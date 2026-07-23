@@ -6,3 +6,6 @@ verify_jwt = false
 
 [functions.vote-capsule]
 verify_jwt = true
+
+[functions.report-cooccurrence]
+verify_jwt = false

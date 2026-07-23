@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { X, Loader2, RotateCcw, FileText, Folder, Radio } from "lucide-svelte";
+  import { X, Loader2, RotateCcw, FileText, Folder, Radio, Share2 } from "lucide-svelte";
   import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { trapFocus } from "../lib/focusTrap";
   import CopyButton from "./CopyButton.svelte";
+  import { shareCrashLogWithFeedback } from "../lib/mclogs";
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
@@ -22,6 +23,7 @@
   let lastFetchedLen = -1;
   let loadGen = 0;
   let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
+  let sharing = false;
 
   type SuspectSummary = { id: string; name: string; confidence: number };
   let suspects: SuspectSummary[] = [];
@@ -120,6 +122,17 @@
       logFiles = await invoke("list_instance_logs", { path: projectPath });
     } catch {
       logFiles = [];
+    }
+  }
+
+  async function shareCurrent() {
+    if (sharing || !projectPath) return;
+    sharing = true;
+    try {
+      const name = selectedLog === "__live__" ? null : selectedLog;
+      await shareCrashLogWithFeedback(projectPath, name);
+    } finally {
+      sharing = false;
     }
   }
 
@@ -290,6 +303,10 @@
           ? "Live tail · refreshes ~1s · XML console auto-formatted"
           : `Showing ${selectedLog} (loaded once)`}</span
       >
+      <button class="ghost" on:click={shareCurrent} disabled={!log || sharing} title="Upload to mclo.gs">
+        <Share2 size={16} />
+        {sharing ? "Sharing…" : "Share"}
+      </button>
       <button class="ghost" on:click={() => loadLog({ forceAnalyze: true })}>
         <RotateCcw size={16} />
         Refresh

@@ -12,10 +12,11 @@
     Plus,
     Library,
     User,
+    MessagesSquare,
   } from "lucide-svelte";
   import { newProjectOpen } from "../lib/store";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
   export let currentView: View;
 
   const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string }[] = [
@@ -26,6 +27,7 @@
     { id: "graph", label: "Graph", icon: GitGraph, shortcut: "Ctrl+4" },
     { id: "world", label: "World", icon: Globe, shortcut: "Ctrl+8" },
     { id: "library", label: "Library", icon: Library },
+    { id: "chats", label: "Chats", icon: MessagesSquare },
     { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, shortcut: "Ctrl+6" },
     { id: "crash-votes", label: "Crash Votes", icon: Vote },
     { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
@@ -48,7 +50,7 @@
   <nav class="nav">
     {#each items as item}
       <button
-        class="nav-item"
+        class="nav-item tb-icon-hover"
         class:active={currentView === item.id}
         class:featured={item.featured}
         on:click={() => (currentView = item.id)}
@@ -62,7 +64,7 @@
       </button>
     {/each}
 
-    <button class="nav-item add" title="New instance" on:click={openNewProject}>
+    <button class="nav-item add tb-icon-hover" title="New instance" on:click={openNewProject}>
       <Plus size={20} />
       <span class="nav-label">New</span>
     </button>
@@ -70,7 +72,7 @@
 
   <div class="bottom">
     <button
-      class="nav-item"
+      class="nav-item tb-icon-hover"
       class:active={currentView === "settings"}
       on:click={() => (currentView = "settings")}
       title="Settings"
@@ -112,6 +114,7 @@
     color: #000;
     box-shadow: 0 4px 14px rgba(27, 217, 106, 0.35);
     flex-shrink: 0;
+    animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .brand-name {
@@ -143,12 +146,16 @@
     gap: 12px;
     font-size: 14px;
     font-weight: 500;
-    transition: all 0.15s ease;
+    transition: background var(--motion-fast, 160ms) var(--ease-out, ease),
+      color var(--motion-fast, 160ms) var(--ease-out, ease),
+      border-color var(--motion-fast, 160ms) var(--ease-out, ease),
+      transform var(--motion-fast, 160ms) var(--ease-spring, ease);
   }
 
   .nav-item:hover {
     background: var(--bg-hover);
     color: var(--text-secondary);
+    transform: translateX(2px);
   }
 
   .nav-item.active {

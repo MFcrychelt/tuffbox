@@ -26,6 +26,7 @@
     diagnoseMode?: string;
     crashKbEndpoint?: string;
     ollamaBinaryPath?: string;
+    ollamaModelsPath?: string;
   };
   type SwarmSettings = {
     enabled?: boolean;
@@ -73,6 +74,7 @@
   let aiEndpoint = "";
   let aiModel = "";
   let ollamaBinaryPath = "";
+  let ollamaModelsPath = "";
   let diagnoseMode: "server" | "local" | "kb_only" = "server";
   let crashKbEndpoint = "";
   let githubTokenSet = false;
@@ -287,6 +289,7 @@
       aiEndpoint = status.settings?.ai?.endpoint ?? "";
       aiModel = status.settings?.ai?.model ?? "";
       ollamaBinaryPath = status.settings?.ai?.ollamaBinaryPath ?? "";
+      ollamaModelsPath = status.settings?.ai?.ollamaModelsPath ?? "";
       const dm = status.settings?.ai?.diagnoseMode ?? "server";
       diagnoseMode = dm === "local" || dm === "kb_only" ? dm : "server";
       crashKbEndpoint = status.settings?.ai?.crashKbEndpoint ?? "";
@@ -338,6 +341,7 @@
             diagnoseMode,
             crashKbEndpoint: crashKbEndpoint.trim(),
             ollamaBinaryPath: ollamaBinaryPath.trim(),
+            ollamaModelsPath: ollamaModelsPath.trim(),
           },
           swarm: {
             enabled: swarmEnabled,
@@ -1019,6 +1023,7 @@
               · Model: <code>{aiModel || "—"}</code>
               {#if aiProvider === "ollama"}
                 · Path: <code>{ollamaBinaryPath || "auto"}</code>
+                · Models: <code>{ollamaModelsPath || "default"}</code>
               {/if}
             </p>
             <div class="row-actions">

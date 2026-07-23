@@ -10,6 +10,14 @@ export const TUFFSWARM_SUPABASE_URL = "https://vsoqnwknpueuubiovyjd.supabase.co"
 export const TUFFSWARM_SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzb3Fud2tucHVldXViaW92eWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MTEwMDYsImV4cCI6MjEwMDM4NzAwNn0.E9L11ipWyNiSchUx6pxT3HOVxu_vHtYDUOnNTixqJaI";
 
+/**
+ * Landing page after email confirmation. Must be allowlisted in Supabase
+ * Auth → URL Configuration → Redirect URLs (and preferred over Site URL
+ * localhost:3000 so mail clients do not open a dead local server).
+ */
+export const AUTH_EMAIL_REDIRECT_TO =
+  "https://cdn.jsdelivr.net/gh/MFcrychelt/tuffbox@master/docs/auth-confirmed.html";
+
 export const supabase = createClient(
   TUFFSWARM_SUPABASE_URL,
   TUFFSWARM_SUPABASE_ANON_KEY,
@@ -54,6 +62,9 @@ export async function signUpWithEmail(email: string, password: string) {
   const { data, error } = await supabase.auth.signUp({
     email: email.trim(),
     password,
+    options: {
+      emailRedirectTo: AUTH_EMAIL_REDIRECT_TO,
+    },
   });
   if (error) throw new Error(authErrorMessage(error));
   return data;

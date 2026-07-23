@@ -29,10 +29,10 @@ function createToasts() {
       if (duration > 0) setTimeout(() => { update(t => t.filter(x => x.id !== id)); }, duration);
     },
     dismiss(id: number) { update(t => t.filter(x => x.id !== id)); },
-    success(msg: string, d = 4000) { this.show(msg, "success", d); },
+    success(msg: string, d = 4000, actions?: ToastAction[]) { this.show(msg, "success", d, actions); },
     error(msg: string, d = 8000, actions?: ToastAction[]) { this.show(msg, "error", d, actions); },
-    info(msg: string, d = 4000) { this.show(msg, "info", d); },
-    warning(msg: string, d = 6000) { this.show(msg, "warning", d); },
+    info(msg: string, d = 4000, actions?: ToastAction[]) { this.show(msg, "info", d, actions); },
+    warning(msg: string, d = 6000, actions?: ToastAction[]) { this.show(msg, "warning", d, actions); },
   };
 }
 

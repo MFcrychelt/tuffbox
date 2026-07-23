@@ -228,7 +228,7 @@
           toasts.success("Registered and signed in");
         } else {
           authNote =
-            "Check your email to confirm the account, then sign in.";
+            "Check your email to confirm. If the link opens localhost:3000 and fails, the account is still confirmed — return here and Sign in. New confirms open a success page in the browser.";
           toasts.success("Check your email to confirm registration");
           authMode = "signin";
         }

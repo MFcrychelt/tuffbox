@@ -14,6 +14,7 @@
     graph: "Dependency Graph",
     world: "World Map",
     library: "Library",
+    chats: "Chats",
     diagnostics: "Health Check",
     "crash-votes": "Crash Votes",
     snapshots: "Snapshot History",

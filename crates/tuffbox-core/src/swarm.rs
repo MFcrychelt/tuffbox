@@ -837,13 +837,7 @@ pub fn record_mod_set_cooccurrence(
     let mut store = load_cooccurrence(project_dir);
     store.mc_version = mc_version.to_string();
     store.loader = loader.to_string();
-    let mut ids: Vec<String> = mod_ids
-        .iter()
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect();
-    ids.sort();
-    ids.dedup();
+    let ids = normalize_mod_id_list(mod_ids, 256);
     for i in 0..ids.len() {
         for j in (i + 1)..ids.len() {
             let key = pair_key(&ids[i], &ids[j]);
@@ -851,6 +845,49 @@ pub fn record_mod_set_cooccurrence(
         }
     }
     save_cooccurrence(project_dir, &store)
+}
+
+/// Cap + normalize mod ids for network upload (keeps stable order).
+pub fn normalize_mod_id_list(mod_ids: &[String], max: usize) -> Vec<String> {
+    let mut ids: Vec<String> = mod_ids
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty() && s.len() <= 64)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.truncate(max.max(2));
+    ids
+}
+
+/// Merge local + network pair lists (sum counts), keep top `limit`.
+pub fn merge_cooccurrence_pairs(
+    local: &[ModPairStat],
+    network: &[ModPairStat],
+    limit: usize,
+) -> Vec<ModPairStat> {
+    use std::collections::HashMap;
+    let mut map: HashMap<(String, String), u64> = HashMap::new();
+    for p in local.iter().chain(network.iter()) {
+        let a = p.mod_a.trim().to_ascii_lowercase();
+        let b = p.mod_b.trim().to_ascii_lowercase();
+        if a.is_empty() || b.is_empty() || a == b {
+            continue;
+        }
+        let (x, y) = if a <= b { (a, b) } else { (b, a) };
+        *map.entry((x, y)).or_insert(0) += p.count.max(1);
+    }
+    let mut pairs: Vec<ModPairStat> = map
+        .into_iter()
+        .map(|((mod_a, mod_b), count)| ModPairStat {
+            mod_a,
+            mod_b,
+            count,
+        })
+        .collect();
+    pairs.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.mod_a.cmp(&b.mod_a)));
+    pairs.truncate(limit);
+    pairs
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -886,7 +923,7 @@ pub fn top_cooccurrence_pairs(project_dir: &Path, limit: usize) -> Vec<ModPairSt
 pub fn format_cooccurrence_for_prompt(pairs: &[ModPairStat], limit: usize) -> String {
     let mut out = String::from("## Mod co-occurrence trends (most frequent pairs)\n");
     if pairs.is_empty() {
-        out.push_str("- (no local stats yet)\n");
+        out.push_str("- (no stats yet — install confirmed packs to grow this signal)\n");
         return out;
     }
     for (i, p) in pairs.iter().take(limit).enumerate() {
@@ -899,9 +936,40 @@ pub fn format_cooccurrence_for_prompt(pairs: &[ModPairStat], limit: usize) -> St
         ));
     }
     out.push_str(
-        "\nPrefer suggesting Modrinth mods that fit these pairing trends for the target MC/loader.\n",
+        "\nWhen planning PackBrief mustHave/categories, prefer mods and pairings that fit these trends for the target MC/loader. Do not invent Modrinth IDs — use search queries.\n",
     );
     out
+}
+
+#[cfg(test)]
+mod cooccurrence_tests {
+    use super::*;
+
+    #[test]
+    fn merge_sums_counts() {
+        let local = vec![ModPairStat {
+            mod_a: "sodium".into(),
+            mod_b: "iris".into(),
+            count: 2,
+        }];
+        let network = vec![
+            ModPairStat {
+                mod_a: "iris".into(),
+                mod_b: "sodium".into(),
+                count: 5,
+            },
+            ModPairStat {
+                mod_a: "create".into(),
+                mod_b: "jei".into(),
+                count: 9,
+            },
+        ];
+        let merged = merge_cooccurrence_pairs(&local, &network, 10);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].mod_a, "create");
+        assert_eq!(merged[0].count, 9);
+        assert_eq!(merged[1].count, 7);
+    }
 }
 
 #[cfg(test)]

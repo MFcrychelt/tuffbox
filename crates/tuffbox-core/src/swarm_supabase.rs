@@ -586,6 +586,159 @@ fn row_to_community_card(row: &Value) -> Option<CommunityCapsuleCard> {
     })
 }
 
+/// POST `{supabaseUrl}/functions/v1/report-cooccurrence`
+/// Uploads a mod set; server expands pairs and increments community counts.
+pub async fn report_cooccurrence_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    mod_ids: &[String],
+    mc_version: &str,
+    loader: &str,
+    source: &str,
+    client_key: Option<&str>,
+) -> Result<Value, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() {
+        return Err("Supabase URL is not configured".into());
+    }
+    if key.is_empty() {
+        return Err("Supabase anon key is not configured".into());
+    }
+    let ids = crate::swarm::normalize_mod_id_list(mod_ids, 48);
+    if ids.len() < 2 {
+        return Err("need at least 2 mods to report co-occurrence".into());
+    }
+    let endpoint = join_url(url, "functions/v1/report-cooccurrence");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut payload = json!({
+        "modIds": ids,
+        "mcVersion": mc_version,
+        "loader": loader,
+        "source": source,
+    });
+    if let Some(ck) = client_key.map(str::trim).filter(|s| !s.is_empty()) {
+        payload["clientKey"] = json!(ck);
+        payload["signerPublicKey"] = json!(ck);
+    }
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("supabase co-occurrence report failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("error")
+            .or_else(|| body.get("message"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase co-occurrence report {status}: {msg}"));
+    }
+    Ok(body)
+}
+
+/// GET top co-occurrence pairs from Supabase for Create Mode AI context.
+pub async fn fetch_cooccurrence_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    mc_version: &str,
+    loader: &str,
+    limit: u32,
+) -> Result<Vec<crate::swarm::ModPairStat>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let limit = limit.clamp(1, 100);
+    let loader = loader.trim().to_ascii_lowercase();
+    let mc = mc_version.trim();
+
+    // Prefer exact mc+loader; fall back to loader-only if sparse.
+    let mut pairs =
+        fetch_cooccurrence_rows(url, key, Some(mc), Some(&loader), limit).await?;
+    if pairs.len() < (limit as usize / 3).max(5) {
+        let broader = fetch_cooccurrence_rows(url, key, None, Some(&loader), limit).await?;
+        pairs = crate::swarm::merge_cooccurrence_pairs(&pairs, &broader, limit as usize);
+    }
+    if pairs.len() < (limit as usize / 4).max(3) {
+        let global = fetch_cooccurrence_rows(url, key, None, None, limit).await?;
+        pairs = crate::swarm::merge_cooccurrence_pairs(&pairs, &global, limit as usize);
+    }
+    Ok(pairs)
+}
+
+async fn fetch_cooccurrence_rows(
+    supabase_url: &str,
+    anon_key: &str,
+    mc_version: Option<&str>,
+    loader: Option<&str>,
+    limit: u32,
+) -> Result<Vec<crate::swarm::ModPairStat>, String> {
+    let mut filters = Vec::new();
+    if let Some(mc) = mc_version.map(str::trim).filter(|s| !s.is_empty()) {
+        filters.push(format!("mc_version=eq.{}", urlencoding_minimal(mc)));
+    }
+    if let Some(ld) = loader.map(str::trim).filter(|s| !s.is_empty()) {
+        filters.push(format!("loader=eq.{}", urlencoding_minimal(ld)));
+    }
+    let filter_q = if filters.is_empty() {
+        String::new()
+    } else {
+        format!("&{}", filters.join("&"))
+    };
+    let query = format!(
+        "mod_cooccurrence_pairs?select=mod_a,mod_b,count&order=count.desc&limit={limit}{filter_q}"
+    );
+    let endpoint = join_url(supabase_url, &format!("rest/v1/{query}"));
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(&endpoint)
+        .headers(supabase_headers(anon_key)?)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("supabase co-occurrence fetch failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase co-occurrence fetch {status}: {msg}"));
+    }
+    let rows = body.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let a = row.get("mod_a")?.as_str()?.trim();
+            let b = row.get("mod_b")?.as_str()?.trim();
+            if a.is_empty() || b.is_empty() {
+                return None;
+            }
+            Some(crate::swarm::ModPairStat {
+                mod_a: a.to_string(),
+                mod_b: b.to_string(),
+                count: row.get("count").and_then(|v| v.as_u64()).unwrap_or(1),
+            })
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

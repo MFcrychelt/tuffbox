@@ -13,6 +13,7 @@
   import RecipeBrowser from "./components/RecipeBrowser.svelte";
   import QuestEditor from "./components/QuestEditor.svelte";
   import Library from "./components/Library.svelte";
+  import Chats from "./components/Chats.svelte";
   import World from "./components/World.svelte";
   import ToastContainer from "./components/ToastContainer.svelte";
   import KeyboardHelp from "./components/KeyboardHelp.svelte";
@@ -48,6 +49,7 @@
     | "recipes"
     | "quests"
     | "library"
+    | "chats"
     | "me";
   let currentView: View = "dashboard";
   let showShortcuts = false;
@@ -240,7 +242,7 @@
     dashboard: true, ide: true, mods: true, graph: true, world: true,
     diagnostics: true, "crash-votes": true, snapshots: true, configs: true, settings: true,
     "project-settings": true, "ore-gen": true, recipes: true, quests: true, library: true,
-    me: true,
+    chats: true, me: true,
   };
 
   function handleCommandPaletteNavigate(e: CustomEvent<string>) {
@@ -295,6 +297,8 @@
             <World />
           {:else if currentView === "library"}
             <Library bind:currentView />
+          {:else if currentView === "chats"}
+            <Chats bind:currentView />
           {:else if currentView === "me"}
             <Me onBack={() => (currentView = "dashboard")} />
           {/if}

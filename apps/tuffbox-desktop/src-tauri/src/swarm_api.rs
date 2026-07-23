@@ -8,8 +8,9 @@ use tuffbox_core::action_plan::ActionPlan;
 use tuffbox_core::crash_kb::{AuthorCaseInput, CrashCase};
 use tuffbox_core::swarm::{
     clear_pending_action_plan, format_cooccurrence_for_prompt, load_pending_action_plan,
-    maybe_write_pending_from_score, record_mod_set_cooccurrence, top_cooccurrence_pairs,
-    write_pending_action_plan, ExperienceCapsule, ModPairStat, STRONG_MATCH_THRESHOLD,
+    maybe_write_pending_from_score, merge_cooccurrence_pairs, normalize_mod_id_list,
+    record_mod_set_cooccurrence, top_cooccurrence_pairs, write_pending_action_plan,
+    ExperienceCapsule, ModPairStat, STRONG_MATCH_THRESHOLD,
 };
 use tuffbox_core::{ProjectManifest, Snapshot, SnapshotMeta, SnapshotStore};
 use tauri::Emitter;
@@ -1007,10 +1008,9 @@ pub async fn publish_experience_capsule(
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn record_project_cooccurrence(path: String) -> Result<(), String> {
-    integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let ids: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
     record_mod_set_cooccurrence(
         &project_dir,
@@ -1020,9 +1020,87 @@ pub fn record_project_cooccurrence(path: String) -> Result<(), String> {
     )
 }
 
+/// Local record + best-effort Supabase upload of mod co-occurrence.
+/// Local write does not require swarm; network upload does.
+pub async fn record_and_upload_cooccurrence(
+    path: &str,
+    mod_ids: &[String],
+    source: &str,
+) -> Result<serde_json::Value, String> {
+    record_and_upload_cooccurrence_opts(path, mod_ids, source, true).await
+}
+
+pub async fn record_and_upload_cooccurrence_opts(
+    path: &str,
+    mod_ids: &[String],
+    source: &str,
+    record_local: bool,
+) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(path)?;
+    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    let mc = manifest.minecraft.version.clone();
+    let ids = if mod_ids.is_empty() {
+        manifest.mods.iter().map(|m| m.id.clone()).collect()
+    } else {
+        mod_ids.to_vec()
+    };
+    let ids = normalize_mod_id_list(&ids, 48);
+
+    if record_local {
+        let _ = record_mod_set_cooccurrence(&project_dir, &ids, &mc, &loader);
+    }
+
+    let mut uploaded = false;
+    let mut upload_error: Option<String> = None;
+    if integrations::swarm_enabled() {
+        if let (Some(url), Some(key)) = (
+            integrations::swarm_supabase_url(),
+            integrations::swarm_supabase_anon_key(),
+        ) {
+            let client_key = tuffbox_core::swarm::load_or_create_device_signing_key()
+                .ok()
+                .map(|(_, device_id)| device_id);
+            match tuffbox_core::swarm_supabase::report_cooccurrence_supabase(
+                &url,
+                &key,
+                &ids,
+                &mc,
+                &loader,
+                source,
+                client_key.as_deref(),
+            )
+            .await
+            {
+                Ok(_) => uploaded = true,
+                Err(e) => upload_error = Some(e),
+            }
+        }
+    }
+
+    Ok(json!({
+        "local": record_local,
+        "uploaded": uploaded,
+        "modCount": ids.len(),
+        "uploadError": upload_error,
+        "mcVersion": mc,
+        "loader": loader,
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn report_mod_cooccurrence(
+    path: String,
+    mod_ids: Option<Vec<String>>,
+    source: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let ids = mod_ids.unwrap_or_default();
+    let source = source.unwrap_or_else(|| "manual".into());
+    record_and_upload_cooccurrence(&path, &ids, &source).await
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub fn get_local_cooccurrence(path: String, limit: Option<u32>) -> Result<Vec<ModPairStat>, String> {
-    integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
     Ok(top_cooccurrence_pairs(
         &project_dir,
@@ -1035,43 +1113,91 @@ pub async fn get_creation_trends(
     path: String,
     limit: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
     let limit = limit.unwrap_or(20) as usize;
-    let local = top_cooccurrence_pairs(&project_dir, limit);
-    let prompt_hint = format_cooccurrence_for_prompt(&local, limit.min(15));
+    let local = top_cooccurrence_pairs(&project_dir, limit.max(40));
 
+    let mut network_pairs: Vec<ModPairStat> = Vec::new();
     let mut network: Option<serde_json::Value> = None;
-    // Co-occurrence is hub/KB only (P2P node does not expose this route yet).
-    if let Some(endpoint) = integrations::swarm_network_base() {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
-        let token = integrations::secret_optional("crash_kb");
-        if let Ok(body) = tuffbox_core::crash_remote::fetch_cooccurrence_async(
-            &endpoint,
-            token.as_deref(),
-            &manifest.minecraft.version,
-            &loader,
-            limit as u32,
-        )
-        .await
-        {
-            network = Some(body);
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    let mc = manifest.minecraft.version.clone();
+
+    // Prefer Supabase community stats when swarm is on.
+    if integrations::swarm_enabled() {
+        if let (Some(url), Some(key)) = (
+            integrations::swarm_supabase_url(),
+            integrations::swarm_supabase_anon_key(),
+        ) {
+            if let Ok(pairs) = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
+                &url,
+                &key,
+                &mc,
+                &loader,
+                limit as u32,
+            )
+            .await
+            {
+                network = Some(json!({ "pairs": pairs, "source": "supabase" }));
+                network_pairs = pairs;
+            }
+        }
+        // Optional hub fallback.
+        if network_pairs.is_empty() {
+            if let Some(endpoint) = integrations::swarm_network_base() {
+                let token = integrations::secret_optional("crash_kb");
+                if let Ok(body) = tuffbox_core::crash_remote::fetch_cooccurrence_async(
+                    &endpoint,
+                    token.as_deref(),
+                    &mc,
+                    &loader,
+                    limit as u32,
+                )
+                .await
+                {
+                    if let Some(arr) = body.get("pairs").and_then(|v| v.as_array()) {
+                        network_pairs = arr
+                            .iter()
+                            .filter_map(|p| {
+                                let a = p
+                                    .get("modA")
+                                    .or_else(|| p.get("mod_a"))
+                                    .and_then(|v| v.as_str())?;
+                                let b = p
+                                    .get("modB")
+                                    .or_else(|| p.get("mod_b"))
+                                    .and_then(|v| v.as_str())?;
+                                Some(ModPairStat {
+                                    mod_a: a.to_string(),
+                                    mod_b: b.to_string(),
+                                    count: p.get("count").and_then(|v| v.as_u64()).unwrap_or(1),
+                                })
+                            })
+                            .collect();
+                    }
+                    network = Some(body);
+                }
+            }
         }
     }
 
+    let merged = merge_cooccurrence_pairs(&local, &network_pairs, limit);
+    let prompt_hint = format_cooccurrence_for_prompt(&merged, limit.min(20));
+
     Ok(json!({
         "localPairs": local,
+        "networkPairs": network_pairs,
+        "mergedPairs": merged,
         "network": network,
         "promptHint": prompt_hint,
         "strongMatchThreshold": STRONG_MATCH_THRESHOLD,
+        "supabaseConfigured": integrations::swarm_supabase_configured(),
     }))
 }
 
 /// Suggest Modrinth slugs from co-occurrence partner mods not yet installed.
 #[tauri::command(rename_all = "camelCase")]
 pub fn suggest_mods_from_trends(path: String, limit: Option<u32>) -> Result<Vec<String>, String> {
-    integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let installed: std::collections::HashSet<String> = manifest

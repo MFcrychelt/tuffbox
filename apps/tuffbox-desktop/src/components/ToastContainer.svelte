@@ -21,10 +21,10 @@
 <div class="tc">
   {#each $toasts as t (t.id)}
     <div
-      class="t {t.type}"
+      class="t {t.type} tb-toast-enter"
       style="--tc:{clr(t.type)}; --progress:{progress(t)}"
-      in:fly={{ y: 16, duration: 250 }}
-      out:fade={{ duration: 150 }}
+      in:fly={{ y: 12, duration: 220 }}
+      out:fade={{ duration: 140 }}
     >
       <span class="ti"><svelte:component this={icon(t.type)} size={16} color="var(--tc)" /></span>
       <span class="tm">{t.message}</span>
