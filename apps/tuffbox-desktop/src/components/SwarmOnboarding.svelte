@@ -23,8 +23,8 @@
     <div class="sw-icon"><Network size={28} /></div>
     <h3 id="swarm-onboard-title">Use TuffSwarm network?</h3>
     <p>
-      Share crash-fix experience and unlock Creation mode (modpack trends).
-      Without the network, those modes stay unavailable. You can change this anytime in Settings.
+      Share crash-fix experience with the community backend (automatic) and unlock Creation mode
+      (modpack trends). Without the network, those modes stay unavailable. You can change this anytime in Settings.
     </p>
     <div class="sw-actions">
       <button class="ghost" type="button" on:click={() => dispatch("skip")}>Not now</button>

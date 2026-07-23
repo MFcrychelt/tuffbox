@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { Play, FolderOpen, ChevronRight } from "lucide-svelte";
+  import { Play, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
-  import { projectPath, projectInfo, isLaunching } from "../lib/store";
+  import { projectPath, projectInfo, isLaunching, openLaunchLog } from "../lib/store";
   import { launchWithFeedback } from "../lib/launch";
 
   export let currentView: string;
@@ -15,6 +15,7 @@
     world: "World Map",
     library: "Library",
     diagnostics: "Health Check",
+    "crash-votes": "Crash Votes",
     snapshots: "Snapshot History",
     configs: "Config Editor",
     settings: "Settings",
@@ -70,6 +71,16 @@
     <button class="secondary" on:click={selectProject}>
       <FolderOpen size={16} />
       {$projectPath ? "Switch" : "Open"}
+    </button>
+
+    <button
+      class="secondary"
+      disabled={!$projectPath}
+      title="Live logs of the running build"
+      on:click={() => $projectPath && openLaunchLog($projectPath)}
+    >
+      <Terminal size={16} />
+      Logs
     </button>
 
     <button class="launch-btn" on:click={launch} disabled={!$projectPath || $isLaunching}>

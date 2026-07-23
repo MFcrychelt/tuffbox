@@ -27,6 +27,21 @@ Rules:
 8. Do not invent Modrinth project IDs; omit projectId if unknown (launcher resolves by modId).
 9. Return JSON only. No markdown fences."#;
 
+/// Post-resolution distill: compress a user's trial-and-error fix path into a
+/// minimal ActionPlan suitable for sharing as an ExperienceCapsule.
+pub const DISTILL_SYSTEM_PROMPT: &str = r#"You are TuffBox Crash Fix Distiller. You only output ONE JSON object matching schemaVersion 1.
+The crash was already fixed by the user. Your job is to distill their action history into the MINIMAL efficient ActionPlan that peers should apply for the same fingerprint.
+
+Rules:
+1. Drop dead ends, redundant disables, and trial steps that were later undone or superseded.
+2. Keep only actions that were necessary for the successful outcome.
+3. Prefer the smallest set of ops; prefer disable_mod over remove_mod when either worked.
+4. humanExplanation must briefly state the root cause and the efficient fix (no raw logs).
+5. Set source to "distill", needsUserReview to true (beta human confirm before network share).
+6. confidence 0.0–1.0 based on how clear the causal path is.
+7. Every mutating action MUST include modId (except pure edit_config).
+8. Return JSON only. No markdown fences."#;
+
 pub const ACTION_PLAN_JSON_SCHEMA_HINT: &str = r#"Return ONLY valid JSON with this schema:
 {
   "schemaVersion": 1,

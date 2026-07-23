@@ -922,7 +922,20 @@ pub fn smart_excerpt(text: &str, max_len: usize) -> String {
     if chunk.len() <= max_len {
         return chunk;
     }
-    format!("{}... (truncated)", &chunk[..max_len])
+    format!("{}... (truncated)", truncate_at_char_boundary(&chunk, max_len))
+}
+
+/// Truncate to at most `max_len` bytes without splitting a UTF-8 codepoint.
+/// Panic-safe for crash logs that contain Cyrillic / emoji / Windows paths.
+pub fn truncate_at_char_boundary(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        return s;
+    }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Append a raw JSONL line (debug / import helper).
@@ -980,5 +993,17 @@ at com.example.Mod.init(Mod.java:42)\n";
         assert!(!scrubbed.contains("550e8400"));
         let fp = fingerprint_from_text(raw, "1.20.1", "fabric");
         assert!(!fp.key.to_ascii_lowercase().contains("alice"));
+    }
+
+    #[test]
+    fn smart_excerpt_handles_multibyte_utf8_without_panic() {
+        // Cyrillic + emoji so a naive byte slice would panic mid-codepoint.
+        let mut text = String::from("Description: сбой мода\n");
+        text.push_str(&"я".repeat(4000));
+        text.push_str("🚀💥");
+        let excerpt = smart_excerpt(&text, 200);
+        assert!(excerpt.len() <= 220);
+        assert!(excerpt.is_char_boundary(excerpt.len()));
+        let _ = truncate_at_char_boundary(&text, 17);
     }
 }

@@ -31,6 +31,7 @@
     enabled?: boolean;
     onboardingDone?: boolean;
     sharePromptsEnabled?: boolean;
+    supabaseUrl?: string;
     hubUrl?: string;
     p2pEnabled?: boolean;
     p2pControlUrl?: string;
@@ -43,6 +44,9 @@
     curseforgeTokenSet: boolean;
     aiApiKeySet: boolean;
     crashKbTokenSet?: boolean;
+    swarmSupabaseAnonSet?: boolean;
+    swarmSupabaseUsingBuiltin?: boolean;
+    swarmSupabaseConfigured?: boolean;
   };
   type UpdateCheck = {
     currentVersion: string;
@@ -84,6 +88,12 @@
   let crashKbTokenDraft = "";
   let swarmEnabled = false;
   let swarmSharePrompts = true;
+  let swarmSupabaseUrl = "";
+  let swarmSupabaseAnonDraft = "";
+  let swarmSupabaseAnonSet = false;
+  let swarmSupabaseUsingBuiltin = true;
+  let swarmSupabaseConfigured = false;
+  let swarmSupabaseAdvanced = false;
   let swarmHubUrl = "";
   let swarmP2pEnabled = false;
   let swarmP2pControlUrl = "http://127.0.0.1:8790";
@@ -287,6 +297,10 @@
       crashKbTokenSet = !!status.crashKbTokenSet;
       swarmEnabled = !!status.settings?.swarm?.enabled;
       swarmSharePrompts = status.settings?.swarm?.sharePromptsEnabled !== false;
+      swarmSupabaseUrl = status.settings?.swarm?.supabaseUrl ?? "";
+      swarmSupabaseAnonSet = !!status.swarmSupabaseAnonSet;
+      swarmSupabaseUsingBuiltin = status.swarmSupabaseUsingBuiltin !== false;
+      swarmSupabaseConfigured = !!status.swarmSupabaseConfigured;
       swarmHubUrl = status.settings?.swarm?.hubUrl ?? "";
       swarmP2pEnabled = !!status.settings?.swarm?.p2pEnabled;
       swarmP2pControlUrl =
@@ -296,6 +310,7 @@
       curseforgeTokenDraft = "";
       aiApiKeyDraft = "";
       crashKbTokenDraft = "";
+      swarmSupabaseAnonDraft = "";
       if (swarmEnabled && swarmP2pEnabled) {
         void refreshP2pStatus();
       } else {
@@ -328,6 +343,7 @@
             enabled: swarmEnabled,
             onboardingDone: true,
             sharePromptsEnabled: swarmSharePrompts,
+            supabaseUrl: swarmSupabaseUrl.trim(),
             hubUrl: swarmHubUrl.trim(),
             p2pEnabled: swarmP2pEnabled,
             p2pControlUrl: swarmP2pControlUrl.trim() || "http://127.0.0.1:8790",
@@ -359,6 +375,7 @@
       if (kind === "curseforge") curseforgeTokenDraft = "";
       if (kind === "ai") aiApiKeyDraft = "";
       if (kind === "crash_kb") crashKbTokenDraft = "";
+      if (kind === "swarm_supabase") swarmSupabaseAnonDraft = "";
       await loadIntegrations();
     } catch (e) {
       integrationsError = String(e);
@@ -420,6 +437,24 @@
       const next = !swarmSharePrompts;
       const s = await invoke<SwarmSettings>("set_swarm_share_prompts", { enabled: next });
       swarmSharePrompts = s.sharePromptsEnabled !== false;
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      swarmSaving = false;
+    }
+  }
+
+  async function saveSupabaseUrl() {
+    swarmSaving = true;
+    integrationsError = "";
+    try {
+      const s = await invoke<SwarmSettings>("set_swarm_supabase_url", {
+        supabaseUrl: swarmSupabaseUrl.trim(),
+      });
+      swarmSupabaseUrl = s.supabaseUrl ?? "";
+      integrationsMessage = swarmSupabaseUrl
+        ? "Supabase URL saved."
+        : "Supabase URL cleared.";
     } catch (e) {
       integrationsError = String(e);
     } finally {
@@ -1004,7 +1039,8 @@
             </div>
             <p class="hint">
               Shares crash→fix capsules (fingerprint + solution + actions — not raw logs).
-              Phase B: HTTP hub. Phase C: optional local <code>tuffswarm-node</code> (libp2p DHT + gossip); hub stays bootstrap/fallback.
+              Community backend (Supabase) is built in — users only need to enable the network.
+              Optional: custom hub / P2P for self-hosting.
             </p>
             <label class="check-row">
               <input
@@ -1015,8 +1051,80 @@
               />
               Use TuffSwarm network
             </label>
+            {#if swarmSupabaseConfigured}
+              <small class="test-ok">
+                {swarmSupabaseUsingBuiltin
+                  ? "Community Supabase: connected (built-in)"
+                  : "Supabase: using custom URL / key override"}
+              </small>
+            {:else}
+              <small class="test-ok" style="opacity:0.8">Supabase backend not configured</small>
+            {/if}
+            <button
+              type="button"
+              class="ghost mini"
+              disabled={!swarmEnabled}
+              on:click={() => (swarmSupabaseAdvanced = !swarmSupabaseAdvanced)}
+            >
+              {swarmSupabaseAdvanced ? "Hide advanced backend" : "Advanced backend override…"}
+            </button>
+            {#if swarmSupabaseAdvanced}
             <label>
-              Swarm hub URL (fallback)
+              Supabase URL override (empty = built-in)
+              <input
+                bind:value={swarmSupabaseUrl}
+                placeholder="https://xxxx.supabase.co"
+                disabled={!swarmEnabled}
+                autocomplete="off"
+              />
+            </label>
+            <div class="row-actions">
+              <button
+                type="button"
+                class="mini"
+                disabled={swarmSaving || !swarmEnabled}
+                on:click={saveSupabaseUrl}
+              >
+                Save Supabase URL
+              </button>
+            </div>
+            <label>
+              Supabase anon key override
+              <input
+                type="password"
+                bind:value={swarmSupabaseAnonDraft}
+                placeholder={swarmSupabaseAnonSet ? "•••••••• (custom set)" : "leave empty for built-in"}
+                disabled={!swarmEnabled}
+                autocomplete="off"
+              />
+            </label>
+            <div class="row-actions">
+              <button
+                class="mini"
+                disabled={
+                  swarmSaving ||
+                  savingSecret === "swarm_supabase" ||
+                  !swarmSupabaseAnonDraft.trim()
+                }
+                on:click={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
+              >
+                {savingSecret === "swarm_supabase" ? "Saving…" : "Save anon key"}
+              </button>
+              <button
+                class="ghost mini"
+                disabled={
+                  swarmSaving ||
+                  clearingSecret === "swarm_supabase" ||
+                  !swarmSupabaseAnonSet
+                }
+                on:click={() => clearSecret("swarm_supabase")}
+              >
+                Clear override
+              </button>
+            </div>
+            {/if}
+            <label>
+              Swarm hub URL (optional fallback)
               <input
                 bind:value={swarmHubUrl}
                 placeholder="http://192.168.1.10:8787"

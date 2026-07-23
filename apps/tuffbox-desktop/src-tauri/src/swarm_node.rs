@@ -260,16 +260,35 @@ pub async fn get_p2p_node_status() -> Result<Value, String> {
     Ok(status)
 }
 
-/// Lookup capsules across P2P then hub; merge hits (first base preferred for order).
+/// Lookup capsules across Supabase, then P2P, then hub; merge hits.
 pub async fn lookup_across_transports(
     req: &tuffbox_core::crash_remote::CrashLookupRequest,
 ) -> Option<tuffbox_core::crash_remote::CrashLookupResponse> {
-    let bases = capsule_transport_bases().await;
-    if bases.is_empty() {
-        return None;
-    }
     let mut merged: Vec<tuffbox_core::crash_remote::CrashLookupHit> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+
+    if crate::integrations::swarm_supabase_configured() {
+        let url = crate::integrations::swarm_supabase_url().unwrap();
+        let anon = crate::integrations::swarm_supabase_anon_key().unwrap();
+        if let Ok(resp) = tuffbox_core::swarm_supabase::lookup_capsules_supabase(
+            &url,
+            &anon,
+            &req.fingerprint.key,
+            req.loader.as_deref(),
+            req.mc_version.as_deref(),
+            req.limit,
+        )
+        .await
+        {
+            for hit in resp.hits {
+                if seen.insert(hit.id.clone()) {
+                    merged.push(hit);
+                }
+            }
+        }
+    }
+
+    let bases = capsule_transport_bases().await;
     for base in &bases {
         let token = auth_token_for_base(base);
         if let Ok(resp) =

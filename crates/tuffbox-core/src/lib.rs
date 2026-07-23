@@ -43,6 +43,7 @@ pub mod api_cache;
 pub mod crash_assistant;
 pub mod crash_kb;
 pub mod swarm;
+pub mod swarm_supabase;
 pub mod task_progress;
 pub mod project_ai_inventory;
 pub mod environment;

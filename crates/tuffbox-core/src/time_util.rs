@@ -20,6 +20,61 @@ pub fn compact_now() -> String {
     format_compact_utc(SystemTime::now())
 }
 
+/// Current Unix epoch seconds (UTC).
+pub fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Parse a compact RFC 3339 UTC timestamp produced by [`format_rfc3339`]
+/// (`YYYY-MM-DDTHH:MM:SSZ`, optional fractional seconds) into Unix seconds.
+pub fn parse_rfc3339_unix_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let s = s.strip_suffix('Z').unwrap_or(s);
+    let s = s.split('+').next().unwrap_or(s);
+    let s = if let Some((main, _)) = s.split_once('.') {
+        main
+    } else {
+        s
+    };
+    let (date, time) = s.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let y: i64 = date_parts.next()?.parse().ok()?;
+    let m: u32 = date_parts.next()?.parse().ok()?;
+    let d: u32 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+    let mut time_parts = time.split(':');
+    let h: u32 = time_parts.next()?.parse().ok()?;
+    let mi: u32 = time_parts.next()?.parse().ok()?;
+    let sec: u32 = time_parts.next()?.parse().ok()?;
+    if time_parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    if h > 23 || mi > 59 || sec > 60 {
+        return None;
+    }
+    let days = days_from_civil(y, m, d);
+    let total = days
+        .checked_mul(86_400)?
+        .checked_add(i64::from(h) * 3600 + i64::from(mi) * 60 + i64::from(sec))?;
+    u64::try_from(total).ok()
+}
+
+/// Inverse of the civil_from_days algorithm used above (Hinnant).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = if m > 2 { (m - 3) as u64 } else { (m + 9) as u64 };
+    let doy = (153 * mp + 2) / 5 + u64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe as i64 - 719_468
+}
+
 pub fn format_rfc3339(time: SystemTime) -> String {
     let (y, mo, d, h, mi, s) = civil_utc_from_system_time(time);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
@@ -86,5 +141,22 @@ mod tests {
     fn now_is_not_a_hardcoded_date() {
         assert_ne!(rfc3339_now(), "2026-06-29T00:00:00Z");
         assert_ne!(compact_now(), "20260629T000000Z");
+    }
+
+    #[test]
+    fn parse_rfc3339_roundtrips_known_values() {
+        assert_eq!(parse_rfc3339_unix_secs("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            parse_rfc3339_unix_secs("2024-03-15T13:45:30Z"),
+            Some(1_710_510_330)
+        );
+        assert_eq!(
+            parse_rfc3339_unix_secs("2000-02-29T00:00:00Z"),
+            Some(951_782_400)
+        );
+        assert_eq!(
+            parse_rfc3339_unix_secs("2024-03-15T13:45:30.123Z"),
+            Some(1_710_510_330)
+        );
     }
 }

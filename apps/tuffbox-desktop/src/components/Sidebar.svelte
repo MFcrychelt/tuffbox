@@ -6,6 +6,7 @@
     Globe,
     Stethoscope,
     History,
+    Vote,
     Workflow,
     Settings,
     Plus,
@@ -14,7 +15,7 @@
   } from "lucide-svelte";
   import { newProjectOpen } from "../lib/store";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me";
+  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me";
   export let currentView: View;
 
   const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string }[] = [
@@ -26,6 +27,7 @@
     { id: "world", label: "World", icon: Globe, shortcut: "Ctrl+8" },
     { id: "library", label: "Library", icon: Library },
     { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, shortcut: "Ctrl+6" },
+    { id: "crash-votes", label: "Crash Votes", icon: Vote },
     { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
   ];
 

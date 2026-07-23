@@ -6,6 +6,7 @@
   import Mods from "./components/Mods.svelte";
   import Graph from "./components/Graph.svelte";
   import Diagnostics from "./components/Diagnostics.svelte";
+  import CrashVotes from "./components/CrashVotes.svelte";
   import Snapshots from "./components/Snapshots.svelte";
   import ConfigEditor from "./components/ConfigEditor.svelte";
   import OreGenVisualizer from "./components/OreGenVisualizer.svelte";
@@ -24,10 +25,12 @@
   import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
   import { onMount, tick } from "svelte";
-  import { projectPath, projectInfo, recentProjects } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog } from "./lib/store";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { toasts } from "./lib/toast";
+  import LaunchLogModal from "./components/LaunchLogModal.svelte";
 
   type View =
     | "dashboard"
@@ -36,6 +39,7 @@
     | "graph"
     | "world"
     | "diagnostics"
+    | "crash-votes"
     | "snapshots"
     | "configs"
     | "settings"
@@ -53,6 +57,7 @@
   let shareCapsuleOpen = false;
   let shareCapsulePath = "";
   let shareCapsuleExplanation = "";
+  let shareResolutionId: string | null = null;
   let shareBusy = false;
 
   $: if (currentView) {
@@ -95,12 +100,31 @@
       const detail = (ev as CustomEvent).detail as {
         path?: string;
         marker?: { humanExplanation?: string };
+        resolution?: { id?: string; humanExplanation?: string };
       };
-      shareCapsulePath = detail?.path ?? "";
-      shareCapsuleExplanation = detail?.marker?.humanExplanation ?? "";
-      shareCapsuleOpen = true;
+      openDistillDialog({
+        path: detail?.path ?? "",
+        explanation:
+          detail?.resolution?.humanExplanation ?? detail?.marker?.humanExplanation ?? "",
+        resolutionId: detail?.resolution?.id ?? null,
+      });
     };
     window.addEventListener("tuffbox:share-capsule", onShareCapsule);
+
+    let unlistenDistill: UnlistenFn | null = null;
+    void listen<{
+      path?: string;
+      resolution?: { id?: string; humanExplanation?: string };
+    }>("tuffbox:distill-resolution", (event) => {
+      const payload = event.payload;
+      openDistillDialog({
+        path: payload?.path ?? "",
+        explanation: payload?.resolution?.humanExplanation ?? "",
+        resolutionId: payload?.resolution?.id ?? null,
+      });
+    }).then((u) => {
+      unlistenDistill = u;
+    });
 
     void (async () => {
       try {
@@ -132,8 +156,21 @@
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
+      unlistenDistill?.();
     };
   });
+
+  function openDistillDialog(opts: {
+    path: string;
+    explanation: string;
+    resolutionId: string | null;
+  }) {
+    if (!opts.path || shareCapsuleOpen) return;
+    shareCapsulePath = opts.path;
+    shareCapsuleExplanation = opts.explanation;
+    shareResolutionId = opts.resolutionId;
+    shareCapsuleOpen = true;
+  }
 
   async function finishSwarmOnboarding(enabled: boolean) {
     try {
@@ -150,7 +187,13 @@
     }
   }
 
-  async function shareCapsule() {
+  async function shareCapsule(
+    e: CustomEvent<{
+      humanExplanation: string;
+      actions: Record<string, unknown>[];
+      fingerprintKey: string | null;
+    }>,
+  ) {
     if (!shareCapsulePath) {
       shareCapsuleOpen = false;
       return;
@@ -159,9 +202,9 @@
     try {
       const result: any = await invoke("publish_experience_capsule", {
         path: shareCapsulePath,
-        fingerprintKey: null,
-        humanExplanation: shareCapsuleExplanation || null,
-        actions: null,
+        fingerprintKey: e.detail.fingerprintKey,
+        humanExplanation: e.detail.humanExplanation || shareCapsuleExplanation || null,
+        actions: e.detail.actions ?? null,
       });
       if (result?.published) {
         toasts.success("Fix shared with the swarm hub — other clients can reuse it");
@@ -174,8 +217,8 @@
       } else {
         toasts.success("Capsule saved");
       }
-    } catch (e) {
-      toasts.error(String(e));
+    } catch (err) {
+      toasts.error(String(err));
     } finally {
       shareBusy = false;
       shareCapsuleOpen = false;
@@ -195,7 +238,7 @@
 
   const VIEW_SET: Record<string, boolean> = {
     dashboard: true, ide: true, mods: true, graph: true, world: true,
-    diagnostics: true, snapshots: true, configs: true, settings: true,
+    diagnostics: true, "crash-votes": true, snapshots: true, configs: true, settings: true,
     "project-settings": true, "ore-gen": true, recipes: true, quests: true, library: true,
     me: true,
   };
@@ -232,6 +275,8 @@
             <Graph />
           {:else if currentView === "diagnostics"}
             <Diagnostics />
+          {:else if currentView === "crash-votes"}
+            <CrashVotes />
           {:else if currentView === "snapshots"}
             <Snapshots />
           {:else if currentView === "configs"}
@@ -283,10 +328,16 @@
 
 {#if shareCapsuleOpen}
   <ShareCapsuleDialog
-    explanation={shareCapsuleExplanation}
-    on:share={shareCapsule}
+    path={shareCapsulePath}
+    resolutionId={shareResolutionId}
+    seedExplanation={shareCapsuleExplanation}
+    on:confirm={shareCapsule}
     on:dismiss={dismissShareCapsule}
   />
+{/if}
+
+{#if $launchLogPath}
+  <LaunchLogModal projectPath={$launchLogPath} on:close={closeLaunchLog} />
 {/if}
 
 <svelte:window

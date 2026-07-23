@@ -83,6 +83,10 @@ pub struct IntegrationStatus {
     pub curseforge_token_set: bool,
     pub ai_api_key_set: bool,
     pub crash_kb_token_set: bool,
+    pub swarm_supabase_anon_set: bool,
+    /// Community Supabase URL+key are built into the app (no user setup required).
+    pub swarm_supabase_using_builtin: bool,
+    pub swarm_supabase_configured: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +164,35 @@ pub fn swarm_network_base() -> Option<String> {
     tuffbox_core::swarm::resolve_swarm_network_base(&s.swarm.hub_url, &s.ai.crash_kb_endpoint)
 }
 
+/// Supabase project URL: Settings override, else built-in community project.
+pub fn swarm_supabase_url() -> Option<String> {
+    swarm_settings().effective_supabase_url()
+}
+
+/// Anon/publishable key: keyring override, else built-in (public by design).
+pub fn swarm_supabase_anon_key() -> Option<String> {
+    if let Some(k) = secret_optional("swarm_supabase") {
+        return Some(k);
+    }
+    let builtin = tuffbox_core::swarm::BUILTIN_SUPABASE_ANON_KEY.trim();
+    if builtin.is_empty() {
+        None
+    } else {
+        Some(builtin.to_string())
+    }
+}
+
+/// True when effective URL + anon key resolve (built-in counts).
+pub fn swarm_supabase_configured() -> bool {
+    swarm_supabase_url().is_some() && swarm_supabase_anon_key().is_some()
+}
+
+/// Whether the client is using the shipped community Supabase defaults (no overrides).
+pub fn swarm_supabase_using_builtin() -> bool {
+    let s = swarm_settings();
+    s.supabase_url.trim().is_empty() && secret_optional("swarm_supabase").is_none()
+}
+
 /// Machine-wide durable capsule store (shared across projects on this PC).
 pub fn global_capsule_library() -> tuffbox_core::swarm::CapsuleLibrary {
     let path = dirs::config_dir()
@@ -223,6 +256,24 @@ pub fn set_swarm_hub_url(hub_url: String) -> Result<tuffbox_core::swarm::SwarmSe
 }
 
 #[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_supabase_url(
+    supabase_url: String,
+) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    let url = supabase_url.trim().trim_end_matches('/').to_string();
+    if !url.is_empty()
+        && !url.starts_with("https://")
+        && !url.starts_with("http://127.0.0.1")
+        && !url.starts_with("http://localhost")
+    {
+        return Err("Supabase URL must be https://… (or localhost for local stack)".into());
+    }
+    settings.swarm.supabase_url = url;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 pub fn set_swarm_p2p(
     enabled: bool,
     control_url: Option<String>,
@@ -251,6 +302,7 @@ fn keyring_entry(kind: &str) -> Result<keyring::Entry, String> {
         "curseforge" => "curseforge-token",
         "ai" => "ai-api-key",
         "crash_kb" => "crash-kb-token",
+        "swarm_supabase" => "swarm-supabase-anon",
         _ => return Err(format!("unknown credential kind: {kind}")),
     };
     keyring::Entry::new(KEYRING_SERVICE, account).map_err(|e| e.to_string())
@@ -282,6 +334,9 @@ pub fn get_integration_status() -> IntegrationStatus {
         curseforge_token_set: secret_is_set("curseforge"),
         ai_api_key_set: secret_is_set("ai"),
         crash_kb_token_set: secret_is_set("crash_kb"),
+        swarm_supabase_anon_set: secret_is_set("swarm_supabase"),
+        swarm_supabase_using_builtin: swarm_supabase_using_builtin(),
+        swarm_supabase_configured: swarm_supabase_configured(),
     }
 }
 

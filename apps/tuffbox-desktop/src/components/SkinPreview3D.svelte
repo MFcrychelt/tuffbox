@@ -64,22 +64,29 @@
         canvas,
         width,
         height,
+        // Use skinview3d zoom (drives adjustCameraDistance). Manual
+        // camera.position fights OrbitControls and breaks wheel zoom.
+        zoom: 0.55,
+        fov: 55,
       });
 
-      // Match CSS backdrop; keep lights bright so the model isn't muddy.
-      viewer.background = 0x1c2433;
+      // Transparent WebGL clear — CSS .skin-bg paints the backdrop.
+      viewer.background = null;
       viewer.globalLight.intensity = 1.55;
       viewer.cameraLight.intensity = 1.15;
 
-      viewer.camera.position.set(-8, 4, 38);
       viewer.controls.enableRotate = true;
       viewer.controls.enableZoom = true;
       viewer.controls.enablePan = false;
-      viewer.controls.rotateSpeed = 0.68;
-      viewer.controls.minDistance = 24;
-      viewer.controls.maxDistance = 88;
+      viewer.controls.rotateSpeed = 0.7;
+      viewer.controls.zoomSpeed = 1.2;
+      // Keep library defaults (10..256) so dolly isn't clamped at mid-range.
+      viewer.controls.minDistance = 10;
+      viewer.controls.maxDistance = 256;
       viewer.controls.autoRotate = false;
-      viewer.controls.target.set(0, -4, 0);
+      // Aim at torso so head + feet fit in frame.
+      viewer.controls.target.set(0, -6, 0);
+      viewer.controls.update();
 
       const walk = new WalkingAnimation();
       walk.headBobbing = true;
@@ -96,6 +103,70 @@
 
   async function toDataUrl(url: string): Promise<string> {
     return api.mcAuth.getSkinBase64(url);
+  }
+
+  /** skinview-utils / loadCapeToCanvas accepted atlas ratios. */
+  function isNativeCapeAtlas(w: number, h: number): boolean {
+    return w === 2 * h || w * 17 === h * 22 || w * 11 === h * 23;
+  }
+
+  function copyImageToCanvas(
+    img: CanvasImageSource,
+    w: number,
+    h: number,
+    sx = 0,
+    sy = 0,
+    sw = w,
+    sh = h,
+  ): HTMLCanvasElement {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d");
+    if (!ctx) return c;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+    return c;
+  }
+
+  function scaleSliceTo64x32(
+    img: CanvasImageSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+  ): HTMLCanvasElement {
+    return copyImageToCanvas(img, 64, 32, sx, sy, sw, sh);
+  }
+
+  /** Draw source into dest with aspect-preserving contain (letterbox). */
+  function drawContained(
+    ctx: CanvasRenderingContext2D,
+    img: CanvasImageSource,
+    sx: number,
+    sy: number,
+    sw: number,
+    sh: number,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number,
+  ) {
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    const srcAspect = sw / sh;
+    const dstAspect = dw / dh;
+    let ddx = dx;
+    let ddy = dy;
+    let ddw = dw;
+    let ddh = dh;
+    if (srcAspect > dstAspect) {
+      ddh = dw / srcAspect;
+      ddy = dy + (dh - ddh) / 2;
+    } else {
+      ddw = dh * srcAspect;
+      ddx = dx + (dw - ddw) / 2;
+    }
+    ctx.drawImage(img, sx, sy, sw, sh, ddx, ddy, ddw, ddh);
   }
 
   /** Classic Minecraft cape UV: front (1,1) 10×16, back (12,1) 10×16. */
@@ -125,28 +196,55 @@
     sh: number,
   ): HTMLCanvasElement {
     const aspect = sw / Math.max(1, sh);
-    // OptiFine / Mojang atlas slice (~2:1) — keep layout, just scale to 64×32.
-    if (aspect >= 1.6 && aspect <= 2.4) {
-      const c = document.createElement("canvas");
-      c.width = 64;
-      c.height = 32;
-      const ctx = c.getContext("2d");
-      if (!ctx) return c;
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 64, 32);
-      return c;
+
+    // Exact native atlas slice — copy / normalize without UV remapping.
+    if (isNativeCapeAtlas(sw, sh)) {
+      if (sw === 2 * sh) {
+        return scaleSliceTo64x32(img, sx, sy, sw, sh);
+      }
+      // 22×17 / 46×22 family — keep original size for skinview-utils.
+      return copyImageToCanvas(img, sw, sh, sx, sy, sw, sh);
     }
-    // Full-bleed cape art (common in TLauncher) — place into UV slots so the
-    // mesh doesn't sample a magnified corner of a stretched atlas.
+
+    // Near-2:1 atlas (non-integer dims) — scale whole frame to 64×32 as atlas.
+    if (aspect >= 1.85 && aspect <= 2.15) {
+      return scaleSliceTo64x32(img, sx, sy, sw, sh);
+    }
+
+    // Full-bleed / portrait cape art — pack into classic UV slots with contain
+    // (letterbox) so 10:16 panels aren't stretched.
     return paintCapeUv((ctx, dx, dy, dw, dh) => {
-      ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+      drawContained(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
     });
+  }
+
+  /** Prefer frame heights where each slice is a native cape atlas. */
+  function detectNativeStripFrameHeight(w: number, h: number): number | null {
+    const candidates = new Set<number>();
+    if (w % 2 === 0) candidates.add(w / 2); // 2:1
+    const h22 = Math.round((w * 17) / 22);
+    if (w * 17 === h22 * 22) candidates.add(h22);
+    const h23 = Math.round((w * 11) / 23);
+    if (w * 11 === h23 * 23) candidates.add(h23);
+    // Also try exact divisors that satisfy native ratios.
+    for (let n = 1; n <= Math.min(64, h); n++) {
+      if (h % n !== 0) continue;
+      const fh = h / n;
+      if (isNativeCapeAtlas(w, fh)) candidates.add(fh);
+    }
+    let best: number | null = null;
+    for (const fh of candidates) {
+      if (fh <= 0 || h % fh !== 0) continue;
+      if (!isNativeCapeAtlas(w, fh)) continue;
+      if (best === null || fh < best) best = fh; // prefer more frames when tied
+    }
+    return best;
   }
 
   /**
    * skinview3d only accepts classic cape aspect ratios (64×32 etc).
-   * TLauncher / OptiFine cloaks often ship as HD vertical atlases —
-   * split into correctly UV-mapped 64×32 frames.
+   * TLauncher / OptiFine cloaks often ship as HD panels or vertical atlases —
+   * normalize to UV-correct frames without stretching.
    */
   async function extractCapeFrames(dataUrl: string): Promise<HTMLCanvasElement[]> {
     return new Promise((resolve) => {
@@ -154,62 +252,61 @@
       img.onload = () => {
         const w = img.width;
         const h = img.height;
+        const aspect = w / Math.max(1, h);
 
-        if (
-          w === 2 * h ||
-          (w === 64 && h === 32) ||
-          (w === 22 && h === 17) ||
-          (w === 46 && h === 22)
-        ) {
+        // Whole image is a native atlas — copy as-is (2:1 → 64×32).
+        if (isNativeCapeAtlas(w, h)) {
           resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
           return;
         }
 
-        if (w === 64 && h > 32 && h % 32 === 0) {
-          const frames: HTMLCanvasElement[] = [];
-          const n = h / 32;
-          for (let i = 0; i < n; i++) {
-            frames.push(frameToClassicAtlas(img, 0, i * 32, 64, 32));
-          }
-          resolve(frames.length ? frames : []);
+        // Near-2:1 whole image that isn't exact integers — atlas scale, no UV paint.
+        if (aspect >= 1.85 && aspect <= 2.15) {
+          resolve([scaleSliceTo64x32(img, 0, 0, w, h)]);
           return;
         }
 
-        // HD / TLauncher atlas: tall strip — prefer frame aspect near 2:1 (OF),
-        // else near 10:16 (full-bleed cape panel).
-        let frameH = Math.max(1, Math.round(w / 2));
+        // Tall animated strip of native atlas frames.
         if (h > w) {
-          let best = frameH;
-          let bestScore = Infinity;
-          const tryH = (fh: number) => {
-            if (fh <= 0 || h % fh !== 0) return;
-            const a = w / fh;
-            const score = Math.min(Math.abs(a - 2), Math.abs(a - 10 / 16) * 2);
-            if (score < bestScore) {
-              bestScore = score;
-              best = fh;
+          const nativeFh = detectNativeStripFrameHeight(w, h);
+          if (nativeFh !== null) {
+            const frames: HTMLCanvasElement[] = [];
+            const n = Math.min(Math.floor(h / nativeFh), 48);
+            for (let i = 0; i < n; i++) {
+              frames.push(frameToClassicAtlas(img, 0, i * nativeFh, w, nativeFh));
             }
-          };
-          for (const c of [Math.round(w / 2), Math.round((w * 16) / 10), 32, 64, 17, 272]) {
-            tryH(c);
+            resolve(frames.length ? frames : []);
+            return;
           }
-          for (let n = 4; n <= 64; n++) {
-            if (h % n === 0) tryH(h / n);
+
+          // Classic 64×N strip of 32px frames.
+          if (w === 64 && h % 32 === 0) {
+            const frames: HTMLCanvasElement[] = [];
+            const n = Math.min(h / 32, 48);
+            for (let i = 0; i < n; i++) {
+              frames.push(frameToClassicAtlas(img, 0, i * 32, 64, 32));
+            }
+            resolve(frames.length ? frames : []);
+            return;
           }
-          frameH = best;
         }
 
-        const frameCount = Math.max(1, Math.floor(h / frameH));
-        const frames: HTMLCanvasElement[] = [];
-        const maxFrames = Math.min(frameCount, 48);
-        for (let i = 0; i < maxFrames; i++) {
-          frames.push(frameToClassicAtlas(img, 0, i * frameH, w, frameH));
+        // Portrait / full-bleed single cape art → UV slots with contain.
+        if (aspect < 1.2) {
+          resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
+          return;
         }
-        resolve(frames.length ? frames : []);
+
+        // Fallback: treat as one frame (atlas-ish or UV pack via frameToClassicAtlas).
+        resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
       };
       img.onerror = () => resolve([]);
       img.src = dataUrl;
     });
+  }
+
+  function capeKey(url: string | null | undefined): string {
+    return url ?? "";
   }
 
   async function applyTextures() {
@@ -222,17 +319,20 @@
         lastSkin = skinUrl;
       }
 
-      if (capeUrl && capeUrl !== lastCape) {
+      const nextCape = capeKey(capeUrl);
+      if (nextCape && nextCape !== lastCape) {
         stopCapeAnim();
-        const raw = await toDataUrl(capeUrl);
+        const raw = await toDataUrl(nextCape);
         const frames = await extractCapeFrames(raw);
         if (frames.length) {
           startCapeAnim(frames);
-          lastCape = capeUrl;
+          lastCape = nextCape;
         } else {
+          stopCapeAnim();
+          viewer.loadCape(null);
           lastCape = "";
         }
-      } else if (!capeUrl && lastCape) {
+      } else if (!nextCape && lastCape) {
         stopCapeAnim();
         viewer.loadCape(null);
         lastCape = "";
@@ -244,12 +344,21 @@
     }
   }
 
-  $: if (viewer && (skinUrl !== lastSkin || capeUrl !== lastCape || accountKey !== lastAccount)) {
+  $: if (
+    viewer &&
+    (skinUrl !== lastSkin || capeKey(capeUrl) !== lastCape || accountKey !== lastAccount)
+  ) {
     if (accountKey !== lastAccount) {
       lastAccount = accountKey;
       lastSkin = "";
-      lastCape = "";
+      // Force cape clear branch even when previous account also had no cape.
+      lastCape = lastCape || "__pending_clear__";
       stopCapeAnim();
+      try {
+        viewer.loadCape(null);
+      } catch {
+        /* ignore */
+      }
     }
     void applyTextures();
   }
@@ -268,7 +377,12 @@
 </script>
 
 <div class="skin-3d-wrap" style="width: {width}px;">
-  <div class="skin-3d-container" style="width: {width}px; height: {height}px;">
+  <!-- stopPropagation keeps the page from stealing wheel; OrbitControls still gets the event on canvas -->
+  <div
+    class="skin-3d-container"
+    style="width: {width}px; height: {height}px;"
+    on:wheel|stopPropagation
+  >
     <div class="skin-bg" aria-hidden="true"></div>
     <canvas bind:this={canvas} width={width} height={height}></canvas>
     {#if loading}
@@ -298,15 +412,18 @@
     box-shadow:
       inset 0 -40px 60px rgba(0, 0, 0, 0.35),
       0 12px 28px rgba(0, 0, 0, 0.35);
+    touch-action: none;
+    overscroll-behavior: contain;
   }
 
   .skin-bg {
     position: absolute;
     inset: 0;
     background:
-      radial-gradient(ellipse 90% 55% at 50% 18%, rgba(125, 180, 255, 0.22), transparent 58%),
-      radial-gradient(ellipse 70% 45% at 50% 100%, rgba(27, 217, 106, 0.12), transparent 55%),
-      linear-gradient(165deg, #2a3648 0%, #1c2433 48%, #121820 100%);
+      radial-gradient(ellipse 55% 42% at 50% 38%, rgba(210, 195, 170, 0.14), transparent 62%),
+      radial-gradient(ellipse 80% 50% at 50% 100%, rgba(0, 0, 0, 0.55), transparent 58%),
+      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 40%, rgba(0, 0, 0, 0.45) 100%),
+      linear-gradient(180deg, #2a2c30 0%, #1a1c1f 52%, #121314 100%);
     pointer-events: none;
   }
 
@@ -317,6 +434,7 @@
     height: 100%;
     cursor: grab;
     background: transparent;
+    touch-action: none;
   }
 
   canvas:active {
@@ -329,7 +447,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(18, 24, 32, 0.28);
+    background: rgba(18, 20, 22, 0.28);
     pointer-events: none;
   }
 

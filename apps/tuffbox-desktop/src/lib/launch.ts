@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { toasts } from "./toast";
 import type { LaunchResult, LaunchErrorInfo } from "./api";
+import { isLaunching, openLaunchLog } from "./store";
 
 export type { LaunchErrorInfo };
 
@@ -68,36 +69,33 @@ async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
 /// toast has been shown.
 export async function launchWithFeedback(
   params: LaunchParams,
-  opts?: { onStarted?: (r: LaunchResult) => void; showSuccess?: boolean },
+  opts?: { onStarted?: (r: LaunchResult) => void; showSuccess?: boolean; openLog?: boolean },
 ): Promise<LaunchResult | null> {
   lastLaunch = params;
   lastOnStarted = opts?.onStarted ?? null;
+  const showLog = opts?.openLog !== false;
+  if (showLog) openLaunchLog(params.path);
+  isLaunching.set(true);
   try {
     const result = await doLaunch(params);
     if (opts?.showSuccess) toasts.success("Launch started");
     opts?.onStarted?.(result);
-    // After a successful start, offer to share a recent crash→fix capsule (swarm opt-in).
+    // After a successful start, confirm any pending crash-fix as resolved when
+    // latest.log looks healthy. On verified resolution the backend emits
+    // `tuffbox:distill-resolution` for the Confirm → publish UI (no auto-upload).
     void (async () => {
       try {
-        const prompt = await invoke<{
-          fingerprintKey?: string;
-          humanExplanation?: string;
-        } | null>("get_share_prompt_after_launch", { path: params.path });
-        if (prompt) {
-          window.dispatchEvent(
-            new CustomEvent("tuffbox:share-capsule", {
-              detail: { path: params.path, marker: prompt },
-            }),
-          );
-        }
+        await invoke("confirm_crash_resolution_after_launch", { path: params.path });
       } catch {
-        // ignore — share is optional
+        // optional bookkeeping
       }
     })();
     return result;
   } catch (e) {
     showLaunchError(e, () => launchWithFeedback(params, opts));
     return null;
+  } finally {
+    isLaunching.set(false);
   }
 }
 

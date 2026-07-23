@@ -42,6 +42,7 @@
     Configs: true,
     Shaders: true,
     "Resource Packs": true,
+    Resolutions: true,
     "World/Data": false,
     Other: true,
   };
@@ -50,6 +51,7 @@
     Configs: ["config", "defaultconfigs", "kubejs", "scripts", "options.txt", "servers.dat"],
     Shaders: ["shaderpacks", "shaders"],
     "Resource Packs": ["resourcepacks", "texturepacks"],
+    Resolutions: [],
     "World/Data": ["datapacks", "saves"],
     Other: [],
   };
@@ -294,7 +296,9 @@
               <div class="preview-header">
                 <div>
                   <span class="eyebrow">{entry.category} · {entry.kind.replace("_", " ")}</span>
-                  {#if entry.tags?.includes("crash_fix")}
+                  {#if entry.tags?.includes("crash_resolved") || entry.kind === "crash_resolved"}
+                    <span class="crash-resolved-badge">resolved{#if entry.planSource} · {entry.planSource}{/if}</span>
+                  {:else if entry.tags?.includes("crash_fix")}
                     <span class="crash-fix-badge">crash_fix{#if entry.planSource} · {entry.planSource}{/if}</span>
                   {/if}
                   <h2><FileText size={18} /> {entry.path}</h2>
@@ -410,12 +414,23 @@
   .eyebrow { color: var(--accent-primary); text-transform: uppercase; letter-spacing: .1em; font-weight: 900; }
   .crash-fix-badge {
     display: inline-block;
-    margin: 4px 0 6px;
-    font-size: 11px;
+    margin-left: 8px;
     padding: 2px 8px;
     border-radius: 999px;
-    color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.12);
+    font-size: 11px;
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .crash-resolved-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    background: rgba(27, 217, 106, 0.15);
+    color: #1bd96a;
+    border: 1px solid rgba(27, 217, 106, 0.35);
   }
   .summary-card, .diff-card { padding: 14px; margin-bottom: 14px; background: var(--bg-tertiary); }
   .summary-card strong, .diff-title { display: block; color: var(--text-secondary); margin-bottom: 10px; font-weight: 800; }

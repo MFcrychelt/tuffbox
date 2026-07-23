@@ -22,6 +22,13 @@ pub const CAPSULE_CONTENT_PREFIX: &str = "tuffswarm/cap/v1/";
 /// Max ExperienceCapsule gossip payload (bytes) — soft spam limit.
 pub const MAX_CAPSULE_GOSSIP_BYTES: usize = 64 * 1024;
 
+/// Built-in TuffSwarm Supabase project (community inbox). Publishable/anon key is
+/// public by design (RLS + Edge Function); never ship the service role.
+pub const BUILTIN_SUPABASE_URL: &str = "https://vsoqnwknpueuubiovyjd.supabase.co";
+/// Publishable key (`sb_publishable_…` / legacy anon). Safe to embed in the client.
+pub const BUILTIN_SUPABASE_ANON_KEY: &str =
+    "sb_publishable_b0ICBMz_HvyRa8GioadWcg_Co5Vjljr";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwarmSettings {
@@ -34,8 +41,12 @@ pub struct SwarmSettings {
     /// Prompt to share capsule after successful relaunch.
     #[serde(default = "default_true")]
     pub share_prompts_enabled: bool,
+    /// Optional override for Supabase URL. Empty → use [`BUILTIN_SUPABASE_URL`].
+    /// Anon key: keyring `swarm_supabase` or [`BUILTIN_SUPABASE_ANON_KEY`].
+    #[serde(default)]
+    pub supabase_url: String,
     /// Shared TuffSwarm hub base URL (`http://host:8787`) for capsule publish/lookup.
-    /// Falls back to AI Crash KB endpoint when empty.
+    /// Falls back to AI Crash KB endpoint when empty. Optional when Supabase is set.
     #[serde(default)]
     pub hub_url: String,
     /// Spawn/attach Phase C `tuffswarm-node` and prefer its control HTTP when healthy.
@@ -60,10 +71,31 @@ impl Default for SwarmSettings {
             enabled: false,
             onboarding_done: false,
             share_prompts_enabled: true,
+            supabase_url: String::new(),
             hub_url: String::new(),
             p2p_enabled: false,
             p2p_control_url: default_p2p_control_url(),
         }
+    }
+}
+
+impl SwarmSettings {
+    /// Effective Supabase URL (settings override, else built-in community project).
+    pub fn effective_supabase_url(&self) -> Option<String> {
+        let override_url = self.supabase_url.trim().trim_end_matches('/');
+        if !override_url.is_empty() {
+            return Some(override_url.to_string());
+        }
+        let builtin = BUILTIN_SUPABASE_URL.trim().trim_end_matches('/');
+        if builtin.is_empty() {
+            None
+        } else {
+            Some(builtin.to_string())
+        }
+    }
+
+    pub fn supabase_configured(&self) -> bool {
+        self.effective_supabase_url().is_some() && !BUILTIN_SUPABASE_ANON_KEY.trim().is_empty()
     }
 }
 
@@ -585,7 +617,8 @@ impl CapsuleLibrary {
     }
 }
 
-/// Resolve network base: prefer swarm.hubUrl, else Crash KB endpoint.
+/// Resolve HTTP hub/KB base: prefer swarm.hubUrl, else Crash KB endpoint.
+/// Supabase is a separate transport (`swarm_supabase`) — not returned here.
 pub fn resolve_swarm_network_base(hub_url: &str, crash_kb_endpoint: &str) -> Option<String> {
     let hub = hub_url.trim();
     if !hub.is_empty() {
@@ -596,6 +629,104 @@ pub fn resolve_swarm_network_base(hub_url: &str, crash_kb_endpoint: &str) -> Opt
         return Some(kb.to_string());
     }
     None
+}
+
+/// Directory for machine-wide swarm state (capsules, device signing key).
+pub fn global_swarm_dir() -> PathBuf {
+    dirs_next_config()
+        .join("TuffBox")
+        .join("swarm")
+}
+
+fn dirs_next_config() -> PathBuf {
+    // Prefer the same root desktop uses via `dirs` crate when available;
+    // fall back to relative `.` so unit tests still work offline.
+    std::env::var_os("TUFFBOX_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            #[cfg(windows)]
+            {
+                std::env::var_os("APPDATA").map(PathBuf::from)
+            }
+            #[cfg(not(windows))]
+            {
+                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn device_signing_key_path() -> PathBuf {
+    global_swarm_dir().join("device_signing_key")
+}
+
+/// Load or create a persistent Ed25519 device key for soft-signing capsules.
+/// Returns `(signing_key, device_id)` where device_id is `tb-<hex pubkey prefix>`.
+pub fn load_or_create_device_signing_key() -> Result<(SigningKey, String), String> {
+    let path = device_signing_key_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if path.is_file() {
+        let raw = fs::read(&path).map_err(|e| e.to_string())?;
+        if raw.len() == 32 {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&raw);
+            let sk = SigningKey::from_bytes(&bytes);
+            let device_id = device_id_from_verifying_key(&sk.verifying_key());
+            return Ok((sk, device_id));
+        }
+    }
+    let sk = ExperienceCapsule::generate_signing_key();
+    fs::write(&path, sk.to_bytes()).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    let device_id = device_id_from_verifying_key(&sk.verifying_key());
+    Ok((sk, device_id))
+}
+
+fn device_id_from_verifying_key(vk: &VerifyingKey) -> String {
+    let hex = hex::encode(vk.as_bytes());
+    format!("tb-{}", &hex[..hex.len().min(16)])
+}
+
+/// Sign a capsule with the persistent device key (required for Supabase publish).
+pub fn sign_capsule_with_device_key(capsule: &mut ExperienceCapsule) -> Result<String, String> {
+    let (sk, device_id) = load_or_create_device_signing_key()?;
+    capsule.sign_ed25519(&sk, &device_id)?;
+    Ok(device_id)
+}
+
+/// Canonical vote message — must match Edge Function `vote-capsule`.
+pub fn capsule_vote_message(vote: &str, content_hash: &str) -> String {
+    format!("tuffswarm-vote:v1:{vote}:{content_hash}")
+}
+
+/// Sign a confirm/reject vote. Returns (signer_public_key_b64, signature_b64, device_id).
+pub fn sign_capsule_vote(vote: &str, content_hash: &str) -> Result<(String, String, String), String> {
+    let vote = vote.trim().to_ascii_lowercase();
+    if vote != "confirm" && vote != "reject" {
+        return Err("vote must be confirm or reject".into());
+    }
+    let hash = content_hash.trim();
+    if hash.is_empty() {
+        return Err("content_hash is empty".into());
+    }
+    let (sk, device_id) = load_or_create_device_signing_key()?;
+    let msg = capsule_vote_message(&vote, hash);
+    let sig = sk.sign(msg.as_bytes());
+    let pk_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        sk.verifying_key().as_bytes(),
+    );
+    let sig_b64 = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        sig.to_bytes(),
+    );
+    Ok((pk_b64, sig_b64, device_id))
 }
 
 pub fn swarm_dir(project_dir: &Path) -> PathBuf {
@@ -884,5 +1015,17 @@ mod tests {
         capsule.sign_ed25519(&sk, "12D3KooWtest").unwrap();
         assert_eq!(capsule.verify_signature().unwrap(), true);
         capsule.accept_for_p2p_gossip().unwrap();
+    }
+
+    #[test]
+    fn device_signing_key_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::set_var("TUFFBOX_CONFIG_DIR", dir.path());
+        let (sk1, id1) = load_or_create_device_signing_key().unwrap();
+        let (sk2, id2) = load_or_create_device_signing_key().unwrap();
+        assert_eq!(id1, id2);
+        assert_eq!(sk1.to_bytes(), sk2.to_bytes());
+        assert!(id1.starts_with("tb-"));
+        std::env::remove_var("TUFFBOX_CONFIG_DIR");
     }
 }

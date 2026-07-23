@@ -2,18 +2,22 @@
 
 > **Канон для людей и ИИ-агентов.** Перед любой работой по P2P / federated learning / marketplace задач прочитай этот файл и [`06-ai-role.md`](06-ai-role.md).
 
-**Статус:** архитектура + **MVP flywheel (Phase B HTTP)** + **Phase C scaffold/harden** (`tuffswarm-node`: libp2p Kademlia + Gossipsub + local control HTTP; hub остаётся bootstrap/fallback). Foundation: ActionPlan, Crash KB, remote client, swarm opt-in gate, capsule share, pending network plan, local co-occurrence → Creation trends.
+**Статус:** архитектура + **MVP flywheel** + **Supabase-first remote** (signed ExperienceCapsule publish/lookup) + Phase B HTTP hub (optional fallback) + **Phase C P2P scaffold** (`tuffswarm-node`; не удалять). Foundation: ActionPlan, Crash KB, remote client, swarm opt-in gate, **Resolution Distill → Confirm → capsule**, pending network plan, local co-occurrence → Creation trends.
 
 ## Locked decisions (expert 2026-07)
 
 | Тема | Решение |
 |------|---------|
-| Transport pattern | **Sidecar** `tuffswarm-node` + local control HTTP (`127.0.0.1`) + bearer token; не вшивать libp2p в UI-процесс |
-| Knowledge exchange | Целые **ExperienceCapsule** (JSON); content-hash + Ed25519 soft-sign |
-| Soft verify | Human-in-the-loop: confirm → snapshot → apply → successful launch = reward signal; hub/library `success_count` ranking |
+| Start transport | **Supabase** (Edge Function write + PostgREST read); P2P остаётся opt-in Phase C, код **не удалять** |
+| Transport pattern (P2P) | **Sidecar** `tuffswarm-node` + local control HTTP (`127.0.0.1`) + bearer token; не вшивать libp2p в UI-процесс |
+| Knowledge exchange | Целые **ExperienceCapsule** (JSON); content-hash + Ed25519 soft-sign (device key) |
+| Soft verify | Human-in-the-loop: confirm → snapshot → apply → successful launch = reward signal; library `success_count` ranking |
+| Anti-spam ingest | Edge Function: schema + hash + Ed25519 verify + rate-limit by `signerPublicKey`; RLS: anon SELECT only, no direct INSERT |
+| Publish gate | **MUST NOT** auto-upload solutions. Post-resolution **Distill** → human Confirm/Edit → then `ExperienceCapsule` |
+| Secrets | Anon key OK in client/keyring; **service role NEVER in binary** |
 | Tensor / Tenso / gRPC | **Отложено** на Stage 16+ (только если появится pipeline-parallel inference) |
 | Creation Marketplace | Prior art = **AI Horde** (целая задача воркеру + Kudos без on-chain); **не** Petals/pipeline LLM — Phase **D** |
-| Не делаем сейчас | Pipeline/tensor parallelism, PoUW/Yuma/blockchain DePIN, RepOps/Verde bit-exact, auto-apply без confirm |
+| Не делаем сейчас | Pipeline/tensor parallelism, PoUW/Yuma/blockchain DePIN, RepOps/Verde bit-exact, auto-apply без confirm, auto-publish без Confirm |
 
 ## Executive summary
 
@@ -42,24 +46,54 @@ Clients **do not** upload raw `crash-report` / `latest.log` by default. They exc
 | Layer | Where | Who sees it |
 |-------|--------|-------------|
 | Global local library | `%APPDATA%/TuffBox/swarm/capsules.jsonl` (or OS config dir) | All projects on this PC |
+| Device signing key | `%APPDATA%/TuffBox/swarm/device_signing_key` | Local only (Ed25519 soft-sign) |
 | Project authored export | `.tuffbox/crash_kb/export/` | Pack author |
-| **TuffSwarm hub** | `tuffswarm-hub` JSONL store | All clients pointed at the same hub URL |
+| **Supabase** (preferred start) | `experience_capsules` table + `publish-capsule` Edge Function | All clients with project URL + anon key |
+| **TuffSwarm hub** (optional) | `tuffswarm-hub` JSONL store | Clients with hub URL |
 
-### Run a hub for your team / community
+### Deploy Supabase (community inbox)
+
+1. Create a Supabase project.
+2. Apply migration: [`supabase/migrations/001_experience_capsules.sql`](../supabase/migrations/001_experience_capsules.sql)
+3. Deploy function: `supabase functions deploy publish-capsule` (see [`supabase/functions/publish-capsule`](../supabase/functions/publish-capsule))
+4. In TuffBox Settings → **TuffSwarm**: enable the network. Community URL + publishable key are **built into the client** (no user setup). Optional Advanced override for self-hosted Supabase.
+
+Ingest policy (Edge Function):
+
+- Require `contentHash` + Ed25519 `signature` / `signerPublicKey`
+- Recompute canonical hash (`fingerprint.key \\n solution \\n actionsJson`) — must match
+- Reject raw logs / notes / unknown `op`
+- Rate-limit by signer (default 30/hour)
+- RLS: anon may **SELECT** only; **no** direct INSERT (service role inside function only)
+
+**Honesty:** signature proves device-key attribution + payload integrity, not that a real crash happened. Soft-verify Confirm remains a client gate.
+
+### Run a hub for your team / community (optional fallback)
 
 ```bash
 cargo run -p tuffswarm-hub -- --bind 0.0.0.0:8787
 ```
 
-In TuffBox Settings → **TuffSwarm** → set **Swarm hub URL** to `http://<host>:8787` and enable the network.
+In TuffBox Settings → **TuffSwarm** → set **Swarm hub URL** (optional) and enable the network.
 
 Flow:
 
-1. User A fixes a crash → confirms → successful relaunch → «Share with network?»
-2. Capsule is written to the global local library **and** `POST /v1/crash/capsules` on the hub.
-3. User B hits a similar crash → lookup/diagnose pulls the capsule → pending ActionPlan → confirm apply.
+1. User A hits a crash and fixes it (any path — may be inefficient).
+2. Soft-verify: successful relaunch → resolution recorded in History.
+3. **Resolution Distill** (auto, beta): local AI analyzes action history → minimal `ActionPlan`.
+4. UI shows the plan → user **Confirm** (or **Edit** then Confirm) → only then signed `ExperienceCapsule` → global library + **Supabase** (and optional hub/P2P).
+5. User B hits a similar crash → **AI Explain** may **read** network (lookup) → pending ActionPlan → confirm apply.
 
-**MUST NOT** auto-apply. **MUST** strip notes / raw logs on publish (hub rejects payloads with raw logs).
+**MUST NOT** auto-apply. **MUST NOT** publish during AI Explain. **MUST** strip notes / raw logs on publish (hub/Edge Function reject payloads with raw logs).
+
+### AI Explain vs Resolution Distill
+
+| Mechanism | When | Network | Purpose |
+|-----------|------|---------|---------|
+| **AI Explain** | Diagnostics button | **Read** (lookup/diagnose) | Diagnose current crash using local history + optional peer capsules |
+| **Resolution Distill** | Auto after verified fix | **Write** only after Confirm | Compress user's fix path into an efficient plan for peers |
+
+Explain **MUST NOT** persist remote hits into the durable capsule library. Distill **MUST NOT** publish until the user confirms (or edits) the proposed plan.
 
 ### Opt-in gate (зафиксировано)
 
@@ -72,7 +106,7 @@ Flow:
 |------|--------|
 | `swarm.enabled` | Master switch |
 | `swarm.onboardingDone` | Wizard уже показан |
-| `swarm.sharePromptsEnabled` | Диалог «Поделиться с сетью?» после успешного relaunch (default `true`) |
+| `swarm.sharePromptsEnabled` | Диалог distill → Confirm после verified relaunch (default `true`) |
 
 Settings: переключатель **Use TuffSwarm network** всегда доступен.
 
@@ -93,18 +127,27 @@ flowchart LR
   confirm --> snap["Snapshot tags=crash_fix"]
   snap --> apply[Apply]
   apply --> launch[Successful launch]
-  launch --> share{Share?}
-  share -->|yes + swarm| capsule[POST /v1/crash/capsules]
+  launch --> distill[Distill AI]
+  distill --> review[Confirm or Edit]
+  review -->|confirmed + swarm| capsule[POST /v1/crash/capsules]
   peer[Peer lookup] --> pending[".tuffbox/pending_action_plan.json"]
   pending --> applyNet[Apply network fix + confirm]
 ```
 
-1. **Snapshots / History** — meta: `tags: ["crash_fix"]`, `crashFingerprintKey`, `planSource` (`ai|kb|swarm|manual`), `matchedCaseIds`. UI badges.
-2. **Share after success** — если swarm on + share prompts: диалог → `ExperienceCapsule` → `POST /v1/crash/capsules` (иначе local authored export).
+1. **Snapshots / History** — meta: `tags: ["crash_fix"]`, `crashFingerprintKey`, `planSource` (`ai|kb|swarm|manual|distill`), `matchedCaseIds`. UI badges.
+2. **Distill after success** — если swarm on + share prompts: auto distill from user action timeline → review UI → Confirm/Edit → signed `ExperienceCapsule` → Supabase `publish-capsule` (else optional hub `POST /v1/crash/capsules` / local only).
 3. **Peer pending plan** — сильный network/KB match → `.tuffbox/pending_action_plan.json` → Diagnostics **Apply network fix** (confirm обязателен; **MUST NOT** auto-apply).
-4. **Creation co-occurrence** — локальные пары модов + optional `POST /v1/mods/cooccurrence`; Library → Create → preview → confirm → Modrinth install.
+4. **Creation co-occurrence** — локальные пары модов + optional hub `POST /v1/mods/cooccurrence`; Library → Create → preview → confirm → Modrinth install.
 
-### HTTP endpoints (Phase B)
+### Remote transports (start = Supabase)
+
+| Transport | Write | Read | Notes |
+|-----------|-------|------|-------|
+| **Supabase** | `POST /functions/v1/publish-capsule` | `GET /rest/v1/experience_capsules?fingerprint_key=eq.…` | **Built-in** community project; optional Settings override |
+| HTTP hub | `POST /v1/crash/capsules` | `POST /v1/crash/lookup` (+ diagnose) | Optional self-host / team |
+| P2P node | control HTTP publish | control HTTP lookup | Phase C opt-in; code kept |
+
+### HTTP hub endpoints (Phase B fallback)
 
 | Method | Path | Назначение |
 |--------|------|------------|
@@ -113,7 +156,7 @@ flowchart LR
 | POST | `/v1/crash/capsules` | Publish ExperienceCapsule |
 | POST | `/v1/mods/cooccurrence` | Network pair stats (opt-in) |
 
-**Transport MVP:** Phase B HTTP (`crash_remote`), не P2P.
+**Transport MVP:** Supabase-first; hub HTTP (`crash_remote`) and P2P remain available.
 
 ```mermaid
 flowchart TB
@@ -152,10 +195,11 @@ flowchart TB
 
 ### Поток на устройстве
 
-1. Краш → local parser / Crash Assistant / AI → `ActionPlan`.
+1. Краш → local parser / Crash Assistant / **AI Explain** → `ActionPlan`.
 2. Пользователь подтверждает → snapshot → apply.
-3. Успешный запуск Minecraft → **positive signal** (implicit reward).
-4. Узел может опубликовать **ExperienceCapsule** (opt-in), не raw crash-log.
+3. Успешный запуск Minecraft → **positive signal** (implicit reward) + resolution в History.
+4. **Resolution Distill** (auto, beta): ИИ сжимает историю действий в минимальный план → UI Confirm/Edit.
+5. Только после Confirm узел публикует **ExperienceCapsule** (opt-in), не raw crash-log.
 
 Аналогия: on-device обучение ассистента (как идеи CodeAssist / Gensyn) — локальный опыт; в сеть уходит сжатый опыт.
 
@@ -290,6 +334,7 @@ Research references (не обязательства реализации): SAPO
 | DHT Kademlia (discovery без обязательного центра) | Scaffold в `tuffswarm-node` | **C** |
 | Профилирование VRAM / bandwidth / ping → DHT | Stub capability record (`vramMb`, `rttMs`) | **C** → refine later |
 | HTTP hub (командный / bootstrap) | **Да** — [`tuffswarm-hub`](../crates/tuffswarm-hub) | **B** (fallback) |
+| Supabase capsule store + Edge ingest | **Да** — [`supabase/`](../supabase) + [`swarm_supabase.rs`](../crates/tuffbox-core/src/swarm_supabase.rs) | **B+** (start) |
 
 ### 2. Режим «Создания» (distributed inference)
 
@@ -305,7 +350,9 @@ Research references (не обязательства реализации): SAPO
 | Требование | Статус | Phase |
 |------------|--------|-------|
 | ExperienceCapsule (без full weights / raw logs) | **Да** | **A/B** |
-| Durable store + lookup | **Да** (local library + hub + P2P gossip) | **B/C** |
+| Durable store + lookup | **Да** (local library + Supabase + hub + P2P gossip) | **B+/C** |
+| Soft-sign (device Ed25519) + Edge verify | **Да** | **B+** |
+| Peer confirm/reject + open→saved/rejected (auth required) | **Да** (`vote-capsule` JWT + Crash Votes login) | **B+** |
 | Gossip соседям | Scaffold Gossipsub | **C** |
 | AsyncMesh / NoLoCo / LoRA micro-updates | **Нет** | **E** |
 
@@ -346,6 +393,7 @@ Control HTTP: `/health` is open for probes; `/v1/*` requires `Authorization: Bea
 
 - TuffSwarm **не** dependency resolver. Resolver остаётся детерминированным в `tuffbox-core`.
 - ИИ / сеть **не** применяют фиксы без confirm + snapshot ([`06-ai-role.md`](06-ai-role.md)).
+- **AI Explain ≠ Resolution Distill**: Explain читает сеть для диагностики; Distill пишет капсулу только после human Confirm/Edit.
 - Private authored KB автора модпака **не** шипится в бинарник игрокам (см. crash KB privacy).
 - Knowledge Torrent ≠ Creation Marketplace: разный transport, SLA и экономика.
 - Research names (Petals, Bittensor Yuma, SAPO, NoLoCo, HERO) — **ориентиры**, не vendor lock и не обязательный стек.
@@ -356,7 +404,8 @@ Control HTTP: `/health` is open for probes; `/v1/*` requires `Authorization: Bea
 |-------|-----|--------|
 | **A** | Local ActionPlan + authored export + dual-mode diagnose | В продукте / foundation |
 | **B** | Opt-in swarm gate + **tuffswarm-hub** + durable capsules + pending plan + co-occurrence | Client + hub binary in repo |
-| **C** | P2P ExperienceCapsule gossip / DHT (`tuffswarm-node`) + desktop spawn/bridge + HTTP hub fallback; AutoNAT/Relay client; signed content-hash capsules; control bearer token | Scaffold + harden |
+| **B+** | **Supabase-first** capsule publish/lookup (Edge verify + RLS read); device Ed25519 soft-sign; P2P/hub kept | In product path |
+| **C** | P2P ExperienceCapsule gossip / DHT (`tuffswarm-node`) + desktop spawn/bridge + HTTP hub fallback; AutoNAT/Relay client; signed content-hash capsules; control bearer token | Scaffold + harden (opt-in) |
 | **D** | Creation Marketplace (AI Horde–style whole jobs + off-chain Kudos) + customer verifier | Future (Stage 16) |
 | **E** | Lightweight adapters / federated weight updates | Future |
 | **F** | RepOps / Verde / TAO-style verification | Future |
@@ -372,20 +421,28 @@ Control HTTP: `/health` is open for probes; `/v1/*` requires `Authorization: Bea
 3. Не дублировать словарь действий — только `op` из ActionPlan.
 4. Не предлагать отправку raw logs без явного opt-in в спецификации.
 5. Любой apply-path: validate → confirm → snapshot → deterministic apply.
-6. Отличать Phase B (HTTP remote KB) от Phase C (P2P swarm).
-7. Обновлять этот документ при смене инвариантов; не держать параллельную «тайную» архитектуру только в чате.
+6. Publish-path: verified launch → Distill → Confirm/Edit → capsule (**MUST NOT** publish during Explain).
+7. Отличать **Supabase (B+ start)** / Phase B HTTP hub / Phase C P2P — разные transports; P2P код не удалять.
+8. Publish в Supabase: signed capsule only; service role только на Edge Function.
+9. Обновлять этот документ при смене инвариантов; не держать параллельную «тайную» архитектуру только в чате.
 
 ## Связанные файлы кода
 
 ```text
-crates/tuffbox-core/src/action_plan.rs   # executable plan contract
+crates/tuffbox-core/src/action_plan.rs   # executable plan + DISTILL_SYSTEM_PROMPT
+crates/tuffbox-core/src/ai_explanation.rs # Explain + DistillContext prompts
 crates/tuffbox-core/src/crash_kb.rs      # fingerprint, authored cases, export
-crates/tuffbox-core/src/crash_remote.rs  # Phase B client (lookup/diagnose/capsules/cooccurrence)
-crates/tuffbox-core/src/swarm.rs         # capsule library, pending plan, co-occurrence
-crates/tuffswarm-hub/                    # Phase B HTTP hub (bootstrap / fallback)
-crates/tuffswarm-node/                   # Phase C P2P node (libp2p kad + gossip + local control HTTP)
-apps/tuffbox-desktop/.../swarm_api.rs    # Tauri commands + P2P/hub bridge
-apps/tuffbox-desktop/.../integrations.rs # swarm.enabled / hubUrl / p2p / onboarding
+crates/tuffbox-core/src/crash_remote.rs  # Phase B hub client (lookup/diagnose/capsules/cooccurrence)
+crates/tuffbox-core/src/swarm.rs         # capsule library, device key, pending plan, co-occurrence
+crates/tuffbox-core/src/swarm_supabase.rs # Supabase publish + lookup
+supabase/migrations/                     # experience_capsules + RLS
+supabase/functions/publish-capsule/      # signed ingest Edge Function
+crates/tuffswarm-hub/                    # Phase B HTTP hub (optional fallback)
+crates/tuffswarm-node/                   # Phase C P2P node (kept; opt-in)
+apps/tuffbox-desktop/.../swarm_api.rs    # distill, publish, resolution confirm
+apps/tuffbox-desktop/.../integrations.rs # swarm.enabled / supabaseUrl / hubUrl / p2p
+apps/tuffbox-desktop/.../ShareCapsuleDialog.svelte  # distill review → Confirm/Edit
+apps/tuffbox-desktop/.../CrashVotes.svelte          # community vote board (trust tiles)
 apps/tuffbox-desktop/.../Diagnostics.svelte
 apps/tuffbox-desktop/.../CreationTrends.svelte
 docs/06-ai-role.md

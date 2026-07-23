@@ -191,6 +191,21 @@ pub struct CrashDiagnosis {
     pub recent_snapshots: Vec<Snapshot>,
     pub graph_diagnostics: Vec<Diagnostic>,
     pub fix_plan: ChangePlan,
+    /// `latest_log` when a newer successful `logs/latest.log` supersedes crash-reports;
+    /// otherwise `crash_report` when a report is selected/auto-picked.
+    #[serde(default = "default_analysis_source")]
+    pub analysis_source: String,
+    /// True when a crash-report exists but was ignored because latest.log is newer.
+    #[serde(default)]
+    pub crash_report_stale: bool,
+    /// True when `logs/latest.log` looks like a successful Minecraft session
+    /// (no fresh crash markers). Diagnose should not push crash-log fix plans.
+    #[serde(default)]
+    pub session_healthy: bool,
+}
+
+fn default_analysis_source() -> String {
+    "crash_report".into()
 }
 
 #[derive(Debug, Clone)]
@@ -372,40 +387,98 @@ pub fn build_crash_diagnosis(
 ) -> Result<CrashDiagnosis, CrashError> {
     let project_dir = project_dir.as_ref();
     let reports = list_crash_reports(project_dir)?;
-    let selected_id = selected_report_id
-        .filter(|id| reports.iter().any(|report| report.id == *id))
-        .or_else(|| reports.first().map(|report| report.id.as_str()));
-    let selected_report = selected_id
-        .map(|id| analyze_crash_report(project_dir, id, manifest))
-        .transpose()?;
     let latest_log = analyze_latest_log(project_dir, manifest);
     let launcher_log = analyze_launcher_log(project_dir, manifest);
 
-    let mut suspect_sets = Vec::new();
-    if let Some(report) = &selected_report {
-        suspect_sets.push(report.suspected_mods.clone());
-    }
-    suspect_sets.push(latest_log.suspected_mods.clone());
-    suspect_sets.push(launcher_log.suspected_mods.clone());
-    let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
+    // Explicit user pick always wins. Auto-pick the newest crash report only
+    // when latest.log does not supersede it (game launched successfully after).
+    let explicit = selected_report_id
+        .filter(|id| !id.is_empty())
+        .filter(|id| reports.iter().any(|report| report.id == *id));
+    let newest = reports.first();
+    let stale = newest
+        .map(|r| latest_log_supersedes_crash(project_dir, Some(r.path.as_path()), &latest_log.tail))
+        .unwrap_or(false);
 
+    let selected_id = if let Some(id) = explicit {
+        Some(id)
+    } else if stale {
+        None
+    } else {
+        newest.map(|report| report.id.as_str())
+    };
+
+    let selected_report = selected_id
+        .map(|id| analyze_crash_report(project_dir, id, manifest))
+        .transpose()?;
+
+    let analysis_source = if selected_report.is_some() {
+        "crash_report".to_string()
+    } else {
+        "latest_log".to_string()
+    };
+
+    // Healthy live session (and user did not explicitly open an old crash):
+    // suppress crash-log suspects / fix plans so Diagnose doesn't nag about
+    // a crash that was already fixed and successfully relaunched.
+    let session_healthy =
+        explicit.is_none() && log_indicates_healthy_session(&latest_log.tail);
+
+    let mut suspect_sets = Vec::new();
     let mut combined_signals = Vec::new();
-    if let Some(report) = &selected_report {
-        combined_signals.extend(report.signals.clone());
+    if !session_healthy {
+        if let Some(report) = &selected_report {
+            suspect_sets.push(report.suspected_mods.clone());
+            combined_signals.extend(report.signals.clone());
+        }
+        suspect_sets.push(latest_log.suspected_mods.clone());
+        suspect_sets.push(launcher_log.suspected_mods.clone());
+        combined_signals.extend(latest_log.signals.clone());
+        combined_signals.extend(launcher_log.signals.clone());
     }
-    combined_signals.extend(latest_log.signals.clone());
-    combined_signals.extend(launcher_log.signals.clone());
+    let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
 
     let graph = DependencyGraph::from_manifest(manifest);
     let graph_diagnostics = Resolver::analyze_project(manifest, &graph);
-    let fix_plan = create_crash_fix_plan(
-        &graph,
-        &graph_diagnostics,
-        &suspected_mods,
-        &combined_signals,
-    );
+    let fix_plan = if session_healthy {
+        ChangePlan {
+            summary: "Minecraft launched successfully — no crash-log fixes needed. Remaining items below are dependency-graph checks only.".to_string(),
+            risk: ChangeRisk::Low,
+            actions: Vec::new(),
+            requires_snapshot: false,
+        }
+    } else {
+        create_crash_fix_plan(
+            &graph,
+            &graph_diagnostics,
+            &suspected_mods,
+            &combined_signals,
+        )
+    };
 
-    let hints = build_hints(&combined_signals, &suspected_mods);
+    let mut hints = if session_healthy {
+        Vec::new()
+    } else {
+        build_hints(&combined_signals, &suspected_mods)
+    };
+    if session_healthy {
+        hints.push(DiagnosisHint {
+            id: "session-healthy".into(),
+            title: "Build launched successfully".into(),
+            severity: "info".into(),
+            detail: "latest.log shows a healthy Minecraft session with no fresh crash markers. \
+                Historical crash-reports are kept for reference but are not used for fix suggestions."
+                .into(),
+            steps: vec![
+                "Play normally — no crash-log actions are required.".into(),
+                "Open a crash-report below only if you want to revisit an old failure.".into(),
+                "Use Live logs while the game is running to watch the current session.".into(),
+            ],
+            related_mods: Vec::new(),
+            fix: None,
+            fixes: Vec::new(),
+        });
+    }
 
     Ok(CrashDiagnosis {
         reports,
@@ -417,7 +490,76 @@ pub fn build_crash_diagnosis(
         recent_snapshots,
         graph_diagnostics,
         fix_plan,
+        analysis_source,
+        crash_report_stale: stale && explicit.is_none(),
+        session_healthy,
     })
+}
+
+/// True when `logs/latest.log` is newer than `crash_report_path` and looks like a
+/// post-crash successful (or at least non-crashed) session — so Diagnose should
+/// not keep recommending fixes from the old crash-report.
+pub fn latest_log_supersedes_crash(
+    project_dir: &Path,
+    crash_report_path: Option<&Path>,
+    latest_log_tail: &str,
+) -> bool {
+    let latest_path = project_dir.join("logs").join("latest.log");
+    let Some(latest_mtime) = file_mtime_secs(&latest_path) else {
+        return false;
+    };
+    let Some(crash_path) = crash_report_path else {
+        return false;
+    };
+    let Some(crash_mtime) = file_mtime_secs(crash_path) else {
+        return false;
+    };
+    if latest_mtime <= crash_mtime {
+        return false;
+    }
+    // Newer log without a fresh crash dump → treat crash-report as historical.
+    !log_has_fresh_crash_markers(latest_log_tail)
+        || log_indicates_successful_session(latest_log_tail)
+}
+
+fn file_mtime_secs(path: &Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
+fn log_indicates_successful_session(log: &str) -> bool {
+    let l = log.to_ascii_lowercase();
+    // Vanilla / Fabric / Quilt / NeoForge “game reached playable state” markers.
+    l.contains("sound engine started")
+        || (l.contains("done (") && (l.contains("for help") || l.contains("!")))
+        || l.contains("joining world")
+        || l.contains("logged in with entity id")
+        || l.contains("openal initialized")
+        || l.contains("narrator library")
+        || l.contains("completely loaded in")
+        || l.contains("[chat]")
+        || (l.contains("reloading resource manager")
+            && (l.contains("sound engine") || l.contains("openal") || l.contains("done (")))
+}
+
+/// Session is healthy when the live log shows a successful boot and no fresh crash dump.
+pub fn log_indicates_healthy_session(log: &str) -> bool {
+    !log.trim().is_empty()
+        && log_indicates_successful_session(log)
+        && !log_has_fresh_crash_markers(log)
+}
+
+fn log_has_fresh_crash_markers(log: &str) -> bool {
+    let l = log.to_ascii_lowercase();
+    l.contains("---- minecraft crash report ----")
+        || l.contains("#@!@# game crashed")
+        || l.contains("game crashed!")
+        || l.contains("crash report saved to:")
 }
 
 pub fn parse_crash_sections(text: &str) -> Vec<CrashReportSection> {
@@ -2701,6 +2843,86 @@ JVM Flags:
         assert!(!dir.path().join("logs").exists());
         assert!(!diagnosis.latest_log.path.exists());
         assert!(!diagnosis.launcher_log.path.exists());
+    }
+
+    #[test]
+    fn newer_healthy_latest_log_skips_stale_crash_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let crash_dir = dir.path().join("crash-reports");
+        let logs_dir = dir.path().join("logs");
+        fs::create_dir_all(&crash_dir).unwrap();
+        fs::create_dir_all(&logs_dir).unwrap();
+
+        let crash_path = crash_dir.join("crash-2020-01-01_00.00.00-client.txt");
+        fs::write(
+            &crash_path,
+            "---- Minecraft Crash Report ----\njava.lang.NullPointerException: old crash\n\tat bad.Mod.init(Mod.java:1)\n",
+        )
+        .unwrap();
+        // Ensure distinct mtimes on filesystems with coarse resolution.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+
+        let latest = logs_dir.join("latest.log");
+        fs::write(
+            &latest,
+            "[Render thread/INFO]: Sound engine started\n[Render thread/INFO]: Created: 1024x512x4 minecraft:textures/atlas/blocks.png-atlas\n[Render thread/INFO]: Reloading ResourceManager: Default\n",
+        )
+        .unwrap();
+
+        let diagnosis = build_crash_diagnosis(dir.path(), &manifest(), None, Vec::new()).unwrap();
+        assert!(diagnosis.crash_report_stale, "expected stale flag");
+        assert!(
+            diagnosis.selected_report.is_none(),
+            "should not auto-select old crash"
+        );
+        assert_eq!(diagnosis.analysis_source, "latest_log");
+        assert!(
+            diagnosis.session_healthy,
+            "healthy live log must set session_healthy"
+        );
+        assert!(
+            diagnosis.fix_plan.actions.is_empty(),
+            "healthy session must not propose crash-log fixes"
+        );
+        assert!(
+            diagnosis.suspected_mods.is_empty(),
+            "healthy session must not keep crash suspects"
+        );
+        assert!(latest_log_supersedes_crash(
+            dir.path(),
+            Some(crash_path.as_path()),
+            &diagnosis.latest_log.tail
+        ));
+    }
+
+    #[test]
+    fn explicit_report_id_still_loads_stale_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let crash_dir = dir.path().join("crash-reports");
+        let logs_dir = dir.path().join("logs");
+        fs::create_dir_all(&crash_dir).unwrap();
+        fs::create_dir_all(&logs_dir).unwrap();
+
+        let name = "crash-2020-01-01_00.00.00-client.txt";
+        let crash_path = crash_dir.join(name);
+        fs::write(
+            &crash_path,
+            "---- Minecraft Crash Report ----\njava.lang.NullPointerException: old crash\n",
+        )
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        fs::write(
+            logs_dir.join("latest.log"),
+            "[Render thread/INFO]: Sound engine started\n",
+        )
+        .unwrap();
+
+        let id = format!("crash-reports/{name}");
+        let diagnosis =
+            build_crash_diagnosis(dir.path(), &manifest(), Some(&id), Vec::new()).unwrap();
+        assert!(diagnosis.selected_report.is_some());
+        assert_eq!(diagnosis.analysis_source, "crash_report");
+        assert!(!diagnosis.crash_report_stale);
     }
 
     #[test]

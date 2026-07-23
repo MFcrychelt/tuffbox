@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { X, Loader2, RotateCcw, FileText, Folder } from "lucide-svelte";
-  import { createEventDispatcher, onMount, onDestroy } from "svelte";
+  import { X, Loader2, RotateCcw, FileText, Folder, Radio } from "lucide-svelte";
+  import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { trapFocus } from "../lib/focusTrap";
   import CopyButton from "./CopyButton.svelte";
@@ -13,9 +13,13 @@
   let loading = true;
   let interval: ReturnType<typeof setInterval>;
   let logFiles: { name: string; size: number; modified?: number | null }[] = [];
-  let selectedLog = "latest.log";
+  /** `__live__` = auto-pick console/latest for the running session */
+  let selectedLog = "__live__";
   let loadingLogList = false;
   let logListOpen = false;
+  let followTail = true;
+  let logPreEl: HTMLPreElement | null = null;
+  let userScrolledUp = false;
 
   type SignalKind =
     | "SuspectedMods"
@@ -101,16 +105,36 @@
     }
   }
 
+  async function scrollToBottomIfFollowing() {
+    if (!followTail || userScrolledUp || !logPreEl) return;
+    await tick();
+    logPreEl.scrollTop = logPreEl.scrollHeight;
+  }
+
+  function onLogScroll() {
+    if (!logPreEl) return;
+    const dist = logPreEl.scrollHeight - logPreEl.scrollTop - logPreEl.clientHeight;
+    userScrolledUp = dist > 48;
+    if (!userScrolledUp) followTail = true;
+  }
+
   async function loadLog() {
     try {
-      if (selectedLog === "latest.log") {
+      if (selectedLog === "__live__" || selectedLog === "latest.log") {
         const result = await invoke("get_launch_log", { path: projectPath });
         log = result as string;
       } else {
-        const result = await invoke("read_instance_log", { path: projectPath, logName: selectedLog });
+        const result = await invoke("read_instance_log", {
+          path: projectPath,
+          logName: selectedLog,
+        });
         log = result as string;
       }
-      await analyzeLog();
+      // Analyze less often on live poll — only when idle selection or every ~4s via length change.
+      if (selectedLog !== "__live__" || log.length < 80_000) {
+        await analyzeLog();
+      }
+      await scrollToBottomIfFollowing();
     } catch (e) {
       log += `\n[error] ${e}`;
     } finally {
@@ -133,13 +157,15 @@
     selectedLog = name;
     loading = true;
     log = "";
+    userScrolledUp = false;
+    followTail = true;
     await loadLog();
   }
 
   onMount(() => {
     loadLog();
     loadLogList();
-    interval = setInterval(loadLog, 1000);
+    interval = setInterval(loadLog, 750);
   });
 
   onDestroy(() => {
@@ -147,17 +173,57 @@
   });
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={() => {}}>
-  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div
+  class="modal-backdrop"
+  on:click={(e) => e.target === e.currentTarget && dispatch("close")}
+  role="button"
+  tabindex="-1"
+  aria-label="Close"
+  on:keydown={() => {}}
+>
+  <div
+    class="modal"
+    role="dialog"
+    aria-modal="true"
+    use:trapFocus={{ onEscape: () => dispatch("close") }}
+  >
     <div class="modal-header">
       <div class="modal-header-left">
-        <h2>Launch Log</h2>
+        <h2>
+          <Radio size={16} class="live-icon" />
+          Live logs
+        </h2>
         <div class="log-selector">
-          <button class="log-select-btn" class:active={selectedLog === "latest.log"} on:click={() => switchLog("latest.log")}>
+          <button
+            class="log-select-btn"
+            class:active={selectedLog === "__live__"}
+            on:click={() => switchLog("__live__")}
+            title="JVM console + latest.log (auto)"
+          >
+            <Radio size={13} /> Live
+          </button>
+          <button
+            class="log-select-btn"
+            class:active={selectedLog === "latest.log"}
+            on:click={() => switchLog("latest.log")}
+          >
             <FileText size={13} /> latest.log
           </button>
+          <button
+            class="log-select-btn"
+            class:active={selectedLog === "tuffbox-console.log"}
+            on:click={() => switchLog("tuffbox-console.log")}
+          >
+            <FileText size={13} /> console
+          </button>
           {#if logFiles.length > 0}
-            <button class="log-select-btn toggle" on:click={() => { logListOpen = !logListOpen; if (logListOpen) loadLogList(); }}>
+            <button
+              class="log-select-btn toggle"
+              on:click={() => {
+                logListOpen = !logListOpen;
+                if (logListOpen) loadLogList();
+              }}
+            >
               <Folder size={13} /> {logFiles.length} logs
             </button>
           {/if}
@@ -165,15 +231,41 @@
         {#if logListOpen}
           <div class="log-dropdown">
             {#each logFiles as f}
-              <button class="log-file-row" class:selected={selectedLog === f.name} on:click={() => { switchLog(f.name); logListOpen = false; }}>
+              <button
+                class="log-file-row"
+                class:selected={selectedLog === f.name}
+                on:click={() => {
+                  switchLog(f.name);
+                  logListOpen = false;
+                }}
+              >
                 <span>{f.name}</span>
-                <small>{f.size < 1024 ? f.size + ' B' : f.size < 1048576 ? (f.size/1024).toFixed(1)+' KB' : (f.size/1048576).toFixed(1)+' MB'}</small>
+                <small
+                  >{f.size < 1024
+                    ? f.size + " B"
+                    : f.size < 1048576
+                      ? (f.size / 1024).toFixed(1) + " KB"
+                      : (f.size / 1048576).toFixed(1) + " MB"}</small
+                >
               </button>
             {/each}
           </div>
         {/if}
       </div>
       <div class="modal-header-right">
+        <label class="follow-toggle" title="Keep scrolling to the newest lines">
+          <input
+            type="checkbox"
+            bind:checked={followTail}
+            on:change={() => {
+              if (followTail) {
+                userScrolledUp = false;
+                void scrollToBottomIfFollowing();
+              }
+            }}
+          />
+          Follow
+        </label>
         {#if log}
           <CopyButton text={log} label="Copy log" />
         {/if}
@@ -187,25 +279,42 @@
       {#if loading && !log}
         <div class="loader">
           <Loader2 size={20} class="spin" />
-          Waiting for log...
+          Waiting for process output…
         </div>
       {/if}
-      {#if suspectCount > 0}
+      {#if suspectCount > 0 && selectedLog !== "__live__"}
         <div class="suspect-banner">
           <strong>{suspectCount}</strong> mod{suspectCount === 1 ? "" : "s"} referenced in this log —
           highlighted below.
         </div>
       {/if}
       {#if log}
-        <pre class="log">{#each log.split("\n") as line, i}{@const ln = i + 1}{@const h = highlights.get(ln)}{#if h}<span class="log-hl" title={h.modName + " — " + (KIND_LABEL[h.kind] ?? h.kind) + " (" + h.confidence + "%)"}><span class="log-line-no">{ln}</span><span class="log-badge">{h.modName}</span><span class="log-tag">{KIND_LABEL[h.kind] ?? h.kind}</span>{line}
-</span>{:else}<span class="log-line-no">{ln}</span>{line}
-{/if}{/each}</pre>
+        <pre class="log" bind:this={logPreEl} on:scroll={onLogScroll}
+          >{#each log.split("\n") as line, i}{@const ln = i + 1}{@const h = highlights.get(ln)}{#if h}<span
+              class="log-hl"
+              title={h.modName +
+                " — " +
+                (KIND_LABEL[h.kind] ?? h.kind) +
+                " (" +
+                h.confidence +
+                "%)"}
+              ><span class="log-line-no">{ln}</span><span class="log-badge">{h.modName}</span
+              ><span class="log-tag">{KIND_LABEL[h.kind] ?? h.kind}</span>{line}
+</span
+            >{:else}<span class="log-line-no">{ln}</span>{line}
+{/if}{/each}</pre
+        >
       {:else}
-        <pre class="log">Waiting for process output...</pre>
+        <pre class="log">Waiting for process output…</pre>
       {/if}
     </div>
 
     <div class="modal-footer">
+      <span class="live-hint"
+        >{selectedLog === "__live__"
+          ? "Streaming tuffbox-console.log / latest.log · refreshes ~0.75s"
+          : `Showing ${selectedLog}`}</span
+      >
       <button class="ghost" on:click={loadLog}>
         <RotateCcw size={16} />
         Refresh
@@ -228,72 +337,150 @@
   }
 
   .modal {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-xl);
-    width: 100%;
-    max-width: 800px;
-    height: 70vh;
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    width: min(960px, 100%);
+    max-height: min(85vh, 820px);
+    background: var(--bg-elevated, #1a1f28);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
     display: flex;
     flex-direction: column;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   }
 
   .modal-header {
     display: flex;
-    align-items: center;
     justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color);
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    position: relative;
   }
 
-  .modal-header h2 {
+  .modal-header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .modal-header-left h2 {
+    margin: 0;
     font-size: 16px;
-    font-weight: 800;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  :global(.live-icon) {
+    color: #1bd96a;
   }
 
   .modal-header-right {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
   }
 
-  .icon-btn {
-    width: 32px;
-    height: 32px;
+  .follow-toggle {
     display: flex;
     align-items: center;
-    justify-content: center;
-    border-radius: var(--border-radius-md);
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted, #9aa4b2);
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .log-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .log-select-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
     background: transparent;
-    border: none;
-    color: var(--text-muted);
+    color: var(--text-muted, #9aa4b2);
+    font-size: 12px;
     cursor: pointer;
   }
 
+  .log-select-btn.active {
+    background: rgba(27, 217, 106, 0.12);
+    border-color: rgba(27, 217, 106, 0.35);
+    color: #fff;
+  }
+
+  .log-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 16px;
+    z-index: 5;
+    max-height: 220px;
+    overflow: auto;
+    background: var(--bg-elevated, #1a1f28);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    min-width: 260px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+  }
+
+  .log-file-row {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .log-file-row:hover,
+  .log-file-row.selected {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .icon-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted, #9aa4b2);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+  }
+
   .icon-btn:hover {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
   }
 
   .modal-body {
     flex: 1;
-    overflow: auto;
-    padding: 16px 20px;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    padding: 0;
   }
 
   .loader {
     display: flex;
     align-items: center;
     gap: 10px;
-    color: var(--text-muted);
-    margin-bottom: 12px;
+    padding: 16px;
+    color: var(--text-muted, #9aa4b2);
+    font-size: 13px;
   }
 
   :global(.spin) {
-    animation: spin 1s linear infinite;
+    animation: spin 0.8s linear infinite;
   }
 
   @keyframes spin {
@@ -302,93 +489,79 @@
     }
   }
 
+  .suspect-banner {
+    padding: 8px 14px;
+    font-size: 12px;
+    background: rgba(255, 180, 60, 0.1);
+    border-bottom: 1px solid rgba(255, 180, 60, 0.2);
+  }
+
   .log {
     flex: 1;
     margin: 0;
-    padding: 12px;
-    background: #0b0b0d;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
-    color: var(--text-secondary);
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    white-space: pre-wrap;
+    padding: 12px 14px;
     overflow: auto;
-  }
-
-  .log-hl {
-    display: block;
-    background: rgba(255, 71, 87, 0.14);
-    border-left: 3px solid #ff4757;
-    color: #ffd9dd;
-    padding: 0 6px;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: 11.5px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #d5dbe6;
+    background: #0e1218;
+    min-height: 360px;
   }
 
   .log-line-no {
     display: inline-block;
-    width: 42px;
-    color: var(--text-muted);
+    min-width: 36px;
+    margin-right: 8px;
+    color: #5c6778;
     user-select: none;
-    text-align: right;
-    margin-right: 8px;
   }
 
-  .log-badge {
-    display: inline-block;
-    margin-right: 8px;
-    padding: 0 6px;
-    border-radius: 4px;
-    background: rgba(255, 71, 87, 0.25);
-    color: #ff8a93;
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+  .log-hl {
+    display: block;
+    background: rgba(255, 120, 80, 0.12);
   }
 
+  .log-badge,
   .log-tag {
     display: inline-block;
-    margin-right: 8px;
-    padding: 0 6px;
+    margin-right: 6px;
+    padding: 0 5px;
     border-radius: 4px;
+    font-size: 10px;
     background: rgba(255, 255, 255, 0.08);
-    color: #ffc2c8;
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
   }
-
-  .suspect-banner {
-    margin-bottom: 10px;
-    padding: 8px 12px;
-    border-radius: var(--border-radius-md);
-    background: rgba(255, 71, 87, 0.12);
-    border: 1px solid rgba(255, 71, 87, 0.35);
-    color: #ff8a93;
-    font-size: 12px;
-  }
-
-  .modal-header-left { display: grid; gap: 8px; position: relative; }
-  .log-selector { display: flex; gap: 6px; }
-  .log-select-btn { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; background: var(--bg-tertiary); color: var(--text-muted); border: 1px solid var(--border-color); font-size: 11px; cursor: pointer; }
-  .log-select-btn.active { color: var(--accent-primary); border-color: rgba(27,217,106,.35); background: rgba(27,217,106,.08); }
-  .log-select-btn:hover { color: var(--text-primary); }
-  .log-dropdown { position: absolute; top: 100%; left: 0; z-index: 10; margin-top: 4px; min-width: 220px; max-height: 240px; overflow: auto; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
-  .log-file-row { width: 100%; display: flex; justify-content: space-between; gap: 8px; padding: 7px 10px; background: transparent; color: var(--text-secondary); border: none; font-size: 12px; cursor: pointer; text-align: left; }
-  .log-file-row:hover, .log-file-row.selected { background: var(--bg-hover); color: var(--text-primary); }
-  .log-file-row small { color: var(--text-muted); font-size: 11px; }
 
   .modal-footer {
     display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    padding: 12px 20px;
-    border-top: 1px solid var(--border-color);
-  }
-
-  .modal-footer button {
-    display: flex;
     align-items: center;
     gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .live-hint {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-muted, #9aa4b2);
+  }
+
+  .ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .ghost:hover {
+    background: rgba(255, 255, 255, 0.05);
   }
 </style>

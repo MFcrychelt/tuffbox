@@ -123,10 +123,14 @@
     recentSnapshots: Snapshot[];
     graphDiagnostics: Diagnostic[];
     fixPlan: any;
+    analysisSource?: string;
+    crashReportStale?: boolean;
+    sessionHealthy?: boolean;
   };
 
   let diagnosis: CrashDiagnosis | null = null;
   let selectedReportId = "";
+  let preferLatestLog = true;
   let loading = false;
   let planning = false;
   let applying = false;
@@ -145,16 +149,29 @@
     loading = true;
     error = null;
     try {
+      const reportId = preferLatestLog ? null : (selectedReportId || null);
       const data: CrashDiagnosis = await invoke("get_crash_diagnosis", {
         path: $projectPath,
-        reportId: selectedReportId || null,
+        reportId,
       });
       diagnosis = data;
-      selectedReportId = data.selectedReport?.summary.id ?? data.reports[0]?.id ?? "";
+      // Keep selection only when backend actually analyzed that report.
+      // Do NOT fall back to reports[0] — that re-locks Diagnose onto a stale crash.
+      selectedReportId = data.selectedReport?.summary.id ?? "";
+      preferLatestLog = !selectedReportId || data.analysisSource === "latest_log";
       plan = null;
       detectWrongLoaderMods();
-      // Also refresh Crash Assistant findings (log-phrase detectors + per-issue fixes).
-      void runCrashAssistant();
+      if (data.sessionHealthy && preferLatestLog) {
+        // Successful relaunch — don't re-run crash-phrase detectors on leftover ERROR lines.
+        crashFindings = [];
+        crashMcreator = [];
+        crashClassFinder = [];
+        crashSupportMsg = null;
+        // Record resolved crash in History when a prior fix was applied.
+        void invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath }).catch(() => {});
+      } else {
+        void runCrashAssistant();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -165,12 +182,25 @@
   function onProjectPathChange(path: string | null) {
     if (!path || path === lastLoadedPath) return;
     lastLoadedPath = path;
+    preferLatestLog = true;
+    selectedReportId = "";
     void load(true);
   }
 
   async function chooseReport(reportId: string) {
+    preferLatestLog = false;
     selectedReportId = reportId;
     await load(true);
+  }
+
+  async function chooseLatestLog() {
+    preferLatestLog = true;
+    selectedReportId = "";
+    await load(true);
+  }
+
+  function activeReportId(): string | null {
+    return preferLatestLog ? null : (selectedReportId || null);
   }
 
   async function createFixPlan() {
@@ -180,7 +210,7 @@
     try {
       plan = await invoke("create_crash_fix_plan", {
         path: $projectPath,
-        reportId: selectedReportId || null,
+        reportId: activeReportId(),
       });
     } catch (e) {
       error = String(e);
@@ -196,12 +226,11 @@
     error = null;
     message = null;
     try {
-      await invoke("add_modrinth_mod_with_dependencies", {
+      const summary: string = await invoke("apply_fix_action", {
         path: $projectPath,
-        modId,
-        side: "auto",
+        action: { kind: "installDependency", label: `Install ${modId}`, modId },
       });
-      message = `Installed ${modId} with dependencies. Reloading...`;
+      message = `${summary}. Reloading...`;
       await load(true);
     } catch (e) {
       error = String(e);
@@ -218,13 +247,11 @@
     error = null;
     message = null;
     try {
-      const result: any = await invoke("disable_project_mod", {
+      const summary: string = await invoke("apply_fix_action", {
         path: $projectPath,
-        modId,
+        action: { kind: "disableMod", label: `Disable ${modId}`, modId },
       });
-      message = result?.alreadyDisabled
-        ? `${result.name ?? modId} was already disabled.`
-        : `Disabled ${result?.name ?? modId} (${result?.fileName ?? "★.disabled"}). Rerun the Test profile to verify.`;
+      message = `${summary}. Rerun the Test profile to verify.`;
       await load(true);
     } catch (e) {
       error = String(e);
@@ -280,8 +307,11 @@
     error = null;
     message = null;
     try {
-      await invoke("remove_project_mod", { path: $projectPath, modId });
-      message = `Removed ${modId}. Reloading...`;
+      const summary: string = await invoke("apply_fix_action", {
+        path: $projectPath,
+        action: { kind: "removeMod", label: `Remove ${modId}`, modId },
+      });
+      message = `${summary}. Reloading...`;
       await load(true);
     } catch (e) {
       error = String(e);
@@ -333,7 +363,7 @@
     try {
       const result: any = await invoke("run_crash_assistant_full", {
         path: $projectPath,
-        reportId: selectedReportId || null,
+        reportId: preferLatestLog ? null : (selectedReportId || null),
       });
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
@@ -400,7 +430,7 @@
         // Still try analyze — it also ensures Ollama; surface prep hint if that fails too.
         console.warn("[AI] ensure_ollama_model:", prepErr);
       }
-      const reportId = selectedReportId || null;
+      const reportId = activeReportId();
       const context: any = await invoke("build_ai_crash_context", {
         path: $projectPath,
         reportId,
@@ -447,7 +477,7 @@
           humanExplanation: aiAnalysis.human_explanation ?? aiAnalysis.humanExplanation ?? null,
           suspectedMods: aiAnalysis.suspected_mods ?? aiAnalysis.suspectedMods ?? [],
           recommendedActions: aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions ?? [],
-          reportId: selectedReportId || null,
+          reportId: activeReportId(),
         },
       });
       aiFeedbackMsg = helped
@@ -616,7 +646,7 @@
     try {
       const draft: any = await invoke("draft_authored_crash_case", {
         path: $projectPath,
-        reportId: selectedReportId || null,
+        reportId: activeReportId(),
       });
       authorFingerprint = draft.fingerprint;
       authorSymptoms = (draft.symptoms ?? []).join("\n");
@@ -879,7 +909,7 @@
     try {
       const applied: string[] = await invoke("apply_crash_fix_plan", {
         path: $projectPath,
-        reportId: selectedReportId || null,
+        reportId: activeReportId(),
       });
       message = applied.length
         ? `Applied: ${applied.join(", ")}`
@@ -1081,11 +1111,13 @@
   }
 
   $: graphDiagnostics = diagnosis?.graphDiagnostics ?? [];
-  $: allSignals = [
-    ...(diagnosis?.selectedReport?.signals ?? []),
-    ...(diagnosis?.latestLog?.signals ?? []),
-    ...(diagnosis?.launcherLog?.signals ?? []),
-  ];
+  $: allSignals = diagnosis?.sessionHealthy && preferLatestLog
+    ? []
+    : [
+        ...(diagnosis?.selectedReport?.signals ?? []),
+        ...(diagnosis?.latestLog?.signals ?? []),
+        ...(diagnosis?.launcherLog?.signals ?? []),
+      ];
   $: signalGroups = [
     { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", items: allSignals.filter((s) => s.kind === "Entrypoint") },
     { title: "Loader mismatch", hint: "Wrong loader/API/version bridge, NoSuchMethod/NoSuchField", items: allSignals.filter((s) => s.kind === "LoaderMismatch") },
@@ -1211,8 +1243,25 @@
   {:else if !$projectPath}
     <EmptyState icon={Stethoscope} title="No project selected" description="Open a project to analyze crash reports, latest.log and recent snapshots." />
   {:else if diagnosis}
-    <section class="diagnosis-summary" class:neutral={!topSuspect}>
-      {#if topSuspect}
+    {#if diagnosis.sessionHealthy && preferLatestLog}
+      <div class="muted-box stale-warn" style="border-color: rgba(27, 217, 106, 0.35); margin-bottom: 12px;">
+        <CheckCircle size={16} style="vertical-align: -3px; color: var(--success, #1bd96a);" />
+        Minecraft launched successfully — <code>latest.log</code> has no fresh crash markers.
+        Crash-log fix suggestions are paused. Graph conflicts below still apply.
+      </div>
+    {/if}
+    <section class="diagnosis-summary" class:neutral={!topSuspect || diagnosis.sessionHealthy}>
+      {#if diagnosis.sessionHealthy && preferLatestLog && !topSuspect}
+        <div class="summary-icon"><CheckCircle size={22} /></div>
+        <div class="summary-body">
+          <span class="eyebrow">Session status</span>
+          <h1>Build is healthy</h1>
+          <p class="summary-copy">
+            The current instance reached a successful Minecraft session. Historical crash-reports stay listed for reference,
+            but Diagnose will not ask you to apply crash-log fixes until a new failure appears.
+          </p>
+        </div>
+      {:else if topSuspect}
         <div class="summary-icon"><AlertTriangle size={22} /></div>
         <div class="summary-body">
           <span class="eyebrow">Likely crash source</span>
@@ -1395,18 +1444,38 @@
     <div class="diagnose-grid">
       <aside class="reports panel">
         <h2><Bug size={16} /> Crash reports</h2>
+        {#if diagnosis.crashReportStale}
+          <div class="muted-box stale-warn">
+            Newest crash-report is older than <code>logs/latest.log</code> (game launched since). Analyzing the live log — click a report below only if you want that historical crash.
+          </div>
+        {/if}
+        <button
+          type="button"
+          class="report-card"
+          class:selected={preferLatestLog || !selectedReportId}
+          on:click={() => chooseLatestLog()}
+        >
+          <strong>logs/latest.log</strong>
+          <span>
+            {#if diagnosis.latestLog.exists}
+              Live session · {diagnosis.latestLog.signals.length} signals
+            {:else}
+              Missing
+            {/if}
+          </span>
+        </button>
         {#if diagnosis.reports.length === 0}
           <div class="muted-box">No files in <code>crash-reports/*.txt</code>.</div>
         {:else}
           {#each diagnosis.reports as report (report.id)}
-            <button class="report-card" class:selected={selectedReportId === report.id} on:click={() => chooseReport(report.id)}>
+            <button class="report-card" class:selected={!preferLatestLog && selectedReportId === report.id} on:click={() => chooseReport(report.id)}>
               <strong>{report.name}</strong>
               <span>{formatBytes(report.size)} · {formatDate(report.modified)}</span>
             </button>
           {/each}
         {/if}
 
-        <h2 class="log-title"><Terminal size={16} /> latest.log</h2>
+        <h2 class="log-title"><Terminal size={16} /> latest.log status</h2>
         {#if diagnosis.latestLog.exists}
           <div class="log-status ok">Found · {diagnosis.latestLog.signals.length} parser signals</div>
         {:else}
@@ -1477,8 +1546,16 @@
       <section class="reader panel">
         <div class="panel-header">
           <div>
-            <h2><FileText size={16} /> {selectedReport?.summary.name ?? "No crash report selected"}</h2>
-            <p>{selectedReport ? `${selectedReport.signals.length} parser signals · ${selectedReport.suspectedMods.length} report suspects` : "Run Minecraft until it crashes or place a report in crash-reports/."}</p>
+            <h2><FileText size={16} /> {selectedReport?.summary.name ?? "logs/latest.log"}</h2>
+            <p>
+              {#if selectedReport}
+                {selectedReport.signals.length} parser signals · {selectedReport.suspectedMods.length} report suspects
+              {:else if diagnosis.latestLog.exists}
+                Analyzing live <code>logs/latest.log</code> · {diagnosis.latestLog.signals.length} signals · {diagnosis.latestLog.suspectedMods.length} suspects
+              {:else}
+                Run Minecraft to create logs/latest.log, or select a crash-report.
+              {/if}
+            </p>
           </div>
         </div>
 
@@ -1754,9 +1831,9 @@
             <div class="ai-stat"><strong>{aiContext.findingsCount}</strong> findings</div>
             <div class="ai-stat"><strong>{aiContext.similarCaseCount ?? 0}</strong> KB hits</div>
             <div class="ai-stat"><strong>{aiContext.aiModel ?? "—"}</strong> model</div>
-            <div class="ai-stat"><strong>{aiContext.context?.inventory?.mods?.length ?? aiContext.context?.installedModCount ?? 0}</strong> mods</div>
-            <div class="ai-stat"><strong>{aiContext.context?.inventory?.configFiles?.length ?? 0}</strong> configs</div>
-            <div class="ai-stat"><strong>{(aiContext.context?.inventory?.resourcepacks?.length ?? 0) + (aiContext.context?.inventory?.datapacks?.length ?? 0)}</strong> packs</div>
+            <div class="ai-stat"><strong>{aiContext.inventorySummary?.mods ?? aiContext.context?.installedModCount ?? 0}</strong> mods</div>
+            <div class="ai-stat"><strong>{aiContext.inventorySummary?.configs ?? aiContext.context?.inventory?.configFiles?.length ?? 0}</strong> configs</div>
+            <div class="ai-stat"><strong>{aiContext.inventorySummary?.packs ?? ((aiContext.context?.inventory?.resourcepacks?.length ?? 0) + (aiContext.context?.inventory?.datapacks?.length ?? 0))}</strong> packs</div>
             <div class="ai-stat"><strong>{aiContext.promptLength}</strong> chars prompt</div>
           </div>
           <button class="secondary" on:click={() => (aiShowPrompt = !aiShowPrompt)}>
@@ -1852,7 +1929,7 @@
       </section>
     {/if}
 
-    {#if crashFindings.length > 0}
+    {#if crashFindings.length > 0 && !(diagnosis.sessionHealthy && preferLatestLog)}
       <section class="crash-assistant panel">
         <h2><Zap size={16} /> Crash Assistant ({crashFindings.length} finding{crashFindings.length > 1 ? "s" : ""})</h2>
         <p class="crash-intro">Analyzes the selected crash report, <code>logs/latest.log</code>, and currently installed mods. Apply fixes one at a time, then re-test.</p>
@@ -2331,6 +2408,14 @@
   .code { background: var(--bg-elevated); padding: 2px 7px; border-radius: 4px; font-family: ui-monospace, monospace; }
   .muted-box { padding: 12px; background: var(--bg-tertiary); border-radius: 12px; }
   .muted-box.compact { padding: 9px; }
+  .muted-box.stale-warn {
+    margin-bottom: 10px;
+    border: 1px solid rgba(245, 166, 35, 0.35);
+    background: rgba(245, 166, 35, 0.08);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
   .empty, .loading { color: var(--text-muted); padding: 70px; text-align: center; }
   .empty.inline { padding: 40px; }
   .empty.success { display: flex; flex-direction: column; align-items: center; gap: 12px; }

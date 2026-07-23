@@ -182,6 +182,63 @@ pub fn build_crash_prompt(ctx: &CrashAiContext) -> String {
     p
 }
 
+/// Context for post-resolution distill (user already fixed the crash).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillContext {
+    pub fingerprint_key: String,
+    pub mc_version: String,
+    pub loader: String,
+    pub crash_excerpt: String,
+    /// Chronological user/fix attempts (may include dead ends).
+    pub action_timeline: Vec<String>,
+    pub resolved_summary: String,
+    pub verified_by: String,
+    pub final_actions_summary: Vec<String>,
+}
+
+/// Builds a prompt that asks the model to compress trial-and-error into a minimal plan.
+pub fn build_distill_prompt(ctx: &DistillContext) -> String {
+    let mut p = String::new();
+    p.push_str(crate::action_plan::DISTILL_SYSTEM_PROMPT);
+    p.push_str("\n\n## System Context\n");
+    p.push_str(&format!("- Minecraft: {}\n", ctx.mc_version));
+    p.push_str(&format!("- Loader: {}\n", ctx.loader));
+    p.push_str(&format!("- Fingerprint: {}\n", ctx.fingerprint_key));
+    p.push_str(&format!("- Verified by: {}\n\n", ctx.verified_by));
+
+    p.push_str("## Resolution outcome\n");
+    p.push_str(&format!("{}\n\n", ctx.resolved_summary));
+    if !ctx.final_actions_summary.is_empty() {
+        p.push_str("Recorded successful actions:\n");
+        for a in &ctx.final_actions_summary {
+            p.push_str(&format!("- {a}\n"));
+        }
+        p.push('\n');
+    }
+
+    if !ctx.action_timeline.is_empty() {
+        p.push_str("## User action timeline (may include inefficient / superseded steps)\n");
+        for line in &ctx.action_timeline {
+            p.push_str(&format!("- {line}\n"));
+        }
+        p.push('\n');
+    }
+
+    if !ctx.crash_excerpt.trim().is_empty() {
+        p.push_str("## Crash excerpt (scrubbed)\n```\n");
+        p.push_str(&truncate(&smart_excerpt(&ctx.crash_excerpt, 2500), 2500));
+        p.push_str("\n```\n\n");
+    }
+
+    p.push_str("## Instructions\n");
+    p.push_str(CRASH_JSON_SCHEMA_HINT);
+    p.push_str(
+        "\n\nProduce the minimal ActionPlan peers should reuse. Set source to \"distill\".\n",
+    );
+    p
+}
+
 /// Builds a shorter prompt for quick crash triage.
 pub fn build_triage_prompt(ctx: &CrashAiContext) -> String {
     format!(
@@ -239,10 +296,10 @@ pub fn findings_to_ai(findings: &[CrashAnalysisFinding]) -> Vec<CrashAiFinding> 
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let cut = crate::crash_kb::truncate_at_char_boundary(s, max_len);
+    if cut.len() == s.len() {
         return s.to_string();
     }
-    let cut = &s[..max_len];
     format!("{cut}... (truncated)")
 }
 
@@ -275,6 +332,28 @@ mod tests {
         assert!(prompt.contains("iris"));
         assert!(prompt.contains("Mixin"));
         assert!(prompt.contains("humanExplanation") || prompt.contains("schemaVersion"));
+    }
+
+    #[test]
+    fn builds_distill_prompt() {
+        let ctx = DistillContext {
+            fingerprint_key: "Mixin||||1.20|fabric".into(),
+            mc_version: "1.20.1".into(),
+            loader: "fabric".into(),
+            crash_excerpt: "MixinTransformerError".into(),
+            action_timeline: vec![
+                "[FIX] Disabled iris".into(),
+                "[FIX] Updated sodium".into(),
+                "[RESOLVED] Updated sodium".into(),
+            ],
+            resolved_summary: "Sodium update fixed the mixin crash".into(),
+            verified_by: "successful_launch".into(),
+            final_actions_summary: vec!["Updated sodium".into()],
+        };
+        let prompt = build_distill_prompt(&ctx);
+        assert!(prompt.contains("Distiller") || prompt.contains("distill"));
+        assert!(prompt.contains("Disabled iris"));
+        assert!(prompt.contains("source to \"distill\"") || prompt.contains("distill"));
     }
 
     #[test]

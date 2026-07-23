@@ -1,0 +1,8 @@
+# Minimal Supabase CLI config for TuffSwarm capsule ingest.
+# Deploy: supabase db push && supabase functions deploy publish-capsule && supabase functions deploy vote-capsule
+
+[functions.publish-capsule]
+verify_jwt = false
+
+[functions.vote-capsule]
+verify_jwt = true

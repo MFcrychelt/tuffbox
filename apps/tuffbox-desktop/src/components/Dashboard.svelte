@@ -18,7 +18,6 @@
     Download,
     Globe,
     ShieldAlert,
-    Terminal,
     Minus,
     Workflow,
     LogIn,
@@ -45,7 +44,6 @@
   import { api } from "../lib/api";
   import { launchWithFeedback, registerLaunchCrashListener } from "../lib/launch";
   import AddInstanceModal from "./AddInstanceModal.svelte";
-  import LaunchLogModal from "./LaunchLogModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
@@ -57,7 +55,6 @@
   let selectedPath: string | null = $projectPath;
   let activeMenuPath: string | null = null;
   let menuAnchor: HTMLElement | null = null;
-  let showLogModal = false;
   let showLoginModal = false;
   let showAccountManager = false;
   let showWorldPrompt = false;
@@ -193,7 +190,6 @@
   async function launch() {
     if (!selectedPath) return;
     isLaunching.set(true);
-    showLogModal = true;
     await invoke("set_last_opened_project", { path: selectedPath });
     await launchWithFeedback(
       { path: selectedPath, profile: "client" },
@@ -872,10 +868,6 @@
     on:close={() => (newProjectOpen.set(false))}
     on:created={(e) => loadProject(e.detail)}
   />
-{/if}
-
-{#if showLogModal && selectedPath}
-  <LaunchLogModal projectPath={selectedPath} on:close={() => (showLogModal = false)} />
 {/if}
 
 {#if showWorldPrompt}

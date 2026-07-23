@@ -204,3 +204,14 @@ export const newProjectOpen = writable<boolean>(false);
 // Global launch state — true while a launch is in progress.
 // Used by Header to show spinner, and by Dashboard to disable play button.
 export const isLaunching = writable<boolean>(false);
+
+/** Opens the live launch-log modal for the given project manifest path. */
+export const launchLogPath = writable<string | null>(null);
+
+export function openLaunchLog(path: string) {
+  launchLogPath.set(path);
+}
+
+export function closeLaunchLog() {
+  launchLogPath.set(null);
+}

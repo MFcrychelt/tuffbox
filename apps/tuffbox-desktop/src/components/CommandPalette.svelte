@@ -19,6 +19,7 @@
     { id: "graph", label: "Dependency Graph", category: "Views", shortcut: "Ctrl+4" },
     { id: "configs", label: "Config Editor", category: "Views", shortcut: "Ctrl+5" },
     { id: "diagnostics", label: "Health Check", category: "Views", shortcut: "Ctrl+6" },
+    { id: "crash-votes", label: "Crash Votes", category: "Views" },
     { id: "snapshots", label: "Snapshots", category: "Views", shortcut: "Ctrl+7" },
     { id: "world", label: "World", category: "Views", shortcut: "Ctrl+8" },
     { id: "library", label: "Library", category: "Views" },

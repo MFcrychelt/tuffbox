@@ -1988,8 +1988,10 @@ async fn apply_fix_action(
     action: FixAction,
 ) -> Result<String, String> {
     let manifest_path = PathBuf::from(&path);
+    let path_for_record = path.clone();
     let mod_id = action.mod_id.clone().unwrap_or_default();
-    tokio::task::spawn_blocking(move || {
+    let action_for_record = action.clone();
+    let result = tokio::task::spawn_blocking(move || {
         match action.kind.as_str() {
             "disableMod" => {
                 if mod_id.is_empty() {
@@ -2125,7 +2127,58 @@ async fn apply_fix_action(
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    // Track pending fix so a later healthy relaunch can record *how* it was resolved.
+    let launcher = fix_action_to_launcher_action(&action_for_record, &result);
+    let _ = swarm_api::record_user_fix_attempt(
+        Path::new(&path_for_record),
+        "diagnose_hint",
+        &result,
+        vec![launcher],
+        None,
+    );
+
+    Ok(result)
+}
+
+fn fix_action_to_launcher_action(
+    action: &FixAction,
+    summary: &str,
+) -> tuffbox_core::action_plan::LauncherAction {
+    let op = match action.kind.as_str() {
+        "disableMod" => "disable_mod",
+        "removeMod" => "remove_mod",
+        "reinstallMod" => "reinstall_mod",
+        "updateMod" => "update_mod",
+        "installDependency" => "install_mod",
+        "updateLoader" => "update_loader",
+        "raiseMemory" => "raise_memory",
+        "acceptEula" => "accept_eula",
+        "changePort" => "change_port",
+        "autoJava" => "auto_java",
+        other => other,
+    };
+    tuffbox_core::action_plan::LauncherAction {
+        op: op.into(),
+        mod_id: action.mod_id.clone(),
+        provider: if op == "install_mod" {
+            Some("modrinth".into())
+        } else {
+            None
+        },
+        project_id: if op == "install_mod" {
+            action.mod_id.clone()
+        } else {
+            None
+        },
+        version: None,
+        path: None,
+        patch_type: None,
+        patch: None,
+        reason: Some(summary.to_string()),
+        risk: "medium".into(),
+    }
 }
 
 /// Scans the `mods/` folder for `.jar` files that appear to be built for a
@@ -3507,6 +3560,13 @@ fn run_crash_assistant_full(
 /// Load a single crash report by id (filename stem / path fragment), or the
 /// newest `.txt` under `crash-reports/` when `report_id` is None.
 fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Option<String> {
+    load_scoped_crash_report_with_path(project_dir, report_id).map(|(_, text)| text)
+}
+
+fn load_scoped_crash_report_with_path(
+    project_dir: &Path,
+    report_id: Option<&str>,
+) -> Option<(PathBuf, String)> {
     let cd = project_dir.join("crash-reports");
     if !cd.is_dir() {
         return None;
@@ -3526,15 +3586,19 @@ fn load_scoped_crash_report(project_dir: &Path, report_id: Option<&str>) -> Opti
                 || name.trim_end_matches(".txt") == id
                 || e.path().to_string_lossy().contains(id)
         }) {
-            return std::fs::read_to_string(entry.path())
+            let path = entry.path();
+            let text = std::fs::read_to_string(&path)
                 .ok()
-                .filter(|c| c.len() < 4 * 1024 * 1024);
+                .filter(|c| c.len() < 4 * 1024 * 1024)?;
+            return Some((path, text));
         }
     }
     files.sort_by_key(|e| std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok())));
-    std::fs::read_to_string(files[0].path())
+    let path = files[0].path();
+    let text = std::fs::read_to_string(&path)
         .ok()
-        .filter(|c| c.len() < 4 * 1024 * 1024)
+        .filter(|c| c.len() < 4 * 1024 * 1024)?;
+    Some((path, text))
 }
 
 /// ── Mod compatibility checker ──────────────────────────────────────
@@ -3830,15 +3894,15 @@ fn delete_backup(path: String, backup_id: String) -> Result<(), String> {
 /// Builds a structured AI context from crash data (but does NOT call any
 /// LLM — the frontend can send this to any AI provider).
 #[tauri::command(rename_all = "camelCase")]
-fn build_ai_crash_context(
-    path: String,
-    report_id: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let project_dir = manifest_parent(&path)?;
+fn prepare_ai_crash_context(
+    path: &str,
+    report_id: Option<&str>,
+) -> Result<(tuffbox_core::ai_explanation::CrashAiContext, usize), String> {
+    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_parent(path)?;
 
     let crash_content =
-        load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
+        load_scoped_crash_report(&project_dir, report_id).unwrap_or_default();
     let latest = project_dir.join("logs").join("latest.log");
     let latest_log = if latest.is_file() {
         tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
@@ -3902,6 +3966,10 @@ fn build_ai_crash_context(
         }
     }
 
+    // Pull recent crash-related history into the prompt so the model sees what
+    // the user already tried (and what was marked resolved).
+    let recent_changes = recent_crash_history_lines(&project_dir, 12);
+
     let ai_ctx = tuffbox_core::ai_explanation::CrashAiContext {
         mc_version: manifest.minecraft.version.clone(),
         loader: loader.clone(),
@@ -3914,31 +3982,99 @@ fn build_ai_crash_context(
         latest_log_excerpt: tuffbox_core::crash_kb::smart_excerpt(&latest_log, 4000),
         suspected_mods: report.suspected_mods.clone(),
         crash_assistant_findings: tuffbox_core::ai_explanation::findings_to_ai(&report.findings),
-        recent_changes: Vec::new(),
+        recent_changes,
         graph_diagnostics: Vec::new(),
         similar_cases: similar,
         fingerprint_key: fingerprint.key.clone(),
-        report_id: report_id.clone(),
+        report_id: report_id.map(|s| s.to_string()),
         inventory: Some(inventory),
     };
 
+    Ok((ai_ctx, report.findings.len()))
+}
+
+fn recent_crash_history_lines(project_dir: &Path, limit: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    // Resolved crash fixes (successful relaunch after apply).
+    if let Ok(entries) = swarm_api::list_crash_resolutions(project_dir) {
+        for r in entries.into_iter().take(limit) {
+            lines.push(format!(
+                "RESOLVED [{}] via {}: {}",
+                r.fingerprint_key,
+                r.verified_by,
+                tuffbox_core::crash_kb::truncate_at_char_boundary(&r.human_explanation, 160)
+            ));
+        }
+    }
+    // Recent crash_fix snapshots.
+    let store = SnapshotStore::new(project_dir);
+    if let Ok(snaps) = store.list() {
+        for snap in snaps
+            .into_iter()
+            .filter(|s| s.tags.iter().any(|t| t == "crash_fix" || t == "crash_resolved"))
+            .take(limit)
+        {
+            lines.push(format!(
+                "{} [{}] {}",
+                if snap.tags.iter().any(|t| t == "crash_resolved") {
+                    "RESOLVED_SNAP"
+                } else {
+                    "FIX_APPLIED"
+                },
+                snap.crash_fingerprint_key.as_deref().unwrap_or("-"),
+                snap.reason
+            ));
+        }
+    }
+    lines.truncate(limit);
+    lines
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn build_ai_crash_context(
+    path: String,
+    report_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (ai_ctx, findings_count) =
+        prepare_ai_crash_context(&path, report_id.as_deref())?;
     let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
     let triage = tuffbox_core::ai_explanation::build_triage_prompt(&ai_ctx);
     let settings = integrations::get_integration_status().settings;
 
+    // Do not ship the full inventory blob to the webview — counts + prompt are enough.
+    // Keeps IPC small and avoids UI freezes on big packs.
+    let mod_count = ai_ctx.installed_mod_count;
+    let config_count = ai_ctx
+        .inventory
+        .as_ref()
+        .map(|i| i.config_files.len())
+        .unwrap_or(0);
+    let pack_count = ai_ctx
+        .inventory
+        .as_ref()
+        .map(|i| i.resourcepacks.len() + i.datapacks.len() + i.shaderpacks.len())
+        .unwrap_or(0);
+    let mut ui_ctx = ai_ctx.clone();
+    ui_ctx.inventory = None;
+
     Ok(serde_json::json!({
-        "context": ai_ctx,
+        "context": ui_ctx,
         "prompt": prompt,
         "triagePrompt": triage,
         "promptLength": prompt.len(),
-        "findingsCount": report.findings.len(),
+        "findingsCount": findings_count,
         "similarCaseCount": ai_ctx.similar_cases.len(),
-        "fingerprintKey": fingerprint.key,
+        "fingerprintKey": ai_ctx.fingerprint_key,
         "aiProvider": settings.ai.provider,
         "aiModel": settings.ai.model,
         "aiEndpoint": settings.ai.endpoint,
         "diagnoseMode": settings.ai.diagnose_mode,
         "crashKbEndpoint": settings.ai.crash_kb_endpoint,
+        "inventorySummary": {
+            "mods": mod_count,
+            "configs": config_count,
+            "packs": pack_count,
+        },
     }))
 }
 
@@ -3947,21 +4083,13 @@ async fn analyze_crash_with_ai(
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let context = build_ai_crash_context(path.clone(), report_id.clone())?;
+    // Build structured context directly — avoid JSON round-trip panics / lossy deserialize.
+    let (mut ai_ctx, _findings_count) =
+        prepare_ai_crash_context(&path, report_id.as_deref())?;
     let settings = integrations::get_integration_status().settings;
     let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
-    let similar_count = context
-        .get("similarCaseCount")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-
-    let ai_ctx: tuffbox_core::ai_explanation::CrashAiContext = serde_json::from_value(
-        context
-            .get("context")
-            .cloned()
-            .ok_or_else(|| "crash context missing".to_string())?,
-    )
-    .map_err(|e| format!("invalid crash AI context: {e}"))?;
+    let similar_count = ai_ctx.similar_cases.len() as u64;
+    let prompt_for_fallback = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
 
     let project_dir = manifest_parent(&path)?;
     let crash_content =
@@ -3980,7 +4108,6 @@ async fn analyze_crash_with_ai(
     );
 
     let swarm_on = integrations::swarm_enabled();
-    // Network Fix Mode: P2P control (Phase C) and/or hub/KB (Phase B fallback).
     let transport_bases = if swarm_on {
         swarm_node::capsule_transport_bases().await
     } else {
@@ -3989,18 +4116,12 @@ async fn analyze_crash_with_ai(
     let online_kb = !transport_bases.is_empty();
     let mut network_used = false;
 
-    // Merge durable shared capsules (machine-wide) into local RAG context when swarm is on.
-    let mut ai_ctx = ai_ctx;
     if swarm_on {
-        let global_hits = integrations::global_capsule_library().lookup(
-            &fingerprint,
-            &haystack,
-            5,
-        );
+        let global_hits =
+            integrations::global_capsule_library().lookup(&fingerprint, &haystack, 5);
         if !global_hits.is_empty() {
             let mut merged = tuffbox_core::crash_remote::hits_to_similar_cases(&global_hits);
             merged.extend(ai_ctx.similar_cases.drain(..));
-            // Dedup by id, keep highest score order.
             let mut seen = std::collections::HashSet::new();
             merged.retain(|h| seen.insert(h.id.clone()));
             ai_ctx.similar_cases = merged;
@@ -4016,43 +4137,23 @@ async fn analyze_crash_with_ai(
                 excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
                 prefer_kb_only: false,
             };
-            match swarm_node::diagnose_across_transports(&req).await
-            {
+            match swarm_node::diagnose_across_transports(&req).await {
                 Ok(resp) => {
-                    // Cache remote capsules locally so solutions survive hub downtime.
-                    for id in &resp.plan.matched_case_ids {
-                        let _ = id;
-                    }
-                    if let Ok(capsule) = tuffbox_core::swarm::ExperienceCapsule::from_public_value(
-                        &serde_json::json!({
-                            "id": resp.plan.matched_case_ids.first().cloned().unwrap_or_else(|| format!("remote-{}", fingerprint.key)),
-                            "fingerprint": fingerprint,
-                            "solution": resp.plan.human_explanation,
-                            "actions": resp.plan.actions,
-                            "successScore": resp.plan.confidence,
-                            "successCount": 1u32,
-                            "failCount": 0u32,
-                        }),
-                    ) {
-                        let _ = integrations::global_capsule_library().publish(&capsule);
-                    }
+                    // Explain may read the network; MUST NOT persist peer capsules here.
+                    // Publish is only via post-resolution distill → user Confirm.
                     resp.plan
                 }
                 Err(remote_err) => {
-                    // Fall back: global shared library, then local LLM.
                     if let Some(plan) = integrations::global_capsule_library()
                         .diagnose_best(&fingerprint, &haystack)
                     {
                         plan
                     } else {
-                        let prompt = context
-                            .get("prompt")
-                            .and_then(serde_json::Value::as_str)
-                            .ok_or_else(|| {
-                                format!("server diagnose failed ({remote_err}); no local prompt")
-                            })?;
-                        let value =
-                            integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
+                        let value = integrations::call_ai_crash_explain(
+                            &settings.ai,
+                            &prompt_for_fallback,
+                        )
+                        .await?;
                         let raw = serde_json::to_string(&value).unwrap_or_default();
                         tuffbox_core::action_plan::parse_action_plan(&raw).map_err(|e| {
                             format!("server diagnose failed ({remote_err}); local parse: {e}")
@@ -4074,32 +4175,7 @@ async fn analyze_crash_with_ai(
                 };
                 if let Some(resp) = swarm_node::lookup_across_transports(&req).await
                 {
-                    // Persist peer solutions into the global library.
-                    for hit in &resp.hits {
-                        if let Ok(capsule) =
-                            tuffbox_core::swarm::ExperienceCapsule::from_public_value(
-                                &serde_json::json!({
-                                    "id": hit.id,
-                                    "fingerprint": {
-                                        "exception": fingerprint.exception,
-                                        "frames": fingerprint.frames,
-                                        "modFile": fingerprint.mod_file,
-                                        "mixin": fingerprint.mixin,
-                                        "mcMajor": fingerprint.mc_major,
-                                        "loader": fingerprint.loader,
-                                        "key": hit.fingerprint_key,
-                                    },
-                                    "solution": hit.solution,
-                                    "actions": hit.actions,
-                                    "successScore": hit.score,
-                                    "successCount": 1u32,
-                                    "failCount": 0u32,
-                                }),
-                            )
-                        {
-                            let _ = integrations::global_capsule_library().publish(&capsule);
-                        }
-                    }
+                    // In-memory for this Explain session only — no durable publish.
                     let mut remote =
                         tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
                     remote.extend(ctx.similar_cases.drain(..));
@@ -4129,21 +4205,7 @@ async fn analyze_crash_with_ai(
                         let hit = resp.hits.first().ok_or_else(|| {
                             "no remote KB hits for this fingerprint".to_string()
                         })?;
-                        if let Ok(capsule) =
-                            tuffbox_core::swarm::ExperienceCapsule::from_public_value(
-                                &serde_json::json!({
-                                    "id": hit.id,
-                                    "fingerprint": fingerprint,
-                                    "solution": hit.solution,
-                                    "actions": hit.actions,
-                                    "successScore": hit.score,
-                                    "successCount": 1u32,
-                                    "failCount": 0u32,
-                                }),
-                            )
-                        {
-                            let _ = integrations::global_capsule_library().publish(&capsule);
-                        }
+                        // Session-only plan from network hit — do not publish capsule here.
                         tuffbox_core::action_plan::plan_from_launcher_actions(
                             &hit.solution,
                             &hit.suspected_mods,
@@ -4239,11 +4301,8 @@ async fn analyze_crash_with_ai(
                     tuffbox_core::action_plan::parse_action_plan(&raw)?
                 }
             } else {
-                let prompt = context
-                    .get("prompt")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| "crash context did not contain an AI prompt".to_string())?;
-                let value = integrations::call_ai_crash_explain(&settings.ai, prompt).await?;
+                let value =
+                    integrations::call_ai_crash_explain(&settings.ai, &prompt_for_fallback).await?;
                 let raw = serde_json::to_string(&value).unwrap_or_default();
                 tuffbox_core::action_plan::parse_action_plan(&raw)?
             }
@@ -6683,40 +6742,44 @@ fn get_crash_diagnosis(
 
     // Merge Crash Assistant log-phrase findings into hints so each detect
     // gets one-by-one FixAction buttons in the Problems / Recommended panels.
-    if let Ok(assistant) =
-        run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())
-    {
-        for finding in assistant.findings {
-            let id = format!("ca:{}", finding.code);
-            if diagnosis.hints.iter().any(|h| h.id == id) {
-                continue;
+    // Skip when the live session is healthy — those detectors often match
+    // leftover ERROR lines from a previously fixed crash.
+    if !diagnosis.session_healthy {
+        if let Ok(assistant) =
+            run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())
+        {
+            for finding in assistant.findings {
+                let id = format!("ca:{}", finding.code);
+                if diagnosis.hints.iter().any(|h| h.id == id) {
+                    continue;
+                }
+                let mut detail = finding.description.clone();
+                if let Some(ev) = finding.evidence.as_ref() {
+                    detail.push_str("\n\nLog evidence:\n");
+                    detail.push_str(ev);
+                }
+                let steps = finding
+                    .auto_fix
+                    .clone()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let related: Vec<String> = finding
+                    .fixes
+                    .iter()
+                    .filter_map(|f| f.mod_id.clone())
+                    .collect();
+                let fix = finding.fixes.first().cloned();
+                diagnosis.hints.push(tuffbox_core::crash::DiagnosisHint {
+                    id,
+                    title: finding.title,
+                    severity: finding.severity,
+                    detail,
+                    steps,
+                    related_mods: related,
+                    fix,
+                    fixes: finding.fixes,
+                });
             }
-            let mut detail = finding.description.clone();
-            if let Some(ev) = finding.evidence.as_ref() {
-                detail.push_str("\n\nLog evidence:\n");
-                detail.push_str(ev);
-            }
-            let steps = finding
-                .auto_fix
-                .clone()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let related: Vec<String> = finding
-                .fixes
-                .iter()
-                .filter_map(|f| f.mod_id.clone())
-                .collect();
-            let fix = finding.fixes.first().cloned();
-            diagnosis.hints.push(tuffbox_core::crash::DiagnosisHint {
-                id,
-                title: finding.title,
-                severity: finding.severity,
-                detail,
-                steps,
-                related_mods: related,
-                fix,
-                fixes: finding.fixes,
-            });
         }
     }
 
@@ -6731,17 +6794,32 @@ fn run_crash_assistant_analysis(
 ) -> Result<tuffbox_core::crash_assistant::CrashAnalysisReport, String> {
     // Scope: selected crash report (or newest) + latest.log + current mods.
     // Do not dump every historical crash-report into the analyzer.
+    // If latest.log is newer than the crash report (successful relaunch), skip
+    // the stale crash text unless the user explicitly selected that report.
     let installed: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
-    let mut crash_content = Vec::new();
-    if let Some(text) = load_scoped_crash_report(project_dir, report_id) {
-        crash_content.push(text);
-    }
-
     let mut latest_log = String::new();
     let lp = project_dir.join("logs").join("latest.log");
     if lp.is_file() {
         latest_log = tuffbox_core::process::read_log_tail(&lp, 2000).unwrap_or_default();
     }
+
+    let explicit = report_id.filter(|id| !id.is_empty());
+    let mut crash_content = Vec::new();
+    if let Some(id) = explicit {
+        if let Some(text) = load_scoped_crash_report(project_dir, Some(id)) {
+            crash_content.push(text);
+        }
+    } else if let Some((report_path, text)) = load_scoped_crash_report_with_path(project_dir, None) {
+        let stale = tuffbox_core::crash::latest_log_supersedes_crash(
+            project_dir,
+            Some(report_path.as_path()),
+            &latest_log,
+        );
+        if !stale {
+            crash_content.push(text);
+        }
+    }
+
     let mut launcher_log = String::new();
     let la = project_dir.join("logs").join("launcher.log");
     if la.is_file() {
@@ -6826,12 +6904,15 @@ async fn apply_crash_fix_plan(
             &loader,
         );
 
+        let launcher_actions = swarm_api::change_actions_to_launcher(&plan.actions);
+
         if plan.requires_snapshot {
             swarm_api::auto_snapshot_crash_fix_heuristic(
                 &manifest_path,
                 Some(fingerprint.key.as_str()),
                 &plan.summary,
                 report_id.as_deref(),
+                launcher_actions.clone(),
             )?;
         }
 
@@ -6842,6 +6923,20 @@ async fn apply_crash_fix_plan(
         }
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods(&manifest_path, &manifest);
+
+        let explanation = if applied.is_empty() {
+            plan.summary.clone()
+        } else {
+            format!("Applied fix plan: {}", applied.join("; "))
+        };
+        let _ = swarm_api::record_user_fix_attempt(
+            &manifest_path,
+            "crash_assistant",
+            &explanation,
+            launcher_actions,
+            Some(fingerprint.key.as_str()),
+        );
+
         if integrations::swarm_enabled() {
             let _ = swarm_api::record_project_cooccurrence(path.clone());
         }
@@ -6885,6 +6980,45 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
     let snapshots = store.list().map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
 
+    // Resolved crash fixes (successful relaunch after apply).
+    let mut seen_resolution_keys = std::collections::HashSet::new();
+    if let Ok(resolutions) = swarm_api::list_crash_resolutions(&project_dir) {
+        for rec in resolutions {
+            seen_resolution_keys.insert(rec.fingerprint_key.clone());
+            let how = if rec.actions_summary.is_empty() {
+                rec.human_explanation.clone()
+            } else {
+                rec.actions_summary.join("; ")
+            };
+            let summary = if rec.actions_summary.is_empty() {
+                rec.human_explanation.clone()
+            } else {
+                format!(
+                    "{}\nHow: {}",
+                    rec.human_explanation,
+                    rec.actions_summary.join(", ")
+                )
+            };
+            entries.push(ProjectChangeEntry {
+                id: rec.id.clone(),
+                snapshot_id: rec.snapshot_id.clone(),
+                operation: "Crash resolved".to_string(),
+                reason: format!("Verified by {} · {}", rec.verified_by, how),
+                created_at: rec.resolved_at.clone(),
+                path: format!("crash://{}", rec.fingerprint_key),
+                category: "Resolutions".to_string(),
+                kind: "crash_resolved".to_string(),
+                preview: tuffbox_core::crash_kb::truncate_at_char_boundary(&summary, 240)
+                    .to_string(),
+                diff: summary,
+                can_open: false,
+                tags: vec!["crash_resolved".into(), "crash_fix".into()],
+                crash_fingerprint_key: Some(rec.fingerprint_key),
+                plan_source: rec.plan_source,
+            });
+        }
+    }
+
     for (index, snapshot) in snapshots.iter().enumerate() {
         let after_manifest_path = snapshots
             .get(index + 1)
@@ -6895,6 +7029,34 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
             ProjectManifest::load_from_path(after_manifest_path),
         ) {
             entries.extend(mod_change_entries(snapshot, &before, &after));
+        }
+
+        // Explicit card for crash_resolved snapshots even without file diffs
+        // (skip if already covered by resolutions.jsonl).
+        if snapshot.tags.iter().any(|t| t == "crash_resolved")
+            && snapshot.changed_files.is_empty()
+            && snapshot
+                .crash_fingerprint_key
+                .as_ref()
+                .map(|k| !seen_resolution_keys.contains(k))
+                .unwrap_or(true)
+        {
+            entries.push(ProjectChangeEntry {
+                id: format!("{}:crash-resolved", snapshot.id),
+                snapshot_id: snapshot.id.clone(),
+                operation: snapshot.name.clone(),
+                reason: snapshot.reason.clone(),
+                created_at: snapshot.created_at.clone(),
+                path: "crash-resolution".to_string(),
+                category: "Resolutions".to_string(),
+                kind: "crash_resolved".to_string(),
+                preview: snapshot.reason.clone(),
+                diff: snapshot.reason.clone(),
+                can_open: false,
+                tags: snapshot.tags.clone(),
+                crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
+                plan_source: snapshot.plan_source.clone(),
+            });
         }
 
         for relative in &snapshot.changed_files {
@@ -8650,11 +8812,25 @@ fn get_instance_size(path: String) -> Result<String, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_launch_log(path: String) -> Result<String, String> {
-    let log_path = PathBuf::from(&path)
+    let project_dir = PathBuf::from(&path)
         .parent()
-        .map(|p| p.join("logs").join("latest.log"))
+        .map(|p| p.to_path_buf())
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
-    tuffbox_core::process::read_log_tail(&log_path, 500).map_err(|e| e.to_string())
+    let logs_dir = project_dir.join("logs");
+    // Prefer live JVM console (stdout/stderr tee) while Minecraft is starting;
+    // fall back to Minecraft's own latest.log once it exists and has content.
+    let console = logs_dir.join("tuffbox-console.log");
+    let latest = logs_dir.join("latest.log");
+    let console_len = std::fs::metadata(&console).map(|m| m.len()).unwrap_or(0);
+    let latest_len = std::fs::metadata(&latest).map(|m| m.len()).unwrap_or(0);
+    let log_path = if console_len > 0 && (latest_len < 64 || console_len >= latest_len) {
+        console
+    } else if latest.exists() {
+        latest
+    } else {
+        console
+    };
+    tuffbox_core::process::read_log_tail(&log_path, 2500).map_err(|e| e.to_string())
 }
 
 /// Analyze an arbitrary log/console text against the installed mods of a
@@ -10649,7 +10825,13 @@ pub fn run() {
             swarm_api::write_pending_network_plan,
             swarm_api::get_share_prompt_after_launch,
             swarm_api::dismiss_share_prompt,
+            swarm_api::confirm_crash_resolution_after_launch,
+            swarm_api::confirm_crash_resolution_from_diagnose,
+            swarm_api::distill_resolved_crash_plan,
             swarm_api::publish_experience_capsule,
+            swarm_api::list_community_crash_capsules,
+            swarm_api::vote_community_crash_capsule,
+            swarm_api::propose_community_capsule_plan,
             swarm_api::record_project_cooccurrence,
             swarm_api::get_local_cooccurrence,
             swarm_api::get_creation_trends,
@@ -10659,6 +10841,7 @@ pub fn run() {
             integrations::set_swarm_enabled,
             integrations::set_swarm_share_prompts,
             integrations::set_swarm_hub_url,
+            integrations::set_swarm_supabase_url,
             integrations::set_swarm_p2p,
             swarm_node::get_p2p_node_status,
             swarm_node::ensure_p2p_node,
