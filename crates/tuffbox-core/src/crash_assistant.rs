@@ -43,10 +43,13 @@ pub struct CrashAnalysisReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClassMatch {
     pub class_name: String,
     pub mod_id: String,
     pub mod_name: String,
+    #[serde(default)]
+    pub file_name: Option<String>,
 }
 
 pub struct AnalysisCtx {
@@ -1086,34 +1089,140 @@ fn check_mcreator_mods(mods: &[String]) -> Vec<CrashAnalysisFinding> {
 // Tool: Package/Class Finder + Jdeps
 
 /// Finds which installed mod provides a given Java class or package.
-/// This mirrors Crash Assistant's Package/Class Finder GUI tool.
+/// Prefers exact `.class` path match; resolves mod id via jar metadata when possible.
 pub fn find_class_in_mods(class_name: &str, mods_dir: &std::path::Path) -> Vec<ClassMatch> {
     let mut results = Vec::new();
     if !mods_dir.is_dir() {
         return results;
     }
-    let target = class_name.replace('.', "/");
+    let fqn = class_name.trim().trim_end_matches(".class");
+    if fqn.is_empty() {
+        return results;
+    }
+    let exact = format!("{}.class", fqn.replace('.', "/"));
+    let package_prefix = {
+        let slash = fqn.replace('.', "/");
+        if let Some((pkg, _)) = slash.rsplit_once('/') {
+            format!("{pkg}/")
+        } else {
+            String::new()
+        }
+    };
+
     for entry in std::fs::read_dir(mods_dir).into_iter().flatten().flatten() {
         let p = entry.path();
         if p.extension().map_or(true, |e| e != "jar") {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().to_string();
-        let mod_id = name.trim_end_matches(".jar").to_string();
-        if let Ok(f) = std::fs::File::open(&p) {
-            if let Ok(zip) = zip::ZipArchive::new(f) {
-                let found = zip.file_names().any(|fname| fname.contains(&target));
-                if found {
-                    results.push(ClassMatch {
-                        class_name: class_name.into(),
-                        mod_id: mod_id.clone(),
-                        mod_name: mod_id,
-                    });
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let Ok(f) = std::fs::File::open(&p) else {
+            continue;
+        };
+        let Ok(zip) = zip::ZipArchive::new(f) else {
+            continue;
+        };
+        let names: Vec<String> = zip.file_names().map(|s| s.to_string()).collect();
+        let hit = names.iter().any(|n| n == &exact)
+            || (!package_prefix.is_empty()
+                && names
+                    .iter()
+                    .any(|n| n.starts_with(&package_prefix) && n.ends_with(".class")));
+        if !hit {
+            // Fallback: exact class basename somewhere in the jar (rare shading cases).
+            let simple = fqn.rsplit('.').next().unwrap_or(fqn);
+            let simple_class = format!("{simple}.class");
+            if !names.iter().any(|n| n.ends_with(&simple_class)) {
+                continue;
+            }
+        }
+
+        let meta = crate::mod_scan::scan_mod_jar(&p).ok();
+        let mod_id = meta
+            .as_ref()
+            .and_then(|m| m.mod_id.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| file_name.trim_end_matches(".jar").to_string());
+        let mod_name = mod_id.clone();
+        results.push(ClassMatch {
+            class_name: fqn.to_string(),
+            mod_id,
+            mod_name,
+            file_name: Some(file_name),
+        });
+    }
+    results
+}
+
+/// Extract top FQNs from crash text for class→jar attribution (capped).
+pub fn extract_blame_class_names(text: &str, limit: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let re_candidates = [
+        "java.lang.NoClassDefFoundError:",
+        "java.lang.ClassNotFoundException:",
+        "Caused by:",
+        "Exception in thread",
+    ];
+    for (idx, line) in text.lines().enumerate() {
+        if out.len() >= limit {
+            break;
+        }
+        let trimmed = line.trim();
+        // Stack frame: at pkg.Class.method(
+        if let Some(rest) = trimmed.strip_prefix("at ") {
+            if let Some(fqn) = rest.split('(').next() {
+                if let Some((cls, _)) = fqn.rsplit_once('.') {
+                    // cls is package.Class or package.Class$Inner
+                    let class_fqn = cls.split('$').next().unwrap_or(cls);
+                    if class_fqn.contains('.')
+                        && !class_fqn.starts_with("java.")
+                        && !class_fqn.starts_with("jdk.")
+                        && !class_fqn.starts_with("sun.")
+                        && !class_fqn.starts_with("net.minecraft.")
+                        && !class_fqn.starts_with("com.mojang.")
+                        && seen.insert(class_fqn.to_string())
+                    {
+                        out.push(class_fqn.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        for prefix in re_candidates {
+            if let Some(rest) = trimmed
+                .strip_prefix(prefix)
+                .or_else(|| {
+                    let lower = trimmed.to_lowercase();
+                    let p = prefix.to_lowercase();
+                    if lower.contains(&p) {
+                        trimmed.split(prefix).nth(1)
+                    } else {
+                        None
+                    }
+                })
+            {
+                let token = rest
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_matches(|c: char| c == ':' || c == '"' || c == '\'');
+                let class_fqn = token.replace('/', ".").split('$').next().unwrap_or(token).to_string();
+                if class_fqn.contains('.')
+                    && !class_fqn.starts_with("java.")
+                    && seen.insert(class_fqn.clone())
+                {
+                    out.push(class_fqn);
                 }
             }
         }
+        // Prefer early lines (exception head).
+        if idx > 120 && out.len() >= 3 {
+            break;
+        }
     }
-    results
+    out.truncate(limit);
+    out
 }
 
 /// Finds all mods that depend on a class — mirrors Crash Assistant's Jdeps analysis.
@@ -1158,6 +1267,7 @@ pub fn find_mods_depending_on_class(
                         class_name: class_name.into(),
                         mod_id: mod_id.clone(),
                         mod_name: mod_id,
+                        file_name: Some(name),
                     });
                 }
             }
@@ -1181,6 +1291,7 @@ fn find_classes_in_crashes(_ctx: &AnalysisCtx, combined: &str) -> Vec<ClassMatch
                         class_name: class.to_string(),
                         mod_id: "?".into(),
                         mod_name: "?".into(),
+                        file_name: None,
                     });
                 }
             }
@@ -2134,5 +2245,35 @@ mod tests {
         let hits = check_conflict_log_phrases(&c, &c.latest_log);
         let f = hits.iter().find(|f| f.code == "OUT_OF_MEMORY").unwrap();
         assert!(f.fixes.iter().any(|a| a.kind == "raiseMemory"));
+    }
+
+    #[test]
+    fn class_finder_matches_exact_class_and_mod_id() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let jar = dir.path().join("coolmod-1.0.jar");
+        {
+            let file = std::fs::File::create(&jar).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("fabric.mod.json", opts).unwrap();
+            zip.write_all(
+                br#"{"schemaVersion":1,"id":"coolmod","version":"1","authors":["Zed"]}"#,
+            )
+            .unwrap();
+            zip.start_file("com/example/CoolClass.class", opts).unwrap();
+            zip.write_all(&[0u8; 8]).unwrap();
+            zip.finish().unwrap();
+        }
+        let hits = find_class_in_mods("com.example.CoolClass", dir.path());
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].mod_id, "coolmod");
+        assert_eq!(hits[0].file_name.as_deref(), Some("coolmod-1.0.jar"));
+
+        let names = extract_blame_class_names(
+            "java.lang.NoClassDefFoundError: com/example/CoolClass\n\tat com.example.CoolClass.init(CoolClass.java:10)\n",
+            5,
+        );
+        assert!(names.iter().any(|n| n == "com.example.CoolClass"));
     }
 }

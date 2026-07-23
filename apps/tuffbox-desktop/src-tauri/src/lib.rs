@@ -446,6 +446,9 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     dependencies: vec![],
                     status: vec![],
                     content_type: default_content_type,
+                    authors: tuffbox_core::scan_mod_jar(&entry.path())
+                        .map(|r| r.authors)
+                        .unwrap_or_default(),
                 });
                 any_changes = true;
             }
@@ -3942,13 +3945,35 @@ fn prepare_ai_crash_context(
         is_offline: false,
         win_events: Vec::new(),
     };
+    let diagnosis = tuffbox_core::crash::build_crash_diagnosis(
+        &project_dir,
+        &manifest,
+        report_id,
+        Vec::new(),
+    )
+    .map_err(|e| e.to_string())?;
+
     let report = tuffbox_core::crash_assistant::run_full_analysis(&ctx);
 
+    let blame_ids: Vec<String> = diagnosis
+        .suspected_mods
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.blame_role,
+                tuffbox_core::crash::BlameRole::Primary | tuffbox_core::crash::BlameRole::Secondary
+            ) || s.confidence >= 80
+        })
+        .take(3)
+        .map(|s| s.id.clone())
+        .collect();
+
     let haystack = format!("{crash_content}\n{latest_log}");
-    let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
+    let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text_with_blame(
         &haystack,
         &manifest.minecraft.version,
         &loader,
+        &blame_ids,
     );
     let kb_cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
     let similar = tuffbox_core::crash_kb::search_similar(&kb_cases, &fingerprint, &haystack, 5);
@@ -3956,7 +3981,34 @@ fn prepare_ai_crash_context(
     let inventory =
         tuffbox_core::project_ai_inventory::collect_project_ai_inventory(&project_dir, &manifest);
 
-    let mut installed_sample: Vec<String> = report.suspected_mods.clone();
+    let culprit_details: Vec<tuffbox_core::ai_explanation::CrashAiCulprit> = diagnosis
+        .suspected_mods
+        .iter()
+        .take(8)
+        .map(|s| tuffbox_core::ai_explanation::CrashAiCulprit {
+            id: s.id.clone(),
+            name: s.name.clone(),
+            confidence: s.confidence,
+            authors: s.authors.clone(),
+            blame_role: match s.blame_role {
+                tuffbox_core::crash::BlameRole::Primary => "primary".into(),
+                tuffbox_core::crash::BlameRole::Secondary => "secondary".into(),
+                tuffbox_core::crash::BlameRole::Related => "related".into(),
+            },
+            match_sources: s.match_sources.clone(),
+            evidence: s
+                .evidence
+                .iter()
+                .take(3)
+                .map(|e| e.text.clone())
+                .collect(),
+        })
+        .collect();
+
+    let mut installed_sample: Vec<String> = culprit_details.iter().map(|c| c.id.clone()).collect();
+    if installed_sample.is_empty() {
+        installed_sample = report.suspected_mods.clone();
+    }
     for id in inventory.mods.iter().map(|m| m.id.clone()) {
         if installed_sample.len() >= 24 {
             break;
@@ -3970,6 +4022,13 @@ fn prepare_ai_crash_context(
     // the user already tried (and what was marked resolved).
     let recent_changes = recent_crash_history_lines(&project_dir, 12);
 
+    let graph_diagnostics: Vec<String> = diagnosis
+        .graph_diagnostics
+        .iter()
+        .take(12)
+        .map(|d| format!("[{:?}] {}: {}", d.severity, d.code, d.message))
+        .collect();
+
     let ai_ctx = tuffbox_core::ai_explanation::CrashAiContext {
         mc_version: manifest.minecraft.version.clone(),
         loader: loader.clone(),
@@ -3980,10 +4039,11 @@ fn prepare_ai_crash_context(
         installed_mod_count: inventory.mods.len() as u32,
         crash_report_excerpt: tuffbox_core::crash_kb::smart_excerpt(&crash_content, 6000),
         latest_log_excerpt: tuffbox_core::crash_kb::smart_excerpt(&latest_log, 4000),
-        suspected_mods: report.suspected_mods.clone(),
+        suspected_mods: culprit_details.iter().map(|c| c.id.clone()).collect(),
+        culprit_details,
         crash_assistant_findings: tuffbox_core::ai_explanation::findings_to_ai(&report.findings),
         recent_changes,
-        graph_diagnostics: Vec::new(),
+        graph_diagnostics,
         similar_cases: similar,
         fingerprint_key: fingerprint.key.clone(),
         report_id: report_id.map(|s| s.to_string()),
@@ -8817,13 +8877,16 @@ fn get_launch_log(path: String) -> Result<String, String> {
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
     let logs_dir = project_dir.join("logs");
-    // Prefer live JVM console (stdout/stderr tee) while Minecraft is starting;
-    // fall back to Minecraft's own latest.log once it exists and has content.
+    // Prefer Minecraft's PatternLayout latest.log once it has real content.
+    // tuffbox-console.log is JVM stdout and is often LegacyXMLLayout (raw
+    // <log4j:event timestamp=…>), which is unreadable in the UI.
     let console = logs_dir.join("tuffbox-console.log");
     let latest = logs_dir.join("latest.log");
     let console_len = std::fs::metadata(&console).map(|m| m.len()).unwrap_or(0);
     let latest_len = std::fs::metadata(&latest).map(|m| m.len()).unwrap_or(0);
-    let log_path = if console_len > 0 && (latest_len < 64 || console_len >= latest_len) {
+    let log_path = if latest_len > 256 {
+        latest
+    } else if console_len > 0 {
         console
     } else if latest.exists() {
         latest
@@ -10030,6 +10093,7 @@ fn add_mod_from_curseforge(
         dependencies: vec![],
         status: vec!["ok".to_string()],
         content_type,
+        authors: hit.authors.clone(),
     });
     Ok(())
 }
@@ -10181,6 +10245,11 @@ fn build_mod_spec(
         content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(
             &project.project_type,
         ),
+        authors: project
+            .author
+            .as_ref()
+            .map(|a| vec![a.clone()])
+            .unwrap_or_default(),
     }
 }
 

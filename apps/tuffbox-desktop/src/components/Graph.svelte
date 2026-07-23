@@ -8,6 +8,7 @@
   import * as d3 from "d3-force";
   import { onDestroy, onMount } from "svelte";
 
+
   type GraphNode = {
     id: string;
     kind: string;
@@ -89,17 +90,56 @@
     return { ...edge, from, to };
   }
 
-  function applyGraph(raw: any, resetSelection = false) {
+  function applyGraph(
+    raw: any,
+    opts: { resetSelection?: boolean; preserveLayout?: boolean } | boolean = {},
+  ) {
+    // Backward-compat: older call sites passed a boolean resetSelection flag.
+    const options =
+      typeof opts === "boolean" ? { resetSelection: opts } : opts ?? {};
+    const resetSelection = !!options.resetSelection;
+    const preserveLayout = !!options.preserveLayout;
     graph = {
       nodes: (raw.nodes ?? []).map(normalizeNode),
       edges: (raw.edges ?? []).map(normalizeEdge),
     };
     graphSource = raw.source ?? "local";
     graphGeneratedAt = raw.generatedAt ?? null;
-    simulationLayoutKey = "";
+    if (!preserveLayout) {
+      simulationLayoutKey = "";
+    }
     if (resetSelection) selectedId = null;
     hydrateMissingIcons().catch(() => {});
     queueMicrotask(() => hydrateGhostNodes().catch(() => {}));
+  }
+
+  let pendingRestorePositions: Map<
+    string,
+    {
+      x?: number | null;
+      y?: number | null;
+      fx?: number | null;
+      fy?: number | null;
+      hubX?: number;
+      hubY?: number;
+      isHub?: boolean;
+    }
+  > | null = null;
+
+  /** Soft reload after delete/install: keep camera, positions, and icon cache. */
+  async function reloadGraphInPlace() {
+    if (!$projectPath) return;
+    const prevPos = new Map(
+      simNodes.map((n) => [
+        n.id,
+        { x: n.x, y: n.y, fx: n.fx, fy: n.fy, hubX: n.hubX, hubY: n.hubY, isHub: n.isHub },
+      ]),
+    );
+    const raw: any = await invoke("get_graph", { path: $projectPath });
+    resetViewOnNextLayout = false;
+    pendingRestorePositions = prevPos;
+    applyGraph(raw, { preserveLayout: true });
+    await loadChangePlan();
   }
 
   async function refreshGraph(manual = true) {
@@ -128,9 +168,10 @@
     ghostMeta = {};
     simulationLayoutKey = "";
     resetViewOnNextLayout = true;
+    pendingRestorePositions = null;
     try {
       const raw: any = await invoke("get_graph", { path: $projectPath });
-      applyGraph(raw, true);
+      applyGraph(raw, { resetSelection: true });
       // Don't pre-select a node — otherwise every unrelated edge is dimmed
       // to near-invisible and the graph looks disconnected.
       await loadChangePlan();
@@ -299,7 +340,7 @@
     try {
       await invoke("remove_project_mod", { path: $projectPath, modId });
       message = `Removed ${modId}.`;
-      await load(true);
+      await reloadGraphInPlace();
     } catch (e) {
       error = String(e);
     } finally {
@@ -625,27 +666,28 @@
         },
       }));
     const seen = new Set(out.map((node) => node.id));
+    // Only required missing targets become installable ghosts — optional
+    // integrations must not appear in "Missing dependencies".
     for (const e of edges) {
-      if (e.kind === "RequiresLoader" || e.kind === "RequiresMinecraft" || e.kind === "RequiresJava" || e.kind === "IncludedInProfile") continue;
-      for (const end of [e.from, e.to]) {
-        if (!nodeIdSet(end) && !seen.has(end)) {
-          seen.add(end);
-          const slug = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
-          const cached = ghostMeta[end];
-          out.push({
-            id: end,
-            kind: "Missing",
-            label: cached?.name ?? slug,
-            version: null,
-            side: "unknown",
-            metadata: {
-              ...(cached?.iconUrl ? { icon_url: cached.iconUrl } : {}),
-              ...(cached?.projectId ? { project_id: cached.projectId } : {}),
-              ...(cached?.description ? { description: cached.description } : {}),
-              source: cached?.source ?? "modrinth",
-            },
-          });
-        }
+      if (e.kind !== "Requires") continue;
+      const end = e.to;
+      if (!nodeIdSet(end) && !seen.has(end)) {
+        seen.add(end);
+        const slug = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
+        const cached = ghostMeta[end];
+        out.push({
+          id: end,
+          kind: "Missing",
+          label: cached?.name ?? slug,
+          version: null,
+          side: "unknown",
+          metadata: {
+            ...(cached?.iconUrl ? { icon_url: cached.iconUrl } : {}),
+            ...(cached?.projectId ? { project_id: cached.projectId } : {}),
+            ...(cached?.description ? { description: cached.description } : {}),
+            source: cached?.source ?? "modrinth",
+          },
+        });
       }
     }
     return out;
@@ -887,7 +929,7 @@
       label: "Rendering & Performance",
       color: "rgba(139,92,246,0.5)",
       matches: (id, label) =>
-        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|cull-less|continuity|entitytexture|dashloader|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle|render|optifine|performance|fps)/i.test(
+        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|cull-less|continuity|entitytexture|entity-texture|etf|dashloader|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle|render|optifine|performance|fps|sky|skies)/i.test(
           id + " " + label
         ),
     },
@@ -959,7 +1001,7 @@
       label: "Building & Decor",
       color: "rgba(45,212,191,0.5)",
       matches: (id, label) =>
-        /(bookshelf|supplementaries|decor|furniture|macaw|hand|totem|waystone|building|chisel|construction|architect|block|gravestone|lantern|lighting|painting|statue|plant|flower|terraform|abundance|earth|stone|cobble|Quark)/i.test(
+        /(bookshelf|supplementaries|decor|furniture|macaw|macaws|totem|waystone|building|chisel|construction|architectury-furniture|gravestone|lantern|lighting|painting|statue|plant|flower|terraform|abundance|cobble|quark)/i.test(
           id + " " + label
         ),
     },
@@ -1018,18 +1060,31 @@
   ]);
 
   /// Specific Modrinth tags beat catch-alls (qol / library).
+  /// Decor before storage so furniture tagged both (Macaw's) lands in Building & Decor.
   const GROUP_PRIORITY = [
-    "rendering", "worldgen", "storage", "create", "magic", "adventure", "farming", "decor", "library", "qol",
+    "rendering", "worldgen", "decor", "storage", "create", "magic", "adventure", "farming", "library", "qol",
   ];
 
-  /// Assign every Mod/Missing node to one cluster. Modrinth categories win
-  /// (authoritative site taxonomy); mods without cached categories fall back to
-  /// keyword matching; anything still unmatched routes to Quality of Life so no
-  /// node is orphaned.
+  /// Assign every Mod/Missing node to one cluster. Strong name signals win over
+  /// ambiguous Modrinth tags (e.g. ETF tagged decoration, Macaw's tagged storage).
   function categorizeMod(node: GraphNode | PositionedNode): ModGroup {
     const id = node.id;
     const label = node.label;
+    const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
+    const text = `${slug} ${label}`;
     const cats = nodeCategories(node);
+
+    const decorGroup = MOD_GROUPS.find((g) => g.key === "decor")!;
+    const renderingGroup = MOD_GROUPS.find((g) => g.key === "rendering")!;
+
+    // Strong overrides before Modrinth tags (fixes known mis-tags).
+    if (/(macaw|macaws|furniture|chisel|supplementaries)/i.test(text)) {
+      return decorGroup;
+    }
+    if (/(entity.?texture|^etf\b|\betf\b|shader|iris|sodium|better.?end.?sky|end.?sky)/i.test(text)) {
+      return renderingGroup;
+    }
+
     if (cats.length) {
       const mappedKeys = cats
         .map((c) => MODRINTH_CATEGORY_TO_GROUP[c])
@@ -1045,13 +1100,16 @@
             best = MOD_GROUPS.find((g) => g.key === key) ?? null;
           }
         }
-        if (best) return best;
+        if (best) {
+          return best;
+        }
       }
     }
-    const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
     for (const key of GROUP_PRIORITY) {
       const group = MOD_GROUPS.find((g) => g.key === key);
-      if (group?.matches(slug, label)) return group;
+      if (group?.matches(slug, label)) {
+        return group;
+      }
     }
     return MOD_GROUPS.find((g) => g.key === "qol")!;
   }
@@ -1235,6 +1293,26 @@
       } as LayoutNode;
     });
 
+    // Soft-reload: reuse prior coordinates so delete doesn't remount the graph.
+    if (pendingRestorePositions) {
+      let restored = 0;
+      for (const n of simNodes) {
+        const prev = pendingRestorePositions.get(n.id);
+        if (!prev || prev.x == null || prev.y == null) continue;
+        n.x = prev.x;
+        n.y = prev.y;
+        n.hubX = prev.hubX ?? n.hubX;
+        n.hubY = prev.hubY ?? n.hubY;
+        if (n.isHub) {
+          n.fx = prev.fx ?? prev.x;
+          n.fy = prev.fy ?? prev.y;
+        }
+        restored += 1;
+      }
+      pendingRestorePositions = null;
+      resetViewOnNextLayout = false;
+    }
+
     if (simulation) simulation.stop();
 
     // Polish physics on a tidy seed: collide prevents icon/label overlap,
@@ -1381,12 +1459,38 @@
   $: denseGraph = renderedEdges.length > 70;
 
   function clientToSvgPoint(clientX: number, clientY: number) {
-    const rect = viewportEl.getBoundingClientRect();
+    // Prefer screen CTM so letterboxed SVG (preserveAspectRatio meet) maps correctly.
+    // Manual viewBox math ignores letterboxing and snaps drags toward the canvas center.
+    if (viewportEl) {
+      const ctm = viewportEl.getScreenCTM();
+      if (ctm) {
+        const pt = viewportEl.createSVGPoint();
+        pt.x = clientX;
+        pt.y = clientY;
+        const svg = pt.matrixTransform(ctm.inverse());
+        return { x: svg.x, y: svg.y };
+      }
+    }
+    const rect = viewportEl?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return { x: viewX, y: viewY };
     const relX = (clientX - rect.left) / rect.width;
     const relY = (clientY - rect.top) / rect.height;
     return {
       x: viewX + relX * viewBoxWidth,
       y: viewY + relY * viewBoxHeight,
+    };
+  }
+
+  function screenDeltaToSvg(dx: number, dy: number) {
+    const ctm = viewportEl?.getScreenCTM();
+    if (ctm && ctm.a && ctm.d) {
+      return { x: dx / ctm.a, y: dy / ctm.d };
+    }
+    const rect = viewportEl?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return { x: 0, y: 0 };
+    return {
+      x: (dx / rect.width) * viewBoxWidth,
+      y: (dy / rect.height) * viewBoxHeight,
     };
   }
 
@@ -1449,15 +1553,12 @@
   function handleBackgroundPointerMove(event: PointerEvent) {
     if (!isPanning || !viewportEl) return;
     if (panPointerId != null && event.pointerId !== panPointerId) return;
-    const rect = viewportEl.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const dx = ((event.clientX - panStart.x) / rect.width) * viewBoxWidth;
-    const dy = ((event.clientY - panStart.y) / rect.height) * viewBoxHeight;
+    const delta = screenDeltaToSvg(event.clientX - panStart.x, event.clientY - panStart.y);
     if (Math.abs(event.clientX - panStart.x) > 3 || Math.abs(event.clientY - panStart.y) > 3) {
       panMoved = true;
     }
-    viewX = panStart.viewX - dx;
-    viewY = panStart.viewY - dy;
+    viewX = panStart.viewX - delta.x;
+    viewY = panStart.viewY - delta.y;
   }
 
   function handleBackgroundPointerUp(event: PointerEvent) {
@@ -1599,6 +1700,9 @@
     const target = event.currentTarget as Element | null;
     isNodeDragging = true;
     nodeDragPointerId = pointerId;
+    const grab = clientToSvgPoint(event.clientX, event.clientY);
+    const grabOffsetX = grab.x - (layoutNode.x ?? 0);
+    const grabOffsetY = grab.y - (layoutNode.y ?? 0);
     layoutNode.fx = layoutNode.x;
     layoutNode.fy = layoutNode.y;
     try {
@@ -1610,19 +1714,21 @@
     const onPointerMove = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       const p = clientToSvgPoint(ev.clientX, ev.clientY);
-      layoutNode.fx = p.x;
-      layoutNode.fy = p.y;
-      layoutNode.x = p.x;
-      layoutNode.y = p.y;
+      const nextX = p.x - grabOffsetX;
+      const nextY = p.y - grabOffsetY;
+      layoutNode.fx = nextX;
+      layoutNode.fy = nextY;
+      layoutNode.x = nextX;
+      layoutNode.y = nextY;
       if (keepPinned) {
-        layoutNode.hubX = p.x;
-        layoutNode.hubY = p.y;
+        layoutNode.hubX = nextX;
+        layoutNode.hubY = nextY;
         // Only core/cluster-root nodes share this hub position; category groups
         // keep their own anchors, so we must NOT drag every mod along with a hub.
         for (const other of simNodes) {
           if (other.groupKey === layoutNode.groupKey && other.id !== layoutNode.id) {
-            other.hubX = p.x;
-            other.hubY = p.y;
+            other.hubX = nextX;
+            other.hubY = nextY;
           }
         }
       }

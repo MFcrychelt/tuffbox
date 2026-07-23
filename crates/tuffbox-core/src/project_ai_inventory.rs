@@ -27,6 +27,8 @@ pub struct InventoryMod {
     pub enabled: bool,
     pub side: String,
     pub file_name: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ pub fn collect_project_ai_inventory(
             enabled,
             side: format!("{:?}", m.side).to_lowercase(),
             file_name: m.file_name.clone().or_else(|| m.source.path.clone()),
+            authors: m.authors.clone(),
         });
     }
     // Also list loose jars in mods/ not in manifest.
@@ -91,6 +94,9 @@ pub fn collect_project_ai_inventory(
                     .trim_end_matches(".jar")
                     .trim_end_matches(".JAR")
                     .to_string();
+                let authors = crate::mod_scan::scan_mod_jar(&e.path())
+                    .map(|r| r.authors)
+                    .unwrap_or_default();
                 inv.mods.push(InventoryMod {
                     id: id.clone(),
                     name: id,
@@ -99,6 +105,7 @@ pub fn collect_project_ai_inventory(
                     enabled,
                     side: "unknown".into(),
                     file_name: Some(name),
+                    authors,
                 });
             }
         }
@@ -328,7 +335,7 @@ pub fn format_inventory_for_prompt(inv: &ProjectAiInventory, max_chars: usize) -
             format!(" @{}", m.version)
         };
         let line = format!(
-            "- {}{}{} ({}, side={}){}\n",
+            "- {}{}{} ({}, side={}){}{}\n",
             m.id,
             ver,
             flag,
@@ -337,7 +344,12 @@ pub fn format_inventory_for_prompt(inv: &ProjectAiInventory, max_chars: usize) -
             m.file_name
                 .as_ref()
                 .map(|f| format!(" file={f}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            if m.authors.is_empty() {
+                String::new()
+            } else {
+                format!(" by={}", m.authors.join("/"))
+            }
         );
         if p.len() + line.len() > max_chars {
             p.push_str("- … (truncated)\n");

@@ -267,13 +267,17 @@ impl DependencyGraph {
         }
 
         // Missing dependencies are real graph nodes rather than a UI-only
-        // invention. This keeps the resolver, CLI, DOT export and desktop
-        // view consistent and guarantees every edge endpoint exists.
+        // invention. Only *required* unresolved deps become Missing nodes —
+        // optional integrations must not appear as install prompts.
         let existing: HashSet<NodeId> = graph.nodes.iter().map(|node| node.id.clone()).collect();
         let missing: HashSet<NodeId> = graph
             .edges
             .iter()
-            .filter(|edge| edge.to.0.starts_with("mod:") && !existing.contains(&edge.to))
+            .filter(|edge| {
+                edge.kind == EdgeKind::Requires
+                    && edge.to.0.starts_with("mod:")
+                    && !existing.contains(&edge.to)
+            })
             .map(|edge| edge.to.clone())
             .collect();
         for id in missing {
@@ -348,6 +352,47 @@ mod tests {
             .expect("iris requires edge");
         assert_eq!(edge.to.0, "mod:sodium");
         assert!(graph.has_node(&NodeId::module("sodium")));
+    }
+
+    #[test]
+    fn missing_nodes_only_for_required_deps_not_optional() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.20.1" },
+          "loader": { "type": "fabric", "version": "0.15.11" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "demo",
+              "name": "Demo",
+              "source": { "type": "modrinth", "projectId": "demo" },
+              "version": "1.0.0",
+              "side": "both",
+              "dependencies": [
+                { "type": "requires", "target": "fabric-api" },
+                { "type": "optional", "target": "sodium" },
+                { "type": "optional", "target": "iris" }
+              ]
+            }
+          ]
+        }"#;
+        let manifest: ProjectManifest = serde_json::from_str(raw).unwrap();
+        let graph = DependencyGraph::from_manifest(&manifest);
+        let missing: Vec<_> = graph
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Missing)
+            .map(|n| n.id.0.as_str())
+            .collect();
+        assert!(
+            missing.contains(&"mod:fabric-api"),
+            "required missing dep should be a Missing node: {missing:?}"
+        );
+        assert!(
+            !missing.iter().any(|id| *id == "mod:sodium" || *id == "mod:iris"),
+            "optional deps must not become Missing nodes: {missing:?}"
+        );
     }
 }
 

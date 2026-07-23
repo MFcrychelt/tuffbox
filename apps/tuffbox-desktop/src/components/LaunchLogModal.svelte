@@ -11,98 +11,55 @@
 
   let log = "";
   let loading = true;
-  let interval: ReturnType<typeof setInterval>;
+  let interval: ReturnType<typeof setInterval> | null = null;
   let logFiles: { name: string; size: number; modified?: number | null }[] = [];
   /** `__live__` = auto-pick console/latest for the running session */
   let selectedLog = "__live__";
-  let loadingLogList = false;
   let logListOpen = false;
   let followTail = true;
   let logPreEl: HTMLPreElement | null = null;
   let userScrolledUp = false;
+  let lastFetchedLen = -1;
+  let loadGen = 0;
+  let analyzeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  type SignalKind =
-    | "SuspectedMods"
-    | "ModFile"
-    | "CausedBy"
-    | "Mixin"
-    | "Exception"
-    | "OpenGl"
-    | "Performance"
-    | "ResourceWarning"
-    | "Entrypoint"
-    | "LoaderMismatch"
-    | "MissingDependency"
-    | "ModVersionMismatch"
-    | "MinecraftVersionMismatch"
-    | "LoaderVersionMismatch"
-    | "WrongLoader";
-
-  const KIND_LABEL: Record<SignalKind, string> = {
-    SuspectedMods: "Suspected",
-    ModFile: "Bad file",
-    CausedBy: "Caused by",
-    Mixin: "Mixin",
-    Exception: "Crash",
-    OpenGl: "GPU",
-    Performance: "Lag",
-    ResourceWarning: "Asset",
-    Entrypoint: "Entrypoint",
-    LoaderMismatch: "Loader clash",
-    MissingDependency: "Missing dependency",
-    ModVersionMismatch: "Version conflict",
-    MinecraftVersionMismatch: "Wrong MC version",
-    LoaderVersionMismatch: "Wrong loader version",
-    WrongLoader: "Wrong loader",
-  };
-
-  type Highlight = {
-    modId: string;
-    modName: string;
-    confidence: number;
-    kind: SignalKind;
-    text: string;
-  };
-  let highlights = new Map<number, Highlight>();
+  type SuspectSummary = { id: string; name: string; confidence: number };
+  let suspects: SuspectSummary[] = [];
   let suspectCount = 0;
 
-  async function analyzeLog() {
-    if (!log) {
-      highlights = new Map();
+  function isLiveTab() {
+    return selectedLog === "__live__";
+  }
+
+  async function analyzeLog(text: string) {
+    if (!text || text.length > 400_000) {
+      suspects = [];
       suspectCount = 0;
       return;
     }
+    // Cap analysis to the last chunk so huge latest.log stays responsive.
+    const sample = text.length > 120_000 ? text.slice(text.length - 120_000) : text;
     try {
       const res = (await invoke("analyze_log_text", {
         path: projectPath,
-        text: log,
+        text: sample,
       })) as {
         suspectedMods: { id: string; name: string; confidence: number }[];
-        highlights: {
-          lineNumber: number;
-          modId: string;
-          modName: string;
-          confidence: number;
-          kind: SignalKind;
-          text: string;
-        }[];
       };
-      const map = new Map<number, Highlight>();
-      for (const h of res.highlights) {
-        map.set(h.lineNumber, {
-          modId: h.modId,
-          modName: h.modName,
-          confidence: h.confidence,
-          kind: h.kind,
-          text: h.text,
-        });
-      }
-      highlights = map;
+      suspects = (res.suspectedMods ?? []).slice(0, 12);
       suspectCount = res.suspectedMods?.length ?? 0;
     } catch {
-      highlights = new Map();
+      suspects = [];
       suspectCount = 0;
     }
+  }
+
+  function scheduleAnalyze(text: string) {
+    if (analyzeTimer) clearTimeout(analyzeTimer);
+    analyzeTimer = setTimeout(() => {
+      analyzeTimer = null;
+      void analyzeLog(text);
+    }, isLiveTab() ? 2500 : 400);
   }
 
   async function scrollToBottomIfFollowing() {
@@ -118,58 +75,87 @@
     if (!userScrolledUp) followTail = true;
   }
 
-  async function loadLog() {
+  async function loadLog(opts: { forceAnalyze?: boolean } = {}) {
+    const gen = ++loadGen;
     try {
-      if (selectedLog === "__live__" || selectedLog === "latest.log") {
-        const result = await invoke("get_launch_log", { path: projectPath });
-        log = result as string;
+      let result: string;
+      if (selectedLog === "__live__") {
+        result = (await invoke("get_launch_log", { path: projectPath })) as string;
       } else {
-        const result = await invoke("read_instance_log", {
+        // Always read the named file — never route latest.log through get_launch_log
+        // (that prefers the XML console and showed raw log4j/timestamp markup).
+        result = (await invoke("read_instance_log", {
           path: projectPath,
           logName: selectedLog,
-        });
-        log = result as string;
+        })) as string;
       }
-      // Analyze less often on live poll — only when idle selection or every ~4s via length change.
-      if (selectedLog !== "__live__" || log.length < 80_000) {
-        await analyzeLog();
+      if (gen !== loadGen) return;
+
+      const next = result ?? "";
+      if (next.length === lastFetchedLen && next === log) {
+        return;
+      }
+      const changed = next !== log;
+      log = next;
+      lastFetchedLen = next.length;
+
+      if (changed || opts.forceAnalyze) {
+        if (isLiveTab()) {
+          scheduleAnalyze(next);
+        } else {
+          await analyzeLog(next);
+        }
       }
       await scrollToBottomIfFollowing();
     } catch (e) {
-      log += `\n[error] ${e}`;
+      if (gen !== loadGen) return;
+      log = (log ? log + "\n" : "") + `[error] ${e}`;
     } finally {
-      loading = false;
+      if (gen === loadGen) loading = false;
     }
   }
 
   async function loadLogList() {
-    loadingLogList = true;
     try {
       logFiles = await invoke("list_instance_logs", { path: projectPath });
     } catch {
       logFiles = [];
-    } finally {
-      loadingLogList = false;
+    }
+  }
+
+  function syncPolling() {
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+    // Only live-tail polls — static files (latest.log, archives) load once.
+    if (isLiveTab()) {
+      interval = setInterval(() => void loadLog(), 1000);
     }
   }
 
   async function switchLog(name: string) {
+    if (selectedLog === name && log) return;
     selectedLog = name;
     loading = true;
-    log = "";
+    lastFetchedLen = -1;
     userScrolledUp = false;
     followTail = true;
-    await loadLog();
+    suspects = [];
+    suspectCount = 0;
+    syncPolling();
+    await loadLog({ forceAnalyze: true });
   }
 
   onMount(() => {
-    loadLog();
-    loadLogList();
-    interval = setInterval(loadLog, 750);
+    void loadLog({ forceAnalyze: true });
+    void loadLogList();
+    syncPolling();
   });
 
   onDestroy(() => {
-    clearInterval(interval);
+    if (interval) clearInterval(interval);
+    if (analyzeTimer) clearTimeout(analyzeTimer);
   });
 </script>
 
@@ -198,7 +184,7 @@
             class="log-select-btn"
             class:active={selectedLog === "__live__"}
             on:click={() => switchLog("__live__")}
-            title="JVM console + latest.log (auto)"
+            title="Auto: latest.log when ready, else console"
           >
             <Radio size={13} /> Live
           </button>
@@ -230,7 +216,7 @@
         </div>
         {#if logListOpen}
           <div class="log-dropdown">
-            {#each logFiles as f}
+            {#each logFiles as f (f.name)}
               <button
                 class="log-file-row"
                 class:selected={selectedLog === f.name}
@@ -282,28 +268,17 @@
           Waiting for process output…
         </div>
       {/if}
-      {#if suspectCount > 0 && selectedLog !== "__live__"}
+      {#if suspectCount > 0}
         <div class="suspect-banner">
-          <strong>{suspectCount}</strong> mod{suspectCount === 1 ? "" : "s"} referenced in this log —
-          highlighted below.
+          <strong>{suspectCount}</strong> mod{suspectCount === 1 ? "" : "s"} referenced
+          {#if suspects.length}
+            — {suspects.map((s) => s.name).join(", ")}{suspectCount > suspects.length ? "…" : ""}
+          {/if}
         </div>
       {/if}
       {#if log}
-        <pre class="log" bind:this={logPreEl} on:scroll={onLogScroll}
-          >{#each log.split("\n") as line, i}{@const ln = i + 1}{@const h = highlights.get(ln)}{#if h}<span
-              class="log-hl"
-              title={h.modName +
-                " — " +
-                (KIND_LABEL[h.kind] ?? h.kind) +
-                " (" +
-                h.confidence +
-                "%)"}
-              ><span class="log-line-no">{ln}</span><span class="log-badge">{h.modName}</span
-              ><span class="log-tag">{KIND_LABEL[h.kind] ?? h.kind}</span>{line}
-</span
-            >{:else}<span class="log-line-no">{ln}</span>{line}
-{/if}{/each}</pre
-        >
+        <!-- Single text node: per-line Svelte each-blocks made latest.log lag hard. -->
+        <pre class="log" bind:this={logPreEl} on:scroll={onLogScroll}>{log}</pre>
       {:else}
         <pre class="log">Waiting for process output…</pre>
       {/if}
@@ -312,10 +287,10 @@
     <div class="modal-footer">
       <span class="live-hint"
         >{selectedLog === "__live__"
-          ? "Streaming tuffbox-console.log / latest.log · refreshes ~0.75s"
-          : `Showing ${selectedLog}`}</span
+          ? "Live tail · refreshes ~1s · XML console auto-formatted"
+          : `Showing ${selectedLog} (loaded once)`}</span
       >
-      <button class="ghost" on:click={loadLog}>
+      <button class="ghost" on:click={() => loadLog({ forceAnalyze: true })}>
         <RotateCcw size={16} />
         Refresh
       </button>
@@ -509,29 +484,6 @@
     color: #d5dbe6;
     background: #0e1218;
     min-height: 360px;
-  }
-
-  .log-line-no {
-    display: inline-block;
-    min-width: 36px;
-    margin-right: 8px;
-    color: #5c6778;
-    user-select: none;
-  }
-
-  .log-hl {
-    display: block;
-    background: rgba(255, 120, 80, 0.12);
-  }
-
-  .log-badge,
-  .log-tag {
-    display: inline-block;
-    margin-right: 6px;
-    padding: 0 5px;
-    border-radius: 4px;
-    font-size: 10px;
-    background: rgba(255, 255, 255, 0.08);
   }
 
   .modal-footer {

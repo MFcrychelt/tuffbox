@@ -52,14 +52,43 @@ pub struct ModScanResult {
     pub loader_hint: Option<String>,
     /// Raw `environment` string from the descriptor, for diagnostics.
     pub raw_environment: Option<String>,
+    /// Canonical mod id from the descriptor when present.
+    pub mod_id: Option<String>,
+    /// Authors / contributors from jar metadata.
+    pub authors: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FabricModJson {
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     environment: Option<String>,
+    #[serde(default)]
+    authors: Vec<FabricAuthor>,
+    #[serde(default)]
+    contributors: Vec<FabricAuthor>,
     #[serde(default, rename = "accessWidener")]
     _access_widener: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum FabricAuthor {
+    Name(String),
+    Obj { name: Option<String> },
+}
+
+impl FabricAuthor {
+    fn name(&self) -> Option<String> {
+        match self {
+            FabricAuthor::Name(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            FabricAuthor::Obj { name: Some(s) } if !s.trim().is_empty() => {
+                Some(s.trim().to_string())
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,10 +116,36 @@ struct ForgeModsToml {
 
 #[derive(Debug, Deserialize)]
 struct ForgeModEntry {
+    #[serde(default, alias = "modId", alias = "modid")]
+    mod_id: String,
     #[serde(default)]
-    _modid: String,
+    authors: Option<ForgeAuthors>,
     #[serde(default, rename = "networking")]
     _networking: Option<ForgeNetworking>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ForgeAuthors {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ForgeAuthors {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            ForgeAuthors::One(s) => s
+                .split([',', ';'])
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .collect(),
+            ForgeAuthors::Many(v) => v
+                .into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,23 +242,27 @@ fn parse_forge_mods_toml(
     content: &str,
     loader: &str,
 ) -> Result<Option<ModScanResult>, ModScanError> {
-    let _toml: ForgeModsToml =
+    let toml: ForgeModsToml =
         toml::from_str(content).map_err(|source| ModScanError::Parse {
             entry: format!("META-INF/{loader}.mods.toml"),
             source: serde::de::Error::custom(source.to_string()),
         })?;
 
-    // Heuristic: a Forge/NeoForge mod is server+client (`Both`) unless it is
-    // clearly client-only. We can't read the @Mod annotation's
-    // `@NetworkDirection(PLAY_TO_SERVER)` without bytecode analysis, so we
-    // treat the presence of *any* mod entry as `Both` (SPC's ForgeScanner does
-    // the same — it can't statically prove client-only either). A manifest
-    // `side` of `Client`/`Server` elsewhere still overrides if known.
     let side = Side::Both;
+    let first = toml.mods.first();
+    let mod_id = first
+        .map(|m| m.mod_id.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let authors = first
+        .and_then(|m| m.authors.clone())
+        .map(|a| a.into_vec())
+        .unwrap_or_default();
     Ok(Some(ModScanResult {
         side,
         loader_hint: Some(loader.to_string()),
         raw_environment: None,
+        mod_id,
+        authors,
     }))
 }
 
@@ -215,10 +274,20 @@ fn parse_fabric_mod_json(content: &str, _path: &str) -> Result<Option<ModScanRes
         Some("server") => Side::Server,
         _ => Side::Both,
     };
+    let mut authors: Vec<String> = json
+        .authors
+        .iter()
+        .chain(json.contributors.iter())
+        .filter_map(|a| a.name())
+        .collect();
+    authors.sort();
+    authors.dedup();
     Ok(Some(ModScanResult {
         side,
         loader_hint: Some("fabric".into()),
         raw_environment: json.environment,
+        mod_id: json.id.filter(|s| !s.trim().is_empty()),
+        authors,
     }))
 }
 
@@ -239,6 +308,8 @@ fn parse_quilt_mod_json(content: &str, _path: &str) -> Result<Option<ModScanResu
         side,
         loader_hint: Some("quilt".into()),
         raw_environment: None,
+        mod_id: None,
+        authors: Vec::new(),
     }))
 }
 
@@ -264,6 +335,8 @@ fn parse_mcmod_info(content: &str) -> Result<Option<ModScanResult>, ModScanError
         side,
         loader_hint: Some("forge".into()),
         raw_environment: None,
+        mod_id: None,
+        authors: Vec::new(),
     }))
 }
 
@@ -277,6 +350,8 @@ fn parse_mods_info(content: &str) -> Result<Option<ModScanResult>, ModScanError>
         side: if side { Side::Client } else { Side::Both },
         loader_hint: Some("forge".into()),
         raw_environment: None,
+        mod_id: None,
+        authors: Vec::new(),
     }))
 }
 
@@ -372,6 +447,35 @@ displayName="X"
         let result = scan_mod_jar(&dir.path().join("mod.jar")).unwrap();
         assert_eq!(result.side, Side::Both);
         assert_eq!(result.loader_hint.as_deref(), Some("forge"));
+    }
+
+    #[test]
+    fn fabric_authors_are_parsed() {
+        let dir = make_jar(&[(
+            "fabric.mod.json",
+            r#"{"schemaVersion":1,"id":"coolmod","version":"1","authors":["Alice","Bob"],"environment":"*"}"#,
+        )]);
+        let result = scan_mod_jar(&dir.path().join("mod.jar")).unwrap();
+        assert_eq!(result.mod_id.as_deref(), Some("coolmod"));
+        assert_eq!(result.authors, vec!["Alice".to_string(), "Bob".to_string()]);
+    }
+
+    #[test]
+    fn forge_authors_are_parsed() {
+        let dir = make_jar(&[(
+            "META-INF/mods.toml",
+            r#"
+[[mods]]
+modId="x"
+version="1"
+displayName="X"
+authors="Carol, Dave"
+"#,
+        )]);
+        let result = scan_mod_jar(&dir.path().join("mod.jar")).unwrap();
+        assert_eq!(result.mod_id.as_deref(), Some("x"));
+        assert!(result.authors.iter().any(|a| a == "Carol"));
+        assert!(result.authors.iter().any(|a| a == "Dave"));
     }
 
     #[test]

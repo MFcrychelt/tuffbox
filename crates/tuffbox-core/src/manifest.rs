@@ -298,6 +298,9 @@ pub struct ModSpec {
     /// load them as a mod and fail.
     #[serde(default)]
     pub content_type: ContentType,
+    /// Mod authors / creators (Modrinth/CF / jar metadata). Empty when unknown.
+    #[serde(default)]
+    pub authors: Vec<String>,
 }
 
 impl ModSpec {

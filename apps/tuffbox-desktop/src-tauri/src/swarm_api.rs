@@ -882,6 +882,7 @@ pub async fn publish_experience_capsule(
             mc_major: fingerprint.mc_major,
             loader: loader.clone(),
             key: fp_key.clone(),
+            blame_mod_ids: Vec::new(),
         };
     } else if !fp_key.is_empty() && fp_key != "unknown" {
         // Keep marker key if it was the one used for the fix.

@@ -121,6 +121,7 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
                 dependencies: Vec::new(),
                 status: vec!["ok".to_string()],
                 content_type,
+                authors: Vec::new(),
             })
         })
         .collect();
@@ -300,6 +301,7 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
                 dependencies: vec![],
                 status: vec!["imported-curseforge".into()],
                 content_type: crate::manifest::ContentType::Mod,
+                authors: Vec::new(),
             }
         })
         .collect();

@@ -889,6 +889,11 @@ fn build_mod_spec(
         dependencies,
         status: vec!["ok".to_string()],
         content_type: tuffbox_core::manifest::ContentType::from_modrinth_project_type(&project.project_type),
+        authors: project
+            .author
+            .as_ref()
+            .map(|a| vec![a.clone()])
+            .unwrap_or_default(),
     }
 }
 

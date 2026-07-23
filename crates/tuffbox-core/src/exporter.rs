@@ -899,6 +899,7 @@ mod tests {
                     dependencies: vec![],
                     status: vec![],
                     content_type: ContentType::Mod,
+                    authors: Vec::new(),
                 },
                 ModSpec {
                     id: "clientmod".to_string(),
@@ -919,6 +920,7 @@ mod tests {
                     dependencies: vec![],
                     status: vec![],
                     content_type: ContentType::Mod,
+                    authors: Vec::new(),
                 },
             ],
             overrides: None,

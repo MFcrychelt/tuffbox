@@ -22,6 +22,9 @@ pub struct CrashFingerprint {
     pub loader: String,
     /// Compact key for exact match / display.
     pub key: String,
+    /// Top blamed mod ids (sorted, capped) used to refine similarity.
+    #[serde(default)]
+    pub blame_mod_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +107,16 @@ pub struct AuthorCaseSaveResult {
 /// Extract a stable fingerprint from crash report / log text.
 /// Scrubs absolute paths and UUID-like tokens before hashing (ReDoS-aware linear patterns).
 pub fn fingerprint_from_text(text: &str, mc_version: &str, loader: &str) -> CrashFingerprint {
+    fingerprint_from_text_with_blame(text, mc_version, loader, &[])
+}
+
+/// Same as [`fingerprint_from_text`] but attaches top blamed mod ids to the key.
+pub fn fingerprint_from_text_with_blame(
+    text: &str,
+    mc_version: &str,
+    loader: &str,
+    blame_mod_ids: &[String],
+) -> CrashFingerprint {
     let scrubbed = scrub_privacy_sensitive(text);
     let exception = extract_exception(&scrubbed);
     let frames = extract_top_frames(&scrubbed, 5);
@@ -111,8 +124,17 @@ pub fn fingerprint_from_text(text: &str, mc_version: &str, loader: &str) -> Cras
     let mixin = extract_mixin(&scrubbed);
     let mc_major = mc_major(mc_version);
     let loader = loader.to_ascii_lowercase();
+    let mut blame: Vec<String> = blame_mod_ids
+        .iter()
+        .map(|s| normalize_token(s))
+        .filter(|s| !s.is_empty())
+        .collect();
+    blame.sort();
+    blame.dedup();
+    blame.truncate(3);
+    let blame_part = blame.join("+");
     let key = format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         normalize_token(&exception),
         frames.first().map(|s| normalize_token(s)).unwrap_or_default(),
         mod_file
@@ -120,7 +142,8 @@ pub fn fingerprint_from_text(text: &str, mc_version: &str, loader: &str) -> Cras
             .map(normalize_token)
             .unwrap_or_default(),
         mc_major,
-        loader
+        loader,
+        blame_part
     );
     CrashFingerprint {
         exception,
@@ -130,6 +153,7 @@ pub fn fingerprint_from_text(text: &str, mc_version: &str, loader: &str) -> Cras
         mc_major,
         loader,
         key,
+        blame_mod_ids: blame,
     }
 }
 
@@ -370,6 +394,7 @@ fn case(
             mc_major: String::new(),
             loader: String::new(),
             key,
+            blame_mod_ids: Vec::new(),
         },
         symptoms: symptoms.iter().map(|s| (*s).to_string()).collect(),
         suspected_mods: Vec::new(),
@@ -693,6 +718,7 @@ mod author_tests {
             mc_major: "1.20".into(),
             loader: "fabric".into(),
             key: "noclass|foo|foo.jar|1.20|fabric".into(),
+            blame_mod_ids: Vec::new(),
         };
         let result = save_authored_case(
             dir.path(),
@@ -736,6 +762,38 @@ fn score_case(case: &CrashCase, fp: &CrashFingerprint, hay: &str) -> f64 {
     let mut score = 0.0;
     if !fp.key.is_empty() && fp.key == case.fingerprint.key {
         score += 1.0;
+    } else if !fp.key.is_empty() && !case.fingerprint.key.is_empty() {
+        // Soft match: ignore trailing blame suffix so older cases still hit.
+        let trunc = |k: &str| -> String {
+            k.rsplit_once('|')
+                .map(|(h, _)| h.to_string())
+                .unwrap_or_else(|| k.to_string())
+        };
+        let fp_trunc = trunc(&fp.key);
+        let case_trunc = trunc(&case.fingerprint.key);
+        if fp_trunc == case_trunc
+            || fp.key.starts_with(&case.fingerprint.key)
+            || case.fingerprint.key.starts_with(&fp_trunc)
+        {
+            score += 0.75;
+        }
+    }
+    if !fp.blame_mod_ids.is_empty() {
+        let case_blame: HashSet<String> = case
+            .fingerprint
+            .blame_mod_ids
+            .iter()
+            .chain(case.suspected_mods.iter())
+            .map(|s| normalize_token(s))
+            .collect();
+        let overlap = fp
+            .blame_mod_ids
+            .iter()
+            .filter(|id| case_blame.contains(&normalize_token(id)))
+            .count();
+        if overlap > 0 {
+            score += 0.2 * overlap as f64;
+        }
     }
     let ex = normalize_token(&fp.exception);
     let cex = normalize_token(&case.fingerprint.exception);

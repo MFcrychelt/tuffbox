@@ -403,6 +403,11 @@ pub fn identify_local_jar_via_modrinth(
         project.client_side.as_deref(),
         project.server_side.as_deref(),
     );
+    let authors = project
+        .author
+        .as_ref()
+        .map(|a| vec![a.clone()])
+        .unwrap_or_default();
 
     Ok(Some((
         ModSpec {
@@ -427,6 +432,7 @@ pub fn identify_local_jar_via_modrinth(
             dependencies,
             status: vec!["ok".to_string()],
             content_type,
+            authors,
         },
         project.client_side,
         project.server_side,
@@ -467,6 +473,7 @@ mod tests {
             dependencies: Vec::new(),
             status: vec!["ok".to_string()],
             content_type,
+            authors: Vec::new(),
         }
     }
 

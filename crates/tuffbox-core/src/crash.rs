@@ -97,6 +97,16 @@ pub struct SuspectEvidence {
     pub text: String,
 }
 
+/// How strongly a suspect is implicated in the crash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum BlameRole {
+    #[default]
+    Related,
+    Secondary,
+    Primary,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuspectedMod {
@@ -107,6 +117,15 @@ pub struct SuspectedMod {
     pub known_in_manifest: bool,
     pub confidence: u8,
     pub evidence: Vec<SuspectEvidence>,
+    /// Authors from manifest / jar metadata (may be empty).
+    #[serde(default)]
+    pub authors: Vec<String>,
+    /// `primary` / `secondary` / `related` after multi-signal ranking.
+    #[serde(default)]
+    pub blame_role: BlameRole,
+    /// Independent attribution channels that fired for this mod.
+    #[serde(default)]
+    pub match_sources: Vec<String>,
 }
 
 /// A plain-language explanation of a detected crash cause plus actionable
@@ -224,6 +243,8 @@ struct SuspectAccumulator {
     known_in_manifest: bool,
     confidence: u8,
     evidence: Vec<SuspectEvidence>,
+    authors: Vec<String>,
+    match_sources: Vec<String>,
 }
 
 pub fn list_crash_reports(
@@ -437,6 +458,17 @@ pub fn build_crash_diagnosis(
         combined_signals.extend(launcher_log.signals.clone());
     }
     let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
+    let suspected_mods = if session_healthy {
+        suspected_mods
+    } else {
+        enrich_diagnosis_suspects(
+            project_dir,
+            manifest,
+            &selected_report,
+            &latest_log,
+            suspected_mods,
+        )
+    };
 
     let graph = DependencyGraph::from_manifest(manifest);
     let graph_diagnostics = Resolver::analyze_project(manifest, &graph);
@@ -892,6 +924,11 @@ pub fn analyze_text_for_suspects(
                                 evidence(source, line_number, kind, line),
                                 88,
                             );
+                            if let Some(entry) =
+                                suspects.get_mut(&normalize_token(&candidate.module.id))
+                            {
+                                push_match_source(entry, "package");
+                            }
                         }
                     }
                 }
@@ -981,15 +1018,7 @@ pub fn analyze_text_for_suspects(
 
     let suspected_mods = suspects
         .into_values()
-        .map(|acc| SuspectedMod {
-            id: acc.id,
-            name: acc.name,
-            version: acc.version,
-            file_name: acc.file_name,
-            known_in_manifest: acc.known_in_manifest,
-            confidence: acc.confidence,
-            evidence: acc.evidence,
-        })
+        .map(accumulator_to_suspect)
         .collect::<Vec<_>>();
 
     (signals, merge_suspected_mods(suspected_mods))
@@ -1007,6 +1036,8 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             known_in_manifest: module.known_in_manifest,
             confidence: 0,
             evidence: Vec::new(),
+            authors: module.authors.clone(),
+            match_sources: module.match_sources.clone(),
         });
         entry.confidence = entry.confidence.max(module.confidence);
         if module.known_in_manifest && !entry.known_in_manifest {
@@ -1014,6 +1045,9 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             entry.name = module.name.clone();
             entry.version = module.version.clone();
             entry.file_name = module.file_name.clone();
+            if !module.authors.is_empty() {
+                entry.authors = module.authors.clone();
+            }
         }
         entry.known_in_manifest |= module.known_in_manifest;
         if entry.version.is_none() {
@@ -1022,6 +1056,12 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
         if entry.file_name.is_none() {
             entry.file_name = module.file_name.clone();
         }
+        if entry.authors.is_empty() && !module.authors.is_empty() {
+            entry.authors = module.authors.clone();
+        }
+        for src in &module.match_sources {
+            push_match_source(entry, src);
+        }
         for evidence in module.evidence {
             if entry.evidence.len() >= MAX_EVIDENCE_PER_SUSPECT {
                 break;
@@ -1029,6 +1069,7 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             if !entry.evidence.iter().any(|item| {
                 item.source == evidence.source && item.line_number == evidence.line_number
             }) {
+                push_match_source(entry, &match_source_for_kind(evidence.kind));
                 entry.evidence.push(evidence);
             }
         }
@@ -1039,15 +1080,7 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
 
     let mut out = by_id
         .into_values()
-        .map(|acc| SuspectedMod {
-            id: acc.id,
-            name: acc.name,
-            version: acc.version,
-            file_name: acc.file_name,
-            known_in_manifest: acc.known_in_manifest,
-            confidence: acc.confidence.min(99),
-            evidence: acc.evidence,
-        })
+        .map(accumulator_to_suspect)
         .collect::<Vec<_>>();
     out.sort_by(|a, b| {
         b.confidence
@@ -1055,6 +1088,7 @@ pub fn merge_suspected_mods(mods: impl IntoIterator<Item = SuspectedMod>) -> Vec
             .then_with(|| b.known_in_manifest.cmp(&a.known_in_manifest))
             .then_with(|| a.name.cmp(&b.name))
     });
+    assign_blame_roles(&mut out);
     out
 }
 
@@ -2014,6 +2048,7 @@ fn add_manifest_suspect(
     confidence: u8,
 ) {
     let key = normalize_token(&module.id);
+    let src = match_source_for_kind(evidence.kind);
     let entry = suspects.entry(key).or_insert_with(|| SuspectAccumulator {
         id: module.id.clone(),
         name: module.name.clone(),
@@ -2022,8 +2057,14 @@ fn add_manifest_suspect(
         known_in_manifest: true,
         confidence: 0,
         evidence: Vec::new(),
+        authors: module.authors.clone(),
+        match_sources: Vec::new(),
     });
+    if entry.authors.is_empty() && !module.authors.is_empty() {
+        entry.authors = module.authors.clone();
+    }
     entry.confidence = entry.confidence.max(confidence);
+    push_match_source(entry, &src);
     push_evidence(entry, evidence);
 }
 
@@ -2035,6 +2076,7 @@ fn add_inferred_suspect(
     confidence: u8,
 ) {
     let key = normalize_token(id);
+    let src = match_source_for_kind(evidence.kind);
     let entry = suspects.entry(key).or_insert_with(|| SuspectAccumulator {
         id: id.to_string(),
         name: id.to_string(),
@@ -2043,9 +2085,322 @@ fn add_inferred_suspect(
         known_in_manifest: false,
         confidence: 0,
         evidence: Vec::new(),
+        authors: Vec::new(),
+        match_sources: Vec::new(),
     });
     entry.confidence = entry.confidence.max(confidence);
+    push_match_source(entry, &src);
     push_evidence(entry, evidence);
+}
+
+fn accumulator_to_suspect(acc: SuspectAccumulator) -> SuspectedMod {
+    SuspectedMod {
+        id: acc.id,
+        name: acc.name,
+        version: acc.version,
+        file_name: acc.file_name,
+        known_in_manifest: acc.known_in_manifest,
+        confidence: acc.confidence.min(99),
+        evidence: acc.evidence,
+        authors: acc.authors,
+        blame_role: BlameRole::Related,
+        match_sources: acc.match_sources,
+    }
+}
+
+fn match_source_for_kind(kind: CrashSignalKind) -> String {
+    match kind {
+        CrashSignalKind::SuspectedMods => "suspected_mods_line".into(),
+        CrashSignalKind::Entrypoint => "entrypoint".into(),
+        CrashSignalKind::ModFile => "mod_file".into(),
+        CrashSignalKind::Mixin => "mixin".into(),
+        CrashSignalKind::Exception | CrashSignalKind::CausedBy => "exception".into(),
+        CrashSignalKind::MissingDependency => "missing_dependency".into(),
+        CrashSignalKind::ModVersionMismatch => "version_mismatch".into(),
+        CrashSignalKind::LoaderMismatch
+        | CrashSignalKind::WrongLoader
+        | CrashSignalKind::LoaderVersionMismatch => "loader".into(),
+        _ => "signal".into(),
+    }
+}
+
+fn push_match_source(entry: &mut SuspectAccumulator, source: &str) {
+    if source.is_empty() {
+        return;
+    }
+    if !entry.match_sources.iter().any(|s| s == source) {
+        entry.match_sources.push(source.to_string());
+    }
+}
+
+/// Independent high-value channels used to promote primary blame.
+fn is_strong_match_source(source: &str) -> bool {
+    matches!(
+        source,
+        "suspected_mods_line"
+            | "entrypoint"
+            | "mod_file"
+            | "class_in_jar"
+            | "mixin"
+            | "package"
+    )
+}
+
+fn assign_blame_roles(suspects: &mut [SuspectedMod]) {
+    for s in suspects.iter_mut() {
+        let strong = s
+            .match_sources
+            .iter()
+            .filter(|src| is_strong_match_source(src))
+            .count();
+        // Multi-signal agreement → primary; single strong → secondary; else related.
+        if strong >= 2 || (s.confidence >= 92 && strong >= 1) {
+            s.blame_role = BlameRole::Primary;
+            s.confidence = s.confidence.saturating_add(4).min(99);
+        } else if strong == 1 || s.confidence >= 75 {
+            s.blame_role = BlameRole::Secondary;
+        } else {
+            s.blame_role = BlameRole::Related;
+        }
+    }
+    // Keep ranking: primary first, then confidence.
+    suspects.sort_by(|a, b| {
+        blame_rank(b.blame_role)
+            .cmp(&blame_rank(a.blame_role))
+            .then_with(|| b.confidence.cmp(&a.confidence))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+fn blame_rank(role: BlameRole) -> u8 {
+    match role {
+        BlameRole::Primary => 3,
+        BlameRole::Secondary => 2,
+        BlameRole::Related => 1,
+    }
+}
+
+/// Post-merge enrichment: crash-report mod list, authors from jars, class→jar blame.
+fn enrich_diagnosis_suspects(
+    project_dir: &Path,
+    manifest: &ProjectManifest,
+    selected_report: &Option<CrashReportAnalysis>,
+    latest_log: &LatestLogAnalysis,
+    mut suspects: Vec<SuspectedMod>,
+) -> Vec<SuspectedMod> {
+    // 1) Force high confidence for Fabric "Suspected mods" / report mod entries.
+    if let Some(report) = selected_report {
+        for signal in report.signals.iter().filter(|s| s.kind == CrashSignalKind::SuspectedMods) {
+            for token in tokenize(&signal.text) {
+                if token.len() < 2 || is_noise_token(&token) {
+                    continue;
+                }
+                if let Some(module) = manifest.mods.iter().find(|m| {
+                    normalize_token(&m.id) == token
+                        || compact_token(&normalize_token(&m.id)) == compact_token(&token)
+                        || normalize_token(&m.name) == token
+                }) {
+                    boost_or_insert_suspect(
+                        &mut suspects,
+                        module,
+                        SuspectEvidence {
+                            source: signal.source.clone(),
+                            line_number: signal.line_number,
+                            kind: CrashSignalKind::SuspectedMods,
+                            text: signal.text.clone(),
+                        },
+                        97,
+                        "suspected_mods_line",
+                    );
+                } else if let Some(entry) = report.mod_entries.iter().find(|e| {
+                    normalize_token(&e.id) == token
+                        || e.name
+                            .as_ref()
+                            .map(|n| normalize_token(n) == token)
+                            .unwrap_or(false)
+                }) {
+                    let mut inferred = SuspectedMod {
+                        id: entry.id.clone(),
+                        name: entry.name.clone().unwrap_or_else(|| entry.id.clone()),
+                        version: entry.version.clone(),
+                        file_name: None,
+                        known_in_manifest: false,
+                        confidence: 90,
+                        evidence: vec![SuspectEvidence {
+                            source: signal.source.clone(),
+                            line_number: signal.line_number,
+                            kind: CrashSignalKind::SuspectedMods,
+                            text: signal.text.clone(),
+                        }],
+                        authors: Vec::new(),
+                        blame_role: BlameRole::Related,
+                        match_sources: vec!["suspected_mods_line".into()],
+                    };
+                    if let Some(module) = manifest.mods.iter().find(|m| {
+                        normalize_token(&m.id) == normalize_token(&entry.id)
+                    }) {
+                        inferred.id = module.id.clone();
+                        inferred.name = module.name.clone();
+                        inferred.version = Some(module.version.clone());
+                        inferred.file_name = module.file_name.clone();
+                        inferred.known_in_manifest = true;
+                        inferred.authors = module.authors.clone();
+                        inferred.confidence = 97;
+                    }
+                    suspects = merge_suspected_mods(
+                        suspects.into_iter().chain(std::iter::once(inferred)),
+                    );
+                }
+            }
+        }
+    }
+
+    // 2) Fill authors from manifest / jar metadata.
+    let mods_dir = project_dir.join("mods");
+    for s in &mut suspects {
+        if !s.authors.is_empty() {
+            continue;
+        }
+        if let Some(module) = manifest.mods.iter().find(|m| {
+            normalize_token(&m.id) == normalize_token(&s.id)
+                || m.file_name
+                    .as_ref()
+                    .zip(s.file_name.as_ref())
+                    .map(|(a, b)| a.eq_ignore_ascii_case(b))
+                    .unwrap_or(false)
+        }) {
+            if !module.authors.is_empty() {
+                s.authors = module.authors.clone();
+            } else if let Some(file) = module.file_name.as_ref() {
+                let jar = mods_dir.join(file);
+                if let Ok(meta) = crate::mod_scan::scan_mod_jar(&jar) {
+                    s.authors = meta.authors;
+                    if s.file_name.is_none() {
+                        s.file_name = Some(file.clone());
+                    }
+                }
+            }
+        } else if let Some(file) = s.file_name.as_ref() {
+            let jar = mods_dir.join(file);
+            if let Ok(meta) = crate::mod_scan::scan_mod_jar(&jar) {
+                s.authors = meta.authors;
+            }
+        }
+    }
+
+    // 3) Class → jar → modid attribution.
+    let mut haystack = String::new();
+    if let Some(report) = selected_report {
+        haystack.push_str(&report.content);
+        haystack.push('\n');
+    }
+    haystack.push_str(&latest_log.tail);
+    let class_names = crate::crash_assistant::extract_blame_class_names(&haystack, 8);
+    if mods_dir.is_dir() && !class_names.is_empty() {
+        for class_name in class_names {
+            let matches = crate::crash_assistant::find_class_in_mods(&class_name, &mods_dir);
+            for hit in matches {
+                if hit.mod_id == "?" {
+                    continue;
+                }
+                let evidence = SuspectEvidence {
+                    source: "class-finder".into(),
+                    line_number: 0,
+                    kind: CrashSignalKind::Exception,
+                    text: format!("{} provided by {}", hit.class_name, hit.file_name.as_deref().unwrap_or(&hit.mod_id)),
+                };
+                if let Some(module) = manifest.mods.iter().find(|m| {
+                    normalize_token(&m.id) == normalize_token(&hit.mod_id)
+                        || m.file_name
+                            .as_ref()
+                            .zip(hit.file_name.as_ref())
+                            .map(|(a, b)| a.eq_ignore_ascii_case(b))
+                            .unwrap_or(false)
+                }) {
+                    boost_or_insert_suspect(
+                        &mut suspects,
+                        module,
+                        evidence,
+                        93,
+                        "class_in_jar",
+                    );
+                } else {
+                    let inferred = SuspectedMod {
+                        id: hit.mod_id.clone(),
+                        name: hit.mod_name.clone(),
+                        version: None,
+                        file_name: hit.file_name.clone(),
+                        known_in_manifest: false,
+                        confidence: 88,
+                        evidence: vec![evidence],
+                        authors: hit
+                            .file_name
+                            .as_ref()
+                            .and_then(|f| crate::mod_scan::scan_mod_jar(&mods_dir.join(f)).ok())
+                            .map(|m| m.authors)
+                            .unwrap_or_default(),
+                        blame_role: BlameRole::Related,
+                        match_sources: vec!["class_in_jar".into()],
+                    };
+                    suspects = merge_suspected_mods(
+                        suspects.into_iter().chain(std::iter::once(inferred)),
+                    );
+                }
+            }
+        }
+    }
+
+    assign_blame_roles(&mut suspects);
+    suspects
+}
+
+fn boost_or_insert_suspect(
+    suspects: &mut Vec<SuspectedMod>,
+    module: &ModSpec,
+    evidence: SuspectEvidence,
+    confidence: u8,
+    match_source: &str,
+) {
+    let key = compact_token(&normalize_token(&module.id));
+    if let Some(existing) = suspects
+        .iter_mut()
+        .find(|s| compact_token(&normalize_token(&s.id)) == key)
+    {
+        existing.confidence = existing.confidence.max(confidence);
+        existing.known_in_manifest = true;
+        existing.id = module.id.clone();
+        existing.name = module.name.clone();
+        existing.version = Some(module.version.clone());
+        if existing.file_name.is_none() {
+            existing.file_name = module.file_name.clone();
+        }
+        if existing.authors.is_empty() {
+            existing.authors = module.authors.clone();
+        }
+        if !existing.match_sources.iter().any(|s| s == match_source) {
+            existing.match_sources.push(match_source.to_string());
+        }
+        if existing.evidence.len() < MAX_EVIDENCE_PER_SUSPECT
+            && !existing.evidence.iter().any(|e| {
+                e.source == evidence.source && e.line_number == evidence.line_number
+            })
+        {
+            existing.evidence.push(evidence);
+        }
+    } else {
+        suspects.push(SuspectedMod {
+            id: module.id.clone(),
+            name: module.name.clone(),
+            version: Some(module.version.clone()),
+            file_name: module.file_name.clone(),
+            known_in_manifest: true,
+            confidence,
+            evidence: vec![evidence],
+            authors: module.authors.clone(),
+            blame_role: BlameRole::Related,
+            match_sources: vec![match_source.to_string()],
+        });
+    }
 }
 
 fn push_evidence(entry: &mut SuspectAccumulator, evidence: SuspectEvidence) {
@@ -2351,6 +2706,7 @@ mod tests {
                 dependencies: Vec::new(),
                 status: Vec::new(),
                 content_type: crate::manifest::ContentType::Mod,
+                authors: Vec::new(),
             }],
             overrides: None,
         }
@@ -2394,6 +2750,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         // A different "critters*" mod must not steal the provided-by match via
         // the shared short name token "critters".
@@ -2416,6 +2773,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "Could not execute entrypoint stage 'main' due to errors, provided by 'crittersandcompanions'!";
 
@@ -2455,6 +2813,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "[Fabric] Loading 120 mods:\n\t- crittersandcompanions 2.1.0 provided by 'crittersandcompanions'\nDone.";
         let (signals, suspects) =
@@ -2481,6 +2840,9 @@ mod tests {
             known_in_manifest: false,
             confidence: 70,
             evidence: Vec::new(),
+            authors: Vec::new(),
+            blame_role: BlameRole::Related,
+            match_sources: Vec::new(),
         };
         let resolved = SuspectedMod {
             id: "sodium".to_string(),
@@ -2490,6 +2852,9 @@ mod tests {
             known_in_manifest: true,
             confidence: 96,
             evidence: Vec::new(),
+            authors: Vec::new(),
+            blame_role: BlameRole::Related,
+            match_sources: Vec::new(),
         };
 
         let suspects = merge_suspected_mods([inferred, resolved]);
@@ -2530,6 +2895,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         // Real Fabric loader resolution error format.
         let text = "net.fabricmc.loader.impl.discovery.ModResolutionException: Mod 'Lithium' (lithium) requires version 1.0.0 or later of mod 'jellysquid3's sodium' (sodium), which is missing!";
@@ -2562,6 +2928,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "Incompatible mod set!\nMod 'Iris' (iris) requires version 1.21.4 or later of 'Minecraft' (minecraft), but a non-matching version 1.20.1 is present!";
         let (signals, suspects) =
@@ -2599,6 +2966,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "Mod 'Create' (create) requires the Forge mod loader, but Fabric Loader 0.15.0 is in use!";
         let (signals, suspects) =
@@ -2629,6 +2997,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "Mod 'Reese's Sodium Options' (reeses-sodium-options) 1.8.0 conflicts with 'Sodium' (sodium) 0.6.0 (incompatible).";
         let (signals, suspects) =
@@ -2661,6 +3030,7 @@ mod tests {
                 dependencies: Vec::new(),
                 status: Vec::new(),
                 content_type: crate::manifest::ContentType::Mod,
+                authors: Vec::new(),
             });
         let text = "Mod 'Fabric API' (fabric-api) requires Fabric Loader 0.16.0 or later, but 0.15.0 is present!";
         let (signals, suspects) =
@@ -2692,6 +3062,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null\n\tat knot//net.earthcomputer.clientcommands.features.PlayerRandCracker.throwItem(PlayerRandCracker.java:412)";
         let (_signals, suspects) =
@@ -2724,6 +3095,7 @@ mod tests {
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "\
 java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null
@@ -2769,6 +3141,7 @@ Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommand
             dependencies: Vec::new(),
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
+            authors: Vec::new(),
         });
         let text = "Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommands (incompatible), cloth-config";
         let (signals, suspects) =
@@ -2947,6 +3320,9 @@ JVM Flags:
             known_in_manifest: true,
             confidence: 96,
             evidence: Vec::new(),
+            authors: Vec::new(),
+            blame_role: BlameRole::Related,
+            match_sources: Vec::new(),
         };
         let plan = create_crash_fix_plan(&graph, &[], &[suspect], &[]);
 
@@ -2960,6 +3336,36 @@ JVM Flags:
             .expect("expected update action");
         assert_eq!(update, LATEST_COMPATIBLE_VERSION);
         assert_eq!(resolve_update_target_version(update), None);
+    }
+
+    #[test]
+    fn suspected_mods_line_and_mod_file_become_primary() {
+        let text = "\
+---- Minecraft Crash Report ----
+Suspected Mods: sodium
+Mod File: /instance/mods/sodium-fabric-mc1.20.1-0.5.8.jar
+Caused by: java.lang.IllegalStateException: boom
+";
+        let (_signals, suspects) =
+            analyze_text_for_suspects(text, "crash-reports/latest.txt", &manifest());
+        let sodium = suspects.iter().find(|s| s.id == "sodium").expect("sodium");
+        assert!(sodium.confidence >= 90);
+        assert!(
+            sodium.match_sources.iter().any(|s| s == "suspected_mods_line")
+                || sodium.match_sources.iter().any(|s| s == "mod_file")
+        );
+        // Multi-signal → primary after merge/assign.
+        assert_eq!(sodium.blame_role, BlameRole::Primary);
+    }
+
+    #[test]
+    fn mod_spec_authors_serde_default() {
+        let json = r#"{
+            "id":"x","name":"X","source":{"type":"modrinth"},
+            "version":"1","side":"both"
+        }"#;
+        let m: ModSpec = serde_json::from_str(json).unwrap();
+        assert!(m.authors.is_empty());
     }
 }
 

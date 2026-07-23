@@ -26,6 +26,9 @@ pub struct CrashAiContext {
     pub crash_report_excerpt: String,
     pub latest_log_excerpt: String,
     pub suspected_mods: Vec<String>,
+    /// Ranked culprits from Diagnose (id/name/authors/confidence/role).
+    #[serde(default)]
+    pub culprit_details: Vec<CrashAiCulprit>,
     pub crash_assistant_findings: Vec<CrashAiFinding>,
     pub recent_changes: Vec<String>,
     pub graph_diagnostics: Vec<String>,
@@ -38,6 +41,22 @@ pub struct CrashAiContext {
     /// Full project inventory (mods, packs, datapacks, configs).
     #[serde(default)]
     pub inventory: Option<ProjectAiInventory>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashAiCulprit {
+    pub id: String,
+    pub name: String,
+    pub confidence: u8,
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub blame_role: String,
+    #[serde(default)]
+    pub match_sources: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,7 +117,29 @@ pub fn build_crash_prompt(ctx: &CrashAiContext) -> String {
         p.push_str(&format!("- Fingerprint: {}\n\n", ctx.fingerprint_key));
     }
 
-    if !ctx.suspected_mods.is_empty() {
+    if !ctx.culprit_details.is_empty() {
+        p.push_str("## Culprits (launcher diagnosis — prefer these)\n");
+        for c in &ctx.culprit_details {
+            let authors = if c.authors.is_empty() {
+                String::new()
+            } else {
+                format!(" by {}", c.authors.join(", "))
+            };
+            p.push_str(&format!(
+                "- [{}] {}{} — confidence {}%, role={}, sources=[{}]\n",
+                c.id,
+                c.name,
+                authors,
+                c.confidence,
+                c.blame_role,
+                c.match_sources.join(", ")
+            ));
+            for ev in c.evidence.iter().take(2) {
+                p.push_str(&format!("  evidence: {ev}\n"));
+            }
+        }
+        p.push('\n');
+    } else if !ctx.suspected_mods.is_empty() {
         p.push_str("## Suspected Mods\n");
         for m in &ctx.suspected_mods {
             p.push_str(&format!("- {m}\n"));
@@ -320,6 +361,15 @@ mod tests {
             crash_report_excerpt: "NoClassDefFoundError: com/example/Foo".into(),
             latest_log_excerpt: "Mixin apply failed".into(),
             suspected_mods: vec!["sodium".into()],
+            culprit_details: vec![CrashAiCulprit {
+                id: "sodium".into(),
+                name: "Sodium".into(),
+                confidence: 96,
+                authors: vec!["JellySquid".into()],
+                blame_role: "primary".into(),
+                match_sources: vec!["mod_file".into()],
+                evidence: vec!["Mod File: sodium.jar".into()],
+            }],
             crash_assistant_findings: vec![],
             recent_changes: vec!["Added iris 1.7.0".into()],
             graph_diagnostics: vec!["Missing dependency: indium".into()],
@@ -331,6 +381,7 @@ mod tests {
         let prompt = build_crash_prompt(&ctx);
         assert!(prompt.contains("iris"));
         assert!(prompt.contains("Mixin"));
+        assert!(prompt.contains("Culprits") || prompt.contains("JellySquid"));
         assert!(prompt.contains("humanExplanation") || prompt.contains("schemaVersion"));
     }
 

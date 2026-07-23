@@ -240,6 +240,7 @@ impl ModHashIndexEntry {
             dependencies: vec![],
             status: vec!["ok".into()],
             content_type,
+            authors: Vec::new(),
         })
     }
 }

@@ -68,6 +68,9 @@
     knownInManifest: boolean;
     confidence: number;
     evidence: Evidence[];
+    authors?: string[];
+    blameRole?: "primary" | "secondary" | "related" | string;
+    matchSources?: string[];
   };
 
   type CrashReportSummary = {
@@ -890,7 +893,12 @@
 
   $: selectedReport = diagnosis?.selectedReport ?? null;
   $: suspected = diagnosis?.suspectedMods ?? [];
-  $: topSuspect = suspected[0] ?? null;
+  $: primarySuspects = suspected.filter((m) => m.blameRole === "primary");
+  $: topSuspect = primarySuspects[0] ?? suspected[0] ?? null;
+  $: heroCulpritLabel =
+    primarySuspects.length > 1
+      ? primarySuspects.map((m) => m.name).join(" + ")
+      : topSuspect?.name ?? "";
   $: strongestEvidence = topSuspect?.evidence?.[0] ?? null;
   $: providedByEvidence = topSuspect?.evidence?.find((item) =>
     item.text.toLowerCase().includes("provided by"),
@@ -1266,16 +1274,28 @@
         <div class="summary-body">
           <span class="eyebrow">Likely crash source</span>
           <div class="summary-heading">
-            <h1>{topSuspect.name}</h1>
+            <h1>{heroCulpritLabel || topSuspect.name}</h1>
             <strong>{topSuspect.confidence}% confidence</strong>
           </div>
           <div class="summary-meta">
             <code>{topSuspect.id}{topSuspect.version ? ` · ${topSuspect.version}` : ""}</code>
+            {#if topSuspect.blameRole}
+              <span class="role-pill {topSuspect.blameRole}">{topSuspect.blameRole}</span>
+            {/if}
             <span class:installed={topSuspect.knownInManifest}>
               {#if topSuspect.knownInManifest}<BadgeCheck size={14} />{:else}<CircleHelp size={14} />{/if}
               {topSuspect.knownInManifest ? "Installed mod" : "Inferred from logs"}
             </span>
           </div>
+          {#if topSuspect.authors?.length}
+            <p class="mapping-note">Author{topSuspect.authors.length > 1 ? "s" : ""}: {topSuspect.authors.join(", ")}</p>
+          {/if}
+          {#if primarySuspects.length > 1}
+            <p class="mapping-note">
+              Multiple primary culprits:
+              {primarySuspects.map((m) => m.id).join(", ")}
+            </p>
+          {/if}
           {#if providedByEvidence && topSuspect.knownInManifest}
             <p class="mapping-note">
               The crash log’s <code>provided by</code> identifier was mapped to this installed mod.
@@ -1665,15 +1685,24 @@
                   <div>
                     <strong>{mod.name}</strong>
                     <span class="suspect-identity">{mod.id}{mod.version ? ` · ${mod.version}` : ""}</span>
+                    {#if mod.authors?.length}
+                      <span class="suspect-identity">by {mod.authors.join(", ")}</span>
+                    {/if}
                   </div>
                   <b>{mod.confidence}%</b>
                 </div>
                 <div class="badges">
+                  {#if mod.blameRole}
+                    <small class="role-pill {mod.blameRole}">{mod.blameRole}</small>
+                  {/if}
                   <small class:known={mod.knownInManifest}>
                     {#if mod.knownInManifest}<BadgeCheck size={13} />{:else}<CircleHelp size={13} />{/if}
                     {mod.knownInManifest ? "Installed mod" : "Unresolved log identifier"}
                   </small>
                   {#if mod.fileName}<small>{mod.fileName}</small>{/if}
+                  {#each (mod.matchSources ?? []).slice(0, 4) as src (src)}
+                    <small class="match-src">{src}</small>
+                  {/each}
                 </div>
                 {#each mod.evidence.slice(0, 3) as item (`${item.source}-${item.lineNumber}-${item.kind}`)}
                   <div class="evidence">
@@ -2264,6 +2293,21 @@
   .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
   .badges small { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); background: var(--bg-elevated); border-radius: 999px; padding: 3px 8px; }
   .badges small.known { color: var(--accent-primary); }
+  .role-pill {
+    display: inline-flex;
+    align-items: center;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+    font-weight: 800;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+  }
+  .role-pill.primary { background: rgba(239, 68, 68, 0.14); color: #ef4444; }
+  .role-pill.secondary { background: rgba(245, 158, 11, 0.14); color: var(--accent-warning); }
+  .match-src { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px !important; }
   .evidence { border-top: 1px solid var(--border-color); padding-top: 8px; margin-top: 8px; }
   .evidence code, .code { color: var(--text-muted); font-size: 11px; }
   .evidence p, .diag-card p, .plan-card p { margin: 5px 0 0; color: var(--text-secondary); line-height: 1.45; }
