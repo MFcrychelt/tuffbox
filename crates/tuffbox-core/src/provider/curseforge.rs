@@ -174,6 +174,16 @@ impl CurseForgeProvider {
         Ok(resp.data.into())
     }
 
+    /// HTML description body for a CurseForge project (overview page).
+    pub fn get_mod_description_html(&self, mod_id: u64) -> Result<String, ProviderError> {
+        #[derive(Deserialize)]
+        struct Desc {
+            data: String,
+        }
+        let resp: Desc = self.get_json(&format!("/mods/{mod_id}/description"))?;
+        Ok(resp.data)
+    }
+
     /// List files for a project (modpack or mod).
     pub fn get_mod_files(
         &self,
@@ -381,6 +391,13 @@ pub struct CurseForgeSearchHit {
     pub name: String,
     pub summary: String,
     pub download_count: u64,
+    /// CurseForge "thumbs up" count (maps to UI likes/follows).
+    #[serde(default)]
+    pub thumbs_up_count: u64,
+    #[serde(default)]
+    pub date_modified: Option<String>,
+    #[serde(default)]
+    pub date_created: Option<String>,
     pub icon_url: Option<String>,
     pub authors: Vec<String>,
     pub categories: Vec<String>,
@@ -490,6 +507,12 @@ struct CfMod {
     #[serde(default)]
     download_count: u64,
     #[serde(default)]
+    thumbs_up_count: u64,
+    #[serde(default)]
+    date_modified: Option<String>,
+    #[serde(default)]
+    date_created: Option<String>,
+    #[serde(default)]
     logo: Option<CfLogo>,
     #[serde(default)]
     authors: Vec<CfAuthor>,
@@ -550,19 +573,27 @@ struct CfHash {
 
 impl From<CfMod> for CurseForgeSearchHit {
     fn from(m: CfMod) -> Self {
+        let latest_files: Vec<CurseForgeFileInfo> =
+            m.latest_files.into_iter().map(Into::into).collect();
+        // Prefer mod-level dates; fall back to newest listed file date.
+        let file_date = latest_files.iter().find_map(|f| f.file_date.clone());
+        let date_modified = m.date_modified.or(file_date.clone());
         Self {
             id: m.id,
             slug: m.slug,
             name: m.name,
             summary: m.summary,
             download_count: m.download_count,
+            thumbs_up_count: m.thumbs_up_count,
+            date_modified,
+            date_created: m.date_created.or(file_date),
             icon_url: m
                 .logo
                 .as_ref()
                 .and_then(|l| l.thumbnail_url.clone().or_else(|| l.url.clone())),
             authors: m.authors.into_iter().map(|a| a.name).collect(),
             categories: m.categories.into_iter().map(|c| c.name).collect(),
-            latest_files: m.latest_files.into_iter().map(Into::into).collect(),
+            latest_files,
             class_id: m.class_id,
         }
     }

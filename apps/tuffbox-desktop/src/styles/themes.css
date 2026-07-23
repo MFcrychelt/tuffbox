@@ -162,9 +162,9 @@
   --motion-micro: 110ms;
   --motion-fast: 160ms;
   --motion-med: 240ms;
-  --motion-enter: 280ms;
-  --motion-page: 260ms;
-  --stagger-step: 42ms;
+  --motion-enter: 320ms;
+  --motion-page: 400ms;
+  --stagger-step: 48ms;
 }
 
 .press-effect {
@@ -294,12 +294,39 @@
 @keyframes tb-view-enter {
   from {
     opacity: 0;
-    transform: translateX(14px);
+    transform: translateX(18px) translateY(6px) scale(0.985);
+    filter: blur(4px);
   }
   to {
     opacity: 1;
-    transform: translateX(0);
+    transform: translateX(0) translateY(0) scale(1);
+    filter: blur(0);
   }
+}
+@keyframes tb-view-child-settle {
+  from {
+    opacity: 0.72;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes tb-title-swap {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+.tb-title-swap {
+  animation: tb-title-swap var(--motion-enter) var(--ease-spring) both;
 }
 
 .theme-swatch {

@@ -782,8 +782,8 @@ async fn search_unified_mods(
                         "iconUrl": hit.icon_url,
                         "author": hit.authors.first().cloned(),
                         "downloads": hit.download_count,
-                        "follows": null,
-                        "dateModified": null,
+                        "follows": hit.thumbs_up_count,
+                        "dateModified": hit.date_modified.clone().or(hit.date_created.clone()),
                         "categories": hit.categories,
                         "provider": "curseforge",
                     }));
@@ -932,8 +932,8 @@ async fn search_curseforge_mods(
                     "iconUrl": hit.icon_url,
                     "author": hit.authors.first().cloned(),
                     "downloads": hit.download_count,
-                    "follows": null,
-                    "dateModified": null,
+                    "follows": hit.thumbs_up_count,
+                    "dateModified": hit.date_modified.clone().or(hit.date_created.clone()),
                     "categories": hit.categories,
                     "provider": "curseforge",
                 })
@@ -1033,6 +1033,149 @@ async fn get_modrinth_project(project_id: String) -> Result<tuffbox_core::Projec
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Unified catalog project detail for the in-launcher project page
+/// (Modrinth or CurseForge), GDLauncher-style.
+#[tauri::command(rename_all = "camelCase")]
+async fn get_catalog_project(
+    provider: String,
+    project_id: String,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let provider = provider.trim().to_ascii_lowercase();
+        if provider == "curseforge" || provider == "cf" {
+            let id: u64 = project_id
+                .trim()
+                .parse()
+                .map_err(|_| format!("Invalid CurseForge project id: {project_id}"))?;
+            let cf = tuffbox_core::CurseForgeProvider::new();
+            if !cf.is_configured() {
+                return Err("CurseForge API key is not configured".into());
+            }
+            let hit = cf.get_mod(id).map_err(|e| e.to_string())?;
+            let description_html = cf.get_mod_description_html(id).unwrap_or_default();
+            let mapped_type = match hit.class_id.unwrap_or(6) {
+                12 => "resourcepack",
+                6552 => "shader",
+                6945 => "datapack",
+                4471 => "modpack",
+                _ => "mod",
+            };
+            return Ok(serde_json::json!({
+                "id": hit.id.to_string(),
+                "slug": hit.slug,
+                "name": hit.name,
+                "description": hit.summary,
+                "descriptionHtml": description_html,
+                "projectType": mapped_type,
+                "iconUrl": hit.icon_url,
+                "author": hit.authors.first().cloned(),
+                "authors": hit.authors,
+                "downloads": hit.download_count,
+                "follows": hit.thumbs_up_count,
+                "dateModified": hit.date_modified.clone().or(hit.date_created.clone()),
+                "categories": hit.categories,
+                "provider": "curseforge",
+            }));
+        }
+
+        let mr = tuffbox_core::ModrinthProvider::new();
+        let project = mr.get_project(&project_id).map_err(|e| e.to_string())?;
+        Ok(serde_json::json!({
+            "id": project.id,
+            "slug": project.slug,
+            "name": project.name,
+            "description": project.description,
+            "descriptionHtml": null,
+            "projectType": project.project_type,
+            "iconUrl": project.icon_url,
+            "author": project.author,
+            "authors": project.author.clone().map(|a| vec![a]).unwrap_or_default(),
+            "downloads": project.downloads,
+            "follows": project.follows,
+            "dateModified": project.date_modified,
+            "categories": project.categories,
+            "license": project.license,
+            "clientSide": project.client_side,
+            "serverSide": project.server_side,
+            "provider": "modrinth",
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Versions/files for the in-launcher project page.
+#[tauri::command(rename_all = "camelCase")]
+async fn get_catalog_versions(
+    provider: String,
+    project_id: String,
+    minecraft_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let provider_l = provider.trim().to_ascii_lowercase();
+    if provider_l == "curseforge" || provider_l == "cf" {
+        return tokio::task::spawn_blocking(move || {
+            let id: u64 = project_id
+                .trim()
+                .parse()
+                .map_err(|_| format!("Invalid CurseForge project id: {project_id}"))?;
+            let cf = tuffbox_core::CurseForgeProvider::new();
+            if !cf.is_configured() {
+                return Err("CurseForge API key is not configured".into());
+            }
+            let gv = minecraft_version.as_deref().filter(|s| !s.is_empty());
+            let files = cf.get_mod_files(id, gv).map_err(|e| e.to_string())?;
+            let loader_slug = loader
+                .as_deref()
+                .map(|l| l.trim().to_lowercase())
+                .filter(|l| !l.is_empty());
+            let mut rows: Vec<serde_json::Value> = files
+                .into_iter()
+                .map(|f| {
+                    let mc_ok = gv
+                        .map(|v| f.game_versions.iter().any(|g| g == v))
+                        .unwrap_or(true);
+                    let loader_ok = match &loader_slug {
+                        Some(l) => f
+                            .game_versions
+                            .iter()
+                            .any(|g| g.eq_ignore_ascii_case(l) || (*l == "quilt" && g.eq_ignore_ascii_case("fabric"))),
+                        None => true,
+                    };
+                    let channel = match f.release_type {
+                        1 => "release",
+                        2 => "beta",
+                        3 => "alpha",
+                        _ => "release",
+                    };
+                    serde_json::json!({
+                        "id": f.id.to_string(),
+                        "versionNumber": f.display_name,
+                        "name": f.file_name,
+                        "gameVersions": f.game_versions,
+                        "loaders": [],
+                        "datePublished": f.file_date,
+                        "versionType": channel,
+                        "compatible": mc_ok && loader_ok,
+                        "compatibleMinecraft": mc_ok,
+                        "compatibleLoader": loader_ok,
+                    })
+                })
+                .collect();
+            rows.sort_by(|a, b| {
+                let ad = a.get("datePublished").and_then(|v| v.as_str()).unwrap_or("");
+                let bd = b.get("datePublished").and_then(|v| v.as_str()).unwrap_or("");
+                bd.cmp(ad)
+            });
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+
+    get_mod_versions(project_id, minecraft_version.unwrap_or_default(), loader).await
 }
 
 /// Resolves the download URL of the latest Modrinth modpack file (.mrpack) for
@@ -3048,9 +3191,8 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
         }
     }
 
-    // Check if performance mods are missing
-    let mod_slugs: std::collections::HashSet<String> =
-        manifest.mods.iter().map(|m| m.id.clone()).collect();
+    // Check if performance mods are missing (treat forks/ports as covering the base mod).
+    let keys = installed_mod_keys(&manifest);
     let perf_mods = [
         "sodium",
         "embeddium",
@@ -3064,7 +3206,13 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
     ];
     let mut missing_perf = Vec::new();
     for pm in perf_mods {
-        if !mod_slugs.contains(pm) {
+        let aliases = recommendation_aliases(pm);
+        let aliases: Vec<&str> = if aliases.is_empty() {
+            vec![pm]
+        } else {
+            aliases
+        };
+        if !has_installed(&keys, &aliases) {
             missing_perf.push(pm);
         }
     }
@@ -4773,20 +4921,106 @@ fn open_authored_kb_folder(app: tauri::AppHandle, path: String) -> Result<(), St
 
 /// ── Mod recommendation engine ─────────────────────────────────────
 
+/// Lowercase alphanumeric-only token so `modernfix-mvus` / `ModernFix mVUS`
+/// / `modernfix-neoforge-5.20.9.jar` collapse to comparable forms.
+fn compact_mod_token(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
 fn installed_mod_keys(manifest: &ProjectManifest) -> std::collections::HashSet<String> {
     let mut keys = std::collections::HashSet::new();
     for m in &manifest.mods {
+        if m.content_type != tuffbox_core::manifest::ContentType::Mod {
+            continue;
+        }
         keys.insert(m.id.to_lowercase());
+        keys.insert(m.name.to_lowercase());
         if let Some(pid) = &m.source.project_id {
             keys.insert(pid.to_lowercase());
         }
-        keys.insert(m.name.to_lowercase());
+        if let Some(file) = &m.file_name {
+            keys.insert(file.to_lowercase());
+            if let Some(stem) = std::path::Path::new(file)
+                .file_stem()
+                .and_then(|s| s.to_str())
+            {
+                keys.insert(stem.to_lowercase());
+            }
+        }
     }
     keys
 }
 
+/// True if any installed mod covers `aliases` — exact slug/name match, or a
+/// fork/port whose id/name/jar starts with (or clearly contains) the alias
+/// (e.g. `modernfix-mvus` covers `modernfix`).
 fn has_installed(keys: &std::collections::HashSet<String>, aliases: &[&str]) -> bool {
-    aliases.iter().any(|a| keys.contains(&a.to_lowercase()))
+    let compact_keys: Vec<String> = keys
+        .iter()
+        .map(|k| compact_mod_token(k))
+        .filter(|k| k.len() >= 3)
+        .collect();
+
+    for alias in aliases {
+        let lower = alias.to_lowercase();
+        if keys.contains(&lower) {
+            return true;
+        }
+        let ac = compact_mod_token(alias);
+        if ac.len() < 3 {
+            continue;
+        }
+        for ck in &compact_keys {
+            if ck == &ac {
+                return true;
+            }
+            // Short slugs (emi, jei, iris, …) stay exact-only to avoid
+            // false positives inside unrelated names.
+            if ac.len() < 6 {
+                continue;
+            }
+            // Installed fork/port of the suggested mod.
+            if ck.starts_with(&ac) {
+                return true;
+            }
+            // e.g. jar `…-modernfix-…` or name with prefix noise.
+            if ck.contains(&ac) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Known Modrinth slug families for heuristic filtering (ports/forks/loaders).
+fn recommendation_aliases(slug: &str) -> Vec<&'static str> {
+    match slug {
+        "ferrite-core" | "ferritecore" => vec!["ferrite-core", "ferritecore"],
+        "entityculling" | "entity-culling" => vec!["entityculling", "entity-culling"],
+        "embeddium" => vec!["embeddium", "rubidium", "sodium", "magnesium"],
+        "rubidium" => vec!["rubidium", "embeddium", "sodium", "magnesium"],
+        "sodium" => vec!["sodium", "embeddium", "rubidium", "magnesium"],
+        "iris" => vec!["iris", "oculus"],
+        "oculus" => vec!["oculus", "iris"],
+        "emi" => vec!["emi", "roughly-enough-items", "jei", "rei"],
+        "jei" => vec!["jei", "emi", "roughly-enough-items", "rei"],
+        "modernfix" => vec!["modernfix", "modernfix-mvus"],
+        "lithium" => vec!["lithium", "radium", "canary"],
+        "radium" => vec!["radium", "lithium", "canary"],
+        "fabric-api" | "fabric_api" => vec!["fabric-api", "fabric_api"],
+        _ => Vec::new(),
+    }
+}
+
+fn aliases_for_candidate(slug: &'static str) -> Vec<&'static str> {
+    let mut aliases = recommendation_aliases(slug);
+    if !aliases.iter().any(|a| *a == slug) {
+        aliases.insert(0, slug);
+    }
+    aliases
 }
 
 type RecCandidate = (&'static str, &'static str, &'static str, &'static str);
@@ -4895,35 +5129,22 @@ fn heuristic_mod_recommendations(manifest: &ProjectManifest) -> Vec<serde_json::
     let mut recommendations = Vec::new();
 
     for (slug, name, desc, reason) in optimization_candidates(loader) {
-        let aliases: Vec<&str> = match slug {
-            "ferrite-core" | "ferritecore" => vec!["ferrite-core", "ferritecore"],
-            "entityculling" => vec!["entityculling", "entity-culling"],
-            "embeddium" => vec!["embeddium", "rubidium", "sodium"],
-            "rubidium" => vec!["rubidium", "embeddium", "sodium"],
-            "sodium" => vec!["sodium", "embeddium", "rubidium"],
-            "iris" => vec!["iris", "oculus"],
-            "oculus" => vec!["oculus", "iris"],
-            "emi" => vec!["emi", "roughly-enough-items", "jei", "rei"],
-            "jei" => vec!["jei", "emi", "roughly-enough-items", "rei"],
-            other => vec![other],
-        };
+        let aliases = aliases_for_candidate(slug);
         if !has_installed(&keys, &aliases) {
             push_rec(&mut recommendations, reason, slug, name, desc, "high");
         }
     }
 
     for (slug, name, desc, reason) in qol_candidates(loader) {
-        let aliases: Vec<&str> = match slug {
-            "emi" => vec!["emi", "roughly-enough-items", "jei", "rei"],
-            "jei" => vec!["jei", "emi", "roughly-enough-items", "rei"],
-            other => vec![other],
-        };
+        let aliases = aliases_for_candidate(slug);
         if !has_installed(&keys, &aliases) {
             push_rec(&mut recommendations, reason, slug, name, desc, "medium");
         }
     }
 
-    if matches!(loader, "fabric" | "quilt") && !has_installed(&keys, &["fabric-api", "fabric_api"]) {
+    if matches!(loader, "fabric" | "quilt")
+        && !has_installed(&keys, &aliases_for_candidate("fabric-api"))
+    {
         push_rec(
             &mut recommendations,
             "dependency",
@@ -4947,7 +5168,7 @@ fn heuristic_mod_recommendations(manifest: &ProjectManifest) -> Vec<serde_json::
                 "Trains and advanced rails for Create",
             ),
         ] {
-            if !has_installed(&keys, &[slug]) {
+            if !has_installed(&keys, &aliases_for_candidate(slug)) {
                 push_rec(&mut recommendations, "synergy", slug, name, desc, "low");
             }
         }
@@ -4999,6 +5220,7 @@ Rules:
 - Suggest at most 8 mods.
 - Prefer performance / optimization mods that exist on Modrinth for loader "{loader}" and Minecraft {mc}.
 - Do NOT suggest mods already installed.
+- Do NOT suggest a mod if a fork, port, or unofficial build of it is already installed (e.g. modernfix-mvus covers modernfix; rubidium/embeddium cover sodium).
 - Do NOT suggest Fabric-only mods for Forge/NeoForge (e.g. no Sodium on Forge — use Embeddium).
 - Do NOT suggest Forge-only mods for Fabric/Quilt.
 - Prefer well-known Modrinth slugs (sodium, lithium, embeddium, modernfix, ferrite-core, iris, oculus, jei, emi).
@@ -5074,7 +5296,9 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
                     let Some(slug) = rec.get("slug").and_then(|v| v.as_str()) else {
                         continue;
                     };
-                    if has_installed(&keys, &[slug]) {
+                    let mut aliases = recommendation_aliases(slug);
+                    aliases.push(slug);
+                    if has_installed(&keys, &aliases) {
                         continue;
                     }
                     let name = rec
@@ -5134,6 +5358,55 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
     // Cap the list so the panel stays usable.
     recommendations.truncate(12);
     Ok(recommendations)
+}
+
+#[cfg(test)]
+mod recommend_mod_tests {
+    use super::{compact_mod_token, has_installed};
+    use std::collections::HashSet;
+
+    #[test]
+    fn compact_strips_separators() {
+        assert_eq!(compact_mod_token("ModernFix-mVUS"), "modernfixmvus");
+        assert_eq!(compact_mod_token("modernfix_neoforge-5.20.9"), "modernfixneoforge5209");
+    }
+
+    #[test]
+    fn modernfix_mvus_covers_modernfix() {
+        let mut keys = HashSet::new();
+        keys.insert("modernfix-mvus".into());
+        assert!(has_installed(&keys, &["modernfix"]));
+    }
+
+    #[test]
+    fn modernfix_name_port_covers_modernfix() {
+        let mut keys = HashSet::new();
+        keys.insert("modernfix mvus".into());
+        assert!(has_installed(&keys, &["modernfix"]));
+    }
+
+    #[test]
+    fn jar_stem_covers_modernfix() {
+        let mut keys = HashSet::new();
+        keys.insert("modernfix-neoforge-5.20.9".into());
+        assert!(has_installed(&keys, &["modernfix"]));
+    }
+
+    #[test]
+    fn short_slug_stays_exact() {
+        let mut keys = HashSet::new();
+        keys.insert("something-with-emi-inside".into());
+        assert!(!has_installed(&keys, &["emi"]));
+        keys.insert("emi".into());
+        assert!(has_installed(&keys, &["emi"]));
+    }
+
+    #[test]
+    fn unrelated_mod_does_not_cover() {
+        let mut keys = HashSet::new();
+        keys.insert("sodium".into());
+        assert!(!has_installed(&keys, &["modernfix"]));
+    }
 }
 
 /// Returns a compatibility database entry for a mod slug from the builtin
@@ -9017,15 +9290,18 @@ fn get_launch_log(path: String) -> Result<String, String> {
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
-    let logs_dir = project_dir.join("logs");
-    // Prefer Minecraft's PatternLayout latest.log once it has real content.
-    // tuffbox-console.log is JVM stdout and is often LegacyXMLLayout (raw
-    // <log4j:event timestamp=…>), which is unreadable in the UI.
+    let log_path = resolve_live_launch_log(&project_dir.join("logs"));
+    tuffbox_core::process::read_log_tail(&log_path, 2500).map_err(|e| e.to_string())
+}
+
+/// Same source the Live tab tails: prefer Minecraft `latest.log` once it has
+/// real content, else TuffBox console capture.
+fn resolve_live_launch_log(logs_dir: &Path) -> PathBuf {
     let console = logs_dir.join("tuffbox-console.log");
     let latest = logs_dir.join("latest.log");
     let console_len = std::fs::metadata(&console).map(|m| m.len()).unwrap_or(0);
     let latest_len = std::fs::metadata(&latest).map(|m| m.len()).unwrap_or(0);
-    let log_path = if latest_len > 256 {
+    if latest_len > 256 {
         latest
     } else if console_len > 0 {
         console
@@ -9033,13 +9309,13 @@ fn get_launch_log(path: String) -> Result<String, String> {
         latest
     } else {
         console
-    };
-    tuffbox_core::process::read_log_tail(&log_path, 2500).map_err(|e| e.to_string())
+    }
 }
 
 /// Upload a crash / instance log to mclo.gs and return the public share URL.
-/// Prefer a named crash-report when `logName` is set; otherwise auto-pick
-/// latest crash-report, then latest.log, then tuffbox-console.log.
+/// - `logName` set → that file under logs/ or crash-reports/
+/// - `logName` = `__live__` → same resolution as the Live log tab (latest.log preferred)
+/// - `logName` omitted → newest crash-report, then latest.log (post-crash share)
 #[tauri::command(rename_all = "camelCase")]
 fn share_log_mclogs(
     path: String,
@@ -9049,19 +9325,27 @@ fn share_log_mclogs(
     let logs_dir = project_dir.join("logs");
     let crashes_dir = project_dir.join("crash-reports");
 
-    let log_path = if let Some(name) = log_name.as_deref().filter(|n| !n.is_empty()) {
-        let candidate = if name.starts_with("crash-") || name.ends_with(".txt") {
-            crashes_dir.join(name)
-        } else {
-            logs_dir.join(name)
-        };
-        if !candidate.exists() {
-            return Err(format!("log not found: {name}"));
+    let log_path = match log_name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        Some("__live__") => {
+            let p = resolve_live_launch_log(&logs_dir);
+            if !p.exists() {
+                return Err("no live log found (latest.log / console empty)".into());
+            }
+            p
         }
-        candidate
-    } else {
-        pick_shareable_crash_log(&logs_dir, &crashes_dir)
-            .ok_or_else(|| "no crash report or latest.log found to share".to_string())?
+        Some(name) => {
+            let candidate = if name.starts_with("crash-") || name.ends_with(".txt") {
+                crashes_dir.join(name)
+            } else {
+                logs_dir.join(name)
+            };
+            if !candidate.exists() {
+                return Err(format!("log not found: {name}"));
+            }
+            candidate
+        }
+        None => pick_shareable_crash_log(&logs_dir, &crashes_dir)
+            .ok_or_else(|| "no crash report or latest.log found to share".to_string())?,
     };
 
     // Read more than the UI tail so the shared paste has useful context.
@@ -11109,6 +11393,8 @@ pub fn run() {
             preview_modrinth_install,
             get_modrinth_project_icon,
             get_modrinth_project,
+            get_catalog_project,
+            get_catalog_versions,
             get_modrinth_pack_download,
             get_mod_user_state,
             set_mod_user_state,

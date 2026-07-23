@@ -175,7 +175,45 @@ fn write_settings(settings: &IntegrationSettings) -> Result<(), String> {
             fs::remove_file(&path).ok();
             fs::rename(&tmp, &path)
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // So tray / future Ollama launches honor the same folder (not only our serve spawn).
+    persist_ollama_models_user_env(settings.ai.ollama_models_path.trim());
+    Ok(())
+}
+
+/// Persist `OLLAMA_MODELS` at the user environment level (Windows `setx`).
+/// Empty path clears the override so Ollama falls back to its default.
+fn persist_ollama_models_user_env(models_path: &str) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("setx");
+        cmd.arg("OLLAMA_MODELS");
+        if models_path.is_empty() {
+            cmd.arg("");
+        } else {
+            cmd.arg(models_path);
+        }
+        let _ = cmd
+            .creation_flags(0x08000000)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        // Also set for this process so child spawns inherit immediately.
+        if models_path.is_empty() {
+            std::env::remove_var("OLLAMA_MODELS");
+        } else {
+            std::env::set_var("OLLAMA_MODELS", models_path);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if models_path.is_empty() {
+            std::env::remove_var("OLLAMA_MODELS");
+        } else {
+            std::env::set_var("OLLAMA_MODELS", models_path);
+        }
+    }
 }
 
 /// Current swarm settings from integrations.json.
@@ -934,6 +972,9 @@ async fn ollama_list_models(root: &str) -> Result<Vec<String>, String> {
 fn try_start_ollama(binary_hint: &str, models_path: &str) {
     let exe = resolve_ollama_binary(binary_hint);
     let models = models_path.trim();
+    if !models.is_empty() {
+        let _ = fs::create_dir_all(models);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -958,6 +999,107 @@ fn try_start_ollama(binary_hint: &str, models_path: &str) {
         }
         let _ = cmd.spawn();
     }
+}
+
+/// Stop existing Ollama processes so a restart can honor `OLLAMA_MODELS`.
+/// Without this, pulls hit an already-running daemon that still uses C:\…\.ollama.
+fn stop_ollama_processes() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for image in ["ollama.exe", "ollama app.exe"] {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/IM", image, "/F", "/T"])
+                .creation_flags(0x08000000)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "ollama serve"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = std::process::Command::new("pkill")
+            .args(["-x", "ollama"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// Ensure a daemon is running with the configured models directory.
+async fn ensure_ollama_daemon(settings: &AiSettings) -> Result<String, String> {
+    let root = ollama_root(&settings.endpoint);
+    let models = settings.ollama_models_path.trim();
+    if models.is_empty() {
+        if ollama_list_models(&root).await.is_err() {
+            try_start_ollama(&settings.ollama_binary_path, "");
+            tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        }
+        return Ok(root);
+    }
+
+    let _ = fs::create_dir_all(models);
+    // Custom path: always bounce the daemon so pull does not land on C:\Users\…\.ollama.
+    persist_ollama_models_user_env(models);
+    stop_ollama_processes();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    try_start_ollama(&settings.ollama_binary_path, models);
+
+    let mut last_err = String::new();
+    for attempt in 0..8 {
+        tokio::time::sleep(std::time::Duration::from_millis(600 + attempt * 250)).await;
+        match ollama_list_models(&root).await {
+            Ok(_) => return Ok(root),
+            Err(e) => last_err = e,
+        }
+        if attempt == 2 || attempt == 5 {
+            try_start_ollama(&settings.ollama_binary_path, models);
+        }
+    }
+    Err(format!(
+        "Ollama did not start with models path '{models}'. Last error: {last_err}. Close the Ollama tray app and try Install again."
+    ))
+}
+
+async fn ollama_pull_model_cli(
+    binary_hint: &str,
+    models_path: &str,
+    model: &str,
+) -> Result<(), String> {
+    let exe = resolve_ollama_binary(binary_hint);
+    let mut cmd = tokio::process::Command::new(&exe);
+    cmd.arg("pull").arg(model);
+    let models = models_path.trim();
+    if !models.is_empty() {
+        let _ = fs::create_dir_all(models);
+        cmd.env("OLLAMA_MODELS", models);
+    }
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000);
+    }
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run ollama pull: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "ollama pull failed: {}",
+            if stderr.trim().is_empty() {
+                stdout.trim()
+            } else {
+                stderr.trim()
+            }
+        ));
+    }
+    Ok(())
 }
 
 /// Default Ollama models directory when `OLLAMA_MODELS` is unset.
@@ -1078,6 +1220,10 @@ pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String
 
     let mut last_err = String::new();
     let mut models = None;
+    // Prefer daemon with configured models dir so later ops don't hit C:\ default.
+    if !settings.ollama_models_path.trim().is_empty() {
+        let _ = ensure_ollama_daemon(settings).await;
+    }
     for attempt in 0..4 {
         match ollama_list_models(&root).await {
             Ok(list) => {
@@ -1270,13 +1416,28 @@ pub async fn pull_ollama_model(
             .unwrap_or_else(|| settings.ai.endpoint.clone()),
     );
 
-    // Make sure the daemon is up before pulling (honors custom models dir).
-    if ollama_list_models(&root).await.is_err() {
-        try_start_ollama(&hint, &settings.ai.ollama_models_path);
-        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    // Restart daemon with OLLAMA_MODELS when configured, then pull via CLI
+    // (API pull hits whatever daemon was already on C:\Users\…\.ollama).
+    let mut ai = settings.ai.clone();
+    if !root.is_empty() {
+        ai.endpoint = root.clone();
+    }
+    if !hint.trim().is_empty() {
+        ai.ollama_binary_path = hint.clone();
+    }
+    let root = ensure_ollama_daemon(&ai).await?;
+    let models_path = ai.ollama_models_path.clone();
+
+    match ollama_pull_model_cli(&hint, &models_path, &name).await {
+        Ok(()) => {}
+        Err(cli_err) => {
+            // Fallback to HTTP pull against the restarted daemon.
+            if let Err(api_err) = ollama_pull_model(&root, &name).await {
+                return Err(format!("{cli_err} | API fallback: {api_err}"));
+            }
+        }
     }
 
-    ollama_pull_model(&root, &name).await?;
     let models = ollama_list_models(&root).await.unwrap_or_default();
 
     // Persist as active model when pull succeeds.
@@ -1292,6 +1453,11 @@ pub async fn pull_ollama_model(
         "ok": true,
         "model": name,
         "models": models,
+        "modelsPath": if models_path.trim().is_empty() {
+            default_ollama_models_dir().to_string_lossy().to_string()
+        } else {
+            models_path
+        },
     }))
 }
 
@@ -1332,6 +1498,9 @@ pub async fn import_ollama_gguf(
     let from_line = format!("FROM {}", abs.display());
     let tmp = std::env::temp_dir().join(format!("tuffbox-modelfile-{name}"));
     fs::write(&tmp, format!("{from_line}\n")).map_err(|e| e.to_string())?;
+
+    // Bounce daemon onto configured models path before create.
+    let _ = ensure_ollama_daemon(&settings.ai).await;
 
     let mut cmd = tokio::process::Command::new(&exe);
     cmd.arg("create").arg(&name).arg("-f").arg(&tmp);

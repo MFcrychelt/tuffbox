@@ -248,7 +248,7 @@
     try {
       // Persist path/endpoint first so pull uses the same config.
       await persistAiSettings(name);
-      const result = await invoke<{ ok: boolean; model: string; models: string[] }>("pull_ollama_model", {
+      const result = await invoke<{ ok: boolean; model: string; models: string[]; modelsPath?: string }>("pull_ollama_model", {
         model: name,
         endpoint: endpoint || null,
         binaryPath: ollamaBinaryPath || null,
@@ -256,7 +256,10 @@
       model = result.model;
       pullName = result.model;
       ollamaModels = result.models ?? [];
-      message = `Model “${result.model}” installed and selected.`;
+      const where = result.modelsPath?.trim();
+      message = where
+        ? `Model “${result.model}” installed to ${where}`
+        : `Model “${result.model}” installed and selected.`;
       await probeOllama();
       dispatch("saved");
     } catch (e) {
@@ -531,6 +534,9 @@
             </div>
             <p class="hint">
               Where Ollama stores downloaded weights (<code>OLLAMA_MODELS</code>).
+              Leave empty for the default under your user profile. If models still land on
+              <code>C:</code>, set a folder on another drive, Save, then Install — TuffBox
+              restarts Ollama with this path before pulling.
               After changing, stop the Ollama app and click Re-detect so TuffBox starts it with the new path.
             </p>
           </label>

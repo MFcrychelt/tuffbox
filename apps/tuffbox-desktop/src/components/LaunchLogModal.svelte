@@ -1,6 +1,8 @@
 <script lang="ts">
   import { X, Loader2, RotateCcw, FileText, Folder, Radio, Share2 } from "lucide-svelte";
   import { createEventDispatcher, onMount, onDestroy, tick } from "svelte";
+  import { fade, fly } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import { invoke } from "@tauri-apps/api/core";
   import { trapFocus } from "../lib/focusTrap";
   import CopyButton from "./CopyButton.svelte";
@@ -129,7 +131,9 @@
     if (sharing || !projectPath) return;
     sharing = true;
     try {
-      const name = selectedLog === "__live__" ? null : selectedLog;
+      // Live must share the same file the Live tab tails (latest.log / console).
+      // Passing null used to auto-pick the newest crash-report instead.
+      const name = selectedLog === "__live__" ? "__live__" : selectedLog;
       await shareCrashLogWithFeedback(projectPath, name);
     } finally {
       sharing = false;
@@ -276,25 +280,29 @@
 
     <div class="modal-body">
       {#if loading && !log}
-        <div class="loader">
+        <div class="loader" transition:fade={{ duration: 160 }}>
           <Loader2 size={20} class="spin" />
           Waiting for process output…
         </div>
       {/if}
       {#if suspectCount > 0}
-        <div class="suspect-banner">
+        <div class="suspect-banner" transition:fly={{ y: -8, duration: 220, opacity: 0, easing: quintOut }}>
           <strong>{suspectCount}</strong> mod{suspectCount === 1 ? "" : "s"} referenced
           {#if suspects.length}
             — {suspects.map((s) => s.name).join(", ")}{suspectCount > suspects.length ? "…" : ""}
           {/if}
         </div>
       {/if}
-      {#if log}
-        <!-- Single text node: per-line Svelte each-blocks made latest.log lag hard. -->
-        <pre class="log" bind:this={logPreEl} on:scroll={onLogScroll}>{log}</pre>
-      {:else}
-        <pre class="log">Waiting for process output…</pre>
-      {/if}
+      {#key selectedLog}
+        <div class="log-pane" in:fly={{ x: 16, duration: 280, opacity: 0, easing: quintOut }}>
+          {#if log}
+            <!-- Single text node: per-line Svelte each-blocks made latest.log lag hard. -->
+            <pre class="log" bind:this={logPreEl} on:scroll={onLogScroll}>{log}</pre>
+          {:else}
+            <pre class="log">Waiting for process output…</pre>
+          {/if}
+        </div>
+      {/key}
     </div>
 
     <div class="modal-footer">
@@ -303,7 +311,7 @@
           ? "Live tail · refreshes ~1s · XML console auto-formatted"
           : `Showing ${selectedLog} (loaded once)`}</span
       >
-      <button class="ghost" on:click={shareCurrent} disabled={!log || sharing} title="Upload to mclo.gs">
+      <button class="ghost" on:click={shareCurrent} disabled={!log || sharing} title={selectedLog === "__live__" ? "Upload the Live log (latest.log when available)" : `Upload ${selectedLog} to mclo.gs`}>
         <Share2 size={16} />
         {sharing ? "Sharing…" : "Share"}
       </button>
@@ -390,25 +398,6 @@
     gap: 6px;
   }
 
-  .log-select-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: transparent;
-    color: var(--text-muted, #9aa4b2);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .log-select-btn.active {
-    background: rgba(27, 217, 106, 0.12);
-    border-color: rgba(27, 217, 106, 0.35);
-    color: #fff;
-  }
-
   .log-dropdown {
     position: absolute;
     top: 100%;
@@ -460,6 +449,43 @@
     display: flex;
     flex-direction: column;
     padding: 0;
+    overflow: hidden;
+  }
+
+  .log-pane {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .log-select-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: transparent;
+    color: var(--text-muted, #9aa4b2);
+    font-size: 12px;
+    cursor: pointer;
+    transition:
+      background var(--motion-fast, 160ms) var(--ease-out, ease),
+      border-color var(--motion-fast, 160ms) var(--ease-out, ease),
+      color var(--motion-fast, 160ms) var(--ease-out, ease),
+      transform var(--motion-fast, 160ms) var(--ease-spring, ease);
+  }
+
+  .log-select-btn:hover {
+    transform: translateY(-1px);
+  }
+
+  .log-select-btn.active {
+    background: rgba(27, 217, 106, 0.12);
+    border-color: rgba(27, 217, 106, 0.35);
+    color: #fff;
+    transform: scale(1.03);
   }
 
   .loader {

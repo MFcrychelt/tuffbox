@@ -2,6 +2,8 @@
   import { invoke } from "@tauri-apps/api/core";
   import { launchWithFeedback } from "../lib/launch";
   import { onMount } from "svelte";
+  import { fly } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import {
     MessageCircle,
     Search,
@@ -138,6 +140,8 @@
   /// Sentinel: force latest.log analysis (never auto-pick a crash file).
   const LATEST_LOG_SOURCE = "__latest_log__";
   let analysisBusy = false;
+  /** Detail panel under the verdict: rules findings vs AI explanation. */
+  let detailTab: "rules" | "ai" = "rules";
   let aiSoftError: string | null = null;
   let sharingLog = false;
   let loading = false;
@@ -151,6 +155,13 @@
   let message: string | null = null;
   let plan: any | null = null;
   let lastLoadedPath: string | null = null;
+
+  function onSourceChange(e: Event) {
+    const el = e.currentTarget;
+    if (!(el instanceof HTMLSelectElement)) return;
+    if (el.value === LATEST_LOG_SOURCE) chooseLatestLog();
+    else chooseReport(el.value);
+  }
 
   async function shareCurrentLog() {
     if (!$projectPath || sharingLog) return;
@@ -624,6 +635,8 @@
   };
 
   $: mergedRecommendations = buildMergedRecommendations(crashFindings, aiAnalysis);
+  $: primaryRec = mergedRecommendations[0] ?? null;
+  $: sessionOk = !!(diagnosis?.sessionHealthy && preferLatestLog);
 
   function buildMergedRecommendations(findings: any[], analysis: any): MergedRec[] {
     const out: MergedRec[] = [];
@@ -1338,19 +1351,17 @@
       <button
         class="secondary"
         on:click={() => runUnifiedAnalysis()}
-        disabled={!$projectPath || analysisBusy || loading || (diagnosis?.sessionHealthy && preferLatestLog)}
+        disabled={!$projectPath || analysisBusy || loading || sessionOk}
         title="Re-run Crash Assistant + AI"
       >
         <RefreshCw size={16} class={analysisBusy ? "spin" : ""} />
         {analysisBusy ? "Analyzing…" : "Re-analyze"}
       </button>
-      <button class="ghost" on:click={() => load(true)} disabled={!$projectPath || loading}>
+      <button class="ghost icon-only" on:click={() => load(true)} disabled={!$projectPath || loading} title="Refresh logs">
         <RefreshCw size={16} class={loading ? "spin" : ""} />
-        Refresh
       </button>
-      <button class="ghost" on:click={openFolder} disabled={!$projectPath}>
+      <button class="ghost icon-only" on:click={openFolder} disabled={!$projectPath} title="Open folder">
         <FolderOpen size={16} />
-        Folder
       </button>
     </div>
   </div>
@@ -1359,281 +1370,314 @@
   {#if message}<div class="notice success">{message}</div>{/if}
   {#if aiSoftError}
     <div class="notice warning">
-      AI unavailable: {aiSoftError}
+      AI unavailable — rules still work.
       <button class="ghost mini" type="button" on:click={() => (aiModalOpen = true)}>AI settings</button>
     </div>
   {/if}
   {#if pendingPlan && swarmEnabled}
     <div class="notice warning">
-      Network pending plan ready ({(pendingPlan.actions ?? []).length} action(s)).
+      Network fix ready ({(pendingPlan.actions ?? []).length} action(s)).
       <button class="secondary small" on:click={applyPendingNetworkFix} disabled={pendingBusy}>
-        {pendingBusy ? "Applying…" : "Apply network fix"}
+        {pendingBusy ? "Applying…" : "Apply"}
       </button>
     </div>
   {/if}
 
   {#if loading && !diagnosis}
-    <div class="loading">Loading crash diagnosis...</div>
+    <div class="loading">Loading crash diagnosis…</div>
   {:else if !$projectPath}
     <EmptyState icon={Stethoscope} title="No project selected" description="Open a project to analyze crash reports and latest.log." />
   {:else if diagnosis}
-    {#if diagnosis.sessionHealthy && preferLatestLog}
-      <div class="muted-box stale-warn ok-banner">
-        <CheckCircle size={16} />
-        Minecraft launched successfully — crash analysis paused. Graph conflicts below still apply.
-      </div>
-    {/if}
-
-    <!-- 1. Source picker -->
-    <section class="source-bar panel">
-      <h2><Bug size={16} /> Log source</h2>
-      <div class="source-cards">
-        <button
-          type="button"
-          class="report-card"
-          class:selected={preferLatestLog || !selectedReportId}
-          on:click={() => chooseLatestLog()}
-        >
-          <strong>logs/latest.log</strong>
-          <span>
-            {#if diagnosis.latestLog.exists}
-              Live · {diagnosis.latestLog.signals.length} signals
-            {:else}
-              Missing
-            {/if}
-          </span>
-        </button>
-        {#each diagnosis.reports.slice(0, 6) as report (report.id)}
-          <button
-            type="button"
-            class="report-card"
-            class:selected={!preferLatestLog && selectedReportId === report.id}
-            on:click={() => chooseReport(report.id)}
-          >
-            <strong>{report.name}</strong>
-            <span>{formatBytes(report.size)} · {formatDate(report.modified)}</span>
-          </button>
+    <!-- 1. Source + status (compact) -->
+    <section class="dx-source panel">
+      <label class="dx-source-label" for="dx-source-select">Looking at</label>
+      <select
+        id="dx-source-select"
+        class="dx-source-select"
+        value={preferLatestLog ? LATEST_LOG_SOURCE : selectedReportId}
+        on:change={onSourceChange}
+      >
+        <option value={LATEST_LOG_SOURCE}>
+          latest.log{diagnosis.latestLog.exists ? ` · ${diagnosis.latestLog.signals.length} signals` : " · missing"}
+        </option>
+        {#each diagnosis.reports as report (report.id)}
+          <option value={report.id}>{report.name} · {formatBytes(report.size)}</option>
         {/each}
-      </div>
+      </select>
       {#if diagnosis.crashReportStale}
-        <p class="muted-inline">Newest crash-report is older than latest.log — analyzing the live log.</p>
+        <p class="muted-inline">Crash report is older than latest.log — live log is preferred.</p>
       {/if}
     </section>
 
-    <!-- Hero: top suspect only when useful -->
-    {#if topSuspect && !(diagnosis.sessionHealthy && preferLatestLog)}
-      <section class="diagnosis-summary">
-        <div class="summary-icon"><AlertTriangle size={22} /></div>
-        <div class="summary-body">
-          <span class="eyebrow">Top suspect</span>
-          <div class="summary-heading">
-            <h1>{heroCulpritLabel || topSuspect.name}</h1>
-            <strong>{topSuspect.confidence}%</strong>
-          </div>
-          <div class="summary-meta">
+    <!-- 2. Verdict + one clear CTA -->
+    <section class="dx-verdict" class:ok={sessionOk} class:warn={!sessionOk && !!topSuspect} class:neutral={!sessionOk && !topSuspect}>
+      <div class="dx-verdict-icon">
+        {#if sessionOk}
+          <CheckCircle size={22} />
+        {:else if topSuspect}
+          <AlertTriangle size={22} />
+        {:else}
+          <CircleHelp size={22} />
+        {/if}
+      </div>
+      <div class="dx-verdict-body">
+        {#if sessionOk}
+          <span class="eyebrow">Status</span>
+          <h1>Last launch looked healthy</h1>
+          <p class="dx-verdict-copy">Crash analysis is paused. Pack graph conflicts below still apply if listed.</p>
+        {:else if topSuspect}
+          <span class="eyebrow">Most likely cause</span>
+          <h1>{heroCulpritLabel || topSuspect.name}</h1>
+          <p class="dx-verdict-copy">
             <code>{topSuspect.id}</code>
-            {#if topSuspect.blameRole}<span class="role-pill {topSuspect.blameRole}">{topSuspect.blameRole}</span>{/if}
-          </div>
+            · {topSuspect.confidence}% confidence
+            {#if topSuspect.blameRole}· {topSuspect.blameRole}{/if}
+          </p>
           {#if strongestEvidence}
-            <div class="summary-evidence"><code>{strongestEvidence}</code></div>
+            <p class="dx-evidence"><code>{strongestEvidence}</code></p>
           {/if}
-          {#if topSuspect.knownInManifest}
-            <div class="summary-actions">
-              <button class="secondary" on:click={() => fixDisableMod(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
-                {disablingModId === topSuspect.id ? "Disabling…" : "Disable"}
-              </button>
-              <button class="ghost" on:click={() => applyTopSuspectUpdate()} disabled={fixingIdx === -1}>
-                {fixingIdx === -1 ? "Updating…" : "Update"}
-              </button>
-              <button class="ghost danger" on:click={() => fixRemoveMod(topSuspect.id, -1)} disabled={fixingIdx === -2 || fixingIdx === -1}>
-                Remove
-              </button>
-            </div>
+        {:else}
+          <span class="eyebrow">Status</span>
+          <h1>No clear culprit yet</h1>
+          <p class="dx-verdict-copy">
+            {crashFindings.length
+              ? `${crashFindings.length} rule finding(s) — open Rules below.`
+              : analysisBusy
+                ? "Still analyzing…"
+                : "Try Re-analyze, or open the log under Evidence."}
+          </p>
+        {/if}
+
+        <div class="dx-cta">
+          {#if !sessionOk && primaryRec}
+            <button
+              class="primary"
+              type="button"
+              on:click={primaryRec.apply}
+              disabled={aiApplyBusy || applyingHintId !== null}
+            >
+              <Wrench size={15} />
+              {primaryRec.label}
+            </button>
+            {#if mergedRecommendations.length > 1}
+              <span class="dx-cta-more">{mergedRecommendations.length - 1} more below</span>
+            {/if}
+          {:else if !sessionOk && topSuspect?.knownInManifest}
+            <button class="primary" on:click={() => fixDisableMod(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
+              {disablingModId === topSuspect.id ? "Disabling…" : `Disable ${topSuspect.name}`}
+            </button>
+            <button class="ghost" on:click={() => applyTopSuspectUpdate()} disabled={fixingIdx === -1}>Update</button>
+          {/if}
+          {#if !sessionOk && aiAnalysis && aiPlanActions(aiAnalysis).length > 1}
+            <button
+              class="secondary"
+              on:click={applyAiPlan}
+              disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
+            >
+              {aiApplyBusy ? "Applying…" : "Apply full AI plan"}
+            </button>
           {/if}
         </div>
-      </section>
-    {/if}
+      </div>
+    </section>
 
-    <!-- 2. Unified recommendations -->
-    {#if mergedRecommendations.length > 0}
-      <section class="merged-recs panel">
-        <h2><Lightbulb size={16} /> Recommended actions</h2>
-        <p class="muted-inline">Rules (Crash Assistant) and AI plan, deduplicated. Nothing applies until you confirm.</p>
-        <ul class="merged-list">
-          {#each mergedRecommendations as rec (rec.id)}
+    <!-- Extra actions (only if more than the primary) -->
+    {#if !sessionOk && mergedRecommendations.length > 1}
+      <section class="dx-more-actions panel">
+        <h2><Lightbulb size={16} /> Other suggested fixes</h2>
+        <ul class="merged-list compact">
+          {#each mergedRecommendations.slice(1) as rec (rec.id)}
             <li class="merged-item {rec.source}">
               <span class="src-tag">{rec.source === "ai" ? "AI" : "Rules"}</span>
               <div class="merged-body">
                 <strong>{rec.label}</strong>
                 {#if rec.detail}<span>{rec.detail}</span>{/if}
-                <small>risk: {rec.risk}</small>
               </div>
-              <button class="primary small" type="button" on:click={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
-                <Wrench size={13} /> Apply
+              <button class="secondary small" type="button" on:click={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
+                Apply
               </button>
             </li>
           {/each}
         </ul>
-        {#if aiAnalysis && aiPlanActions(aiAnalysis).length}
-          <button class="secondary" on:click={applyAiPlan} disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}>
-            {aiApplyBusy ? "Applying…" : "Apply full AI plan"}
-          </button>
-        {/if}
       </section>
     {/if}
 
-    <!-- 3. Equal CA + AI cards -->
-    <div class="analysis-equal">
-      <section class="panel analysis-card">
-        <h2>
-          <Zap size={16} /> Crash Assistant
-          {#if crashLoading}<span class="analyzing-pill">Running…</span>{/if}
+    <!-- 3. Analysis as tabs (not side-by-side) -->
+    <section class="dx-tabs panel">
+      <div class="dx-tabbar" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          class="dx-tab"
+          class:active={detailTab === "rules"}
+          aria-selected={detailTab === "rules"}
+          on:click={() => (detailTab = "rules")}
+        >
+          <Zap size={14} /> Rules
           {#if crashFindings.length}<span class="count">{crashFindings.length}</span>{/if}
-        </h2>
-        {#if crashFindings.length === 0 && !crashLoading}
-          <div class="muted-box">No rule-based findings for this source.</div>
+          {#if crashLoading}<span class="analyzing-pill">…</span>{/if}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="dx-tab"
+          class:active={detailTab === "ai"}
+          aria-selected={detailTab === "ai"}
+          on:click={() => (detailTab = "ai")}
+        >
+          <MessageCircle size={14} /> AI
+          {#if aiAnalysis?.source}<span class="ai-source-badge">{aiAnalysis.source}</span>{/if}
+          {#if aiLoading}<span class="analyzing-pill">…</span>{/if}
+        </button>
+      </div>
+
+      {#key detailTab}
+        {#if detailTab === "rules"}
+          <div class="dx-tabpanel" role="tabpanel" in:fly={{ x: -12, duration: 280, opacity: 0, easing: quintOut }}>
+            {#if crashFindings.length === 0 && !crashLoading}
+              <div class="muted-box">No rule-based findings for this source.</div>
+            {:else}
+              <div class="findings-stack">
+                {#each crashFindings.slice(0, 10) as f, fIdx (f.code + f.title + fIdx)}
+                  <article class="finding-card {f.severity}" class:ai-agree={f.aiAgree}>
+                    <header>
+                      <strong>{f.title}</strong>
+                      <code>{f.code}</code>
+                      {#if f.aiAgree}<span class="ai-agree-badge" title={f.aiHint ?? ""}>AI agrees</span>{/if}
+                    </header>
+                    <p>{f.description}</p>
+                    {#if f.aiHint}<p class="ai-hint">AI: {f.aiHint}</p>{/if}
+                    {#if f.autoFix}<p class="auto-fix">{f.autoFix}</p>{/if}
+                    {#if f.fixes?.length}
+                      <div class="finding-actions">
+                        {#each f.fixes.slice(0, 3) as action (action.kind + (action.modId ?? "") + action.label)}
+                          <button class="secondary small" on:click={() => applyCrashFindingFix(f, action)} disabled={applyingHintId !== null}>
+                            {action.label}
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </div>
         {:else}
-          <div class="findings-stack">
-            {#each crashFindings.slice(0, 8) as f, fIdx (f.code + f.title + fIdx)}
-              <article class="finding-card {f.severity}" class:ai-agree={f.aiAgree}>
-                <header>
-                  <strong>{f.title}</strong>
-                  <code>{f.code}</code>
-                  {#if f.aiAgree}<span class="ai-agree-badge" title={f.aiHint ?? ""}>AI agrees</span>{/if}
-                </header>
-                <p>{f.description}</p>
-                {#if f.aiHint}<p class="ai-hint">AI: {f.aiHint}</p>{/if}
-                {#if f.autoFix}<p class="auto-fix">{f.autoFix}</p>{/if}
-                {#if f.fixes?.length}
-                  <div class="finding-actions">
-                    {#each f.fixes.slice(0, 4) as action (action.kind + (action.modId ?? "") + action.label)}
-                      <button class="secondary small" on:click={() => applyCrashFindingFix(f, action)} disabled={applyingHintId !== null}>
-                        {action.label}
-                      </button>
+          <div class="dx-tabpanel" role="tabpanel" in:fly={{ x: 12, duration: 280, opacity: 0, easing: quintOut }}>
+            {#if aiLoading && !aiAnalysis}
+              <div class="muted-box">AI is reading this crash…</div>
+            {:else if !aiAnalysis}
+              <div class="muted-box">
+                {aiSoftError ? "AI failed — use Rules, or fix Ollama." : "No AI result yet."}
+                <button class="ghost mini" type="button" on:click={() => runAiExplain()}>Retry AI</button>
+              </div>
+            {:else}
+              <p class="ai-human">{aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation}</p>
+              <div class="ai-stats compact">
+                <div class="ai-stat"><strong>{Math.round((aiAnalysis.confidence ?? 0) * 100)}%</strong> conf</div>
+                <div class="ai-stat"><strong>{aiPlanActions(aiAnalysis).length}</strong> actions</div>
+                {#if aiAnalysis.model}<div class="ai-stat"><strong>{aiAnalysis.model}</strong></div>{/if}
+              </div>
+              {#if aiAnalysis.normalizeNotes?.length}
+                <div class="notice warning tight">Adjusted: {aiAnalysis.normalizeNotes.join("; ")}</div>
+              {/if}
+              {#if aiAnalysis.additionalContext ?? aiAnalysis.additional_context}
+                <div class="notice warning tight">{aiAnalysis.additionalContext ?? aiAnalysis.additional_context}</div>
+              {/if}
+              {#if (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods)?.length}
+                <div class="ai-list">
+                  <strong>Suspected</strong>
+                  <div class="crash-tags">
+                    {#each (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods) as modId (modId)}
+                      <code>{modId}</code>
                     {/each}
                   </div>
-                {/if}
-              </article>
+                </div>
+              {/if}
+              {#if aiPlanActions(aiAnalysis).length}
+                <div class="ai-list">
+                  <strong>Plan</strong>
+                  <ul>
+                    {#each aiPlanActions(aiAnalysis) as action, aIdx (aIdx)}
+                      <li>
+                        <strong>{aiActionLabel(action)}</strong>
+                        {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
+                        {#if aiActionVersion(action)}<span class="ai-ver">v{aiActionVersion(action)}</span>{/if}
+                        <span>{action.reason ?? action.description ?? ""}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+              <div class="ai-feedback">
+                <button class="secondary small" disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)} on:click={applyAiPlan}>
+                  {aiApplyBusy ? "Applying…" : "Apply plan"}
+                </button>
+                <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(true)}>Helped</button>
+                <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(false)}>Wrong</button>
+                {#if aiFeedbackMsg}<small>{aiFeedbackMsg}</small>{/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      {/key}
+    </section>
+
+    <!-- 4. Evidence (secondary) -->
+    <details class="panel collapsible-block dx-evidence-block" open={graphDiagnostics.length > 0 || wrongLoaderJars.length > 0}>
+      <summary>
+        <span><GitMerge size={16} /> Conflicts & jars</span>
+        <span class="tools-hint">
+          {graphDiagnostics.length} conflict{graphDiagnostics.length === 1 ? "" : "s"}
+          {#if wrongLoaderJars.length} · {wrongLoaderJars.length} wrong jar{/if}
+          <ChevronDown size={14} />
+        </span>
+      </summary>
+      <div class="dx-evidence-body">
+        {#if graphDiagnostics.length === 0}
+          <div class="muted-box">No graph conflicts.</div>
+        {:else}
+          <div class="diag-list">
+            {#each graphDiagnostics as d, idx (d.code + d.message + idx)}
+              <div class="diag-row {String(d.severity).toLowerCase()}">
+                <div>
+                  <strong>{d.code}</strong>
+                  <p>{d.message}</p>
+                </div>
+                <div class="diag-actions">
+                  {#if /MISSING|DEPEND/i.test(d.code + d.message)}
+                    {@const mid = (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1]}
+                    {#if mid}
+                      <button class="secondary small" on:click={() => fixMissingDependency(mid, idx)} disabled={fixingIdx === idx}>
+                        Install {mid}
+                      </button>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
             {/each}
           </div>
         {/if}
-      </section>
-
-      <section class="panel analysis-card ai-card">
-        <h2>
-          <MessageCircle size={16} /> AI / KB
-          {#if aiLoading}<span class="analyzing-pill">Running…</span>{/if}
-          {#if aiAnalysis?.source}<span class="ai-source-badge">{aiAnalysis.source}</span>{/if}
-          {#if aiAnalysis?.compactPromptUsed}<span class="ai-source-badge">compact</span>{/if}
-          {#if aiAnalysis?.kbShortCircuit}<span class="ai-source-badge">KB</span>{/if}
-        </h2>
-        {#if aiLoading && !aiAnalysis}
-          <div class="muted-box">Neural model is analyzing this crash…</div>
-        {:else if !aiAnalysis}
-          <div class="muted-box">
-            {aiSoftError ? "AI failed — use Crash Assistant results, or fix Ollama in AI settings." : "Waiting for AI…"}
-            <button class="ghost mini" type="button" on:click={() => runAiExplain()}>Retry AI</button>
-          </div>
-        {:else}
-          <p class="ai-human">{aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation}</p>
-          <div class="ai-stats compact">
-            <div class="ai-stat"><strong>{Math.round((aiAnalysis.confidence ?? 0) * 100)}%</strong> conf</div>
-            <div class="ai-stat"><strong>{aiPlanActions(aiAnalysis).length}</strong> actions</div>
-            {#if aiAnalysis.model}<div class="ai-stat"><strong>{aiAnalysis.model}</strong></div>{/if}
-          </div>
-          {#if aiAnalysis.normalizeNotes?.length}
-            <div class="notice warning tight">Adjusted: {aiAnalysis.normalizeNotes.join("; ")}</div>
-          {/if}
-          {#if aiAnalysis.additionalContext ?? aiAnalysis.additional_context}
-            <div class="notice warning tight">{aiAnalysis.additionalContext ?? aiAnalysis.additional_context}</div>
-          {/if}
-          {#if (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods)?.length}
-            <div class="ai-list">
-              <strong>Suspected</strong>
-              <div class="crash-tags">
-                {#each (aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods) as modId (modId)}
-                  <code>{modId}</code>
-                {/each}
-              </div>
-            </div>
-          {/if}
-          {#if aiPlanActions(aiAnalysis).length}
-            <div class="ai-list">
-              <strong>ActionPlan</strong>
-              <ul>
-                {#each aiPlanActions(aiAnalysis) as action, aIdx (aIdx)}
-                  <li>
-                    <strong>{aiActionLabel(action)}</strong>
-                    {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
-                    {#if aiActionVersion(action)}<span class="ai-ver">v{aiActionVersion(action)}</span>{/if}
-                    <span>{action.reason ?? action.description ?? ""}</span>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/if}
-          <div class="ai-feedback">
-            <button class="secondary small" disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)} on:click={applyAiPlan}>
-              {aiApplyBusy ? "Applying…" : "Apply plan"}
-            </button>
-            <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(true)}>Helped</button>
-            <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(false)}>Wrong</button>
-            {#if aiFeedbackMsg}<small>{aiFeedbackMsg}</small>{/if}
-          </div>
-        {/if}
-      </section>
-    </div>
-
-    <!-- 4. Graph once -->
-    <section class="graph-health panel">
-      <h2><GitMerge size={16} /> Graph conflicts <span class="count">{graphDiagnostics.length}</span></h2>
-      {#if graphDiagnostics.length === 0}
-        <div class="muted-box">No graph diagnostics.</div>
-      {:else}
-        <div class="diag-list">
-          {#each graphDiagnostics as d, idx (d.code + d.message + idx)}
-            <div class="diag-row {String(d.severity).toLowerCase()}">
+        {#if wrongLoaderJars.length > 0}
+          <h3 class="dx-subhead"><AlertTriangle size={14} /> Wrong-loader jars</h3>
+          {#each wrongLoaderJars as jar (jar.fileName)}
+            <div class="diag-row warning">
               <div>
-                <strong>{d.code}</strong>
-                <p>{d.message}</p>
+                <strong>{jar.fileName}</strong>
+                <p>{jar.reason ?? jar.detectedLoader ?? "Wrong loader"}</p>
               </div>
               <div class="diag-actions">
-                {#if /MISSING|DEPEND/i.test(d.code + d.message)}
-                  {@const mid = (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1]}
-                  {#if mid}
-                    <button class="secondary small" on:click={() => fixMissingDependency(mid, idx)} disabled={fixingIdx === idx}>
-                      Install {mid}
-                    </button>
-                  {/if}
-                {/if}
+                <button class="ghost mini" on:click={() => disableWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Disable</button>
+                <button class="ghost mini danger" on:click={() => removeWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Remove</button>
               </div>
             </div>
           {/each}
-        </div>
-      {/if}
-    </section>
+        {/if}
+      </div>
+    </details>
 
-    {#if wrongLoaderJars.length > 0}
-      <section class="panel">
-        <h2><AlertTriangle size={16} /> Wrong-loader jars</h2>
-        {#each wrongLoaderJars as jar (jar.fileName)}
-          <div class="diag-row warning">
-            <div>
-              <strong>{jar.fileName}</strong>
-              <p>{jar.reason ?? jar.detectedLoader ?? "Wrong loader"}</p>
-            </div>
-            <div class="diag-actions">
-              <button class="ghost mini" on:click={() => disableWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Disable</button>
-              <button class="ghost mini danger" on:click={() => removeWrongJar(jar.fileName)} disabled={wrongLoaderFixing === jar.fileName}>Remove</button>
-            </div>
-          </div>
-        {/each}
-      </section>
-    {/if}
-
-    <!-- Logs collapsible -->
     <details class="panel collapsible-block">
-      <summary><Terminal size={16} /> Log reader <ChevronDown size={14} /></summary>
+      <summary><Terminal size={16} /> Log <ChevronDown size={14} /></summary>
       <div class="log-reader-body">
         {#if selectedReport}
           <pre class="log-pre">{selectedReport.content.slice(0, 40000)}</pre>
@@ -1650,11 +1694,10 @@
       </div>
     </details>
 
-    <!-- More tools -->
     <details class="panel collapsible-block analysis-tools">
       <summary>
         <span><Wrench size={16} /> More tools</span>
-        <span class="tools-hint">Pack scanners, KB, AI settings <ChevronDown size={14} /></span>
+        <span class="tools-hint">Scanners, KB, AI settings <ChevronDown size={14} /></span>
       </summary>
       <div class="actions">
         <button class="secondary" on:click={createFixPlan} disabled={planning}>{planning ? "…" : "Create fix plan"}</button>
@@ -1707,483 +1750,265 @@
 <AiConnectionModal bind:open={aiModalOpen} />
 
 <style>
-  .diagnostics { max-width: none; width: 100%; }
+  .diagnostics { max-width: 920px; width: 100%; margin: 0 auto; }
   .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
+  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
   .primary-actions { gap: 8px; flex-wrap: wrap; }
-  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost, .primary-actions .refresh { cursor: pointer; }
-  .refresh { display: inline-flex; align-items: center; gap: 8px; }
+  .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost { cursor: pointer; }
+  .ghost.icon-only { padding: 8px; min-width: 36px; justify-content: center; }
+  .dx-source { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .dx-source-label { color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+  .dx-source-select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .dx-verdict {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px;
+    margin-bottom: 14px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+  .dx-verdict.warn {
+    border-color: rgba(245, 158, 11, 0.42);
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.11), var(--bg-secondary) 65%);
+  }
+  .dx-verdict.ok {
+    border-color: rgba(27, 217, 106, 0.35);
+    background: linear-gradient(135deg, rgba(27, 217, 106, 0.08), var(--bg-secondary) 65%);
+  }
+  .dx-verdict-icon {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+  }
+  .dx-verdict.warn .dx-verdict-icon { color: var(--accent-warning); background: rgba(245, 158, 11, 0.13); }
+  .dx-verdict.ok .dx-verdict-icon { color: var(--accent-primary); background: rgba(27, 217, 106, 0.13); }
+  .dx-verdict-body { min-width: 0; }
+  .dx-verdict-body h1 { margin: 0; color: var(--text-primary); font-size: 20px; line-height: 1.3; }
+  .dx-verdict-copy { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
+  .dx-verdict-copy code { font-size: 12px; color: var(--text-muted); }
+  .dx-evidence {
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    border-left: 3px solid var(--accent-warning);
+    border-radius: 0 10px 10px 0;
+    background: var(--bg-tertiary);
+    font-size: 12px;
+    color: var(--text-secondary);
+    word-break: break-word;
+  }
+  .dx-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+  .dx-cta-more { color: var(--text-muted); font-size: 12px; }
+  .dx-more-actions { margin-bottom: 14px; }
+  .dx-tabs { padding: 0; overflow: hidden; margin-bottom: 14px; }
+  .dx-tabbar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .dx-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 11px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition:
+      color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      border-color var(--motion-med) var(--ease-spring);
+  }
+  .dx-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent-primary);
+    background: var(--bg-secondary);
+  }
+  .dx-tabpanel { padding: 14px 16px 16px; }
+  .dx-evidence-block .dx-evidence-body { padding: 0 12px 12px; }
+  .dx-subhead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 14px 0 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .merged-list.compact { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
   .analysis-tools { margin-bottom: 16px; border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); background: var(--bg-secondary); }
-  .analysis-tools > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; color: var(--text-secondary); cursor: pointer; list-style: none; font-size: 12px; font-weight: 700; }
-  .analysis-tools > summary::-webkit-details-marker { display: none; }
-  .analysis-tools > summary span { display: flex; align-items: center; gap: 7px; }
-  .analysis-tools .tools-hint { color: var(--text-muted); font-weight: 500; }
-  .analysis-tools[open] .tools-hint :global(svg) { transform: rotate(180deg); }
+  .analysis-tools > summary,
+  .collapsible-block > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    list-style: none;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .analysis-tools > summary::-webkit-details-marker,
+  .collapsible-block > summary::-webkit-details-marker { display: none; }
+  .analysis-tools > summary span,
+  .collapsible-block > summary span { display: flex; align-items: center; gap: 7px; }
+  .analysis-tools .tools-hint,
+  .collapsible-block .tools-hint { color: var(--text-muted); font-weight: 500; }
+  .analysis-tools[open] .tools-hint :global(svg),
+  .collapsible-block[open] .tools-hint :global(svg),
+  .collapsible-block[open] > summary :global(svg:last-child) { transform: rotate(180deg); }
   .analysis-tools .actions { padding: 0 12px 12px; border-top: 1px solid var(--border-color); padding-top: 12px; }
+  .collapsible-block { margin-bottom: 12px; padding: 0; }
+  .log-reader-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; }
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
-  .diagnosis-summary { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: 18px; margin-bottom: 16px; border: 1px solid rgba(245, 158, 11, 0.42); border-radius: var(--border-radius-lg); background: linear-gradient(135deg, rgba(245, 158, 11, 0.11), var(--bg-secondary) 65%); }
-  .diagnosis-summary.neutral { border-color: var(--border-color); background: var(--bg-secondary); }
-  .summary-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; color: var(--accent-warning); background: rgba(245, 158, 11, 0.13); }
-  .neutral .summary-icon { color: var(--text-muted); background: var(--bg-tertiary); }
-  .summary-body { min-width: 0; }
   .eyebrow { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
-  .summary-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  .summary-heading h1, .summary-body > h1 { margin: 0; color: var(--text-primary); font-size: 22px; line-height: 1.25; }
-  .summary-heading strong { flex-shrink: 0; color: var(--accent-warning); font-size: 13px; }
-  .summary-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
-  .summary-meta code { color: var(--text-secondary); font-size: 12px; }
-  .summary-meta span { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; color: var(--text-muted); background: var(--bg-tertiary); font-size: 11px; font-weight: 700; }
-  .summary-meta span.installed { color: var(--accent-primary); }
-  .mapping-note { margin: 12px 0 0; color: var(--text-secondary); font-size: 12px; }
-  .mapping-note code { color: var(--accent-primary); }
-  .summary-evidence { margin-top: 12px; padding: 10px 12px; border-left: 3px solid var(--accent-warning); border-radius: 0 10px 10px 0; background: var(--bg-tertiary); }
-  .summary-evidence span { color: var(--text-muted); font-size: 11px; }
-  .summary-evidence p, .summary-copy { margin: 5px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
-  .summary-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .summary-actions button { display: inline-flex; align-items: center; gap: 6px; }
-  .suspect-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .ghost.danger { color: #fca5a5; }
   .ghost.danger:hover { color: #fecaca; }
-  .stats { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 14px; margin-bottom: 16px; }
   .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .stat-card { padding: 15px; display: flex; flex-direction: column; gap: 4px; }
-  .stat-card strong { font-size: 26px; }
-  .stat-card span, .muted-box, .panel-header p, .report-card span, .log-status, .snapshot-row span, .snapshot-row small, .suspect-head span { color: var(--text-muted); font-size: 12px; }
-  .stat-card.danger { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.06); }
-  .stat-card.warning { border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.06); }
-  .stat-card.accent { border-color: rgba(27, 217, 106, 0.3); background: rgba(27, 217, 106, 0.06); }
-  .diagnose-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
-  .diagnose-grid > * { min-width: 0; }
-  .reader { overflow: hidden; }
-  .inspector { max-height: calc(100vh - 150px); overflow: auto; }
+  .muted-box, .report-card span, .log-status, .snapshot-row span, .snapshot-row small, .suspect-head span { color: var(--text-muted); font-size: 12px; }
   .panel { padding: 16px; min-width: 0; }
-  .panel-header { justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-  .panel-header h2 { margin: 0 0 4px; }
-  .panel-header.small { margin: 18px 0 8px; }
-  .panel-header.small span { color: var(--text-muted); font-size: 12px; }
-  .report-card { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); padding: 11px; margin-bottom: 8px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left; transform: none; cursor: pointer; transition: border-color .12s ease, background .12s ease; }
-  .report-card:hover, .report-card.selected { border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); color: var(--text-primary); }
-  .conflict-card { margin-bottom: 12px; padding: 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
-  .conflict-card.error { border-color: rgba(239, 68, 68, 0.5); }
-  .conflict-card.warning { border-color: rgba(234, 179, 8, 0.5); }
-  .conflict-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-  .fixing-spinner { font-size: 11px; color: var(--accent-primary); animation: pulse 1.2s ease-in-out infinite; }
-  .conflict-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
-  .conflict-actions :global(.mini.danger) { color: #f87171; }
-  .conflict-actions :global(.mini.danger:hover) { background: rgba(239, 68, 68, 0.1); }
-  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-  .related-mods { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .mod-pill { font-size: 11px; background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border-color); }
-
-  .log-title, .changes-title { margin-top: 20px; }
-  .log-status { padding: 10px; border: 1px dashed var(--border-color); border-radius: 10px; }
-  .log-status.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.28); }
-  pre { margin: 0; border-radius: 12px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow: auto; max-width: 100%; }
-  .crash-preview {
-    border: 1px solid var(--border-color);
-    border-radius: 12px;
-    background: #0d0d10;
-    overflow: hidden;
-  }
-  .crash-preview-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-weight: 800;
-    background: var(--bg-tertiary);
-  }
-  .crash-preview-bar small { color: var(--text-muted); font-weight: 500; }
-  .crash-preview .report-content {
-    margin: 0;
-    max-height: 420px;
-    overflow: auto;
-    padding: 14px;
-    color: #d4d4d8;
-    font-size: 12px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    font-family: ui-monospace, monospace;
-  }
-  .raw-section { margin-top: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); overflow: hidden; }
-  .raw-section > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 800; }
-  .raw-section > summary span { display: flex; align-items: center; gap: 8px; }
-  .raw-section > summary small { color: var(--text-muted); font-weight: 500; }
-  .raw-section[open] > summary { border-bottom: 1px solid var(--border-color); }
-  .report-content { max-height: 520px; padding: 16px; }
-  .log-content { max-height: 250px; padding: 14px; color: #a1a1aa; }
-  .suspects, .snapshot-list, .diagnostic-list, .signal-groups, .mod-entry-list { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-  .suspects { max-height: 520px; overflow: auto; padding-right: 4px; }
-  .suspect-card, .snapshot-row, .diag-card, .plan-card, .signal-group, .mod-entry { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; }
-  .mod-entry { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 8px; align-items: center; }
-  .mod-entry strong { color: var(--text-primary); }
-  .mod-entry span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .signal-group { display: grid; gap: 5px; border-left: 4px solid rgba(27, 217, 106, .55); }
-  .signal-group strong { color: var(--text-primary); }
-  .signal-group span, .signal-group small, .signal-group p { color: var(--text-muted); font-size: 12px; }
-  .signal-group p { margin: 2px 0; line-height: 1.45; }
-  .suspect-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-  .suspect-head strong { display: block; color: var(--text-primary); font-size: 15px; overflow-wrap: anywhere; }
-  .suspect-card { border-left: 4px solid var(--accent-primary); min-width: 0; }
-  .suspect-card.unresolved { border-left-color: var(--text-muted); }
-  .suspect-identity { display: block; margin-top: 3px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow-wrap: anywhere; word-break: break-all; }
-  .suspect-head b { color: var(--accent-primary); }
-  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
-  .badges small { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); background: var(--bg-elevated); border-radius: 999px; padding: 3px 8px; }
-  .badges small.known { color: var(--accent-primary); }
-  .role-pill {
+  .muted-inline { margin: 0; color: var(--text-muted); font-size: 12px; }
+  .analyzing-pill {
     display: inline-flex;
     align-items: center;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(27, 217, 106, 0.12);
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .count {
+    display: inline-flex;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    font-size: 11px;
+  }
+  .findings-stack { display: flex; flex-direction: column; gap: 10px; }
+  .finding-card {
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .finding-card header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .finding-card header strong { color: var(--text-primary); }
+  .finding-card header code { color: var(--text-muted); font-size: 11px; }
+  .finding-card p { margin: 0 0 6px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
+  .finding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .ai-hint, .auto-fix { font-size: 12px; color: var(--text-muted); }
+  .ai-agree-badge, .ai-source-badge {
+    display: inline-flex;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(27, 217, 106, 0.12);
+    color: var(--accent-primary);
     font-size: 10px;
     font-weight: 800;
-    border-radius: 999px;
-    padding: 2px 8px;
-    background: var(--bg-elevated);
-    color: var(--text-muted);
   }
-  .role-pill.primary { background: rgba(239, 68, 68, 0.14); color: #ef4444; }
-  .role-pill.secondary { background: rgba(245, 158, 11, 0.14); color: var(--accent-warning); }
-  .match-src { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10px !important; }
-  .evidence { border-top: 1px solid var(--border-color); padding-top: 8px; margin-top: 8px; }
-  .evidence code, .code { color: var(--text-muted); font-size: 11px; }
-  .evidence p, .diag-card p, .plan-card p { margin: 5px 0 0; color: var(--text-secondary); line-height: 1.45; }
-  .snapshot-row { display: flex; flex-direction: column; gap: 5px; }
-  .snapshot-row strong { color: var(--text-primary); }
-  .plan-card { margin-top: 16px; border-color: rgba(27, 217, 106, 0.32); background: rgba(27, 217, 106, 0.06); }
-  .hints-panel { margin-top: 16px; border-color: rgba(96, 165, 250, 0.35); background: rgba(96, 165, 250, 0.04); }
-  .hints-list { display: grid; gap: 10px; margin-top: 10px; }
-  .hint-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; background: var(--bg-tertiary); }
-  .hint-card.error { border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.05); }
-  .hint-card.warning { border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.05); }
-  .hint-card.info { border-color: rgba(96, 165, 250, 0.3); background: rgba(96, 165, 250, 0.05); }
-  .hint-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .hint-head strong { color: var(--text-primary); }
-  .hint-detail { margin: 6px 0 0; color: var(--text-secondary); line-height: 1.45; font-size: 13px; }
-  .hint-steps { margin: 8px 0 0 18px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-  .hint-steps li { margin: 2px 0; }
-  .hint-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .primary.small { font-size: 12px; padding: 6px 10px; white-space: nowrap; flex: 0 0 auto; min-width: 0; max-width: 100%; }
-  .fixing-spinner { color: var(--accent); font-size: 12px; }
-  .plan-meta { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 12px; margin: 10px 0; }
-  .plan-card ul { margin: 8px 0 0 18px; color: var(--text-secondary); font-size: 12px; }
-  .graph-health { margin-top: 16px; }
-  .wrong-loader { margin-top: 16px; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.04); }
-  .wrong-loader-list { display: grid; gap: 8px; }
-  .wrong-loader-card { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 12px; border: 1px solid rgba(245, 158, 11, 0.2); background: var(--bg-tertiary); }
-  .wrong-loader-main { display: grid; gap: 5px; min-width: 0; }
-  .wrong-loader-main strong { color: var(--text-primary); }
-  .wrong-reason { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .wrong-loader-actions { display: flex; gap: 6px; flex-shrink: 0; }
-  .perf-audit { margin-top: 16px; border-color: rgba(96,165,250,.3); background: rgba(96,165,250,.03); }
-  .perf-list { display: grid; gap: 8px; }
-  .perf-card { padding: 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 4px; }
-  .perf-card.warning { border-color: rgba(245,158,11,.3); }
-  .perf-card.info { border-color: rgba(96,165,250,.25); }
-  .perf-card-header { display: flex; justify-content: space-between; align-items: center; }
-  .perf-card strong { color: var(--text-primary); font-size: 13px; }
-  .perf-severity { font-size: 10px; text-transform: uppercase; font-weight: 800; color: var(--text-muted); padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); }
-  .perf-card p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.4; }
-  .perf-file { font-size: 11px; color: var(--accent-primary); word-break: break-all; }
-  .ore-gen { margin-top: 16px; border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.03); }
-  .ore-list { display: grid; gap: 6px; }
-  .ore-card { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 4px; }
-  .ore-header { display: flex; justify-content: space-between; align-items: center; }
-  .ore-header strong { color: var(--text-primary); text-transform: capitalize; }
-  .ore-conf { font-size: 10px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); color: var(--accent-secondary); }
-  .ore-key { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent-primary); }
-  .ore-meta { display: flex; gap: 10px; flex-wrap: wrap; }
-  .ore-meta span { font-size: 11px; color: var(--text-muted); }
-  .ore-file { font-size: 10px; color: var(--text-muted); }
-  .ore-known { font-size: 10px; color: var(--accent-primary); }
-  .crash-assistant { margin-top: 16px; border-color: rgba(239,68,68,.3); background: rgba(239,68,68,.02); }
-  .crash-intro { margin: 0 0 10px; color: var(--text-muted); font-size: 12px; }
-  .crash-list { display: grid; gap: 8px; }
-  .crash-card { padding: 14px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 8px; }
-  .crash-card.critical { border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.06); }
-  .crash-card.error { border-color: rgba(239,68,68,.35); }
-  .crash-card.warning { border-color: rgba(245,158,11,.35); }
-  .crash-card-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .crash-card strong { color: var(--text-primary); font-size: 14px; }
-  .crash-sev { font-size: 10px; text-transform: uppercase; font-weight: 800; padding: 3px 7px; border-radius: 4px; }
-  .crash-sev.critical, .crash-sev.error { background: rgba(239,68,68,.15); color: #fca5a5; }
-  .crash-sev.warning { background: rgba(245,158,11,.15); color: #fde68a; }
-  .crash-sev.info { background: rgba(96,165,250,.15); color: #93c5fd; }
-  .crash-code { font-size: 11px; color: var(--text-muted); }
-  .crash-card p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
-  .crash-evidence {
+  .ai-human { margin: 0 0 12px; color: var(--text-primary); font-size: 14px; line-height: 1.5; }
+  .ai-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .ai-stat { padding: 6px 10px; border-radius: 8px; background: var(--bg-tertiary); font-size: 12px; color: var(--text-muted); }
+  .ai-stat strong { color: var(--text-primary); margin-right: 4px; }
+  .ai-list { margin-top: 12px; }
+  .ai-list strong { display: block; margin-bottom: 6px; font-size: 12px; color: var(--text-muted); }
+  .ai-list ul { margin: 0; padding-left: 18px; color: var(--text-secondary); font-size: 13px; }
+  .ai-list li { margin-bottom: 6px; }
+  .ai-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+  .crash-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .crash-tags code { padding: 2px 6px; border-radius: 4px; background: var(--bg-secondary); font-size: 11px; }
+  .diag-list { display: flex; flex-direction: column; gap: 8px; }
+  .diag-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .diag-row p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; }
+  .diag-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+  .merged-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .merged-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .merged-body strong { color: var(--text-primary); font-size: 13px; }
+  .merged-body span { color: var(--text-muted); font-size: 12px; }
+  .src-tag {
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 800;
+  }
+  .merged-item.ai .src-tag { color: var(--accent-primary); background: rgba(27, 217, 106, 0.12); }
+  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .notice.tight { padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
+  .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); }
+  .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }
+  .log-pre {
     margin: 0;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #0d0d10;
+    max-height: 320px;
+    padding: 12px;
+    border-radius: 12px;
+    background: #09090b;
     color: #d4d4d8;
-    font-size: 11px;
-    line-height: 1.4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
     white-space: pre-wrap;
-    word-break: break-word;
-    font-family: ui-monospace, monospace;
-    max-height: 120px;
     overflow: auto;
   }
-  .crash-fix { padding: 8px 10px; border-radius: 8px; background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.2); font-size: 12px; color: var(--accent-primary); }
-  .crash-fix strong { color: var(--accent-primary); }
-  .crash-card > p,
-  .crash-evidence { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
-  .crash-fix-actions { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
-  .crash-fix-actions button { flex: 0 0 auto; white-space: nowrap; max-width: 100%; }
-  .crash-fix-actions .small { font-size: 11px; padding: 5px 10px; }
-  .more-fixes { color: var(--text-muted); font-size: 11px; align-self: center; }
-  .crash-refs { display: flex; gap: 8px; flex-wrap: wrap; }
-  .crash-link { font-size: 11px; color: var(--accent-secondary); text-decoration: none; }
-  .crash-support { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); display: flex; gap: 8px; align-items: center; }
-  .crash-mcreator { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.25); }
-  .crash-mcreator strong { color: #fde68a; font-size: 12px; display: block; margin-bottom: 4px; }
-  .crash-mcreator p { color: var(--text-muted); font-size: 11px; margin: 0 0 6px; }
-  .crash-tags { display: flex; gap: 6px; flex-wrap: wrap; }
-  .crash-tags code { font-size: 11px; background: var(--bg-elevated); padding: 3px 7px; border-radius: 4px; }
-  .crash-classfinder { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(96,165,250,.06); border: 1px solid rgba(96,165,250,.2); }
-  .crash-classfinder strong { color: #93c5fd; font-size: 12px; display: block; margin-bottom: 4px; }
-  .crash-classfinder p { color: var(--text-muted); font-size: 11px; margin: 0 0 6px; }
-  .class-match { display: flex; gap: 8px; align-items: center; font-size: 11px; }
-  .class-match span { color: var(--accent-primary); font-weight: 700; }
-  .ai-panel { margin-top: 16px; border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.03); }
-  .ai-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 12px; }
-  .ai-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 10px; padding: 10px; text-align: center; }
-  .ai-stat strong { font-size: 20px; color: var(--accent-secondary); }
-  .ai-human { color: var(--text-primary); font-size: 14px; line-height: 1.5; margin: 0 0 12px; }
-  .ai-list { margin: 10px 0; }
-  .ai-list ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
-  .ai-list li { color: var(--text-secondary); font-size: 12px; }
-  .ai-list small { color: var(--text-muted); margin-left: 6px; }
-  .ai-feedback {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-color);
-    font-size: 12px; color: var(--text-muted);
+  .plan-card, .author-form { margin-top: 12px; padding: 12px; border-top: 1px solid var(--border-color); }
+  .author-form label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
+  .author-form textarea, .author-form input {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
   }
-  .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; }
-  .ai-desc { color: var(--text-muted); font-size: 12px; margin: 0 0 10px; line-height: 1.4; }
-  .ai-prompt-text { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 400px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
-  .author-kb-panel { border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.04); }
-  .author-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .author-grid label { display: grid; gap: 6px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
-  .author-grid label.full { grid-column: 1 / -1; }
-  .author-grid input, .author-grid textarea {
-    width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-color);
-    background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-weight: 400;
+  :global(.spin) { animation: dx-spin 0.9s linear infinite; }
+  @keyframes dx-spin { to { transform: rotate(360deg); } }
+  @media (max-width: 720px) {
+    .dx-verdict { grid-template-columns: 1fr; }
+    .merged-item { grid-template-columns: 1fr; }
   }
-  .author-grid textarea.mono { font-family: ui-monospace, monospace; font-size: 11px; }
-  .author-fp-meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: 11px; color: var(--text-muted); }
-  @media (max-width: 720px) { .author-grid { grid-template-columns: 1fr; } }
-
-  .crash-support-msg { margin: 10px 0 0; padding: 14px; border-radius: 10px; background: #0d0d10; color: #d4d4d8; font-size: 12px; line-height: 1.5; max-height: 360px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
-  .diag-card { display: flex; gap: 12px; border-left: 4px solid var(--text-muted); }
-  .diag-card.error { border-left-color: var(--accent-danger); }
-  .diag-card.warning { border-left-color: var(--accent-warning); }
-  .diag-card.info { border-left-color: #60a5fa; }
-  .diag-icon { color: var(--text-muted); margin-top: 2px; }
-  .diag-card.error .diag-icon { color: var(--accent-danger); }
-  .diag-card.warning .diag-icon { color: var(--accent-warning); }
-  .diag-card.info .diag-icon { color: #60a5fa; }
-  .meta { gap: 8px; }
-  .severity { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--text-secondary); }
-  .code { background: var(--bg-elevated); padding: 2px 7px; border-radius: 4px; font-family: ui-monospace, monospace; }
-  .muted-box { padding: 12px; background: var(--bg-tertiary); border-radius: 12px; }
-  .muted-box.compact { padding: 9px; }
-  .muted-box.stale-warn {
-    margin-bottom: 10px;
-    border: 1px solid rgba(245, 166, 35, 0.35);
-    background: rgba(245, 166, 35, 0.08);
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-  .empty, .loading { color: var(--text-muted); padding: 70px; text-align: center; }
-  .empty.inline { padding: 40px; }
-  .empty.success { display: flex; flex-direction: column; align-items: center; gap: 12px; }
-  :global(.spin) { animation: spin 900ms linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 1180px) {
-    .diagnose-grid { grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr); }
-    .inspector { grid-column: 1 / -1; }
-    .stats { grid-template-columns: repeat(2, 1fr); }
-  }
-  @media (max-width: 760px) {
-    .diagnose-grid, .stats { grid-template-columns: 1fr; }
-    .inspector { grid-column: auto; }
-    .summary-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
-    .analysis-tools > summary { align-items: flex-start; }
-    .analysis-tools .tools-hint { display: none; }
-    .actions button { flex: 1 1 160px; justify-content: center; }
-  }
-  @media (max-width: 480px) {
-    .diagnosis-summary { grid-template-columns: 1fr; padding: 14px; }
-    .toolbar { align-items: flex-start; }
-    .title span { font-size: 14px; }
-  .mod-entry { grid-template-columns: 1fr; }
-  .wrong-loader-card, .wrong-loader-actions { flex-direction: column; }
-  .wrong-loader-actions { width: 100%; }
-  }
-
-  /* --- Unified Problems panel (IDE "Problems" tool window) --- */
-  .problems-panel { margin-top: 16px; border-color: rgba(239, 68, 68, 0.25); background: rgba(239, 68, 68, 0.04); }
-  .problems-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
-  .problems-head h2 { margin: 0; }
-  .problems-head .count { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 20px; padding: 1px 9px; font-size: 11px; color: var(--text-secondary); }
-  .problems-legend { display: flex; gap: 6px; flex-wrap: wrap; }
-  .legend-pill { font-size: 11px; padding: 2px 8px; border-radius: 12px; border: 1px solid var(--border-color); }
-  .legend-pill.critical { color: #fecaca; border-color: rgba(239, 68, 68, 0.5); }
-  .legend-pill.error { color: #fecaca; border-color: rgba(239, 68, 68, 0.4); }
-  .legend-pill.warning { color: #fde68a; border-color: rgba(234, 179, 8, 0.4); }
-  .legend-pill.info { color: #bfdbfe; border-color: rgba(59, 130, 246, 0.4); }
-  .problems-list { display: grid; gap: 8px; }
-  .problem-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
-  .problem-row.critical { border-color: rgba(239, 68, 68, 0.5); }
-  .problem-row.error { border-color: rgba(239, 68, 68, 0.3); }
-  .problem-row.warning { border-color: rgba(234, 179, 8, 0.35); }
-  .problem-row.info { border-color: rgba(59, 130, 246, 0.3); }
-  .sev-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; background: var(--text-muted); }
-  .problem-row.critical .sev-dot, .problem-row.error .sev-dot { background: #ef4444; }
-  .problem-row.warning .sev-dot { background: #eab308; }
-  .problem-row.info .sev-dot { background: #3b82f6; }
-  .problem-body {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .problem-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .problem-title strong { color: var(--text-primary); }
-  .problem-source { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); border: 1px solid var(--border-color); border-radius: 10px; padding: 0 7px; }
-  .problem-detail {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-    max-width: 100%;
-  }
-  .problem-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    width: 100%;
-    align-items: center;
-  }
-  .problem-actions button {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    max-width: 100%;
-  }
-
-  /* --- Find-in-log + section TOC --- */
-  .preview-tools { display: flex; align-items: center; gap: 12px; }
-  .find-box { display: flex; align-items: center; gap: 6px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 8px; padding: 3px 8px; }
-  .find-box :global(svg) { color: var(--text-muted); }
-  .find-input { background: transparent; border: none; outline: none; color: var(--text-primary); font-size: 12px; width: 150px; }
-  .find-count { font-size: 11px; color: var(--text-muted); min-width: 30px; text-align: center; }
-  .find-nav { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 13px; padding: 0 3px; }
-  .find-nav:hover:not(:disabled) { color: var(--text-primary); }
-  .find-nav:disabled { opacity: .4; cursor: default; }
-  .toc { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 4px; border-bottom: 1px solid var(--border-color); margin-bottom: 8px; }
-  .toc-item { font-size: 11px; padding: 3px 9px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; transition: border-color .12s ease, color .12s ease; }
-  .toc-item:hover { border-color: rgba(27, 217, 106, 0.4); color: var(--text-primary); }
-  .report-content .log-line { padding: 0 2px; border-radius: 3px; }
-  .report-content .log-line.active { background: rgba(234, 179, 8, 0.22); outline: 1px solid rgba(234, 179, 8, 0.5); }
-  .report-content .log-line.signal { background: rgba(239, 68, 68, 0.12); box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.85); }
-  .report-content .log-line.signal[data-sig="Mixin"],
-  .report-content .log-line.signal[data-sig="Exception"],
-  .report-content .log-line.signal[data-sig="CausedBy"] { background: rgba(249, 115, 22, 0.12); box-shadow: inset 3px 0 0 rgba(249, 115, 22, 0.85); }
-  .report-content .log-line.signal[data-sig="OutOfMemory"],
-  .report-content .log-line.signal[data-sig="Watchdog"],
-  .report-content .log-line.signal[data-sig="EulaNotAccepted"],
-  .report-content .log-line.signal[data-sig="PortConflict"],
-  .report-content .log-line.signal[data-sig="CorruptJar"],
-  .report-content .log-line.signal[data-sig="MissingDependency"],
-  .report-content .log-line.signal[data-sig="SuspectedMods"] { background: rgba(239, 68, 68, 0.16); box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.95); }
-  .sig-marker { display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--bg-primary); background: rgba(239, 68, 68, 0.85); border-radius: 3px; padding: 0 4px; margin-right: 6px; vertical-align: middle; }
-  .report-content :global(mark) { background: rgba(234, 179, 8, 0.45); color: inherit; border-radius: 2px; padding: 0 1px; }
-
-  /* --- Diagnostics button-group + card spacing hardening ---
-     Actions sit below detail (stacked), so text is never squeezed into
-     single-letter columns by side-by-side flex siblings. */
-  .problems-list, .hints-list, .suspects, .diagnostic-list, .signal-groups, .mod-entry-list {
-    display: grid;
-    gap: 12px;
-  }
-  .hint-actions, .suspect-actions, .conflict-actions, .plan-card ul {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  .hint-actions button, .suspect-actions button, .conflict-actions button {
-    white-space: nowrap;
-    flex: 0 0 auto;
-    min-width: 0;
-    max-width: 100%;
-  }
-  .hint-card, .problem-row, .suspect-card, .conflict-card, .diag-card, .signal-group, .mod-entry, .plan-card {
-    overflow-wrap: break-word;
-    word-break: normal;
-  }
-  .problem-body { overflow-wrap: break-word; word-break: normal; }
-  .suspects { max-height: none; overflow: visible; }
-
-  .analyzing-pill { margin-left: 8px; font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 999px; padding: 2px 8px; }
-  .ok-banner { display: flex; align-items: center; gap: 8px; border-color: rgba(27, 217, 106, 0.35) !important; margin-bottom: 12px; }
-  .source-bar { margin-bottom: 14px; }
-  .source-cards { display: flex; flex-wrap: wrap; gap: 8px; }
-  .source-cards .report-card { min-width: 140px; max-width: 220px; text-align: left; }
-  .muted-inline { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
-  .summary-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .merged-recs { margin-bottom: 14px; }
-  .merged-list { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; }
-  .merged-item { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-tertiary); }
-  .merged-item.ai { border-color: rgba(139,92,246,.35); }
-  .src-tag { font-size: 10px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 7px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-muted); }
-  .merged-item.ai .src-tag { color: #c4b5fd; background: rgba(139,92,246,.15); }
-  .merged-body { display: grid; gap: 2px; min-width: 0; }
-  .merged-body strong { color: var(--text-primary); font-size: 13px; }
-  .merged-body span { color: var(--text-secondary); font-size: 12px; }
-  .merged-body small { color: var(--text-muted); }
-  .analysis-equal { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
-  @media (max-width: 1100px) { .analysis-equal { grid-template-columns: 1fr; } }
-  .analysis-card { min-height: 200px; }
-  .analysis-card.ai-card { border-color: rgba(139,92,246,.3); background: rgba(139,92,246,.03); }
-  .findings-stack { display: grid; gap: 8px; }
-  .finding-card { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); }
-  .finding-card header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
-  .finding-card p { margin: 0 0 6px; font-size: 12px; color: var(--text-secondary); }
-  .finding-card.ai-agree { border-color: rgba(139,92,246,.4); }
-  .ai-agree-badge { font-size: 10px; font-weight: 700; color: #c4b5fd; background: rgba(139,92,246,.15); padding: 2px 6px; border-radius: 999px; }
-  .ai-hint, .auto-fix { font-size: 11px !important; color: var(--text-muted) !important; }
-  .finding-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-  .ai-stats.compact { margin-bottom: 8px; }
-  .notice.tight { padding: 8px 10px; margin-bottom: 8px; font-size: 12px; }
-  .collapsible-block { margin-top: 14px; }
-  .collapsible-block > summary { cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 700; color: var(--text-secondary); font-size: 13px; }
-  .collapsible-block > summary::-webkit-details-marker { display: none; }
-  .log-reader-body { margin-top: 10px; }
-  .log-pre { max-height: 320px; overflow: auto; font-size: 11px; background: var(--bg-elevated); padding: 10px; border-radius: 8px; white-space: pre-wrap; }
-  .diag-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .author-form { display: grid; gap: 8px; margin-top: 12px; }
-  .author-form label { display: grid; gap: 4px; font-size: 12px; color: var(--text-muted); }
-  .author-form input, .author-form textarea { background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 8px; padding: 8px; }
-  button.mini { padding: 4px 8px; font-size: 11px; }
-  .count { margin-left: 6px; font-size: 11px; color: var(--text-muted); font-weight: 600; }
-  .ai-source-badge { margin-left: 6px; font-size: 10px; font-weight: 700; color: var(--accent-secondary); background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 999px; padding: 2px 8px; }
-  .ai-ver { color: var(--text-muted); margin-left: 4px; font-size: 11px; }
 </style>

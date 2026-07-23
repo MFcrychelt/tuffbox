@@ -2,6 +2,8 @@
   import { Play, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
+  import { fly } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import { projectPath, projectInfo, isLaunching, openLaunchLog } from "../lib/store";
   import { launchWithFeedback } from "../lib/launch";
 
@@ -27,6 +29,17 @@
     me: "Me",
   };
 
+  function prefersReducedMotion(): boolean {
+    if (typeof document === "undefined") return true;
+    if (document.documentElement.classList.contains("potato-pc")) return true;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function titleIntro(node: Element) {
+    if (prefersReducedMotion()) return { duration: 0 };
+    return fly(node, { y: 12, duration: 320, opacity: 0, easing: quintOut });
+  }
+
   async function selectProject() {
     const selected = await open({
       multiple: false,
@@ -50,12 +63,16 @@
 
 <header class="header">
   <div class="left">
-    <div class="breadcrumb">
-      <span class="crumb">TuffBox</span>
-      <ChevronRight size={14} class="separator" />
-      <span class="crumb active">{titles[currentView]}</span>
-    </div>
-    <h1 class="page-title">{titles[currentView]}</h1>
+    {#key currentView}
+      <div class="title-swap" in:titleIntro>
+        <div class="breadcrumb">
+          <span class="crumb">TuffBox</span>
+          <ChevronRight size={14} class="separator" />
+          <span class="crumb active">{titles[currentView]}</span>
+        </div>
+        <h1 class="page-title">{titles[currentView]}</h1>
+      </div>
+    {/key}
   </div>
 
   <div class="right">
@@ -113,6 +130,14 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    min-width: 0;
+    position: relative;
+  }
+
+  .title-swap {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .breadcrumb {
@@ -134,6 +159,7 @@
   .page-title {
     font-size: 20px;
     font-weight: 800;
+    margin: 0;
   }
 
   .right {

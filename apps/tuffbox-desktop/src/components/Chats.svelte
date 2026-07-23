@@ -69,7 +69,7 @@
       return;
     }
     try {
-      sessions = await invoke<ChatSession[]>("listCreateChats", { path: $projectPath });
+      sessions = await invoke<ChatSession[]>("list_create_chats", { path: $projectPath });
       if (activeId && !sessions.some((s) => s.id === activeId)) {
         activeId = sessions[0]?.id ?? null;
       }
@@ -82,7 +82,7 @@
     if (!$projectPath) return;
     activeId = id;
     try {
-      const s = await invoke<ChatSession>("loadCreateChat", {
+      const s = await invoke<ChatSession>("load_create_chat", {
         path: $projectPath,
         chatId: id,
       });
@@ -100,7 +100,7 @@
   async function newChat() {
     if (!$projectPath) return;
     try {
-      const s = await invoke<ChatSession>("newCreateChat", {
+      const s = await invoke<ChatSession>("new_create_chat", {
         path: $projectPath,
         title: "New chat",
       });
@@ -119,7 +119,7 @@
     if (!$projectPath) return;
     if (!confirm("Delete this chat?")) return;
     try {
-      await invoke("deleteCreateChat", { path: $projectPath, chatId: id });
+      await invoke("delete_create_chat", { path: $projectPath, chatId: id });
       if (activeId === id) {
         activeId = null;
         messages = [];
@@ -142,7 +142,7 @@
       updatedAt: String(Date.now()),
     };
     try {
-      await invoke("saveCreateChat", { path: $projectPath, session });
+      await invoke("save_create_chat", { path: $projectPath, session });
       await refreshSessions();
     } catch {
       /* ignore */
@@ -160,7 +160,7 @@
         reply: string;
         brief?: PackBrief | null;
         session?: ChatSession;
-      }>("createModeChat", {
+      }>("create_mode_chat", {
         path: $projectPath,
         chatId: activeId,
         message: refine && brief
@@ -199,7 +199,7 @@
     progressTotal = 1;
     progressCurrent = "Searching Modrinth…";
     try {
-      draft = await invoke<PackDraft>("assemblePackDraft", {
+      draft = await invoke<PackDraft>("assemble_pack_draft", {
         path: $projectPath,
         brief: { ...brief, targetCount },
       });
@@ -234,7 +234,7 @@
         checked: number;
         ok: number;
         failures: { slug: string; error: string }[];
-      }>("previewPackDraft", {
+      }>("preview_pack_draft", {
         path: $projectPath,
         draft,
         sampleLimit: Math.min(40, draft.mods.length),
@@ -272,7 +272,7 @@
     progressCurrent = "Installing…";
     try {
       const res = await invoke<{ installedCount: number; requested: number }>(
-        "installPackDraft",
+        "install_pack_draft",
         {
           path: $projectPath,
           draft,

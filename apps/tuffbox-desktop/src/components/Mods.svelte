@@ -38,12 +38,13 @@
     ExternalLink,
   } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
+  import EmptyState from "./EmptyState.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
   import { toasts } from "../lib/toast";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import PromptDialog from "./PromptDialog.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
-import EmptyState from "./EmptyState.svelte";
 import { trapFocus } from "../lib/focusTrap";
 
   type ModRow = {
@@ -381,6 +382,8 @@ import { trapFocus } from "../lib/focusTrap";
   });
 
   let addOpen = false;
+  /** In-launcher catalog page (GDLauncher-style) opened from a search card. */
+  let catalogViewResult: SearchResult | null = null;
   let catalogProvider: "modrinth" | "curseforge" | "both" = "modrinth";
   let searchQuery = "";
   let searchResults: SearchResult[] = [];
@@ -1094,6 +1097,14 @@ import { trapFocus } from "../lib/focusTrap";
     await openExternalUrl(url);
   }
 
+  function openCatalogInApp(result: SearchResult) {
+    catalogViewResult = result;
+  }
+
+  function closeCatalogInApp() {
+    catalogViewResult = null;
+  }
+
   async function openInstalledModPage(mod: ModRow) {
     const url = installedModPageUrl(mod);
     if (!url) {
@@ -1493,6 +1504,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   async function openAddModal() {
     addOpen = true;
+    catalogViewResult = null;
     error = null;
     await initAddFilters();
   }
@@ -2080,7 +2092,16 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
       <div class="results list saved-results tb-stagger">
         {#each filteredSavedMods as result, i (result.id)}
-          <article class="result-card tb-card" style={`--i: ${i}`} class:installed={isInstalled(result)} class:list={true}>
+          <article
+            class="result-card tb-card"
+            style={`--i: ${i}`}
+            class:installed={isInstalled(result)}
+            class:list={true}
+            role="button"
+            tabindex="0"
+            on:click={() => openCatalogInApp(result)}
+            on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+          >
             <div class="result-icon">
               {#if result.iconUrl}
                 <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
@@ -2090,14 +2111,14 @@ import { trapFocus } from "../lib/focusTrap";
             </div>
             <div class="result-main">
               <div class="result-title">
-                <button type="button" class="result-name linkish" title="Open on {isCurseForgeResult(result) ? 'CurseForge' : 'Modrinth'}" on:click|stopPropagation={() => openProjectPage(result)}>{result.name}</button>
+                <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
                 {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                 {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
               </div>
               <p class="result-desc">{result.description}</p>
             </div>
             <div class="result-actions">
-              <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+              <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
                 <Download size={16} /> {isInstalled(result) ? "Installed" : "Install"}
               </button>
               <div class="quick-actions">
@@ -2107,7 +2128,7 @@ import { trapFocus } from "../lib/focusTrap";
                 {#if contentFilter.startsWith("list:")}
                   <button class="qa danger" title="Remove from list" on:click|stopPropagation={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
                 {/if}
-                <button class="qa" title="Open page" on:click|stopPropagation={() => openProjectPage(result)}>
+                <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
                   <ExternalLink size={15} />
                 </button>
                 <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
@@ -2362,10 +2383,24 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Close add mod dialog"
-    on:click|self={() => (addOpen = false)}
+    on:click|self={() => { catalogViewResult = null; addOpen = false; }}
     on:keydown={() => {}}
   >
-    <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (addOpen = false) }}>
+    <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>
+      {#if catalogViewResult}
+        <div class="modal-body catalog-body">
+          <CatalogProjectView
+            result={catalogViewResult}
+            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+            loaderKind={$projectInfo?.loaderKind ?? null}
+            installed={isInstalled(catalogViewResult)}
+            installing={mutating && pendingInstall?.id === catalogViewResult.id}
+            on:back={closeCatalogInApp}
+            on:install={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
+            on:openExternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
+          />
+        </div>
+      {:else}
       <div class="modal-header">
         <div>
           <h2>Add {catalogProvider === "both" ? "" : (catalogProvider === "curseforge" ? "CurseForge " : "Modrinth ")}{contentFilter}</h2>
@@ -2561,7 +2596,16 @@ import { trapFocus } from "../lib/focusTrap";
             {:else}
               <div class="results {viewMode} tb-stagger">
                 {#each savedMods as result, i (result.id)}
-                  <article class="result-card tb-card" style={`--i: ${i}`} class:installed={isInstalled(result)} class:list={viewMode === "list"}>
+                  <article
+                    class="result-card tb-card"
+                    style={`--i: ${i}`}
+                    class:installed={isInstalled(result)}
+                    class:list={viewMode === "list"}
+                    role="button"
+                    tabindex="0"
+                    on:click={() => openCatalogInApp(result)}
+                    on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+                  >
                     <div class="result-icon">
                       {#if result.iconUrl}
                         <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
@@ -2571,7 +2615,7 @@ import { trapFocus } from "../lib/focusTrap";
                     </div>
                     <div class="result-main">
                       <div class="result-title">
-                        <button type="button" class="result-name linkish" title="Open on {isCurseForgeResult(result) ? 'CurseForge' : 'Modrinth'}" on:click|stopPropagation={() => openProjectPage(result)}>{result.name}</button>
+                        <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
                         {#if catalogProvider === "both"}
                           <span
                             class="provider-badge"
@@ -2585,7 +2629,7 @@ import { trapFocus } from "../lib/focusTrap";
                       <p class="result-desc">{result.description}</p>
                     </div>
                     <div class="result-actions">
-                      <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                      <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
                         <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                       </button>
                       <div class="quick-actions">
@@ -2612,7 +2656,7 @@ import { trapFocus } from "../lib/focusTrap";
                             </div>
                           {/if}
                         </div>
-                        <button class="qa" title="Open page" on:click|stopPropagation={() => openProjectPage(result)}>
+                        <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
                           <ExternalLink size={15} />
                         </button>
                         <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
@@ -2638,8 +2682,18 @@ import { trapFocus } from "../lib/focusTrap";
           {:else}
             <div class="results {viewMode} tb-stagger">
           {#each pagedResults as result, i (result.id)}
-            <article class="result-card tb-card" style={`--i: ${i}`} class:installed={isInstalled(result)} class:selected={selectedResultIds[result.id]} class:list={viewMode === "list"}>
-              <label class="select-result" title="Select for bulk install">
+            <article
+              class="result-card tb-card"
+              style={`--i: ${i}`}
+              class:installed={isInstalled(result)}
+              class:selected={selectedResultIds[result.id]}
+              class:list={viewMode === "list"}
+              role="button"
+              tabindex="0"
+              on:click={() => openCatalogInApp(result)}
+              on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+            >
+              <label class="select-result" title="Select for bulk install" on:click|stopPropagation>
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
               </label>
               <div class="result-icon">
@@ -2651,7 +2705,7 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
               <div class="result-main">
                 <div class="result-title">
-                  <button type="button" class="result-name linkish" title="Open on {isCurseForgeResult(result) ? 'CurseForge' : 'Modrinth'}" on:click|stopPropagation={() => openProjectPage(result)}>{result.name}</button>
+                  <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
                   {#if catalogProvider === "both"}
                     <span
                       class="provider-badge"
@@ -2679,7 +2733,7 @@ import { trapFocus } from "../lib/focusTrap";
                 </div>
               </div>
               <div class="result-actions">
-                <button class="download-btn" on:click={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
                   <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                 </button>
                 <div class="quick-actions">
@@ -2706,7 +2760,7 @@ import { trapFocus } from "../lib/focusTrap";
                       </div>
                     {/if}
                   </div>
-                  <button class="qa" title="Open page" on:click|stopPropagation={() => openProjectPage(result)}>
+                  <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
                     <ExternalLink size={15} />
                   </button>
                   <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
@@ -2813,6 +2867,7 @@ import { trapFocus } from "../lib/focusTrap";
             </button>
           </div>
         </div>
+      {/if}
       {/if}
     </div>
   </div>
@@ -3924,6 +3979,10 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
+  .catalog-body {
+    min-height: min(720px, calc(100vh - 80px));
+  }
+
   .modal-tabs {
     display: flex;
     gap: 6px;
@@ -4277,6 +4336,7 @@ import { trapFocus } from "../lib/focusTrap";
     border-radius: var(--border-radius-lg);
     background: #2d2d2d;
     border: 1px solid var(--border-color);
+    cursor: pointer;
   }
 
   .result-card:hover {

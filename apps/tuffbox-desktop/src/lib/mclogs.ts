@@ -11,7 +11,7 @@ export interface McloShareResult {
   fileName?: string | null;
 }
 
-/** Upload crash/latest log to mclo.gs. Optional `logName` selects a specific file. */
+/** Upload crash/latest log to mclo.gs. Optional `logName` selects a specific file (`__live__` = Live tab source). */
 export async function shareLogToMclogs(
   projectPath: string,
   logName?: string | null,

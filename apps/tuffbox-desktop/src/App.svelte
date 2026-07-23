@@ -26,6 +26,8 @@
   import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
   import { onMount, tick } from "svelte";
+  import { fly } from "svelte/transition";
+  import { cubicOut, quintOut } from "svelte/easing";
   import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog } from "./lib/store";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
@@ -51,6 +53,28 @@
     | "library"
     | "chats"
     | "me";
+
+  /** Sidebar-ish order — drives slide direction between tabs. */
+  const VIEW_ORDER: View[] = [
+    "dashboard",
+    "me",
+    "ide",
+    "mods",
+    "graph",
+    "world",
+    "library",
+    "chats",
+    "diagnostics",
+    "crash-votes",
+    "snapshots",
+    "configs",
+    "ore-gen",
+    "recipes",
+    "quests",
+    "project-settings",
+    "settings",
+  ];
+
   let currentView: View = "dashboard";
   let showShortcuts = false;
   let showCommandPalette = false;
@@ -61,6 +85,44 @@
   let shareCapsuleExplanation = "";
   let shareResolutionId: string | null = null;
   let shareBusy = false;
+  /** 1 = deeper in nav (slide from right), -1 = back (from left). */
+  let viewDir = 1;
+  let prevViewForDir: View = currentView;
+
+  function prefersReducedMotion(): boolean {
+    if (typeof document === "undefined") return true;
+    if (document.documentElement.classList.contains("potato-pc")) return true;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function viewIntro(node: Element) {
+    if (prefersReducedMotion()) return { duration: 0 };
+    return fly(node, {
+      x: viewDir * 48,
+      y: 10,
+      duration: 400,
+      opacity: 0,
+      easing: quintOut,
+    });
+  }
+
+  function viewOutro(node: Element) {
+    if (prefersReducedMotion()) return { duration: 0 };
+    return fly(node, {
+      x: viewDir * -32,
+      y: -6,
+      duration: 280,
+      opacity: 0,
+      easing: cubicOut,
+    });
+  }
+
+  $: if (currentView !== prevViewForDir) {
+    const a = VIEW_ORDER.indexOf(prevViewForDir);
+    const b = VIEW_ORDER.indexOf(currentView);
+    viewDir = a >= 0 && b >= 0 && a !== b ? (b > a ? 1 : -1) : 1;
+    prevViewForDir = currentView;
+  }
 
   $: if (currentView) {
     tick().then(() => {
@@ -265,45 +327,47 @@
   <div class="main">
     <Header {currentView} />
     <main class="content" class:ide-view={currentView === "ide"} bind:this={contentEl}>
-      {#key currentView}
-        <div class="view-wrapper tb-view-enter">
-          {#if currentView === "dashboard"}
-            <Dashboard bind:currentView />
-          {:else if currentView === "ide"}
-            <IdeWorkspace />
-          {:else if currentView === "mods"}
-            <Mods />
-          {:else if currentView === "graph"}
-            <Graph />
-          {:else if currentView === "diagnostics"}
-            <Diagnostics />
-          {:else if currentView === "crash-votes"}
-            <CrashVotes />
-          {:else if currentView === "snapshots"}
-            <Snapshots />
-          {:else if currentView === "configs"}
-            <ConfigEditor />
-          {:else if currentView === "settings"}
-            <Settings />
-          {:else if currentView === "project-settings"}
-            <ProjectSettings onBack={() => (currentView = "dashboard")} />
-          {:else if currentView === "ore-gen"}
-            <OreGenVisualizer />
-          {:else if currentView === "recipes"}
-            <RecipeBrowser />
-          {:else if currentView === "quests"}
-            <QuestEditor />
-          {:else if currentView === "world"}
-            <World />
-          {:else if currentView === "library"}
-            <Library bind:currentView />
-          {:else if currentView === "chats"}
-            <Chats bind:currentView />
-          {:else if currentView === "me"}
-            <Me onBack={() => (currentView = "dashboard")} />
-          {/if}
-        </div>
-      {/key}
+      <div class="view-stack" class:dir-forward={viewDir > 0} class:dir-back={viewDir < 0}>
+        {#key currentView}
+          <div class="view-pane" in:viewIntro out:viewOutro>
+            {#if currentView === "dashboard"}
+              <Dashboard bind:currentView />
+            {:else if currentView === "ide"}
+              <IdeWorkspace />
+            {:else if currentView === "mods"}
+              <Mods />
+            {:else if currentView === "graph"}
+              <Graph />
+            {:else if currentView === "diagnostics"}
+              <Diagnostics />
+            {:else if currentView === "crash-votes"}
+              <CrashVotes />
+            {:else if currentView === "snapshots"}
+              <Snapshots />
+            {:else if currentView === "configs"}
+              <ConfigEditor />
+            {:else if currentView === "settings"}
+              <Settings />
+            {:else if currentView === "project-settings"}
+              <ProjectSettings onBack={() => (currentView = "dashboard")} />
+            {:else if currentView === "ore-gen"}
+              <OreGenVisualizer />
+            {:else if currentView === "recipes"}
+              <RecipeBrowser />
+            {:else if currentView === "quests"}
+              <QuestEditor />
+            {:else if currentView === "world"}
+              <World />
+            {:else if currentView === "library"}
+              <Library bind:currentView />
+            {:else if currentView === "chats"}
+              <Chats bind:currentView />
+            {:else if currentView === "me"}
+              <Me onBack={() => (currentView = "dashboard")} />
+            {/if}
+          </div>
+        {/key}
+      </div>
     </main>
     {#if currentView !== "ide"}
       <ScrollToTopButton container={contentEl} />
@@ -389,7 +453,8 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     padding: 24px 32px;
     position: relative;
   }
@@ -399,8 +464,23 @@
     padding: 0;
   }
 
-  .view-wrapper {
-    height: 100%;
+  .view-stack {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     width: 100%;
+    min-height: 100%;
+  }
+
+  .view-pane {
+    grid-area: 1 / 1;
+    width: 100%;
+    min-width: 0;
+    min-height: 100%;
+    will-change: transform, opacity;
+  }
+
+  .view-pane :global(> *:first-child) {
+    animation: tb-view-child-settle var(--motion-enter, 280ms) var(--ease-spring, ease) both;
+    animation-delay: 60ms;
   }
 </style>

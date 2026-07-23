@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { trapFocus } from "../lib/focusTrap";
@@ -76,6 +76,59 @@
   let graphCanvasEl: HTMLElement;
   let fullscreenElement: Element | null = null;
   $: graphFullscreen = fullscreenElement === graphCanvasEl;
+
+  /** Right-click menu for installable graph deps. */
+  let ctxMenu: {
+    x: number;
+    y: number;
+    nodeId: string;
+    label: string;
+    mode: "install" | "install-missing";
+  } | null = null;
+
+  function closeCtxMenu() {
+    ctxMenu = null;
+  }
+
+  function openNodeContextMenu(event: MouseEvent, node: GraphNode & { ghost?: boolean }) {
+    event.preventDefault();
+    event.stopPropagation();
+    const isInstallable = node.kind === "Missing" || !!node.ghost;
+    if (isInstallable) {
+      ctxMenu = {
+        x: event.clientX,
+        y: event.clientY,
+        nodeId: node.id,
+        label: node.label,
+        mode: "install",
+      };
+      return;
+    }
+    const missing = missingDepsByMod.get(node.id) ?? [];
+    if (missing.length > 0) {
+      ctxMenu = {
+        x: event.clientX,
+        y: event.clientY,
+        nodeId: node.id,
+        label: node.label,
+        mode: "install-missing",
+      };
+    }
+  }
+
+  async function runCtxMenuAction() {
+    if (!ctxMenu) return;
+    const menu = ctxMenu;
+    ctxMenu = null;
+    if (menu.mode === "install") {
+      await installGhostNode(menu.nodeId);
+      return;
+    }
+    const edges = missingDepsByMod.get(menu.nodeId) ?? [];
+    for (const edge of edges) {
+      await installSingleMissingDep(edge);
+    }
+  }
 
   function normalizeNode(node: any): GraphNode {
     return {
@@ -614,6 +667,80 @@
       && nodeById(edge.from)?.kind !== "Missing"
       && nodeById(edge.to)?.kind !== "Missing"
   );
+
+  /** Deduped conflict pairs with a recommended removal target. */
+  $: conflictInsights = (() => {
+    type Insight = {
+      key: string;
+      edge: GraphEdge;
+      leftId: string;
+      rightId: string;
+      leftLabel: string;
+      rightLabel: string;
+      severity: "critical" | "warning";
+      reason: string;
+      known: boolean;
+      recommendRemoveId: string;
+      recommendRemoveLabel: string;
+      keepId: string;
+      keepLabel: string;
+      leftDependents: number;
+      rightDependents: number;
+    };
+    const seen = new Set<string>();
+    const out: Insight[] = [];
+    const dependentsOf = (id: string) =>
+      displayEdges.filter((e) => e.to === id && (e.kind === "Requires" || e.kind === "Optional")).length;
+
+    for (const edge of conflictEdges) {
+      const a = edge.from < edge.to ? edge.from : edge.to;
+      const b = edge.from < edge.to ? edge.to : edge.from;
+      const key = `${a}::${b}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const leftId = edge.from;
+      const rightId = edge.to;
+      const leftLabel = nodeById(leftId)?.label ?? leftId.replace(/^mod:/, "");
+      const rightLabel = nodeById(rightId)?.label ?? rightId.replace(/^mod:/, "");
+      const leftDependents = dependentsOf(leftId);
+      const rightDependents = dependentsOf(rightId);
+      // Prefer removing the mod fewer others depend on.
+      const recommendRemoveId = leftDependents <= rightDependents ? leftId : rightId;
+      const keepId = recommendRemoveId === leftId ? rightId : leftId;
+      const reason =
+        (edge.reason && edge.reason.trim()) ||
+        (edge.kind === "BreaksWith"
+          ? `${leftLabel} breaks when used with ${rightLabel}`
+          : `${leftLabel} is incompatible with ${rightLabel}`);
+      const known = /known/i.test(reason);
+
+      out.push({
+        key,
+        edge,
+        leftId,
+        rightId,
+        leftLabel,
+        rightLabel,
+        severity: edge.kind === "BreaksWith" ? "critical" : "warning",
+        reason,
+        known,
+        recommendRemoveId,
+        recommendRemoveLabel: nodeById(recommendRemoveId)?.label ?? recommendRemoveId.replace(/^mod:/, ""),
+        keepId,
+        keepLabel: nodeById(keepId)?.label ?? keepId.replace(/^mod:/, ""),
+        leftDependents,
+        rightDependents,
+      });
+    }
+
+    return out.sort((x, y) => {
+      if (x.severity !== y.severity) return x.severity === "critical" ? -1 : 1;
+      if (x.known !== y.known) return x.known ? -1 : 1;
+      return x.leftLabel.localeCompare(y.leftLabel);
+    });
+  })();
+
   $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
     return acc;
@@ -1683,6 +1810,17 @@
     simulation?.stop();
   });
 
+  function onGlobalPointerDown(e: MouseEvent) {
+    if (!ctxMenu) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.(".graph-ctx-menu")) return;
+    closeCtxMenu();
+  }
+
+  function onGlobalKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") closeCtxMenu();
+  }
+
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
   function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
     event.stopPropagation();
@@ -1818,8 +1956,8 @@
         <span class="stat-value">{missingEdges.length}</span>
         <span class="stat-label">Missing</span>
       </div>
-      <div class="stat-card" class:danger={conflictEdges.length > 0}>
-        <span class="stat-value">{conflictEdges.length}</span>
+      <div class="stat-card" class:danger={conflictInsights.length > 0}>
+        <span class="stat-value">{conflictInsights.length}</span>
         <span class="stat-label">Conflicts</span>
       </div>
     </div>
@@ -1976,6 +2114,7 @@
             tabindex="0"
             on:pointerdown={(e) => handleNodeMouseDown(e, node)}
             on:click|stopPropagation={() => handleNodeClick(node)}
+            on:contextmenu|stopPropagation={(e) => openNodeContextMenu(e, node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
             aria-label={node.label}
           >
@@ -2061,6 +2200,7 @@
                   role="button"
                   tabindex="0"
                   on:click={() => (selectedId = node.id)}
+                  on:contextmenu={(e) => openNodeContextMenu(e, node)}
                   on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
                 >
                   {#if icon}
@@ -2092,8 +2232,9 @@
                   </div>
                   {#if missingDeps.length > 0}
                     <button
-                      class="card-install-deps"
-                      title="Install missing dependencies"
+                      class="card-install-btn"
+                      type="button"
+                      title="Install {missingDeps.length} missing dependencies"
                       on:click|stopPropagation={async () => {
                         for (const edge of missingDeps) {
                           await installSingleMissingDep(edge);
@@ -2101,7 +2242,8 @@
                       }}
                       disabled={resolving}
                     >
-                      <Download size={14} />
+                      <Download size={14} strokeWidth={2.25} />
+                      <span>Install</span>
                     </button>
                   {/if}
                   <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
@@ -2117,27 +2259,38 @@
       {#if ghostNodes.length > 0}
         <section class="node-column missing-column">
           <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
-          <p class="column-hint">Install from Modrinth or CurseForge.</p>
+          <p class="column-hint">Click or right-click a row to install from Modrinth.</p>
           <div class="mod-grid">
             {#each ghostNodes as node (node.id)}
               {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
-              <div class="node-card compact missing-card" class:selected={selectedId === node.id}>
+              <div
+                class="node-card compact missing-card"
+                class:selected={selectedId === node.id}
+                role="button"
+                tabindex="0"
+                title="Install {node.label}"
+                on:click={() => installGhostNode(node.id)}
+                on:contextmenu={(e) => openNodeContextMenu(e, node)}
+                on:keydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
+              >
                 {#if icon}
                   <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
                 {:else}
-                  <span class="card-icon-fallback missing-fallback">⬇</span>
+                  <span class="card-icon-fallback missing-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}
                 <div class="card-text">
                   <span class="node-label">{node.label}</span>
-                  <span class="node-meta">{ghostMeta[node.id]?.description ?? "not installed"}</span>
+                  <span class="node-meta">{ghostMeta[node.id]?.description ?? "Required · not installed"}</span>
                 </div>
                 <button
-                  class="card-install-deps"
+                  class="card-install-btn"
+                  type="button"
                   title="Install {node.label}"
                   on:click|stopPropagation={() => installGhostNode(node.id)}
                   disabled={resolving}
                 >
-                  <Download size={14} />
+                  <Download size={14} strokeWidth={2.25} />
+                  <span>Install</span>
                 </button>
               </div>
             {/each}
@@ -2220,23 +2373,52 @@
       </aside>
     </div>
 
-    {#if conflictEdges.length > 0}
+    {#if conflictInsights.length > 0}
       <div class="conflict-panel">
-        <h3><AlertTriangle size={16} /> Conflicts</h3>
-        {#each conflictEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
-          <div class="conflict-row">
-            <div>
-              <strong>{nodeById(edge.from)?.label ?? edge.from}</strong>
-              <span>{edge.kind} with</span>
-              <strong>{nodeById(edge.to)?.label ?? edge.to}</strong>
-              {#if edge.reason}<small>{edge.reason}</small>{/if}
-            </div>
-            <div class="conflict-actions">
-              <button class="ghost mini" on:click={() => removeConflictNode(edge.from)}>Remove left</button>
-              <button class="ghost mini" on:click={() => removeConflictNode(edge.to)}>Remove right</button>
-            </div>
-          </div>
-        {/each}
+        <div class="conflict-panel-head">
+          <h3><ShieldAlert size={16} /> Conflicts ({conflictInsights.length})</h3>
+          <p>Known incompatibilities first. Suggestion keeps the mod more others depend on.</p>
+        </div>
+        <div class="conflict-list">
+          {#each conflictInsights as c (c.key)}
+            <article class="conflict-card" class:critical={c.severity === "critical"} class:known={c.known}>
+              <div class="conflict-card-top">
+                <span class="conflict-badge">{c.severity === "critical" ? "Breaks" : c.known ? "Known" : "Conflict"}</span>
+                <div class="conflict-pair">
+                  <strong>{c.leftLabel}</strong>
+                  <span class="vs">vs</span>
+                  <strong>{c.rightLabel}</strong>
+                </div>
+              </div>
+              <p class="conflict-reason">{c.reason}</p>
+              <div class="conflict-meta">
+                <span>{c.leftLabel}: {c.leftDependents} dependent{c.leftDependents === 1 ? "" : "s"}</span>
+                <span>{c.rightLabel}: {c.rightDependents} dependent{c.rightDependents === 1 ? "" : "s"}</span>
+              </div>
+              <div class="conflict-actions">
+                <button
+                  class="primary small"
+                  type="button"
+                  disabled={resolving}
+                  title="Recommended: fewer dependents"
+                  on:click={() => removeConflictNode(c.recommendRemoveId)}
+                >
+                  <Ban size={13} />
+                  Remove {c.recommendRemoveLabel}
+                </button>
+                <button
+                  class="ghost small"
+                  type="button"
+                  disabled={resolving}
+                  on:click={() => removeConflictNode(c.keepId)}
+                >
+                  Remove {c.keepLabel} instead
+                </button>
+                <button class="ghost small" type="button" on:click={() => (selectedId = c.leftId)}>Focus</button>
+              </div>
+            </article>
+          {/each}
+        </div>
       </div>
     {/if}
 
@@ -2244,6 +2426,26 @@
     <EmptyState icon={GitGraph} title="No project selected" description="Open a project to view its dependency graph." />
   {/if}
 </div>
+
+{#if ctxMenu}
+  <div
+    class="graph-ctx-menu"
+    style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`}
+    role="menu"
+  >
+    <button type="button" role="menuitem" on:click={runCtxMenuAction} disabled={resolving}>
+      <Download size={14} strokeWidth={2.25} />
+      {#if ctxMenu.mode === "install"}
+        Install {ctxMenu.label}
+      {:else}
+        Install missing for {ctxMenu.label}
+      {/if}
+    </button>
+    <button type="button" role="menuitem" class="muted-item" on:click={closeCtxMenu}>Cancel</button>
+  </div>
+{/if}
+
+<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
 
 {#if depPreviewOpen}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={() => {}}>
@@ -2991,6 +3193,182 @@
 
   .card-install-deps:hover:not(:disabled) {
     background: rgba(27, 217, 106, 0.18);
+  }
+
+  .card-install-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(27, 217, 106, 0.45);
+    background: rgba(27, 217, 106, 0.14);
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .card-install-btn :global(svg) {
+    fill: none !important;
+    stroke: currentColor !important;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .card-install-btn:hover:not(:disabled) {
+    background: rgba(27, 217, 106, 0.24);
+    border-color: var(--accent-primary);
+  }
+  .card-install-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .graph-ctx-menu {
+    position: fixed;
+    z-index: 80;
+    min-width: 200px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated, #1a1f28);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .graph-ctx-menu button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+  }
+  .graph-ctx-menu button :global(svg) {
+    fill: none !important;
+    stroke: currentColor !important;
+  }
+  .graph-ctx-menu button:hover:not(:disabled) {
+    background: rgba(27, 217, 106, 0.12);
+    color: var(--accent-primary);
+  }
+  .graph-ctx-menu .muted-item {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .conflict-panel {
+    margin-top: 18px;
+    padding: 16px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid rgba(239, 68, 68, 0.28);
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.08), var(--bg-secondary));
+  }
+  .conflict-panel-head h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 4px;
+    color: #fecaca;
+    font-size: 14px;
+  }
+  .conflict-panel-head p {
+    margin: 0 0 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .conflict-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+  }
+  .conflict-card {
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    background: rgba(24, 24, 27, 0.88);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .conflict-card.critical {
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .conflict-card.known {
+    box-shadow: inset 0 0 0 1px rgba(27, 217, 106, 0.12);
+  }
+  .conflict-card-top {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .conflict-badge {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.16);
+    color: #fbbf24;
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .conflict-card.critical .conflict-badge {
+    background: rgba(239, 68, 68, 0.18);
+    color: #fca5a5;
+  }
+  .conflict-pair {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .conflict-pair .vs {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .conflict-reason {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .conflict-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .conflict-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .conflict-actions .primary.small,
+  .conflict-actions .ghost.small {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
   }
 
   .node-card:hover,

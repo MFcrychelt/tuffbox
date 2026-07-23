@@ -291,6 +291,64 @@ impl DependencyGraph {
             });
         }
 
+        // Inject built-in known conflicts between installed mods so the graph
+        // surfaces Sodium↔OptiFine style problems even when Modrinth metadata
+        // didn't declare an incompatible edge.
+        {
+            use crate::knowledge::builtin::check_known_conflict;
+            let mod_slugs: Vec<String> = graph
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Mod)
+                .map(|n| {
+                    n.id.0
+                        .strip_prefix("mod:")
+                        .unwrap_or(&n.id.0)
+                        .to_string()
+                })
+                .collect();
+            let mut existing_pairs: HashSet<(String, String)> = graph
+                .edges
+                .iter()
+                .filter(|e| matches!(e.kind, EdgeKind::Conflicts | EdgeKind::BreaksWith))
+                .map(|e| {
+                    let a = e.from.0.clone();
+                    let b = e.to.0.clone();
+                    if a <= b {
+                        (a, b)
+                    } else {
+                        (b, a)
+                    }
+                })
+                .collect();
+            for i in 0..mod_slugs.len() {
+                for j in (i + 1)..mod_slugs.len() {
+                    let a = &mod_slugs[i];
+                    let b = &mod_slugs[j];
+                    let Some(reason) = check_known_conflict(a, b) else {
+                        continue;
+                    };
+                    let from = NodeId::module(a);
+                    let to = NodeId::module(b);
+                    let key = if from.0 <= to.0 {
+                        (from.0.clone(), to.0.clone())
+                    } else {
+                        (to.0.clone(), from.0.clone())
+                    };
+                    if !existing_pairs.insert(key) {
+                        continue;
+                    }
+                    graph.edges.push(GraphEdge {
+                        from,
+                        to,
+                        kind: EdgeKind::Conflicts,
+                        constraint: None,
+                        reason: Some(reason),
+                    });
+                }
+            }
+        }
+
         graph
     }
 

@@ -5,7 +5,8 @@
   import { onMount } from "svelte";
   import {
     Palette, Info, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2,
-    Gamepad2, Bot, Network, Coffee, Terminal, HardDrive, Settings2, Download,
+    Bot, Network, Coffee, Terminal, HardDrive, Settings2,
+    MessageCircle, ExternalLink,
   } from "lucide-svelte";
   import { api } from "../lib/api";
   import type { PresenceSettings, LauncherSettings } from "../lib/store";
@@ -138,9 +139,15 @@
   let defaultInstancesPath = "";
   let instancesDraft = "";
   let showJavaPicker = false;
-  let resMode: "default" | "1080p" | "720p" | "custom" = "default";
+  let resMode: "default" | "854x480" | "1280x720" | "1920x1080" | "custom" = "default";
   let customW = 1280;
   let customH = 720;
+  let discordDirty = false;
+
+  const concurrentOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
+  $: concurrentSelectOptions = concurrentOptions.includes(launcher.concurrentDownloads)
+    ? concurrentOptions
+    : [...concurrentOptions, launcher.concurrentDownloads].sort((a, b) => a - b);
 
   const tabs: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
     { id: "appearance", label: "Appearance", icon: Palette },
@@ -158,8 +165,9 @@
       resMode = "default";
       return;
     }
-    if (r.width === 1920 && r.height === 1080) resMode = "1080p";
-    else if (r.width === 1280 && r.height === 720) resMode = "720p";
+    if (r.width === 1920 && r.height === 1080) resMode = "1920x1080";
+    else if (r.width === 1280 && r.height === 720) resMode = "1280x720";
+    else if (r.width === 854 && r.height === 480) resMode = "854x480";
     else {
       resMode = "custom";
       customW = r.width;
@@ -221,26 +229,41 @@
     void persistLauncher({ theme: id });
   }
 
-  function applyResolution(mode: typeof resMode) {
-    resMode = mode;
-    if (mode === "default") void persistLauncher({ gameResolution: null });
-    else if (mode === "1080p") void persistLauncher({ gameResolution: { width: 1920, height: 1080 } });
-    else if (mode === "720p") void persistLauncher({ gameResolution: { width: 1280, height: 720 } });
-    else void persistLauncher({ gameResolution: { width: customW, height: customH } });
-  }
-
   async function loadPresence() {
     discordError = "";
     try {
       const s = await api.presence.get();
       discordRpcEnabled = !!s.discordRpcEnabled;
       discordClientId = s.discordClientId ?? "";
+      discordDirty = false;
     } catch (e) {
       discordError = String(e);
     }
   }
 
-  async function savePresence() {
+  function applyResolution(mode: typeof resMode) {
+    resMode = mode;
+    if (mode === "default") void persistLauncher({ gameResolution: null });
+    else if (mode === "1920x1080") void persistLauncher({ gameResolution: { width: 1920, height: 1080 } });
+    else if (mode === "1280x720") void persistLauncher({ gameResolution: { width: 1280, height: 720 } });
+    else if (mode === "854x480") void persistLauncher({ gameResolution: { width: 854, height: 480 } });
+    else {
+      const width = Math.min(7680, Math.max(640, Math.floor(Number(customW) || 1280)));
+      const height = Math.min(4320, Math.max(480, Math.floor(Number(customH) || 720)));
+      customW = width;
+      customH = height;
+      void persistLauncher({ gameResolution: { width, height } });
+    }
+  }
+
+  function onConcurrentChange(ev: Event) {
+    const el = ev.currentTarget as HTMLSelectElement;
+    const n = Math.min(32, Math.max(1, Number(el.value) || 8));
+    launcher.concurrentDownloads = n;
+    void persistLauncher({ concurrentDownloads: n });
+  }
+
+  async function savePresence(): Promise<boolean> {
     discordSaving = true;
     discordError = "";
     discordMessage = "";
@@ -249,12 +272,44 @@
         discordRpcEnabled,
         discordClientId: discordClientId.trim(),
       };
+      if (settings.discordRpcEnabled && !settings.discordClientId) {
+        throw new Error("Paste a Discord Application Client ID before enabling Rich Presence.");
+      }
       await api.presence.save(settings);
-      discordMessage = "Discord presence settings saved.";
+      discordDirty = false;
+      discordMessage = settings.discordRpcEnabled
+        ? "Discord Rich Presence enabled."
+        : "Discord Rich Presence saved.";
+      setTimeout(() => {
+        if (discordMessage.startsWith("Discord Rich Presence")) discordMessage = "";
+      }, 2200);
+      return true;
     } catch (e) {
       discordError = String(e);
+      return false;
     } finally {
       discordSaving = false;
+    }
+  }
+
+  async function onDiscordToggle() {
+    const next = !discordRpcEnabled;
+    if (next && !discordClientId.trim()) {
+      discordError = "Paste a Discord Application Client ID before enabling Rich Presence.";
+      discordMessage = "";
+      return;
+    }
+    const prev = discordRpcEnabled;
+    discordRpcEnabled = next;
+    const ok = await savePresence();
+    if (!ok) discordRpcEnabled = prev;
+  }
+
+  async function openDiscordPortal() {
+    try {
+      await openShell("https://discord.com/developers/applications");
+    } catch (e) {
+      discordError = String(e);
     }
   }
 
@@ -636,103 +691,131 @@
     {/if}
 
     {#if tab === "general"}
-      <section class="card">
+      <section class="card card-wide">
         <div class="card-title">
-          <Download size={18} />
-          <h3>Downloads</h3>
+          <Settings2 size={18} />
+          <h3>General</h3>
         </div>
-        <label>
-          Concurrent downloads (1–32)
-          <input
-            type="number"
-            min="1"
-            max="32"
-            bind:value={launcher.concurrentDownloads}
-            on:change={() =>
-              persistLauncher({
-                concurrentDownloads: Math.min(32, Math.max(1, Number(launcher.concurrentDownloads) || 8)),
-              })}
-          />
-        </label>
-      </section>
 
-      <section class="card">
-        <div class="card-title">
-          <Gamepad2 size={18} />
-          <h3>Game resolution</h3>
-        </div>
-        <div class="chip-row">
-          <button type="button" class="chip press-effect" class:active={resMode === "default"} on:click={() => applyResolution("default")}>Default</button>
-          <button type="button" class="chip press-effect" class:active={resMode === "1080p"} on:click={() => applyResolution("1080p")}>1080p</button>
-          <button type="button" class="chip press-effect" class:active={resMode === "720p"} on:click={() => applyResolution("720p")}>720p</button>
-          <button type="button" class="chip press-effect" class:active={resMode === "custom"} on:click={() => (resMode = "custom")}>Custom</button>
-        </div>
-        {#if resMode === "custom"}
-          <div class="res-custom">
-            <label>
-              Width
-              <input type="number" min="640" bind:value={customW} />
-            </label>
-            <label>
-              Height
-              <input type="number" min="480" bind:value={customH} />
-            </label>
-            <button type="button" class="secondary" on:click={() => applyResolution("custom")} disabled={launcherSaving}>
-              Apply
-            </button>
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>Concurrent downloads</strong>
+            <p>How many files to fetch in parallel when installing mods or updating the instance.</p>
           </div>
-        {/if}
-      </section>
+          <div class="settings-row-control">
+            <select
+              class="control-select"
+              value={String(launcher.concurrentDownloads)}
+              on:change={onConcurrentChange}
+              disabled={launcherSaving}
+              aria-label="Concurrent downloads"
+            >
+              {#each concurrentSelectOptions as n (n)}
+                <option value={String(n)}>{n}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
 
-      <section class="card">
-        <div class="card-title">
-          <Gamepad2 size={18} />
-          <h3>Discord Rich Presence</h3>
-        </div>
-        {#if discordError}<div class="notice error"><AlertTriangle size={14} /> {discordError}</div>{/if}
-        {#if discordMessage}<div class="notice success"><CheckCircle2 size={14} /> {discordMessage}</div>{/if}
-        <label class="check-row">
-          <input type="checkbox" bind:checked={discordRpcEnabled} />
-          Show playing status in Discord while Minecraft is running
-        </label>
-        <label>
-          Application Client ID
-          <input
-            bind:value={discordClientId}
-            placeholder="Create an app at discord.com/developers"
-            autocomplete="off"
-          />
-        </label>
-        <p class="hint">
-          Create an application in the Discord Developer Portal and paste its Client ID.
-          Optional asset key <code>tuffbox</code> can be uploaded for a large image.
-        </p>
-        <div class="row-actions">
-          <button on:click={savePresence} disabled={discordSaving}>
-            {discordSaving ? "Saving…" : "Save Discord settings"}
-          </button>
-        </div>
-      </section>
-
-      <section class="card">
-        <div class="card-title">
-          <Command size={18} />
-          <h3>Keyboard shortcuts</h3>
-        </div>
-        <button class="ghost" on:click={() => (shortcutsOpen = !shortcutsOpen)}>
-          {shortcutsOpen ? "Hide" : "Show"} shortcuts ({shortcuts.length})
-        </button>
-        {#if shortcutsOpen}
-          <div class="shortcut-list">
-            {#each shortcuts as s (s.key + s.action + (s.context ?? ""))}
-              <div class="shortcut-row">
-                <kbd>{s.key}</kbd>
-                <span>{s.action}</span>
-                <small>{s.context}</small>
+        <div class="settings-row" class:settings-row-stack={resMode === "custom"}>
+          <div class="settings-row-text">
+            <strong>Game resolution</strong>
+            <p>Window size passed to Minecraft on launch. Leave Default to use the game’s own setting.</p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} on:click={() => applyResolution("default")}>Default</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "854x480"} disabled={launcherSaving} on:click={() => applyResolution("854x480")}>854×480</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "1280x720"} disabled={launcherSaving} on:click={() => applyResolution("1280x720")}>720p</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "1920x1080"} disabled={launcherSaving} on:click={() => applyResolution("1920x1080")}>1080p</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} on:click={() => (resMode = "custom")}>Custom</button>
+            </div>
+            {#if resMode === "custom"}
+              <div class="res-custom">
+                <label class="field-inline">
+                  Width
+                  <input type="number" min="640" max="7680" step="1" bind:value={customW} />
+                </label>
+                <label class="field-inline">
+                  Height
+                  <input type="number" min="480" max="4320" step="1" bind:value={customH} />
+                </label>
+                <button type="button" class="secondary" on:click={() => applyResolution("custom")} disabled={launcherSaving}>
+                  Apply
+                </button>
               </div>
-            {/each}
+            {/if}
           </div>
-        {/if}
+        </div>
+
+        <div class="settings-row settings-row-stack">
+          <div class="settings-row-text">
+            <strong>Discord Rich Presence</strong>
+            <p>Show what you’re playing in Discord while Minecraft is running. Needs an Application Client ID from the Discord Developer Portal.</p>
+          </div>
+          <div class="settings-row-control discord-block">
+            {#if discordError}<div class="notice error compact"><AlertTriangle size={14} /> {discordError}</div>{/if}
+            {#if discordMessage}<div class="notice success compact"><CheckCircle2 size={14} /> {discordMessage}</div>{/if}
+            <label class="check-row">
+              <input
+                type="checkbox"
+                checked={discordRpcEnabled}
+                disabled={discordSaving}
+                on:change={onDiscordToggle}
+              />
+              Enable Rich Presence
+            </label>
+            <label class="field-inline">
+              Application Client ID
+              <div class="path-row">
+                <input
+                  bind:value={discordClientId}
+                  placeholder="Application ID from Discord Developer Portal"
+                  autocomplete="off"
+                  disabled={discordSaving}
+                  on:input={() => (discordDirty = true)}
+                />
+                <button type="button" class="ghost mini" on:click={openDiscordPortal} title="Open Discord Developer Portal">
+                  <ExternalLink size={14} /> Portal
+                </button>
+              </div>
+            </label>
+            <div class="row-actions">
+              <button type="button" on:click={savePresence} disabled={discordSaving || !discordDirty}>
+                {#if discordSaving}
+                  <Loader2 size={14} class="spin" /> Saving…
+                {:else}
+                  <MessageCircle size={14} /> Save presence
+                {/if}
+              </button>
+            </div>
+            <p class="hint flat">Optional: upload a large image asset named <code>tuffbox</code> in the Discord app for a richer status card.</p>
+          </div>
+        </div>
+
+        <div class="settings-row settings-row-stack">
+          <div class="settings-row-text">
+            <strong>Keyboard shortcuts</strong>
+            <p>Built-in hotkeys for navigating TuffBox.</p>
+          </div>
+          <div class="settings-row-control">
+            <button type="button" class="ghost" on:click={() => (shortcutsOpen = !shortcutsOpen)}>
+              <Command size={14} />
+              {shortcutsOpen ? "Hide" : "Show"} shortcuts ({shortcuts.length})
+            </button>
+            {#if shortcutsOpen}
+              <div class="shortcut-list">
+                {#each shortcuts as s (s.key + s.action + (s.context ?? ""))}
+                  <div class="shortcut-row">
+                    <kbd>{s.key}</kbd>
+                    <span>{s.action}</span>
+                    <small>{s.context}</small>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
       </section>
     {/if}
 
@@ -1402,6 +1485,105 @@
     margin-bottom: 12px;
   }
 
+  .chip-row.tight {
+    margin-bottom: 0;
+    justify-content: flex-end;
+  }
+
+  .settings-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 24px;
+    padding: 18px 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .settings-row:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .card-title + .settings-row {
+    padding-top: 0;
+  }
+
+  .settings-row-stack {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-row-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .settings-row-text strong {
+    display: block;
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .settings-row-text p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.45;
+    max-width: 42rem;
+  }
+
+  .settings-row-control {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    min-width: min(320px, 100%);
+  }
+
+  .settings-row-stack .settings-row-control {
+    align-items: stretch;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .control-select {
+    width: auto;
+    min-width: 88px;
+  }
+
+  .field-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 0;
+    width: 100%;
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  .discord-block {
+    width: 100%;
+  }
+
+  .hint.flat {
+    margin: 0;
+  }
+
+  .notice.compact {
+    margin-bottom: 0;
+    padding: 8px 10px;
+  }
+
+  .row-actions button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
   .chip {
     padding: 7px 12px;
     border-radius: 999px;
@@ -1463,7 +1645,13 @@
     margin-bottom: 8px;
   }
 
-  .shortcut-list { display: grid; gap: 4px; margin-top: 8px; }
+  .ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .shortcut-list { display: grid; gap: 4px; margin-top: 4px; width: 100%; }
   .shortcut-row { display: flex; align-items: center; gap: 12px; padding: 6px 10px; border-radius: 6px; background: var(--bg-tertiary); }
   .shortcut-row kbd { font-family: ui-monospace,monospace; font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--bg-elevated); border: 1px solid var(--border-color); color: var(--text-primary); min-width: 60px; text-align: center; }
   .shortcut-row span { flex: 1; color: var(--text-secondary); font-size: 12px; }
@@ -1494,6 +1682,7 @@
   .hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .check-row {
     display: flex;
+    flex-direction: row;
     align-items: center;
     gap: 10px;
     font-size: 13px;
@@ -1502,7 +1691,11 @@
     cursor: pointer;
     font-weight: 500;
   }
-  .check-row input { accent-color: var(--accent-primary); width: auto; }
+  .check-row input {
+    accent-color: var(--accent-primary);
+    width: auto;
+    flex-shrink: 0;
+  }
   .test-ok { color: var(--accent-primary); font-size: 11px; }
   .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
@@ -1510,6 +1703,26 @@
   .inline-status { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; margin-bottom: 10px; }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 720px) {
+    .settings-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .settings-row-control {
+      align-items: stretch;
+      min-width: 0;
+    }
+
+    .chip-row.tight {
+      justify-content: flex-start;
+    }
+
+    .res-custom {
+      grid-template-columns: 1fr;
+    }
+  }
 
   @media (max-width: 640px) {
     .res-custom {
