@@ -35,11 +35,15 @@
     Ban,
     Bot,
     BookMarked,
+    Share2,
+    Maximize2,
+    ArrowDownToLine,
   } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
+  import { open as openShell } from "@tauri-apps/plugin-shell";
 
   type Diagnostic = {
     severity: string;
@@ -1070,6 +1074,20 @@
     return "Review this signal group and compare it with recent snapshots.";
   }
 
+  $: topFinding =
+    [...(crashFindings ?? [])].sort((a, b) => {
+      const rank = (s: string) =>
+        s === "critical" ? 4 : s === "error" ? 3 : s === "warning" ? 2 : 1;
+      return rank(String(b.severity ?? "")) - rank(String(a.severity ?? ""));
+    })[0] ?? null;
+
+  function severityChip(sev: string): string {
+    if (sev === "critical") return "Fix this first";
+    if (sev === "error") return "Needs a fix";
+    if (sev === "warning") return "Worth checking";
+    return "FYI";
+  }
+
   $: selectedReport = diagnosis?.selectedReport ?? null;
   $: suspected = diagnosis?.suspectedMods ?? [];
   $: primarySuspects = suspected.filter((m) => m.blameRole === "primary");
@@ -1193,29 +1211,34 @@
   // Drives the inline signal marker so crashes are visible at a glance.
   $: signalLineMap = (() => {
     const m = new Map<number, string>();
-    for (const s of selectedReport?.signals ?? []) {
+    const signals = preferLatestLog
+      ? (diagnosis?.latestLog?.signals ?? [])
+      : (selectedReport?.signals ?? []);
+    for (const s of signals) {
       if (s.lineNumber && s.lineNumber > 0) {
         const prev = m.get(s.lineNumber);
-        // Keep the most severe kind already recorded (critical wins).
         m.set(s.lineNumber, prev ?? s.kind);
       }
     }
     return m;
   })();
 
-  // --- Inline log search (Find-in-log, IDE style) ---
+  // --- Inline log search + syntax-colored viewer ---
   let logQuery = "";
   let logMatches: { line: number }[] = [];
   let activeMatch = 0;
-  let logPreEl: HTMLPreElement | null = null;
+  let logPreEl: HTMLElement | null = null;
+  let logWrap = true;
+  let logExpanded = false;
 
-  // Splits log text into lines and highlights the current search query.
-  function highlightLog(text: string, query: string): string {
-    if (!query) return escapeHtml(text);
-    const q = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`(${q})`, "gi");
-    return escapeHtml(text).replace(re, "<mark>$1</mark>");
-  }
+  $: currentLogText = preferLatestLog
+    ? (diagnosis?.latestLog?.tail ?? "")
+    : (selectedReport?.content ?? "");
+  $: logDisplayText =
+    currentLogText.length > 160_000 ? currentLogText.slice(currentLogText.length - 160_000) : currentLogText;
+  $: logLines = logDisplayText ? logDisplayText.split("\n") : [];
+  $: logLineCount = logLines.length;
+  $: if (diagnosis) recomputeLogMatches(logDisplayText);
 
   function escapeHtml(s: string): string {
     return s
@@ -1224,8 +1247,50 @@
       .replace(/>/g, "&gt;");
   }
 
-  // Counts query matches across the current crash-report / log text and
-  // prepares line offsets for jumping between them.
+  function markQuery(html: string, query: string): string {
+    if (!query) return html;
+    const q = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return html.replace(new RegExp(`(${q})`, "gi"), "<mark>$1</mark>");
+  }
+
+  /** Minecraft / log4j-ish line coloring (safe: escapes first). */
+  function colorizeLogLine(line: string, query: string): string {
+    let html = escapeHtml(line);
+    if (/^\s+at\s+\S/.test(line) || /^\s+\.\.\.\s+\d+\s+more/.test(line)) {
+      return `<span class="tok-stack">${markQuery(html, query)}</span>`;
+    }
+    if (/^Caused by:/i.test(line) || /^Suppressed:/i.test(line)) {
+      return `<span class="tok-caused">${markQuery(html, query)}</span>`;
+    }
+    if (/^-{5,}|^----\s*Minecraft Crash Report/i.test(line) || /^\/\/ /i.test(line)) {
+      return `<span class="tok-section">${markQuery(html, query)}</span>`;
+    }
+    html = html.replace(
+      /^((?:\[[^\]]+\]\s*){1,3}|\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:\s+\[[^\]]+\])?)/,
+      '<span class="tok-time">$1</span>',
+    );
+    html = html.replace(/\b(FATAL|ERROR|SEVERE)\b/g, '<span class="tok-error">$1</span>');
+    html = html.replace(/\b(WARN(?:ING)?)\b/g, '<span class="tok-warn">$1</span>');
+    html = html.replace(/\b(INFO|DEBUG|TRACE)\b/g, '<span class="tok-info">$1</span>');
+    html = html.replace(
+      /\b([a-z0-9_.-]+\.(?:Exception|Error|Throwable))\b/gi,
+      '<span class="tok-exc">$1</span>',
+    );
+    html = html.replace(
+      /\b(mod\s+[a-z0-9_-]+|[a-z0-9_-]+:[a-z0-9_./-]+)\b/gi,
+      '<span class="tok-mod">$1</span>',
+    );
+    return markQuery(html, query);
+  }
+
+  function signalClass(kind: string | undefined): string {
+    if (!kind) return "";
+    const k = kind.toLowerCase();
+    if (k.includes("entry") || k.includes("error") || k.includes("crash")) return "sig-error";
+    if (k.includes("warn") || k.includes("mismatch") || k.includes("perf")) return "sig-warn";
+    return "sig-info";
+  }
+
   function recomputeLogMatches(text: string) {
     if (!logQuery) {
       logMatches = [];
@@ -1258,6 +1323,52 @@
     const lines = logPreEl.querySelectorAll("div.log-line");
     const target = lines[Math.min(line, lines.length - 1)] as HTMLElement | undefined;
     target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function jumpToFirstError() {
+    const lines = logDisplayText.split("\n");
+    const idx = lines.findIndex((l) =>
+      /\b(FATAL|ERROR|SEVERE)\b|Exception|Caused by:|Crash Report/i.test(l),
+    );
+    if (idx < 0) {
+      message = "No ERROR/FATAL/Exception lines found in this log view.";
+      return;
+    }
+    scrollLogToLine(idx);
+    message = `Jumped to line ${idx + 1}.`;
+  }
+
+  async function copyCurrentLog() {
+    const text = currentLogText;
+    if (!text) {
+      error = "Nothing to copy — load a log first.";
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      message = `Copied ${text.length.toLocaleString()} characters.`;
+    } catch {
+      error = "Clipboard copy failed.";
+    }
+  }
+
+  function projectDir(): string {
+    const p = $projectPath ?? "";
+    const i = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+    return i >= 0 ? p.slice(0, i) : p;
+  }
+
+  async function openSubdir(name: string) {
+    if (!$projectPath) return;
+    try {
+      await openShell(`${projectDir()}\\${name}`.replace(/\//g, "\\"));
+    } catch {
+      try {
+        await openShell(`${projectDir()}/${name}`);
+      } catch (e) {
+        error = String(e);
+      }
+    }
   }
 
   // --- Unified Problems panel (IDE "Problems" tool window) ---
@@ -1343,9 +1454,14 @@
         <span class="analyzing-pill">Analyzing…</span>
       {/if}
     </div>
-    <div class="primary-actions">
+  </div>
+
+  <!-- Tools first — always visible action strip -->
+  <section class="tools-strip panel">
+    <div class="tools-group">
+      <span class="tools-label">Analyze</span>
       <button class="primary" on:click={runTest} disabled={!$projectPath || launching || loading}>
-        <Play size={16} class={launching ? "spin" : ""} />
+        <Play size={15} class={launching ? "spin" : ""} />
         {launching ? "Launching…" : "Test launch"}
       </button>
       <button
@@ -1354,17 +1470,59 @@
         disabled={!$projectPath || analysisBusy || loading || sessionOk}
         title="Re-run Crash Assistant + AI"
       >
-        <RefreshCw size={16} class={analysisBusy ? "spin" : ""} />
+        <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
         {analysisBusy ? "Analyzing…" : "Re-analyze"}
       </button>
-      <button class="ghost icon-only" on:click={() => load(true)} disabled={!$projectPath || loading} title="Refresh logs">
-        <RefreshCw size={16} class={loading ? "spin" : ""} />
+      <button class="ghost" on:click={() => load(true)} disabled={!$projectPath || loading} title="Reload crash reports & logs">
+        <RefreshCw size={15} class={loading ? "spin" : ""} /> Refresh
       </button>
-      <button class="ghost icon-only" on:click={openFolder} disabled={!$projectPath} title="Open folder">
-        <FolderOpen size={16} />
+      <button class="ghost" on:click={() => runAiExplain()} disabled={!$projectPath || aiLoading || sessionOk}>
+        <Bot size={15} /> AI explain
       </button>
     </div>
-  </div>
+    <div class="tools-group">
+      <span class="tools-label">Log</span>
+      <button class="ghost" on:click={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
+        <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
+      </button>
+      <button class="ghost" on:click={copyCurrentLog} disabled={!currentLogText}>
+        <Copy size={15} /> Copy log
+      </button>
+      <button class="ghost" on:click={copySupportMsg} disabled={!crashSupportMsg}>
+        <Copy size={15} /> Support msg
+      </button>
+      <button class="ghost" on:click={jumpToFirstError} disabled={!logDisplayText}>
+        <ArrowDownToLine size={15} /> Jump to error
+      </button>
+    </div>
+    <div class="tools-group">
+      <span class="tools-label">Folders</span>
+      <button class="ghost" on:click={openFolder} disabled={!$projectPath} title="Open instance folder">
+        <FolderOpen size={15} /> Instance
+      </button>
+      <button class="ghost" on:click={() => openSubdir("logs")} disabled={!$projectPath}>
+        <FileText size={15} /> logs/
+      </button>
+      <button class="ghost" on:click={() => openSubdir("crash-reports")} disabled={!$projectPath}>
+        <Bug size={15} /> crashes/
+      </button>
+    </div>
+    <div class="tools-group">
+      <span class="tools-label">Scanners</span>
+      <button class="ghost" on:click={createFixPlan} disabled={!$projectPath || planning}>{planning ? "…" : "Fix plan"}</button>
+      <button class="ghost" on:click={scanOreGen} disabled={!$projectPath || oreLoading}>{oreLoading ? "…" : "Ore gen"}</button>
+      <button class="ghost" on:click={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>{duplicateLoading ? "…" : "Duplicates"}</button>
+      <button class="ghost" on:click={generateUnify} disabled={!$projectPath || unifyLoading}>{unifyLoading ? "…" : "Unify"}</button>
+      <button class="ghost" on:click={() => detectWrongLoaderMods()} disabled={!$projectPath}>Wrong jars</button>
+      <button class="ghost" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy}>
+        <BookMarked size={15} /> Save KB
+      </button>
+      <button class="ghost" on:click={() => (aiModalOpen = true)}><Bot size={15} /> AI settings</button>
+      {#if aiPrompt}
+        <button class="ghost" on:click={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
+      {/if}
+    </div>
+  </section>
 
   {#if error}<div class="notice error">{error}</div>{/if}
   {#if message}<div class="notice success">{message}</div>{/if}
@@ -1386,7 +1544,7 @@
   {#if loading && !diagnosis}
     <div class="loading">Loading crash diagnosis…</div>
   {:else if !$projectPath}
-    <EmptyState icon={Stethoscope} title="No project selected" description="Open a project to analyze crash reports and latest.log." />
+    <EmptyState icon={Stethoscope} title="Pick a pack first" description="Open a project — we'll read the crash log and tell you what to click next." />
   {:else if diagnosis}
     <!-- 1. Source + status (compact) -->
     <section class="dx-source panel">
@@ -1409,12 +1567,12 @@
       {/if}
     </section>
 
-    <!-- 2. Verdict + one clear CTA -->
-    <section class="dx-verdict" class:ok={sessionOk} class:warn={!sessionOk && !!topSuspect} class:neutral={!sessionOk && !topSuspect}>
+    <!-- Verdict first (answer before the scary log) -->
+    <section class="dx-verdict" class:ok={sessionOk} class:warn={!sessionOk && !!(topSuspect || topFinding)} class:neutral={!sessionOk && !topSuspect && !topFinding}>
       <div class="dx-verdict-icon">
         {#if sessionOk}
           <CheckCircle size={22} />
-        {:else if topSuspect}
+        {:else if topSuspect || topFinding}
           <AlertTriangle size={22} />
         {:else}
           <CircleHelp size={22} />
@@ -1422,11 +1580,24 @@
       </div>
       <div class="dx-verdict-body">
         {#if sessionOk}
-          <span class="eyebrow">Status</span>
-          <h1>Last launch looked healthy</h1>
-          <p class="dx-verdict-copy">Crash analysis is paused. Pack graph conflicts below still apply if listed.</p>
+          <span class="eyebrow">You're good</span>
+          <h1>Last launch looked fine</h1>
+          <p class="dx-verdict-copy">No crash to chase right now. Pack graph warnings below still matter if any show up.</p>
+        {:else if topFinding && (!topSuspect || (topFinding.severity === "critical" || topFinding.severity === "error"))}
+          <span class="eyebrow">{severityChip(topFinding.severity)}</span>
+          <h1>{topFinding.title}</h1>
+          <p class="dx-verdict-copy">{topFinding.description}</p>
+          {#if topFinding.autoFix}
+            <p class="dx-next-step"><strong>Try this:</strong> {topFinding.autoFix}</p>
+          {/if}
+          {#if topSuspect}
+            <p class="dx-verdict-copy muted-inline">
+              Suspect mod: <code>{topSuspect.id}</code>
+              · {topSuspect.confidence}%
+            </p>
+          {/if}
         {:else if topSuspect}
-          <span class="eyebrow">Most likely cause</span>
+          <span class="eyebrow">Looks like this broke it</span>
           <h1>{heroCulpritLabel || topSuspect.name}</h1>
           <p class="dx-verdict-copy">
             <code>{topSuspect.id}</code>
@@ -1437,14 +1608,12 @@
             <p class="dx-evidence"><code>{strongestEvidence}</code></p>
           {/if}
         {:else}
-          <span class="eyebrow">Status</span>
+          <span class="eyebrow">Still figuring it out</span>
           <h1>No clear culprit yet</h1>
           <p class="dx-verdict-copy">
-            {crashFindings.length
-              ? `${crashFindings.length} rule finding(s) — open Rules below.`
-              : analysisBusy
-                ? "Still analyzing…"
-                : "Try Re-analyze, or open the log under Evidence."}
+            {analysisBusy
+              ? "Scanning the log…"
+              : "Hit Re-analyze, or jump to the first error in the log below."}
           </p>
         {/if}
 
@@ -1477,6 +1646,11 @@
               {aiApplyBusy ? "Applying…" : "Apply full AI plan"}
             </button>
           {/if}
+          {#if !sessionOk}
+            <button class="ghost" type="button" on:click={jumpToFirstError} disabled={!logDisplayText}>
+              <ArrowDownToLine size={15} /> Jump to error
+            </button>
+          {/if}
         </div>
       </div>
     </section>
@@ -1484,7 +1658,7 @@
     <!-- Extra actions (only if more than the primary) -->
     {#if !sessionOk && mergedRecommendations.length > 1}
       <section class="dx-more-actions panel">
-        <h2><Lightbulb size={16} /> Other suggested fixes</h2>
+        <h2><Lightbulb size={16} /> Other ways to fix it</h2>
         <ul class="merged-list compact">
           {#each mergedRecommendations.slice(1) as rec (rec.id)}
             <li class="merged-item {rec.source}">
@@ -1494,13 +1668,87 @@
                 {#if rec.detail}<span>{rec.detail}</span>{/if}
               </div>
               <button class="secondary small" type="button" on:click={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
-                Apply
+                Do it
               </button>
             </li>
           {/each}
         </ul>
       </section>
     {/if}
+
+    <!-- Log viewer (details after the answer) -->
+    <section class="log-viewer panel" class:expanded={logExpanded}>
+      <div class="log-viewer-head">
+        <div class="log-viewer-title">
+          <Terminal size={16} />
+          <strong>Log</strong>
+          <span class="log-meta">
+            {preferLatestLog ? "latest.log" : (selectedReport?.summary?.name ?? "log")}
+            · {logLineCount.toLocaleString()} lines
+            {#if currentLogText.length > logDisplayText.length}
+              · last {(logDisplayText.length / 1024).toFixed(0)} KB
+            {/if}
+          </span>
+        </div>
+        <div class="log-viewer-actions">
+          <label class="log-search">
+            <Search size={13} />
+            <input
+              type="search"
+              placeholder="Find in log…"
+              bind:value={logQuery}
+              on:keydown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  jumpToMatch(e.shiftKey ? -1 : 1);
+                }
+              }}
+            />
+            {#if logQuery}
+              <span class="log-match-count">
+                {logMatches.length ? `${activeMatch + 1}/${logMatches.length}` : "0"}
+              </span>
+              <button type="button" class="ghost mini" on:click={() => jumpToMatch(-1)} disabled={!logMatches.length}>↑</button>
+              <button type="button" class="ghost mini" on:click={() => jumpToMatch(1)} disabled={!logMatches.length}>↓</button>
+            {/if}
+          </label>
+          <button type="button" class="ghost mini" class:active={logWrap} on:click={() => (logWrap = !logWrap)} title="Toggle wrap">
+            Wrap
+          </button>
+          <button type="button" class="ghost mini" on:click={() => (logExpanded = !logExpanded)} title="Toggle height">
+            <Maximize2 size={13} /> {logExpanded ? "Compact" : "Tall"}
+          </button>
+          <button type="button" class="ghost mini" on:click={jumpToFirstError} disabled={!logDisplayText}>Error</button>
+          <button type="button" class="ghost mini" on:click={copyCurrentLog} disabled={!currentLogText}><Copy size={13} /></button>
+          <button type="button" class="ghost mini" on:click={shareCurrentLog} disabled={sharingLog || !currentLogText}>
+            <Share2 size={13} />
+          </button>
+        </div>
+      </div>
+
+      {#if logLines.length}
+        <div
+          class="log-stage"
+          class:nowrap={!logWrap}
+          bind:this={logPreEl}
+          role="log"
+          aria-label="Crash or game log"
+        >
+          {#each logLines as line, i (i)}
+            <div
+              class="log-line {signalClass(signalLineMap.get(i + 1))}"
+              class:active-match={logMatches[activeMatch]?.line === i}
+              data-ln={i + 1}
+            >
+              <span class="ln">{i + 1}</span>
+              <span class="ll">{@html colorizeLogLine(line, logQuery)}</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="muted-box">No log yet — pick latest.log or a crash report above, then Refresh.</div>
+      {/if}
+    </section>
 
     <!-- 3. Analysis as tabs (not side-by-side) -->
     <section class="dx-tabs panel">
@@ -1541,13 +1789,13 @@
                 {#each crashFindings.slice(0, 10) as f, fIdx (f.code + f.title + fIdx)}
                   <article class="finding-card {f.severity}" class:ai-agree={f.aiAgree}>
                     <header>
+                      <span class="sev-chip {f.severity}">{severityChip(f.severity)}</span>
                       <strong>{f.title}</strong>
-                      <code>{f.code}</code>
                       {#if f.aiAgree}<span class="ai-agree-badge" title={f.aiHint ?? ""}>AI agrees</span>{/if}
                     </header>
                     <p>{f.description}</p>
                     {#if f.aiHint}<p class="ai-hint">AI: {f.aiHint}</p>{/if}
-                    {#if f.autoFix}<p class="auto-fix">{f.autoFix}</p>{/if}
+                    {#if f.autoFix}<p class="auto-fix"><strong>Try this:</strong> {f.autoFix}</p>{/if}
                     {#if f.fixes?.length}
                       <div class="finding-actions">
                         {#each f.fixes.slice(0, 3) as action (action.kind + (action.modId ?? "") + action.label)}
@@ -1676,88 +1924,209 @@
       </div>
     </details>
 
-    <details class="panel collapsible-block">
-      <summary><Terminal size={16} /> Log <ChevronDown size={14} /></summary>
-      <div class="log-reader-body">
-        {#if selectedReport}
-          <pre class="log-pre">{selectedReport.content.slice(0, 40000)}</pre>
-        {:else if diagnosis.latestLog.exists}
-          <pre class="log-pre">{(diagnosis.latestLog.tail ?? "").slice(0, 40000)}</pre>
-        {:else}
-          <div class="muted-box">No log content for the selected source.</div>
+    <!-- Scanner results / KB authoring (tools live in the top strip) -->
+    {#if plan || oreFindings?.length || duplicateFindings?.length || unifyConfigResult || authorOpen || aiShowPrompt}
+      <section class="panel tools-results">
+        <h2><Wrench size={16} /> Tool results</h2>
+        {#if aiShowPrompt && aiPrompt}
+          <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
         {/if}
-        {#if $projectPath && (selectedReport || diagnosis.latestLog.exists)}
-          <button class="secondary small" on:click={shareCurrentLog} disabled={sharingLog}>
-            {sharingLog ? "Sharing…" : "Share log (mclo.gs)"}
-          </button>
-        {/if}
-      </div>
-    </details>
-
-    <details class="panel collapsible-block analysis-tools">
-      <summary>
-        <span><Wrench size={16} /> More tools</span>
-        <span class="tools-hint">Scanners, KB, AI settings <ChevronDown size={14} /></span>
-      </summary>
-      <div class="actions">
-        <button class="secondary" on:click={createFixPlan} disabled={planning}>{planning ? "…" : "Create fix plan"}</button>
-        <button class="secondary" on:click={scanOreGen} disabled={oreLoading}>{oreLoading ? "…" : "Ore gen scan"}</button>
-        <button class="secondary" on:click={scanDuplicateItems} disabled={duplicateLoading}>{duplicateLoading ? "…" : "Find duplicates"}</button>
-        <button class="secondary" on:click={generateUnify} disabled={unifyLoading}>{unifyLoading ? "…" : "Unify config"}</button>
-        <button class="secondary" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={authorBusy}>Save KB case</button>
-        <button class="secondary" on:click={() => (aiModalOpen = true)}><Bot size={14} /> AI settings</button>
-        {#if aiPrompt}
-          <button class="ghost" on:click={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
-        {/if}
-      </div>
-      {#if aiShowPrompt && aiPrompt}
-        <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
-      {/if}
-      {#if plan}
-        <div class="plan-card">
-          <h2>Fix plan</h2>
-          <p>{plan.summary}</p>
-          <button class="primary" on:click={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply fix plan"}</button>
-        </div>
-      {/if}
-      {#if oreFindings?.length}
-        <div class="muted-box"><strong>Ore gen</strong>: {oreFindings.length} finding(s)</div>
-      {/if}
-      {#if duplicateFindings?.length}
-        <div class="muted-box"><strong>Duplicates</strong>: {duplicateFindings.length} finding(s)</div>
-      {/if}
-      {#if unifyConfigResult}
-        <div class="muted-box"><pre>{JSON.stringify(unifyConfigResult, null, 2).slice(0, 4000)}</pre></div>
-      {/if}
-      {#if authorOpen}
-        <div class="author-form">
-          <h2>Save KB case</h2>
-          <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
-          <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
-          <div class="actions">
-            <button class="primary" on:click={saveAuthorCase} disabled={authorBusy}>Save</button>
-            <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
+        {#if plan}
+          <div class="plan-card">
+            <h3>Fix plan</h3>
+            <p>{plan.summary}</p>
+            <button class="primary" on:click={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply fix plan"}</button>
           </div>
-          {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
-        </div>
-      {/if}
-    </details>
+        {/if}
+        {#if oreFindings?.length}
+          <div class="muted-box"><strong>Ore gen</strong>: {oreFindings.length} finding(s)</div>
+        {/if}
+        {#if duplicateFindings?.length}
+          <div class="muted-box"><strong>Duplicates</strong>: {duplicateFindings.length} finding(s)</div>
+        {/if}
+        {#if unifyConfigResult}
+          <div class="muted-box"><pre>{JSON.stringify(unifyConfigResult, null, 2).slice(0, 4000)}</pre></div>
+        {/if}
+        {#if authorOpen}
+          <div class="author-form">
+            <h3>Save KB case</h3>
+            <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
+            <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
+            <div class="actions">
+              <button class="primary" on:click={saveAuthorCase} disabled={authorBusy}>Save</button>
+              <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
+            </div>
+            {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
+          </div>
+        {/if}
+      </section>
+    {/if}
   {:else}
-    <div class="empty">Press refresh to load diagnosis.</div>
+    <div class="empty">Press Refresh to load diagnosis.</div>
   {/if}
 </div>
 
 <AiConnectionModal bind:open={aiModalOpen} />
 
 <style>
-  .diagnostics { max-width: 920px; width: 100%; margin: 0 auto; }
+  .diagnostics { max-width: min(1280px, 100%); width: 100%; margin: 0 auto; }
   .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
   .primary-actions { gap: 8px; flex-wrap: wrap; }
   .primary-actions .primary, .primary-actions .secondary, .primary-actions .ghost { cursor: pointer; }
   .ghost.icon-only { padding: 8px; min-width: 36px; justify-content: center; }
+
+  .tools-strip {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+  .tools-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .tools-label {
+    min-width: 64px;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .tools-group button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+
+  .log-viewer {
+    margin-bottom: 14px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    background: var(--bg-secondary);
+  }
+  .log-viewer-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .log-viewer-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .log-meta { color: var(--text-muted); font-size: 11px; font-weight: 500; }
+  .log-viewer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .log-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 4px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .log-search input {
+    width: min(220px, 36vw);
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+  }
+  .log-match-count { font-size: 11px; color: var(--text-muted); min-width: 36px; text-align: center; }
+  .log-viewer-actions .ghost.mini.active {
+    border-color: rgba(27, 217, 106, 0.45);
+    color: var(--accent-primary);
+  }
+  .log-stage {
+    height: min(62vh, 720px);
+    overflow: auto;
+    background: #0a0a0c;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .log-viewer.expanded .log-stage {
+    height: min(86vh, 1100px);
+  }
+  .log-line {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 0;
+    padding: 0 10px 0 0;
+    border-left: 2px solid transparent;
+  }
+  .log-line:hover { background: rgba(255, 255, 255, 0.03); }
+  .log-line.active-match { background: rgba(250, 204, 21, 0.12); }
+  .log-line.sig-error { border-left-color: #f87171; background: rgba(248, 113, 113, 0.06); }
+  .log-line.sig-warn { border-left-color: #fbbf24; background: rgba(251, 191, 36, 0.05); }
+  .log-line.sig-info { border-left-color: #60a5fa; }
+  .ln {
+    user-select: none;
+    text-align: right;
+    padding: 0 10px 0 8px;
+    color: #52525b;
+    background: #111114;
+    border-right: 1px solid #1f1f23;
+  }
+  .ll {
+    padding: 0 8px;
+    color: #d4d4d8;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .log-stage.nowrap .ll {
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+  .log-stage :global(mark) {
+    background: rgba(250, 204, 21, 0.45);
+    color: #fff;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .log-stage :global(.tok-time) { color: #71717a; }
+  .log-stage :global(.tok-error) { color: #f87171; font-weight: 700; }
+  .log-stage :global(.tok-warn) { color: #fbbf24; font-weight: 700; }
+  .log-stage :global(.tok-info) { color: #38bdf8; }
+  .log-stage :global(.tok-stack) { color: #a1a1aa; }
+  .log-stage :global(.tok-caused) { color: #fb7185; font-weight: 700; }
+  .log-stage :global(.tok-section) { color: #c4b5fd; font-weight: 700; }
+  .log-stage :global(.tok-exc) { color: #f472b6; }
+  .log-stage :global(.tok-mod) { color: #4ade80; }
+
+  .tools-results { margin-bottom: 14px; padding: 14px; }
+  .tools-results h2, .tools-results h3 { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+
   .dx-source { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
   .dx-source-label { color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
   .dx-source-select {
@@ -1802,6 +2171,32 @@
   .dx-verdict-body h1 { margin: 0; color: var(--text-primary); font-size: 20px; line-height: 1.3; }
   .dx-verdict-copy { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
   .dx-verdict-copy code { font-size: 12px; color: var(--text-muted); }
+  .dx-next-step {
+    margin: 10px 0 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: rgba(27, 217, 106, 0.08);
+    border: 1px solid rgba(27, 217, 106, 0.22);
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  .sev-chip {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 999px;
+    color: var(--text-muted);
+    background: rgba(148, 163, 184, 0.15);
+  }
+  .sev-chip.critical { color: #fecaca; background: rgba(239, 68, 68, 0.18); }
+  .sev-chip.error { color: #fed7aa; background: rgba(249, 115, 22, 0.16); }
+  .sev-chip.warning { color: #fde68a; background: rgba(245, 158, 11, 0.14); }
+  .sev-chip.info { color: #bae6fd; background: rgba(56, 189, 248, 0.12); }
   .dx-evidence {
     margin: 10px 0 0;
     padding: 10px 12px;

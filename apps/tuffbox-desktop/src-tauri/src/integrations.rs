@@ -181,20 +181,24 @@ fn write_settings(settings: &IntegrationSettings) -> Result<(), String> {
     Ok(())
 }
 
-/// Persist `OLLAMA_MODELS` at the user environment level (Windows `setx`).
+/// Persist `OLLAMA_MODELS` at the user environment level.
 /// Empty path clears the override so Ollama falls back to its default.
+/// On Windows prefer PowerShell `[Environment]::SetEnvironmentVariable` over `setx`
+/// (Unicode paths, reliable User hive write, immediate read-back for new processes).
 fn persist_ollama_models_user_env(models_path: &str) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("setx");
-        cmd.arg("OLLAMA_MODELS");
-        if models_path.is_empty() {
-            cmd.arg("");
+        let ps = if models_path.is_empty() {
+            "[Environment]::SetEnvironmentVariable('OLLAMA_MODELS', $null, 'User')".to_string()
         } else {
-            cmd.arg(models_path);
-        }
-        let _ = cmd
+            let escaped = models_path.replace('\'', "''");
+            format!(
+                "[Environment]::SetEnvironmentVariable('OLLAMA_MODELS', '{escaped}', 'User')"
+            )
+        };
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
             .creation_flags(0x08000000)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -214,6 +218,15 @@ fn persist_ollama_models_user_env(models_path: &str) {
             std::env::set_var("OLLAMA_MODELS", models_path);
         }
     }
+}
+
+/// Host for a short-lived TuffBox-managed `ollama serve` used only for pulls when a
+/// custom models path is set. Avoids racing the tray app on :11434 (which often keeps
+/// writing under `%USERPROFILE%\.ollama\models`).
+const MANAGED_OLLAMA_HOST: &str = "127.0.0.1:18434";
+
+fn managed_ollama_root() -> String {
+    format!("http://{MANAGED_OLLAMA_HOST}")
 }
 
 /// Current swarm settings from integrations.json.
@@ -970,6 +983,10 @@ async fn ollama_list_models(root: &str) -> Result<Vec<String>, String> {
 }
 
 fn try_start_ollama(binary_hint: &str, models_path: &str) {
+    try_start_ollama_on_host(binary_hint, models_path, None);
+}
+
+fn try_start_ollama_on_host(binary_hint: &str, models_path: &str, host: Option<&str>) {
     let exe = resolve_ollama_binary(binary_hint);
     let models = models_path.trim();
     if !models.is_empty() {
@@ -986,6 +1003,9 @@ fn try_start_ollama(binary_hint: &str, models_path: &str) {
         if !models.is_empty() {
             cmd.env("OLLAMA_MODELS", models);
         }
+        if let Some(h) = host.filter(|s| !s.trim().is_empty()) {
+            cmd.env("OLLAMA_HOST", h);
+        }
         let _ = cmd.spawn();
     }
     #[cfg(not(windows))]
@@ -997,6 +1017,9 @@ fn try_start_ollama(binary_hint: &str, models_path: &str) {
         if !models.is_empty() {
             cmd.env("OLLAMA_MODELS", models);
         }
+        if let Some(h) = host.filter(|s| !s.trim().is_empty()) {
+            cmd.env("OLLAMA_HOST", h);
+        }
         let _ = cmd.spawn();
     }
 }
@@ -1007,7 +1030,8 @@ fn stop_ollama_processes() {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        for image in ["ollama.exe", "ollama app.exe"] {
+        // Broad kill: tray (`ollama app`), CLI/server (`ollama`), capitalized variants.
+        for image in ["ollama.exe", "ollama app.exe", "Ollama.exe"] {
             let _ = std::process::Command::new("taskkill")
                 .args(["/IM", image, "/F", "/T"])
                 .creation_flags(0x08000000)
@@ -1015,6 +1039,25 @@ fn stop_ollama_processes() {
                 .stderr(std::process::Stdio::null())
                 .status();
         }
+        let ps = r#"
+Get-Process -ErrorAction SilentlyContinue |
+  Where-Object { $_.ProcessName -match 'ollama' } |
+  Stop-Process -Force -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object {
+    $_.Name -match 'ollama' -or
+    ($_.CommandLine -and $_.CommandLine -match '(?i)ollama')
+  } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+"#;
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps])
+            .creation_flags(0x08000000)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
     }
     #[cfg(not(windows))]
     {
@@ -1031,7 +1074,171 @@ fn stop_ollama_processes() {
     }
 }
 
-/// Ensure a daemon is running with the configured models directory.
+/// Rough inventory of Ollama storage under a models dir (blobs + manifests).
+fn ollama_storage_stats(models_path: &Path) -> (u64, u64) {
+    fn walk_sum(dir: &Path, files: &mut u64, bytes: &mut u64) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            if meta.is_dir() {
+                walk_sum(&path, files, bytes);
+            } else if meta.is_file() {
+                *files += 1;
+                *bytes = bytes.saturating_add(meta.len());
+            }
+        }
+    }
+    let mut files: u64 = 0;
+    let mut bytes: u64 = 0;
+    for sub in ["blobs", "manifests"] {
+        walk_sum(&models_path.join(sub), &mut files, &mut bytes);
+    }
+    (files, bytes)
+}
+
+fn default_ollama_home_models() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            return PathBuf::from(home).join(".ollama").join("models");
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".ollama").join("models");
+    }
+    PathBuf::from(".ollama").join("models")
+}
+
+/// After pull: ensure weights actually landed under the configured folder
+/// (daemon env is what matters — CLI `OLLAMA_MODELS` alone does not).
+fn verify_pull_landed_in_path(
+    models_path: &str,
+    before: (u64, u64),
+    model: &str,
+) -> Result<(), String> {
+    let dir = PathBuf::from(models_path.trim());
+    let after = ollama_storage_stats(&dir);
+    if after.0 > before.0 || after.1 > before.1 {
+        return Ok(());
+    }
+    // Manifests may already exist for a re-pull; accept if model tag folder is present.
+    let slug = model.trim().to_lowercase();
+    let (name, tag) = match slug.split_once(':') {
+        Some((n, t)) => (n.to_string(), t.to_string()),
+        None => (slug.clone(), "latest".into()),
+    };
+    let manifest_candidates = [
+        dir.join("manifests")
+            .join("registry.ollama.ai")
+            .join("library")
+            .join(&name)
+            .join(&tag),
+        dir.join("manifests").join("library").join(&name).join(&tag),
+    ];
+    if manifest_candidates.iter().any(|p| p.is_file()) {
+        return Ok(());
+    }
+
+    let default_dir = default_ollama_home_models();
+    let default_stats = ollama_storage_stats(&default_dir);
+    let mut hint = format!(
+        "Pull reported success but nothing new appeared under '{models_path}'. \
+         Ollama stores models via the *daemon* (`OLLAMA_MODELS`); the tray app may still be writing to the default folder."
+    );
+    if default_dir != dir && (default_stats.0 > 0 || default_stats.1 > 0) {
+        hint.push_str(&format!(
+            " Default location still has data: {}.",
+            default_dir.display()
+        ));
+    }
+    hint.push_str(
+        " Fully Quit Ollama from the system tray (right-click → Quit), then click Install model again.",
+    );
+    Err(hint)
+}
+
+async fn wait_ollama_api(root: &str, attempts: u32) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..attempts {
+        let delay_ms = 400u64 + u64::from(attempt) * 200;
+        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        match ollama_list_models(root).await {
+            Ok(_) => return Ok(()),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
+/// Start a managed daemon on `MANAGED_OLLAMA_HOST` with `OLLAMA_MODELS` set.
+/// Prefer leaving the tray on :11434 alone during a long download; if the managed
+/// instance cannot bind (single-instance Ollama), fall back to a full bounce.
+async fn ensure_managed_pull_daemon(settings: &AiSettings) -> Result<String, String> {
+    let models = settings.ollama_models_path.trim();
+    if models.is_empty() {
+        return Err("models path is empty".into());
+    }
+    let _ = fs::create_dir_all(models);
+    persist_ollama_models_user_env(models);
+
+    let root = managed_ollama_root();
+    let binary = settings.ollama_binary_path.as_str();
+
+    if ollama_list_models(&root).await.is_ok() {
+        stop_ollama_processes();
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    }
+    try_start_ollama_on_host(binary, models, Some(MANAGED_OLLAMA_HOST));
+
+    let mut last_err = String::new();
+    for attempt in 0..12 {
+        tokio::time::sleep(std::time::Duration::from_millis(450 + attempt * 200)).await;
+        match ollama_list_models(&root).await {
+            Ok(_) => return Ok(root),
+            Err(e) => last_err = e,
+        }
+        if attempt == 2 || attempt == 6 || attempt == 9 {
+            // Single-instance installs often refuse a second serve — kill tray and retry.
+            stop_ollama_processes();
+            tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+            try_start_ollama_on_host(binary, models, Some(MANAGED_OLLAMA_HOST));
+        }
+    }
+    Err(format!(
+        "Could not start a managed Ollama on {MANAGED_OLLAMA_HOST} with models path '{models}'. {last_err}. \
+         Fully Quit Ollama from the tray and try Install again."
+    ))
+}
+
+/// After a custom-path pull, restart the user's usual endpoint daemon with `OLLAMA_MODELS`
+/// so chat/detect on :11434 see the same library.
+async fn relaunch_user_endpoint_daemon(settings: &AiSettings) -> Result<String, String> {
+    let root = ollama_root(&settings.endpoint);
+    let models = settings.ollama_models_path.trim();
+    persist_ollama_models_user_env(models);
+    stop_ollama_processes();
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    try_start_ollama(&settings.ollama_binary_path, models);
+    match wait_ollama_api(&root, 12).await {
+        Ok(()) => Ok(root),
+        Err(e) => {
+            // Soft failure: models are on disk; user can open Ollama tray (now with User env).
+            Err(format!(
+                "Models were saved under '{models}', but Ollama did not come back on {root}: {e}. \
+                 Open the Ollama app once (it should pick up OLLAMA_MODELS), then Re-detect."
+            ))
+        }
+    }
+}
+
+/// Ensure a daemon is running for the user's configured endpoint.
+/// Custom models path: prefer starting with `OLLAMA_MODELS` if the API is down.
+/// (Pulls use `ensure_managed_pull_daemon` so they do not race the tray on :11434.)
 async fn ensure_ollama_daemon(settings: &AiSettings) -> Result<String, String> {
     let root = ollama_root(&settings.endpoint);
     let models = settings.ollama_models_path.trim();
@@ -1044,32 +1251,20 @@ async fn ensure_ollama_daemon(settings: &AiSettings) -> Result<String, String> {
     }
 
     let _ = fs::create_dir_all(models);
-    // Custom path: always bounce the daemon so pull does not land on C:\Users\…\.ollama.
     persist_ollama_models_user_env(models);
-    stop_ollama_processes();
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    try_start_ollama(&settings.ollama_binary_path, models);
-
-    let mut last_err = String::new();
-    for attempt in 0..8 {
-        tokio::time::sleep(std::time::Duration::from_millis(600 + attempt * 250)).await;
-        match ollama_list_models(&root).await {
-            Ok(_) => return Ok(root),
-            Err(e) => last_err = e,
-        }
-        if attempt == 2 || attempt == 5 {
-            try_start_ollama(&settings.ollama_binary_path, models);
-        }
+    if ollama_list_models(&root).await.is_ok() {
+        return Ok(root);
     }
-    Err(format!(
-        "Ollama did not start with models path '{models}'. Last error: {last_err}. Close the Ollama tray app and try Install again."
-    ))
+    try_start_ollama(&settings.ollama_binary_path, models);
+    let _ = wait_ollama_api(&root, 10).await;
+    Ok(root)
 }
 
 async fn ollama_pull_model_cli(
     binary_hint: &str,
     models_path: &str,
     model: &str,
+    host: Option<&str>,
 ) -> Result<(), String> {
     let exe = resolve_ollama_binary(binary_hint);
     let mut cmd = tokio::process::Command::new(&exe);
@@ -1078,6 +1273,9 @@ async fn ollama_pull_model_cli(
     if !models.is_empty() {
         let _ = fs::create_dir_all(models);
         cmd.env("OLLAMA_MODELS", models);
+    }
+    if let Some(h) = host.filter(|s| !s.trim().is_empty()) {
+        cmd.env("OLLAMA_HOST", h);
     }
     #[cfg(windows)]
     {
@@ -1395,6 +1593,7 @@ pub async fn pull_ollama_model(
     model: String,
     endpoint: Option<String>,
     binary_path: Option<String>,
+    models_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let name = model.trim().to_string();
     if name.is_empty() {
@@ -1410,42 +1609,86 @@ pub async fn pull_ollama_model(
 
     let settings = read_settings();
     let hint = binary_path.unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
-    let root = ollama_root(
+    let root_user = ollama_root(
         &endpoint
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| settings.ai.endpoint.clone()),
     );
 
-    // Restart daemon with OLLAMA_MODELS when configured, then pull via CLI
-    // (API pull hits whatever daemon was already on C:\Users\…\.ollama).
     let mut ai = settings.ai.clone();
-    if !root.is_empty() {
-        ai.endpoint = root.clone();
+    if !root_user.is_empty() {
+        ai.endpoint = root_user.clone();
     }
     if !hint.trim().is_empty() {
         ai.ollama_binary_path = hint.clone();
     }
-    let root = ensure_ollama_daemon(&ai).await?;
-    let models_path = ai.ollama_models_path.clone();
+    // Prefer path from the UI (may not be flushed to disk yet).
+    if let Some(p) = models_path {
+        ai.ollama_models_path = p;
+    }
+    let models_path = ai.ollama_models_path.trim().to_string();
+    if !models_path.is_empty() {
+        let _ = fs::create_dir_all(&models_path);
+        // Persist into settings so later chat/detect use the same folder.
+        let mut disk = read_settings();
+        disk.ai.ollama_models_path = models_path.clone();
+        let _ = write_settings(&disk);
+    }
 
-    match ollama_pull_model_cli(&hint, &models_path, &name).await {
+    let before = if models_path.is_empty() {
+        (0, 0)
+    } else {
+        ollama_storage_stats(Path::new(&models_path))
+    };
+
+    // Custom path: pull against a private managed daemon so the tray on :11434
+    // cannot swallow the download into %USERPROFILE%\.ollama\models.
+    let pull_root = if models_path.is_empty() {
+        ensure_ollama_daemon(&ai).await?
+    } else {
+        ensure_managed_pull_daemon(&ai).await?
+    };
+
+    let pull_host = pull_root
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+
+    // Prefer HTTP pull against the daemon that has OLLAMA_MODELS; CLI is a backup.
+    match ollama_pull_model(&pull_root, &name).await {
         Ok(()) => {}
-        Err(cli_err) => {
-            // Fallback to HTTP pull against the restarted daemon.
-            if let Err(api_err) = ollama_pull_model(&root, &name).await {
-                return Err(format!("{cli_err} | API fallback: {api_err}"));
+        Err(api_err) => {
+            if let Err(cli_err) =
+                ollama_pull_model_cli(&hint, &models_path, &name, Some(pull_host)).await
+            {
+                return Err(format!("{api_err} | CLI fallback: {cli_err}"));
             }
         }
     }
 
-    let models = ollama_list_models(&root).await.unwrap_or_default();
+    if !models_path.is_empty() {
+        verify_pull_landed_in_path(&models_path, before, &name)?;
+        // Bring :11434 (or user endpoint) up on the same models dir for chat.
+        if let Err(relaunch_err) = relaunch_user_endpoint_daemon(&ai).await {
+            // Soft: weights are verified on disk.
+            eprintln!("[tuffbox] ollama relaunch after pull: {relaunch_err}");
+        }
+    }
+
+    let list_root = ollama_root(&ai.endpoint);
+    let models = match ollama_list_models(&list_root).await {
+        Ok(m) => m,
+        Err(_) => ollama_list_models(&pull_root).await.unwrap_or_default(),
+    };
 
     // Persist as active model when pull succeeds.
     let mut next = read_settings();
     next.ai.provider = "ollama".into();
     next.ai.model = name.clone();
+    if !models_path.is_empty() {
+        next.ai.ollama_models_path = models_path.clone();
+    }
     if next.ai.endpoint.trim().is_empty() {
-        next.ai.endpoint = root.clone();
+        next.ai.endpoint = list_root.clone();
     }
     let _ = write_settings(&next);
 
@@ -1453,7 +1696,7 @@ pub async fn pull_ollama_model(
         "ok": true,
         "model": name,
         "models": models,
-        "modelsPath": if models_path.trim().is_empty() {
+        "modelsPath": if models_path.is_empty() {
             default_ollama_models_dir().to_string_lossy().to_string()
         } else {
             models_path
@@ -1499,15 +1742,32 @@ pub async fn import_ollama_gguf(
     let tmp = std::env::temp_dir().join(format!("tuffbox-modelfile-{name}"));
     fs::write(&tmp, format!("{from_line}\n")).map_err(|e| e.to_string())?;
 
-    // Bounce daemon onto configured models path before create.
-    let _ = ensure_ollama_daemon(&settings.ai).await;
+    // Bounce onto configured models path before create (managed port when custom).
+    let mut ai = settings.ai.clone();
+    if !hint.trim().is_empty() {
+        ai.ollama_binary_path = hint.clone();
+    }
+    let models_dir = ai.ollama_models_path.trim().to_string();
+    let before = if models_dir.is_empty() {
+        (0, 0)
+    } else {
+        ollama_storage_stats(Path::new(&models_dir))
+    };
+    let create_root = if models_dir.is_empty() {
+        ensure_ollama_daemon(&ai).await?
+    } else {
+        ensure_managed_pull_daemon(&ai).await?
+    };
+    let create_host = create_root
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
 
     let mut cmd = tokio::process::Command::new(&exe);
     cmd.arg("create").arg(&name).arg("-f").arg(&tmp);
-    let models_dir = settings.ai.ollama_models_path.trim();
     if !models_dir.is_empty() {
-        cmd.env("OLLAMA_MODELS", models_dir);
+        cmd.env("OLLAMA_MODELS", &models_dir);
     }
+    cmd.env("OLLAMA_HOST", create_host);
     let output = cmd
         .output()
         .await
@@ -1527,6 +1787,11 @@ pub async fn import_ollama_gguf(
         ));
     }
 
+    if !models_dir.is_empty() {
+        verify_pull_landed_in_path(&models_dir, before, &name)?;
+        let _ = relaunch_user_endpoint_daemon(&ai).await;
+    }
+
     let mut next = read_settings();
     next.ai.provider = "ollama".into();
     next.ai.model = name.clone();
@@ -1538,6 +1803,11 @@ pub async fn import_ollama_gguf(
         "ok": true,
         "model": name,
         "models": models,
+        "modelsPath": if models_dir.is_empty() {
+            default_ollama_models_dir().to_string_lossy().to_string()
+        } else {
+            models_dir
+        },
     }))
 }
 

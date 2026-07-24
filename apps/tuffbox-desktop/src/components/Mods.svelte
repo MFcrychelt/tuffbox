@@ -36,6 +36,7 @@
     Power,
     PowerOff,
     ExternalLink,
+    Users,
   } from "lucide-svelte";
   import { projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -123,6 +124,7 @@ import { trapFocus } from "../lib/focusTrap";
   let mods: ModRow[] = [];
   let loading = false;
   let mutating = false;
+  let steamBridgeInstalling = false;
   let filter = "";
   let sideFilter = "all";
   let contentFilter = "mod"; // mod, resourcepack, datapack, shader, favorites, list:<name>
@@ -709,6 +711,49 @@ import { trapFocus } from "../lib/focusTrap";
   let recommendations: any[] = [];
   let recsLoading = false;
   let recsError: string | null = null;
+
+  $: hasSteamBridge = mods.some((m) => {
+    const id = (m.id ?? "").toLowerCase();
+    const file = (m.fileName ?? "").toLowerCase();
+    return (
+      id === "steambridge" ||
+      id === "steam-bridge" ||
+      id === "steam_bridge" ||
+      file.startsWith("steambridge")
+    );
+  });
+
+  async function installSteamBridge() {
+    if (!$projectPath || steamBridgeInstalling || hasSteamBridge) return;
+    steamBridgeInstalling = true;
+    error = null;
+    try {
+      const result = await api.mods.installSteamBridge($projectPath);
+      const note =
+        result.matchKind && !result.matchKind.includes("exact")
+          ? ` (${result.matchKind})`
+          : "";
+      toasts.success(
+        `Steam Bridge ${result.tag} installed for ${result.loader} ${result.mcVersion}${note}. Host a LAN world — friends join via Steam.`,
+        10000,
+        [
+          {
+            label: "Repo",
+            run: () => {
+              void openExternal(`https://github.com/${result.repo}`);
+            },
+          },
+        ],
+      );
+      await load(true);
+    } catch (e) {
+      const msg = String(e);
+      error = msg;
+      toasts.error(msg, 10000);
+    } finally {
+      steamBridgeInstalling = false;
+    }
+  }
 
   async function loadRecommendations() {
     if (!$projectPath) return;
@@ -1976,6 +2021,25 @@ import { trapFocus } from "../lib/focusTrap";
           <Lightbulb size={16} />
           {recsLoading ? "Analyzing..." : "Suggestions"}
         </button>
+        <button
+          class="secondary"
+          on:click={installSteamBridge}
+          disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
+          title={hasSteamBridge
+            ? "Steam Bridge is already installed"
+            : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
+        >
+          {#if steamBridgeInstalling}
+            <Loader2 size={16} class="spin" />
+            Steam Bridge…
+          {:else if hasSteamBridge}
+            <Check size={16} />
+            Steam Bridge
+          {:else}
+            <Users size={16} />
+            Steam Bridge
+          {/if}
+        </button>
       </div>
     </div>
   </div>
@@ -2386,7 +2450,7 @@ import { trapFocus } from "../lib/focusTrap";
     on:click|self={() => { catalogViewResult = null; addOpen = false; }}
     on:keydown={() => {}}
   >
-    <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>
+    <div class="modal add-mods-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>
       {#if catalogViewResult}
         <div class="modal-body catalog-body">
           <CatalogProjectView
@@ -3977,6 +4041,54 @@ import { trapFocus } from "../lib/focusTrap";
     border-radius: 22px;
     box-shadow: 0 30px 100px rgba(0, 0, 0, 0.45);
     padding: 22px;
+  }
+
+  /* Add content browser: nearly full viewport so filters + grid aren't cramped. */
+  .modal.add-mods-modal {
+    width: min(1760px, calc(100vw - 16px));
+    height: min(1000px, calc(100vh - 16px));
+    max-height: calc(100vh - 16px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 18px 20px 16px;
+  }
+
+  .modal.add-mods-modal .modal-header {
+    flex-shrink: 0;
+    margin-bottom: 12px;
+  }
+
+  .modal.add-mods-modal .modal-tabs {
+    flex-shrink: 0;
+    padding: 0 0 10px;
+  }
+
+  .modal.add-mods-modal .browser-layout {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    align-items: stretch;
+  }
+
+  .modal.add-mods-modal .catalog-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .modal.add-mods-modal .filter-sidebar {
+    max-height: none;
+    height: 100%;
+  }
+
+  .modal.add-mods-modal .browser-results {
+    min-height: 0;
+    height: 100%;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 
   .catalog-body {

@@ -13,21 +13,48 @@ use serde_json::Value;
 pub const ACTION_PLAN_SCHEMA_VERSION: u32 = 1;
 
 /// Canonical system prompt shared by server and local LLM paths.
+///
+/// Decision framework (must be followed in order when analyzing logs):
+/// 1. Understand context — shared system / inventory / KB facts
+/// 2. Isolate the problem — one root cause, not a laundry list
+/// 3. Accept the risk — every action carries an explicit risk; review when unsure
+/// 4. Map decision — emit executable ActionPlan ops only
 pub const ACTION_PLAN_SYSTEM_PROMPT: &str = r#"You are TuffBox Crash Planner. You only output ONE JSON object matching schemaVersion 1.
 You do NOT apply fixes. You propose an ActionPlan for the launcher.
 
-Rules:
+AI Decision making — follow these steps IN ORDER before emitting JSON:
+
+1) Understand the context (shared info)
+   - Use ONLY facts from the prompt: MC/loader/Java/OS, inventory, culprits, Crash Assistant findings, similar KB cases, graph diagnostics, recent changes, crash/log excerpts.
+   - Treat launcher culprits + high-score KB cases as shared ground truth. Do not invent mods, versions, or paths outside that context.
+
+2) Isolate the problem
+   - Name ONE primary root cause (and at most 1–2 tightly related secondary causes).
+   - Prefer the earliest hard failure (first Caused by / Mixin apply failed / ModResolution) over late cascading noise (config NPE, “refusing to send event”, etc.).
+   - Put the isolated cause in humanExplanation and suspectedMods; discard unrelated stack noise.
+
+3) Accept the risk
+   - Every mutating action MUST set risk: low | medium | high — honestly.
+   - Prefer lower-risk ops when they can confirm the theory (disable_mod before remove_mod; update only when version is known).
+   - Set needsUserReview true unless ALL actions are risk=low AND grounded in a matched KB case.
+   - Lower confidence when the stack is ambiguous or context is incomplete. Never hide uncertainty.
+
+4) Map decision
+   - Map the isolated cause to the smallest set of launcher ops (install_mod, remove_mod, disable_mod, update_mod, change_mod_version, reinstall_mod, edit_config).
+   - Each action’s reason must link back to the isolated problem; no speculative drive-by fixes.
+   - Order actions: safest confirmation step first, then the fix.
+
+Hard rules:
 1. Prefer matchedCaseIds / similar known cases when score is high.
 2. Every mutating action MUST include modId (except pure edit_config).
 3. Only reference mods that appear in inventory OR are explicit missing dependencies named in the crash.
 4. Prefer disable_mod before remove_mod; prefer exact version when known.
 5. For edit_config: path relative to instance; patch must be minimal; never rewrite whole unrelated files.
-6. Set needsUserReview true unless all actions are risk=low and grounded in a matched case.
-7. confidence 0.0–1.0; lower if no KB match or ambiguous stacktrace.
-8. Do not invent Modrinth project IDs; omit projectId if unknown (launcher resolves by modId).
-9. Never invent version numbers or file paths. If the exact version is unknown, set "version" and "path" to null (launcher resolves). Do not use placeholders like 1.2.3, 0.0.1, or /game/mods/….
-10. If a mod is a suspected culprit / already installed, prefer disable_mod or remove_mod — never install_mod for that mod.
-11. Return JSON only. No markdown fences."#;
+6. confidence 0.0–1.0; lower if no KB match or ambiguous stacktrace.
+7. Do not invent Modrinth project IDs; omit projectId if unknown (launcher resolves by modId).
+8. Never invent version numbers or file paths. If the exact version is unknown, set "version" and "path" to null (launcher resolves). Do not use placeholders like 1.2.3, 0.0.1, or /game/mods/….
+9. If a mod is a suspected culprit / already installed, prefer disable_mod or remove_mod — never install_mod for that mod.
+10. Return JSON only. No markdown fences."#;
 
 /// Post-resolution distill: compress a user's trial-and-error fix path into a
 /// minimal ActionPlan suitable for sharing as an ExperienceCapsule.

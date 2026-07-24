@@ -335,8 +335,15 @@ fn crash_prompt_body(ctx: &CrashAiContext, budget: CrashPromptBudget) -> String 
     p.push_str("\n```\n\n");
 
     p.push_str("## Instructions\n");
+    p.push_str(
+        "Apply AI Decision making in order: (1) Understand the context from sections above, \
+(2) Isolate ONE primary problem, (3) Accept the risk on every action (risk + needsUserReview + confidence), \
+(4) Map decision to minimal `actions` with `op`.\n",
+    );
     p.push_str(CRASH_JSON_SCHEMA_HINT);
-    p.push_str("\n\nFollow the system rules. Prefer `actions` with `op` fields over legacy recommended_actions.\n");
+    p.push_str(
+        "\n\nFollow the system rules. Prefer `actions` with `op` fields over legacy recommended_actions.\n",
+    );
     if !budget.include_full_inventory {
         p.push_str(
             "Compact mode: do not invent mods, versions, or paths. Prefer disable_mod for culprits.\n",
@@ -576,6 +583,11 @@ mod tests {
         assert!(prompt.contains("Mixin"));
         assert!(prompt.contains("Culprits") || prompt.contains("JellySquid"));
         assert!(prompt.contains("humanExplanation") || prompt.contains("schemaVersion"));
+        // Decision framework must be present in the canon system prompt.
+        assert!(prompt.contains("Understand the context"));
+        assert!(prompt.contains("Isolate the problem"));
+        assert!(prompt.contains("Accept the risk"));
+        assert!(prompt.contains("Map decision"));
     }
 
     #[test]

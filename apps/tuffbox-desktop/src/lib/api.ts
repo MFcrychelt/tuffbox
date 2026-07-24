@@ -781,6 +781,18 @@ export const api = {
     add(modId: string, side: string, p?: string) { return cmd<void>("add_modrinth_mod", { ...pathArg(p), modId, side }); },
     addWithDeps(modId: string, side: string, p?: string) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side }); },
     addManyWithDeps(modIds: string[], side: string, p?: string) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side }); },
+    /** Install Steam Bridge jar matching this pack's MC + loader (GitHub releases). */
+    installSteamBridge(p?: string) {
+      return cmd<{
+        modId: string;
+        fileName: string;
+        tag: string;
+        mcVersion: string;
+        loader: string;
+        matchKind: string;
+        repo: string;
+      }>("install_steam_bridge", pathArg(p));
+    },
     remove(modId: string, p?: string) { return cmd<void>("remove_project_mod", { ...pathArg(p), modId }); },
     update(modId: string, p?: string, versionId?: string | null) {
       return cmd<Record<string, unknown>>("update_project_mod", {

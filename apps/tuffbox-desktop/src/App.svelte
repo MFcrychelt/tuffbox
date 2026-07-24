@@ -27,7 +27,7 @@
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
-  import { cubicOut, quintOut } from "svelte/easing";
+  import { quintOut } from "svelte/easing";
   import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog } from "./lib/store";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
@@ -98,22 +98,11 @@
   function viewIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
     return fly(node, {
-      x: viewDir * 48,
-      y: 10,
-      duration: 400,
+      x: viewDir * 36,
+      y: 8,
+      duration: 320,
       opacity: 0,
       easing: quintOut,
-    });
-  }
-
-  function viewOutro(node: Element) {
-    if (prefersReducedMotion()) return { duration: 0 };
-    return fly(node, {
-      x: viewDir * -32,
-      y: -6,
-      duration: 280,
-      opacity: 0,
-      easing: cubicOut,
     });
   }
 
@@ -327,47 +316,45 @@
   <div class="main">
     <Header {currentView} />
     <main class="content" class:ide-view={currentView === "ide"} bind:this={contentEl}>
-      <div class="view-stack" class:dir-forward={viewDir > 0} class:dir-back={viewDir < 0}>
-        {#key currentView}
-          <div class="view-pane" in:viewIntro out:viewOutro>
-            {#if currentView === "dashboard"}
-              <Dashboard bind:currentView />
-            {:else if currentView === "ide"}
-              <IdeWorkspace />
-            {:else if currentView === "mods"}
-              <Mods />
-            {:else if currentView === "graph"}
-              <Graph />
-            {:else if currentView === "diagnostics"}
-              <Diagnostics />
-            {:else if currentView === "crash-votes"}
-              <CrashVotes />
-            {:else if currentView === "snapshots"}
-              <Snapshots />
-            {:else if currentView === "configs"}
-              <ConfigEditor />
-            {:else if currentView === "settings"}
-              <Settings />
-            {:else if currentView === "project-settings"}
-              <ProjectSettings onBack={() => (currentView = "dashboard")} />
-            {:else if currentView === "ore-gen"}
-              <OreGenVisualizer />
-            {:else if currentView === "recipes"}
-              <RecipeBrowser />
-            {:else if currentView === "quests"}
-              <QuestEditor />
-            {:else if currentView === "world"}
-              <World />
-            {:else if currentView === "library"}
-              <Library bind:currentView />
-            {:else if currentView === "chats"}
-              <Chats bind:currentView />
-            {:else if currentView === "me"}
-              <Me onBack={() => (currentView = "dashboard")} />
-            {/if}
-          </div>
-        {/key}
-      </div>
+      {#key currentView}
+        <div class="view-pane" in:viewIntro>
+          {#if currentView === "dashboard"}
+            <Dashboard bind:currentView />
+          {:else if currentView === "ide"}
+            <IdeWorkspace />
+          {:else if currentView === "mods"}
+            <Mods />
+          {:else if currentView === "graph"}
+            <Graph />
+          {:else if currentView === "diagnostics"}
+            <Diagnostics />
+          {:else if currentView === "crash-votes"}
+            <CrashVotes />
+          {:else if currentView === "snapshots"}
+            <Snapshots />
+          {:else if currentView === "configs"}
+            <ConfigEditor />
+          {:else if currentView === "settings"}
+            <Settings />
+          {:else if currentView === "project-settings"}
+            <ProjectSettings onBack={() => (currentView = "dashboard")} />
+          {:else if currentView === "ore-gen"}
+            <OreGenVisualizer />
+          {:else if currentView === "recipes"}
+            <RecipeBrowser />
+          {:else if currentView === "quests"}
+            <QuestEditor />
+          {:else if currentView === "world"}
+            <World />
+          {:else if currentView === "library"}
+            <Library bind:currentView />
+          {:else if currentView === "chats"}
+            <Chats bind:currentView />
+          {:else if currentView === "me"}
+            <Me onBack={() => (currentView = "dashboard")} />
+          {/if}
+        </div>
+      {/key}
     </main>
     {#if currentView !== "ide"}
       <ScrollToTopButton container={contentEl} />
@@ -453,8 +440,7 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: auto;
     padding: 24px 32px;
     position: relative;
   }
@@ -464,23 +450,8 @@
     padding: 0;
   }
 
-  .view-stack {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    width: 100%;
-    min-height: 100%;
-  }
-
   .view-pane {
-    grid-area: 1 / 1;
     width: 100%;
     min-width: 0;
-    min-height: 100%;
-    will-change: transform, opacity;
-  }
-
-  .view-pane :global(> *:first-child) {
-    animation: tb-view-child-settle var(--motion-enter, 280ms) var(--ease-spring, ease) both;
-    animation-delay: 60ms;
   }
 </style>

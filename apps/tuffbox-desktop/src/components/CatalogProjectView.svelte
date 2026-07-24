@@ -373,6 +373,54 @@
   }
   .html-body :global(img) { max-width: 100%; height: auto; border-radius: 8px; }
   .html-body :global(a) { color: var(--accent-primary); }
+  .html-body :global(h1),
+  .html-body :global(h2),
+  .html-body :global(h3),
+  .html-body :global(h4) {
+    color: var(--text-primary);
+    margin: 1.1em 0 0.45em;
+    line-height: 1.25;
+  }
+  .html-body :global(h1) { font-size: 1.35rem; }
+  .html-body :global(h2) { font-size: 1.2rem; }
+  .html-body :global(h3) { font-size: 1.05rem; }
+  .html-body :global(p),
+  .html-body :global(ul),
+  .html-body :global(ol) { margin: 0.55em 0; }
+  .html-body :global(ul),
+  .html-body :global(ol) { padding-left: 1.35em; }
+  .html-body :global(code) {
+    font-size: 0.9em;
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+  }
+  .html-body :global(pre) {
+    overflow: auto;
+    padding: 12px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+  }
+  .html-body :global(pre code) { padding: 0; background: transparent; }
+  .html-body :global(blockquote) {
+    margin: 0.7em 0;
+    padding-left: 12px;
+    border-left: 3px solid var(--border-color);
+    color: var(--text-muted);
+  }
+  .html-body :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.8em 0;
+    font-size: 13px;
+  }
+  .html-body :global(th),
+  .html-body :global(td) {
+    border: 1px solid var(--border-color);
+    padding: 6px 8px;
+    text-align: left;
+  }
   .meta-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

@@ -23,6 +23,7 @@ flate2.workspace = true
 lazy_static.workspace = true
 rayon.workspace = true
 chrono.workspace = true
+pulldown-cmark.workspace = true
 tempfile.workspace = true
 semver = "1"
 lz4 = { version = "1", optional = true }

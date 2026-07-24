@@ -34,6 +34,7 @@ pub mod process;
 pub mod provider;
 pub mod resolver;
 pub mod snapshot;
+pub mod steam_bridge;
 pub mod tag_index;
 pub mod time_util;
 pub mod updater;

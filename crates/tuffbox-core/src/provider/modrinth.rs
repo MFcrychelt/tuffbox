@@ -110,6 +110,38 @@ impl ModrinthProvider {
         }
         Ok(merged)
     }
+
+    /// Project metadata plus long-form Markdown body (for in-launcher pages).
+    /// Always hits the network for the body; still refreshes the ProjectInfo cache.
+    pub fn get_project_with_body(
+        &self,
+        id: &str,
+    ) -> Result<(ProjectInfo, Option<String>), ProviderError> {
+        let project: ModrinthProject = self.get_json(&format!("/project/{id}"))?;
+        let body = project
+            .body
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let info: ProjectInfo = project.into();
+        let key = crate::api_cache::project_key("modrinth", id);
+        crate::api_cache::put(key, info.clone());
+        Ok((info, body))
+    }
+}
+
+/// Render Modrinth Markdown body to HTML for the catalog project page.
+pub fn markdown_to_html(md: &str) -> String {
+    use pulldown_cmark::{html, Options, Parser};
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_HEADING_ATTRIBUTES);
+    let parser = Parser::new_ext(md, options);
+    let mut out = String::new();
+    html::push_html(&mut out, parser);
+    out
 }
 
 impl ContentProvider for ModrinthProvider {
@@ -145,9 +177,7 @@ impl ContentProvider for ModrinthProvider {
         if let Some(cached) = crate::api_cache::get::<ProjectInfo>(&key) {
             return Ok(cached);
         }
-        let project: ModrinthProject = self.get_json(&format!("/project/{id}"))?;
-        let info: ProjectInfo = project.into();
-        crate::api_cache::put(key, info.clone());
+        let (info, _) = self.get_project_with_body(id)?;
         Ok(info)
     }
 
@@ -396,6 +426,9 @@ struct ModrinthProject {
     client_side: Option<String>,
     #[serde(default, deserialize_with = "string_or_object")]
     server_side: Option<String>,
+    /// Long-form project page (Markdown). Search hits omit this; GET /project includes it.
+    #[serde(default)]
+    body: Option<String>,
 }
 
 impl From<ModrinthProject> for ProjectInfo {

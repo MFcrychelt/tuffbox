@@ -107,6 +107,9 @@ pub fn run_full_analysis(ctx: &AnalysisCtx) -> CrashAnalysisReport {
     findings.extend(check_watermedia_vlc(&combined));
     findings.extend(check_irlandacore_backdoor(ctx));
     findings.extend(check_class_metadata_not_found(&combined));
+    findings.extend(check_client_only_on_server(ctx, &combined));
+    findings.extend(check_cascading_config_mask(&combined));
+    findings.extend(check_render_stack_conflict(ctx, &combined));
     findings.extend(check_mcreator_mods(&ctx.installed_mods));
     findings.extend(check_conflict_log_phrases(ctx, &combined));
 
@@ -650,6 +653,17 @@ fn check_module_resolution(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalys
 }
 
 fn check_connector_incompat(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
+    let lower = combined.to_lowercase();
+    let mentions_connector = lower.contains("connector")
+        || ctx
+            .installed_mods
+            .iter()
+            .any(|m| m.to_lowercase().contains("connector"));
+    if !mentions_connector {
+        return vec![];
+    }
+
+    let mut out = Vec::new();
     if combined.contains("Connector") && combined.contains("incompatible") {
         let bad: Vec<_> = ["sodium", "iris", "indium", "lithium", "phosphor"]
             .iter()
@@ -657,26 +671,57 @@ fn check_connector_incompat(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnaly
             .cloned()
             .collect();
         if !bad.is_empty() {
-            vec![f(
+            out.push(f(
                 "error",
                 "CONNECTOR_INCOMPAT",
-                "Connector incompatible Fabric mods",
+                "Connector vs Fabric performance mods",
                 &format!(
-                    "These Fabric mods don't work with Sinytra Connector: {}",
+                    "These Fabric mods don't play nice with Sinytra Connector: {}",
                     bad.join(", ")
                 ),
                 Some(&format!(
-                    "Remove: {}. Forge alternatives: Embeddium (Sodium), Oculus (Iris).",
+                    "Remove: {}. On Forge use Embeddium (Sodium) + Oculus (Iris).",
                     bad.join(", ")
                 )),
-                &[],
-            )]
-        } else {
-            vec![]
+                &["https://modrinth.com/mod/connector"],
+            ));
         }
-    } else {
-        vec![]
     }
+
+    // Connector + NeoForge version fights (beta regressions).
+    if lower.contains("connector")
+        && (lower.contains("executionexception")
+            || lower.contains("fmlconfig")
+            || lower.contains("getconfigvalue")
+            || lower.contains("locator error")
+            || (lower.contains("nullpointerexception") && lower.contains("neoforge")))
+    {
+        let connector_id = ctx
+            .installed_mods
+            .iter()
+            .find(|m| m.to_lowercase().contains("connector"))
+            .map(|s| s.as_str())
+            .unwrap_or("connector");
+        out.push(fx(
+            "error",
+            "CONNECTOR_NEOFORGE_BREAK",
+            "Sinytra Connector is unstable here",
+            "Connector betas often break on specific NeoForge builds. Updating or temporarily disabling Connector usually unlocks the pack.",
+            Some("Update Connector, or disable it (and pure-Fabric mods) to confirm."),
+            &["https://github.com/Sinytra/Connector/issues/2149"],
+            vec![
+                fix_action("updateMod", "Update Connector", Some(connector_id)),
+                fix_action("disableMod", "Disable Connector to test", Some(connector_id)),
+            ],
+            first_evidence_line(
+                combined,
+                &["Connector", "FMLConfig", "ExecutionException", "locator"],
+            )
+            .map(truncate_evidence),
+        ));
+    }
+
+    out
 }
 
 fn check_too_many_ids(combined: &str) -> Vec<CrashAnalysisFinding> {
@@ -1050,14 +1095,264 @@ fn check_class_metadata_not_found(combined: &str) -> Vec<CrashAnalysisFinding> {
         vec![f(
             "error",
             "CLASS_METADATA_NOT_FOUND",
-            "Class metadata missing",
-            "Mixin target class not found — version mismatch between mod and Minecraft/loader.",
-            Some("Update the mod to a version compatible with your Minecraft version."),
+            "Mod targets the wrong Minecraft version",
+            "A mixin looked for a class that isn't in this MC build — usually a wrong-version jar.",
+            Some("Update or re-download that mod for your exact Minecraft version."),
             &[],
         )]
     } else {
         vec![]
     }
+}
+
+/// Client-only mods (minimap, shaders UI, etc.) crash dedicated servers with
+/// `invalid dist DEDICATED_SERVER` / `NoClassDefFoundError: net/minecraft/client/...`.
+/// Common NeoForge/Fabric server startup failure in 2024–2026 packs.
+fn check_client_only_on_server(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
+    let lower = combined.to_lowercase();
+    let client_on_server = (lower.contains("invalid dist")
+        && (lower.contains("dedicated_server") || lower.contains("dedicated server")))
+        || (lower.contains("noclassdeffounderror")
+            && (lower.contains("net/minecraft/client") || lower.contains("net.minecraft.client")));
+    // Only fire when this looks like a server / dedicated context, or the
+    // dist error is explicit (client runs don't emit DEDICATED_SERVER).
+    let serverish = lower.contains("dedicated_server")
+        || lower.contains("dedicated server")
+        || lower.contains("server thread")
+        || ctx.loader.to_lowercase().contains("server")
+        || lower.contains("attempted to load class");
+    if !client_on_server || !serverish {
+        return vec![];
+    }
+    let mods = match_mods_in_text(combined, &ctx.installed_mods);
+    let evidence = first_evidence_line(
+        combined,
+        &[
+            "invalid dist",
+            "DEDICATED_SERVER",
+            "NoClassDefFoundError: net/minecraft/client",
+            "net.minecraft.client",
+        ],
+    )
+    .map(truncate_evidence);
+    let fixes: Vec<_> = mods
+        .iter()
+        .take(5)
+        .flat_map(|m| {
+            vec![
+                fix_action("disableMod", &format!("Disable client-only `{m}`"), Some(m)),
+                fix_action("removeMod", &format!("Remove `{m}` from server"), Some(m)),
+            ]
+        })
+        .collect();
+    vec![fx(
+        "critical",
+        "CLIENT_ONLY_ON_SERVER",
+        "Client-only mod on a server",
+        "Something tried to load Minecraft client/GUI code on a dedicated server. Minimap, shaders, and HUD mods belong in the client mods folder only.",
+        Some("Pull client-only jars out of the server mods folder, then relaunch."),
+        &["https://supercraft.host/wiki/minecraft/modded_server_wont_start_client_class/"],
+        fixes,
+        evidence,
+    )]
+}
+
+/// NeoForge often surfaces a late `Cannot get config value before config is loaded`
+/// while the real failure is an earlier mod init / missing class (cascading error).
+fn check_cascading_config_mask(combined: &str) -> Vec<CrashAnalysisFinding> {
+    let lower = combined.to_lowercase();
+    let config_mask = lower.contains("cannot get config value before config is loaded")
+        || (lower.contains("config")
+            && lower.contains("null")
+            && lower.contains("cowardly refusing"));
+    if !config_mask {
+        return vec![];
+    }
+    // Prefer pointing at earlier hard failures when present.
+    let earlier = first_evidence_line(
+        combined,
+        &[
+            "Failed to create mod instance",
+            "NoClassDefFoundError",
+            "ModLoadingException",
+            "Mixin apply failed",
+        ],
+    )
+    .map(truncate_evidence);
+    vec![fx(
+        "warning",
+        "CASCADING_CONFIG_ERROR",
+        "Config error is probably a side effect",
+        "The crash mentions config loading, but that often happens after another mod already failed. Scroll up for the first `Failed to create mod instance` / `NoClassDefFoundError`.",
+        Some("Fix the earliest error in the log first — ignore the late config NPE until then."),
+        &["https://github.com/neoforged/NeoForge/issues/2636"],
+        vec![],
+        earlier.or_else(|| {
+            first_evidence_line(
+                combined,
+                &["Cannot get config value before config is loaded", "cowardly refusing"],
+            )
+            .map(truncate_evidence)
+        }),
+    )]
+}
+
+/// Embeddium/Oculus/Iris/Distant Horizons render-stack fights — very common on
+/// Forge 1.20.1 and NeoForge 1.21 packs used by 18–24 players.
+fn check_render_stack_conflict(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> {
+    let lower = combined.to_lowercase();
+    let mut out = Vec::new();
+    let has = |id: &str| {
+        ctx.installed_mods
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(id) || m.to_lowercase().contains(id))
+    };
+    let has_embeddium = has("embeddium") || has("rubidium");
+    let has_oculus = has("oculus");
+    let has_iris = has("iris");
+    let has_sodium = has("sodium");
+    let has_dh = has("distanthorizons")
+        || has("distant-horizons")
+        || has("distant_horizons")
+        || lower.contains("distanthorizons")
+        || lower.contains("distant horizons");
+
+    let tainted = lower.contains("embeddium instance tainted")
+        || lower.contains("mixin into embeddium internals")
+        || lower.contains("mixintaintdetector");
+    let field_break = lower.contains("nosuchfielderror")
+        && (lower.contains("tesselation") || lower.contains("shader") || lower.contains("iris"));
+    let dh_mixin = lower.contains("noncullingfrustummixin")
+        || lower.contains("mixins.oculus.compat.dh")
+        || (lower.contains("oculus") && lower.contains("distanthorizons") && lower.contains("mixin"));
+
+    if (tainted || field_break) && (has_embeddium || has_oculus || lower.contains("oculus")) {
+        let mut fixes = Vec::new();
+        if has_oculus {
+            fixes.push(fix_action(
+                "updateMod",
+                "Update Oculus (match Embeddium)",
+                Some("oculus"),
+            ));
+            fixes.push(fix_action(
+                "disableMod",
+                "Disable Oculus to test",
+                Some("oculus"),
+            ));
+        }
+        if has_embeddium {
+            fixes.push(fix_action(
+                "updateMod",
+                "Update Embeddium",
+                Some("embeddium"),
+            ));
+        }
+        if has_iris && has_embeddium {
+            fixes.push(fix_action(
+                "disableMod",
+                "Disable Iris (use Oculus on Forge)",
+                Some("iris"),
+            ));
+        }
+        out.push(fx(
+            "critical",
+            "EMBEDDIUM_OCULUS_CONFLICT",
+            "Shaders + Embeddium versions don't match",
+            "Oculus/Iris and Embeddium are fighting over the same render code. Wrong pair = instant crash or random freezes.",
+            Some("Update Oculus + Embeddium together, or temporarily disable shaders to confirm."),
+            &[
+                "https://github.com/Asek3/Oculus/issues/731",
+                "https://modrinth.com/mod/oculus",
+            ],
+            fixes,
+            first_evidence_line(
+                combined,
+                &[
+                    "Embeddium instance tainted",
+                    "NoSuchFieldError",
+                    "MixinTaintDetector",
+                    "TESSELATION",
+                ],
+            )
+            .map(truncate_evidence),
+        ));
+    }
+
+    if dh_mixin || (has_dh && (has_oculus || has_iris) && lower.contains("mixin apply failed")) {
+        let mut fixes = Vec::new();
+        if has_oculus {
+            fixes.push(fix_action(
+                "updateMod",
+                "Update Oculus for Distant Horizons",
+                Some("oculus"),
+            ));
+        }
+        if has_iris {
+            fixes.push(fix_action(
+                "updateMod",
+                "Update Iris for Distant Horizons",
+                Some("iris"),
+            ));
+        }
+        if has("distanthorizons") || has("distant-horizons") {
+            let id = ctx
+                .installed_mods
+                .iter()
+                .find(|m| {
+                    let l = m.to_lowercase();
+                    l.contains("distant") && l.contains("horizon")
+                })
+                .map(|s| s.as_str())
+                .unwrap_or("distanthorizons");
+            fixes.push(fix_action(
+                "updateMod",
+                "Update Distant Horizons",
+                Some(id),
+            ));
+            fixes.push(fix_action(
+                "disableMod",
+                "Disable Distant Horizons to test",
+                Some(id),
+            ));
+        }
+        out.push(fx(
+            "error",
+            "DISTANT_HORIZONS_SHADER",
+            "Distant Horizons + shaders clash",
+            "DH needs a matching Iris/Oculus build. Mix-and-match versions often die on mixin apply.",
+            Some("Update Distant Horizons and Iris/Oculus as a set — or disable DH to play now."),
+            &["https://www.answeroverflow.com/m/1349114489932480542"],
+            fixes,
+            first_evidence_line(
+                combined,
+                &[
+                    "NonCullingFrustumMixin",
+                    "mixins.oculus.compat.dh",
+                    "DistantHorizons",
+                ],
+            )
+            .map(truncate_evidence),
+        ));
+    }
+
+    // Sodium on Forge / Iris on Embeddium without Oculus — wrong platform stack.
+    if has_sodium && has_embeddium {
+        out.push(fx(
+            "critical",
+            "SODIUM_AND_EMBEDDIUM",
+            "Sodium and Embeddium both installed",
+            "Pick one renderer: Sodium (Fabric) or Embeddium (Forge/NeoForge). Both at once = chaos.",
+            Some("Disable Sodium on Forge, or Embeddium on Fabric."),
+            &[],
+            vec![
+                fix_action("disableMod", "Disable Sodium", Some("sodium")),
+                fix_action("disableMod", "Disable Embeddium", Some("embeddium")),
+            ],
+            None,
+        ));
+    }
+
+    out
 }
 
 fn check_mcreator_mods(mods: &[String]) -> Vec<CrashAnalysisFinding> {
@@ -1403,9 +1698,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         out.push(fx(
             "critical",
             "DUPLICATE_MODS",
-            "Duplicate mods detected",
-            "The loader found two jars claiming the same mod ID (or a dependency jar bundled inside another mod). Keep one copy and remove/disable the rest.",
-            Some("Open mods/ and remove the older jar listed next to the mod ID in latest.log."),
+            "Same mod installed twice",
+            "Two jars claim the same mod ID. Keep the newer one, ditch the other.",
+            Some("Open mods/ and delete the older duplicate jar from the log."),
             &[],
             fixes,
             evidence,
@@ -1471,9 +1766,9 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         out.push(fx(
             "critical",
             "MISSING_DEPENDENCY",
-            "Missing or unmet mod dependency",
-            "A mod requires another mod / library that is absent or the wrong version. Fabric usually prints `Mod 'x' requires … which is missing`; Forge prints mandatory dependency tables.",
-            Some("Install the named dependency for the same Minecraft + loader version."),
+            "Missing a required mod",
+            "A mod needs another library that isn't installed (or is the wrong version). Super common with Fabric API / Cloth Config / Architectury.",
+            Some("Install the missing dependency for this Minecraft + loader version."),
             &["https://minefixtools.com/fixes/how-to-fix-missing-mods-on-server"],
             fixes,
             evidence,
@@ -1710,24 +2005,49 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         ));
     }
 
-    // --- Out of memory ---
+    // --- Out of memory (heap + direct buffers — common with shaders) ---
     if lower.contains("outofmemoryerror")
         || lower.contains("java heap space")
         || lower.contains("gc overhead limit")
+        || lower.contains("direct buffer memory")
+        || lower.contains("failed to resize buffer")
     {
+        let direct = lower.contains("direct buffer") || lower.contains("failed to resize buffer");
         out.push(fx(
             "critical",
             "OUT_OF_MEMORY",
-            "Out of memory",
-            "The JVM exhausted heap memory. Heavily modded packs often need 4–8 GB.",
-            Some("Raise allocated memory, then retest."),
+            if direct {
+                "Ran out of GPU/off-heap memory"
+            } else {
+                "Minecraft ran out of RAM"
+            },
+            if direct {
+                "Shaders + big packs burn DirectByteBuffers. Raise RAM or turn shaders down."
+            } else {
+                "The game used all allocated heap. Heavy packs usually want 6–8 GB."
+            },
+            Some(if direct {
+                "Bump allocated memory, then try a lighter shader or lower render distance."
+            } else {
+                "Raise allocated memory, then relaunch."
+            }),
             &[],
             vec![fix_action(
                 "raiseMemory",
-                "Raise allocated memory to 6 GB",
+                "Bump RAM to 6 GB",
                 None,
             )],
-            first_evidence_line(combined, &["OutOfMemoryError", "Java heap space", "GC overhead"]).map(truncate_evidence),
+            first_evidence_line(
+                combined,
+                &[
+                    "OutOfMemoryError",
+                    "Java heap space",
+                    "GC overhead",
+                    "Direct buffer memory",
+                    "Failed to resize buffer",
+                ],
+            )
+            .map(truncate_evidence),
         ));
     }
 
@@ -1795,13 +2115,16 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         ));
     }
 
-    // --- Corrupted / zip errors ---
+    // --- Corrupted / zip errors (incl. empty download / END header) ---
     if lower.contains("zipexception")
         || lower.contains("invalid cen header")
         || lower.contains("unexpected end of zlib")
+        || lower.contains("zip end header not found")
+        || lower.contains("zip file is empty")
         || (lower.contains("truncat") && lower.contains(".jar"))
     {
         let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let empty = lower.contains("zip file is empty") || lower.contains("end header not found");
         let fixes: Vec<_> = mods
             .iter()
             .take(3)
@@ -1810,12 +2133,71 @@ fn check_conflict_log_phrases(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAna
         out.push(fx(
             "error",
             "CORRUPT_JAR",
-            "Corrupted mod jar",
-            "A jar failed ZIP/deflate validation — incomplete download or disk corruption.",
-            Some("Re-download the named jar(s)."),
+            if empty {
+                "Mod download is empty / broken"
+            } else {
+                "Corrupted mod jar"
+            },
+            if empty {
+                "A jar failed ZIP checks — often a 0-byte download (browser blocked Fabric API, bad mirror, etc.)."
+            } else {
+                "A jar failed ZIP/deflate validation — incomplete download or disk corruption."
+            },
+            Some("Delete the named jar and re-download it (check file size ≠ 0)."),
             &[],
             fixes,
-            first_evidence_line(combined, &["ZipException", "CEN header", "zlib", ".jar"]).map(truncate_evidence),
+            first_evidence_line(
+                combined,
+                &[
+                    "ZipException",
+                    "CEN header",
+                    "zlib",
+                    "zip END header",
+                    "zip file is empty",
+                    ".jar",
+                ],
+            )
+            .map(truncate_evidence),
+        ));
+    }
+
+    // --- Fabric hard conflicts ("Incompatible mods found" / breaks / conflicts with) ---
+    if lower.contains("incompatible mods found")
+        || lower.contains("incompatible mod set")
+        || (lower.contains("conflicts with") && (lower.contains("mod ") || lower.contains("modresolution")))
+        || (lower.contains(" breaks ") && lower.contains("mod "))
+    {
+        let mods = match_mods_in_text(combined, &ctx.installed_mods);
+        let evidence = first_evidence_line(
+            combined,
+            &[
+                "Incompatible mods found",
+                "Incompatible mod set",
+                "conflicts with",
+                " breaks ",
+            ],
+        )
+        .map(truncate_evidence);
+        let fixes: Vec<_> = mods
+            .iter()
+            .take(4)
+            .flat_map(|m| {
+                vec![
+                    fix_action("disableMod", &format!("Disable `{m}`"), Some(m)),
+                    fix_action("updateMod", &format!("Update `{m}`"), Some(m)),
+                    fix_action("removeMod", &format!("Remove `{m}`"), Some(m)),
+                ]
+            })
+            .collect();
+        out.push(fx(
+            "critical",
+            "HARD_MOD_CONFLICT",
+            "Two mods refuse to load together",
+            "Fabric already figured out the fight — one mod `depends`/`breaks`/`conflicts` with another. Pick a side or update.",
+            Some("Read the red error screen / log line, then disable or update one of the named mods."),
+            &["https://guide.astroworldmc.com/fabric-incompatible-mods-fix"],
+            fixes,
+            evidence,
         ));
     }
 
@@ -2036,40 +2418,49 @@ pub fn classify_launch_crash(
     let report = run_full_analysis(&analysis_ctx);
 
     let code_note = match exit_code {
-        Some(c) => format!("Minecraft exited with code {c}. "),
-        None => "Minecraft exited unexpectedly. ".to_string(),
+        Some(c) if c != 0 => format!("Game closed (code {c}). "),
+        Some(_) => "Game closed. ".to_string(),
+        None => "Game closed unexpectedly. ".to_string(),
     };
 
     let mut message = code_note;
     if report.findings.is_empty() {
-        message.push_str("No obvious cause was detected in the log — open the log to investigate.");
+        message.push_str("Couldn't spot an obvious cause — hit Diagnose or open the log.");
     } else {
-        // Surface the most severe findings (up to 3) directly in the toast so
-        // the user sees the likely causes without first opening Diagnose.
+        // Surface the most severe findings (up to 2) + a concrete next step.
         let severity_rank = |s: &str| match s {
-            "critical" => 3,
+            "critical" => 4,
+            "error" => 3,
             "high" => 2,
-            "medium" => 1,
+            "warning" | "medium" => 1,
             _ => 0,
         };
         let mut ranked: Vec<&CrashAnalysisFinding> = report.findings.iter().collect();
         ranked.sort_by(|a, b| severity_rank(&b.severity).cmp(&severity_rank(&a.severity)));
-        let shown = ranked.len().min(3);
-        message.push_str("Likely cause(s): ");
+        let top = ranked.first().copied();
+        message.push_str("Likely: ");
+        let shown = ranked.len().min(2);
         for (i, f) in ranked.iter().take(shown).enumerate() {
             if i > 0 {
-                message.push_str("; ");
+                message.push_str(" · ");
             }
             message.push_str(&f.title);
         }
+        if let Some(fix) = top.and_then(|f| f.auto_fix.as_deref()) {
+            let short: String = fix.chars().take(90).collect();
+            message.push_str(" — Try: ");
+            message.push_str(&short);
+            if fix.len() > 90 {
+                message.push('…');
+            }
+        }
         if report.findings.len() > shown {
             message.push_str(&format!(
-                ". +{} more — open Diagnose for the full report.",
+                " (+{} more in Diagnose)",
                 report.findings.len() - shown
             ));
-        } else {
-            message.push('.');
         }
+        message.push('.');
     }
 
     LaunchErrorInfo::new(LaunchErrorKind::LaunchCrash, message).with_log(log_path)
@@ -2130,7 +2521,7 @@ mod tests {
         );
         let info = classify_launch_crash(&log, Some(1), "1.20.1", "17", "fabric", "0.15.0", &[]);
         assert_eq!(info.kind, LaunchErrorKind::LaunchCrash);
-        assert!(info.message.contains("Likely cause(s):"));
+        assert!(info.message.contains("Likely:"));
         assert!(info.message.contains("File locked by another process"));
     }
 
@@ -2245,6 +2636,54 @@ mod tests {
         let hits = check_conflict_log_phrases(&c, &c.latest_log);
         let f = hits.iter().find(|f| f.code == "OUT_OF_MEMORY").unwrap();
         assert!(f.fixes.iter().any(|a| a.kind == "raiseMemory"));
+    }
+
+    #[test]
+    fn detects_client_only_on_server() {
+        let mut c = ctx();
+        c.latest_log = "Attempted to load class net/minecraft/client/gui/screens/Screen for invalid dist DEDICATED_SERVER\njava.lang.NoClassDefFoundError: net/minecraft/client/gui/screens/Screen\n".into();
+        c.installed_mods = vec!["xaerominimap".into()];
+        let r = run_full_analysis(&c);
+        assert!(r.findings.iter().any(|f| f.code == "CLIENT_ONLY_ON_SERVER"));
+    }
+
+    #[test]
+    fn detects_hard_mod_conflict() {
+        let mut c = ctx();
+        c.latest_log = "Incompatible mods found!\nnet.fabricmc.loader.impl.FormattedException: ModResolutionException: Mod 'modA' conflicts with 'modB'\n".into();
+        c.installed_mods = vec!["moda".into(), "modb".into()];
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "HARD_MOD_CONFLICT"));
+    }
+
+    #[test]
+    fn detects_embeddium_oculus_taint() {
+        let mut c = ctx();
+        c.installed_mods = vec!["embeddium".into(), "oculus".into()];
+        c.latest_log = "[Render thread/ERROR] [Embeddium-MixinTaintDetector/]: Embeddium instance tainted by mods: [oculus]\njava.lang.NoSuchFieldError: TESSELATION_SHADERS\n".into();
+        let r = run_full_analysis(&c);
+        assert!(r
+            .findings
+            .iter()
+            .any(|f| f.code == "EMBEDDIUM_OCULUS_CONFLICT"));
+    }
+
+    #[test]
+    fn detects_empty_zip_jar() {
+        let mut c = ctx();
+        c.latest_log =
+            "Error analyzing [mods/fabric-api.jar]: java.util.zip.ZipException: zip file is empty\n"
+                .into();
+        let hits = check_conflict_log_phrases(&c, &c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "CORRUPT_JAR"));
+    }
+
+    #[test]
+    fn detects_cascading_config_mask() {
+        let mut c = ctx();
+        c.latest_log = "Failed to create mod instance. ModID: brokenmod\njava.lang.IllegalStateException: Cannot get config value before config is loaded.\n".into();
+        let hits = check_cascading_config_mask(&c.latest_log);
+        assert!(hits.iter().any(|f| f.code == "CASCADING_CONFIG_ERROR"));
     }
 
     #[test]

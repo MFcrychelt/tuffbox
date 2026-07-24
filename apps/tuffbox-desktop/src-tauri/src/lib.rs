@@ -1081,13 +1081,19 @@ async fn get_catalog_project(
         }
 
         let mr = tuffbox_core::ModrinthProvider::new();
-        let project = mr.get_project(&project_id).map_err(|e| e.to_string())?;
+        let (project, body_md) = mr
+            .get_project_with_body(&project_id)
+            .map_err(|e| e.to_string())?;
+        let description_html = body_md
+            .as_deref()
+            .map(tuffbox_core::markdown_to_html)
+            .filter(|s| !s.trim().is_empty());
         Ok(serde_json::json!({
             "id": project.id,
             "slug": project.slug,
             "name": project.name,
             "description": project.description,
-            "descriptionHtml": null,
+            "descriptionHtml": description_html,
             "projectType": project.project_type,
             "iconUrl": project.icon_url,
             "author": project.author,
@@ -1374,6 +1380,53 @@ fn remove_from_mod_list(
     }
     save_mod_user_state(&project_dir, &state)?;
     Ok(state)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn install_steam_bridge(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "install-steam-bridge").map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+
+        if tuffbox_core::steam_bridge::project_has_steam_bridge(&manifest.mods) {
+            return Err("Steam Bridge is already in this pack.".into());
+        }
+
+        let asset = tuffbox_core::steam_bridge::resolve_steam_bridge_asset(
+            &manifest.minecraft.version,
+            &manifest.loader.kind,
+        )?;
+        let match_note = match asset.match_kind {
+            tuffbox_core::steam_bridge::SteamBridgeMatchKind::Exact => "exact match",
+            tuffbox_core::steam_bridge::SteamBridgeMatchKind::SameMinor => {
+                "closest same minor (exact jar not published)"
+            }
+        };
+        let file_name = asset.file_name.clone();
+        let mc = asset.mc_version.clone();
+        let tag = asset.tag.clone();
+        let loader_label = asset.loader_label.clone();
+        let spec = tuffbox_core::steam_bridge::build_steam_bridge_mod_spec(&asset);
+        manifest.mods.push(spec);
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
+
+        Ok(serde_json::json!({
+            "modId": tuffbox_core::steam_bridge::STEAM_BRIDGE_MOD_ID,
+            "fileName": file_name,
+            "tag": tag,
+            "mcVersion": mc,
+            "loader": loader_label,
+            "matchKind": match_note,
+            "repo": tuffbox_core::steam_bridge::STEAM_BRIDGE_REPO,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -11406,6 +11459,7 @@ pub fn run() {
             add_modrinth_mod,
             add_modrinth_mod_with_dependencies,
             add_modrinth_mods_with_dependencies,
+            install_steam_bridge,
             create_mode_api::create_mode_chat,
             create_mode_api::assemble_pack_draft,
             create_mode_api::preview_pack_draft,

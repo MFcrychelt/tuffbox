@@ -56,14 +56,20 @@ API (ваш сервер):
 
 ## System prompt (канон)
 
-Текст живёт в `tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT` — один и тот же для server и local:
+Текст живёт в `tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT` — один и тот же для server и local.
+
+**AI Decision making** (порядок рассуждения перед JSON):
+
+1. **Understand the context** — только shared info из промпта (MC/loader/Java, inventory, culprits, findings, KB, graph, excerpts).
+2. **Isolate the problem** — одна primary root cause; ранний hard failure важнее cascading noise.
+3. **Accept the risk** — у каждого action явный `risk`; `needsUserReview` / `confidence` честные.
+4. **Map decision** — минимальный набор `actions` с `op`, reason ↔ isolated cause.
 
 ```text
 You are TuffBox Crash Planner. You only output ONE JSON object matching schemaVersion 1.
 You do NOT apply fixes. You propose an ActionPlan for the launcher.
-… (см. код)
+… (см. код: decision steps + hard rules)
 ```
-
 ## Формат ответа ИИ — ActionPlan
 
 Единственный executable контракт (`schemaVersion: 1`):

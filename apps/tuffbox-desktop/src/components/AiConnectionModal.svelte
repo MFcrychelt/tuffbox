@@ -252,6 +252,7 @@
         model: name,
         endpoint: endpoint || null,
         binaryPath: ollamaBinaryPath || null,
+        modelsPath: ollamaModelsPath.trim() || null,
       });
       model = result.model;
       pullName = result.model;
@@ -359,7 +360,9 @@
       });
       if (typeof selected === "string" && selected) {
         ollamaModelsPath = selected;
-        message = "Models path set. Restart Ollama (or Re-detect) so pulls use this folder.";
+        await persistAiSettings(model || pullName || "qwen2.5:7b");
+        message =
+          "Models folder saved. Click Install model — TuffBox will download into this folder (not C:\\Users\\…\\.ollama).";
       }
     } catch (e) {
       error = String(e);
@@ -534,10 +537,10 @@
             </div>
             <p class="hint">
               Where Ollama stores downloaded weights (<code>OLLAMA_MODELS</code>).
-              Leave empty for the default under your user profile. If models still land on
-              <code>C:</code>, set a folder on another drive, Save, then Install — TuffBox
-              restarts Ollama with this path before pulling.
-              After changing, stop the Ollama app and click Re-detect so TuffBox starts it with the new path.
+              Leave empty for the default under your user profile.
+              With a custom folder, Install downloads via a private Ollama port so the tray app
+              cannot write to <code>C:\Users\…\.ollama\models</code>. After install, TuffBox
+              restarts Ollama with this path for chat.
             </p>
           </label>
 

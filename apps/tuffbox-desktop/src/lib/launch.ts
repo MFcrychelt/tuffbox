@@ -113,7 +113,7 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
   }
   if (info.logPath) {
     actions.push({
-      label: "View log",
+      label: "Open log",
       run: () => {
         open(info.logPath as string).catch(() => {});
       },
@@ -124,7 +124,7 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
   // the structured findings and apply a fix without re-navigating.
   if (info.kind === "launch_crash") {
     actions.push({
-      label: "Diagnose",
+      label: "Fix it",
       run: () => {
         window.dispatchEvent(new Event("tuffbox:open-diagnostics"));
       },
@@ -141,7 +141,7 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
       },
     });
   }
-  toasts.error(info.message, 14000, actions);
+  toasts.error(info.message, 16000, actions);
 }
 
 let crashListener: Promise<UnlistenFn> | null = null;
