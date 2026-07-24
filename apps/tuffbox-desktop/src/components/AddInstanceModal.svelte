@@ -258,8 +258,8 @@
     }
   }
 
-  function pickLoader(id: typeof loader) {
-    loader = id;
+  function pickLoader(id: string) {
+    loader = id as typeof loader;
     loadLoaderVersions();
   }
 
@@ -445,7 +445,7 @@
                 class:active={loader === l.id}
                 role="radio"
                 aria-checked={loader === l.id}
-                on:click={() => pickLoader(l.id as typeof loader)}
+                on:click={() => pickLoader(l.id)}
               >{l.label}</button>
             {/each}
           </div>

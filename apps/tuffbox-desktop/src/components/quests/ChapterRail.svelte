@@ -74,6 +74,10 @@
   function stripMc(s: string): string {
     return s.replace(/§[0-9a-fk-or]/gi, "").replace(/&[0-9a-fk-or]/gi, "").trim();
   }
+
+  function inputVal(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
+  }
 </script>
 
 <aside class="rail ftbq-rail">
@@ -110,10 +114,10 @@
                     autofocus
                     on:click|stopPropagation
                     on:keydown={(e) => {
-                      if (e.key === "Enter") commitTitle(ch, (e.target as HTMLInputElement).value);
+                      if (e.key === "Enter") commitTitle(ch, inputVal(e));
                       if (e.key === "Escape") editingId = null;
                     }}
-                    on:blur={(e) => commitTitle(ch, (e.target as HTMLInputElement).value)}
+                    on:blur={(e) => commitTitle(ch, inputVal(e))}
                   />
                 {:else}
                   <strong>{stripMc(ch.title)}</strong>

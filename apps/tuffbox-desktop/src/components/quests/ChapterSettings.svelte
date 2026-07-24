@@ -56,6 +56,13 @@
     chapter.extras = { ...chapter.extras };
     onDirty();
   }
+
+  function selectVal(e: Event): string {
+    return (e.currentTarget as HTMLSelectElement).value;
+  }
+  function inputVal(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
+  }
 </script>
 
 <div class="ch-set ftbq-panel">
@@ -67,7 +74,7 @@
     <select
       value={chapter.group ?? ""}
       on:change={(e) => {
-        chapter.group = (e.target as HTMLSelectElement).value || null;
+        chapter.group = selectVal(e) || null;
         onDirty();
       }}
     >
@@ -82,7 +89,7 @@
       type="number"
       value={chapter.orderIndex ?? ""}
       on:input={(e) => {
-        const v = (e.target as HTMLInputElement).value;
+        const v = inputVal(e);
         chapter.orderIndex = v === "" ? null : Number(v);
         onDirty();
       }}
@@ -94,7 +101,7 @@
     <select
       value={chapter.defaultQuestShape ?? ""}
       on:change={(e) => {
-        chapter.defaultQuestShape = (e.target as HTMLSelectElement).value || null;
+        chapter.defaultQuestShape = selectVal(e) || null;
         onDirty();
       }}
     >
@@ -107,7 +114,7 @@
     >Default hide dependency lines
     <select
       value={hideDef.value}
-      on:change={(e) => hideDef.set((e.target as HTMLSelectElement).value)}
+      on:change={(e) => hideDef.set(selectVal(e))}
     >
       <option value="">unset</option>
       <option value="true">true</option>

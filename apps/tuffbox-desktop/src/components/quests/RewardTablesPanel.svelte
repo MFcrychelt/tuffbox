@@ -11,8 +11,12 @@
 
   let selectedId = "";
 
-  $: selected = tables.find((t) => t.id === selectedId) ?? tables[0] ?? null;
-  $: if (selected && selectedId !== selected.id) selectedId = selected.id;
+  $: if (tables.length === 0) {
+    selectedId = "";
+  } else if (!tables.some((t) => t.id === selectedId)) {
+    selectedId = tables[0].id;
+  }
+  $: selected = tables.find((t) => t.id === selectedId) ?? null;
 
   function addEntry() {
     if (!selected) return;

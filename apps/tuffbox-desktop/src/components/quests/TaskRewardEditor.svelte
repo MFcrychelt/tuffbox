@@ -150,21 +150,46 @@
     if (typeof v === "string" && v !== "" && !Number.isNaN(Number(v))) return Number(v);
     return fallback;
   }
+
+  // Svelte 4 markup can't parse TS `as` — keep casts in script helpers
+  function inputVal(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
+  }
+  function inputNum(e: Event): number {
+    return Number((e.currentTarget as HTMLInputElement).value);
+  }
+  function inputChecked(e: Event): boolean {
+    return (e.currentTarget as HTMLInputElement).checked;
+  }
+  function selectVal(e: Event): string {
+    return (e.currentTarget as HTMLSelectElement).value;
+  }
+  function textareaVal(e: Event): string {
+    return (e.currentTarget as HTMLTextAreaElement).value;
+  }
+
+  function onPickTaskType(e: Event) {
+    const el = e.currentTarget as HTMLSelectElement;
+    if (el.value) {
+      addTask(el.value);
+      el.value = "";
+    }
+  }
+
+  function onPickRewardType(e: Event) {
+    const el = e.currentTarget as HTMLSelectElement;
+    if (el.value) {
+      addReward(el.value);
+      el.value = "";
+    }
+  }
 </script>
 
 <section class="tr ftbq-tr">
   <div class="tr-h">
     <h4>Tasks</h4>
     <div class="add-row">
-      <select
-        on:change={(e) => {
-          const t = (e.target as HTMLSelectElement).value;
-          if (t) {
-            addTask(t);
-            (e.target as HTMLSelectElement).value = "";
-          }
-        }}
-      >
+      <select on:change={onPickTaskType}>
         <option value="">+ Task type…</option>
         {#each TASK_TYPES as t}
           <option value={t}>{t}</option>
@@ -179,7 +204,7 @@
         <select
           value={task.type}
           on:change={(e) => {
-            task.type = (e.target as HTMLSelectElement).value;
+            task.type = selectVal(e);
             onDirty();
           }}
         >
@@ -196,7 +221,7 @@
           <div class="item-row">
             <input
               value={getItemId(task.properties)}
-              on:input={(e) => setProp(task, "item", (e.target as HTMLInputElement).value)}
+              on:input={(e) => setProp(task, "item", inputVal(e))}
               placeholder="modid:item"
             />
             <button type="button" class="pick" on:click={() => openPicker("task", i)}
@@ -209,14 +234,14 @@
             type="number"
             min="1"
             value={numProp(task.properties, "count", 1)}
-            on:input={(e) => setProp(task, "count", Number((e.target as HTMLInputElement).value) || 1)}
+            on:input={(e) => setProp(task, "count", inputNum(e) || 1)}
           /></label
         >
       {:else if task.type === "kill"}
         <label
           >Entity<input
             value={String(task.properties?.entity ?? "")}
-            on:input={(e) => setProp(task, "entity", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "entity", inputVal(e))}
             placeholder="minecraft:zombie"
           /></label
         >
@@ -225,14 +250,14 @@
             type="number"
             min="1"
             value={numProp(task.properties, "value", 1)}
-            on:input={(e) => setProp(task, "value", Number((e.target as HTMLInputElement).value) || 1)}
+            on:input={(e) => setProp(task, "value", inputNum(e) || 1)}
           /></label
         >
       {:else if task.type === "dimension"}
         <label
           >Dimension<input
             value={String(task.properties?.dimension ?? "")}
-            on:input={(e) => setProp(task, "dimension", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "dimension", inputVal(e))}
             placeholder="minecraft:the_nether"
           /></label
         >
@@ -240,7 +265,7 @@
         <label
           >Biome<input
             value={String(task.properties?.biome ?? "")}
-            on:input={(e) => setProp(task, "biome", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "biome", inputVal(e))}
             placeholder="minecraft:plains"
           /></label
         >
@@ -251,7 +276,7 @@
             min="1"
             value={typeof task.value === "number" ? task.value : Number(task.value) || 1}
             on:input={(e) => {
-              task.value = Number((e.target as HTMLInputElement).value) || 1;
+              task.value = inputNum(e) || 1;
               onDirty();
             }}
           /></label
@@ -262,14 +287,14 @@
         <label
           >Stage<input
             value={String(task.properties?.stage ?? "")}
-            on:input={(e) => setProp(task, "stage", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "stage", inputVal(e))}
           /></label
         >
       {:else if task.type === "advancement"}
         <label
           >Advancement<input
             value={String(task.properties?.advancement ?? "")}
-            on:input={(e) => setProp(task, "advancement", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "advancement", inputVal(e))}
             placeholder="minecraft:story/mine_stone"
           /></label
         >
@@ -277,7 +302,7 @@
         <label
           >Stat<input
             value={String(task.properties?.stat ?? "")}
-            on:input={(e) => setProp(task, "stat", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "stat", inputVal(e))}
             placeholder="minecraft:walk_one_cm"
           /></label
         >
@@ -285,14 +310,14 @@
           >Value<input
             type="number"
             value={numProp(task.properties, "value", 1)}
-            on:input={(e) => setProp(task, "value", Number((e.target as HTMLInputElement).value) || 1)}
+            on:input={(e) => setProp(task, "value", inputNum(e) || 1)}
           /></label
         >
       {:else if task.type === "fluid"}
         <label
           >Fluid<input
             value={String(task.properties?.fluid ?? task.properties?.fluid_name ?? "")}
-            on:input={(e) => setProp(task, "fluid", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "fluid", inputVal(e))}
             placeholder="minecraft:water"
           /></label
         >
@@ -300,14 +325,14 @@
           >Amount (mB)<input
             type="number"
             value={numProp(task.properties, "amount", 1000)}
-            on:input={(e) => setProp(task, "amount", Number((e.target as HTMLInputElement).value) || 1)}
+            on:input={(e) => setProp(task, "amount", inputNum(e) || 1)}
           /></label
         >
       {:else if task.type === "location"}
         <label
           >Dimension<input
             value={String(task.properties?.dimension ?? "")}
-            on:input={(e) => setProp(task, "dimension", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "dimension", inputVal(e))}
             placeholder="minecraft:overworld"
           /></label
         >
@@ -318,19 +343,19 @@
               type="number"
               title="x"
               value={numProp(task.properties, "x", 0)}
-              on:input={(e) => setProp(task, "x", Number((e.target as HTMLInputElement).value))}
+              on:input={(e) => setProp(task, "x", inputNum(e))}
             />
             <input
               type="number"
               title="y"
               value={numProp(task.properties, "y", 0)}
-              on:input={(e) => setProp(task, "y", Number((e.target as HTMLInputElement).value))}
+              on:input={(e) => setProp(task, "y", inputNum(e))}
             />
             <input
               type="number"
               title="z"
               value={numProp(task.properties, "z", 0)}
-              on:input={(e) => setProp(task, "z", Number((e.target as HTMLInputElement).value))}
+              on:input={(e) => setProp(task, "z", inputNum(e))}
             />
           </div>
         </label>
@@ -339,7 +364,7 @@
           >Observe timer (ticks)<input
             type="number"
             value={numProp(task.properties, "timer", 0)}
-            on:input={(e) => setProp(task, "timer", Number((e.target as HTMLInputElement).value) || 0)}
+            on:input={(e) => setProp(task, "timer", inputNum(e) || 0)}
           /></label
         >
         <label
@@ -353,7 +378,7 @@
         <label
           >Structure<input
             value={String(task.properties?.structure ?? "")}
-            on:input={(e) => setProp(task, "structure", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(task, "structure", inputVal(e))}
             placeholder="minecraft:village"
           /></label
         >
@@ -377,7 +402,7 @@
             type="checkbox"
             checked={!!task.properties?.consume_items}
             on:change={(e) =>
-              setProp(task, "consume_items", (e.target as HTMLInputElement).checked)}
+              setProp(task, "consume_items", inputChecked(e))}
           />
           Consume items
         </label>
@@ -390,7 +415,7 @@
           value={JSON.stringify(task.properties ?? {}, null, 0)}
           on:change={(e) => {
             try {
-              task.properties = JSON.parse((e.target as HTMLTextAreaElement).value);
+              task.properties = JSON.parse(textareaVal(e));
               onDirty();
             } catch {
               /* ignore invalid */
@@ -404,15 +429,7 @@
   <div class="tr-h">
     <h4>Rewards</h4>
     <div class="add-row">
-      <select
-        on:change={(e) => {
-          const t = (e.target as HTMLSelectElement).value;
-          if (t) {
-            addReward(t);
-            (e.target as HTMLSelectElement).value = "";
-          }
-        }}
-      >
+      <select on:change={onPickRewardType}>
         <option value="">+ Reward type…</option>
         {#each REWARD_TYPES as t}
           <option value={t}>{t}</option>
@@ -427,7 +444,7 @@
         <select
           value={reward.type}
           on:change={(e) => {
-            reward.type = (e.target as HTMLSelectElement).value;
+            reward.type = selectVal(e);
             onDirty();
           }}
         >
@@ -446,7 +463,7 @@
           <div class="item-row">
             <input
               value={getItemId(reward.properties)}
-              on:input={(e) => setProp(reward, "item", (e.target as HTMLInputElement).value)}
+              on:input={(e) => setProp(reward, "item", inputVal(e))}
               placeholder="modid:item"
             />
             <button type="button" class="pick" on:click={() => openPicker("reward", i)}
@@ -459,7 +476,7 @@
             type="number"
             min="1"
             value={numProp(reward.properties, "count", 1)}
-            on:input={(e) => setProp(reward, "count", Number((e.target as HTMLInputElement).value) || 1)}
+            on:input={(e) => setProp(reward, "count", inputNum(e) || 1)}
           /></label
         >
       {:else if reward.type === "xp"}
@@ -468,7 +485,7 @@
             type="number"
             min="1"
             value={numProp(reward.properties, "xp", 10)}
-            on:input={(e) => setProp(reward, "xp", Number((e.target as HTMLInputElement).value) || 1)}
+            on:input={(e) => setProp(reward, "xp", inputNum(e) || 1)}
           /></label
         >
       {:else if reward.type === "xp_levels"}
@@ -478,14 +495,14 @@
             min="1"
             value={numProp(reward.properties, "xp_levels", 1)}
             on:input={(e) =>
-              setProp(reward, "xp_levels", Number((e.target as HTMLInputElement).value) || 1)}
+              setProp(reward, "xp_levels", inputNum(e) || 1)}
           /></label
         >
       {:else if reward.type === "command"}
         <label
           >Command<input
             value={String(reward.properties?.command ?? "")}
-            on:input={(e) => setProp(reward, "command", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(reward, "command", inputVal(e))}
             placeholder="/say hi"
           /></label
         >
@@ -494,7 +511,7 @@
           >Reward table
           <select
             value={String(reward.properties?.table ?? "")}
-            on:change={(e) => setProp(reward, "table", (e.target as HTMLSelectElement).value)}
+            on:change={(e) => setProp(reward, "table", selectVal(e))}
           >
             <option value="">Select table…</option>
             {#each rewardTableIds as tid}
@@ -506,7 +523,7 @@
         <label
           >Stage<input
             value={String(reward.properties?.stage ?? "")}
-            on:input={(e) => setProp(reward, "stage", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(reward, "stage", inputVal(e))}
           /></label
         >
       {:else if reward.type === "choice"}
@@ -514,7 +531,7 @@
           >Table / choices
           <select
             value={String(reward.properties?.table ?? "")}
-            on:change={(e) => setProp(reward, "table", (e.target as HTMLSelectElement).value)}
+            on:change={(e) => setProp(reward, "table", selectVal(e))}
           >
             <option value="">Select table…</option>
             {#each rewardTableIds as tid}
@@ -526,7 +543,7 @@
         <label
           >Description<input
             value={String(reward.properties?.description ?? reward.title ?? "")}
-            on:input={(e) => setProp(reward, "description", (e.target as HTMLInputElement).value)}
+            on:input={(e) => setProp(reward, "description", inputVal(e))}
           /></label
         >
       {:else}
@@ -541,7 +558,7 @@
           value={JSON.stringify(reward.properties ?? {}, null, 0)}
           on:change={(e) => {
             try {
-              reward.properties = JSON.parse((e.target as HTMLTextAreaElement).value);
+              reward.properties = JSON.parse(textareaVal(e));
               onDirty();
             } catch {
               /* ignore */

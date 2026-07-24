@@ -109,6 +109,16 @@
     quest.extras = { ...quest.extras };
     onDirty();
   }
+
+  function selectVal(e: Event): string {
+    return (e.currentTarget as HTMLSelectElement).value;
+  }
+  function inputVal(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
+  }
+  function textareaVal(e: Event): string {
+    return (e.currentTarget as HTMLTextAreaElement).value;
+  }
 </script>
 
 <aside class="insp ftbq-view">
@@ -137,7 +147,7 @@
       >Description<textarea
         rows="3"
         value={descText}
-        on:input={(e) => (descText = (e.target as HTMLTextAreaElement).value)}
+        on:input={(e) => (descText = textareaVal(e))}
         on:change={commitDescription}
         placeholder="One line per paragraph"
       ></textarea></label
@@ -151,7 +161,7 @@
       <select
         value={quest.shape ?? ""}
         on:change={(e) => {
-          quest.shape = (e.target as HTMLSelectElement).value || null;
+          quest.shape = selectVal(e) || null;
           onDirty();
         }}
       >
@@ -230,7 +240,7 @@
           min="0"
           value={quest.minRequiredDependencies ?? ""}
           on:input={(e) => {
-            const v = (e.target as HTMLInputElement).value;
+            const v = inputVal(e);
             quest.minRequiredDependencies = v === "" ? null : Number(v);
             onDirty();
           }}
@@ -241,7 +251,7 @@
         <select
           value={quest.dependencyRequirement ?? ""}
           on:change={(e) => {
-            quest.dependencyRequirement = (e.target as HTMLSelectElement).value || null;
+            quest.dependencyRequirement = selectVal(e) || null;
             onDirty();
           }}
         >
