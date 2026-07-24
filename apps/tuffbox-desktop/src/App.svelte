@@ -315,7 +315,12 @@
   <Sidebar bind:currentView />
   <div class="main">
     <Header {currentView} />
-    <main class="content" class:ide-view={currentView === "ide"} bind:this={contentEl}>
+    <main
+      class="content"
+      class:ide-view={currentView === "ide"}
+      class:fill-view={currentView === "world"}
+      bind:this={contentEl}
+    >
       {#key currentView}
         <div class="view-pane" in:viewIntro>
           {#if currentView === "dashboard"}
@@ -468,6 +473,25 @@
   }
 
   .content.ide-view .view-pane > :global(.ide-workspace) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* World (MCA map) needs a real height chain; otherwise flex:1 map-stage collapses to 0. */
+  .content.fill-view {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 20px;
+  }
+  .content.fill-view .view-pane {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .content.fill-view .view-pane > :global(.worlds-view) {
     flex: 1;
     min-height: 0;
   }

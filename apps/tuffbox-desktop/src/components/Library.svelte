@@ -7,21 +7,39 @@
     Plus,
     Download,
     FolderOpen,
+    Folder,
     Star,
     Compass,
     LayoutGrid,
-    Sparkles,
     ExternalLink,
+    MoreVertical,
+    Copy,
+    GitBranch,
+    Share2,
+    Wrench,
+    Minus,
+    Trash2,
+    Package,
+    Settings,
   } from "lucide-svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-dialog";
+  import { open, confirm } from "@tauri-apps/plugin-dialog";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
-  import { recentProjects, projectPath, projectInfo, type RecentProject } from "../lib/store";
+  import {
+    recentProjects,
+    projectPath,
+    projectInfo,
+    ideStageRequest,
+    newProjectOpen,
+    type RecentProject,
+  } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import type { SearchResult } from "../lib/api";
   import { launchWithFeedback } from "../lib/launch";
   import CreationTrends from "./CreationTrends.svelte";
+  import PromptDialog from "./PromptDialog.svelte";
+  import AddInstanceModal from "./AddInstanceModal.svelte";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
 
@@ -41,6 +59,11 @@
   // ── Your packs (local instances) ────────────────────────────────
   let instanceSizes: Record<string, string> = {};
   let launching: string | null = null;
+  let actionBusy = false;
+  let ctxMenu: { x: number; y: number; project: RecentProject } | null = null;
+  let showClonePrompt = false;
+  let cloneTarget: RecentProject | null = null;
+  let clonePromptName = "";
 
   function gradientFrom(name: string) {
     const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
@@ -66,18 +89,287 @@
   $: if (tab === "yours") $recentProjects.forEach((p) => loadSize(p.path));
 
   function openPack(project: RecentProject) {
+    closeCtxMenu();
     projectPath.set(project.path);
     projectInfo.set(project.info);
-    currentView = "dashboard";
+    ideStageRequest.set("content");
+    currentView = "ide";
+  }
+
+  function openPackSettings(project: RecentProject) {
+    closeCtxMenu();
+    projectPath.set(project.path);
+    projectInfo.set(project.info);
+    currentView = "project-settings";
   }
 
   async function launchPack(project: RecentProject) {
+    closeCtxMenu();
     launching = project.path;
     try {
       await invoke("set_last_opened_project", { path: project.path });
       await launchWithFeedback({ path: project.path, profile: "client" });
     } finally {
       launching = null;
+    }
+  }
+
+  let importing = false;
+  let importMenuOpen = false;
+
+  function openNewPack() {
+    newProjectOpen.set(true);
+  }
+
+  async function resolveImportTargetDir(): Promise<string> {
+    if (!downloadDir && !defaultDownloadDir) {
+      await loadDownloadDir();
+    }
+    const local = (downloadDir || defaultDownloadDir).replace(/[\\/]+$/, "");
+    if (local) return local;
+    try {
+      const info = await api.launcher.instancesPathInfo();
+      const settings = await api.launcher.get();
+      return (settings.instancesPath?.trim() || info.current || info.default || "").replace(
+        /[\\/]+$/,
+        "",
+      );
+    } catch {
+      return "";
+    }
+  }
+
+  async function finishImportedPack(result: { path?: string; name?: string; modCount?: number }) {
+    const path = result.path;
+    if (!path) throw new Error("Import returned no path");
+    const info = (await invoke("validate_project", { path })) as any;
+    const manifestPath = info.manifestPath || path;
+    recentProjects.add({ path: manifestPath, info });
+    projectPath.set(manifestPath);
+    projectInfo.set(info);
+    toasts.success(
+      `Imported "${result.name ?? info.name ?? "pack"}"${
+        result.modCount != null ? ` · ${result.modCount} mods` : ""
+      }`,
+    );
+    tab = "yours";
+    ideStageRequest.set("content");
+    currentView = "ide";
+  }
+
+  async function importFromSource(source: string) {
+    importing = true;
+    importMenuOpen = false;
+    try {
+      const targetDir = await resolveImportTargetDir();
+      if (!targetDir) {
+        toasts.error("Set a download/instances folder in Discover or Settings first.");
+        return;
+      }
+      const result: any = await invoke("install_modpack", {
+        source,
+        targetDir,
+        instanceName: null,
+      });
+      await finishImportedPack(result);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      importing = false;
+    }
+  }
+
+  async function importPackFile() {
+    importMenuOpen = false;
+    const selected = await open({
+      multiple: false,
+      title: "Import .mrpack or .zip",
+      filters: [
+        { name: "Modpacks", extensions: ["mrpack", "zip"] },
+        { name: "All", extensions: ["*"] },
+      ],
+    });
+    if (typeof selected !== "string" || !selected) return;
+    await importFromSource(selected);
+  }
+
+  async function importInstanceFolder() {
+    importMenuOpen = false;
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Import Prism / MultiMC / CurseForge / mods folder",
+    });
+    if (typeof selected !== "string" || !selected) return;
+    await importFromSource(selected);
+  }
+
+  async function onPackCreated(e: CustomEvent<string>) {
+    newProjectOpen.set(false);
+    const path = e.detail;
+    try {
+      const info = (await invoke("validate_project", { path })) as any;
+      const manifestPath = info.manifestPath || path;
+      recentProjects.add({ path: manifestPath, info });
+      projectPath.set(manifestPath);
+      projectInfo.set(info);
+      toasts.success(`Created "${info.name ?? "pack"}"`);
+      tab = "yours";
+      ideStageRequest.set("content");
+      currentView = "ide";
+    } catch (err) {
+      toasts.error(String(err));
+    }
+  }
+
+  function openCtxMenu(e: MouseEvent, project: RecentProject) {
+    e.preventDefault();
+    e.stopPropagation();
+    const pad = 8;
+    const menuW = 220;
+    const menuH = 360;
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
+    if (y + menuH > window.innerHeight - pad) y = window.innerHeight - menuH - pad;
+    ctxMenu = { x: Math.max(pad, x), y: Math.max(pad, y), project };
+  }
+
+  function closeCtxMenu() {
+    ctxMenu = null;
+  }
+
+  function onGlobalPointerDown(e: MouseEvent) {
+    if (importMenuOpen) {
+      const t = e.target as HTMLElement | null;
+      if (!t?.closest?.(".import-wrap") && !t?.closest?.(".import-menu")) {
+        importMenuOpen = false;
+      }
+    }
+    if (!ctxMenu || e.button === 2) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.(".pack-ctx-menu")) return;
+    closeCtxMenu();
+  }
+
+  function onGlobalKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      closeCtxMenu();
+      importMenuOpen = false;
+    }
+  }
+
+  async function runPackAction(action: string, project: RecentProject) {
+    closeCtxMenu();
+    switch (action) {
+      case "open":
+        openPack(project);
+        break;
+      case "play":
+        await launchPack(project);
+        break;
+      case "settings":
+        openPackSettings(project);
+        break;
+      case "open-folder":
+        try {
+          await invoke("open_project_folder", { path: project.path });
+        } catch (e) {
+          toasts.error(String(e));
+        }
+        break;
+      case "copy-path":
+        try {
+          await navigator.clipboard.writeText(project.path);
+          toasts.success("Path copied");
+        } catch (e) {
+          toasts.error(String(e));
+        }
+        break;
+      case "clone":
+        clonePromptName = `${project.info.name} copy`;
+        cloneTarget = project;
+        showClonePrompt = true;
+        break;
+      case "export":
+        actionBusy = true;
+        try {
+          const exported: any = await api.export.modrinthPack(null, project.path);
+          await navigator.clipboard.writeText(exported.path);
+          toasts.success(`Exported .mrpack: ${exported.path}`);
+        } catch (e) {
+          toasts.error(String(e));
+        } finally {
+          actionBusy = false;
+        }
+        break;
+      case "repair":
+        actionBusy = true;
+        try {
+          const report: any = await invoke("repair_project", { path: project.path });
+          const downloaded = report.downloaded?.length ?? 0;
+          const failed = report.failed?.length ?? 0;
+          toasts.success(
+            downloaded === 0 && failed === 0
+              ? "All mod files present and valid."
+              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`,
+          );
+        } catch (e) {
+          toasts.error(String(e));
+        } finally {
+          actionBusy = false;
+        }
+        break;
+      case "remove":
+        recentProjects.remove(project.path);
+        if ($projectPath === project.path) {
+          const next = $recentProjects[0];
+          projectPath.set(next?.path ?? null);
+          projectInfo.set(next?.info ?? null);
+        }
+        toasts.info(`Removed "${project.info.name}" from library`);
+        break;
+      case "delete": {
+        const ok = await confirm(`Delete "${project.info.name}" from disk?`, {
+          title: "Delete pack",
+          kind: "warning",
+        });
+        if (!ok) break;
+        try {
+          await invoke("delete_project", { path: project.path });
+          recentProjects.remove(project.path);
+          if ($projectPath === project.path) {
+            const next = $recentProjects[0];
+            projectPath.set(next?.path ?? null);
+            projectInfo.set(next?.info ?? null);
+          }
+          toasts.success(`Deleted "${project.info.name}"`);
+        } catch (e) {
+          toasts.error(String(e));
+        }
+        break;
+      }
+    }
+  }
+
+  async function confirmClone(newName: string) {
+    showClonePrompt = false;
+    if (!cloneTarget || !newName.trim()) return;
+    actionBusy = true;
+    try {
+      const clonedPath = await invoke<string>("clone_project", {
+        path: cloneTarget.path,
+        newName: newName.trim(),
+      });
+      const info = (await invoke("validate_project", { path: clonedPath })) as any;
+      const manifestPath = info.manifestPath || clonedPath;
+      recentProjects.add({ path: manifestPath, info });
+      toasts.success(`Cloned to: ${manifestPath}`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      actionBusy = false;
+      cloneTarget = null;
     }
   }
 
@@ -339,16 +631,44 @@
       <LibraryIcon size={22} />
       <h1>Library</h1>
     </div>
-    <div class="tabs">
-      <button class:active={tab === "yours"} on:click={() => switchTab("yours")}>
-        <LayoutGrid size={15} /> Your packs
-      </button>
-      <button class:active={tab === "discover"} on:click={() => switchTab("discover")}>
-        <Compass size={15} /> Discover
-      </button>
-      <button class:active={tab === "create"} on:click={() => switchTab("create")} title={swarmEnabled ? "Creation trends" : "Requires TuffSwarm"}>
-        <Sparkles size={15} /> Create
-      </button>
+    <div class="header-actions">
+      <div class="import-wrap">
+        <button
+          type="button"
+          class="header-btn"
+          class:busy={importing}
+          disabled={importing}
+          on:click|stopPropagation={() => (importMenuOpen = !importMenuOpen)}
+          title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
+        >
+          {#if importing}
+            <span class="mini-spinner dark"></span> Importing…
+          {:else}
+            <Download size={15} /> Import
+          {/if}
+        </button>
+        {#if importMenuOpen}
+          <div class="import-menu" role="menu">
+            <button type="button" role="menuitem" on:click={importPackFile}>
+              File (.mrpack / .zip)
+            </button>
+            <button type="button" role="menuitem" on:click={importInstanceFolder}>
+              Instance folder
+            </button>
+          </div>
+        {/if}
+      </div>
+      <div class="tabs">
+        <button class:active={tab === "yours"} on:click={() => switchTab("yours")}>
+          <LayoutGrid size={15} /> Your packs
+        </button>
+        <button class:active={tab === "discover"} on:click={() => switchTab("discover")}>
+          <Compass size={15} /> Discover
+        </button>
+        <button class:active={tab === "create"} on:click={() => switchTab("create")} title="Create a new modpack">
+          <Plus size={15} /> Create
+        </button>
+      </div>
     </div>
   </div>
 
@@ -358,35 +678,93 @@
         <div class="empty-icon"><LibraryIcon size={40} /></div>
         <h3>No packs yet</h3>
         <p>Create or import a modpack to build your library.</p>
+        <div class="empty-actions">
+          <button class="empty-cta" type="button" on:click={openNewPack}>
+            <Plus size={16} /> New pack
+          </button>
+          <button class="empty-cta ghost" type="button" on:click={() => (importMenuOpen = true)} disabled={importing}>
+            <Download size={16} /> Import
+          </button>
+        </div>
       </div>
     {:else}
       <div class="pack-grid tb-stagger">
         {#each $recentProjects as project, i (project.path)}
-          <div class="pack-card tb-card" style={`--i: ${i}`} role="button" tabindex="0"
+          <div
+            class="pack-card yours tb-card"
+            class:active={$projectPath === project.path}
+            style={`--i: ${i}`}
+            role="button"
+            tabindex="0"
             on:click={() => openPack(project)}
-            on:keydown={(e) => e.key === "Enter" && openPack(project)}>
-            <div class="pack-cover" style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}>
+            on:keydown={(e) => e.key === "Enter" && openPack(project)}
+            on:contextmenu={(e) => openCtxMenu(e, project)}
+          >
+            <div
+              class="pack-cover"
+              style={`background: linear-gradient(135deg, ${gradientFrom(project.info.name)}, ${gradientFrom(project.info.id)})`}
+            >
               <span class="pack-cover-letter tb-cover-media">{project.info.name[0]}</span>
-              <button class="pack-play" class:busy={launching === project.path}
+              <button
+                class="pack-play"
+                class:busy={launching === project.path}
+                type="button"
                 on:click|stopPropagation={() => launchPack(project)}
-                title="Play" aria-label="Play {project.info.name}">
-                {#if launching === project.path}<span class="mini-spinner"></span>{:else}<Play size={20} fill="currentColor" />{/if}
+                title="Play"
+                aria-label="Play {project.info.name}"
+              >
+                {#if launching === project.path}
+                  <span class="mini-spinner"></span>
+                {:else}
+                  <Play size={20} fill="currentColor" />
+                {/if}
               </button>
             </div>
             <div class="pack-body">
-              <span class="pack-name">{project.info.name}</span>
+              <span class="pack-name" title={project.info.name}>{project.info.name}</span>
               <span class="pack-meta">{project.info.minecraftVersion} · {project.info.loaderKind}</span>
               <div class="pack-footer">
                 <span class="pack-size">{instanceSizes[project.path] || "…"}</span>
-                <button class="pack-open" on:click|stopPropagation={() => openPack(project)}>
-                  <FolderOpen size={14} /> Open
-                </button>
+                <div class="pack-btns">
+                  <button
+                    type="button"
+                    class="icon-act"
+                    title="Open in IDE → Mods"
+                    on:click|stopPropagation={() => openPack(project)}
+                  >
+                    <Package size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-act"
+                    title="Open folder"
+                    on:click|stopPropagation={() => runPackAction("open-folder", project)}
+                  >
+                    <Folder size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-act"
+                    title="Settings"
+                    on:click|stopPropagation={() => openPackSettings(project)}
+                  >
+                    <Settings size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-act more"
+                    title="More actions"
+                    on:click|stopPropagation={(e) => openCtxMenu(e, project)}
+                  >
+                    <MoreVertical size={14} />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         {/each}
 
-        <button class="pack-card add-card tb-card" style={`--i: ${$recentProjects.length}`} on:click={() => (currentView = "dashboard")}>
+        <button class="pack-card add-card tb-card" style={`--i: ${$recentProjects.length}`} type="button" on:click={openNewPack}>
           <div class="pack-cover add-cover"><Plus size={28} class="tb-cover-media" /></div>
           <div class="pack-body"><span class="pack-name">New pack</span></div>
         </button>
@@ -506,9 +884,88 @@
       </div>
     {/if}
   {:else if tab === "create"}
-    <CreationTrends {swarmEnabled} />
+    <div class="create-pane">
+      <div class="create-actions">
+        <button type="button" class="create-plus" on:click={openNewPack}>
+          <span class="plus-ring"><Plus size={40} strokeWidth={2.25} /></span>
+          <strong>Create modpack</strong>
+          <span>Blank instance or CurseForge browse</span>
+        </button>
+        <button type="button" class="create-plus import" on:click={() => (importMenuOpen = true)} disabled={importing}>
+          <span class="plus-ring"><Download size={36} strokeWidth={2.25} /></span>
+          <strong>{importing ? "Importing…" : "Import pack"}</strong>
+          <span>.mrpack · zip · Prism · MultiMC · CurseForge · mods folder</span>
+        </button>
+      </div>
+      <div class="create-trends">
+        <CreationTrends {swarmEnabled} />
+      </div>
+    </div>
   {/if}
 </div>
+
+{#if ctxMenu}
+  {@const menuProject = ctxMenu.project}
+  <div
+    class="pack-ctx-menu"
+    style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`}
+    role="menu"
+  >
+    <button type="button" role="menuitem" on:click={() => runPackAction("open", menuProject)} disabled={actionBusy}>
+      <Package size={14} /> Open in IDE → Mods
+    </button>
+    <button type="button" role="menuitem" on:click={() => runPackAction("play", menuProject)} disabled={actionBusy || launching === menuProject.path}>
+      <Play size={14} /> Play
+    </button>
+    <button type="button" role="menuitem" on:click={() => runPackAction("open-folder", menuProject)} disabled={actionBusy}>
+      <Folder size={14} /> Open folder
+    </button>
+    <button type="button" role="menuitem" on:click={() => runPackAction("settings", menuProject)} disabled={actionBusy}>
+      <Settings size={14} /> Settings
+    </button>
+    <div class="menu-sep"></div>
+    <button type="button" role="menuitem" on:click={() => runPackAction("copy-path", menuProject)} disabled={actionBusy}>
+      <Copy size={14} /> Copy path
+    </button>
+    <button type="button" role="menuitem" on:click={() => runPackAction("clone", menuProject)} disabled={actionBusy}>
+      <GitBranch size={14} /> Clone
+    </button>
+    <button type="button" role="menuitem" on:click={() => runPackAction("export", menuProject)} disabled={actionBusy}>
+      <Share2 size={14} /> Export .mrpack
+    </button>
+    <button type="button" role="menuitem" on:click={() => runPackAction("repair", menuProject)} disabled={actionBusy}>
+      <Wrench size={14} /> Repair
+    </button>
+    <div class="menu-sep"></div>
+    <button type="button" role="menuitem" on:click={() => runPackAction("remove", menuProject)} disabled={actionBusy}>
+      <Minus size={14} /> Remove from library
+    </button>
+    <button type="button" role="menuitem" class="danger" on:click={() => runPackAction("delete", menuProject)} disabled={actionBusy}>
+      <Trash2 size={14} /> Delete from disk
+    </button>
+  </div>
+{/if}
+
+{#if showClonePrompt && cloneTarget}
+  <PromptDialog
+    title="Clone pack"
+    message={`Create a copy of "${cloneTarget.info.name}"`}
+    mode="text"
+    defaultValue={clonePromptName}
+    confirmLabel="Clone"
+    on:confirm={(e) => confirmClone(e.detail)}
+    on:cancel={() => { showClonePrompt = false; cloneTarget = null; }}
+  />
+{/if}
+
+{#if $newProjectOpen}
+  <AddInstanceModal
+    on:close={() => newProjectOpen.set(false)}
+    on:created={onPackCreated}
+  />
+{/if}
+
+<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
 
 <style>
   .library { max-width: 1200px; margin: 0 auto; }
@@ -520,6 +977,58 @@
     margin-bottom: 22px;
     gap: 16px;
     flex-wrap: wrap;
+  }
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .import-wrap { position: relative; }
+  .header-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(27, 217, 106, 0.12);
+    border: 1px solid rgba(27, 217, 106, 0.35);
+    color: var(--accent-primary);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .header-btn:disabled { opacity: 0.6; cursor: default; }
+  .import-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    min-width: 220px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated, #1a1f28);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .import-menu button {
+    width: 100%;
+    text-align: left;
+    padding: 9px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .import-menu button:hover {
+    background: rgba(27, 217, 106, 0.12);
+    color: var(--accent-primary);
   }
   .title-row { display: flex; align-items: center; gap: 10px; color: var(--accent-primary); }
   .title-row h1 { margin: 0; font-size: 22px; color: var(--text-primary); }
@@ -552,18 +1061,33 @@
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
-    overflow: hidden;
+    overflow: visible;
     text-align: left;
     cursor: pointer;
-    display: flex; flex-direction: column;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    transition:
+      transform var(--motion-fast) var(--ease-spring),
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out);
   }
-  .pack-card:hover { background: var(--bg-tertiary); }
+  .pack-card:hover { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); }
+  .pack-card.yours:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+  }
+  .pack-card.active {
+    border-color: rgba(27, 217, 106, 0.45);
+    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.2);
+  }
 
   .pack-cover {
     position: relative;
     height: 120px;
     display: flex; align-items: center; justify-content: center;
     overflow: hidden;
+    border-radius: var(--border-radius-lg) var(--border-radius-lg) 0 0;
   }
   .pack-cover-letter {
     font-size: 44px; font-weight: 900; color: #fff;
@@ -601,15 +1125,188 @@
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     min-height: 34px;
   }
-  .pack-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 8px; }
-  .pack-size { font-size: 12px; color: var(--text-muted); }
-  .pack-open {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
-    background: var(--bg-tertiary); border: 1px solid var(--border-color); color: var(--text-secondary); cursor: pointer;
-    transition: all 0.15s ease;
+  .pack-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 8px; gap: 8px; }
+  .pack-size { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  .pack-btns {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
-  .pack-open:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+  .icon-act {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 0;
+  }
+  .icon-act:hover {
+    border-color: rgba(27, 217, 106, 0.4);
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.08);
+  }
+  .icon-act.more:hover {
+    border-color: var(--border-color);
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+
+  .pack-ctx-menu {
+    position: fixed;
+    z-index: 90;
+    min-width: 210px;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated, #1a1f28);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pack-ctx-menu button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: left;
+  }
+  .pack-ctx-menu button:hover:not(:disabled) {
+    background: rgba(27, 217, 106, 0.12);
+    color: var(--accent-primary);
+  }
+  .pack-ctx-menu button:disabled { opacity: 0.45; cursor: default; }
+  .pack-ctx-menu button.danger:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.12);
+    color: #f87171;
+  }
+  .pack-ctx-menu .menu-sep {
+    height: 1px;
+    background: var(--border-color);
+    margin: 4px 2px;
+  }
+
+  .empty-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .empty-cta {
+    margin-top: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: none;
+    background: var(--accent-primary);
+    color: #000;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .empty-cta:hover { background: var(--accent-hover); }
+  .empty-cta.ghost {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+  }
+  .empty-cta.ghost:hover {
+    border-color: rgba(27, 217, 106, 0.4);
+    color: var(--accent-primary);
+  }
+
+  .create-pane {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+  .create-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 14px;
+  }
+  .create-plus {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 200px;
+    padding: 28px 20px;
+    border-radius: var(--border-radius-xl);
+    border: 2px dashed rgba(27, 217, 106, 0.35);
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(27, 217, 106, 0.12), transparent 60%),
+      var(--bg-secondary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition:
+      border-color var(--motion-fast) var(--ease-out),
+      background var(--motion-fast) var(--ease-out),
+      transform var(--motion-fast) var(--ease-spring);
+  }
+  .create-plus.import {
+    border-color: rgba(59, 130, 246, 0.35);
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.12), transparent 60%),
+      var(--bg-secondary);
+  }
+  .create-plus.import .plus-ring {
+    background: rgba(59, 130, 246, 0.14);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.35);
+  }
+  .create-plus:hover {
+    border-color: rgba(27, 217, 106, 0.6);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+  }
+  .create-plus.import:hover {
+    border-color: rgba(59, 130, 246, 0.6);
+  }
+  .create-plus:disabled { opacity: 0.6; cursor: default; transform: none; }
+  .create-plus strong {
+    font-size: 18px;
+    color: var(--text-primary);
+  }
+  .create-plus > span:last-child {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .plus-ring {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(27, 217, 106, 0.14);
+    color: var(--accent-primary);
+    border: 1px solid rgba(27, 217, 106, 0.35);
+  }
+  .create-trends {
+    min-width: 0;
+  }
+  .mini-spinner.dark {
+    border-color: rgba(27, 217, 106, 0.25);
+    border-top-color: var(--accent-primary);
+  }
 
   .pack-stats { display: flex; gap: 12px; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
   .pack-stats span { display: inline-flex; align-items: center; gap: 4px; }

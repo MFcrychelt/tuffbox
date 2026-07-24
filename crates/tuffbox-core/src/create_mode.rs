@@ -26,9 +26,10 @@ Respond with a single JSON object:
   }
 }
 Rules:
+- Language: write reply, title, and reason fields in the same language as the user's latest message (Russian→Russian, English→English, etc.). Never switch to Chinese or another language unless the user wrote in it. JSON keys and Modrinth search queries stay English.
 - targetCount should match the user's requested size (typically 40–120).
 - categories[].count values should sum approximately to targetCount.
-- Prefer concrete Modrinth search queries (short, 1–3 words: "create", "jei", "iron chests").
+- Prefer concrete Modrinth search queries (short, 1–3 words: "create", "jei", "iron chests", "airplane").
 - Use category ids aligned with Modrinth when possible: technology, magic, decoration, utility, adventure, worldgen, storage, food, equipment, transportation, library.
 - Keep library/API budget small (about 8–12% of target) — gameplay mods first.
 - mustHave is for named must-include mods (query by name; optional slugHint if known).
@@ -1096,6 +1097,14 @@ mod tests {
             client_side: None,
             server_side: None,
         }
+    }
+
+    #[test]
+    fn system_prompt_requires_user_language() {
+        assert!(
+            CREATE_MODE_SYSTEM_PROMPT.contains("same language as the user's latest message"),
+            "Create Mode must pin reply language to the user message"
+        );
     }
 
     #[test]

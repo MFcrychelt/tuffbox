@@ -63,6 +63,14 @@ export interface QuestData {
   optional: boolean;
   shape?: string | null;
   size?: number | null;
+  hideDependencyLines?: boolean | null;
+  hideDependentLines?: boolean | null;
+  minRequiredDependencies?: number | null;
+  canRepeat?: boolean | null;
+  invisible?: boolean | null;
+  disableToast?: boolean | null;
+  dependencyRequirement?: string | null;
+  extras?: Record<string, unknown>;
 }
 
 export interface QuestChapter {
@@ -71,18 +79,114 @@ export interface QuestChapter {
   icon?: string | null;
   quests: QuestData[];
   group?: string | null;
+  orderIndex?: number | null;
+  filename?: string | null;
+  defaultQuestShape?: string | null;
+  defaultHideDependencyLines?: boolean | null;
+  extras?: Record<string, unknown>;
   sourceFile?: string | null;
+}
+
+export interface QuestChapterGroup {
+  id: string;
+  title: string;
 }
 
 export interface QuestBook {
   chapters: QuestChapter[];
   title?: string | null;
   subtitle?: string | null;
+  chapterGroups?: QuestChapterGroup[];
+  rewardTables?: QuestRewardTable[];
+  bookSettings?: Record<string, unknown>;
+}
+
+export interface QuestRewardTable {
+  id: string;
+  title?: string | null;
+  entries: { rewardId: string; weight: number }[];
+  emptyWeight?: number;
+  sourceFile?: string | null;
 }
 
 export interface QuestValidationIssue {
   questId: string;
   message: string;
+}
+
+/** AI → launcher contract for FTB Quests (see quest_plan.rs). */
+export interface QuestPlan {
+  schemaVersion: number;
+  humanExplanation: string;
+  confidence: number;
+  needsUserReview?: boolean;
+  source?: string | null;
+  chapterGroups?: QuestChapterGroup[];
+  chapters: QuestPlanChapter[];
+}
+
+export interface QuestPlanChapter {
+  id?: string | null;
+  title: string;
+  icon?: string | null;
+  group?: string | null;
+  orderIndex?: number | null;
+  mode?: "upsert" | "replace" | string | null;
+  quests: QuestPlanQuest[];
+}
+
+export interface QuestPlanQuest {
+  id?: string | null;
+  title: string;
+  subtitle?: string | null;
+  description?: string[];
+  x?: number;
+  y?: number;
+  icon?: string | null;
+  dependencies?: string[];
+  tasks: QuestTask[];
+  rewards?: QuestReward[];
+  optional?: boolean;
+  shape?: string | null;
+  size?: number | null;
+}
+
+export interface QuestPlanValidation {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  bookErrors?: { questId: string; message: string }[];
+}
+
+export interface QuestPlanMergeResult {
+  plan: QuestPlan;
+  validation: QuestPlanValidation;
+  book: QuestBook;
+  touchedChapterIds: string[];
+  notes: string[];
+}
+
+export type QuestProgressStatus =
+  | "completed"
+  | "started"
+  | "available"
+  | "locked"
+  | "unknown";
+
+export interface QuestProgressTeamRef {
+  world: string;
+  teamId: string;
+  name: string;
+  relativePath: string;
+}
+
+export interface QuestProgressSnapshot {
+  world: string;
+  teamId: string;
+  name: string;
+  statuses: Record<string, QuestProgressStatus>;
+  completedCount: number;
+  startedCount: number;
 }
 
 export interface IngredientDisplay {
@@ -1288,6 +1392,56 @@ export const api = {
       });
     },
     validate(p?: string) { return cmd<QuestValidationIssue[]>("validate_quest_book", pathArg(p)); },
+    saveRewardTable(table: QuestRewardTable, relativePath?: string | null, p?: string) {
+      return cmd<{ relativePath: string; entryCount: number }>("save_quest_reward_table", {
+        ...pathArg(p),
+        table,
+        relativePath: relativePath ?? null,
+      });
+    },
+    saveBookData(book: Pick<QuestBook, "title" | "subtitle" | "bookSettings">, p?: string) {
+      return cmd<{ relativePath: string }>("save_quest_book_data", {
+        ...pathArg(p),
+        book,
+      });
+    },
+    saveChapterGroups(groups: QuestChapterGroup[], p?: string) {
+      return cmd<{ relativePath: string }>("save_quest_chapter_groups", {
+        ...pathArg(p),
+        groups,
+      });
+    },
+    itemCatalog(p?: string) { return cmd<string[]>("list_quest_item_catalog", pathArg(p)); },
+    listProgressTeams(p?: string) {
+      return cmd<QuestProgressTeamRef[]>("list_quest_progress_teams", pathArg(p));
+    },
+    loadProgress(relativePath: string, p?: string) {
+      return cmd<QuestProgressSnapshot>("load_quest_progress", {
+        ...pathArg(p),
+        relativePath,
+      });
+    },
+    /** Parse AI QuestPlan JSON and merge into current book (memory only). */
+    parseAndMergePlan(raw: string, p?: string) {
+      return cmd<QuestPlanMergeResult>("parse_and_merge_quest_plan", {
+        ...pathArg(p),
+        raw,
+      });
+    },
+    /** Natural language → QuestPlan merge preview (heuristic or AI). */
+    generateFromPrompt(prompt: string, forceAi = false, p?: string) {
+      return cmd<QuestPlanMergeResult>("generate_quest_plan_from_prompt", {
+        ...pathArg(p),
+        prompt,
+        forceAi,
+      });
+    },
+    validatePlan(plan: QuestPlan) {
+      return cmd<QuestPlanValidation>("validate_quest_plan", { plan });
+    },
+    planSystemPrompt() {
+      return cmd<string>("quest_plan_system_prompt");
+    },
   },
 
   // ── Export ────────────────────────────────────────────────────────

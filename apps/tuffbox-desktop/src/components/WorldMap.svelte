@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import {
     Map as MapIcon, RefreshCw, Trash2, MousePointer2, Square, Layers, Download,
     CalendarRange, CheckSquare, XSquare, Copy, Scissors, Clipboard, Circle,
@@ -181,13 +181,15 @@
     try {
       await loadDimensions();
       map = await api.worlds.map(worldName, dimension, $projectPath);
+      loading = false;
+      // Canvas mounts with {#if map}; wait for layout so viewport has non-zero size.
+      await tick();
       fitView();
+      draw();
     } catch (e) {
       map = null;
       error = String(e);
-    } finally {
       loading = false;
-      requestAnimationFrame(draw);
     }
   }
 
@@ -1321,14 +1323,33 @@
     draw();
   }
 
+  let viewportRo: ResizeObserver | null = null;
+
   onMount(() => {
     window.addEventListener("keydown", handleKeydown);
     window.addEventListener("resize", onResize);
+    if (typeof ResizeObserver !== "undefined" && viewport) {
+      let sawSize = false;
+      viewportRo = new ResizeObserver(() => {
+        const h = viewport?.clientHeight ?? 0;
+        const w = viewport?.clientWidth ?? 0;
+        if (w < 2 || h < 2) {
+          sawSize = false;
+          return;
+        }
+        if (map && !sawSize) fitView();
+        sawSize = true;
+        draw();
+      });
+      viewportRo.observe(viewport);
+    }
   });
 
   onDestroy(() => {
     window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("resize", onResize);
+    viewportRo?.disconnect();
+    viewportRo = null;
     clearTimeout(flashTimer);
   });
 
@@ -1857,11 +1878,17 @@
   }
 
   .layout-dock .map-scroll {
-    height: auto;
+    flex: 1 1 0;
     min-height: 0;
+    height: auto;
   }
 
-  canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+  }
   .hover-tip { position: fixed; pointer-events: none; z-index: 30; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px; font-size: 11px; color: var(--text-secondary); box-shadow: 0 4px 16px rgba(0,0,0,.4); }
   .hover-tip code { color: var(--accent-primary); }
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); align-items: center; flex-shrink: 0; }

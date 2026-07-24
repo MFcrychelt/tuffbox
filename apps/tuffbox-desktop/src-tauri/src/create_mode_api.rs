@@ -89,7 +89,7 @@ pub async fn create_mode_chat(
     }
 
     let system = format!(
-        "{CREATE_MODE_SYSTEM_PROMPT}\n\nProject context: Minecraft {mc}, loader {loader}, preferred targetCount {target}.{trends_hint}"
+        "{CREATE_MODE_SYSTEM_PROMPT}\n\nProject context: Minecraft {mc}, loader {loader}, preferred targetCount {target}.{trends_hint}\n\nImportant: reply, title, and reasons must use the same language as the latest user message (not Chinese unless the user wrote Chinese)."
     );
 
     let mut messages: Vec<Value> = Vec::new();

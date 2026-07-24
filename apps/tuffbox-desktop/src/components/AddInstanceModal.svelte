@@ -25,6 +25,11 @@
   let loaderVersions: { id: string; stable: boolean }[] = [];
   let loadingMc = true;
   let loadingLoader = false;
+  let memoryMode: "auto" | "manual" = "auto";
+  let recommendedMemoryMb = 8192;
+  let memoryMb = 8192;
+  let memoryMaxMb = 16384;
+  let jvmArgs = "-XX:+UseG1GC";
 
   // --- Templates (blank helper) ---
   let templates: any[] = [];
@@ -79,6 +84,24 @@
   onMount(async () => {
     loadingMc = true;
     try {
+      try {
+        const settings = await invoke<{ defaultMemoryMb?: number }>("get_launcher_settings");
+        if (settings?.defaultMemoryMb && settings.defaultMemoryMb >= 1024) {
+          recommendedMemoryMb = settings.defaultMemoryMb;
+          memoryMb = settings.defaultMemoryMb;
+        }
+      } catch {
+        /* keep defaults */
+      }
+      try {
+        // Rough upper bound for the slider from JS (navigator), fallback 16G.
+        const deviceMemGb = (navigator as any).deviceMemory as number | undefined;
+        if (deviceMemGb && deviceMemGb > 0) {
+          memoryMaxMb = Math.max(8192, Math.min(65536, Math.floor(deviceMemGb * 1024 * 0.75)));
+        }
+      } catch {
+        /* keep default max */
+      }
       const versions = await invoke("get_minecraft_versions");
       mcVersions = versions as { id: string; popular: boolean }[];
       if (!mcVersions.some((v) => v.id === minecraftVersion)) {
@@ -212,12 +235,19 @@
     error = "";
     installMessage = "";
     try {
+      const mem = memoryMode === "auto" ? recommendedMemoryMb : memoryMb;
+      const args = jvmArgs
+        .split(/\s+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       const path = await invoke("create_instance", {
         name,
         minecraftVersion,
         loader,
         loaderVersion,
         location,
+        memoryMb: mem,
+        jvmArgs: args.length ? args : ["-XX:+UseG1GC"],
       });
       dispatch("created", path as string);
       dispatch("close");
@@ -226,6 +256,11 @@
     } finally {
       loading = false;
     }
+  }
+
+  function pickLoader(id: typeof loader) {
+    loader = id;
+    loadLoaderVersions();
   }
 
   async function installFromFile() {
@@ -340,10 +375,13 @@
 </script>
 
 <div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}>
-  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => dispatch("close") }}>
-    <div class="modal-header">
-      <h2 id="add-instance-title">Add Instance</h2>
-      <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close add instance dialog">
+  <div class="modal" class:wide={mode !== "blank"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+    <div class="modal-hero">
+      <div class="hero-copy">
+        <h2 id="add-instance-title">Create modpack</h2>
+        <p>Name it, pick loader + Minecraft, set memory — then build in IDE.</p>
+      </div>
+      <button class="icon-btn hero-close" on:click={() => dispatch("close")} aria-label="Close add instance dialog">
         <X size={18} />
       </button>
     </div>
@@ -351,88 +389,130 @@
     <div class="tabs">
       <button class:active={mode === "blank"} on:click={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
       <button class:active={mode === "import"} on:click={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
-       <button class:active={mode === "curseforge"} on:click={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
-     </div>
+      <button class:active={mode === "curseforge"} on:click={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
+    </div>
 
-     <div class="modal-body">
-       {#if error}
-         <div class="error">{error}</div>
-       {/if}
-       {#if installMessage || packPhase}
-         <div class="notice">{packPhase || installMessage}</div>
-       {/if}
+    <div class="modal-body">
+      {#if error}
+        <div class="error">{error}</div>
+      {/if}
+      {#if installMessage || packPhase}
+        <div class="notice">{packPhase || installMessage}</div>
+      {/if}
 
-       {#if mode === "blank"}
-         <!-- Page 1: typed, self-validating blank instance fields -->
-         <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
-           {useTemplate ? "Create from scratch" : "Use template"}
-         </button>
+      {#if mode === "blank"}
+        <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
+          {useTemplate ? "Create from scratch" : "Use template"}
+        </button>
 
-         {#if useTemplate && templates.length > 0}
-           <div class="template-list">
-             {#each templates.slice(0, 5) as tpl}
-               <button class="template-row" on:click={() => {
-                 name = tpl.name || "New Instance";
-                 if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
-                 if (tpl.manifest?.loader?.kind) {
-                   applyTemplateLoader(String(tpl.manifest.loader.kind));
-                 }
-                 if (tpl.manifest?.loader?.version) loaderVersion = tpl.manifest.loader.version;
-                 useTemplate = false;
-                 loadLoaderVersions();
-               }}>
-                 <strong>{tpl.name}</strong>
-                 <span>{tpl.modCount || 0} mods · {tpl.manifest?.minecraft?.version || "?"}</span>
-               </button>
-             {/each}
-           </div>
-         {:else if useTemplate}
-           <div class="muted">No templates found. Save a project as template first.</div>
-         {/if}
+        {#if useTemplate && templates.length > 0}
+          <div class="template-list">
+            {#each templates.slice(0, 5) as tpl, i (tpl.name || i)}
+              <button class="template-row" on:click={() => {
+                name = tpl.name || "New Instance";
+                if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
+                if (tpl.manifest?.loader?.kind) {
+                  applyTemplateLoader(String(tpl.manifest.loader.kind));
+                }
+                if (tpl.manifest?.loader?.version) loaderVersion = tpl.manifest.loader.version;
+                useTemplate = false;
+                loadLoaderVersions();
+              }}>
+                <strong>{tpl.name}</strong>
+                <span>{tpl.modCount || 0} mods · {tpl.manifest?.minecraft?.version || "?"}</span>
+              </button>
+            {/each}
+          </div>
+        {:else if useTemplate}
+          <div class="muted">No templates found. Save a project as template first.</div>
+        {/if}
 
-         <div class="field">
-           <label for="inst-name">Name</label>
-           <input id="inst-name" bind:value={name} on:input={() => (location = guessLocation())} />
-         </div>
+        <div class="name-row">
+          <div class="pack-icon" aria-hidden="true">{(name.trim()[0] || "?").toUpperCase()}</div>
+          <div class="field grow">
+            <label for="inst-name">Profile name</label>
+            <input id="inst-name" bind:value={name} placeholder="Enter pack name" on:input={() => (location = guessLocation())} />
+          </div>
+        </div>
 
-         <div class="field">
-           <label for="inst-mc">Minecraft version</label>
-           {#if loadingMc}
-             <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions...</div>
-           {:else}
-             <select id="inst-mc" bind:value={minecraftVersion}>
-               {#each mcVersions as v}
-                 <option value={v.id}>{v.id}{#if v.popular} ★{/if}</option>
-               {/each}
-             </select>
-           {/if}
-         </div>
+        <div class="field">
+          <span class="field-label">Loader</span>
+          <div class="loader-chips" role="radiogroup" aria-label="Loader">
+            {#each loaders as l (l.id)}
+              <button
+                type="button"
+                class="loader-chip"
+                class:active={loader === l.id}
+                role="radio"
+                aria-checked={loader === l.id}
+                on:click={() => pickLoader(l.id as typeof loader)}
+              >{l.label}</button>
+            {/each}
+          </div>
+        </div>
 
-         <div class="field-row">
-           <div class="field">
-             <label for="inst-loader">Loader</label>
-             <select id="inst-loader" bind:value={loader} on:change={() => loadLoaderVersions()}>
-               {#each loaders as l}
-                 <option value={l.id}>{l.label}</option>
-               {/each}
-             </select>
-           </div>
-           <div class="field">
-             <label for="inst-loader-version">Loader version</label>
-             {#if loadingLoader}
-               <div class="field-loader"><Loader2 size={16} class="spin" /> Loading...</div>
-             {:else if loader === "vanilla"}
-               <input id="inst-loader-version" value="No loader (Vanilla)" disabled />
-             {:else}
-               <select id="inst-loader-version" bind:value={loaderVersion}>
-                 {#each loaderVersions as v}
-                   <option value={v.id}>{v.id}{#if v.stable} (stable){/if}</option>
-                 {/each}
-               </select>
-             {/if}
-           </div>
-         </div>
-       {:else if mode === "import"}
+        <div class="field-row">
+          <div class="field">
+            <label for="inst-mc">Minecraft version</label>
+            {#if loadingMc}
+              <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions...</div>
+            {:else}
+              <select id="inst-mc" bind:value={minecraftVersion}>
+                {#each mcVersions as v (v.id)}
+                  <option value={v.id}>{v.id}{#if v.popular} ★{/if}</option>
+                {/each}
+              </select>
+            {/if}
+          </div>
+          <div class="field">
+            <label for="inst-loader-version">Loader version</label>
+            {#if loadingLoader}
+              <div class="field-loader"><Loader2 size={16} class="spin" /> Loading...</div>
+            {:else if loader === "vanilla"}
+              <input id="inst-loader-version" value="No loader (Vanilla)" disabled />
+            {:else}
+              <select id="inst-loader-version" bind:value={loaderVersion}>
+                {#each loaderVersions as v (v.id)}
+                  <option value={v.id}>{v.id}{#if v.stable} (stable){/if}</option>
+                {/each}
+              </select>
+            {/if}
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Memory</span>
+          <label class="mem-opt">
+            <input type="radio" bind:group={memoryMode} value="auto" />
+            Recommended — {recommendedMemoryMb} MB
+          </label>
+          <label class="mem-opt">
+            <input type="radio" bind:group={memoryMode} value="manual" />
+            Set RAM manually
+          </label>
+          {#if memoryMode === "manual"}
+            <div class="mem-slider">
+              <input
+                type="range"
+                min="1024"
+                max={memoryMaxMb}
+                step="256"
+                bind:value={memoryMb}
+              />
+              <div class="mem-scale">
+                <span>1024</span>
+                <strong>{memoryMb} MB</strong>
+                <span>{memoryMaxMb}</span>
+              </div>
+            </div>
+          {/if}
+        </div>
+
+        <div class="field">
+          <label for="inst-jvm">Launch arguments</label>
+          <input id="inst-jvm" bind:value={jvmArgs} placeholder="Extra Java arguments" />
+        </div>
+      {:else if mode === "import"}
          <!-- Page 2: import — name derived from file, isolated -->
          <p class="muted">Import a Modrinth <code>.mrpack</code>, CurseForge zip, or Prism instance zip — mods download automatically (Prism-style).</p>
          <div class="field">
@@ -461,7 +541,7 @@
          </div>
          <div class="cf-layout">
            <div class="cf-list">
-             {#each cfHits as hit}
+             {#each cfHits as hit (hit.id)}
                <button class="cf-row" class:active={cfSelected?.id === hit.id} on:click={() => selectCfPack(hit)}>
                  {#if hit.iconUrl}
                    <img src={hit.iconUrl} alt="" />
@@ -485,7 +565,7 @@
                {:else}
                  <label for="cf-file">Pack version</label>
                  <select id="cf-file" value={cfFileId ?? ""} on:change={onCfFileChange}>
-                   {#each cfFiles as f}
+                   {#each cfFiles as f (f.id)}
                      <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
                    {/each}
                  </select>
@@ -517,7 +597,7 @@
         <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
         {#if mode === "blank"}
           <LoadingButton {loading} disabled={!blankValid} on:click={create}>
-            Create instance
+            Create
           </LoadingButton>
         {:else if mode === "import"}
           <LoadingButton {loading} disabled={!importValid} on:click={installFromFile}>
@@ -549,13 +629,34 @@
     display: flex; flex-direction: column;
   }
   .modal.wide { width: min(880px, 100%); }
-  .modal-header {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 18px 20px 8px;
+  .modal-hero {
+    position: relative;
+    padding: 22px 20px 16px;
+    background:
+      radial-gradient(ellipse at 20% 0%, rgba(27, 217, 106, 0.28), transparent 55%),
+      radial-gradient(ellipse at 90% 40%, rgba(59, 130, 246, 0.18), transparent 50%),
+      linear-gradient(160deg, #12161c 0%, #1a222c 100%);
+    border-bottom: 1px solid var(--border-color);
   }
-  .modal-header h2 { margin: 0; font-size: 20px; }
+  .hero-copy h2 {
+    margin: 0 0 6px;
+    font-size: 22px;
+    color: #fff;
+  }
+  .hero-copy p {
+    margin: 0;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.72);
+    max-width: 42ch;
+  }
+  .hero-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    color: rgba(255, 255, 255, 0.8);
+  }
   .tabs {
-    display: flex; gap: 6px; padding: 0 20px 8px;
+    display: flex; gap: 6px; padding: 12px 20px 8px;
   }
   .tabs button {
     background: transparent; border: 1px solid transparent; color: var(--text-muted);
@@ -566,22 +667,81 @@
     background: rgba(27,217,106,.1);
     color: var(--accent-primary);
   }
-   .modal-body { padding: 8px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-body { padding: 8px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
   .modal-footer {
     display: flex; justify-content: flex-end; gap: 10px;
     padding: 12px 20px 18px; border-top: 1px solid var(--border-color);
   }
-   .field { display: grid; gap: 6px; }
-   .field label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
-   .field input, .field select, .cf-detail select {
-     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
-     border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
-     font-size: 14px; line-height: 1;
-   }
-   .field input:disabled {
-     color: var(--text-muted); background: var(--bg-elevated); cursor: not-allowed;
-     opacity: 0.85;
-   }
+  .field { display: grid; gap: 6px; }
+  .field.grow { flex: 1; min-width: 0; }
+  .field label, .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+  .field input, .field select, .cf-detail select {
+    box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
+    border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
+    font-size: 14px; line-height: 1;
+  }
+  .field input:disabled {
+    color: var(--text-muted); background: var(--bg-elevated); cursor: not-allowed;
+    opacity: 0.85;
+  }
+  .name-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+  }
+  .pack-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 800;
+    color: #04140a;
+    background: linear-gradient(135deg, #1bd96a, #0ea5e9);
+    flex-shrink: 0;
+  }
+  .loader-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .loader-chip {
+    padding: 8px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .loader-chip.active {
+    border-color: rgba(27, 217, 106, 0.45);
+    background: rgba(27, 217, 106, 0.14);
+    color: var(--accent-primary);
+  }
+  .mem-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .mem-slider { display: grid; gap: 6px; margin-top: 4px; }
+  .mem-slider input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent-primary);
+  }
+  .mem-scale {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .mem-scale strong { color: var(--text-primary); font-size: 12px; }
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .input-row { display: flex; gap: 8px; }
   .input-row input { flex: 1; }
@@ -597,7 +757,7 @@
   .path-hint { font-size: 11px; color: var(--text-muted); }
   .muted.compact { padding: 16px; text-align: center; }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
-   .template-btn { align-self: flex-start; }
+  .template-btn { align-self: flex-start; }
   .template-list { display: grid; gap: 6px; }
   .template-row {
     display: grid; text-align: left; gap: 2px; padding: 10px 12px;
@@ -610,10 +770,10 @@
     padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary);
   }
   .search input { border: 0; background: transparent; color: var(--text-primary); width: 100%; padding: 10px 0; }
-   .cf-layout {
-     display: grid; grid-template-columns: 1.2fr 0.9fr; gap: 12px;
-     min-height: 300px; max-height: 380px;
-   }
+  .cf-layout {
+    display: grid; grid-template-columns: 1.2fr 0.9fr; gap: 12px;
+    min-height: 300px; max-height: 380px;
+  }
   .cf-list { overflow: auto; display: grid; gap: 6px; align-content: start; }
   .cf-row {
     display: grid; grid-template-columns: 40px 1fr; gap: 10px; text-align: left;

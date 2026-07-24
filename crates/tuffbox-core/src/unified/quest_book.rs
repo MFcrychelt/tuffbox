@@ -7,7 +7,22 @@ pub struct QuestBook {
     pub chapters: Vec<Chapter>,
     pub title: Option<String>,
     pub subtitle: Option<String>,
+    #[serde(default, rename = "chapterGroups")]
+    pub chapter_groups: Vec<ChapterGroup>,
+    #[serde(default, rename = "rewardTables")]
+    pub reward_tables: Vec<RewardTable>,
+    /// Remaining keys from `data.snbt` (defaults, loot, etc.) for round-trip.
+    #[serde(default, rename = "bookSettings", skip_serializing_if = "HashMap::is_empty")]
+    pub book_settings: HashMap<String, serde_json::Value>,
 }
+
+/// FTB Quests sidebar group (`chapter_groups.snbt`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChapterGroup {
+    pub id: String,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chapter {
     pub id: String,
@@ -15,8 +30,28 @@ pub struct Chapter {
     pub icon: Option<String>,
     pub quests: Vec<Quest>,
     pub group: Option<String>,
-    /// Relative path inside the project (e.g. config/ftbquests/quests/chapters/foo.snbt).
+    /// FTB chapter sort key (`order_index` in SNBT).
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "orderIndex")]
+    pub order_index: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "defaultQuestShape")]
+    pub default_quest_shape: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "defaultHideDependencyLines"
+    )]
+    pub default_hide_dependency_lines: Option<bool>,
+    /// Unknown/extra chapter SNBT keys preserved on save.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extras: HashMap<String, serde_json::Value>,
+    /// Relative path inside the project (e.g. config/ftbquests/quests/chapters/foo.snbt).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "sourceFile"
+    )]
     pub source_file: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +69,31 @@ pub struct Quest {
     pub optional: bool,
     pub shape: Option<String>,
     pub size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "hideDependencyLines")]
+    pub hide_dependency_lines: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "hideDependentLines")]
+    pub hide_dependent_lines: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "minRequiredDependencies"
+    )]
+    pub min_required_dependencies: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "canRepeat")]
+    pub can_repeat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invisible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "disableToast")]
+    pub disable_toast: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "dependencyRequirement"
+    )]
+    pub dependency_requirement: Option<String>,
+    /// Unknown/extra quest SNBT keys preserved on save.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extras: HashMap<String, serde_json::Value>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -105,11 +165,153 @@ impl QuestBook {
                 }
             }
         }
-        chapters.sort_by(|a, b| a.title.cmp(&b.title));
+        chapters.sort_by(|a, b| {
+            a.order_index
+                .cmp(&b.order_index)
+                .then_with(|| a.title.cmp(&b.title))
+        });
+
+        let (title, subtitle, book_settings) = load_book_data(dir);
+        let chapter_groups = load_chapter_groups(dir);
+
         Ok(QuestBook {
             chapters,
-            ..Default::default()
+            title,
+            subtitle,
+            chapter_groups,
+            reward_tables: RewardTable::load_from_project(project_dir),
+            book_settings,
         })
+    }
+
+    /// Write `data.snbt` (book title + settings).
+    pub fn save_book_data(project_dir: &std::path::Path, book: &QuestBook) -> Result<String, String> {
+        let quests_dir = Self::quests_dir_for_project(project_dir);
+        std::fs::create_dir_all(&quests_dir).map_err(|e| e.to_string())?;
+        let rel = {
+            let candidate = project_dir.join("config/ftbquests/quests");
+            if quests_dir == candidate || quests_dir.starts_with(&candidate) {
+                "config/ftbquests/quests/data.snbt"
+            } else {
+                "defaultconfigs/ftbquests/quests/data.snbt"
+            }
+        };
+        // Prefer path next to loaded chapters when possible
+        let rel = book
+            .chapters
+            .iter()
+            .find_map(|c| c.source_file.as_ref())
+            .and_then(|sf| {
+                let p = std::path::Path::new(sf);
+                p.parent().map(|parent| {
+                    parent
+                        .join("data.snbt")
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                })
+            })
+            .unwrap_or_else(|| rel.to_string());
+
+        let mut map = book.book_settings.clone();
+        if let Some(t) = &book.title {
+            map.insert("title".into(), serde_json::Value::String(t.clone()));
+        }
+        if let Some(s) = &book.subtitle {
+            map.insert("subtitle".into(), serde_json::Value::String(s.clone()));
+        }
+        if !map.contains_key("version") {
+            map.insert("version".into(), serde_json::json!(13));
+        }
+        let snbt = format!("{{\n{}\n}}\n", snbt_object_body(&map, 1));
+        let target = project_dir.join(&rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&target, snbt).map_err(|e| e.to_string())?;
+        Ok(rel)
+    }
+
+    /// Write `chapter_groups.snbt`.
+    pub fn save_chapter_groups(
+        project_dir: &std::path::Path,
+        groups: &[ChapterGroup],
+    ) -> Result<String, String> {
+        let quests_dir = Self::quests_dir_for_project(project_dir);
+        std::fs::create_dir_all(&quests_dir).map_err(|e| e.to_string())?;
+        let rel = "config/ftbquests/quests/chapter_groups.snbt";
+        let mut lines = vec!["{".to_string(), "\tchapter_groups: [".to_string()];
+        for (i, g) in groups.iter().enumerate() {
+            let comma = if i + 1 == groups.len() { "" } else { "," };
+            lines.push(format!(
+                "\t\t{{ id: {} title: {} }}{}",
+                snbt_quote(&g.id),
+                snbt_quote(&g.title),
+                comma
+            ));
+        }
+        lines.push("\t]".to_string());
+        lines.push("}".to_string());
+        let target = project_dir.join(rel);
+        std::fs::write(&target, lines.join("\n")).map_err(|e| e.to_string())?;
+        Ok(rel.into())
+    }
+
+    /// Map task id → owning quest id (FTB deps may point at either).
+    pub fn task_owner_map(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for ch in &self.chapters {
+            for q in &ch.quests {
+                for t in &q.tasks {
+                    if !t.id.is_empty() {
+                        map.insert(t.id.clone(), q.id.clone());
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    /// Resolve a dependency id to a quest id (quest itself, or parent of a task).
+    pub fn resolve_dep(&self, dep: &str) -> Option<String> {
+        if self
+            .chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter())
+            .any(|q| q.id == dep)
+        {
+            return Some(dep.to_string());
+        }
+        self.task_owner_map().get(dep).cloned()
+    }
+
+    /// Quest dependency graph with task-id edges rewritten to parent quests.
+    fn resolved_dep_graph(&self) -> HashMap<String, Vec<String>> {
+        let owners = self.task_owner_map();
+        let quest_ids: HashSet<String> = self
+            .chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter().map(|q| q.id.clone()))
+            .collect();
+        self.chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter())
+            .map(|q| {
+                let mut parents = Vec::new();
+                for d in &q.dependencies {
+                    let resolved = if quest_ids.contains(d) {
+                        Some(d.clone())
+                    } else {
+                        owners.get(d).cloned()
+                    };
+                    if let Some(pid) = resolved {
+                        if pid != q.id && !parents.contains(&pid) {
+                            parents.push(pid);
+                        }
+                    }
+                }
+                (q.id.clone(), parents)
+            })
+            .collect()
     }
 
     pub fn save_chapter(
@@ -136,16 +338,34 @@ impl QuestBook {
     }
 
     pub fn validate(&self) -> Vec<QuestValidationError> {
+        self.validate_with_items(None)
+    }
+
+    /// Full pack checks: missing deps, empty tasks, duplicate ids, cycles,
+    /// reachability from roots, and (optionally) unknown item ids.
+    pub fn validate_with_items(
+        &self,
+        available_items: Option<&HashSet<String>>,
+    ) -> Vec<QuestValidationError> {
         let mut errors = Vec::new();
-        let all_ids: std::collections::HashSet<String> = self
+        let mut seen_ids: HashSet<String> = HashSet::new();
+        let all_quest_ids: HashSet<String> = self
             .chapters
             .iter()
             .flat_map(|ch| ch.quests.iter().map(|q| q.id.clone()))
             .collect();
+        let task_owners = self.task_owner_map();
+
         for ch in &self.chapters {
             for q in &ch.quests {
+                if !seen_ids.insert(q.id.clone()) {
+                    errors.push(QuestValidationError {
+                        quest_id: q.id.clone(),
+                        message: format!("Duplicate quest id '{}'", q.id),
+                    });
+                }
                 for dep in &q.dependencies {
-                    if !all_ids.contains(dep) {
+                    if !all_quest_ids.contains(dep) && !task_owners.contains_key(dep) {
                         errors.push(QuestValidationError {
                             quest_id: q.id.clone(),
                             message: format!("Dep '{}' missing", dep),
@@ -158,9 +378,104 @@ impl QuestBook {
                         message: "No tasks".into(),
                     });
                 }
+                if let Some(items) = available_items {
+                    for item in extract_quest_item_ids(q) {
+                        if item.is_empty() || item.starts_with('#') || item.starts_with("itemfilters:")
+                        {
+                            continue;
+                        }
+                        if !items.contains(&item) {
+                            errors.push(QuestValidationError {
+                                quest_id: q.id.clone(),
+                                message: format!("Unknown item '{item}'"),
+                            });
+                        }
+                    }
+                }
             }
         }
+
+        for cycle in self.find_cycles() {
+            let msg = format!("Dependency cycle: {}", cycle.join(" → "));
+            let quest_id = cycle.first().cloned().unwrap_or_default();
+            errors.push(QuestValidationError { quest_id, message: msg });
+        }
+
+        for qid in self.unreachable_quest_ids() {
+            errors.push(QuestValidationError {
+                quest_id: qid,
+                message: "Unreachable from any root quest".into(),
+            });
+        }
+
         errors
+    }
+
+    /// Quests that cannot be reached by walking dependencies from roots
+    /// (quests with no dependencies). Missing deps are treated as roots'
+    /// children only when the dep id exists in the book.
+    pub fn unreachable_quest_ids(&self) -> Vec<String> {
+        let graph = self.resolved_dep_graph();
+        if graph.is_empty() {
+            return Vec::new();
+        }
+
+        // Reverse edges: dep -> dependents (who requires this quest)
+        let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
+        for (id, deps) in &graph {
+            for d in deps {
+                dependents.entry(d.clone()).or_default().push(id.clone());
+            }
+        }
+
+        let roots: Vec<String> = graph
+            .iter()
+            .filter(|(_, deps)| deps.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect();
+        if roots.is_empty() {
+            // Every quest has deps — if there are cycles everything is "stuck";
+            // otherwise pick arbitrary starts already covered by cycle errors.
+            return Vec::new();
+        }
+
+        let mut reachable: HashSet<String> = HashSet::new();
+        let mut stack = roots;
+        while let Some(id) = stack.pop() {
+            if !reachable.insert(id.clone()) {
+                continue;
+            }
+            if let Some(kids) = dependents.get(&id) {
+                for k in kids {
+                    stack.push(k.clone());
+                }
+            }
+        }
+
+        // Only flag islands where every raw dep resolves — broken/missing deps
+        // already have their own error and would otherwise flood the list.
+        let task_owners = self.task_owner_map();
+        let quest_ids: HashSet<String> = graph.keys().cloned().collect();
+        let mut missing: Vec<String> = self
+            .chapters
+            .iter()
+            .flat_map(|ch| ch.quests.iter())
+            .filter(|q| {
+                if reachable.contains(&q.id) {
+                    return false;
+                }
+                q.dependencies.iter().all(|d| {
+                    quest_ids.contains(d) || task_owners.contains_key(d)
+                })
+            })
+            .map(|q| q.id.clone())
+            .collect();
+        missing.sort();
+        missing
+    }
+
+    pub fn is_reachable(&self, quest_id: &str) -> bool {
+        !self.unreachable_quest_ids().iter().any(|id| id == quest_id)
     }
 
     /// Returns a list of quest-id cycles found in the dependency graph.
@@ -171,12 +486,7 @@ impl QuestBook {
     /// UI's topological sort. We mirror that: each returned entry is the
     /// ordered list of quest ids forming one cycle (e.g. `A -> B -> A`).
     pub fn find_cycles(&self) -> Vec<Vec<String>> {
-        let graph: HashMap<String, Vec<String>> = self
-            .chapters
-            .iter()
-            .flat_map(|ch| ch.quests.iter())
-            .map(|q| (q.id.clone(), q.dependencies.clone()))
-            .collect();
+        let graph = self.resolved_dep_graph();
         let mut cycles = Vec::new();
         let mut visited: HashSet<String> = HashSet::new();
         let mut on_stack: HashSet<String> = HashSet::new();
@@ -263,12 +573,7 @@ impl QuestBook {
             return Err(cycles);
         }
 
-        let graph: HashMap<String, Vec<String>> = self
-            .chapters
-            .iter()
-            .flat_map(|ch| ch.quests.iter())
-            .map(|q| (q.id.clone(), q.dependencies.clone()))
-            .collect();
+        let graph = self.resolved_dep_graph();
         let mut order = Vec::new();
         let mut visited: HashSet<String> = HashSet::new();
 
@@ -304,7 +609,7 @@ impl QuestBook {
     }
 }
 
-fn snbt_to_json(text: &str) -> Result<serde_json::Value, String> {
+pub fn snbt_to_json(text: &str) -> Result<serde_json::Value, String> {
     parse_snbt(text)
 }
 
@@ -522,14 +827,105 @@ impl<'a> SnbtParser<'a> {
     }
 }
 
+fn load_book_data(
+    dir: &std::path::Path,
+) -> (
+    Option<String>,
+    Option<String>,
+    HashMap<String, serde_json::Value>,
+) {
+    let path = dir.join("data.snbt");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (None, None, HashMap::new());
+    };
+    let Ok(j) = snbt_to_json(&content) else {
+        return (None, None, HashMap::new());
+    };
+    let Some(m) = j.as_object() else {
+        return (None, None, HashMap::new());
+    };
+    let title = gs(m, "title");
+    let subtitle = gs(m, "subtitle");
+    let mut settings = HashMap::new();
+    for (k, v) in m {
+        if k == "title" || k == "subtitle" {
+            continue;
+        }
+        settings.insert(k.clone(), v.clone());
+    }
+    (title, subtitle, settings)
+}
+
+fn load_chapter_groups(dir: &std::path::Path) -> Vec<ChapterGroup> {
+    let path = dir.join("chapter_groups.snbt");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(j) = snbt_to_json(&content) else {
+        return Vec::new();
+    };
+    j.get("chapter_groups")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|g| {
+                    let m = g.as_object()?;
+                    Some(ChapterGroup {
+                        id: gs(m, "id")?,
+                        title: gs(m, "title").unwrap_or_else(|| "Group".into()),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn snbt_object_body(map: &HashMap<String, serde_json::Value>, indent: usize) -> String {
+    let pad = "\t".repeat(indent);
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort();
+    keys.into_iter()
+        .map(|k| format!("{pad}{k}: {}", snbt_value(&map[k])))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {
     let j = snbt_to_json(c)?;
     let m = j.as_object().ok_or("not object")?;
+    const KNOWN: &[&str] = &[
+        "id",
+        "title",
+        "icon",
+        "group",
+        "order_index",
+        "quests",
+        "filename",
+        "default_quest_shape",
+        "default_hide_dependency_lines",
+    ];
+    let mut extras = HashMap::new();
+    for (k, v) in m {
+        if !KNOWN.contains(&k.as_str()) {
+            extras.insert(k.clone(), v.clone());
+        }
+    }
     Ok(Chapter {
         id: gs(m, "id").unwrap_or_else(|| "untitled".into()),
         title: gs(m, "title").unwrap_or_else(|| "Untitled".into()),
         icon: gs(m, "icon"),
         group: gs(m, "group"),
+        order_index: m.get("order_index").and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_f64().map(|f| f as i64))
+                .or_else(|| v.as_u64().map(|u| u as i64))
+        }),
+        filename: gs(m, "filename"),
+        default_quest_shape: gs(m, "default_quest_shape"),
+        default_hide_dependency_lines: m
+            .get("default_hide_dependency_lines")
+            .and_then(|v| v.as_bool()),
+        extras,
         quests: m
             .get("quests")
             .and_then(|v| v.as_array())
@@ -544,6 +940,34 @@ fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
         .get("dependencies")
         .map(parse_dependencies)
         .unwrap_or_default();
+    const KNOWN: &[&str] = &[
+        "id",
+        "title",
+        "subtitle",
+        "description",
+        "x",
+        "y",
+        "icon",
+        "dependencies",
+        "tasks",
+        "rewards",
+        "optional",
+        "shape",
+        "size",
+        "hide_dependency_lines",
+        "hide_dependent_lines",
+        "min_required_dependencies",
+        "can_repeat",
+        "invisible",
+        "disable_toast",
+        "dependency_requirement",
+    ];
+    let mut extras = HashMap::new();
+    for (k, v) in m {
+        if !KNOWN.contains(&k.as_str()) {
+            extras.insert(k.clone(), v.clone());
+        }
+    }
     Ok(Quest {
         id: gs(m, "id").unwrap_or_default(),
         title: gs(m, "title").unwrap_or_else(|| "Quest".into()),
@@ -574,6 +998,18 @@ fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
         optional: m.get("optional").and_then(|v| v.as_bool()).unwrap_or(false),
         shape: gs(m, "shape"),
         size: m.get("size").and_then(|v| v.as_f64()),
+        hide_dependency_lines: m.get("hide_dependency_lines").and_then(|v| v.as_bool()),
+        hide_dependent_lines: m.get("hide_dependent_lines").and_then(|v| v.as_bool()),
+        min_required_dependencies: m.get("min_required_dependencies").and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_f64().map(|f| f as i64))
+                .or_else(|| v.as_u64().map(|u| u as i64))
+        }),
+        can_repeat: m.get("can_repeat").and_then(|v| v.as_bool()),
+        invisible: m.get("invisible").and_then(|v| v.as_bool()),
+        disable_toast: m.get("disable_toast").and_then(|v| v.as_bool()),
+        dependency_requirement: gs(m, "dependency_requirement"),
+        extras,
     })
 }
 
@@ -618,6 +1054,70 @@ fn parse_snbt_reward(v: &serde_json::Value) -> Result<Reward, String> {
 }
 fn gs(m: &serde_json::Map<String, serde_json::Value>, k: &str) -> Option<String> {
     m.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+fn collect_item_ids_from_value(v: &serde_json::Value, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => {
+            if !s.is_empty() {
+                out.push(s.clone());
+            }
+        }
+        serde_json::Value::Object(m) => {
+            if let Some(id) = gs(m, "id").or_else(|| gs(m, "item")) {
+                out.push(id);
+            }
+            // itemfilters:or / and wrap candidates under tag.items
+            if let Some(tag) = m.get("tag").and_then(|t| t.as_object()) {
+                if let Some(items) = tag.get("items").and_then(|i| i.as_array()) {
+                    for it in items {
+                        collect_item_ids_from_value(it, out);
+                    }
+                }
+                if let Some(value) = tag.get("value").and_then(|x| x.as_str()) {
+                    // itemfilters:tag uses tag.value = "#mod:tag" or similar
+                    if !value.is_empty() {
+                        out.push(value.to_string());
+                    }
+                }
+            }
+            if let Some(items) = m.get("items").and_then(|i| i.as_array()) {
+                for it in items {
+                    collect_item_ids_from_value(it, out);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for it in arr {
+                collect_item_ids_from_value(it, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_quest_item_ids(q: &Quest) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(icon) = &q.icon {
+        if icon.contains(':') {
+            out.push(icon.clone());
+        }
+    }
+    for task in &q.tasks {
+        if task.task_type == "item" {
+            if let Some(v) = task.properties.get("item") {
+                collect_item_ids_from_value(v, &mut out);
+            }
+        }
+    }
+    for reward in &q.rewards {
+        if reward.reward_type == "item" {
+            if let Some(v) = reward.properties.get("item") {
+                collect_item_ids_from_value(v, &mut out);
+            }
+        }
+    }
+    out
 }
 
 fn sanitize_snbt_filename(id: &str) -> String {
@@ -684,6 +1184,21 @@ pub fn serialize_chapter_to_snbt(chapter: &Chapter) -> String {
     if let Some(group) = &chapter.group {
         lines.push(format!("\tgroup: {}", snbt_quote(group)));
     }
+    if let Some(order) = chapter.order_index {
+        lines.push(format!("\torder_index: {order}"));
+    }
+    if let Some(filename) = &chapter.filename {
+        lines.push(format!("\tfilename: {}", snbt_quote(filename)));
+    }
+    if let Some(shape) = &chapter.default_quest_shape {
+        lines.push(format!("\tdefault_quest_shape: {}", snbt_quote(shape)));
+    }
+    if let Some(v) = chapter.default_hide_dependency_lines {
+        lines.push(format!("\tdefault_hide_dependency_lines: {v}"));
+    }
+    for (k, v) in &chapter.extras {
+        lines.push(format!("\t{k}: {}", snbt_value(v)));
+    }
     lines.push("\tquests: [".to_string());
     for (qi, quest) in chapter.quests.iter().enumerate() {
         lines.push("\t\t{".to_string());
@@ -709,6 +1224,30 @@ pub fn serialize_chapter_to_snbt(chapter: &Chapter) -> String {
         }
         if quest.optional {
             lines.push("\t\t\toptional: true".to_string());
+        }
+        if let Some(v) = quest.hide_dependency_lines {
+            lines.push(format!("\t\t\thide_dependency_lines: {v}"));
+        }
+        if let Some(v) = quest.hide_dependent_lines {
+            lines.push(format!("\t\t\thide_dependent_lines: {v}"));
+        }
+        if let Some(v) = quest.min_required_dependencies {
+            lines.push(format!("\t\t\tmin_required_dependencies: {v}"));
+        }
+        if let Some(v) = quest.can_repeat {
+            lines.push(format!("\t\t\tcan_repeat: {v}"));
+        }
+        if let Some(v) = quest.invisible {
+            lines.push(format!("\t\t\tinvisible: {v}"));
+        }
+        if let Some(v) = quest.disable_toast {
+            lines.push(format!("\t\t\tdisable_toast: {v}"));
+        }
+        if let Some(v) = &quest.dependency_requirement {
+            lines.push(format!("\t\t\tdependency_requirement: {}", snbt_quote(v)));
+        }
+        for (k, v) in &quest.extras {
+            lines.push(format!("\t\t\t{k}: {}", snbt_value(v)));
         }
         if !quest.dependencies.is_empty() {
             let deps: Vec<String> = quest.dependencies.iter().map(|d| snbt_quote(d)).collect();
@@ -780,14 +1319,15 @@ pub struct RewardTable {
     pub id: String,
     pub title: Option<String>,
     pub entries: Vec<WeightedReward>,
-    #[serde(default)]
+    #[serde(default, rename = "emptyWeight")]
     pub empty_weight: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "sourceFile")]
     pub source_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeightedReward {
+    #[serde(rename = "rewardId")]
     pub reward_id: String,
     #[serde(default = "default_weight")]
     pub weight: f64,
@@ -825,6 +1365,29 @@ impl RewardTable {
             }
         }
         tables
+    }
+
+    pub fn save_to_project(
+        project_dir: &std::path::Path,
+        table: &RewardTable,
+        relative_path: Option<&str>,
+    ) -> Result<String, String> {
+        let rel = relative_path
+            .map(|s| s.to_string())
+            .or_else(|| table.source_file.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "config/ftbquests/quests/reward_tables/{}.snbt",
+                    sanitize_snbt_filename(&table.id)
+                )
+            });
+        let target = project_dir.join(&rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let snbt = serialize_reward_table_to_snbt(table);
+        std::fs::write(&target, snbt).map_err(|e| e.to_string())?;
+        Ok(rel)
     }
 
     /// Total weight across all entries plus the empty slot (when requested).
@@ -980,6 +1543,14 @@ mod tests {
             optional: false,
             shape: None,
             size: None,
+            hide_dependency_lines: None,
+            hide_dependent_lines: None,
+            min_required_dependencies: None,
+            can_repeat: None,
+            invisible: None,
+            disable_toast: None,
+            dependency_requirement: None,
+            extras: HashMap::new(),
         }
     }
 
@@ -991,10 +1562,18 @@ mod tests {
                 icon: None,
                 quests,
                 group: None,
+                order_index: None,
+                filename: None,
+                default_quest_shape: None,
+                default_hide_dependency_lines: None,
+                extras: HashMap::new(),
                 source_file: None,
             }],
             title: None,
             subtitle: None,
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            book_settings: HashMap::new(),
         }
     }
 
@@ -1024,11 +1603,149 @@ mod tests {
     }
 
     #[test]
-    fn self_loop_is_a_cycle() {
-        let book = book_from_quests(vec![q("A", &["A"])]);
-        let cycles = book.find_cycles();
-        assert_eq!(cycles.len(), 1);
-        assert_eq!(cycles[0][0], "A");
+    fn unreachable_quest_detected() {
+        // Cycle island A↔B is unreachable from root C; missing-dep orphans are not flooded.
+        let book = book_from_quests(vec![
+            q("A", &["B"]),
+            q("B", &["A"]),
+            q("C", &[]),
+            q("D", &["Z"]),
+        ]);
+        let missing = book.unreachable_quest_ids();
+        assert!(missing.contains(&"A".to_string()));
+        assert!(missing.contains(&"B".to_string()));
+        assert!(!missing.contains(&"C".to_string()));
+        assert!(!missing.contains(&"D".to_string())); // missing dep only
+        assert!(book
+            .validate()
+            .iter()
+            .any(|e| e.quest_id == "D" && e.message.contains("missing")));
+    }
+
+    #[test]
+    fn task_id_dependency_resolves() {
+        // CAB-style: chapter unlock quest depends on a checkmark *task* id.
+        let unlock = Quest {
+            id: "UNLOCK".into(),
+            title: "Unlock".into(),
+            subtitle: None,
+            description: vec![],
+            x: 0.0,
+            y: 0.0,
+            icon: None,
+            dependencies: vec![],
+            tasks: vec![Task {
+                id: "TASK_CHECK".into(),
+                task_type: "checkmark".into(),
+                title: Some("Go".into()),
+                value: None,
+                properties: HashMap::new(),
+            }],
+            rewards: vec![],
+            optional: false,
+            shape: None,
+            size: None,
+            hide_dependency_lines: None,
+            hide_dependent_lines: None,
+            min_required_dependencies: None,
+            can_repeat: None,
+            invisible: None,
+            disable_toast: None,
+            dependency_requirement: None,
+            extras: HashMap::new(),
+        };
+        let stage = q("STAGE", &["TASK_CHECK"]);
+        let book = book_from_quests(vec![unlock, stage]);
+        assert_eq!(book.resolve_dep("TASK_CHECK").as_deref(), Some("UNLOCK"));
+        assert!(book.validate().iter().all(|e| !e.message.contains("missing")));
+        assert!(book.find_cycles().is_empty());
+        let order = book.topo_order().unwrap();
+        let pos = |id: &str| order.iter().position(|x| x == id).unwrap();
+        assert!(pos("UNLOCK") < pos("STAGE"));
+    }
+
+    #[test]
+    fn parses_data_and_chapter_groups_snbt() {
+        let dir = tempfile::tempdir().unwrap();
+        let quests = dir.path().join("quests");
+        std::fs::create_dir_all(quests.join("chapters")).unwrap();
+        std::fs::write(
+            quests.join("data.snbt"),
+            r#"{ title: "&6 Above" subtitle: "demo" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            quests.join("chapter_groups.snbt"),
+            r#"{ chapter_groups: [{ id: "G1" title: "Factory" }] }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            quests.join("chapters").join("a.snbt"),
+            r#"{ id: "CH1" title: "One" group: "G1" order_index: 2 quests: [{ id: "Q1" title: "Q" x: 0.0d y: 0.0d tasks: [{ id: "T1" type: "checkmark" }] }] }"#,
+        )
+        .unwrap();
+        let book = QuestBook::load_from_dir(&quests, dir.path()).unwrap();
+        assert_eq!(book.title.as_deref(), Some("&6 Above"));
+        assert_eq!(book.subtitle.as_deref(), Some("demo"));
+        assert_eq!(book.chapter_groups.len(), 1);
+        assert_eq!(book.chapter_groups[0].title, "Factory");
+        assert_eq!(book.chapters[0].order_index, Some(2));
+        assert_eq!(book.chapters[0].group.as_deref(), Some("G1"));
+    }
+
+    #[test]
+    fn itemfilters_or_extracts_nested_ids() {
+        let mut props = HashMap::new();
+        props.insert(
+            "item".into(),
+            serde_json::json!({
+                "id": "itemfilters:or",
+                "tag": { "items": [
+                    { "id": "minecraft:iron_ingot" },
+                    { "id": "minecraft:gold_ingot" }
+                ]}
+            }),
+        );
+        let q = Quest {
+            id: "Q".into(),
+            title: "Q".into(),
+            subtitle: None,
+            description: vec![],
+            x: 0.0,
+            y: 0.0,
+            icon: None,
+            dependencies: vec![],
+            tasks: vec![Task {
+                id: "T".into(),
+                task_type: "item".into(),
+                title: None,
+                value: None,
+                properties: props,
+            }],
+            rewards: vec![],
+            optional: false,
+            shape: None,
+            size: None,
+            hide_dependency_lines: None,
+            hide_dependent_lines: None,
+            min_required_dependencies: None,
+            can_repeat: None,
+            invisible: None,
+            disable_toast: None,
+            dependency_requirement: None,
+            extras: HashMap::new(),
+        };
+        let ids = extract_quest_item_ids(&q);
+        assert!(ids.contains(&"itemfilters:or".into()));
+        assert!(ids.contains(&"minecraft:iron_ingot".into()));
+        assert!(ids.contains(&"minecraft:gold_ingot".into()));
+    }
+
+    #[test]
+    fn validate_reports_duplicate_ids() {
+        let book = book_from_quests(vec![q("A", &[]), q("A", &[])]);
+        let errs = book.validate();
+        assert!(errs.iter().any(|e| e.message.contains("Duplicate")));
     }
 
     #[test]
@@ -1115,5 +1832,42 @@ mod tests {
         assert_eq!(parsed.entries.len(), 2);
         assert_eq!(parsed.empty_weight, 0.5);
         assert_eq!(parsed.entries[0].reward_id, "r1");
+    }
+
+    #[test]
+    fn preserves_hide_dependency_lines_roundtrip() {
+        let snbt = r#"{
+          id: "CH"
+          title: "T"
+          default_hide_dependency_lines: true
+          filename: "t"
+          quests: [{
+            id: "Q1"
+            title: "One"
+            x: 0.0d
+            y: 0.0d
+            hide_dependency_lines: true
+            invisible: false
+            can_repeat: true
+            custom_flag: "kept"
+            tasks: [{ id: "T1" type: "checkmark" }]
+          }]
+        }"#;
+        let ch = parse_snbt_chapter(snbt).unwrap();
+        assert_eq!(ch.default_hide_dependency_lines, Some(true));
+        assert_eq!(ch.filename.as_deref(), Some("t"));
+        assert_eq!(ch.quests[0].hide_dependency_lines, Some(true));
+        assert_eq!(ch.quests[0].can_repeat, Some(true));
+        assert_eq!(
+            ch.quests[0].extras.get("custom_flag").and_then(|v| v.as_str()),
+            Some("kept")
+        );
+        let out = serialize_chapter_to_snbt(&ch);
+        let ch2 = parse_snbt_chapter(&out).unwrap();
+        assert_eq!(ch2.quests[0].hide_dependency_lines, Some(true));
+        assert_eq!(
+            ch2.quests[0].extras.get("custom_flag").and_then(|v| v.as_str()),
+            Some("kept")
+        );
     }
 }

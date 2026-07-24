@@ -6112,16 +6112,230 @@ fn save_quest_chapter(
     Ok(serde_json::json!({ "relativePath": rel, "questCount": chapter.quests.len() }))
 }
 
-/// Validate quest book integrity (missing deps, empty tasks).
+fn collect_catalog_item_ids(
+    manifest_path: &std::path::Path,
+) -> Result<std::collections::HashSet<String>, String> {
+    let scan = tuffbox_core::recipe_scan::scan_project_recipes(manifest_path)?;
+    let mut set = std::collections::HashSet::new();
+    for r in scan.recipes {
+        if !r.output_id.is_empty() && !r.output_id.starts_with('#') {
+            set.insert(r.output_id);
+        }
+        for id in r.input_ids {
+            if !id.is_empty() && !id.starts_with('#') {
+                set.insert(id);
+            }
+        }
+    }
+    Ok(set)
+}
+
+/// Validate quest book integrity (missing deps, empty tasks, cycles, reachability, items).
 #[tauri::command(rename_all = "camelCase")]
 fn validate_quest_book(path: String) -> Result<Vec<serde_json::Value>, String> {
+    let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
-    Ok(book
-        .validate()
+    let available = collect_catalog_item_ids(&manifest_path).ok();
+    let errors = match &available {
+        Some(set) => book.validate_with_items(Some(set)),
+        None => book.validate(),
+    };
+    Ok(errors
         .into_iter()
         .map(|e| serde_json::json!({ "questId": e.quest_id, "message": e.message }))
         .collect())
+}
+
+/// Parse AI QuestPlan JSON (fences ok) and merge into the project's quest book in memory.
+/// Does not write SNBT — caller applies result in the editor, then Save.
+#[tauri::command(rename_all = "camelCase")]
+fn parse_and_merge_quest_plan(path: String, raw: String) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    let result = tuffbox_core::quest_plan::parse_and_merge_quest_plan(&book, &raw)?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+/// Validate a QuestPlan object without merging.
+#[tauri::command(rename_all = "camelCase")]
+fn validate_quest_plan(
+    plan: tuffbox_core::quest_plan::QuestPlan,
+) -> Result<serde_json::Value, String> {
+    let v = tuffbox_core::quest_plan::validate_quest_plan(&plan);
+    serde_json::to_value(v).map_err(|e| e.to_string())
+}
+
+/// System prompt text for quest-authoring models (UI / local LLM).
+#[tauri::command(rename_all = "camelCase")]
+fn quest_plan_system_prompt() -> String {
+    tuffbox_core::quest_plan::QUEST_PLAN_SYSTEM_PROMPT.to_string()
+}
+
+/// Natural-language → QuestPlan → merge preview.
+/// Uses offline heuristic for simple numbered prompts; otherwise configured AI (Ollama / OpenAI-compatible).
+#[tauri::command(rename_all = "camelCase")]
+async fn generate_quest_plan_from_prompt(
+    path: String,
+    prompt: String,
+    force_ai: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("Empty quest prompt".into());
+    }
+    let project_dir = manifest_parent(&path)?;
+    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+
+    let force_ai = force_ai.unwrap_or(false);
+    let plan = if !force_ai {
+        if let Some(p) = tuffbox_core::quest_plan::try_heuristic_quest_plan(&prompt) {
+            p
+        } else {
+            generate_quest_plan_via_ai(&path, &prompt, &book).await?
+        }
+    } else {
+        generate_quest_plan_via_ai(&path, &prompt, &book).await?
+    };
+
+    let result = tuffbox_core::quest_plan::merge_quest_plan(&book, &plan)?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+async fn generate_quest_plan_via_ai(
+    path: &str,
+    prompt: &str,
+    book: &tuffbox_core::unified::QuestBook,
+) -> Result<tuffbox_core::quest_plan::QuestPlan, String> {
+    let settings = integrations::get_integration_status().settings;
+    let sample_items = {
+        let manifest_path = PathBuf::from(path);
+        collect_catalog_item_ids(&manifest_path)
+            .unwrap_or_default()
+            .into_iter()
+            .take(80)
+            .collect::<Vec<_>>()
+    };
+    let ctx = tuffbox_core::quest_plan::QuestAuthorContext {
+        existing_chapters: book.chapters.iter().map(|c| c.title.clone()).collect(),
+        sample_items,
+        pack_hint: book.title.clone(),
+    };
+    let user_msg = tuffbox_core::quest_plan::build_quest_author_user_message(prompt, &ctx);
+    let messages = vec![serde_json::json!({"role": "user", "content": user_msg})];
+    let value = integrations::call_ai_messages(
+        &settings.ai,
+        tuffbox_core::quest_plan::QUEST_PLAN_SYSTEM_PROMPT,
+        &messages,
+        true,
+    )
+    .await?;
+    // call_ai_messages(json_mode) returns a JSON Value — stringify for parse_quest_plan
+    let raw = if value.is_string() {
+        value.as_str().unwrap_or("").to_string()
+    } else {
+        value.to_string()
+    };
+    tuffbox_core::quest_plan::parse_quest_plan(&raw)
+}
+
+/// Save an FTB Quests reward table SNBT file.
+#[tauri::command(rename_all = "camelCase")]
+fn save_quest_reward_table(
+    path: String,
+    table: tuffbox_core::unified::RewardTable,
+    relative_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let rel = tuffbox_core::unified::RewardTable::save_to_project(
+        &project_dir,
+        &table,
+        relative_path.as_deref(),
+    )?;
+    auto_snapshot_with_changed_files(&manifest_path, "save-quest-reward-table", &[PathBuf::from(&rel)])
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "relativePath": rel, "entryCount": table.entries.len() }))
+}
+
+/// Save quest book `data.snbt` (title + defaults).
+#[tauri::command(rename_all = "camelCase")]
+fn save_quest_book_data(
+    path: String,
+    book: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let mut loaded = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    if let Some(t) = book.get("title").and_then(|v| v.as_str()) {
+        loaded.title = Some(t.to_string());
+    } else if book.get("title").map(|v| v.is_null()).unwrap_or(false) {
+        loaded.title = None;
+    }
+    if let Some(t) = book.get("subtitle").and_then(|v| v.as_str()) {
+        loaded.subtitle = Some(t.to_string());
+    }
+    if let Some(settings) = book.get("bookSettings").and_then(|v| v.as_object()) {
+        loaded.book_settings = settings
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+    }
+    let rel = tuffbox_core::unified::QuestBook::save_book_data(&project_dir, &loaded)?;
+    auto_snapshot_with_changed_files(&manifest_path, "save-quest-book-data", &[PathBuf::from(&rel)])
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "relativePath": rel }))
+}
+
+/// Save `chapter_groups.snbt`.
+#[tauri::command(rename_all = "camelCase")]
+fn save_quest_chapter_groups(
+    path: String,
+    groups: Vec<tuffbox_core::unified::ChapterGroup>,
+) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let rel = tuffbox_core::unified::QuestBook::save_chapter_groups(&project_dir, &groups)?;
+    auto_snapshot_with_changed_files(
+        &manifest_path,
+        "save-quest-chapter-groups",
+        &[PathBuf::from(&rel)],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "relativePath": rel }))
+}
+
+/// List item ids from the recipe catalog (for quest item pickers).
+#[tauri::command(rename_all = "camelCase")]
+fn list_quest_item_catalog(path: String) -> Result<Vec<String>, String> {
+    let set = collect_catalog_item_ids(Path::new(&path))?;
+    let mut ids: Vec<String> = set.into_iter().collect();
+    ids.sort();
+    Ok(ids)
+}
+
+/// List FTB Quests team progress files under saves/*/ftbquests/.
+#[tauri::command(rename_all = "camelCase")]
+fn list_quest_progress_teams(path: String) -> Result<Vec<serde_json::Value>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let teams = tuffbox_core::unified::list_progress_teams(&project_dir);
+    teams
+        .into_iter()
+        .map(|t| serde_json::to_value(t).map_err(|e| e.to_string()))
+        .collect()
+}
+
+/// Load read-only quest progress overlay for a team file.
+#[tauri::command(rename_all = "camelCase")]
+fn load_quest_progress(
+    path: String,
+    relative_path: String,
+) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    let snap =
+        tuffbox_core::unified::load_progress_for_book(&project_dir, &relative_path, &book)?;
+    serde_json::to_value(snap).map_err(|e| e.to_string())
 }
 
 /// ── World management ────────────────────────────────────────────
@@ -8886,8 +9100,8 @@ fn import_curseforge_project(source: String, target_dir: String) -> Result<Strin
 #[tauri::command(rename_all = "camelCase")]
 fn import_project(source: String, target_dir: String) -> Result<String, String> {
     use tuffbox_core::{
-        import_curseforge_pack, import_folder, import_modrinth_pack, import_prism_instance,
-        is_curseforge_pack, resolve_curseforge_pack_files,
+        import_curseforge_pack, import_instance_directory, import_modrinth_pack,
+        import_prism_instance, is_curseforge_pack, resolve_curseforge_pack_files,
     };
 
     let path = PathBuf::from(&source);
@@ -8898,7 +9112,36 @@ fn import_project(source: String, target_dir: String) -> Result<String, String> 
         .to_lowercase();
 
     let (mut manifest, is_cf) = if path.is_dir() {
-        (import_folder(&source).map_err(|e| e.to_string())?, false)
+        let (m, game_dir) = import_instance_directory(&source).map_err(|e| e.to_string())?;
+        let target_root = PathBuf::from(&target_dir).join(&m.project.id);
+        std::fs::create_dir_all(&target_root).map_err(|e| e.to_string())?;
+        // Inline copy of game content (same folders as install_modpack).
+        for entry_name in [
+            "mods",
+            "config",
+            "defaultconfigs",
+            "kubejs",
+            "scripts",
+            "resourcepacks",
+            "shaderpacks",
+            "datapacks",
+            "options.txt",
+            "optionsof.txt",
+            "servers.dat",
+        ] {
+            let src = game_dir.join(entry_name);
+            if src.is_dir() {
+                copy_dir_recursive(&src, &target_root.join(entry_name)).map_err(|e| e.to_string())?;
+            } else if src.is_file() {
+                std::fs::copy(&src, target_root.join(entry_name)).map_err(|e| e.to_string())?;
+            }
+        }
+        let target = target_root.join(format!("{}.tuffbox.json", m.project.id));
+        let json = serde_json::to_string_pretty(&m).map_err(|e| e.to_string())?;
+        std::fs::write(&target, json).map_err(|e| e.to_string())?;
+        let out = target.to_string_lossy().to_string();
+        swarm_api::spawn_pack_cooccurrence(out.clone(), "pack_import");
+        return Ok(out);
     } else {
         match ext.as_str() {
             "mrpack" => (
@@ -9011,6 +9254,9 @@ async fn get_curseforge_modpack_files(
 
 /// Download a CurseForge / Modrinth / local pack and create an instance with
 /// resolved mods + download progress (Prism InstanceImportTask flow).
+///
+/// Also accepts launcher instance folders (Prism / MultiMC / CurseForge /
+/// plain `mods/`) and mods-only zip archives.
 #[tauri::command(rename_all = "camelCase")]
 async fn install_modpack(
     app: tauri::AppHandle,
@@ -9022,8 +9268,9 @@ async fn install_modpack(
         use tauri::Emitter;
         use tuffbox_core::{
             curseforge_overrides_folder, extract_curseforge_overrides, import_curseforge_pack,
-            import_modrinth_pack, import_prism_instance, is_curseforge_pack,
-            resolve_curseforge_pack_files, stash_curseforge_manifest, CurseForgeProvider,
+            import_instance_directory, import_modrinth_pack, import_prism_instance,
+            is_curseforge_pack, is_mods_only_zip, resolve_curseforge_pack_files,
+            resolve_instance_game_dir, stash_curseforge_manifest, CurseForgeProvider,
         };
 
         let _ = app.emit(
@@ -9035,6 +9282,45 @@ async fn install_modpack(
             "Install modpack",
         );
         tuffbox_core::task_progress::set_progress(&task_id, 0.05, Some("Preparing…".into()));
+
+        let source_path = PathBuf::from(&source);
+
+        // ── Instance / plain folder import ──────────────────────────
+        if source_path.is_dir() {
+            let (mut manifest, game_dir) =
+                import_instance_directory(&source_path).map_err(|e| e.to_string())?;
+            if let Some(name) = instance_name.filter(|n| !n.trim().is_empty()) {
+                manifest.project.name = name.clone();
+                manifest.project.id = slugify_project_name(&name);
+            }
+            let instance_dir = PathBuf::from(&target_dir).join(&manifest.project.id);
+            std::fs::create_dir_all(&instance_dir).map_err(|e| e.to_string())?;
+            copy_instance_game_content(&game_dir, &instance_dir)?;
+            let manifest_path = instance_dir.join(format!("{}.tuffbox.json", manifest.project.id));
+            let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
+            std::fs::write(&manifest_path, &json).map_err(|e| e.to_string())?;
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({
+                    "phase": "done",
+                    "message": format!("Imported {} mods from folder", manifest.mods.len()),
+                }),
+            );
+            tuffbox_core::task_progress::succeed(
+                &task_id,
+                Some(format!("{} mods", manifest.mods.len())),
+            );
+            swarm_api::spawn_pack_cooccurrence(
+                manifest_path.to_string_lossy().to_string(),
+                "pack_import",
+            );
+            return Ok(serde_json::json!({
+                "path": manifest_path.to_string_lossy(),
+                "name": manifest.project.name,
+                "modCount": manifest.mods.len(),
+                "provider": "folder",
+            }));
+        }
 
         // Remote CF file: source is "cf:<modId>:<fileId>" or a direct URL.
         let pack_path = if let Some(rest) = source.strip_prefix("cf:") {
@@ -9091,21 +9377,31 @@ async fn install_modpack(
             .unwrap_or("")
             .to_lowercase();
         let is_cf = is_curseforge_pack(&pack_path);
+        let is_mods_zip = ext == "zip" && !is_cf && is_mods_only_zip(&pack_path);
+        let is_prism_zip = ext == "zip" && !is_cf && !is_mods_zip;
+
         let mut manifest = match ext.as_str() {
             "mrpack" => import_modrinth_pack(&pack_path).map_err(|e| e.to_string())?,
             "zip" if is_cf => import_curseforge_pack(&pack_path).map_err(|e| e.to_string())?,
+            "zip" if is_mods_zip => {
+                // Temporary extract → treat as folder with mods/.
+                let tmp_root = std::env::temp_dir().join(format!(
+                    "tuffbox-mods-zip-{}",
+                    tuffbox_core::time_util::compact_now()
+                ));
+                std::fs::create_dir_all(tmp_root.join("mods")).map_err(|e| e.to_string())?;
+                extract_mods_only_zip(&pack_path, &tmp_root.join("mods"))?;
+                let (m, _) = import_instance_directory(&tmp_root).map_err(|e| e.to_string())?;
+                let _ = std::fs::remove_dir_all(&tmp_root);
+                m
+            }
             "zip" => import_prism_instance(&pack_path).map_err(|e| e.to_string())?,
             _ => return Err(format!("unsupported pack format: .{ext}")),
         };
 
         if let Some(name) = instance_name.filter(|n| !n.trim().is_empty()) {
             manifest.project.name = name.clone();
-            manifest.project.id = name
-                .to_lowercase()
-                .replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "-")
-                .replace("--", "-")
-                .trim_matches('-')
-                .to_string();
+            manifest.project.id = slugify_project_name(&name);
         }
 
         if is_cf {
@@ -9142,18 +9438,59 @@ async fn install_modpack(
             );
         }
 
+        if is_prism_zip {
+            extract_prism_zip_content(&pack_path, &instance_dir)?;
+            // Re-scan local jars so remote-less Prism exports still list mods.
+            let game = resolve_instance_game_dir(&instance_dir);
+            if game.join("mods").is_dir() {
+                let (scanned, _) = import_instance_directory(&instance_dir).map_err(|e| e.to_string())?;
+                if !scanned.mods.is_empty() {
+                    manifest.mods = scanned.mods;
+                    if manifest.minecraft.version.is_empty() {
+                        manifest.minecraft.version = scanned.minecraft.version;
+                    }
+                    if manifest.loader.version.is_empty() {
+                        manifest.loader = scanned.loader;
+                    }
+                }
+            }
+        }
+
+        if is_mods_zip {
+            // Re-extract into final instance (temp was cleaned).
+            std::fs::create_dir_all(instance_dir.join("mods")).map_err(|e| e.to_string())?;
+            extract_mods_only_zip(&pack_path, &instance_dir.join("mods"))?;
+        }
+
         let manifest_path = instance_dir.join(format!("{}.tuffbox.json", manifest.project.id));
         let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
         std::fs::write(&manifest_path, &json).map_err(|e| e.to_string())?;
 
-        let _ = app.emit(
-            "modpack-install-progress",
-            serde_json::json!({
-                "phase": "downloading-mods",
-                "message": format!("Downloading {} content files…", manifest.mods.len())
-            }),
-        );
-        let report = download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
+        let needs_download = manifest.mods.iter().any(|m| {
+            m.source
+                .url
+                .as_ref()
+                .map(|u| !u.is_empty())
+                .unwrap_or(false)
+        });
+
+        let report = if needs_download {
+            let _ = app.emit(
+                "modpack-install-progress",
+                serde_json::json!({
+                    "phase": "downloading-mods",
+                    "message": format!("Downloading {} content files…", manifest.mods.len())
+                }),
+            );
+            download_project_mods_tracked(&app, &manifest_path, &manifest, None, true)
+        } else {
+            tuffbox_core::ModSyncReport {
+                downloaded: vec![],
+                already_present: manifest.mods.iter().map(|m| m.id.clone()).collect(),
+                skipped: vec![],
+                failed: vec![],
+            }
+        };
 
         let _ = app.emit(
             "modpack-install-progress",
@@ -9167,17 +9504,111 @@ async fn install_modpack(
             &task_id,
             Some(format!("{} mods", manifest.mods.len())),
         );
+        swarm_api::spawn_pack_cooccurrence(
+            manifest_path.to_string_lossy().to_string(),
+            "pack_import",
+        );
 
         Ok(serde_json::json!({
             "path": manifest_path.to_string_lossy(),
             "name": manifest.project.name,
             "modCount": manifest.mods.len(),
             "download": report,
-            "provider": if is_cf { "curseforge" } else if ext == "mrpack" { "modrinth" } else { "prism" },
+            "provider": if is_cf {
+                "curseforge"
+            } else if ext == "mrpack" {
+                "modrinth"
+            } else if is_mods_zip {
+                "mods-zip"
+            } else {
+                "prism"
+            },
         }))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn copy_instance_game_content(game_dir: &Path, instance_dir: &Path) -> Result<(), String> {
+    for entry_name in [
+        "mods",
+        "config",
+        "defaultconfigs",
+        "kubejs",
+        "scripts",
+        "resourcepacks",
+        "shaderpacks",
+        "datapacks",
+        "options.txt",
+        "optionsof.txt",
+        "servers.dat",
+    ] {
+        let src = game_dir.join(entry_name);
+        if src.is_dir() {
+            copy_dir_recursive(&src, &instance_dir.join(entry_name)).map_err(|e| e.to_string())?;
+        } else if src.is_file() {
+            std::fs::copy(&src, instance_dir.join(entry_name)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn extract_mods_only_zip(zip_path: &Path, mods_dir: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(mods_dir).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().replace('\\', "/");
+        let lower = name.to_lowercase();
+        if !lower.ends_with(".jar") {
+            continue;
+        }
+        let file_name = Path::new(&name)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("bad jar path in zip: {name}"))?;
+        let dest = mods_dir.join(file_name);
+        let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn extract_prism_zip_content(zip_path: &Path, instance_dir: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(zip_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        let name = entry.name().replace('\\', "/");
+        let lower = name.to_lowercase();
+        // Skip launcher metadata; keep game content.
+        if lower == "instance.cfg"
+            || lower == "mmc-pack.json"
+            || lower.ends_with("tuffbox.remote-mods.json")
+            || name.ends_with('/')
+        {
+            continue;
+        }
+        // Strip optional minecraft/ or .minecraft/ prefix used by some exporters.
+        let rel = name
+            .strip_prefix("minecraft/")
+            .or_else(|| name.strip_prefix(".minecraft/"))
+            .unwrap_or(name.as_str());
+        if rel.is_empty() || rel.contains("..") {
+            continue;
+        }
+        let dest = instance_dir.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+        std::io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Re-download only the mods that failed in the last sync (user Retry).
@@ -9910,6 +10341,8 @@ fn create_instance(
     loader: String,
     loader_version: String,
     location: String,
+    memory_mb: Option<u32>,
+    jvm_args: Option<Vec<String>>,
 ) -> Result<String, String> {
     use tuffbox_core::manifest::{
         JavaSpec, LoaderKind, LoaderSpec, MinecraftSpec, ProfileSpec, ProjectManifest,
@@ -9933,6 +10366,9 @@ fn create_instance(
 
     let dir = PathBuf::from(&location);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let mem = memory_mb.unwrap_or(4096).clamp(1024, 65536);
+    let args = jvm_args.unwrap_or_else(|| vec!["-XX:+UseG1GC".to_string()]);
 
     let manifest = ProjectManifest {
         schema_version: "0.1.0".to_string(),
@@ -9962,8 +10398,8 @@ fn create_instance(
             side: Side::Client,
             include_optional_mods: false,
             include_shaders: true,
-            memory_mb: Some(4096),
-            jvm_args: vec!["-XX:+UseG1GC".to_string()],
+            memory_mb: Some(mem),
+            jvm_args: args,
             include_mods: Vec::new(),
             player_name: None,
         }],
@@ -11809,6 +12245,16 @@ pub fn run() {
             load_quest_book,
             save_quest_chapter,
             validate_quest_book,
+            save_quest_reward_table,
+            save_quest_book_data,
+            save_quest_chapter_groups,
+            parse_and_merge_quest_plan,
+            validate_quest_plan,
+            quest_plan_system_prompt,
+            generate_quest_plan_from_prompt,
+            list_quest_item_catalog,
+            list_quest_progress_teams,
+            load_quest_progress,
             list_worlds,
             list_content_packs,
             set_content_pack_enabled,

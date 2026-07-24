@@ -77,55 +77,22 @@
   let fullscreenElement: Element | null = null;
   $: graphFullscreen = fullscreenElement === graphCanvasEl;
 
-  /** Right-click menu for installable graph deps. */
-  let ctxMenu: {
-    x: number;
-    y: number;
-    nodeId: string;
-    label: string;
-    mode: "install" | "install-missing";
-  } | null = null;
-
-  function closeCtxMenu() {
-    ctxMenu = null;
-  }
-
-  function openNodeContextMenu(event: MouseEvent, node: GraphNode & { ghost?: boolean }) {
+  /** Right-click = same install path as left-click (hint: "click or right-click to install"). */
+  async function onNodeContextInstall(event: MouseEvent, node: GraphNode & { ghost?: boolean }) {
     event.preventDefault();
     event.stopPropagation();
-    const isInstallable = node.kind === "Missing" || !!node.ghost;
-    if (isInstallable) {
-      ctxMenu = {
-        x: event.clientX,
-        y: event.clientY,
-        nodeId: node.id,
-        label: node.label,
-        mode: "install",
-      };
+    selectedId = node.id;
+    if (node.kind === "Missing" || !!node.ghost) {
+      await installGhostNode(node.id);
+      return;
+    }
+    // Installed dep whose jar may be missing on disk — same as icon click.
+    if (node.kind === "Mod" && depNodeIds.has(node.id)) {
+      await downloadMissingFiles();
       return;
     }
     const missing = missingDepsByMod.get(node.id) ?? [];
-    if (missing.length > 0) {
-      ctxMenu = {
-        x: event.clientX,
-        y: event.clientY,
-        nodeId: node.id,
-        label: node.label,
-        mode: "install-missing",
-      };
-    }
-  }
-
-  async function runCtxMenuAction() {
-    if (!ctxMenu) return;
-    const menu = ctxMenu;
-    ctxMenu = null;
-    if (menu.mode === "install") {
-      await installGhostNode(menu.nodeId);
-      return;
-    }
-    const edges = missingDepsByMod.get(menu.nodeId) ?? [];
-    for (const edge of edges) {
+    for (const edge of missing) {
       await installSingleMissingDep(edge);
     }
   }
@@ -1810,17 +1777,6 @@
     simulation?.stop();
   });
 
-  function onGlobalPointerDown(e: MouseEvent) {
-    if (!ctxMenu) return;
-    const t = e.target as HTMLElement | null;
-    if (t?.closest?.(".graph-ctx-menu")) return;
-    closeCtxMenu();
-  }
-
-  function onGlobalKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") closeCtxMenu();
-  }
-
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
   function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
     event.stopPropagation();
@@ -2114,7 +2070,7 @@
             tabindex="0"
             on:pointerdown={(e) => handleNodeMouseDown(e, node)}
             on:click|stopPropagation={() => handleNodeClick(node)}
-            on:contextmenu|stopPropagation={(e) => openNodeContextMenu(e, node)}
+            on:contextmenu|stopPropagation={(e) => onNodeContextInstall(e, node)}
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
             aria-label={node.label}
           >
@@ -2200,7 +2156,7 @@
                   role="button"
                   tabindex="0"
                   on:click={() => (selectedId = node.id)}
-                  on:contextmenu={(e) => openNodeContextMenu(e, node)}
+                  on:contextmenu={(e) => onNodeContextInstall(e, node)}
                   on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
                 >
                   {#if icon}
@@ -2270,7 +2226,7 @@
                 tabindex="0"
                 title="Install {node.label}"
                 on:click={() => installGhostNode(node.id)}
-                on:contextmenu={(e) => openNodeContextMenu(e, node)}
+                on:contextmenu={(e) => onNodeContextInstall(e, node)}
                 on:keydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
               >
                 {#if icon}
@@ -2426,26 +2382,6 @@
     <EmptyState icon={GitGraph} title="No project selected" description="Open a project to view its dependency graph." />
   {/if}
 </div>
-
-{#if ctxMenu}
-  <div
-    class="graph-ctx-menu"
-    style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`}
-    role="menu"
-  >
-    <button type="button" role="menuitem" on:click={runCtxMenuAction} disabled={resolving}>
-      <Download size={14} strokeWidth={2.25} />
-      {#if ctxMenu.mode === "install"}
-        Install {ctxMenu.label}
-      {:else}
-        Install missing for {ctxMenu.label}
-      {/if}
-    </button>
-    <button type="button" role="menuitem" class="muted-item" on:click={closeCtxMenu}>Cancel</button>
-  </div>
-{/if}
-
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
 
 {#if depPreviewOpen}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={() => {}}>
@@ -3225,47 +3161,6 @@
   .card-install-btn:disabled {
     opacity: 0.55;
     cursor: not-allowed;
-  }
-
-  .graph-ctx-menu {
-    position: fixed;
-    z-index: 80;
-    min-width: 200px;
-    padding: 6px;
-    border-radius: 10px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-elevated, #1a1f28);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .graph-ctx-menu button {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 9px 10px;
-    border: none;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-primary);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    text-align: left;
-  }
-  .graph-ctx-menu button :global(svg) {
-    fill: none !important;
-    stroke: currentColor !important;
-  }
-  .graph-ctx-menu button:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.12);
-    color: var(--accent-primary);
-  }
-  .graph-ctx-menu .muted-item {
-    color: var(--text-muted);
-    font-weight: 500;
   }
 
   .conflict-panel {

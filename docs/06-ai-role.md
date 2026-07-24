@@ -32,19 +32,21 @@ API (ваш сервер):
 - `POST /v1/crash/diagnose` — context → готовый `ActionPlan`
 - Auth: bearer token (`crash_kb` в keyring); **нет** bulk dump KB
 
-## Что делает код
-
-- граф зависимостей, metadata, версии, loader/side checks;
-- snapshots, apply, rollback, export, launch;
-- парсинг логов / stacktrace / fingerprint;
-- валидация и применение `ActionPlan`.
-
 ## Что делает ИИ
 
 - объяснение stacktrace;
 - гипотезы и ранжирование подозрительных модов;
 - предложение **структурированного** плана (`ActionPlan`);
-- помощь с config values (через `edit_config`).
+- помощь с config values (через `edit_config`);
+- предложение **квестовых глав** (`QuestPlan`) для FTB Quests editor.
+
+## Что делает код
+
+- граф зависимостей, metadata, версии, loader/side checks;
+- snapshots, apply, rollback, export, launch;
+- парсинг логов / stacktrace / fingerprint;
+- валидация и применение `ActionPlan`;
+- парсинг / валидация / merge `QuestPlan` → `QuestBook` (Save пишет SNBT).
 
 ## Что ИИ не должен делать напрямую
 
@@ -189,3 +191,41 @@ Fingerprint подставляется автоматически из теку�
 | **Resolution Distill** | После verified fix: сжать историю действий пользователя → показать план → **Confirm/Edit** → только тогда publish |
 
 Authored export из Diagnostics («Save KB case») — прямой вход в capsule format для будущей сети.
+
+## Формат ответа ИИ — QuestPlan (FTB Quests)
+
+Второй executable контракт (`schemaVersion: 1`), рядом с ActionPlan. Канон и system prompt: `tuffbox_core::quest_plan`.
+
+```text
+Prompt / model JSON
+→ parse_quest_plan (strips ``` fences)
+→ validate_quest_plan
+→ merge_quest_plan into QuestBook (memory)
+→ UI confirm → Save chapter SNBT → play in game
+```
+
+ИИ **не** пишет `.snbt` сам. Лаунчер понимает declarative `chapters[]` (upsert/replace), генерирует hex id, резолвит `dependencies` по id **или** точному title.
+
+Минимальный пример:
+
+```json
+{
+  "schemaVersion": 1,
+  "humanExplanation": "Early Create progression",
+  "confidence": 0.82,
+  "needsUserReview": true,
+  "chapters": [{
+    "title": "Andesite Age",
+    "icon": "create:andesite_alloy",
+    "quests": [{
+      "title": "Cobblestone",
+      "x": 0, "y": 0,
+      "tasks": [{ "type": "item", "properties": { "item": "minecraft:cobblestone" } }]
+    }]
+  }]
+}
+```
+
+UI: Quest editor → **Создать** → текст запроса → Сгенерировать → Применить → Save all.
+
+Простые нумерованные запросы (как «добудь 10 дерева… награда 10 палок») разбирает офлайн-эвристика; свободный текст — через настроенный AI (Ollama / OpenAI-compatible) в `QuestPlan` JSON.

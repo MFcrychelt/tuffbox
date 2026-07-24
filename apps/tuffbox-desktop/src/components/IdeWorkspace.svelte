@@ -16,7 +16,7 @@
     ScrollText,
     Circle,
   } from "lucide-svelte";
-  import { projectPath } from "../lib/store";
+  import { projectPath, ideStageRequest } from "../lib/store";
   import ProjectSettings from "./ProjectSettings.svelte";
   import Mods from "./Mods.svelte";
   import Graph from "./Graph.svelte";
@@ -172,6 +172,13 @@
   ];
 
   let activeStage: StageId = "brief";
+  $: if ($ideStageRequest) {
+    const req = $ideStageRequest;
+    if (stages.some((s) => s.id === req)) {
+      activeStage = req as StageId;
+    }
+    ideStageRequest.set(null);
+  }
   let briefGoal = "";
   let briefAudience = "";
   let briefPillars = "";

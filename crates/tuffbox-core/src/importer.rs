@@ -3,7 +3,12 @@ use crate::manifest::{
     ProjectManifest, ProjectMetadata, Side, SourceKind,
 };
 use serde::Deserialize;
-use std::{collections::HashMap, fs, io::Read, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -641,6 +646,31 @@ fn slugify(s: &str) -> String {
 }
 
 pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportError> {
+    let (manifest, _) = import_instance_directory(path)?;
+    Ok(manifest)
+}
+
+/// Resolve the Minecraft game directory inside a launcher instance root.
+/// Prism uses `minecraft/`, MultiMC uses `.minecraft/`, CurseForge / plain
+/// instances keep `mods/` at the root.
+pub fn resolve_instance_game_dir(instance_root: &Path) -> PathBuf {
+    let minecraft = instance_root.join("minecraft");
+    if minecraft.is_dir() {
+        return minecraft;
+    }
+    let dot = instance_root.join(".minecraft");
+    if dot.is_dir() {
+        return dot;
+    }
+    instance_root.to_path_buf()
+}
+
+/// Import a Prism / MultiMC / CurseForge / plain Minecraft instance folder.
+/// Returns `(manifest, game_dir)` — copy content from `game_dir` into the
+/// TuffBox instance after writing the manifest.
+pub fn import_instance_directory(
+    path: impl AsRef<Path>,
+) -> Result<(ProjectManifest, PathBuf), ImportError> {
     let path = path.as_ref();
     if !path.is_dir() {
         return Err(ImportError::UnsupportedFormat(format!(
@@ -650,26 +680,79 @@ pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportEr
     }
 
     if crate::packwiz::is_packwiz_pack(path) {
-        return crate::packwiz::import_packwiz_pack(path).map_err(|e| {
+        let manifest = crate::packwiz::import_packwiz_pack(path).map_err(|e| {
             ImportError::UnsupportedFormat(format!("packwiz import failed: {e}"))
-        });
+        })?;
+        return Ok((manifest, path.to_path_buf()));
     }
 
-    let mods_dir = path.join("mods");
-    if !mods_dir.exists() && !path.join("config").exists() {
+    let game_dir = resolve_instance_game_dir(path);
+    let mods_dir = game_dir.join("mods");
+    let looks_like_instance = mods_dir.is_dir()
+        || game_dir.join("config").is_dir()
+        || path.join("instance.cfg").is_file()
+        || path.join("mmc-pack.json").is_file()
+        || path.join("minecraftinstance.json").is_file()
+        || path.join("manifest.json").is_file();
+    if !looks_like_instance {
         return Err(ImportError::UnsupportedFormat(
-            "folder does not look like a Minecraft instance".to_string(),
+            "folder does not look like a Minecraft / Prism / MultiMC / CurseForge instance"
+                .into(),
         ));
     }
 
-    let name = path
+    let mut name = path
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Minecraft Instance".to_string());
+        .unwrap_or_else(|| "Imported Instance".to_string());
+    let mut memory_mb = 4096u32;
+    let mut jvm_args = vec!["-XX:+UseG1GC".to_string()];
 
-    let (loader_kind, loader_version, minecraft_version) = detect_instance(&mods_dir, path)?;
+    if let Ok(cfg_raw) = fs::read_to_string(path.join("instance.cfg")) {
+        let cfg = parse_ini(&cfg_raw);
+        if let Some(n) = cfg.get("name").filter(|s| !s.is_empty()) {
+            name = n.clone();
+        }
+        if let Some(max) = cfg
+            .get("MaxMemAlloc")
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&m| m >= 512)
+        {
+            memory_mb = max;
+        }
+        if let Some(args) = cfg.get("JvmArgs").filter(|s| !s.trim().is_empty()) {
+            jvm_args = args.split_whitespace().map(|s| s.to_string()).collect();
+        }
+    }
 
-    Ok(ProjectManifest {
+    if let Ok(raw) = fs::read_to_string(path.join("minecraftinstance.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(n) = v.get("name").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+                name = n.to_string();
+            }
+            if let Some(m) = v
+                .get("allocatedMemory")
+                .and_then(|x| x.as_u64())
+                .filter(|&m| m >= 512)
+            {
+                memory_mb = m as u32;
+            }
+            if let Some(args) = v
+                .get("javaArgsOverride")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.trim().is_empty())
+            {
+                jvm_args = args.split_whitespace().map(|s| s.to_string()).collect();
+            }
+        }
+    }
+
+    let (loader_kind, loader_version, minecraft_version) =
+        detect_instance_meta(path, &game_dir, &mods_dir)?;
+
+    let mods = collect_local_content(&game_dir);
+
+    let manifest = ProjectManifest {
         schema_version: "0.1.0".to_string(),
         project: ProjectMetadata {
             id: slugify(&name),
@@ -697,14 +780,263 @@ pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportEr
             side: Side::Client,
             include_optional_mods: false,
             include_shaders: true,
-            memory_mb: Some(4096),
-            jvm_args: vec!["-XX:+UseG1GC".to_string()],
+            memory_mb: Some(memory_mb),
+            jvm_args,
             include_mods: Vec::new(),
             player_name: None,
         }],
-        mods: Vec::new(),
+        mods,
         overrides: None,
-    })
+    };
+
+    Ok((manifest, game_dir))
+}
+
+fn detect_instance_meta(
+    instance_root: &Path,
+    game_dir: &Path,
+    mods_dir: &Path,
+) -> Result<(LoaderKind, String, String), ImportError> {
+    if let Some(meta) = parse_mmc_pack(&instance_root.join("mmc-pack.json")) {
+        return Ok(meta);
+    }
+    if let Some(meta) = parse_curseforge_instance_json(&instance_root.join("minecraftinstance.json"))
+    {
+        return Ok(meta);
+    }
+    if let Some(meta) = parse_curseforge_manifest_file(&instance_root.join("manifest.json")) {
+        return Ok(meta);
+    }
+    detect_instance(mods_dir, game_dir)
+}
+
+fn parse_mmc_pack(path: &Path) -> Option<(LoaderKind, String, String)> {
+    let raw = fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let components = v.get("components")?.as_array()?;
+    let mut mc = String::new();
+    let mut loader = LoaderKind::Vanilla;
+    let mut loader_ver = String::new();
+    for c in components {
+        let uid = c.get("uid").and_then(|x| x.as_str()).unwrap_or("");
+        let version = c
+            .get("version")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        match uid {
+            "net.minecraft" => mc = version,
+            "net.fabricmc.fabric-loader" => {
+                loader = LoaderKind::Fabric;
+                loader_ver = version;
+            }
+            "org.quiltmc.quilt-loader" => {
+                loader = LoaderKind::Quilt;
+                loader_ver = version;
+            }
+            "net.minecraftforge" => {
+                loader = LoaderKind::Forge;
+                loader_ver = version;
+            }
+            "net.neoforged" | "net.neoforged.fancymodloader" => {
+                loader = LoaderKind::Neoforge;
+                loader_ver = version;
+            }
+            _ => {}
+        }
+    }
+    if mc.is_empty() && matches!(loader, LoaderKind::Vanilla) {
+        return None;
+    }
+    Some((loader, loader_ver, mc))
+}
+
+fn parse_curseforge_instance_json(path: &Path) -> Option<(LoaderKind, String, String)> {
+    let raw = fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let mc = v
+        .get("gameVersion")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let base = v.get("baseModLoader")?;
+    let name = base
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let forge_ver = base
+        .get("forgeVersion")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let (loader, ver) = if name.contains("fabric") {
+        (LoaderKind::Fabric, forge_ver)
+    } else if name.contains("quilt") {
+        (LoaderKind::Quilt, forge_ver)
+    } else if name.contains("neoforge") {
+        (LoaderKind::Neoforge, forge_ver)
+    } else if name.contains("forge") {
+        (LoaderKind::Forge, forge_ver)
+    } else {
+        (LoaderKind::Vanilla, String::new())
+    };
+    if mc.is_empty() && matches!(loader, LoaderKind::Vanilla) {
+        return None;
+    }
+    Some((loader, ver, mc))
+}
+
+fn parse_curseforge_manifest_file(path: &Path) -> Option<(LoaderKind, String, String)> {
+    let raw = fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let mc = v
+        .pointer("/minecraft/version")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let loaders = v
+        .pointer("/minecraft/modLoaders")
+        .and_then(|x| x.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let parsed: Vec<CurseForgeModLoader> = loaders
+        .into_iter()
+        .filter_map(|l| serde_json::from_value(l).ok())
+        .collect();
+    if parsed.is_empty() && mc.is_empty() {
+        return None;
+    }
+    let (kind, ver) = detect_curseforge_loader(&parsed);
+    Some((kind, ver, mc))
+}
+
+fn collect_local_content(game_dir: &Path) -> Vec<crate::manifest::ModSpec> {
+    use crate::manifest::{ContentType, ModSource, SourceKind};
+    let mut out = Vec::new();
+    for (folder, content_type) in [
+        ("mods", ContentType::Mod),
+        ("resourcepacks", ContentType::Resourcepack),
+        ("shaderpacks", ContentType::Shaderpack),
+    ] {
+        let dir = game_dir.join(folder);
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if content_type == ContentType::Mod && ext != "jar" {
+                continue;
+            }
+            if content_type != ContentType::Mod && ext != "zip" && ext != "jar" {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if file_name.is_empty() {
+                continue;
+            }
+            let mut id = file_name
+                .trim_end_matches(".jar")
+                .trim_end_matches(".zip")
+                .to_string();
+            let mut side = Side::Both;
+            let mut version = "unknown".to_string();
+            let mut authors = Vec::new();
+            let mut name = id.clone();
+            if content_type == ContentType::Mod {
+                if let Ok(scan) = crate::mod_scan::scan_mod_jar(&path) {
+                    if let Some(mid) = scan.mod_id.filter(|s| !s.is_empty()) {
+                        id = mid;
+                    }
+                    side = scan.side;
+                    authors = scan.authors;
+                }
+            }
+            // Prefer unique ids when duplicate mod ids appear (different jars).
+            let unique_id = if out.iter().any(|m: &crate::manifest::ModSpec| m.id == id) {
+                format!("{id}-{}", slugify(&file_name))
+            } else {
+                id.clone()
+            };
+            if name == id {
+                name = file_name.clone();
+            }
+            let _ = version;
+            out.push(crate::manifest::ModSpec {
+                id: unique_id,
+                name,
+                source: ModSource {
+                    kind: SourceKind::Local,
+                    project_id: None,
+                    file_id: None,
+                    url: None,
+                    path: Some(format!("{folder}/{file_name}")),
+                    icon_url: None,
+                    categories: Vec::new(),
+                },
+                version: "unknown".into(),
+                file_name: Some(file_name),
+                hashes: None,
+                side,
+                dependencies: Vec::new(),
+                status: Vec::new(),
+                content_type,
+                authors,
+                option: None,
+            });
+        }
+    }
+    out
+}
+
+/// Whether a zip looks like a mods-only archive (jars at root or under mods/).
+pub fn is_mods_only_zip(path: impl AsRef<Path>) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    let mut jar_count = 0usize;
+    let mut has_instance_cfg = false;
+    let mut has_cf_manifest = false;
+    let mut has_mrpack = false;
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().replace('\\', "/");
+        let lower = name.to_lowercase();
+        if lower == "instance.cfg" || lower.ends_with("/instance.cfg") {
+            has_instance_cfg = true;
+        }
+        if lower == "manifest.json" || lower.ends_with("/manifest.json") {
+            has_cf_manifest = true;
+        }
+        if lower == "modrinth.index.json" {
+            has_mrpack = true;
+        }
+        if lower.ends_with(".jar")
+            && (lower.starts_with("mods/") || !lower.contains('/'))
+        {
+            jar_count += 1;
+        }
+    }
+    !has_instance_cfg && !has_cf_manifest && !has_mrpack && jar_count > 0
 }
 
 fn detect_instance(

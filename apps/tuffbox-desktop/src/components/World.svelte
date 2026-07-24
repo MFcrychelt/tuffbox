@@ -210,8 +210,14 @@
 </div>
 
 <style>
-  .worlds-view { height: 100%; display: flex; flex-direction: column; }
-  .worlds-layout { display: flex; gap: 0; height: 100%; min-height: 0; }
+  .worlds-view {
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .worlds-layout { display: flex; gap: 0; height: 100%; min-height: 0; flex: 1; }
 
   .worlds-sidebar {
     width: 260px;
@@ -391,5 +397,11 @@
     flex: 1;
     min-height: 0;
     display: flex;
+    flex-direction: column;
+  }
+  .map-stage > :global(.world-map) {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
   }
 </style>

@@ -215,3 +215,6 @@ export function openLaunchLog(path: string) {
 export function closeLaunchLog() {
   launchLogPath.set(null);
 }
+
+/** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
+export const ideStageRequest = writable<string | null>(null);
