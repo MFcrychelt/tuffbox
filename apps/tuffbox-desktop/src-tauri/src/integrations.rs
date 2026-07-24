@@ -2083,6 +2083,207 @@ pub async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<String>,
     })
 }
 
+fn is_ollama_models_dir(path: &Path) -> bool {
+    path.join("blobs").is_dir() && path.join("manifests").is_dir()
+}
+
+fn should_skip_scan_dir(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        "windows"
+            | "winsxs"
+            | "system volume information"
+            | "$recycle.bin"
+            | "recovery"
+            | "windowsapps"
+            | "node_modules"
+            | ".git"
+            | "target"
+            | "cache"
+            | "caches"
+            | "__pycache__"
+            | "temp"
+            | "tmp"
+            | "packages"
+            | "nuget"
+            | "i386"
+            | "assembly"
+    ) || n.starts_with('$')
+}
+
+/// Read installed model tags from an Ollama models folder (manifests tree).
+pub fn list_models_from_ollama_dir(models_dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let root = models_dir.join("manifests").join("registry.ollama.ai");
+    let Ok(ns_entries) = fs::read_dir(&root) else {
+        return out;
+    };
+    for ns in ns_entries.flatten() {
+        if !ns.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let ns_name = ns.file_name().to_string_lossy().to_string();
+        let Ok(models) = fs::read_dir(ns.path()) else {
+            continue;
+        };
+        for model_ent in models.flatten() {
+            if !model_ent.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let model_name = model_ent.file_name().to_string_lossy().to_string();
+            let Ok(tags) = fs::read_dir(model_ent.path()) else {
+                continue;
+            };
+            for tag in tags.flatten() {
+                if tag.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let tag_name = tag.file_name().to_string_lossy().to_string();
+                    if ns_name == "library" {
+                        out.push(format!("{model_name}:{tag_name}"));
+                    } else {
+                        out.push(format!("{ns_name}/{model_name}:{tag_name}"));
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn push_unique_path(out: &mut Vec<String>, path: PathBuf) {
+    let s = path.to_string_lossy().to_string();
+    if s.is_empty() || out.iter().any(|x| x.eq_ignore_ascii_case(&s)) {
+        return;
+    }
+    out.push(s);
+}
+
+/// Scan a drive (default `C:\`) for `ollama.exe` and Ollama models folders.
+/// Skips Windows system trees. Cap visits so it cannot hang forever.
+///
+/// # ponytail: BFS with skip-list + visit cap; full unrestricted C: crawl if misses persist
+#[tauri::command(rename_all = "camelCase")]
+pub async fn scan_ollama_disk(root: Option<String>) -> Result<Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let root = root
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| r"C:\".into());
+        let root_path = PathBuf::from(&root);
+        if !root_path.exists() {
+            return Err(format!("Drive/path not found: {root}"));
+        }
+
+        let mut binaries: Vec<String> = Vec::new();
+        let mut models_dirs: Vec<String> = Vec::new();
+
+        for p in default_ollama_binary_candidates() {
+            if p.is_file() {
+                push_unique_path(&mut binaries, p);
+            }
+        }
+        if let Ok(custom) = std::env::var("OLLAMA_MODELS") {
+            let p = PathBuf::from(custom.trim());
+            if is_ollama_models_dir(&p) {
+                push_unique_path(&mut models_dirs, p);
+            }
+        }
+        let default_models = default_ollama_models_dir();
+        if is_ollama_models_dir(&default_models) {
+            push_unique_path(&mut models_dirs, default_models);
+        }
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            let home = PathBuf::from(home);
+            for rel in [
+                PathBuf::from(".ollama").join("models"),
+                PathBuf::from("Ollama").join("models"),
+                PathBuf::from("LLM").join("ollama").join("models"),
+                PathBuf::from("Models").join("ollama"),
+            ] {
+                let p = home.join(rel);
+                if is_ollama_models_dir(&p) {
+                    push_unique_path(&mut models_dirs, p);
+                }
+            }
+        }
+
+        const MAX_VISITS: usize = 250_000;
+        let mut visits = 0usize;
+        let mut queue: std::collections::VecDeque<PathBuf> = std::collections::VecDeque::new();
+        queue.push_back(root_path);
+        while let Some(dir) = queue.pop_front() {
+            if visits >= MAX_VISITS {
+                break;
+            }
+            visits += 1;
+            let Ok(rd) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for ent in rd.flatten() {
+                let path = ent.path();
+                let Ok(ft) = ent.file_type() else {
+                    continue;
+                };
+                let name = ent.file_name().to_string_lossy().to_string();
+                if ft.is_file() {
+                    if name.eq_ignore_ascii_case("ollama.exe") || name == "ollama" {
+                        push_unique_path(&mut binaries, path);
+                    }
+                    continue;
+                }
+                if !ft.is_dir() {
+                    continue;
+                }
+                if should_skip_scan_dir(&name) {
+                    continue;
+                }
+                if is_ollama_models_dir(&path) {
+                    push_unique_path(&mut models_dirs, path.clone());
+                }
+                if name.eq_ignore_ascii_case("blobs") || name.eq_ignore_ascii_case("manifests") {
+                    continue;
+                }
+                queue.push_back(path);
+            }
+        }
+
+        binaries.sort();
+        models_dirs.sort_by(|a, b| {
+            let ca = list_models_from_ollama_dir(Path::new(a)).len();
+            let cb = list_models_from_ollama_dir(Path::new(b)).len();
+            cb.cmp(&ca).then_with(|| a.cmp(b))
+        });
+
+        let best_binary = binaries.first().cloned();
+        let best_models = models_dirs.first().cloned();
+        let mut disk_models = Vec::new();
+        for p in &models_dirs {
+            for m in list_models_from_ollama_dir(Path::new(p)) {
+                if !disk_models.iter().any(|x| x == &m) {
+                    disk_models.push(m);
+                }
+            }
+        }
+        disk_models.sort();
+        disk_models.dedup();
+
+        Ok(json!({
+            "root": root,
+            "visited": visits,
+            "truncated": visits >= MAX_VISITS,
+            "binaries": binaries,
+            "modelsDirs": models_dirs,
+            "bestBinary": best_binary,
+            "bestModelsDir": best_models,
+            "models": disk_models,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2105,5 +2306,21 @@ mod tests {
             normalized_semver("v1.2.3"),
             Some(semver::Version::new(1, 2, 3))
         );
+    }
+
+    #[test]
+    fn skip_list_covers_windows() {
+        assert!(should_skip_scan_dir("Windows"));
+        assert!(should_skip_scan_dir("node_modules"));
+        assert!(!should_skip_scan_dir("Users"));
+    }
+
+    #[test]
+    fn detects_models_dir_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_ollama_models_dir(dir.path()));
+        fs::create_dir(dir.path().join("blobs")).unwrap();
+        fs::create_dir(dir.path().join("manifests")).unwrap();
+        assert!(is_ollama_models_dir(dir.path()));
     }
 }

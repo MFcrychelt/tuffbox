@@ -126,7 +126,7 @@ impl TestLauncher {
 
         // For MVP, copy only mods whose side is compatible with the profile side.
         for module in &manifest.mods {
-            if !module.side.is_compatible_with_profile(profile.side) {
+            if !module.included_in_profile(profile) {
                 continue;
             }
             if let Some(file_name) = &module.file_name {

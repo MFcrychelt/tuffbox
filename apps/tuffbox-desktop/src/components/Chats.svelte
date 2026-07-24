@@ -184,10 +184,70 @@
       }
       await refreshSessions();
     } catch (e) {
+      toasts.error(`${String(e)} — try Quick assemble (no AI).`);
+    } finally {
+      busy = false;
+      phase = "";
+    }
+  }
+
+  async function quickAssemble() {
+    const text = input.trim();
+    if (!$projectPath || !text || busy) return;
+    busy = true;
+    phase = "plan";
+    try {
+      const res = await invoke<{
+        chatId: string;
+        brief: PackBrief;
+        session?: ChatSession;
+      }>("create_mode_quick_brief", {
+        path: $projectPath,
+        chatId: activeId,
+        message: text,
+        targetCount,
+      });
+      activeId = res.chatId;
+      brief = res.brief;
+      if (res.session) {
+        messages = res.session.messages ?? [];
+      } else {
+        messages = [
+          ...messages,
+          { role: "user", content: text },
+          { role: "assistant", content: `Quick brief: ${res.brief.title}` },
+        ];
+      }
+      input = "";
+      await refreshSessions();
+
+      phase = "search";
+      progressDone = 0;
+      progressTotal = 1;
+      progressCurrent = "Searching Modrinth…";
+      draft = await invoke<PackDraft>("assemble_pack_draft", {
+        path: $projectPath,
+        brief: { ...brief, targetCount },
+      });
+      brief = draft.brief;
+      messages = [
+        ...messages,
+        {
+          role: "system",
+          content: `Assembled draft: ${draft.mods.length} mods` +
+            (draft.unresolved?.length
+              ? ` (${draft.unresolved.length} must-have unresolved)`
+              : ""),
+        },
+      ];
+      await persistDraft();
+      toasts.success(`Draft ready: ${draft.mods.length} mods`);
+    } catch (e) {
       toasts.error(String(e));
     } finally {
       busy = false;
       phase = "";
+      progressCurrent = "";
     }
   }
 
@@ -392,8 +452,8 @@
             <h3>Describe the pack you want</h3>
             <p>
               Example: “Tech + magic kitchen sink for Fabric, ~80 mods, Create and JEI required.”
-              AI builds a search plan; then Assemble fills 50–100 real Modrinth mods. Install only
-              after you confirm.
+              Plan uses AI for a search brief; Quick assemble works without AI and builds a draft
+              in one step. Install only after you confirm.
             </p>
           </div>
         {/if}
@@ -429,6 +489,9 @@
         <div class="actions">
           <button type="button" class="btn primary" disabled={busy || !input.trim()} on:click={() => sendMessage(false)}>
             <Send size={14} /> Plan
+          </button>
+          <button type="button" class="btn" disabled={busy || !input.trim()} on:click={() => void quickAssemble()}>
+            Quick assemble
           </button>
           <button type="button" class="btn" disabled={busy || !brief || !input.trim()} on:click={() => sendMessage(true)}>
             Refine
@@ -483,7 +546,7 @@
       </div>
       {#if draft?.unresolved?.length}
         <div class="unresolved">
-          Unresolved: {draft.unresolved.join(", ")}
+          Must-have unresolved: {draft.unresolved.join(", ")}
         </div>
       {/if}
     </aside>

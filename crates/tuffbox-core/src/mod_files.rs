@@ -433,6 +433,7 @@ pub fn identify_local_jar_via_modrinth(
             status: vec!["ok".to_string()],
             content_type,
             authors,
+            option: None,
         },
         project.client_side,
         project.server_side,
@@ -474,6 +475,7 @@ mod tests {
             status: vec!["ok".to_string()],
             content_type,
             authors: Vec::new(),
+        option: None,
         }
     }
 

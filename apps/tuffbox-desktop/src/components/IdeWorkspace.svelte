@@ -332,6 +332,9 @@
   .stage-shell {
     min-width: 0;
     min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
     background:
       radial-gradient(circle at top right, rgba(27, 217, 106, 0.06), transparent 32%),
       rgba(255, 255, 255, 0.015);
@@ -339,16 +342,17 @@
   }
 
   .stage-content {
+    flex: 1;
     min-width: 0;
     min-height: 0;
     width: 100%;
-    height: 100%;
     overflow: auto;
     padding: 20px 24px;
     scrollbar-gutter: stable;
   }
 
   .workflow-rail {
+    flex: 0 0 auto;
     display: flex;
     flex-wrap: wrap;
     align-items: stretch;
@@ -358,6 +362,7 @@
     overflow: visible;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
+    z-index: 2;
   }
 
   .stage-tab {

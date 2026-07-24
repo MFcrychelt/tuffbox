@@ -8,6 +8,7 @@
   export let swarmEnabled = false;
 
   type Pair = { modA: string; modB: string; count: number };
+  type Group = { mods: string[]; score: number };
   type Preview = {
     projectId: string;
     slug: string;
@@ -19,6 +20,7 @@
   };
 
   let pairs: Pair[] = [];
+  let groups: Group[] = [];
   let suggestions: string[] = [];
   let loading = false;
   let error = "";
@@ -41,13 +43,17 @@
         limit: 20,
       });
       pairs = trends?.mergedPairs ?? trends?.localPairs ?? [];
-      suggestions = await invoke("suggest_mods_from_trends", {
-        path: $projectPath,
-        limit: 8,
-      });
+      groups = trends?.groups ?? [];
+      suggestions =
+        trends?.suggestions ??
+        (await invoke("suggest_mods_from_trends", {
+          path: $projectPath,
+          limit: 8,
+        }));
     } catch (e) {
       error = String(e);
       pairs = [];
+      groups = [];
       suggestions = [];
     } finally {
       loading = false;
@@ -117,7 +123,7 @@
     <Sparkles size={18} />
     <div>
       <h2>Creation trends</h2>
-      <p>Local mod co-occurrence → Modrinth install preview (requires TuffSwarm).</p>
+      <p>Frequent mod groups from packs → suggest installs that fit your set (TuffSwarm).</p>
     </div>
     <button class="ghost" disabled={loading || !swarmEnabled || !$projectPath} on:click={refresh}>
       <span class:spin={loading} style="display:inline-flex"><RefreshCw size={14} /></span> Refresh
@@ -135,9 +141,28 @@
     {#if error}<div class="err">{error}</div>{/if}
 
     <section>
+      <h3>Frequent groups (3+)</h3>
+      {#if groups.length === 0}
+        <p class="muted">No groups yet — need enough overlapping pairs from real packs.</p>
+      {:else}
+        <ul>
+          {#each groups.slice(0, 10) as g (g.mods.join("|"))}
+            <li>
+              {#each g.mods as m, i (m)}
+                {#if i > 0}<span class="plus">+</span>{/if}
+                <code>{m}</code>
+              {/each}
+              <span>×{g.score}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+
+    <section>
       <h3>Top pairs</h3>
       {#if pairs.length === 0}
-        <p class="muted">No pairs yet — install mods or refresh after a crash-fix apply.</p>
+        <p class="muted">No pairs yet — install mods or export a pack with TuffSwarm on.</p>
       {:else}
         <ul>
           {#each pairs.slice(0, 12) as p (p.modA + p.modB)}
@@ -148,9 +173,9 @@
     </section>
 
     <section>
-      <h3>Suggested Modrinth installs</h3>
+      <h3>Suggested installs (fit your pack)</h3>
       {#if suggestions.length === 0}
-        <p class="muted">No missing partners inferred from local pairs.</p>
+        <p class="muted">No group-fitting partners yet — install a few mods first.</p>
       {:else}
         <div class="suggest-grid">
           {#each suggestions as slug (slug)}
@@ -247,6 +272,9 @@
     align-items: center;
   }
   li span {
+    color: var(--text-muted);
+  }
+  .plus {
     color: var(--text-muted);
   }
   .muted {

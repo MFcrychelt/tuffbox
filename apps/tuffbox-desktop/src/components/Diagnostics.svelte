@@ -200,11 +200,11 @@
       }
       plan = null;
       detectWrongLoaderMods();
+      detectDuplicateModJars();
       if (data.sessionHealthy && preferLatestLog) {
         crashFindings = [];
         crashMcreator = [];
         crashClassFinder = [];
-        crashSupportMsg = null;
         aiAnalysis = null;
         aiContext = null;
         aiSoftError = null;
@@ -360,11 +360,28 @@
     }
   }
 
-  /// Per-diagnostic fix: handle duplicate mods by opening the graph view.
+  /// Per-diagnostic fix: keep newest jar for this mod id when disk duplicates exist.
   async function fixDeduplicate(idx: number) {
     fixingIdx = idx;
-    message = "Duplicate mods found. Open the Dependency Graph (Resolve stage) to review and remove duplicates manually.";
-    fixingIdx = null;
+    const d = graphDiagnostics[idx];
+    const fromMsg = (d?.message ?? "").match(/Duplicate mod node:\s*(.+)$/i)?.[1]?.trim();
+    const group =
+      duplicateJarGroups.find((g) => g.modId === fromMsg) ??
+      (fromMsg
+        ? duplicateJarGroups.find((g) => g.modId.toLowerCase() === fromMsg.toLowerCase())
+        : undefined);
+    try {
+      if (group?.keepCandidate) {
+        await keepOneDuplicateJar(group.modId, group.keepCandidate);
+      } else {
+        await detectDuplicateModJars();
+        message = duplicateJarGroups.length
+          ? "Duplicate jars listed under Conflicts & jars — pick which jar to keep."
+          : "No duplicate jars on disk for this graph warning.";
+      }
+    } finally {
+      fixingIdx = null;
+    }
   }
 
   // --- Wrong-loader jar detection ---
@@ -378,6 +395,18 @@
   let wrongLoaderJars: WrongLoaderJar[] = [];
   let wrongLoaderLoading = false;
   let wrongLoaderFixing: string | null = null;
+
+  type DupJar = {
+    fileName: string;
+    modId: string;
+    mtimeMs: number;
+    size: number;
+    inManifest: boolean;
+  };
+  type DupJarGroup = { modId: string; keepCandidate: string; jars: DupJar[] };
+  let duplicateJarGroups: DupJarGroup[] = [];
+  let duplicateJarLoading = false;
+  let duplicateJarFixing: string | null = null;
 
   // Ore generation scanner state
   let oreFindings: any[] = [];
@@ -394,8 +423,6 @@
   let crashFindings: any[] = [];
   let crashMcreator: string[] = [];
   let crashClassFinder: any[] = [];
-  let crashSupportMsg: string | null = null;
-  let crashShowSupport = false;
 
   async function runCrashAssistant() {
     if (!$projectPath) return;
@@ -408,8 +435,6 @@
       crashFindings = result.findings ?? [];
       crashMcreator = result.mcreatorMods ?? [];
       crashClassFinder = result.classFinderResults ?? [];
-      crashSupportMsg = result.supportMessageDiscord || result.supportMessageGithub || null;
-      crashShowSupport = false;
       enrichCrashFindingsWithAi();
     } catch (e) {
       error = String(e);
@@ -466,12 +491,6 @@
           (aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? null),
       };
     });
-  }
-
-  async function copySupportMsg() {
-    const text = crashSupportMsg ?? "";
-    try { await navigator.clipboard.writeText(text); message = "Support message copied."; }
-    catch { message = "Failed to copy."; }
   }
 
   // AI context state
@@ -1013,6 +1032,38 @@
     }
   }
 
+  async function detectDuplicateModJars() {
+    if (!$projectPath) return;
+    duplicateJarLoading = true;
+    try {
+      duplicateJarGroups = await invoke("detect_duplicate_mod_jars", { path: $projectPath });
+    } catch {
+      duplicateJarGroups = [];
+    } finally {
+      duplicateJarLoading = false;
+    }
+  }
+
+  async function keepOneDuplicateJar(modId: string, keepFileName: string) {
+    if (!$projectPath) return;
+    duplicateJarFixing = `${modId}::${keepFileName}`;
+    error = null;
+    try {
+      const result: string = await invoke("keep_one_duplicate_mod_jar", {
+        path: $projectPath,
+        modId,
+        keepFileName,
+      });
+      message = result;
+      await detectDuplicateModJars();
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      duplicateJarFixing = null;
+    }
+  }
+
   async function disableWrongJar(fileName: string) {
     if (!$projectPath) return;
     wrongLoaderFixing = fileName;
@@ -1325,17 +1376,23 @@
     target?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
-  function jumpToFirstError() {
-    const lines = logDisplayText.split("\n");
-    const idx = lines.findIndex((l) =>
-      /\b(FATAL|ERROR|SEVERE)\b|Exception|Caused by:|Crash Report/i.test(l),
-    );
-    if (idx < 0) {
+  const LOG_ERROR_RE = /\b(FATAL|ERROR|SEVERE)\b|Exception|Caused by:|Crash Report/i;
+  let activeErrorHit = -1;
+
+  $: errorHits = (logDisplayText ? logDisplayText.split("\n") : [])
+    .map((l, i) => (LOG_ERROR_RE.test(l) ? i : -1))
+    .filter((i) => i >= 0);
+
+  /** Cycle through every ERROR/FATAL/Exception line (wraps). */
+  function jumpToNextError() {
+    if (!errorHits.length) {
       message = "No ERROR/FATAL/Exception lines found in this log view.";
       return;
     }
+    activeErrorHit = ((activeErrorHit + 1) % errorHits.length + errorHits.length) % errorHits.length;
+    const idx = errorHits[activeErrorHit];
     scrollLogToLine(idx);
-    message = `Jumped to line ${idx + 1}.`;
+    message = `Error ${activeErrorHit + 1}/${errorHits.length} · line ${idx + 1}`;
   }
 
   async function copyCurrentLog() {
@@ -1485,14 +1542,17 @@
       <button class="ghost" on:click={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
         <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
       </button>
-      <button class="ghost" on:click={copyCurrentLog} disabled={!currentLogText}>
+      <button class="ghost" on:click={copyCurrentLog} disabled={!currentLogText} title="Copy the full raw log to clipboard">
         <Copy size={15} /> Copy log
       </button>
-      <button class="ghost" on:click={copySupportMsg} disabled={!crashSupportMsg}>
-        <Copy size={15} /> Support msg
-      </button>
-      <button class="ghost" on:click={jumpToFirstError} disabled={!logDisplayText}>
-        <ArrowDownToLine size={15} /> Jump to error
+      <button
+        class="ghost"
+        on:click={jumpToNextError}
+        disabled={!errorHits.length}
+        title={errorHits.length ? `Cycle errors (${errorHits.length})` : "No error lines in this log"}
+      >
+        <ArrowDownToLine size={15} />
+        Error{errorHits.length ? ` ${(activeErrorHit < 0 ? 0 : activeErrorHit) + 1}/${errorHits.length}` : ""}
       </button>
     </div>
     <div class="tools-group">
@@ -1513,7 +1573,10 @@
       <button class="ghost" on:click={scanOreGen} disabled={!$projectPath || oreLoading}>{oreLoading ? "…" : "Ore gen"}</button>
       <button class="ghost" on:click={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>{duplicateLoading ? "…" : "Duplicates"}</button>
       <button class="ghost" on:click={generateUnify} disabled={!$projectPath || unifyLoading}>{unifyLoading ? "…" : "Unify"}</button>
-      <button class="ghost" on:click={() => detectWrongLoaderMods()} disabled={!$projectPath}>Wrong jars</button>
+      <button class="ghost" on:click={() => detectWrongLoaderMods()} disabled={!$projectPath || wrongLoaderLoading}>Wrong jars</button>
+      <button class="ghost" on:click={() => detectDuplicateModJars()} disabled={!$projectPath || duplicateJarLoading}>
+        {duplicateJarLoading ? "Dupes…" : "Dup jars"}
+      </button>
       <button class="ghost" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy}>
         <BookMarked size={15} /> Save KB
       </button>
@@ -1718,7 +1781,15 @@
           <button type="button" class="ghost mini" on:click={() => (logExpanded = !logExpanded)} title="Toggle height">
             <Maximize2 size={13} /> {logExpanded ? "Compact" : "Tall"}
           </button>
-          <button type="button" class="ghost mini" on:click={jumpToFirstError} disabled={!logDisplayText}>Error</button>
+          <button
+            type="button"
+            class="ghost mini"
+            on:click={jumpToNextError}
+            disabled={!errorHits.length}
+            title={errorHits.length ? `Next error (${errorHits.length})` : "No error lines"}
+          >
+            Error{errorHits.length ? ` ${(activeErrorHit < 0 ? 0 : activeErrorHit) + 1}/${errorHits.length}` : ""}
+          </button>
           <button type="button" class="ghost mini" on:click={copyCurrentLog} disabled={!currentLogText}><Copy size={13} /></button>
           <button type="button" class="ghost mini" on:click={shareCurrentLog} disabled={sharingLog || !currentLogText}>
             <Share2 size={13} />
@@ -1872,19 +1943,21 @@
     </section>
 
     <!-- 4. Evidence (secondary) -->
-    <details class="panel collapsible-block dx-evidence-block" open={graphDiagnostics.length > 0 || wrongLoaderJars.length > 0}>
+    <details class="panel collapsible-block dx-evidence-block" open={graphDiagnostics.length > 0 || wrongLoaderJars.length > 0 || duplicateJarGroups.length > 0}>
       <summary>
         <span><GitMerge size={16} /> Conflicts & jars</span>
         <span class="tools-hint">
           {graphDiagnostics.length} conflict{graphDiagnostics.length === 1 ? "" : "s"}
           {#if wrongLoaderJars.length} · {wrongLoaderJars.length} wrong jar{/if}
+          {#if duplicateJarGroups.length} · {duplicateJarGroups.length} dup{/if}
           <ChevronDown size={14} />
         </span>
       </summary>
       <div class="dx-evidence-body">
-        {#if graphDiagnostics.length === 0}
-          <div class="muted-box">No graph conflicts.</div>
-        {:else}
+        {#if graphDiagnostics.length === 0 && !wrongLoaderJars.length && !duplicateJarGroups.length}
+          <div class="muted-box">No graph conflicts or jar issues.</div>
+        {/if}
+        {#if graphDiagnostics.length > 0}
           <div class="diag-list">
             {#each graphDiagnostics as d, idx (d.code + d.message + idx)}
               <div class="diag-row {String(d.severity).toLowerCase()}">
@@ -1901,10 +1974,53 @@
                       </button>
                     {/if}
                   {/if}
+                  {#if /DUPLICATE/i.test(d.code)}
+                    <button class="secondary small" on:click={() => fixDeduplicate(idx)} disabled={fixingIdx === idx || duplicateJarFixing !== null}>
+                      Keep one jar
+                    </button>
+                  {/if}
                 </div>
               </div>
             {/each}
           </div>
+        {/if}
+        {#if duplicateJarGroups.length > 0}
+          <h3 class="dx-subhead"><AlertTriangle size={14} /> Duplicate mod jars</h3>
+          <p class="tools-hint" style="margin: 0 0 8px">Same mod id in more than one jar — keep one, delete the rest.</p>
+          {#each duplicateJarGroups as group (group.modId)}
+            <div class="diag-row warning">
+              <div>
+                <strong>{group.modId}</strong>
+                <p>{group.jars.length} jars · suggested keep: <code>{group.keepCandidate}</code></p>
+                <ul class="dup-jar-list">
+                  {#each group.jars as jar (jar.fileName)}
+                    <li>
+                      <code>{jar.fileName}</code>
+                      {#if jar.inManifest}<span class="pill">manifest</span>{/if}
+                      {#if jar.fileName === group.keepCandidate}<span class="pill">newest</span>{/if}
+                      <button
+                        class="ghost mini"
+                        disabled={duplicateJarFixing !== null}
+                        on:click={() => keepOneDuplicateJar(group.modId, jar.fileName)}
+                        title="Keep this jar, delete the other copies"
+                      >
+                        {duplicateJarFixing === `${group.modId}::${jar.fileName}` ? "…" : "Keep this"}
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+              <div class="diag-actions">
+                <button
+                  class="secondary small"
+                  disabled={duplicateJarFixing !== null}
+                  on:click={() => keepOneDuplicateJar(group.modId, group.keepCandidate)}
+                >
+                  Keep newest
+                </button>
+              </div>
+            </div>
+          {/each}
         {/if}
         {#if wrongLoaderJars.length > 0}
           <h3 class="dx-subhead"><AlertTriangle size={14} /> Wrong-loader jars</h3>
@@ -2352,6 +2468,32 @@
   }
   .diag-row p { margin: 4px 0 0; color: var(--text-secondary); font-size: 12px; }
   .diag-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+  .dup-jar-list {
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .dup-jar-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .dup-jar-list .pill {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
   .merged-item {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;

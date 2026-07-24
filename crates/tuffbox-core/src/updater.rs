@@ -9,7 +9,10 @@
 //! manifest via [`crate::manifest::ModSpec::pinned`]) are never updated.
 
 use crate::manifest::{ModSpec, SourceKind};
-use crate::provider::{ContentProvider, ModrinthProvider, ProviderSearchQuery, VersionInfo};
+use crate::provider::{
+    ContentProvider, CurseForgeProvider, ModrinthProvider, ProviderFileHashes, ProviderFileInfo,
+    ProviderSearchQuery, VersionInfo,
+};
 use semver::Version;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -27,6 +30,8 @@ pub enum UpdateError {
         #[source]
         source: semver::Error,
     },
+    #[error("network error: {0}")]
+    Network(String),
 }
 
 /// Whether an available update is safe to apply automatically.
@@ -63,14 +68,13 @@ pub fn classify_update(
     match cur.major.cmp(&lat.major) {
         Ordering::Less => Ok(UpdateRisk::Risky),
         Ordering::Equal => {
-            // Same major: a pre-release channel makes it risky.
             if matches!(channel, Some("alpha") | Some("beta")) {
                 Ok(UpdateRisk::Risky)
             } else {
                 Ok(UpdateRisk::Safe)
             }
         }
-        Ordering::Greater => Ok(UpdateRisk::Safe), // already newer; treat as safe/no-op
+        Ordering::Greater => Ok(UpdateRisk::Safe),
     }
 }
 
@@ -78,7 +82,6 @@ fn parse_lenient(v: &str) -> Result<Version, UpdateError> {
     match Version::parse(v) {
         Ok(ver) => Ok(ver),
         Err(_) => {
-            // Try stripping a leading "v" or taking the first numeric-ish segment.
             let trimmed = v.trim_start_matches('v');
             Version::parse(trimmed).map_err(|source| UpdateError::VersionParse {
                 version: v.to_string(),
@@ -88,35 +91,44 @@ fn parse_lenient(v: &str) -> Result<Version, UpdateError> {
     }
 }
 
+fn pinned_update(module: &ModSpec) -> ModUpdate {
+    ModUpdate {
+        mod_id: module.id.clone(),
+        current_version: module.version.clone(),
+        latest_version: module.version.clone(),
+        latest_version_id: module.source.file_id.clone().unwrap_or_default(),
+        channel: None,
+        risk: UpdateRisk::Safe,
+        pinned: true,
+    }
+}
+
 /// Checks a single mod for an available update.
 ///
-/// Only Modrinth-sourced mods (with a `project_id`) are supported; others
-/// return `Ok(None)`. Pinned mods return `Ok(Some(ModUpdate { pinned: true }))`
-/// so the UI can show them as intentionally frozen.
+/// Supports Modrinth, CurseForge, and GitHub Releases (project_id = `owner/repo`).
+/// Pinned mods return `Ok(Some(ModUpdate { pinned: true }))`.
 pub fn check_mod_update(
     module: &ModSpec,
     minecraft_version: &str,
     loader: &str,
 ) -> Result<Option<ModUpdate>, UpdateError> {
     if module.pinned() {
-        return Ok(Some(ModUpdate {
-            mod_id: module.id.clone(),
-            current_version: module.version.clone(),
-            latest_version: module.version.clone(),
-            latest_version_id: module
-                .source
-                .file_id
-                .clone()
-                .unwrap_or_default(),
-            channel: None,
-            risk: UpdateRisk::Safe,
-            pinned: true,
-        }));
+        return Ok(Some(pinned_update(module)));
     }
 
-    if !matches!(module.source.kind, SourceKind::Modrinth) {
-        return Ok(None);
+    match module.source.kind {
+        SourceKind::Modrinth => check_modrinth_update(module, minecraft_version, loader),
+        SourceKind::Curseforge => check_curseforge_update(module, minecraft_version, loader),
+        SourceKind::Github => check_github_update(module),
+        SourceKind::Local | SourceKind::Direct => Ok(None),
     }
+}
+
+fn check_modrinth_update(
+    module: &ModSpec,
+    minecraft_version: &str,
+    loader: &str,
+) -> Result<Option<ModUpdate>, UpdateError> {
     let Some(project_id) = &module.source.project_id else {
         return Err(UpdateError::NoProjectId(module.id.clone()));
     };
@@ -132,10 +144,14 @@ pub fn check_mod_update(
         return Ok(None);
     };
 
-    let risk = classify_update(&module.version, &latest.version_number, latest.version_type.as_deref())?;
     if latest.version_number == module.version {
         return Ok(None);
     }
+    let risk = classify_update(
+        &module.version,
+        &latest.version_number,
+        latest.version_type.as_deref(),
+    )?;
 
     Ok(Some(ModUpdate {
         mod_id: module.id.clone(),
@@ -143,6 +159,103 @@ pub fn check_mod_update(
         latest_version: latest.version_number.clone(),
         latest_version_id: latest.id.clone(),
         channel: latest.version_type.clone(),
+        risk,
+        pinned: false,
+    }))
+}
+
+fn check_curseforge_update(
+    module: &ModSpec,
+    minecraft_version: &str,
+    loader: &str,
+) -> Result<Option<ModUpdate>, UpdateError> {
+    let Some(project_id) = &module.source.project_id else {
+        return Err(UpdateError::NoProjectId(module.id.clone()));
+    };
+    let mod_id: u64 = project_id
+        .parse()
+        .map_err(|_| UpdateError::NoProjectId(module.id.clone()))?;
+
+    let provider = CurseForgeProvider::new();
+    let files = provider.get_mod_files(mod_id, Some(minecraft_version))?;
+    let Some(latest) = CurseForgeProvider::pick_best_file(&files, minecraft_version, loader) else {
+        return Ok(None);
+    };
+
+    let latest_version = if latest.display_name.is_empty() {
+        latest.file_name.clone()
+    } else {
+        latest.display_name.clone()
+    };
+    let current_file_id = module.source.file_id.as_deref().unwrap_or("");
+    if current_file_id == latest.id.to_string() || latest_version == module.version {
+        return Ok(None);
+    }
+
+    let channel = match latest.release_type {
+        1 => Some("release"),
+        2 => Some("beta"),
+        3 => Some("alpha"),
+        _ => None,
+    };
+    let risk = classify_update(&module.version, &latest_version, channel).unwrap_or(UpdateRisk::Risky);
+
+    Ok(Some(ModUpdate {
+        mod_id: module.id.clone(),
+        current_version: module.version.clone(),
+        latest_version,
+        latest_version_id: latest.id.to_string(),
+        channel: channel.map(str::to_string),
+        risk,
+        pinned: false,
+    }))
+}
+
+fn check_github_update(module: &ModSpec) -> Result<Option<ModUpdate>, UpdateError> {
+    let Some(repo) = &module.source.project_id else {
+        return Err(UpdateError::NoProjectId(module.id.clone()));
+    };
+    // project_id = "owner/repo"
+    let url = format!("https://api.github.com/repos/{repo}/releases/latest");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("TuffBox-IDE/0.1.0")
+        .build()
+        .map_err(|e| UpdateError::Network(e.to_string()))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .map_err(|e| UpdateError::Network(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .map_err(|e| UpdateError::Network(e.to_string()))?;
+    let tag = body
+        .get("tag_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim_start_matches('v');
+    if tag.is_empty() {
+        return Ok(None);
+    }
+    let current = module
+        .source
+        .file_id
+        .as_deref()
+        .unwrap_or(&module.version)
+        .trim_start_matches('v');
+    if current == tag {
+        return Ok(None);
+    }
+    let risk = classify_update(current, tag, Some("release")).unwrap_or(UpdateRisk::Risky);
+    Ok(Some(ModUpdate {
+        mod_id: module.id.clone(),
+        current_version: module.version.clone(),
+        latest_version: tag.to_string(),
+        latest_version_id: tag.to_string(),
+        channel: Some("release".into()),
         risk,
         pinned: false,
     }))
@@ -167,7 +280,7 @@ pub fn check_manifest_updates(
 /// caller is responsible for persisting the manifest and re-materializing the
 /// file via [`crate::mod_files`].
 pub fn apply_update(module: &ModSpec, latest: &VersionInfo) -> ModSpec {
-    let file = crate::provider::ProviderFileInfo::select_file_for_loader(latest, &module.source.kind.as_str());
+    let file = ProviderFileInfo::select_file_for_loader(latest, module.source.kind.as_str());
     let mut updated = module.clone();
     updated.version = latest.version_number.clone();
     updated.source.file_id = Some(latest.id.clone());
@@ -179,6 +292,29 @@ pub fn apply_update(module: &ModSpec, latest: &VersionInfo) -> ModSpec {
             sha512: f.hashes.sha512.clone(),
         });
     }
+    updated
+}
+
+/// Apply a CurseForge file picked by [`check_curseforge_update`] onto a mod.
+pub fn apply_curseforge_update(
+    module: &ModSpec,
+    file_id: u64,
+    display_name: &str,
+    file_name: &str,
+    download_url: Option<String>,
+    hashes: ProviderFileHashes,
+) -> ModSpec {
+    let mut updated = module.clone();
+    updated.version = display_name.to_string();
+    updated.source.file_id = Some(file_id.to_string());
+    updated.file_name = Some(file_name.to_string());
+    if let Some(url) = download_url {
+        updated.source.url = Some(url);
+    }
+    updated.hashes = Some(crate::manifest::FileHashes {
+        sha1: hashes.sha1,
+        sha512: hashes.sha512,
+    });
     updated
 }
 

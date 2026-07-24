@@ -739,6 +739,165 @@ async fn fetch_cooccurrence_rows(
         .collect())
 }
 
+/// POST `/rest/v1/rpc/launcher_heartbeat` — mark this device online and open/extend a session.
+pub async fn launcher_heartbeat_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    device_id: &str,
+    display_name: Option<&str>,
+    app_version: Option<&str>,
+) -> Result<Value, String> {
+    rpc_launcher(
+        supabase_url,
+        anon_key,
+        "launcher_heartbeat",
+        json!({
+            "p_device_id": device_id,
+            "p_display_name": display_name,
+            "p_app_version": app_version,
+        }),
+    )
+    .await
+}
+
+/// POST `/rest/v1/rpc/launcher_goodbye` — end session and go offline.
+pub async fn launcher_goodbye_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    device_id: &str,
+    reason: &str,
+) -> Result<Value, String> {
+    rpc_launcher(
+        supabase_url,
+        anon_key,
+        "launcher_goodbye",
+        json!({
+            "p_device_id": device_id,
+            "p_reason": reason,
+        }),
+    )
+    .await
+}
+
+/// POST `/rest/v1/rpc/launcher_online_stats` — online count + list.
+pub async fn launcher_online_stats_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+) -> Result<Value, String> {
+    rpc_launcher(supabase_url, anon_key, "launcher_online_stats", json!({})).await
+}
+
+/// POST `/rest/v1/rpc/launcher_online_series` — minute buckets for charts.
+pub async fn launcher_online_series_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    hours: u32,
+) -> Result<Value, String> {
+    rpc_launcher(
+        supabase_url,
+        anon_key,
+        "launcher_online_series",
+        json!({ "p_hours": hours.max(1) }),
+    )
+    .await
+}
+
+/// POST `/rest/v1/rpc/launcher_game_session_start`.
+pub async fn launcher_game_session_start_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    device_id: &str,
+    project_name: Option<&str>,
+    app_version: Option<&str>,
+) -> Result<Value, String> {
+    rpc_launcher(
+        supabase_url,
+        anon_key,
+        "launcher_game_session_start",
+        json!({
+            "p_device_id": device_id,
+            "p_project_name": project_name,
+            "p_app_version": app_version,
+        }),
+    )
+    .await
+}
+
+/// POST `/rest/v1/rpc/launcher_game_session_end`.
+pub async fn launcher_game_session_end_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    device_id: &str,
+    duration_seconds: Option<u64>,
+    reason: &str,
+) -> Result<Value, String> {
+    rpc_launcher(
+        supabase_url,
+        anon_key,
+        "launcher_game_session_end",
+        json!({
+            "p_device_id": device_id,
+            "p_duration_seconds": duration_seconds,
+            "p_reason": reason,
+        }),
+    )
+    .await
+}
+
+/// POST `/rest/v1/rpc/launcher_recent_sessions`.
+pub async fn launcher_recent_sessions_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    limit: u32,
+) -> Result<Value, String> {
+    rpc_launcher(
+        supabase_url,
+        anon_key,
+        "launcher_recent_sessions",
+        json!({ "p_limit": limit }),
+    )
+    .await
+}
+
+async fn rpc_launcher(
+    supabase_url: &str,
+    anon_key: &str,
+    fn_name: &str,
+    body: Value,
+) -> Result<Value, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let endpoint = join_url(url, &format!("rest/v1/rpc/{fn_name}"));
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("supabase {fn_name} failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .or_else(|| body.get("hint"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase {fn_name} {status}: {msg}"));
+    }
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,10 +9,11 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use tuffbox_core::create_mode::{
-    assemble_pack_draft as run_assemble_pack_draft, delete_create_chat as delete_create_chat_file,
-    list_create_chats as list_create_chat_files, load_create_chat as load_create_chat_file,
-    new_chat_id, now_iso, parse_create_mode_ai_response, save_create_chat as save_create_chat_file,
-    AssembleOptions, CreateChatMessage, CreateChatSession, LiveModrinthSearch, PackBrief, PackDraft,
+    assemble_pack_draft as run_assemble_pack_draft, brief_from_prompt,
+    delete_create_chat as delete_create_chat_file, list_create_chats as list_create_chat_files,
+    load_create_chat as load_create_chat_file, new_chat_id, now_iso,
+    parse_create_mode_ai_response, save_create_chat as save_create_chat_file, AssembleOptions,
+    CreateChatMessage, CreateChatSession, LiveModrinthSearch, PackBrief, PackDraft,
     CREATE_MODE_SYSTEM_PROMPT,
 };
 use tuffbox_core::graph::loader_kind_slug;
@@ -137,7 +138,12 @@ pub async fn create_mode_chat(
         })
         .map_err(|e| e)?;
 
-    let brief = parsed.brief.map(|b| ensure_brief_from_manifest(b, &manifest));
+    let brief = parsed
+        .brief
+        .map(|b| ensure_brief_from_manifest(b, &manifest))
+        .ok_or_else(|| {
+            "AI returned no PackBrief; use Quick assemble".to_string()
+        })?;
 
     // Persist chat session
     let id = chat_id
@@ -145,12 +151,7 @@ pub async fn create_mode_chat(
         .unwrap_or_else(new_chat_id);
     let mut session = load_create_chat_file(&project_dir, &id).unwrap_or_else(|_| CreateChatSession {
         id: id.clone(),
-        title: brief
-            .as_ref()
-            .map(|b| b.title.clone())
-            .unwrap_or_else(|| {
-                message.chars().take(48).collect::<String>()
-            }),
+        title: brief.title.clone(),
         messages: history.unwrap_or_default(),
         draft: None,
         updated_at: now_iso(),
@@ -165,10 +166,8 @@ pub async fn create_mode_chat(
         content: parsed.reply.clone(),
         created_at: Some(now_iso()),
     });
-    if let Some(b) = &brief {
-        if session.title == "New chat" || session.title.is_empty() {
-            session.title = b.title.clone();
-        }
+    if session.title == "New chat" || session.title.is_empty() {
+        session.title = brief.title.clone();
     }
     session.updated_at = now_iso();
     save_create_chat_file(&project_dir, &session)?;
@@ -176,6 +175,70 @@ pub async fn create_mode_chat(
     Ok(json!({
         "chatId": id,
         "reply": parsed.reply,
+        "brief": brief,
+        "session": session,
+    }))
+}
+
+/// Deterministic PackBrief from free text (no LLM) — fallback when AI is unavailable.
+#[tauri::command(rename_all = "camelCase")]
+pub fn create_mode_quick_brief(
+    path: String,
+    chat_id: Option<String>,
+    message: String,
+    target_count: Option<u32>,
+) -> Result<Value, String> {
+    let message = message.trim().to_string();
+    if message.is_empty() {
+        return Err("message is empty".into());
+    }
+
+    let project_dir = manifest_parent(&path)?;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let mc = manifest.minecraft.version.clone();
+    let loader = loader_kind_slug(&manifest.loader.kind).to_string();
+    let target = target_count.unwrap_or(80).clamp(40, 120);
+
+    let brief = ensure_brief_from_manifest(
+        brief_from_prompt(&message, &mc, &loader, target),
+        &manifest,
+    );
+
+    let id = chat_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(new_chat_id);
+    let mut session = load_create_chat_file(&project_dir, &id).unwrap_or_else(|_| CreateChatSession {
+        id: id.clone(),
+        title: brief.title.clone(),
+        messages: vec![],
+        draft: None,
+        updated_at: now_iso(),
+    });
+    session.messages.push(CreateChatMessage {
+        role: "user".into(),
+        content: message.clone(),
+        created_at: Some(now_iso()),
+    });
+    let reply = format!(
+        "Quick assemble plan: {} ({} mods, {} must-have). No AI — default category budgets + names from your prompt.",
+        brief.title,
+        brief.target_count,
+        brief.must_have.len()
+    );
+    session.messages.push(CreateChatMessage {
+        role: "assistant".into(),
+        content: reply.clone(),
+        created_at: Some(now_iso()),
+    });
+    if session.title == "New chat" || session.title.is_empty() {
+        session.title = brief.title.clone();
+    }
+    session.updated_at = now_iso();
+    save_create_chat_file(&project_dir, &session)?;
+
+    Ok(json!({
+        "chatId": id,
+        "reply": reply,
         "brief": brief,
         "session": session,
     }))

@@ -8,9 +8,11 @@ use tuffbox_core::action_plan::ActionPlan;
 use tuffbox_core::crash_kb::{AuthorCaseInput, CrashCase};
 use tuffbox_core::swarm::{
     clear_pending_action_plan, format_cooccurrence_for_prompt, load_pending_action_plan,
-    maybe_write_pending_from_score, merge_cooccurrence_pairs, normalize_mod_id_list,
-    record_mod_set_cooccurrence, top_cooccurrence_pairs, write_pending_action_plan,
-    ExperienceCapsule, ModPairStat, STRONG_MATCH_THRESHOLD,
+    mark_pack_observation, maybe_write_pending_from_score, merge_cooccurrence_pairs,
+    normalize_mod_id_list, pack_mod_ids, partners_for_mod, plan_pack_observation,
+    record_mod_set_cooccurrence, suggest_by_group_affinity, top_cooccurrence_groups,
+    top_cooccurrence_pairs, write_pending_action_plan, ExperienceCapsule, ModPairStat,
+    STRONG_MATCH_THRESHOLD,
 };
 use tuffbox_core::{ProjectManifest, Snapshot, SnapshotMeta, SnapshotStore};
 use tauri::Emitter;
@@ -1011,17 +1013,28 @@ pub fn record_project_cooccurrence(path: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
-    let ids: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
-    record_mod_set_cooccurrence(
+    let ids = pack_mod_ids(&manifest);
+    let plan = plan_pack_observation(
         &project_dir,
         &ids,
         &manifest.minecraft.version,
         &loader,
-    )
+    );
+    if plan.record_local {
+        record_mod_set_cooccurrence(
+            &project_dir,
+            &plan.ids,
+            &manifest.minecraft.version,
+            &loader,
+        )?;
+        let _ = mark_pack_observation(&project_dir, &plan.fingerprint, false);
+    }
+    Ok(())
 }
 
 /// Local record + best-effort Supabase upload of mod co-occurrence.
 /// Local write does not require swarm; network upload does.
+/// Identical pack compositions are not re-counted (basket dedupe).
 pub async fn record_and_upload_cooccurrence(
     path: &str,
     mod_ids: &[String],
@@ -1041,20 +1054,26 @@ pub async fn record_and_upload_cooccurrence_opts(
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
     let ids = if mod_ids.is_empty() {
-        manifest.mods.iter().map(|m| m.id.clone()).collect()
+        pack_mod_ids(&manifest)
     } else {
-        mod_ids.to_vec()
+        normalize_mod_id_list(mod_ids, 512)
     };
-    let ids = normalize_mod_id_list(&ids, 48);
 
-    if record_local {
-        let _ = record_mod_set_cooccurrence(&project_dir, &ids, &mc, &loader);
+    let plan = plan_pack_observation(&project_dir, &ids, &mc, &loader);
+    let do_local = record_local && plan.record_local;
+    if do_local {
+        let _ = record_mod_set_cooccurrence(&project_dir, &plan.ids, &mc, &loader);
     }
 
     let mut uploaded = false;
     let mut upload_error: Option<String> = None;
-    if integrations::swarm_enabled() {
-        if let (Some(url), Some(key)) = (
+    let skipped = !plan.record_local && !plan.upload_network;
+    // ponytail: co-occurrence is mod-id pairs only — upload when Supabase is configured,
+    // without requiring the full TuffSwarm crash-network opt-in. Crash capsules still gate on swarm.enabled.
+    if plan.upload_network && integrations::swarm_supabase_configured() {
+        if plan.network_ids.len() < 2 {
+            upload_error = Some("need at least 2 mods to report co-occurrence".into());
+        } else if let (Some(url), Some(key)) = (
             integrations::swarm_supabase_url(),
             integrations::swarm_supabase_anon_key(),
         ) {
@@ -1064,7 +1083,7 @@ pub async fn record_and_upload_cooccurrence_opts(
             match tuffbox_core::swarm_supabase::report_cooccurrence_supabase(
                 &url,
                 &key,
-                &ids,
+                &plan.network_ids,
                 &mc,
                 &loader,
                 source,
@@ -1072,20 +1091,42 @@ pub async fn record_and_upload_cooccurrence_opts(
             )
             .await
             {
-                Ok(_) => uploaded = true,
-                Err(e) => upload_error = Some(e),
+                Ok(_) => {
+                    uploaded = true;
+                    let _ = mark_pack_observation(&project_dir, &plan.fingerprint, true);
+                }
+                Err(e) => {
+                    upload_error = Some(e);
+                    if do_local || plan.record_local {
+                        let _ = mark_pack_observation(&project_dir, &plan.fingerprint, false);
+                    }
+                }
             }
         }
+    } else if do_local {
+        let _ = mark_pack_observation(&project_dir, &plan.fingerprint, false);
+    } else if skipped {
+        // identical pack already observed + uploaded
     }
 
     Ok(json!({
-        "local": record_local,
+        "local": do_local,
         "uploaded": uploaded,
-        "modCount": ids.len(),
+        "skippedDuplicate": skipped,
+        "modCount": plan.ids.len(),
+        "networkModCount": plan.network_ids.len(),
         "uploadError": upload_error,
         "mcVersion": mc,
         "loader": loader,
+        "fingerprint": plan.fingerprint,
     }))
+}
+
+/// Fire-and-forget pack basket stats (install / export hooks).
+pub fn spawn_pack_cooccurrence(path: String, source: &'static str) {
+    tauri::async_runtime::spawn(async move {
+        let _ = record_and_upload_cooccurrence(&path, &[], source).await;
+    });
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1182,12 +1223,17 @@ pub async fn get_creation_trends(
     }
 
     let merged = merge_cooccurrence_pairs(&local, &network_pairs, limit);
+    let groups = top_cooccurrence_groups(&merged, limit.min(12));
     let prompt_hint = format_cooccurrence_for_prompt(&merged, limit.min(20));
+    let installed: std::collections::HashSet<String> = pack_mod_ids(&manifest).into_iter().collect();
+    let suggestions = suggest_by_group_affinity(&merged, &installed, limit.min(8));
 
     Ok(json!({
         "localPairs": local,
         "networkPairs": network_pairs,
         "mergedPairs": merged,
+        "groups": groups,
+        "suggestions": suggestions,
         "network": network,
         "promptHint": prompt_hint,
         "strongMatchThreshold": STRONG_MATCH_THRESHOLD,
@@ -1195,30 +1241,49 @@ pub async fn get_creation_trends(
     }))
 }
 
-/// Suggest Modrinth slugs from co-occurrence partner mods not yet installed.
+/// Suggest Modrinth slugs that fit groups already present in the pack (≥2 co-occur edges).
 #[tauri::command(rename_all = "camelCase")]
-pub fn suggest_mods_from_trends(path: String, limit: Option<u32>) -> Result<Vec<String>, String> {
-    let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let installed: std::collections::HashSet<String> = manifest
-        .mods
-        .iter()
-        .map(|m| m.id.to_ascii_lowercase())
-        .collect();
-    let pairs = top_cooccurrence_pairs(&project_dir, 50);
-    let mut scores: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for p in pairs {
-        for id in [p.mod_a, p.mod_b] {
-            let key = id.to_ascii_lowercase();
-            if !installed.contains(&key) {
-                *scores.entry(key).or_insert(0) += p.count;
-            }
-        }
+pub async fn suggest_mods_from_trends(
+    path: String,
+    limit: Option<u32>,
+) -> Result<Vec<String>, String> {
+    let limit = limit.unwrap_or(8) as usize;
+    let trends = get_creation_trends(path, Some(limit as u32)).await?;
+    if let Some(arr) = trends.get("suggestions").and_then(|v| v.as_array()) {
+        return Ok(arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .take(limit)
+            .collect());
     }
-    let mut ranked: Vec<(String, u64)> = scores.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1));
-    ranked.truncate(limit.unwrap_or(8) as usize);
-    Ok(ranked.into_iter().map(|(id, _)| id).collect())
+    Ok(Vec::new())
+}
+
+/// After installing `modId`, suggest popular co-occurring mods the user may also want.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn suggest_partners_for_mod(
+    path: String,
+    mod_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let limit = limit.unwrap_or(8).clamp(1, 20) as usize;
+    let trends = get_creation_trends(path.clone(), Some(80)).await?;
+    let pairs: Vec<ModPairStat> = trends
+        .get("mergedPairs")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let installed: std::collections::HashSet<String> = pack_mod_ids(&manifest).into_iter().collect();
+    let partners = partners_for_mod(&pairs, &mod_id, &installed, limit);
+    Ok(partners
+        .into_iter()
+        .map(|(slug, count)| {
+            json!({
+                "slug": slug,
+                "count": count,
+            })
+        })
+        .collect())
 }
 
 fn collect_crash_fix_timeline(

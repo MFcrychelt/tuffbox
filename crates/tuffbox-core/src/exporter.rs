@@ -1,4 +1,5 @@
-use crate::manifest::{LoaderKind, ProjectManifest, Side};
+use crate::manifest::{LoaderKind, ProjectManifest, Side, SourceKind};
+use crate::provider::CurseForgeProvider;
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -111,9 +112,10 @@ struct CurseForgeLoader {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct CurseForgeFile {
+    #[serde(rename = "projectID")]
     project_id: u64,
+    #[serde(rename = "fileID")]
     file_id: u64,
     required: bool,
 }
@@ -473,6 +475,8 @@ pub fn export_curseforge_pack(
         fs::create_dir_all(parent)?;
     }
 
+    let (files, override_jars) = curseforge_files_and_jars(manifest, project_dir);
+
     let output = fs::File::create(output_path)?;
     let mut zip = ZipWriter::new(output);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
@@ -492,24 +496,140 @@ pub fn export_curseforge_pack(
             .first()
             .cloned()
             .unwrap_or_else(|| "TuffBox".to_string()),
-        files: Vec::new(),
+        files,
         overrides: "overrides".to_string(),
     };
 
     zip.start_file("manifest.json", options)?;
     zip.write_all(serde_json::to_string_pretty(&cf_manifest)?.as_bytes())?;
 
-    zip.start_file("tuffbox.remote-mods.json", options)?;
-    zip.write_all(serde_json::to_string_pretty(&remote_mod_manifest(manifest))?.as_bytes())?;
+    // Remotes that are not CurseForge entries (Modrinth/direct URLs) stay as a
+    // side channel so nothing is silently dropped.
+    let remotes: Vec<ServerPackRemoteMod> = remote_mod_manifest(manifest)
+        .into_iter()
+        .filter(|r| {
+            !manifest.mods.iter().any(|m| {
+                m.id == r.id && matches!(m.source.kind, SourceKind::Curseforge)
+            })
+        })
+        .collect();
+    if !remotes.is_empty() {
+        zip.start_file("tuffbox.remote-mods.json", options)?;
+        zip.write_all(serde_json::to_string_pretty(&remotes)?.as_bytes())?;
+    }
 
-    let override_count = add_overrides(&mut zip, project_dir, options)?;
+    let mut override_count = add_overrides(&mut zip, project_dir, options)?;
+    for jar in &override_jars {
+        let dest = format!(
+            "overrides/mods/{}",
+            jar.file_name()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_else(|| "mod.jar".into())
+        );
+        zip.start_file(&dest, options)?;
+        zip.write_all(&fs::read(jar)?)?;
+        override_count += 1;
+    }
     zip.finish()?;
 
     Ok(ExportResult {
         path: output_path.to_path_buf(),
-        file_count: cf_manifest.files.len() + 2,
+        file_count: cf_manifest.files.len() + if remotes.is_empty() { 1 } else { 2 },
         override_count,
     })
+}
+
+/// Build CurseForge `files[]` from mods that already have project/file IDs,
+/// fingerprint-resolve local jars when possible, and collect leftover jars for
+/// `overrides/mods/`.
+fn curseforge_files_and_jars(
+    manifest: &ProjectManifest,
+    project_dir: &Path,
+) -> (Vec<CurseForgeFile>, Vec<PathBuf>) {
+    let mut files = Vec::new();
+    let mut override_jars = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    let cf = CurseForgeProvider::new();
+    // Batch fingerprint lookups for jars that lack CF IDs.
+    let mut pending_fps: Vec<(usize, u32, PathBuf)> = Vec::new();
+    let mut pending_mods: Vec<&crate::manifest::ModSpec> = Vec::new();
+
+    for module in &manifest.mods {
+        let required = !matches!(module.side, Side::Optional);
+        if matches!(module.source.kind, SourceKind::Curseforge) {
+            if let (Some(pid), Some(fid)) = (
+                module.source.project_id.as_deref().and_then(|s| s.parse().ok()),
+                module.source.file_id.as_deref().and_then(|s| s.parse().ok()),
+            ) {
+                let key = (pid, fid);
+                if seen.insert(key) {
+                    files.push(CurseForgeFile {
+                        project_id: pid,
+                        file_id: fid,
+                        required,
+                    });
+                }
+                continue;
+            }
+        }
+
+        let jar = resolve_mod_jar_path(project_dir, module);
+        if let Some(path) = jar {
+            if matches!(module.source.kind, SourceKind::Curseforge)
+                || module.source.project_id.is_none()
+            {
+                if let Ok(fp) = crate::murmur2::murmur2_file(&path) {
+                    pending_fps.push((pending_mods.len(), fp, path.clone()));
+                    pending_mods.push(module);
+                    continue;
+                }
+            }
+            override_jars.push(path);
+        }
+    }
+
+    if !pending_fps.is_empty() {
+        let fps: Vec<u32> = pending_fps.iter().map(|(_, fp, _)| *fp).collect();
+        let resolved = cf.get_fingerprints(&fps).unwrap_or_default();
+        for (idx, fp, path) in pending_fps {
+            if let Some(info) = resolved.get(&fp) {
+                let key = (info.mod_id, info.id);
+                if seen.insert(key) {
+                    let required = !matches!(pending_mods[idx].side, Side::Optional);
+                    files.push(CurseForgeFile {
+                        project_id: info.mod_id,
+                        file_id: info.id,
+                        required,
+                    });
+                }
+            } else {
+                override_jars.push(path);
+            }
+        }
+    }
+
+    files.sort_by_key(|f| (f.project_id, f.file_id));
+    (files, override_jars)
+}
+
+fn resolve_mod_jar_path(
+    project_dir: &Path,
+    module: &crate::manifest::ModSpec,
+) -> Option<PathBuf> {
+    if let Some(rel) = module.source.path.as_ref() {
+        let p = project_dir.join(rel);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(name) = module.file_name.as_ref() {
+        let p = project_dir.join("mods").join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
 }
 
 fn prism_instance_cfg(manifest: &ProjectManifest) -> String {
@@ -645,6 +765,7 @@ fn add_overrides<W: Write + Seek>(
     project_dir: &Path,
     options: SimpleFileOptions,
 ) -> Result<usize, ExportError> {
+    let ignore = TuffboxIgnore::load(project_dir);
     let mut count = 0;
     for root in [
         "config",
@@ -656,7 +777,7 @@ fn add_overrides<W: Write + Seek>(
     ] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir(zip, project_dir, &dir, options)?;
+            count += add_dir(zip, project_dir, &dir, options, &ignore)?;
         }
     }
     Ok(count)
@@ -667,11 +788,12 @@ fn add_server_overrides<W: Write + Seek>(
     project_dir: &Path,
     options: SimpleFileOptions,
 ) -> Result<usize, ExportError> {
+    let ignore = TuffboxIgnore::load(project_dir);
     let mut count = 0;
     for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir(zip, project_dir, &dir, options)?;
+            count += add_dir(zip, project_dir, &dir, options, &ignore)?;
         }
     }
     Ok(count)
@@ -791,6 +913,7 @@ fn add_dir<W: Write + Seek>(
     project_dir: &Path,
     dir: &Path,
     options: SimpleFileOptions,
+    ignore: &TuffboxIgnore,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
     for entry in fs::read_dir(dir)? {
@@ -799,20 +922,96 @@ fn add_dir<W: Write + Seek>(
             continue;
         }
         let path = entry.path();
+        let relative = path
+            .strip_prefix(project_dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if ignore.is_ignored(&relative) {
+            continue;
+        }
         if path.is_dir() {
-            count += add_dir(zip, project_dir, &path, options)?;
+            count += add_dir(zip, project_dir, &path, options, ignore)?;
         } else if path.is_file() {
-            let relative = path
-                .strip_prefix(project_dir)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
             zip.start_file(format!("overrides/{relative}"), options)?;
             zip.write_all(&fs::read(&path)?)?;
             count += 1;
         }
     }
     Ok(count)
+}
+
+/// Minimal `.tuffboxignore` (gitignore-like prefixes / `*` globs). Empty = no filter.
+struct TuffboxIgnore {
+    patterns: Vec<String>,
+}
+
+impl TuffboxIgnore {
+    fn load(project_dir: &Path) -> Self {
+        let path = project_dir.join(".tuffboxignore");
+        let Ok(raw) = fs::read_to_string(path) else {
+            return Self {
+                patterns: Vec::new(),
+            };
+        };
+        let patterns = raw
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|s| s.replace('\\', "/"))
+            .collect();
+        Self { patterns }
+    }
+
+    fn is_ignored(&self, relative: &str) -> bool {
+        let rel = relative.replace('\\', "/");
+        self.patterns.iter().any(|pat| match_ignore(pat, &rel))
+    }
+}
+
+fn match_ignore(pattern: &str, path: &str) -> bool {
+    let pat = pattern.trim_start_matches('/');
+    if let Some(prefix) = pat.strip_suffix("/**") {
+        return path == prefix || path.starts_with(&format!("{prefix}/"));
+    }
+    if pat.ends_with('/') {
+        let prefix = pat.trim_end_matches('/');
+        return path == prefix || path.starts_with(&format!("{prefix}/"));
+    }
+    if pat.contains('*') {
+        return wildcard_match(pat, path)
+            || path
+                .rsplit('/')
+                .next()
+                .map(|name| wildcard_match(pat, name))
+                .unwrap_or(false);
+    }
+    path == pat || path.ends_with(&format!("/{pat}")) || path.starts_with(&format!("{pat}/"))
+}
+
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    // ponytail: single-`*` glob only; `**` via prefix rules above.
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return text == pattern;
+    }
+    if !text.starts_with(parts[0]) {
+        return false;
+    }
+    let mut rest = &text[parts[0].len()..];
+    for (i, part) in parts.iter().enumerate().skip(1) {
+        if part.is_empty() {
+            if i == parts.len() - 1 {
+                return true;
+            }
+            continue;
+        }
+        match rest.find(part) {
+            Some(idx) => rest = &rest[idx + part.len()..],
+            None => return false,
+        }
+    }
+    rest.is_empty() || pattern.ends_with('*')
 }
 
 fn side_env(side: Side) -> HashMap<String, String> {
@@ -845,6 +1044,7 @@ mod tests {
         ContentType, FileHashes, LoaderSpec, MinecraftSpec, ModSource, ModSpec, ProfileSpec,
         ProjectMetadata, SourceKind,
     };
+    use std::io::Read;
 
     fn fixture_manifest(_dir: &Path) -> ProjectManifest {
         ProjectManifest {
@@ -900,6 +1100,7 @@ mod tests {
                     status: vec![],
                     content_type: ContentType::Mod,
                     authors: Vec::new(),
+                option: None,
                 },
                 ModSpec {
                     id: "clientmod".to_string(),
@@ -921,6 +1122,29 @@ mod tests {
                     status: vec![],
                     content_type: ContentType::Mod,
                     authors: Vec::new(),
+                option: None,
+                },
+                ModSpec {
+                    id: "cf-jei".to_string(),
+                    name: "JEI".to_string(),
+                    source: ModSource {
+                        kind: SourceKind::Curseforge,
+                        project_id: Some("238222".to_string()),
+                        file_id: Some("5101366".to_string()),
+                        url: None,
+                        path: None,
+                        icon_url: None,
+                        categories: Vec::new(),
+                    },
+                    version: "15.20.0.106".to_string(),
+                    file_name: Some("jei.jar".to_string()),
+                    hashes: None,
+                    side: Side::Both,
+                    dependencies: vec![],
+                    status: vec![],
+                    content_type: ContentType::Mod,
+                    authors: Vec::new(),
+                option: None,
                 },
             ],
             overrides: None,
@@ -1010,6 +1234,27 @@ mod tests {
             result.err()
         );
         assert!(out.exists(), "output curseforge zip not created");
+
+        let file = fs::File::open(&out).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let mut manifest_raw = String::new();
+        zip.by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest_raw)
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&manifest_raw).unwrap();
+        let files = value.get("files").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(files.len(), 1, "expected one CF file entry, got {files:?}");
+        assert_eq!(files[0].get("projectID").and_then(|v| v.as_u64()), Some(238222));
+        assert_eq!(files[0].get("fileID").and_then(|v| v.as_u64()), Some(5101366));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tuffboxignore_skips_override_paths() {
+        assert!(match_ignore("config/secret.cfg", "config/secret.cfg"));
+        assert!(match_ignore("*.log", "config/debug.log"));
+        assert!(match_ignore("kubejs/**", "kubejs/server_scripts/foo.js"));
+        assert!(!match_ignore("config/secret.cfg", "config/other.cfg"));
     }
 }

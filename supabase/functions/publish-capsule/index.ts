@@ -386,7 +386,7 @@ Deno.serve(async (req) => {
     deduped: !!existing,
     note:
       status === "open"
-        ? "Capsule stored as open until peer Keep votes raise trust (saved)"
+        ? "Capsule stored as open — peer Keep/Discard votes accumulate; admin moderation sets saved/rejected"
         : undefined,
   });
 });

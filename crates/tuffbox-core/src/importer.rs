@@ -122,6 +122,7 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
                 status: vec!["ok".to_string()],
                 content_type,
                 authors: Vec::new(),
+            option: None,
             })
         })
         .collect();
@@ -302,6 +303,7 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
                 status: vec!["imported-curseforge".into()],
                 content_type: crate::manifest::ContentType::Mod,
                 authors: Vec::new(),
+            option: None,
             }
         })
         .collect();
@@ -435,6 +437,74 @@ pub fn resolve_curseforge_pack_files(
         }
     }
     Ok(resolved)
+}
+
+/// Fill missing CurseForge `project_id`/`file_id` by murmur2 fingerprint lookup.
+///
+/// Used after folder/local-jar import when mods lack CF metadata but jars exist
+/// on disk under `mods/` or `source.path`.
+pub fn resolve_mods_by_fingerprint(
+    manifest: &mut ProjectManifest,
+    project_dir: impl AsRef<Path>,
+) -> Result<usize, crate::provider::ProviderError> {
+    use crate::provider::CurseForgeProvider;
+
+    let project_dir = project_dir.as_ref();
+    let provider = CurseForgeProvider::new();
+    let mut pending: Vec<(usize, u32)> = Vec::new();
+
+    for (idx, module) in manifest.mods.iter().enumerate() {
+        if module.source.project_id.is_some() && module.source.file_id.is_some() {
+            continue;
+        }
+        let path = module
+            .source
+            .path
+            .as_ref()
+            .map(|p| project_dir.join(p))
+            .or_else(|| {
+                module
+                    .file_name
+                    .as_ref()
+                    .map(|n| project_dir.join("mods").join(n))
+            });
+        let Some(path) = path.filter(|p| p.is_file()) else {
+            continue;
+        };
+        if let Ok(fp) = crate::murmur2::murmur2_file(&path) {
+            pending.push((idx, fp));
+        }
+    }
+
+    if pending.is_empty() {
+        return Ok(0);
+    }
+    let fps: Vec<u32> = pending.iter().map(|(_, fp)| *fp).collect();
+    let resolved = provider.get_fingerprints(&fps)?;
+    let mut count = 0usize;
+    for (idx, fp) in pending {
+        let Some(info) = resolved.get(&fp) else {
+            continue;
+        };
+        let module = &mut manifest.mods[idx];
+        module.source.kind = SourceKind::Curseforge;
+        module.source.project_id = Some(info.mod_id.to_string());
+        module.source.file_id = Some(info.id.to_string());
+        if module.source.url.is_none() {
+            module.source.url = info.resolved_download_url();
+        }
+        if module.file_name.is_none() {
+            module.file_name = Some(info.file_name.clone());
+        }
+        if module.hashes.is_none() {
+            module.hashes = Some(FileHashes {
+                sha1: info.hashes.sha1.clone(),
+                sha512: info.hashes.sha512.clone(),
+            });
+        }
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Extract the CurseForge `overrides/` folder into `instance_dir` (→ minecraft root).
@@ -577,6 +647,12 @@ pub fn import_folder(path: impl AsRef<Path>) -> Result<ProjectManifest, ImportEr
             "not a directory: {}",
             path.display()
         )));
+    }
+
+    if crate::packwiz::is_packwiz_pack(path) {
+        return crate::packwiz::import_packwiz_pack(path).map_err(|e| {
+            ImportError::UnsupportedFormat(format!("packwiz import failed: {e}"))
+        });
     }
 
     let mods_dir = path.join("mods");

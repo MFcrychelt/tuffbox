@@ -2,12 +2,36 @@
   import { Play, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
+  import { onMount, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
   import { projectPath, projectInfo, isLaunching, openLaunchLog } from "../lib/store";
   import { launchWithFeedback } from "../lib/launch";
 
   export let currentView: string;
+
+  let onlineCount = 0;
+  let onlineOk = false;
+  let onlineTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function refreshOnline() {
+    try {
+      const stats: any = await invoke("get_launcher_online");
+      onlineCount = Number(stats?.onlineCount ?? 0);
+      onlineOk = true;
+    } catch {
+      onlineOk = false;
+    }
+  }
+
+  onMount(() => {
+    void refreshOnline();
+    onlineTimer = setInterval(() => void refreshOnline(), 15000);
+  });
+
+  onDestroy(() => {
+    if (onlineTimer) clearInterval(onlineTimer);
+  });
 
   const titles: Record<string, string> = {
     dashboard: "Launcher",
@@ -76,6 +100,16 @@
   </div>
 
   <div class="right">
+    <div
+      class="online-chip"
+      class:live={onlineOk}
+      title={onlineOk ? "Users with TuffBox open right now" : "Online status unavailable"}
+    >
+      <span class="online-dot" class:on={onlineOk && onlineCount > 0}></span>
+      <span class="online-label">{onlineOk ? onlineCount : "—"}</span>
+      <span class="online-hint">online</span>
+    </div>
+
     {#if $projectInfo}
       <div class="project-chip">
         <span class="project-name">{$projectInfo.name}</span>
@@ -166,6 +200,43 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .online-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    user-select: none;
+  }
+  .online-chip.live {
+    color: var(--text-secondary);
+  }
+  .online-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #64748b;
+    box-shadow: none;
+  }
+  .online-dot.on {
+    background: #22c55e;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
+  }
+  .online-label {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    min-width: 1ch;
+  }
+  .online-hint {
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
   }
 
   .project-chip {

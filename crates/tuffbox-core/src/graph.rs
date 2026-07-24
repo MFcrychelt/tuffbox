@@ -239,7 +239,7 @@ impl DependencyGraph {
                     && profile.include_mods.iter().any(|id| id == &module.id);
                 let implicitly_included = profile.include_mods.is_empty();
                 let included = explicitly_included || implicitly_included;
-                if included && module.side.is_compatible_with_profile(profile.side) {
+                if included && module.included_in_profile(profile) {
                     graph.edges.push(GraphEdge {
                         from: NodeId::profile(&profile.id),
                         to: mod_id.clone(),

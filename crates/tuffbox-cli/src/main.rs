@@ -894,6 +894,7 @@ fn build_mod_spec(
             .as_ref()
             .map(|a| vec![a.clone()])
             .unwrap_or_default(),
+        option: None,
     }
 }
 

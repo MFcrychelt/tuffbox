@@ -1004,6 +1004,112 @@ import { trapFocus } from "../lib/focusTrap";
     }).catch(() => {});
   }
 
+  // Ideas: after Add-mod install, offer popular co-occurring companions (user can decline).
+  const IDEAS_STORAGE_KEY = "tuffbox.mods.ideas";
+  let ideasEnabled =
+    typeof localStorage === "undefined"
+      ? true
+      : localStorage.getItem(IDEAS_STORAGE_KEY) !== "false";
+  type IdeaOffer = { slug: string; count: number; selected: boolean };
+  let ideasOpen = false;
+  let ideasSeedLabel = "";
+  let ideasOffers: IdeaOffer[] = [];
+  let ideasBusy = false;
+  let ideasPendingDepsCheck = false;
+
+  function setIdeasEnabled(next: boolean) {
+    ideasEnabled = next;
+    try {
+      localStorage.setItem(IDEAS_STORAGE_KEY, next ? "true" : "false");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function maybeOfferIdeas(seedIds: string[], seedLabel: string): Promise<boolean> {
+    if (!ideasEnabled || !$projectPath || seedIds.length === 0) return false;
+    try {
+      const seen = new Set<string>();
+      const merged: IdeaOffer[] = [];
+      for (const seed of seedIds) {
+        const partners = await invoke<{ slug: string; count: number }[]>(
+          "suggest_partners_for_mod",
+          { path: $projectPath, modId: seed, limit: 8 },
+        );
+        for (const p of partners ?? []) {
+          const slug = (p.slug || "").trim().toLowerCase();
+          if (!slug || seen.has(slug)) continue;
+          seen.add(slug);
+          merged.push({ slug, count: p.count ?? 1, selected: true });
+        }
+      }
+      merged.sort((a, b) => b.count - a.count);
+      ideasOffers = merged.slice(0, 8);
+      if (ideasOffers.length === 0) return false;
+      ideasSeedLabel = seedLabel;
+      ideasOpen = true;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function afterAddModInstall(seedIds: string[], seedLabel: string) {
+    await reloadModsSilent();
+    ideasPendingDepsCheck = true;
+    const shown = await maybeOfferIdeas(seedIds, seedLabel);
+    if (!shown) {
+      ideasPendingDepsCheck = false;
+      checkMissingDepsAfterInstall();
+    }
+  }
+
+  function dismissIdeas() {
+    ideasOpen = false;
+    ideasOffers = [];
+    ideasBusy = false;
+    if (ideasPendingDepsCheck) {
+      ideasPendingDepsCheck = false;
+      checkMissingDepsAfterInstall();
+    }
+  }
+
+  async function installSelectedIdeas() {
+    if (!$projectPath || ideasBusy) return;
+    const selected = ideasOffers.filter((o) => o.selected).map((o) => o.slug);
+    if (selected.length === 0) {
+      dismissIdeas();
+      return;
+    }
+    ideasBusy = true;
+    ideasOpen = false;
+    mutating = true;
+    openDownloadOverlay(
+      selected.length === 1
+        ? `Installing ${selected[0]} + deps`
+        : `Installing ${selected.length} ideas + deps`,
+    );
+    try {
+      await invoke("add_modrinth_mods_with_dependencies", {
+        path: $projectPath,
+        modIds: selected,
+        side: selectedSide,
+      });
+      await reloadModsSilent();
+    } catch (e) {
+      error = String(e);
+      downloadDone = true;
+    } finally {
+      mutating = false;
+      ideasBusy = false;
+      ideasOffers = [];
+      if (ideasPendingDepsCheck) {
+        ideasPendingDepsCheck = false;
+        checkMissingDepsAfterInstall();
+      }
+    }
+  }
+
   async function resolveDepsViaGraph() {
     dependencyDialogOpen = false;
     // Switch to graph view — signal via a custom event
@@ -1027,6 +1133,41 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   let message: string | null = null;
+
+  type DupJarGroup = {
+    modId: string;
+    keepCandidate: string;
+    jars: Array<{ fileName: string; modId: string; mtimeMs: number; size: number; inManifest: boolean }>;
+  };
+  let duplicateJarGroups: DupJarGroup[] = [];
+  let duplicateJarFixing: string | null = null;
+
+  async function detectDuplicateModJars() {
+    if (!$projectPath) {
+      duplicateJarGroups = [];
+      return;
+    }
+    try {
+      duplicateJarGroups = await api.mods.detectDuplicateModJars($projectPath);
+    } catch {
+      duplicateJarGroups = [];
+    }
+  }
+
+  async function keepOneDuplicateJar(modId: string, keepFileName: string) {
+    if (!$projectPath) return;
+    duplicateJarFixing = `${modId}::${keepFileName}`;
+    error = null;
+    try {
+      message = await api.mods.keepOneDuplicateModJar(modId, keepFileName, $projectPath);
+      await detectDuplicateModJars();
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      duplicateJarFixing = null;
+    }
+  }
 
   // User state for mods (favorites, named build lists, ratings)
   let userState: { favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> } = {
@@ -1301,6 +1442,8 @@ import { trapFocus } from "../lib/focusTrap";
 
   async function confirmFromPlan(withDeps: boolean) {
     if (!$projectPath || !planPreviewMod) return;
+    const seedId = planPreviewMod.id;
+    const seedLabel = planPreviewMod.name || planPreviewMod.slug || planPreviewMod.id;
     planPreviewOpen = false;
     mutating = true;
     error = null;
@@ -1315,8 +1458,7 @@ import { trapFocus } from "../lib/focusTrap";
       selectedResultIds = {};
       searchResults = [];
       searchQuery = "";
-      await reloadModsSilent();
-      checkMissingDepsAfterInstall();
+      await afterAddModInstall([seedId], seedLabel);
     } catch (e) {
       error = String(e);
       downloadDone = true;
@@ -1364,6 +1506,7 @@ import { trapFocus } from "../lib/focusTrap";
       lastLoadedPath = path;
       brokenIcons = [];
       await loadUserState();
+      void detectDuplicateModJars();
     } catch (e) {
       error = String(e);
       loading = false;
@@ -1696,6 +1839,11 @@ import { trapFocus } from "../lib/focusTrap";
 
   async function bulkInstallSelected() {
     if (!$projectPath || selectedResults.length === 0) return;
+    const seeds = selectedResults.map((r) => r.slug || r.id);
+    const seedLabel =
+      selectedResults.length === 1
+        ? selectedResults[0].name
+        : `${selectedResults.length} mods`;
     mutating = true;
     error = null;
     openDownloadOverlay(`Installing ${selectedResults.length} projects`);
@@ -1709,8 +1857,7 @@ import { trapFocus } from "../lib/focusTrap";
       selectedResultIds = {};
       searchResults = [];
       searchQuery = "";
-      await reloadModsSilent();
-      checkMissingDepsAfterInstall();
+      await afterAddModInstall(seeds, seedLabel);
     } catch (e) {
       error = String(e);
       downloadDone = true;
@@ -1754,7 +1901,14 @@ import { trapFocus } from "../lib/focusTrap";
       pendingInstall = null;
       searchResults = [];
       searchQuery = "";
-      await reloadModsSilent();
+      if (!curseforge) {
+        await afterAddModInstall(
+          [installTarget.slug || installTarget.id],
+          installTarget.name,
+        );
+      } else {
+        await reloadModsSilent();
+      }
     } catch (e) {
       downloadError = String(e);
       error = downloadError;
@@ -1976,6 +2130,46 @@ import { trapFocus } from "../lib/focusTrap";
     </div>
   </header>
 
+  {#if duplicateJarGroups.length > 0}
+    <section class="panel conflicts-jars">
+      <div class="conflicts-head">
+        <h2><AlertTriangle size={16} /> Conflicts & jars</h2>
+        <p>Same mod id in more than one jar — keep one copy, delete the duplicates.</p>
+      </div>
+      {#each duplicateJarGroups as group (group.modId)}
+        <div class="dup-group">
+          <div class="dup-meta">
+            <strong>{group.modId}</strong>
+            <span>{group.jars.length} jars</span>
+            <button
+              class="secondary small"
+              disabled={duplicateJarFixing !== null}
+              on:click={() => keepOneDuplicateJar(group.modId, group.keepCandidate)}
+            >
+              Keep newest
+            </button>
+          </div>
+          <ul class="dup-list">
+            {#each group.jars as jar (jar.fileName)}
+              <li>
+                <code>{jar.fileName}</code>
+                {#if jar.fileName === group.keepCandidate}<span class="pill">newest</span>{/if}
+                {#if jar.inManifest}<span class="pill">manifest</span>{/if}
+                <button
+                  class="ghost mini"
+                  disabled={duplicateJarFixing !== null}
+                  on:click={() => keepOneDuplicateJar(group.modId, jar.fileName)}
+                >
+                  {duplicateJarFixing === `${group.modId}::${jar.fileName}` ? "…" : "Keep this"}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/each}
+    </section>
+  {/if}
+
   <div class="toolbar">
     <div class="tabs content-tabs">
       <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
@@ -2021,6 +2215,19 @@ import { trapFocus } from "../lib/focusTrap";
           <Lightbulb size={16} />
           {recsLoading ? "Analyzing..." : "Suggestions"}
         </button>
+        <label
+          class="ideas-toggle"
+          class:on={ideasEnabled}
+          title="After installing from Add mods, offer popular companion mods from community stats"
+        >
+          <input
+            type="checkbox"
+            checked={ideasEnabled}
+            on:change={(e) => setIdeasEnabled((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <Sparkles size={14} />
+          Ideas
+        </label>
         <button
           class="secondary"
           on:click={installSteamBridge}
@@ -3074,6 +3281,52 @@ import { trapFocus } from "../lib/focusTrap";
   </div>
 {/if}
 
+<!-- Ideas: popular companions after Add-mod install -->
+{#if ideasOpen}
+  <div
+    class="modal-backdrop"
+    role="button"
+    tabindex="-1"
+    on:click={(e) => e.target === e.currentTarget && dismissIdeas()}
+    on:keydown={() => {}}
+  >
+    <div
+      class="modal ideas-dialog"
+      role="dialog"
+      aria-modal="true"
+      use:trapFocus={{ onEscape: dismissIdeas }}
+    >
+      <div class="modal-header">
+        <div>
+          <h2><Sparkles size={18} /> Ideas for {ideasSeedLabel}</h2>
+          <p>These mods often appear together in other packs. Install any you want, or skip.</p>
+        </div>
+        <button class="icon-btn" on:click={dismissIdeas} aria-label="Close"><X size={18} /></button>
+      </div>
+      <div class="ideas-list">
+        {#each ideasOffers as offer (offer.slug)}
+          <label class="ideas-row">
+            <input type="checkbox" bind:checked={offer.selected} />
+            <code>{offer.slug}</code>
+            <span class="muted">×{offer.count}</span>
+          </label>
+        {/each}
+      </div>
+      <div class="dep-dialog-footer ideas-footer">
+        <button class="ghost" on:click={dismissIdeas} disabled={ideasBusy}>No thanks</button>
+        <button
+          on:click={installSelectedIdeas}
+          disabled={ideasBusy || !ideasOffers.some((o) => o.selected)}
+        >
+          {ideasBusy
+            ? "Installing…"
+            : `Install selected (${ideasOffers.filter((o) => o.selected).length})`}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- Post-bulk dependency resolution dialog -->
 {#if dependencyDialogOpen}
   <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} on:keydown={() => {}}>
@@ -3231,6 +3484,62 @@ import { trapFocus } from "../lib/focusTrap";
     animation: hero-in 0.45s ease both;
   }
 
+  .conflicts-jars {
+    margin-bottom: 18px;
+    padding: 14px 16px;
+    border: 1px solid rgba(251, 191, 36, 0.28);
+    border-radius: var(--border-radius-lg);
+    background: rgba(251, 191, 36, 0.05);
+  }
+  .conflicts-head h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 4px;
+    font-size: 15px;
+  }
+  .conflicts-head p {
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .dup-group + .dup-group { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); }
+  .dup-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .dup-meta span { color: var(--text-muted); font-size: 12px; }
+  .dup-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .dup-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .dup-list .pill,
+  .conflicts-jars .pill {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
+
   @keyframes hero-in {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: none; }
@@ -3335,6 +3644,55 @@ import { trapFocus } from "../lib/focusTrap";
 
   .glow-btn {
     border-color: rgba(27, 217, 106, 0.35) !important;
+  }
+
+  .ideas-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .ideas-toggle.on {
+    color: var(--text-primary);
+    border-color: rgba(27, 217, 106, 0.4);
+    background: rgba(27, 217, 106, 0.08);
+  }
+  .ideas-toggle input {
+    margin: 0;
+  }
+  .ideas-dialog {
+    max-width: 420px;
+  }
+  .ideas-list {
+    display: grid;
+    gap: 8px;
+    padding: 4px 0 12px;
+    max-height: 280px;
+    overflow: auto;
+  }
+  .ideas-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .ideas-row .muted {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .ideas-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   .search {

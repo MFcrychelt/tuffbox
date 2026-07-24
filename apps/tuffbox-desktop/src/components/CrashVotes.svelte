@@ -322,7 +322,7 @@
         <h1>Crash Votes</h1>
       </div>
       <p class="subtitle">
-        Community crash fix capsules — statuses open → saved / rejected. Sign in to vote Keep or Discard.
+        Community crash fix capsules — vote Keep/Discard; an admin promotes open → saved / rejected.
       </p>
       <p class="privacy">
         <Shield size={13} />

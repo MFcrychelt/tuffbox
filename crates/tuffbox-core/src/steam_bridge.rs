@@ -185,6 +185,7 @@ pub fn build_steam_bridge_mod_spec(asset: &SteamBridgeAsset) -> ModSpec {
         status: vec!["ok".into()],
         content_type: ContentType::Mod,
         authors: vec!["Ragalikx".into()],
+    option: None,
     }
 }
 

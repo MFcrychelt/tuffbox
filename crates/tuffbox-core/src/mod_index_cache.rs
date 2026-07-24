@@ -241,6 +241,7 @@ impl ModHashIndexEntry {
             status: vec!["ok".into()],
             content_type,
             authors: Vec::new(),
+        option: None,
         })
     }
 }

@@ -448,10 +448,27 @@
   .content.ide-view {
     overflow: hidden;
     padding: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   .view-pane {
     width: 100%;
     min-width: 0;
+  }
+
+  /* IDE workflow fills the pane so the stage rail stays docked at the bottom
+     instead of floating mid-window under short pages (Brief) or getting clipped. */
+  .content.ide-view .view-pane {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .content.ide-view .view-pane > :global(.ide-workspace) {
+    flex: 1;
+    min-height: 0;
   }
 </style>

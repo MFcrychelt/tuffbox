@@ -93,7 +93,7 @@ impl TuffboxLockfile {
             })
             .collect();
 
-        mods.sort_by(|a, b| a.id.cmp(&b.id));
+        mods.sort_by_key(|a| a.id.clone());
 
         let edges = graph
             .edges
@@ -125,6 +125,132 @@ impl TuffboxLockfile {
             },
             generated_at: rfc3339_now(),
         }
+    }
+
+    /// Re-hash jars on disk and drop lock entries whose files are missing
+    /// (packwiz `Refresh()`-style). Returns how many mods were updated or removed.
+    pub fn refresh_from_disk(&mut self, project_dir: impl AsRef<Path>) -> usize {
+        use sha1::{Digest, Sha1};
+        use sha2::Sha512;
+
+        let project_dir = project_dir.as_ref();
+        let mut changed = 0usize;
+        let mut kept = Vec::with_capacity(self.mods.len());
+        for mut module in self.mods.drain(..) {
+            let path = resolve_locked_jar(project_dir, &module);
+            let Some(path) = path else {
+                changed += 1; // dropped missing
+                continue;
+            };
+            let Ok(bytes) = fs::read(&path) else {
+                changed += 1;
+                continue;
+            };
+            let sha1 = format!("{:x}", Sha1::digest(&bytes));
+            let sha512 = format!("{:x}", Sha512::digest(&bytes));
+            if module.hashes.sha1.as_deref() != Some(sha1.as_str())
+                || module.hashes.sha512.as_deref() != Some(sha512.as_str())
+            {
+                module.hashes.sha1 = Some(sha1);
+                module.hashes.sha512 = Some(sha512);
+                changed += 1;
+            }
+            kept.push(module);
+        }
+        self.mods = kept;
+        self.generated_at = rfc3339_now();
+        changed
+    }
+}
+
+fn resolve_locked_jar(project_dir: &Path, module: &LockedMod) -> Option<std::path::PathBuf> {
+    if let Some(rel) = module.source.path.as_ref() {
+        let p = project_dir.join(rel);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(name) = module.file_name.as_ref() {
+        let p = project_dir.join("mods").join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_drops_missing_and_rehashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mods = dir.path().join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        fs::write(mods.join("a.jar"), b"hello").unwrap();
+
+        let mut lock = TuffboxLockfile {
+            schema_version: CURRENT_LOCKFILE_SCHEMA_VERSION.into(),
+            project_id: "p".into(),
+            project_version: "1".into(),
+            minecraft_version: "1.20.1".into(),
+            loader: LockedLoader {
+                kind: "fabric".into(),
+                version: "0.15".into(),
+            },
+            java_major: None,
+            mods: vec![
+                LockedMod {
+                    id: "a".into(),
+                    name: "A".into(),
+                    version: "1".into(),
+                    source: LockedSource {
+                        kind: "local".into(),
+                        project_id: None,
+                        file_id: None,
+                        url: None,
+                        path: None,
+                    },
+                    file_name: Some("a.jar".into()),
+                    hashes: LockedHashes {
+                        sha1: Some("bad".into()),
+                        sha512: None,
+                    },
+                    side: "both".into(),
+                },
+                LockedMod {
+                    id: "gone".into(),
+                    name: "Gone".into(),
+                    version: "1".into(),
+                    source: LockedSource {
+                        kind: "local".into(),
+                        project_id: None,
+                        file_id: None,
+                        url: None,
+                        path: None,
+                    },
+                    file_name: Some("missing.jar".into()),
+                    hashes: LockedHashes {
+                        sha1: None,
+                        sha512: None,
+                    },
+                    side: "both".into(),
+                },
+            ],
+            graph: LockedGraph {
+                node_count: 0,
+                edge_count: 0,
+                edges: vec![],
+            },
+            generated_at: "t".into(),
+        };
+
+        let changed = lock.refresh_from_disk(dir.path());
+        assert!(changed >= 2);
+        assert_eq!(lock.mods.len(), 1);
+        assert_eq!(lock.mods[0].id, "a");
+        assert!(lock.mods[0].hashes.sha1.as_ref().unwrap().len() == 40);
     }
 }
 

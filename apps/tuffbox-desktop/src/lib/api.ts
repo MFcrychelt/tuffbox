@@ -826,6 +826,16 @@ export const api = {
     detectWrongLoader(p?: string) { return cmd<Record<string, unknown>[]>("detect_wrong_loader_mods", pathArg(p)); },
     disableJar(fileName: string, p?: string) { return cmd<string>("disable_wrong_loader_jar", { ...pathArg(p), fileName }); },
     removeLooseJar(fileName: string, p?: string) { return cmd<string>("remove_loose_jar", { ...pathArg(p), fileName }); },
+    detectDuplicateModJars(p?: string) {
+      return cmd<Array<{
+        modId: string;
+        keepCandidate: string;
+        jars: Array<{ fileName: string; modId: string; mtimeMs: number; size: number; inManifest: boolean }>;
+      }>>("detect_duplicate_mod_jars", pathArg(p));
+    },
+    keepOneDuplicateModJar(modId: string, keepFileName: string, p?: string) {
+      return cmd<string>("keep_one_duplicate_mod_jar", { ...pathArg(p), modId, keepFileName });
+    },
     checkCompatibility(p?: string) { return cmd<Record<string, unknown>[]>("check_mod_compatibility", pathArg(p)); },
     getInfo(slug: string) { return cmd<Record<string, unknown> | null>("get_mod_info", { slug }); },
     compareModpacks(pathA: string, pathB: string) { return cmd<Record<string, unknown>>("compare_modpacks", { pathA, pathB }); },
@@ -1483,6 +1493,12 @@ export const api = {
       return cmd<void>("set_discord_presence", { details, state });
     },
     clear() { return cmd<void>("clear_discord_presence"); },
+    online() { return cmd<Record<string, unknown>>("get_launcher_online"); },
+    recentSessions(limit = 50) {
+      return cmd<unknown[]>("get_launcher_recent_sessions", { limit });
+    },
+    start() { return cmd<Record<string, unknown>>("launcher_presence_start"); },
+    stop() { return cmd<Record<string, unknown>>("launcher_presence_stop"); },
   },
 
   launcher: {

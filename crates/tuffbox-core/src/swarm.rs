@@ -798,6 +798,27 @@ pub struct CooccurrenceStore {
     pub loader: String,
 }
 
+/// Last pack-composition observation (basket) — avoids re-counting the same build.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PackObservationMarker {
+    #[serde(default)]
+    pub fingerprint: String,
+    #[serde(default)]
+    pub network_uploaded: bool,
+    #[serde(default)]
+    pub at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackObservationPlan {
+    pub ids: Vec<String>,
+    pub network_ids: Vec<String>,
+    pub fingerprint: String,
+    pub record_local: bool,
+    pub upload_network: bool,
+}
+
 fn pair_key(a: &str, b: &str) -> String {
     let (x, y) = if a <= b { (a, b) } else { (b, a) };
     format!("{x}||{y}")
@@ -805,6 +826,10 @@ fn pair_key(a: &str, b: &str) -> String {
 
 pub fn cooccurrence_path(project_dir: &Path) -> PathBuf {
     swarm_dir(project_dir).join("cooccurrence.json")
+}
+
+fn pack_observation_path(project_dir: &Path) -> PathBuf {
+    swarm_dir(project_dir).join("cooccurrence_last_pack.json")
 }
 
 pub fn load_cooccurrence(project_dir: &Path) -> CooccurrenceStore {
@@ -825,6 +850,117 @@ pub fn save_cooccurrence(project_dir: &Path, store: &CooccurrenceStore) -> Resul
         serde_json::to_vec_pretty(store).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())
+}
+
+/// Modrinth-style ids for pack baskets: jar mods only (skip resource/shader packs).
+pub fn pack_mod_ids(manifest: &crate::manifest::ProjectManifest) -> Vec<String> {
+    let ids: Vec<String> = manifest
+        .mods
+        .iter()
+        .filter(|m| matches!(m.content_type, crate::manifest::ContentType::Mod))
+        .map(|m| {
+            // Prefer human slug (`id`); fall back to Modrinth project_id.
+            if !m.id.trim().is_empty() {
+                m.id.clone()
+            } else {
+                m.source
+                    .project_id
+                    .clone()
+                    .unwrap_or_default()
+            }
+        })
+        .collect();
+    normalize_mod_id_list(&ids, 512)
+}
+
+/// Stable fingerprint of a full pack composition (all ids + mc + loader).
+pub fn pack_set_fingerprint(ids: &[String], mc_version: &str, loader: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(mc_version.trim().as_bytes());
+    h.update(b"|");
+    h.update(loader.trim().to_ascii_lowercase().as_bytes());
+    h.update(b"|");
+    for id in ids {
+        h.update(id.as_bytes());
+        h.update(b"\n");
+    }
+    format!("{:x}", h.finalize())
+}
+
+/// Cap network upload size with a stable subset (not alphabetical head-cut).
+pub fn normalize_mod_id_list_for_network(mod_ids: &[String], max: usize) -> Vec<String> {
+    let mut ids = normalize_mod_id_list(mod_ids, 10_000);
+    let max = max.max(2);
+    if ids.len() <= max {
+        return ids;
+    }
+    ids.sort_by_cached_key(|id| {
+        let mut h = Sha256::new();
+        h.update(id.as_bytes());
+        h.finalize().to_vec()
+    });
+    ids.truncate(max);
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn load_pack_observation_marker(project_dir: &Path) -> PackObservationMarker {
+    fs::read_to_string(pack_observation_path(project_dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_pack_observation_marker(
+    project_dir: &Path,
+    marker: &PackObservationMarker,
+) -> Result<(), String> {
+    let path = pack_observation_path(project_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(
+        path,
+        serde_json::to_vec_pretty(marker).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Decide whether this pack composition is a new basket observation.
+/// Same fingerprint → skip local re-count; still upload if prior network upload failed.
+pub fn plan_pack_observation(
+    project_dir: &Path,
+    ids: &[String],
+    mc_version: &str,
+    loader: &str,
+) -> PackObservationPlan {
+    let ids = normalize_mod_id_list(ids, 512);
+    let network_ids = normalize_mod_id_list_for_network(&ids, 48);
+    let fingerprint = pack_set_fingerprint(&ids, mc_version, loader);
+    let marker = load_pack_observation_marker(project_dir);
+    let same = marker.fingerprint == fingerprint && !fingerprint.is_empty();
+    PackObservationPlan {
+        ids,
+        network_ids,
+        fingerprint,
+        record_local: !same,
+        upload_network: !same || !marker.network_uploaded,
+    }
+}
+
+pub fn mark_pack_observation(
+    project_dir: &Path,
+    fingerprint: &str,
+    network_uploaded: bool,
+) -> Result<(), String> {
+    let prev = load_pack_observation_marker(project_dir);
+    let marker = PackObservationMarker {
+        fingerprint: fingerprint.to_string(),
+        network_uploaded: network_uploaded || (prev.fingerprint == fingerprint && prev.network_uploaded),
+        at: crate::time_util::rfc3339_now(),
+    };
+    save_pack_observation_marker(project_dir, &marker)
 }
 
 /// Record all unordered pairs among installed mod ids.
@@ -898,6 +1034,15 @@ pub struct ModPairStat {
     pub count: u64,
 }
 
+/// Frequent mod group (3+) derived from pair graph — for install suggestions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModGroupStat {
+    pub mods: Vec<String>,
+    /// Weakest edge in the clique (support floor).
+    pub score: u64,
+}
+
 pub fn top_cooccurrence_pairs(project_dir: &Path, limit: usize) -> Vec<ModPairStat> {
     let store = load_cooccurrence(project_dir);
     let mut pairs: Vec<ModPairStat> = store
@@ -919,6 +1064,182 @@ pub fn top_cooccurrence_pairs(project_dir: &Path, limit: usize) -> Vec<ModPairSt
     pairs
 }
 
+fn pair_adjacency(pairs: &[ModPairStat]) -> HashMap<String, HashMap<String, u64>> {
+    let mut adj: HashMap<String, HashMap<String, u64>> = HashMap::new();
+    for p in pairs {
+        let a = p.mod_a.trim().to_ascii_lowercase();
+        let b = p.mod_b.trim().to_ascii_lowercase();
+        if a.is_empty() || b.is_empty() || a == b {
+            continue;
+        }
+        *adj.entry(a.clone()).or_default().entry(b.clone()).or_insert(0) += p.count.max(1);
+        *adj.entry(b).or_default().entry(a).or_insert(0) += p.count.max(1);
+    }
+    adj
+}
+
+/// Rank partners that frequently co-occur with `seed` (pairs + groups containing seed).
+pub fn partners_for_mod(
+    pairs: &[ModPairStat],
+    seed: &str,
+    exclude: &std::collections::HashSet<String>,
+    limit: usize,
+) -> Vec<(String, u64)> {
+    let seed = seed.trim().to_ascii_lowercase();
+    if seed.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let exclude: std::collections::HashSet<String> = exclude
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut scores: HashMap<String, u64> = HashMap::new();
+    for p in pairs {
+        let a = p.mod_a.trim().to_ascii_lowercase();
+        let b = p.mod_b.trim().to_ascii_lowercase();
+        let c = p.count.max(1);
+        if a == seed && !exclude.contains(&b) && b != seed {
+            *scores.entry(b).or_insert(0) += c;
+        } else if b == seed && !exclude.contains(&a) && a != seed {
+            *scores.entry(a).or_insert(0) += c;
+        }
+    }
+    for g in top_cooccurrence_groups(pairs, 48) {
+        if !g.mods.iter().any(|m| m == &seed) {
+            continue;
+        }
+        for m in &g.mods {
+            if m == &seed || exclude.contains(m) {
+                continue;
+            }
+            *scores.entry(m.clone()).or_insert(0) += g.score.max(1);
+        }
+    }
+    let mut ranked: Vec<(String, u64)> = scores.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked.truncate(limit);
+    ranked
+}
+
+/// Suggest mods that co-occur with **multiple** already-installed mods (group affinity).
+/// Prefers candidates linked to ≥2 installed mods; falls back to ≥1 if needed.
+pub fn suggest_by_group_affinity(
+    pairs: &[ModPairStat],
+    installed: &std::collections::HashSet<String>,
+    limit: usize,
+) -> Vec<String> {
+    let installed: std::collections::HashSet<String> = installed
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if installed.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let adj = pair_adjacency(pairs);
+    let mut scored: Vec<(String, u32, u64)> = Vec::new();
+    for (cand, neighbors) in &adj {
+        if installed.contains(cand) {
+            continue;
+        }
+        let mut support = 0u32;
+        let mut weight = 0u64;
+        for id in &installed {
+            if let Some(&w) = neighbors.get(id) {
+                support += 1;
+                weight += w;
+            }
+        }
+        if support == 0 {
+            continue;
+        }
+        scored.push((cand.clone(), support, weight));
+    }
+    scored.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let multi: Vec<(String, u32, u64)> = scored
+        .iter()
+        .filter(|(_, support, _)| *support >= 2)
+        .cloned()
+        .collect();
+    let mut out: Vec<String> = multi.iter().map(|(id, _, _)| id.clone()).take(limit).collect();
+    if out.len() >= limit {
+        return out;
+    }
+    for (id, support, _) in scored {
+        if support >= 2 {
+            continue;
+        }
+        if out.iter().any(|x| x == &id) {
+            continue;
+        }
+        out.push(id);
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
+/// Top triangles (groups of 3) from the pair graph — frequent “used together” clusters.
+pub fn top_cooccurrence_groups(pairs: &[ModPairStat], limit: usize) -> Vec<ModGroupStat> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let mut ranked = pairs.to_vec();
+    ranked.sort_by(|a, b| b.count.cmp(&a.count));
+    ranked.truncate(200);
+    let adj = pair_adjacency(&ranked);
+    let mut nodes: Vec<String> = adj.keys().cloned().collect();
+    nodes.sort();
+    let mut groups: Vec<ModGroupStat> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for a in &nodes {
+        let Some(na) = adj.get(a) else { continue };
+        let mut partners: Vec<&String> = na.keys().collect();
+        partners.sort();
+        for (j, b) in partners.iter().enumerate() {
+            if *b <= a {
+                continue;
+            }
+            let ab = *na.get(*b).unwrap_or(&0);
+            if ab == 0 {
+                continue;
+            }
+            let Some(nb) = adj.get(*b) else { continue };
+            for c in partners.iter().skip(j + 1) {
+                if *c <= *b {
+                    continue;
+                }
+                let ac = *na.get(*c).unwrap_or(&0);
+                let bc = *nb.get(*c).unwrap_or(&0);
+                if ac == 0 || bc == 0 {
+                    continue;
+                }
+                let score = ab.min(ac).min(bc);
+                let mut mods = vec![a.clone(), (*b).clone(), (*c).clone()];
+                mods.sort();
+                let key = mods.join("||");
+                if !seen.insert(key) {
+                    continue;
+                }
+                groups.push(ModGroupStat { mods, score });
+            }
+        }
+    }
+    groups.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.mods[0].cmp(&b.mods[0]))
+    });
+    groups.truncate(limit);
+    groups
+}
+
 /// Build a short prompt hint for Creation mode from local (and optional network) pairs.
 pub fn format_cooccurrence_for_prompt(pairs: &[ModPairStat], limit: usize) -> String {
     let mut out = String::from("## Mod co-occurrence trends (most frequent pairs)\n");
@@ -935,8 +1256,20 @@ pub fn format_cooccurrence_for_prompt(pairs: &[ModPairStat], limit: usize) -> St
             p.count
         ));
     }
+    let groups = top_cooccurrence_groups(pairs, limit.min(8));
+    if !groups.is_empty() {
+        out.push_str("\n## Frequent mod groups (3+)\n");
+        for (i, g) in groups.iter().enumerate() {
+            out.push_str(&format!(
+                "{}. `{}` (support {})\n",
+                i + 1,
+                g.mods.join("` + `"),
+                g.score
+            ));
+        }
+    }
     out.push_str(
-        "\nWhen planning PackBrief mustHave/categories, prefer mods and pairings that fit these trends for the target MC/loader. Do not invent Modrinth IDs — use search queries.\n",
+        "\nWhen planning PackBrief mustHave/categories, prefer mods and groups that fit these trends for the target MC/loader. Do not invent Modrinth IDs — use search queries.\n",
     );
     out
 }
@@ -969,6 +1302,68 @@ mod cooccurrence_tests {
         assert_eq!(merged[0].mod_a, "create");
         assert_eq!(merged[0].count, 9);
         assert_eq!(merged[1].count, 7);
+    }
+
+    #[test]
+    fn pack_observation_dedupes_same_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ids = vec!["jei".into(), "sodium".into(), "iris".into()];
+        let p1 = plan_pack_observation(dir.path(), &ids, "1.20.1", "fabric");
+        assert!(p1.record_local);
+        assert!(p1.upload_network);
+        // Local recorded, network failed → retry upload only
+        mark_pack_observation(dir.path(), &p1.fingerprint, false).unwrap();
+        let p2 = plan_pack_observation(dir.path(), &ids, "1.20.1", "fabric");
+        assert!(!p2.record_local);
+        assert!(p2.upload_network);
+        mark_pack_observation(dir.path(), &p1.fingerprint, true).unwrap();
+        let p3 = plan_pack_observation(dir.path(), &ids, "1.20.1", "fabric");
+        assert!(!p3.record_local);
+        assert!(!p3.upload_network);
+    }
+
+    #[test]
+    fn network_sample_is_stable_subset() {
+        let ids: Vec<String> = (0..80).map(|i| format!("mod-{i:02}")).collect();
+        let a = normalize_mod_id_list_for_network(&ids, 48);
+        let b = normalize_mod_id_list_for_network(&ids, 48);
+        assert_eq!(a.len(), 48);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn group_affinity_prefers_multi_support() {
+        let pairs = vec![
+            ModPairStat {
+                mod_a: "create".into(),
+                mod_b: "jei".into(),
+                count: 10,
+            },
+            ModPairStat {
+                mod_a: "create".into(),
+                mod_b: "sodium".into(),
+                count: 8,
+            },
+            ModPairStat {
+                mod_a: "jei".into(),
+                mod_b: "sodium".into(),
+                count: 7,
+            },
+            ModPairStat {
+                mod_a: "create".into(),
+                mod_b: "lonely".into(),
+                count: 100,
+            },
+        ];
+        let installed: std::collections::HashSet<String> =
+            ["create".into(), "jei".into()].into_iter().collect();
+        let suggestions = suggest_by_group_affinity(&pairs, &installed, 5);
+        assert_eq!(suggestions.first().map(String::as_str), Some("sodium"));
+        let groups = top_cooccurrence_groups(&pairs, 5);
+        assert!(groups.iter().any(|g| g.mods == ["create", "jei", "sodium"]));
+        let exclude: std::collections::HashSet<String> = ["create".into()].into_iter().collect();
+        let partners = partners_for_mod(&pairs, "create", &exclude, 5);
+        assert!(partners.iter().any(|(id, _)| id == "jei" || id == "sodium"));
     }
 }
 

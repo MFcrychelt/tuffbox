@@ -2711,6 +2711,7 @@ mod tests {
                 status: Vec::new(),
                 content_type: crate::manifest::ContentType::Mod,
                 authors: Vec::new(),
+            option: None,
             }],
             overrides: None,
         }
@@ -2755,6 +2756,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         // A different "critters*" mod must not steal the provided-by match via
         // the shared short name token "critters".
@@ -2778,6 +2780,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "Could not execute entrypoint stage 'main' due to errors, provided by 'crittersandcompanions'!";
 
@@ -2818,6 +2821,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "[Fabric] Loading 120 mods:\n\t- crittersandcompanions 2.1.0 provided by 'crittersandcompanions'\nDone.";
         let (signals, suspects) =
@@ -2900,6 +2904,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         // Real Fabric loader resolution error format.
         let text = "net.fabricmc.loader.impl.discovery.ModResolutionException: Mod 'Lithium' (lithium) requires version 1.0.0 or later of mod 'jellysquid3's sodium' (sodium), which is missing!";
@@ -2933,6 +2938,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "Incompatible mod set!\nMod 'Iris' (iris) requires version 1.21.4 or later of 'Minecraft' (minecraft), but a non-matching version 1.20.1 is present!";
         let (signals, suspects) =
@@ -2971,6 +2977,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "Mod 'Create' (create) requires the Forge mod loader, but Fabric Loader 0.15.0 is in use!";
         let (signals, suspects) =
@@ -3002,6 +3009,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "Mod 'Reese's Sodium Options' (reeses-sodium-options) 1.8.0 conflicts with 'Sodium' (sodium) 0.6.0 (incompatible).";
         let (signals, suspects) =
@@ -3035,6 +3043,7 @@ mod tests {
                 status: Vec::new(),
                 content_type: crate::manifest::ContentType::Mod,
                 authors: Vec::new(),
+            option: None,
             });
         let text = "Mod 'Fabric API' (fabric-api) requires Fabric Loader 0.16.0 or later, but 0.15.0 is present!";
         let (signals, suspects) =
@@ -3067,6 +3076,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null\n\tat knot//net.earthcomputer.clientcommands.features.PlayerRandCracker.throwItem(PlayerRandCracker.java:412)";
         let (_signals, suspects) =
@@ -3100,6 +3110,7 @@ mod tests {
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "\
 java.lang.NullPointerException: Cannot read field \"field_7512\" because \"player\" is null
@@ -3146,6 +3157,7 @@ Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommand
             status: Vec::new(),
             content_type: crate::manifest::ContentType::Mod,
             authors: Vec::new(),
+        option: None,
         });
         let text = "Resource Packs: vanilla, fabric, animatica, antip2w, betterconfig, clientcommands (incompatible), cloth-config";
         let (signals, suspects) =

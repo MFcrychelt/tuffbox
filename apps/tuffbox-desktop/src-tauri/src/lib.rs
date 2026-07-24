@@ -1,6 +1,7 @@
 mod auth;
 mod create_mode_api;
 mod integrations;
+mod launcher_presence;
 mod launcher_settings;
 mod presence;
 mod swarm_api;
@@ -212,6 +213,9 @@ fn validate_project(path: String) -> Result<ProjectSummary, String> {
         .find(|p| p.id == "client")
         .or_else(|| manifest.profiles.first())
         .ok_or_else(|| "project has no profiles".to_string())?;
+
+    // Auto-report pack basket (deduped) so import/open alone feeds Supabase co-occurrence.
+    swarm_api::spawn_pack_cooccurrence(manifest_path.to_string_lossy().to_string(), "pack_open");
 
     Ok(project_summary_from_manifest(&manifest_path, &manifest, profile))
 }
@@ -450,6 +454,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     authors: tuffbox_core::scan_mod_jar(&entry.path())
                         .map(|r| r.authors)
                         .unwrap_or_default(),
+                    option: None,
                 });
                 any_changes = true;
             }
@@ -1436,16 +1441,19 @@ async fn add_modrinth_mod(
     mod_id: String,
     side: String,
 ) -> Result<(), String> {
+    let path_for_stats = path.clone();
     tokio::task::spawn_blocking(move || {
         auto_snapshot(&PathBuf::from(&path), "add-mod").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
         save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &PathBuf::from(&path), &manifest, None, true);
-        Ok(())
+        Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1455,17 +1463,20 @@ async fn add_modrinth_mod_with_dependencies(
     mod_id: String,
     side: String,
 ) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
+    let path_for_stats = path.clone();
+    let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "add-mod-with-dependencies").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
-        Ok(installed)
+        Ok::<Vec<String>, String>(installed)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
+    Ok(installed)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1475,7 +1486,8 @@ async fn add_modrinth_mods_with_dependencies(
     mod_ids: Vec<String>,
     side: String,
 ) -> Result<Vec<String>, String> {
-    tokio::task::spawn_blocking(move || {
+    let path_for_stats = path.clone();
+    let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "bulk-add-mods-with-dependencies")
             .map_err(|e| e.to_string())?;
@@ -1483,10 +1495,12 @@ async fn add_modrinth_mods_with_dependencies(
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
-        Ok(installed)
+        Ok::<Vec<String>, String>(installed)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
+    Ok(installed)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2487,6 +2501,227 @@ async fn remove_loose_jar(path: String, file_name: String) -> Result<String, Str
         }
         std::fs::remove_file(&target).map_err(|e| e.to_string())?;
         Ok(format!("Removed {}", file_name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Groups jars in `mods/` that share the same fabric/forge `mod_id` (true duplicates).
+#[tauri::command(rename_all = "camelCase")]
+async fn detect_duplicate_mod_jars(path: String) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let project_dir = PathBuf::from(&path)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let mods_dir = project_dir.join("mods");
+        let manifest = ProjectManifest::load_from_path(&path).ok();
+        let tracked: std::collections::HashSet<String> = manifest
+            .as_ref()
+            .map(|m| {
+                m.mods
+                    .iter()
+                    .filter_map(|mod_| mod_.file_name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let entries = match std::fs::read_dir(&mods_dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        // mod_id → jars
+        let mut by_id: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+
+        for entry in entries.flatten() {
+            let jar_path = entry.path();
+            if !jar_path
+                .extension()
+                .map_or(false, |e| e.eq_ignore_ascii_case("jar"))
+            {
+                continue;
+            }
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let Ok(meta) = std::fs::metadata(&jar_path) else {
+                continue;
+            };
+            let mtime_ms = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let size = meta.len();
+            let mod_id = match tuffbox_core::mod_scan::scan_mod_jar(&jar_path) {
+                Ok(scan) => scan
+                    .mod_id
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty()),
+                Err(_) => None,
+            };
+            let Some(mod_id) = mod_id else {
+                continue;
+            };
+            by_id.entry(mod_id.clone()).or_default().push(serde_json::json!({
+                "fileName": file_name,
+                "modId": mod_id,
+                "mtimeMs": mtime_ms,
+                "size": size,
+                "inManifest": tracked.contains(&file_name),
+            }));
+        }
+
+        let mut groups: Vec<serde_json::Value> = by_id
+            .into_iter()
+            .filter(|(_, jars)| jars.len() > 1)
+            .map(|(mod_id, mut jars)| {
+                jars.sort_by(|a, b| {
+                    let am = a.get("mtimeMs").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let bm = b.get("mtimeMs").and_then(|v| v.as_u64()).unwrap_or(0);
+                    bm.cmp(&am).then_with(|| {
+                        let an = a.get("fileName").and_then(|v| v.as_str()).unwrap_or("");
+                        let bn = b.get("fileName").and_then(|v| v.as_str()).unwrap_or("");
+                        an.cmp(bn)
+                    })
+                });
+                let keep = jars
+                    .first()
+                    .and_then(|j| j.get("fileName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                serde_json::json!({
+                    "modId": mod_id,
+                    "keepCandidate": keep,
+                    "jars": jars,
+                })
+            })
+            .collect();
+        groups.sort_by(|a, b| {
+            let am = a.get("modId").and_then(|v| v.as_str()).unwrap_or("");
+            let bm = b.get("modId").and_then(|v| v.as_str()).unwrap_or("");
+            am.cmp(bm)
+        });
+        Ok(groups)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Keeps one jar for a duplicate `mod_id` group and deletes the others.
+/// Updates the manifest `fileName` to the kept jar when needed.
+#[tauri::command(rename_all = "camelCase")]
+async fn keep_one_duplicate_mod_jar(
+    path: String,
+    mod_id: String,
+    keep_file_name: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let mod_id_l = mod_id.trim().to_lowercase();
+        if mod_id_l.is_empty() {
+            return Err("modId is empty".into());
+        }
+        let manifest_path = PathBuf::from(&path);
+        let project_dir = manifest_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let mods_dir = project_dir.join("mods");
+        let keep_path = mods_dir.join(&keep_file_name);
+        if !keep_path.is_file() {
+            return Err(format!("{keep_file_name} not found in mods/"));
+        }
+
+        // Confirm keep jar actually belongs to this mod_id.
+        let keep_scan = tuffbox_core::mod_scan::scan_mod_jar(&keep_path).map_err(|e| e.to_string())?;
+        let keep_id = keep_scan
+            .mod_id
+            .as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
+        if keep_id.as_deref() != Some(mod_id_l.as_str()) {
+            return Err(format!(
+                "{keep_file_name} is not mod `{mod_id}` (got {:?})",
+                keep_id
+            ));
+        }
+
+        auto_snapshot(&manifest_path, "dedupe-mod-jars").map_err(|e| e.to_string())?;
+
+        let mut removed = Vec::new();
+        let entries = std::fs::read_dir(&mods_dir).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let jar_path = entry.path();
+            if !jar_path
+                .extension()
+                .map_or(false, |e| e.eq_ignore_ascii_case("jar"))
+            {
+                continue;
+            }
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name == keep_file_name {
+                continue;
+            }
+            let Ok(scan) = tuffbox_core::mod_scan::scan_mod_jar(&jar_path) else {
+                continue;
+            };
+            let Some(id) = scan
+                .mod_id
+                .as_deref()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if id != mod_id_l {
+                continue;
+            }
+            std::fs::remove_file(&jar_path).map_err(|e| e.to_string())?;
+            removed.push(file_name);
+        }
+
+        // Point any manifest entry for this mod at the kept jar; drop extras.
+        if let Ok(mut manifest) = ProjectManifest::load_from_path(&path) {
+            let mut matched = false;
+            let mut drop_idxs = Vec::new();
+            for (i, m) in manifest.mods.iter_mut().enumerate() {
+                let same_id = m.id.eq_ignore_ascii_case(&mod_id_l)
+                    || m.source
+                        .project_id
+                        .as_deref()
+                        .map(|p| p.eq_ignore_ascii_case(&mod_id_l))
+                        .unwrap_or(false)
+                    || m.file_name
+                        .as_deref()
+                        .map(|f| removed.iter().any(|r| r == f) || f == keep_file_name)
+                        .unwrap_or(false);
+                if !same_id {
+                    continue;
+                }
+                if !matched {
+                    m.file_name = Some(keep_file_name.clone());
+                    matched = true;
+                } else {
+                    drop_idxs.push(i);
+                }
+            }
+            for i in drop_idxs.into_iter().rev() {
+                manifest.mods.remove(i);
+            }
+            save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        }
+
+        if removed.is_empty() {
+            Ok(format!("Kept {keep_file_name} (no other jars for `{mod_id}`)"))
+        } else {
+            Ok(format!(
+                "Kept {keep_file_name}; removed {}: {}",
+                removed.len(),
+                removed.join(", ")
+            ))
+        }
     })
     .await
     .map_err(|e| e.to_string())?
@@ -7901,6 +8136,7 @@ fn export_modrinth_pack(
     let result =
         tuffbox_core::export_modrinth_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
     append_release_artifact(&path, "mrpack", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
     Ok(result)
 }
 
@@ -7922,6 +8158,7 @@ fn export_server_pack(
     let result =
         tuffbox_core::export_server_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
     append_release_artifact(&path, "server", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
     Ok(result)
 }
 
@@ -7943,6 +8180,7 @@ fn export_prism_instance(
     let result = tuffbox_core::export_prism_instance(&manifest, &path, &output)
         .map_err(|e| e.to_string())?;
     append_release_artifact(&path, "prism", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
     Ok(result)
 }
 
@@ -7964,6 +8202,7 @@ fn export_curseforge_pack(
     let result = tuffbox_core::export_curseforge_pack(&manifest, &path, &output)
         .map_err(|e| e.to_string())?;
     append_release_artifact(&path, "curseforge", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
     Ok(result)
 }
 
@@ -8484,8 +8723,10 @@ fn build_and_spawn(
     let instance_label = manifest.project.name.clone();
     let _ = presence::set_playing_activity(&instance_label, "In Minecraft");
     let _ = record_launch(path.clone());
+    launcher_presence::spawn_game_session_start(instance_label.clone());
     let on_exit: Option<OnExit> = Some(Box::new(move |exit: ProcessExit| {
         let _ = presence::clear_activity();
+        launcher_presence::spawn_game_session_end(exit.duration_secs, exit.code != Some(0));
         if let Some(ref hook) = post_exit_hook {
             let _ = launcher_settings::run_hook(Some(hook), "post-exit hook");
         }
@@ -8637,7 +8878,9 @@ fn import_curseforge_project(source: String, target_dir: String) -> Result<Strin
     let manifest_path = target.join(format!("{}.tuffbox.json", manifest.project.id));
     let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     std::fs::write(&manifest_path, json).map_err(|e| e.to_string())?;
-    Ok(manifest_path.to_string_lossy().to_string())
+    let out = manifest_path.to_string_lossy().to_string();
+    swarm_api::spawn_pack_cooccurrence(out.clone(), "pack_import");
+    Ok(out)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -8691,7 +8934,9 @@ fn import_project(source: String, target_dir: String) -> Result<String, String> 
     let target = target_root.join(format!("{}.tuffbox.json", manifest.project.id));
     let json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     std::fs::write(&target, json).map_err(|e| e.to_string())?;
-    Ok(target.to_string_lossy().to_string())
+    let out = target.to_string_lossy().to_string();
+    swarm_api::spawn_pack_cooccurrence(out.clone(), "pack_import");
+    Ok(out)
 }
 
 /// Search CurseForge modpacks (classId 4471), Prism FlamePage style.
@@ -10700,6 +10945,7 @@ fn add_mod_from_curseforge(
         status: vec!["ok".to_string()],
         content_type,
         authors: hit.authors.clone(),
+    option: None,
     });
     Ok(())
 }
@@ -10856,6 +11102,7 @@ fn build_mod_spec(
             .as_ref()
             .map(|a| vec![a.clone()])
             .unwrap_or_default(),
+        option: None,
     }
 }
 
@@ -11428,6 +11675,7 @@ pub fn run() {
             if let Some(win) = app.get_webview_window("main") {
                 fit_to_screen(&win);
             }
+            launcher_presence::start_presence_loop();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -11461,6 +11709,7 @@ pub fn run() {
             add_modrinth_mods_with_dependencies,
             install_steam_bridge,
             create_mode_api::create_mode_chat,
+            create_mode_api::create_mode_quick_brief,
             create_mode_api::assemble_pack_draft,
             create_mode_api::preview_pack_draft,
             create_mode_api::install_pack_draft,
@@ -11481,6 +11730,8 @@ pub fn run() {
             detect_wrong_loader_mods,
             disable_wrong_loader_jar,
             remove_loose_jar,
+            detect_duplicate_mod_jars,
+            keep_one_duplicate_mod_jar,
             list_config_files,
             read_config_file,
             write_config_file,
@@ -11524,6 +11775,7 @@ pub fn run() {
             swarm_api::get_local_cooccurrence,
             swarm_api::get_creation_trends,
             swarm_api::suggest_mods_from_trends,
+            swarm_api::suggest_partners_for_mod,
             integrations::complete_swarm_onboarding,
             integrations::get_swarm_settings,
             integrations::set_swarm_enabled,
@@ -11580,6 +11832,7 @@ pub fn run() {
             integrations::test_integration,
             integrations::list_ollama_models,
             integrations::detect_ollama,
+            integrations::scan_ollama_disk,
             integrations::pull_ollama_model,
             integrations::import_ollama_gguf,
             integrations::ensure_ollama_model,
@@ -11721,7 +11974,16 @@ pub fn run() {
             launcher_settings::validate_instances_path_cmd,
             set_discord_presence,
             clear_discord_presence,
+            launcher_presence::launcher_presence_start,
+            launcher_presence::launcher_presence_stop,
+            launcher_presence::get_launcher_online,
+            launcher_presence::get_launcher_recent_sessions,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                launcher_presence::goodbye_on_exit();
+            }
+        });
 }

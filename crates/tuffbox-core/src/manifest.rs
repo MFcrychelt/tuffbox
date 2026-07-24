@@ -301,6 +301,24 @@ pub struct ModSpec {
     /// Mod authors / creators (Modrinth/CF / jar metadata). Empty when unknown.
     #[serde(default)]
     pub authors: Vec<String>,
+    /// Packwiz-style optional-mod metadata (`option{}` in `.pw.toml`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option: Option<ModOption>,
+}
+
+/// Optional-mod presentation / default-enabled flag (packwiz `option` table).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModOption {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// When `true`, optional mod is enabled by default on install.
+    #[serde(default = "default_true")]
+    pub default: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl ModSpec {
@@ -309,6 +327,29 @@ impl ModSpec {
     /// The IDE adds/removes that token through the config editor.
     pub fn pinned(&self) -> bool {
         self.status.iter().any(|s| s.eq_ignore_ascii_case("pinned"))
+    }
+
+    /// Whether this mod should be installed for the given profile.
+    ///
+    /// Optional mods are skipped when `profile.include_optional_mods` is false,
+    /// unless the mod id is explicitly listed in `profile.include_mods`.
+    pub fn included_in_profile(&self, profile: &ProfileSpec) -> bool {
+        if !self.side.is_compatible_with_profile(profile.side) {
+            return false;
+        }
+        if self.side == Side::Optional && !profile.include_optional_mods {
+            return profile.include_mods.iter().any(|id| id == &self.id);
+        }
+        if self.side == Side::Optional {
+            // Respect packwiz `option.default = false` when the profile includes
+            // optionals generically (no whitelist): skip until explicitly listed.
+            if let Some(opt) = &self.option {
+                if !opt.default && profile.include_mods.is_empty() {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 

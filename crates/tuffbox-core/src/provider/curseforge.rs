@@ -242,6 +242,38 @@ impl CurseForgeProvider {
         Ok(out)
     }
 
+    /// Resolve CurseForge package fingerprints (`POST /fingerprints`).
+    ///
+    /// Fingerprints must be computed with [`crate::murmur2`] (whitespace-stripped).
+    pub fn get_fingerprints(
+        &self,
+        fingerprints: &[u32],
+    ) -> Result<HashMap<u32, CurseForgeFileInfo>, ProviderError> {
+        if fingerprints.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut out = HashMap::new();
+        for chunk in fingerprints.chunks(100) {
+            let body = serde_json::json!({ "fingerprints": chunk });
+            let resp: CfData<CfFingerprintResult> = self.post_json("/fingerprints", &body)?;
+            for m in resp.data.exact_matches {
+                let fp = m.id;
+                let info: CurseForgeFileInfo = m.file.into();
+                out.insert(fp, info);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Fingerprint a jar on disk and look it up on CurseForge.
+    pub fn resolve_file_by_fingerprint(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Option<CurseForgeFileInfo>, ProviderError> {
+        let fp = crate::murmur2::murmur2_file(path)?;
+        Ok(self.get_fingerprints(&[fp])?.remove(&fp))
+    }
+
     /// Fill empty `download_url` entries via Modrinth SHA1 (Prism `FallbackMRBlockedMods`).
     pub fn apply_modrinth_fallback(
         &self,
@@ -540,6 +572,20 @@ struct CfAuthor {
 #[derive(Debug, Deserialize)]
 struct CfCategory {
     name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfFingerprintResult {
+    #[serde(default)]
+    exact_matches: Vec<CfFingerprintMatch>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CfFingerprintMatch {
+    /// The fingerprint that matched (same value sent in the request).
+    id: u32,
+    file: CfFile,
 }
 
 #[derive(Debug, Deserialize)]

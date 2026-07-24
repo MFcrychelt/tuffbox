@@ -13,6 +13,7 @@
     FolderOpen,
     Download,
     FileUp,
+    Search,
   } from "lucide-svelte";
 
   export let open = false;
@@ -124,6 +125,7 @@
   let testing = false;
   let listingModels = false;
   let detecting = false;
+  let scanningDisk = false;
   let pulling = false;
   let importing = false;
   let error = "";
@@ -312,6 +314,63 @@
       message = "";
     } finally {
       importing = false;
+    }
+  }
+
+  async function scanDiskForOllama() {
+    scanningDisk = true;
+    error = "";
+    message = "Scanning C:\\ for Ollama and model folders…";
+    try {
+      const scan = await invoke<{
+        bestBinary?: string | null;
+        bestModelsDir?: string | null;
+        models?: string[];
+        binaries?: string[];
+        modelsDirs?: string[];
+        visited?: number;
+        truncated?: boolean;
+      }>("scan_ollama_disk", { root: "C:\\" });
+
+      if (scan.bestBinary) {
+        ollamaBinaryPath = scan.bestBinary;
+      }
+      if (scan.bestModelsDir) {
+        ollamaModelsPath = scan.bestModelsDir;
+      }
+      const diskModels = scan.models ?? [];
+      if (diskModels.length > 0) {
+        ollamaModels = diskModels;
+        if (!model.trim() || !diskModels.includes(model)) {
+          // Prefer a mid-size qwen if present.
+          const prefer =
+            diskModels.find((m) => /qwen3:8b/i.test(m)) ||
+            diskModels.find((m) => /qwen3:4b/i.test(m)) ||
+            diskModels.find((m) => /:8b\b/i.test(m)) ||
+            diskModels[0];
+          model = prefer;
+          pullName = prefer;
+        }
+      }
+
+      const bits: string[] = [];
+      if (scan.bestBinary) bits.push(`binary: ${scan.bestBinary}`);
+      if (scan.bestModelsDir) bits.push(`models: ${scan.bestModelsDir}`);
+      bits.push(`${diskModels.length} model tag(s)`);
+      if (scan.truncated) bits.push(`scan capped (~${scan.visited} dirs)`);
+      message =
+        diskModels.length || scan.bestBinary
+          ? `Found on C:\\ — ${bits.join(" · ")}. Save to apply.`
+          : "Nothing found on C:\\. Install Ollama or pick folders manually.";
+
+      await persistAiSettings(model || pullName || diskModels[0] || "qwen3:8b");
+      await probeOllama();
+      dispatch("saved");
+    } catch (e) {
+      error = String(e);
+      message = "";
+    } finally {
+      scanningDisk = false;
     }
   }
 
@@ -517,7 +576,7 @@
               <button class="ghost mini" type="button" title="Pick install folder" on:click={pickOllamaFolder}>
                 Folder
               </button>
-              <button class="ghost mini" type="button" title="Re-detect" on:click={probeOllama} disabled={detecting}>
+              <button class="ghost mini" type="button" title="Re-detect" on:click={probeOllama} disabled={detecting || scanningDisk}>
                 <RefreshCw size={14} class={detecting ? "spin" : ""} />
               </button>
             </div>
@@ -534,13 +593,22 @@
               <button class="ghost mini" type="button" title="Pick models folder" on:click={pickOllamaModelsFolder}>
                 <FolderOpen size={14} />
               </button>
+              <button
+                class="ghost mini"
+                type="button"
+                title="Scan entire C: drive for ollama.exe and models folders"
+                on:click={scanDiskForOllama}
+                disabled={scanningDisk || detecting}
+              >
+                <Search size={14} class={scanningDisk ? "spin" : ""} />
+                {scanningDisk ? "Scanning C:…" : "Scan C:"}
+              </button>
             </div>
             <p class="hint">
               Where Ollama stores downloaded weights (<code>OLLAMA_MODELS</code>).
-              Leave empty for the default under your user profile.
-              With a custom folder, Install downloads via a private Ollama port so the tray app
-              cannot write to <code>C:\Users\…\.ollama\models</code>. After install, TuffBox
-              restarts Ollama with this path for chat.
+              Don’t know the path? Click <strong>Scan C:</strong> — TuffBox searches the disk for
+              <code>ollama.exe</code> and folders with <code>blobs</code>/<code>manifests</code>,
+              then fills paths and lists installed tags (e.g. <code>qwen3:8b</code>).
             </p>
           </label>
 
@@ -644,13 +712,13 @@
         {/if}
 
         <footer>
-          <button class="ghost" type="button" on:click={test} disabled={testing || saving || pulling || importing}>
+          <button class="ghost" type="button" on:click={test} disabled={testing || saving || pulling || importing || scanningDisk}>
             <Plug size={14} />
             {testing ? "Testing…" : "Test connection"}
           </button>
           <div class="spacer"></div>
           <button class="ghost" type="button" on:click={close}>Cancel</button>
-          <button type="button" on:click={save} disabled={saving || !endpoint.trim() || (provider === "openai-compatible" && !model.trim())}>
+          <button type="button" on:click={save} disabled={saving || scanningDisk || !endpoint.trim() || (provider === "openai-compatible" && !model.trim())}>
             {saving ? "Saving…" : "Save"}
           </button>
         </footer>

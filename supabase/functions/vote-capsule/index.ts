@@ -1,11 +1,9 @@
 // Peer confirm/reject — requires Supabase Auth JWT (verify_jwt=true).
-// Statuses: open -> saved (2 confirms) | rejected (3 rejects).
-// One vote per (content_hash, auth.uid()).
+// Votes only accumulate Keep/Discard counts + trust.
+// Final status (saved/rejected) is set by admin moderation (admin panel), not auto-threshold.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const CONFIRM_TO_SAVED = 2;
-const REJECT_TO_REJECTED = 3;
 const MAX_VOTES_PER_HOUR = 40;
 
 const corsHeaders: Record<string, string> = {
@@ -162,12 +160,9 @@ Deno.serve(async (req) => {
   }
 
   const trust = trustFromCounts(confirm, reject);
+  // Keep admin decisions sticky; community votes never flip saved/rejected.
   let status = capsule.status as string;
-  if (reject >= REJECT_TO_REJECTED || reject >= confirm + 2) {
-    status = "rejected";
-  } else if (confirm >= CONFIRM_TO_SAVED) {
-    status = "saved";
-  } else if (status !== "saved") {
+  if (status !== "saved" && status !== "rejected") {
     status = "open";
   }
 

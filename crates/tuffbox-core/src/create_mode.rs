@@ -230,6 +230,125 @@ fn prefer_short_query(query: &str) -> String {
     parts.into_iter().take(3).collect::<Vec<_>>().join(" ")
 }
 
+/// Well-known mod names detected as must-have when present in a free-text prompt.
+const KNOWN_MUST_HAVE: &[&str] = &[
+    "create",
+    "jei",
+    "rei",
+    "emi",
+    "sodium",
+    "iris",
+    "lithium",
+    "starlight",
+    "ferritecore",
+    "mekanism",
+    "botania",
+    "thermal",
+    "immersive",
+    "ae2",
+    "applied energistics",
+    "farmers delight",
+    "farmersdelight",
+    "supplementaries",
+    "quark",
+    "appleskin",
+    "jade",
+    "wthit",
+    "xaeros",
+    "journeymap",
+    "voxelmap",
+    "cloth config",
+    "modmenu",
+    "fabric api",
+    "forge config",
+];
+
+/// Build a PackBrief without an LLM: default category budgets + must-haves from known names / quotes.
+pub fn brief_from_prompt(
+    prompt: &str,
+    mc_version: &str,
+    loader: &str,
+    target_count: u32,
+) -> PackBrief {
+    let prompt = prompt.trim();
+    let target = target_count.clamp(40, 120);
+    let title = {
+        let t: String = prompt.chars().take(48).collect();
+        let t = t.trim();
+        if t.is_empty() {
+            "Pack draft".into()
+        } else {
+            t.to_string()
+        }
+    };
+    let must_have = extract_must_haves(prompt);
+    normalize_brief(PackBrief {
+        title,
+        mc_version: mc_version.trim().to_string(),
+        loader: loader.trim().to_ascii_lowercase(),
+        target_count: target,
+        must_have,
+        categories: default_categories(target),
+        exclude: Vec::new(),
+    })
+}
+
+fn extract_must_haves(prompt: &str) -> Vec<MustHaveSpec> {
+    let lower = prompt.to_ascii_lowercase();
+    let mut out: Vec<MustHaveSpec> = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Quoted phrases first (user intent).
+    for q in extract_quoted_phrases(prompt) {
+        let key = q.to_ascii_lowercase();
+        if key.len() < 2 || !seen.insert(key) {
+            continue;
+        }
+        out.push(MustHaveSpec {
+            query: q,
+            slug_hint: None,
+            reason: "Quoted in prompt".into(),
+        });
+    }
+
+    // Known mods: longest match first so "applied energistics" wins over shorter tokens.
+    let mut known: Vec<&str> = KNOWN_MUST_HAVE.to_vec();
+    known.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    for name in known {
+        if !lower.contains(name) {
+            continue;
+        }
+        let key = name.to_string();
+        if !seen.insert(key) {
+            continue;
+        }
+        out.push(MustHaveSpec {
+            query: name.to_string(),
+            slug_hint: None,
+            reason: "Mentioned in prompt".into(),
+        });
+    }
+    out
+}
+
+fn extract_quoted_phrases(prompt: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = prompt;
+    while let Some(start) = rest.find('"') {
+        rest = &rest[start + 1..];
+        if let Some(end) = rest.find('"') {
+            let phrase = rest[..end].trim();
+            if !phrase.is_empty() {
+                out.push(phrase.to_string());
+            }
+            rest = &rest[end + 1..];
+        } else {
+            break;
+        }
+    }
+    out
+}
+
 fn soft_cap_library_budget(cats: &mut [CategoryBudget], target: u32) {
     let max_lib = ((target as f64) * 0.12).round() as u32;
     let max_lib = max_lib.max(4);
@@ -999,6 +1118,24 @@ mod tests {
         let b2 = parse_pack_brief(wrapped).unwrap();
         assert_eq!(b2.title, "Magic");
         assert!(!b2.categories.is_empty()); // defaults filled
+    }
+
+    #[test]
+    fn brief_from_prompt_picks_must_haves() {
+        let b = brief_from_prompt(
+            "tech with Create and JEI",
+            "1.20.1",
+            "fabric",
+            80,
+        );
+        assert!(!b.categories.is_empty());
+        assert_eq!(b.mc_version, "1.20.1");
+        assert_eq!(b.loader, "fabric");
+        assert_eq!(b.target_count, 80);
+        let queries: Vec<&str> = b.must_have.iter().map(|m| m.query.as_str()).collect();
+        assert!(queries.iter().any(|q| q.eq_ignore_ascii_case("create")));
+        assert!(queries.iter().any(|q| q.eq_ignore_ascii_case("jei")));
+        assert!(b.title.to_ascii_lowercase().contains("tech"));
     }
 
     #[test]
