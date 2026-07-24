@@ -2223,7 +2223,7 @@ import { trapFocus } from "../lib/focusTrap";
           <input
             type="checkbox"
             checked={ideasEnabled}
-            on:change={(e) => setIdeasEnabled((e.currentTarget as HTMLInputElement).checked)}
+            on:change={(e) => setIdeasEnabled(e.currentTarget.checked)}
           />
           <Sparkles size={14} />
           Ideas
