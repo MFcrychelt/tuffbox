@@ -218,7 +218,8 @@ h4 {
   letter-spacing: -0.02em;
 }
 
-input,
+/* Text fields only — radio/checkbox/range break if padded like text inputs */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
 select {
   font-family: inherit;
   background: var(--bg-elevated);
@@ -230,7 +231,7 @@ select {
   outline: none;
 }
 
-input:focus,
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):focus,
 select:focus {
   border-color: var(--accent-primary);
 }

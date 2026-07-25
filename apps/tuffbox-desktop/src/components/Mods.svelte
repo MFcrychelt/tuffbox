@@ -773,6 +773,36 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
+  async function installRecommendation(rec: {
+    slug: string;
+    name: string;
+    loader?: string;
+    minecraftVersion?: string;
+    compatibleVersion?: string;
+  }) {
+    if (!$projectPath) return;
+    mutating = true;
+    error = null;
+    openDownloadOverlay(`Installing ${rec.name}`);
+    try {
+      // Empty list = already in manifest (Rust skips dupes) — still success.
+      await invoke("add_modrinth_mod_with_dependencies", {
+        path: $projectPath,
+        modId: rec.slug,
+        side: "both",
+      });
+      recommendations = recommendations.filter((r) => r.slug !== rec.slug);
+      message = `Installed ${rec.name}${rec.compatibleVersion ? ` · ${rec.compatibleVersion}` : ""}`;
+      await afterAddModInstall([rec.slug], rec.name);
+    } catch (e) {
+      error = String(e);
+      downloadError = String(e);
+      downloadDone = true;
+    } finally {
+      mutating = false;
+    }
+  }
+
   // Multi-select (right-click enters selection mode; then LMB/RMB toggle)
   let selectionMode = false;
   let selectedModIds: Record<string, boolean> = {};
@@ -2160,7 +2190,7 @@ import { trapFocus } from "../lib/focusTrap";
                   disabled={duplicateJarFixing !== null}
                   on:click={() => keepOneDuplicateJar(group.modId, jar.fileName)}
                 >
-                  {duplicateJarFixing === `${group.modId}::${jar.fileName}` ? "…" : "Keep this"}
+                  {duplicateJarFixing === group.modId + "::" + jar.fileName ? "…" : "Keep this"}
                 </button>
               </li>
             {/each}
@@ -2295,22 +2325,11 @@ import { trapFocus } from "../lib/focusTrap";
               {#if rec.source}<span class="recs-source">{rec.source}</span>{/if}
               <strong>{rec.name}</strong>
               <span>{rec.description}</span>
-              {#if rec.loader || rec.minecraftVersion}
-                <span class="recs-meta">{[rec.loader, rec.minecraftVersion].filter(Boolean).join(" · ")}</span>
+              {#if rec.loader || rec.minecraftVersion || rec.compatibleVersion}
+                <span class="recs-meta">{[rec.loader, rec.minecraftVersion, rec.compatibleVersion].filter(Boolean).join(" · ")}</span>
               {/if}
             </div>
-            <button class="secondary mini" on:click={async () => {
-              if (!$projectPath) return;
-              mutating = true;
-              openDownloadOverlay(`Installing ${rec.name}`);
-              try {
-                await invoke("add_modrinth_mod_with_dependencies", { path: $projectPath, modId: rec.slug, side: "auto" });
-                recommendations = recommendations.filter((r) => r.slug !== rec.slug);
-                await reloadModsSilent();
-                checkMissingDepsAfterInstall();
-              } catch(e) { error = String(e); downloadDone = true; }
-              finally { mutating = false; }
-            }} disabled={mutating}>
+            <button class="secondary mini" on:click={() => installRecommendation(rec)} disabled={mutating}>
               <Plus size={12} /> Install
             </button>
           </div>

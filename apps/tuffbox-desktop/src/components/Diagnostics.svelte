@@ -763,11 +763,20 @@
       });
       const applied = result?.applied ?? [];
       const errs = result?.errors ?? [];
-      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""}`;
+      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""} Next: Test launch to verify the fix.`;
       if (errs.length) error = errs.join("; ");
       await load(true);
-      // Prefill author form from the plan that just worked.
-      await openAuthorForm({ fromAnalysis: true });
+      if (applied.length && !errs.length) {
+        const launchNow = confirm(
+          "Fix applied. Run a Test launch now to verify?\n\nAfter the game starts cleanly, TuffBox can soft-verify and offer to share the fix.",
+        );
+        if (launchNow) {
+          await runTest();
+        } else {
+          // Prefill share form only when they skip launch — verify path offers share later.
+          await openAuthorForm({ fromAnalysis: true });
+        }
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -1222,18 +1231,38 @@
   }
 
   /// Launches the client (Test) profile so the user can reproduce a crash,
-  /// then refreshes the diagnosis once it stops.
+  /// then soft-verifies a pending crash-fix if the session looks healthy.
   async function runTest() {
     if (!$projectPath || launching) return;
     launching = true;
     error = null;
     message = "Launching Test profile — reproduce the crash, then come back.";
+    const path = $projectPath;
     const result = await launchWithFeedback(
-      { path: $projectPath, profile: "client" },
-      { onStarted: () => { message = "Test launch started. Re-run Diagnose after it crashes/closes."; } },
+      { path, profile: "client" },
+      {
+        onStarted: () => {
+          message = "Test launch started. If it stays healthy, soft-verify will confirm the fix.";
+        },
+      },
     );
     if (result) {
-      message = "Test launch started. Re-run Diagnose after it crashes/closes.";
+      message = "Test launch started. Waiting for a healthy session to soft-verify…";
+      try {
+        const rec = await invoke<{ id?: string; humanExplanation?: string } | null>(
+          "confirm_crash_resolution_after_launch",
+          { path },
+        );
+        if (rec) {
+          message = `Fix verified${rec.humanExplanation ? `: ${rec.humanExplanation}` : ""}. You can share it if prompted.`;
+          await load(true);
+        } else {
+          message =
+            "Test launch started. Soft-verify will confirm after latest.log shows a healthy post-fix session (or re-run Diagnose).";
+        }
+      } catch {
+        message = "Test launch started. Re-run Diagnose after it crashes/closes.";
+      }
     }
     launching = false;
   }
@@ -1393,6 +1422,11 @@
     const idx = errorHits[activeErrorHit];
     scrollLogToLine(idx);
     message = `Error ${activeErrorHit + 1}/${errorHits.length} · line ${idx + 1}`;
+  }
+
+  /** Jump to first / next ERROR line in the log (alias kept for older markup). */
+  function jumpToFirstError() {
+    jumpToNextError();
   }
 
   async function copyCurrentLog() {

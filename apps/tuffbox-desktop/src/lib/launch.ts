@@ -141,6 +141,14 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
       },
     });
   }
+  if (info.kind === "java_missing") {
+    actions.push({
+      label: "Java settings",
+      run: () => {
+        window.dispatchEvent(new Event("tuffbox:open-project-settings"));
+      },
+    });
+  }
   toasts.error(info.message, 16000, actions);
 }
 

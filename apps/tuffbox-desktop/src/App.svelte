@@ -144,6 +144,11 @@
     };
     window.addEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
 
+    const onOpenProjectSettings = () => {
+      currentView = "project-settings";
+    };
+    window.addEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
+
     const onOpenMe = () => {
       currentView = "me";
     };
@@ -207,6 +212,7 @@
     return () => {
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
+      window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
       unlistenDistill?.();

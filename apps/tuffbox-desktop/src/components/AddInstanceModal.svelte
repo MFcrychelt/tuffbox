@@ -482,17 +482,32 @@
 
         <div class="field">
           <span class="field-label">Memory</span>
-          <label class="mem-opt">
-            <input type="radio" bind:group={memoryMode} value="auto" />
-            Recommended — {recommendedMemoryMb} MB
-          </label>
-          <label class="mem-opt">
-            <input type="radio" bind:group={memoryMode} value="manual" />
-            Set RAM manually
-          </label>
+          <div class="loader-chips" role="radiogroup" aria-label="Memory">
+            <button
+              type="button"
+              class="loader-chip"
+              class:active={memoryMode === "auto"}
+              role="radio"
+              aria-checked={memoryMode === "auto"}
+              on:click={() => {
+                memoryMode = "auto";
+                memoryMb = recommendedMemoryMb;
+              }}
+            >Recommended · {recommendedMemoryMb} MB</button>
+            <button
+              type="button"
+              class="loader-chip"
+              class:active={memoryMode === "manual"}
+              role="radio"
+              aria-checked={memoryMode === "manual"}
+              on:click={() => (memoryMode = "manual")}
+            >Custom</button>
+          </div>
           {#if memoryMode === "manual"}
             <div class="mem-slider">
+              <div class="mem-value">{memoryMb} MB</div>
               <input
+                class="mem-range"
                 type="range"
                 min="1024"
                 max={memoryMaxMb}
@@ -500,9 +515,8 @@
                 bind:value={memoryMb}
               />
               <div class="mem-scale">
-                <span>1024</span>
-                <strong>{memoryMb} MB</strong>
-                <span>{memoryMaxMb}</span>
+                <span>1 GB</span>
+                <span>{Math.round(memoryMaxMb / 1024)} GB</span>
               </div>
             </div>
           {/if}
@@ -675,7 +689,9 @@
   .field { display: grid; gap: 6px; }
   .field.grow { flex: 1; min-width: 0; }
   .field label, .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
-  .field input, .field select, .cf-detail select {
+  .field input:not([type="radio"]):not([type="range"]):not([type="checkbox"]),
+  .field select,
+  .cf-detail select {
     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
     border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
     font-size: 14px; line-height: 1;
@@ -722,18 +738,43 @@
     background: rgba(27, 217, 106, 0.14);
     color: var(--accent-primary);
   }
-  .mem-opt {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
+  .mem-slider { display: grid; gap: 8px; margin-top: 8px; }
+  .mem-value {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
   }
-  .mem-slider { display: grid; gap: 6px; margin-top: 4px; }
-  .mem-slider input[type="range"] {
+  .mem-range {
+    -webkit-appearance: none;
+    appearance: none;
     width: 100%;
-    accent-color: var(--accent-primary);
+    height: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    outline: none;
+  }
+  .mem-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    border: 2px solid #0b1a10;
+    cursor: pointer;
+    box-shadow: 0 0 0 3px rgba(27, 217, 106, 0.25);
+  }
+  .mem-range::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    border: 2px solid #0b1a10;
+    cursor: pointer;
   }
   .mem-scale {
     display: flex;
@@ -741,7 +782,6 @@
     font-size: 11px;
     color: var(--text-muted);
   }
-  .mem-scale strong { color: var(--text-primary); font-size: 12px; }
   .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   .input-row { display: flex; gap: 8px; }
   .input-row input { flex: 1; }

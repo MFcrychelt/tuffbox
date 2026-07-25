@@ -885,16 +885,24 @@
     {/if}
   {:else if tab === "create"}
     <div class="create-pane">
+      <header class="create-hero">
+        <h2>Start a pack</h2>
+        <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
+      </header>
       <div class="create-actions">
         <button type="button" class="create-plus" on:click={openNewPack}>
-          <span class="plus-ring"><Plus size={40} strokeWidth={2.25} /></span>
-          <strong>Create modpack</strong>
-          <span>Blank instance or CurseForge browse</span>
+          <span class="plus-ring"><Plus size={28} strokeWidth={2.25} /></span>
+          <div class="create-copy">
+            <strong>Create modpack</strong>
+            <span>Blank · Fabric / Forge · CurseForge browse</span>
+          </div>
         </button>
         <button type="button" class="create-plus import" on:click={() => (importMenuOpen = true)} disabled={importing}>
-          <span class="plus-ring"><Download size={36} strokeWidth={2.25} /></span>
-          <strong>{importing ? "Importing…" : "Import pack"}</strong>
-          <span>.mrpack · zip · Prism · MultiMC · CurseForge · mods folder</span>
+          <span class="plus-ring"><Download size={26} strokeWidth={2.25} /></span>
+          <div class="create-copy">
+            <strong>{importing ? "Importing…" : "Import pack"}</strong>
+            <span>.mrpack · zip · Prism · MultiMC · CurseForge</span>
+          </div>
         </button>
       </div>
       <div class="create-trends">
@@ -1233,37 +1241,48 @@
   .create-pane {
     display: flex;
     flex-direction: column;
-    gap: 22px;
+    gap: 20px;
+  }
+  .create-hero h2 {
+    margin: 0 0 4px;
+    font-size: 20px;
+    color: var(--text-primary);
+  }
+  .create-hero p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-muted);
+    max-width: 52ch;
   }
   .create-actions {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
   }
   .create-plus {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
-    justify-content: center;
-    gap: 10px;
-    min-height: 200px;
-    padding: 28px 20px;
+    gap: 14px;
+    min-height: 0;
+    padding: 18px 16px;
     border-radius: var(--border-radius-xl);
-    border: 2px dashed rgba(27, 217, 106, 0.35);
+    border: 1px solid rgba(27, 217, 106, 0.28);
     background:
-      radial-gradient(ellipse at 50% 0%, rgba(27, 217, 106, 0.12), transparent 60%),
+      linear-gradient(135deg, rgba(27, 217, 106, 0.1), transparent 55%),
       var(--bg-secondary);
     color: var(--text-secondary);
     cursor: pointer;
+    text-align: left;
     transition:
       border-color var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
       transform var(--motion-fast) var(--ease-spring);
   }
   .create-plus.import {
-    border-color: rgba(59, 130, 246, 0.35);
+    border-color: rgba(59, 130, 246, 0.28);
     background:
-      radial-gradient(ellipse at 50% 0%, rgba(59, 130, 246, 0.12), transparent 60%),
+      linear-gradient(135deg, rgba(59, 130, 246, 0.1), transparent 55%),
       var(--bg-secondary);
   }
   .create-plus.import .plus-ring {
@@ -1272,36 +1291,45 @@
     border-color: rgba(59, 130, 246, 0.35);
   }
   .create-plus:hover {
-    border-color: rgba(27, 217, 106, 0.6);
+    border-color: rgba(27, 217, 106, 0.55);
     color: var(--text-primary);
     transform: translateY(-1px);
   }
   .create-plus.import:hover {
-    border-color: rgba(59, 130, 246, 0.6);
+    border-color: rgba(59, 130, 246, 0.55);
   }
   .create-plus:disabled { opacity: 0.6; cursor: default; transform: none; }
+  .create-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
   .create-plus strong {
-    font-size: 18px;
+    font-size: 15px;
     color: var(--text-primary);
   }
-  .create-plus > span:last-child {
-    font-size: 13px;
+  .create-plus .create-copy > span {
+    font-size: 12px;
     color: var(--text-muted);
-    text-align: center;
   }
   .plus-ring {
-    width: 72px;
-    height: 72px;
-    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    border-radius: 14px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: rgba(27, 217, 106, 0.14);
     color: var(--accent-primary);
     border: 1px solid rgba(27, 217, 106, 0.35);
+    flex-shrink: 0;
   }
   .create-trends {
     min-width: 0;
+  }
+  @media (max-width: 720px) {
+    .create-actions { grid-template-columns: 1fr; }
   }
   .mini-spinner.dark {
     border-color: rgba(27, 217, 106, 0.25);

@@ -1468,7 +1468,7 @@ async fn add_modrinth_mod_with_dependencies(
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "add-mod-with-dependencies").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side);
+        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok::<Vec<String>, String>(installed)
@@ -1492,7 +1492,7 @@ async fn add_modrinth_mods_with_dependencies(
         auto_snapshot(&manifest_path, "bulk-add-mods-with-dependencies")
             .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side);
+        let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         Ok::<Vec<String>, String>(installed)
@@ -2257,7 +2257,7 @@ async fn apply_fix_action(
                 auto_snapshot(&manifest_path, "fix-install-dep").map_err(|e| e.to_string())?;
                 let mut manifest =
                     ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-                install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both");
+                install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], "both")?;
                 save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
                 download_project_mods_tracked(&app, &manifest_path, &manifest, None, false);
                 Ok(format!("Installed dependency {mod_id}"))
@@ -4648,6 +4648,7 @@ async fn analyze_crash_with_ai(
     let mut network_used = false;
     let mut compact_prompt_used = false;
     let mut kb_short_circuit = false;
+    let mut fallback_notes: Vec<String> = Vec::new();
 
     if swarm_on {
         let global_hits =
@@ -4693,18 +4694,15 @@ async fn analyze_crash_with_ai(
                         kb_short_circuit = true;
                         plan
                     } else {
-                        let (prompt, compact) =
-                            integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
-                        compact_prompt_used = compact;
-                        let value = integrations::call_ai_crash_explain(&settings.ai, &prompt)
-                            .await
-                            .map_err(|e| {
-                                format!("server diagnose failed ({remote_err}); local AI: {e}")
+                        let (p, compact, note) =
+                            ai_plan_with_fallback(&settings.ai, &ai_ctx).await.map_err(|e| {
+                                format!("server diagnose failed ({remote_err}); {e}")
                             })?;
-                        let raw = serde_json::to_string(&value).unwrap_or_default();
-                        tuffbox_core::action_plan::parse_action_plan(&raw).map_err(|e| {
-                            format!("server diagnose failed ({remote_err}); local parse: {e}")
-                        })?
+                        compact_prompt_used = compact;
+                        if let Some(n) = note {
+                            fallback_notes.push(n);
+                        }
+                        p
                     }
                 }
             }
@@ -4741,11 +4739,12 @@ async fn analyze_crash_with_ai(
                 kb_short_circuit = true;
                 plan
             } else {
-                let (prompt, compact) = integrations::crash_explain_prompt_for(&settings.ai, &ctx);
+                let (p, compact, note) = ai_plan_with_fallback(&settings.ai, &ctx).await?;
                 compact_prompt_used = compact;
-                let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
-                let raw = serde_json::to_string(&value).unwrap_or_default();
-                tuffbox_core::action_plan::parse_action_plan(&raw)?
+                if let Some(n) = note {
+                    fallback_notes.push(n);
+                }
+                p
             }
         }
         tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
@@ -4840,7 +4839,7 @@ async fn analyze_crash_with_ai(
                 )
             }
         }
-        // Server mode without network → strong KB first, else local LLM.
+        // Server mode without network → strong KB first, else local LLM / heuristic.
         tuffbox_core::action_plan::DiagnoseMode::Server => {
             if swarm_on {
                 if let Some(plan) = integrations::global_capsule_library()
@@ -4854,35 +4853,35 @@ async fn analyze_crash_with_ai(
                         kb_short_circuit = true;
                         plan
                     } else {
-                        let (prompt, compact) =
-                            integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                        let (p, compact, note) =
+                            ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
                         compact_prompt_used = compact;
-                        let value =
-                            integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
-                        let raw = serde_json::to_string(&value).unwrap_or_default();
-                        tuffbox_core::action_plan::parse_action_plan(&raw)?
+                        if let Some(n) = note {
+                            fallback_notes.push(n);
+                        }
+                        p
                     }
                 } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
                     kb_short_circuit = true;
                     plan
                 } else {
-                    let (prompt, compact) =
-                        integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                    let (p, compact, note) = ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
                     compact_prompt_used = compact;
-                    let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
-                    let raw = serde_json::to_string(&value).unwrap_or_default();
-                    tuffbox_core::action_plan::parse_action_plan(&raw)?
+                    if let Some(n) = note {
+                        fallback_notes.push(n);
+                    }
+                    p
                 }
             } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
                 kb_short_circuit = true;
                 plan
             } else {
-                let (prompt, compact) =
-                    integrations::crash_explain_prompt_for(&settings.ai, &ai_ctx);
+                let (p, compact, note) = ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
                 compact_prompt_used = compact;
-                let value = integrations::call_ai_crash_explain(&settings.ai, &prompt).await?;
-                let raw = serde_json::to_string(&value).unwrap_or_default();
-                tuffbox_core::action_plan::parse_action_plan(&raw)?
+                if let Some(n) = note {
+                    fallback_notes.push(n);
+                }
+                p
             }
         }
     };
@@ -4893,7 +4892,8 @@ async fn analyze_crash_with_ai(
         &inventory_ids,
         &missing_ids,
     );
-    let normalize_notes = grounded.notes;
+    let mut normalize_notes = grounded.notes;
+    normalize_notes.extend(fallback_notes);
     plan = tuffbox_core::action_plan::overlay_crash_assistant_findings(
         grounded.plan,
         &ai_ctx.crash_assistant_findings,
@@ -4968,6 +4968,109 @@ fn strong_plan_from_similar(
     );
     plan.source = Some("kb".into());
     Some(plan)
+}
+
+/// When Ollama/API is down, still return an actionable plan from local culprits.
+fn heuristic_plan_from_context(
+    ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+) -> Option<tuffbox_core::action_plan::ActionPlan> {
+    let mut suspected = ctx.suspected_mods.clone();
+    for c in &ctx.culprit_details {
+        if c.confidence >= 40 && !suspected.iter().any(|s| s.eq_ignore_ascii_case(&c.id)) {
+            suspected.push(c.id.clone());
+        }
+    }
+    suspected.truncate(5);
+    if suspected.is_empty() && ctx.crash_assistant_findings.is_empty() {
+        return None;
+    }
+
+    let explanation = if let Some(f) = ctx.crash_assistant_findings.first() {
+        let auto = f.auto_fix.as_deref().unwrap_or("");
+        format!(
+            "{} — {}{}",
+            f.title,
+            f.description,
+            if auto.is_empty() {
+                String::new()
+            } else {
+                format!(" Suggested: {auto}")
+            }
+        )
+    } else {
+        format!(
+            "Local crash analysis flags: {}. AI was unavailable — review before applying.",
+            suspected.join(", ")
+        )
+    };
+
+    let actions = suspected
+        .iter()
+        .take(3)
+        .map(|id| tuffbox_core::action_plan::LauncherAction {
+            op: "disable_mod".into(),
+            mod_id: Some(id.clone()),
+            provider: None,
+            project_id: None,
+            version: None,
+            path: None,
+            patch_type: None,
+            patch: None,
+            reason: Some(format!(
+                "Heuristic: disable high-confidence culprit `{id}` to isolate the crash"
+            )),
+            risk: "medium".into(),
+        })
+        .collect::<Vec<_>>();
+
+    Some(tuffbox_core::action_plan::ActionPlan {
+        schema_version: tuffbox_core::action_plan::ACTION_PLAN_SCHEMA_VERSION,
+        human_explanation: explanation,
+        confidence: if actions.is_empty() { 0.35 } else { 0.48 },
+        suspected_mods: suspected,
+        needs_user_review: true,
+        source: Some("heuristic".into()),
+        matched_case_ids: Vec::new(),
+        actions,
+        additional_context: Some(
+            "Generated without AI (Ollama/API unavailable or failed). Prefer configuring AI in Settings for better plans."
+                .into(),
+        ),
+    })
+}
+
+/// Prefer AI; on failure fall back to strong KB hit, then local heuristics.
+async fn ai_plan_with_fallback(
+    settings: &integrations::AiSettings,
+    ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+) -> Result<(tuffbox_core::action_plan::ActionPlan, bool /*compact*/, Option<String>), String> {
+    let (prompt, compact) = integrations::crash_explain_prompt_for(settings, ctx);
+    match integrations::call_ai_crash_explain(settings, &prompt).await {
+        Ok(value) => {
+            let raw = serde_json::to_string(&value).unwrap_or_default();
+            let plan = tuffbox_core::action_plan::parse_action_plan(&raw)?;
+            Ok((plan, compact, None))
+        }
+        Err(ai_err) => {
+            if let Some(plan) = strong_plan_from_similar(ctx) {
+                return Ok((
+                    plan,
+                    compact,
+                    Some(format!("AI unavailable ({ai_err}); used strong KB match")),
+                ));
+            }
+            if let Some(plan) = heuristic_plan_from_context(ctx) {
+                return Ok((
+                    plan,
+                    compact,
+                    Some(format!("AI unavailable ({ai_err}); used local crash heuristics")),
+                ));
+            }
+            Err(format!(
+                "AI unavailable: {ai_err}. Configure Ollama or an OpenAI-compatible endpoint in Settings → AI, or enable Crash KB / TuffSwarm."
+            ))
+        }
+    }
 }
 
 /// Apply a validated ActionPlan (after user confirm). Runs snapshot once, then each op.
@@ -5329,7 +5432,7 @@ fn optimization_candidates(loader: &str) -> Vec<RecCandidate> {
         ],
         "forge" => vec![
             ("embeddium", "Embeddium", "Sodium-based renderer for Forge", "optimization"),
-            ("ferritecore", "FerriteCore", "Memory usage reductions", "optimization"),
+            ("ferrite-core", "FerriteCore", "Memory usage reductions", "optimization"),
             ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
             ("entityculling", "Entity Culling", "Skip rendering of occluded entities", "optimization"),
             ("immediatelyfast", "ImmediatelyFast", "Faster immediate-mode rendering", "optimization"),
@@ -5338,7 +5441,7 @@ fn optimization_candidates(loader: &str) -> Vec<RecCandidate> {
         ],
         "neoforge" => vec![
             ("embeddium", "Embeddium", "Sodium-based renderer for NeoForge", "optimization"),
-            ("ferritecore", "FerriteCore", "Memory usage reductions", "optimization"),
+            ("ferrite-core", "FerriteCore", "Memory usage reductions", "optimization"),
             ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
             ("entityculling", "Entity Culling", "Skip rendering of occluded entities", "optimization"),
             ("immediatelyfast", "ImmediatelyFast", "Faster immediate-mode rendering", "optimization"),
@@ -5408,6 +5511,69 @@ fn push_rec(
         "description": description,
         "priority": priority,
     }));
+}
+
+/// Drop suggestions that have no Modrinth file for this pack's MC + loader.
+/// Also rewrites the slug to the first alias that actually resolves.
+fn filter_compatible_recommendations(
+    manifest: &ProjectManifest,
+    recs: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let query = ProviderSearchQuery {
+        minecraft_version: Some(manifest.minecraft.version.clone()),
+        loader: Some(loader.to_string()),
+        ..Default::default()
+    };
+
+    let mut out = Vec::new();
+    for mut rec in recs {
+        let Some(slug) = rec.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()) else {
+            continue;
+        };
+        let mut try_slugs: Vec<String> = vec![slug.clone()];
+        for a in recommendation_aliases(&slug) {
+            if a != slug.as_str() {
+                try_slugs.push(a.to_string());
+            }
+        }
+
+        let mut matched: Option<(String, String)> = None;
+        for candidate in &try_slugs {
+            match provider.get_versions(candidate, &query) {
+                Ok(versions) if !versions.is_empty() => {
+                    matched = Some((candidate.clone(), versions[0].version_number.clone()));
+                    break;
+                }
+                _ => continue,
+            }
+        }
+
+        let Some((resolved_slug, version_number)) = matched else {
+            continue;
+        };
+        if let Some(obj) = rec.as_object_mut() {
+            if resolved_slug != slug {
+                if let Ok(project) = provider.get_project(&resolved_slug) {
+                    obj.insert("name".into(), serde_json::json!(project.name));
+                    if !project.description.is_empty() {
+                        let short: String = project.description.chars().take(120).collect();
+                        obj.insert("description".into(), serde_json::json!(short));
+                    }
+                }
+            }
+            obj.insert("slug".into(), serde_json::json!(resolved_slug));
+            obj.insert("compatibleVersion".into(), serde_json::json!(version_number));
+            obj.insert("loader".into(), serde_json::json!(loader));
+            obj.insert(
+                "minecraftVersion".into(),
+                serde_json::json!(manifest.minecraft.version),
+            );
+        }
+        out.push(rec);
+    }
+    out
 }
 
 fn heuristic_mod_recommendations(manifest: &ProjectManifest) -> Vec<serde_json::Value> {
@@ -5643,7 +5809,15 @@ async fn recommend_mods(path: String) -> Result<Vec<serde_json::Value>, String> 
         }
     }
 
-    // Cap the list so the panel stays usable.
+    // Cap the list so the panel stays usable — after Modrinth compat filter.
+    let path_for_filter = path.clone();
+    recommendations = tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path_for_filter).map_err(|e| e.to_string())?;
+        Ok::<_, String>(filter_compatible_recommendations(&manifest, recommendations))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
     recommendations.truncate(12);
     Ok(recommendations)
 }
@@ -7610,7 +7784,7 @@ async fn resolve_missing_dependencies(
         }
         auto_snapshot(&manifest_path, "resolve-dependencies").map_err(|e| e.to_string())?;
         // Use recursive resolution: install direct deps + transitive deps
-        let installed = install_modrinth_with_dependencies(&mut manifest, &missing, "auto");
+        let installed = install_modrinth_with_dependencies(&mut manifest, &missing, "auto")?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         let installed_ids = manifest
             .mods
@@ -7652,7 +7826,7 @@ async fn install_graph_dep(
             .collect::<std::collections::HashSet<_>>();
         auto_snapshot(&manifest_path, "install-graph-dep").map_err(|e| e.to_string())?;
         // Recursive: install the dep + all its transitive dependencies
-        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto");
+        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], "auto")?;
         if installed.is_empty() {
             return Err(format!(
                 "Failed to install dependency: not found on Modrinth or already installed"
@@ -8789,6 +8963,16 @@ fn build_and_spawn(
     progress.log(&format!("# Java: {} (major {})", java.path, java.major));
     progress.log(&format!("# Java version: {}", java.version));
     let required_java = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
+    if java.major < required_java {
+        return Err(LaunchErrorInfo::new(
+            LaunchErrorKind::JavaMissing,
+            format!(
+                "Minecraft {} needs Java {required_java}+, but selected runtime is Java {} ({}). Install the right JDK and pick it in Project Settings.",
+                manifest.minecraft.version, java.major, java.path
+            ),
+        )
+        .with_log(&console_log));
+    }
     if java.major != required_java {
         progress.log(&format!(
             "# WARNING: Minecraft {} typically needs Java {required_java}, but the selected runtime is Java {}. \
@@ -8845,6 +9029,21 @@ fn build_and_spawn(
                 failure.mod_id, failure.error
             ));
         }
+        let preview: Vec<String> = sync_report
+            .failed
+            .iter()
+            .take(5)
+            .map(|f| format!("{} ({})", f.mod_id, f.error))
+            .collect();
+        return Err(LaunchErrorInfo::new(
+            LaunchErrorKind::ModDownload,
+            format!(
+                "Could not download {} missing mod file(s) before launch: {}. Fix network / Modrinth access, then Retry.",
+                sync_report.failed.len(),
+                preview.join("; ")
+            ),
+        )
+        .with_log(&console_log));
     }
 
     progress.log("# Installing Minecraft (this may take a while)...");
@@ -11200,7 +11399,7 @@ fn install_modrinth_with_dependencies(
     manifest: &mut ProjectManifest,
     mod_ids: &[String],
     side: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     install_modrinth_with_dependencies_rounds(manifest, mod_ids, side, 50)
 }
 
@@ -11209,8 +11408,9 @@ pub(crate) fn install_modrinth_with_dependencies_rounds(
     mod_ids: &[String],
     side: &str,
     max_rounds: usize,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let mut installed = Vec::new();
+    let mut primary_errors: Vec<String> = Vec::new();
     for mod_id in mod_ids {
         if manifest
             .mods
@@ -11219,9 +11419,13 @@ pub(crate) fn install_modrinth_with_dependencies_rounds(
         {
             continue;
         }
-        if add_mod_from_modrinth(manifest, mod_id, Some(side.to_string())).is_ok() {
-            installed.push(mod_id.clone());
+        match add_mod_from_modrinth(manifest, mod_id, Some(side.to_string())) {
+            Ok(()) => installed.push(mod_id.clone()),
+            Err(e) => primary_errors.push(format!("{mod_id}: {e}")),
         }
+    }
+    if installed.is_empty() && !mod_ids.is_empty() && !primary_errors.is_empty() {
+        return Err(primary_errors.join("; "));
     }
 
     let mut failed = std::collections::HashSet::new();
@@ -11253,7 +11457,7 @@ pub(crate) fn install_modrinth_with_dependencies_rounds(
         }
     }
 
-    installed
+    Ok(installed)
 }
 
 fn add_mod_from_modrinth(
