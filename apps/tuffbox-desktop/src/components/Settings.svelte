@@ -827,7 +827,7 @@
                 class="chip press-effect"
                 class:active={normalizeSidebarMode(launcher.sidebarMode) === "full"}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "full" as SidebarMode })}
+                on:click={() => void persistLauncher({ sidebarMode: "full" })}
               >
                 Expanded
               </button>
@@ -836,7 +836,7 @@
                 class="chip press-effect"
                 class:active={normalizeSidebarMode(launcher.sidebarMode) === "icons"}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "icons" as SidebarMode })}
+                on:click={() => void persistLauncher({ sidebarMode: "icons" })}
               >
                 Icons toggle
               </button>
@@ -845,7 +845,7 @@
                 class="chip press-effect"
                 class:active={normalizeSidebarMode(launcher.sidebarMode) === "autoHide"}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "autoHide" as SidebarMode })}
+                on:click={() => void persistLauncher({ sidebarMode: "autoHide" })}
               >
                 Auto-hide
               </button>

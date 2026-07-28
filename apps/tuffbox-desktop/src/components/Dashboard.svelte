@@ -101,6 +101,15 @@
     } catch {}
   }
 
+  function onHomeLayoutChange(e: Event) {
+    const el = e.currentTarget;
+    if (!(el instanceof HTMLSelectElement)) return;
+    const v = el.value;
+    if (HOME_LAYOUT_OPTIONS.some((o) => o.id === v)) {
+      setHomeLayout(v as HomeLayout);
+    }
+  }
+
   type ProjectStatBrief = { playtime: number; lastLaunch: string | null };
   let projectStats: Record<string, ProjectStatBrief> = {};
 
@@ -706,10 +715,7 @@
           <span class="instance-count">{sortedProjects.length}</span>
           <label class="layout-picker" title="Home layout">
             <LayoutGrid size={14} />
-            <select
-              value={homeLayout}
-              on:change={(e) => setHomeLayout((e.currentTarget as HTMLSelectElement).value as HomeLayout)}
-            >
+            <select value={homeLayout} on:change={onHomeLayoutChange}>
               {#each HOME_LAYOUT_OPTIONS as opt (opt.id)}
                 <option value={opt.id}>{opt.label}</option>
               {/each}
