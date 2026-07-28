@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import type { RunningInstance } from "./api";
 
 export interface ProjectInfo {
   id: string;
@@ -204,6 +205,25 @@ export const newProjectOpen = writable<boolean>(false);
 // Global launch state — true while a launch is in progress.
 // Used by Header to show spinner, and by Dashboard to disable play button.
 export const isLaunching = writable<boolean>(false);
+
+/** Currently running Minecraft processes, keyed by project manifest path (`id`). */
+export const runningInstances = writable<RunningInstance[]>([]);
+
+export function isProjectRunning(path: string | null | undefined, list: RunningInstance[]): boolean {
+  if (!path) return false;
+  return list.some((r) => r.id === path);
+}
+
+export function upsertRunning(inst: RunningInstance) {
+  runningInstances.update((list) => {
+    const without = list.filter((r) => r.id !== inst.id);
+    return [...without, inst];
+  });
+}
+
+export function removeRunning(id: string) {
+  runningInstances.update((list) => list.filter((r) => r.id !== id));
+}
 
 /** Opens the live launch-log modal for the given project manifest path. */
 export const launchLogPath = writable<string | null>(null);

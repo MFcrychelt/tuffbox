@@ -2,8 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { toasts } from "./toast";
-import type { LaunchResult, LaunchErrorInfo } from "./api";
-import { isLaunching, openLaunchLog, projectPath } from "./store";
+import type { LaunchResult, LaunchErrorInfo, RunningInstance } from "./api";
+import {
+  isLaunching,
+  openLaunchLog,
+  projectPath,
+  runningInstances,
+  upsertRunning,
+  removeRunning,
+} from "./store";
 import { shareCrashLogWithFeedback } from "./mclogs";
 import { get } from "svelte/store";
 
@@ -101,6 +108,28 @@ export async function launchWithFeedback(
   }
 }
 
+/// Kill the Minecraft process for a project. Backend emits `process-exited`.
+export async function killWithFeedback(path: string): Promise<boolean> {
+  try {
+    await invoke("kill_running_instance", { instanceId: path });
+    removeRunning(path);
+    toasts.info("Game stopped");
+    return true;
+  } catch (e) {
+    toasts.error(`Stop failed: ${e}`);
+    return false;
+  }
+}
+
+export async function refreshRunningInstances(): Promise<void> {
+  try {
+    const list = await invoke<RunningInstance[]>("list_running_instances");
+    runningInstances.set(Array.isArray(list) ? list : []);
+  } catch {
+    // backend not ready / optional
+  }
+}
+
 /// Display a launch error as a toast with Retry / View log actions when
 /// appropriate.
 export function showLaunchError(e: unknown, retry?: () => void): void {
@@ -153,6 +182,7 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
 }
 
 let crashListener: Promise<UnlistenFn> | null = null;
+let processListeners: Promise<UnlistenFn[]> | null = null;
 
 /// Register the global `launch-crashed` handler exactly once. The JVM can exit
 /// non-zero after the launch command has already returned "started", so the
@@ -172,4 +202,19 @@ export function registerLaunchCrashListener(): Promise<UnlistenFn> {
     });
   }
   return crashListener;
+}
+
+/// Keep `runningInstances` in sync with backend process-started / process-exited.
+export function registerProcessListeners(): Promise<UnlistenFn[]> {
+  if (!processListeners) {
+    processListeners = Promise.all([
+      listen<RunningInstance>("process-started", (event) => {
+        upsertRunning(event.payload);
+      }),
+      listen<{ id: string; code?: number | null }>("process-exited", (event) => {
+        if (event.payload?.id) removeRunning(event.payload.id);
+      }),
+    ]);
+  }
+  return processListeners;
 }

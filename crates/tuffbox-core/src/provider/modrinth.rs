@@ -128,6 +128,26 @@ impl ModrinthProvider {
         crate::api_cache::put(key, info.clone());
         Ok((info, body))
     }
+
+    /// Best-effort reverse deps via search facet `required_dependencies:{id}*`.
+    /// Returns empty if the facet is unsupported / request fails (not blocking).
+    pub fn search_dependents(&self, project_id: &str, limit: u32) -> Vec<ProjectInfo> {
+        let id = project_id.trim();
+        if id.is_empty() {
+            return Vec::new();
+        }
+        let limit = limit.clamp(1, 20);
+        let facets = serde_json::to_string(&vec![vec![format!("required_dependencies:{id}*")]])
+            .unwrap_or_default();
+        let path = format!(
+            "/search?index=downloads&limit={limit}&facets={}",
+            urlencode(&facets)
+        );
+        match self.get_json::<ModrinthSearchResponse>(&path) {
+            Ok(resp) => resp.hits.into_iter().map(Into::into).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 /// Render Modrinth Markdown body to HTML for the catalog project page.

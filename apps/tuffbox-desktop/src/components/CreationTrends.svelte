@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
   import { Sparkles, RefreshCw, Download, AlertTriangle, ExternalLink } from "lucide-svelte";
@@ -19,6 +19,19 @@
     side: string;
     dependencies: unknown[];
   };
+  type MpiHit = {
+    id: string;
+    slug: string;
+    name: string;
+    description?: string;
+    iconUrl?: string | null;
+    downloads?: number | null;
+    pageUrl?: string;
+    url?: string;
+    links?: Record<string, string>;
+    provider: "modpackindex";
+    projectType: "modpack";
+  };
   type MrHit = {
     id: string;
     slug: string;
@@ -29,18 +42,30 @@
     follows?: number | null;
     projectType?: string;
   };
+  type MpiCategory = {
+    id: number;
+    slug: string;
+    name: string;
+    kind: "modpack" | "mod" | string;
+  };
 
   let pairs: Pair[] = [];
   let groups: Group[] = [];
   let suggestions: string[] = [];
-  let popularPacks: MrHit[] = [];
+  let popularPacks: MpiHit[] = [];
   let popularMods: MrHit[] = [];
+  let packCategories: MpiCategory[] = [];
+  let selectedPackCategoryId: number | null = null;
+  let packQuery = "";
+  let packSearchTimer: ReturnType<typeof setTimeout> | null = null;
   let loading = false;
   let error = "";
   let previewBusy: string | null = null;
   let installBusy: string | null = null;
   let previews: Record<string, Preview | null> = {};
   let lastKey = "";
+
+  $: packThemeCategories = packCategories.filter((c) => c.kind === "modpack");
 
   function formatCount(n?: number | null): string {
     if (n == null) return "—";
@@ -49,27 +74,42 @@
     return String(n);
   }
 
-  async function loadModrinth() {
+  async function loadCategories() {
+    if (packCategories.length > 0) return;
+    packCategories = await invoke<MpiCategory[]>("list_modpack_index_categories").catch(
+      () => [],
+    );
+  }
+
+  async function loadPacks() {
+    const page = await invoke<{ results: MpiHit[]; total: number }>("search_modpack_index", {
+      query: packQuery.trim(),
+      page: 1,
+      limit: 8,
+      categoryId: selectedPackCategoryId,
+    }).catch(() => ({ results: [], total: 0 }));
+    popularPacks = page.results ?? [];
+  }
+
+  function togglePackCategory(id: number) {
+    selectedPackCategoryId = selectedPackCategoryId === id ? null : id;
+    if (packSearchTimer) {
+      clearTimeout(packSearchTimer);
+      packSearchTimer = null;
+    }
+    void loadPacks();
+  }
+
+  async function loadMods() {
     const path = $projectPath ?? "";
-    const [packsPage, modsPage] = await Promise.all([
-      invoke<{ results: MrHit[]; total: number }>("search_modrinth_mods", {
-        path,
-        query: "",
-        sort: "downloads",
-        contentType: "modpack",
-        page: 1,
-        pageSize: 8,
-      }).catch(() => ({ results: [], total: 0 })),
-      invoke<{ results: MrHit[]; total: number }>("search_modrinth_mods", {
-        path,
-        query: "",
-        sort: "follows",
-        contentType: "mod",
-        page: 1,
-        pageSize: 10,
-      }).catch(() => ({ results: [], total: 0 })),
-    ]);
-    popularPacks = packsPage.results ?? [];
+    const modsPage = await invoke<{ results: MrHit[]; total: number }>("search_modrinth_mods", {
+      path,
+      query: "",
+      sort: "follows",
+      contentType: "mod",
+      page: 1,
+      pageSize: 10,
+    }).catch(() => ({ results: [], total: 0 }));
     popularMods = modsPage.results ?? [];
   }
 
@@ -102,12 +142,29 @@
     loading = true;
     error = "";
     try {
-      await Promise.all([loadModrinth(), loadSwarm()]);
+      await Promise.all([loadPacks(), loadMods(), loadSwarm()]);
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  function schedulePackSearch() {
+    if (packSearchTimer) clearTimeout(packSearchTimer);
+    packSearchTimer = setTimeout(() => {
+      packSearchTimer = null;
+      void loadPacks();
+    }, 300);
+  }
+
+  function onPackQueryKeydown(e: KeyboardEvent) {
+    if (e.key !== "Enter") return;
+    if (packSearchTimer) {
+      clearTimeout(packSearchTimer);
+      packSearchTimer = null;
+    }
+    void loadPacks();
   }
 
   $: {
@@ -119,11 +176,29 @@
   }
 
   onMount(() => {
+    void loadCategories();
     void refresh();
   });
 
+  onDestroy(() => {
+    if (packSearchTimer) clearTimeout(packSearchTimer);
+  });
+
+  async function openPack(hit: MpiHit) {
+    const url = hit.pageUrl || hit.url;
+    if (!url) {
+      toasts.error("No page URL for this pack");
+      return;
+    }
+    try {
+      await openExternal(url);
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
   async function openMr(hit: MrHit) {
-    const url = `https://modrinth.com/${hit.projectType === "modpack" ? "modpack" : "mod"}/${hit.slug || hit.id}`;
+    const url = `https://modrinth.com/mod/${hit.slug || hit.id}`;
     try {
       await openExternal(url);
     } catch (e) {
@@ -176,7 +251,11 @@
     <Sparkles size={18} />
     <div>
       <h2>Creation trends</h2>
-      <p>Popular Modrinth packs &amp; mods{#if swarmEnabled}, plus TuffSwarm co-occurrence{/if}.</p>
+      <p>
+        Suggest more mods from hub co-occurrence. Packs/categories prefer hub
+        (<code>/v1/mods/modpacks</code>, <code>/modpack-categories</code>, 15m cache).
+        {#if swarmEnabled} TuffSwarm stats enabled.{/if}
+      </p>
     </div>
     <button class="ghost" disabled={loading} on:click={refresh}>
       <span class:spin={loading} style="display:inline-flex"><RefreshCw size={14} /></span> Refresh
@@ -186,15 +265,43 @@
   {#if error}<div class="err">{error}</div>{/if}
 
   <section>
-    <h3>Popular modpacks · Modrinth</h3>
+    <h3>{packQuery.trim() ? "Search results" : "Popular modpacks · Modpack Index"}</h3>
+    {#if packThemeCategories.length > 0}
+      <div class="tag-row" role="group" aria-label="Pack themes">
+        {#each packThemeCategories as cat (cat.id)}
+          <button
+            type="button"
+            class="tag-chip"
+            class:active={selectedPackCategoryId === cat.id}
+            on:click={() => togglePackCategory(cat.id)}
+          >
+            {cat.name}
+          </button>
+        {/each}
+      </div>
+    {/if}
+    <div class="pack-search">
+      <input
+        type="search"
+        bind:value={packQuery}
+        placeholder="Search modpacks…"
+        aria-label="Search modpacks"
+        on:input={schedulePackSearch}
+        on:keydown={onPackQueryKeydown}
+      />
+    </div>
     {#if loading && popularPacks.length === 0}
       <p class="muted">Loading…</p>
     {:else if popularPacks.length === 0}
-      <p class="muted">Couldn’t load Modrinth modpacks right now.</p>
+      <p class="muted">
+        {packQuery.trim()
+          ? "No packs found."
+          : "Couldn’t load Modpack Index modpacks right now."}
+      </p>
     {:else}
       <div class="hit-grid">
         {#each popularPacks as hit (hit.id)}
-          <button type="button" class="hit-card" on:click={() => openMr(hit)}>
+          <button type="button" class="hit-card" on:click={() => openPack(hit)}>
             {#if hit.iconUrl}
               <img src={hit.iconUrl} alt="" />
             {:else}
@@ -209,6 +316,12 @@
         {/each}
       </div>
     {/if}
+    <p class="attr">
+      Pack data from
+      <a href="https://www.modpackindex.com" target="_blank" rel="noopener noreferrer"
+        >Modpack Index</a
+      >
+    </p>
   </section>
 
   <section>
@@ -329,6 +442,59 @@
   }
   .creation-head button {
     margin-left: auto;
+  }
+  .tag-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 10px;
+  }
+  .tag-chip {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .tag-chip:hover {
+    color: var(--text-secondary);
+    border-color: rgba(27, 217, 106, 0.35);
+  }
+  .tag-chip.active {
+    color: var(--text-primary);
+    border-color: rgba(27, 217, 106, 0.5);
+    background: rgba(27, 217, 106, 0.08);
+  }
+  .pack-search {
+    margin: 0 0 10px;
+  }
+  .pack-search input {
+    width: 100%;
+    max-width: 320px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .pack-search input::placeholder {
+    color: var(--text-muted);
+  }
+  .attr {
+    margin: 10px 0 0;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .attr a {
+    color: var(--text-muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .attr a:hover {
+    color: var(--text-secondary);
   }
   .gate {
     display: flex;

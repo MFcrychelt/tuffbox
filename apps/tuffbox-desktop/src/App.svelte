@@ -34,6 +34,11 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { toasts } from "./lib/toast";
   import LaunchLogModal from "./components/LaunchLogModal.svelte";
+  import {
+    registerLaunchCrashListener,
+    registerProcessListeners,
+    refreshRunningInstances,
+  } from "./lib/launch";
 
   type View =
     | "dashboard"
@@ -123,6 +128,9 @@
     if (localStorage.getItem("tuffbox-reduced-motion") === "1") {
       document.documentElement.classList.add("potato-pc");
     }
+    void registerLaunchCrashListener();
+    void registerProcessListeners();
+    void refreshRunningInstances();
     // Sync potato + concurrency from persisted launcher settings (best-effort).
     void api.launcher.get().then((s) => {
       if (s.potatoPc) {

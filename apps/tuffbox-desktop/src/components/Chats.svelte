@@ -25,6 +25,7 @@
     reason: string;
     category: string;
     downloads: number;
+    provider?: string;
   };
   type PackBrief = {
     title: string;
@@ -36,6 +37,13 @@
     exclude: string[];
   };
   type PackDraft = { brief: PackBrief; mods: PackDraftMod[]; unresolved: string[] };
+  type CandidateAddon = {
+    slug: string;
+    name: string;
+    summary?: string;
+    score: number;
+    source: string;
+  };
   type ChatSession = {
     id: string;
     title: string;
@@ -49,6 +57,7 @@
   let messages: ChatMessage[] = [];
   let brief: PackBrief | null = null;
   let draft: PackDraft | null = null;
+  let candidates: CandidateAddon[] = [];
   let input = "";
   let targetCount = 80;
   let busy = false;
@@ -60,8 +69,8 @@
   let lastPath = "";
 
   $: active = sessions.find((s) => s.id === activeId) ?? null;
-  $: mcLabel = $projectInfo?.minecraftVersion ?? "—";
-  $: loaderLabel = $projectInfo?.loaderKind ?? "—";
+  $: mcLabel = $projectInfo?.minecraftVersion ?? "?";
+  $: loaderLabel = $projectInfo?.loaderKind ?? "?";
 
   async function refreshSessions() {
     if (!$projectPath) {
@@ -89,6 +98,7 @@
       messages = s.messages ?? [];
       draft = s.draft ?? null;
       brief = s.draft?.brief ?? brief;
+      candidates = [];
       if (!sessions.some((x) => x.id === id)) {
         await refreshSessions();
       }
@@ -109,6 +119,7 @@
       messages = [];
       draft = null;
       brief = null;
+      candidates = [];
       input = "";
     } catch (e) {
       toasts.error(String(e));
@@ -125,6 +136,7 @@
         messages = [];
         draft = null;
         brief = null;
+        candidates = [];
       }
       await refreshSessions();
     } catch (e) {
@@ -159,6 +171,7 @@
         chatId: string;
         reply: string;
         brief?: PackBrief | null;
+        candidates?: CandidateAddon[];
         session?: ChatSession;
       }>("create_mode_chat", {
         path: $projectPath,
@@ -172,6 +185,7 @@
       });
       activeId = res.chatId;
       if (res.brief) brief = res.brief;
+      candidates = res.candidates ?? [];
       input = "";
       if (res.session) {
         messages = res.session.messages ?? [];
@@ -184,7 +198,7 @@
       }
       await refreshSessions();
     } catch (e) {
-      toasts.error(`${String(e)} — try Quick assemble (no AI).`);
+      toasts.error(`${String(e)} ? try Quick assemble (no AI).`);
     } finally {
       busy = false;
       phase = "";
@@ -199,7 +213,9 @@
     try {
       const res = await invoke<{
         chatId: string;
+        reply?: string;
         brief: PackBrief;
+        candidates?: CandidateAddon[];
         session?: ChatSession;
       }>("create_mode_quick_brief", {
         path: $projectPath,
@@ -209,13 +225,17 @@
       });
       activeId = res.chatId;
       brief = res.brief;
+      candidates = res.candidates ?? [];
       if (res.session) {
         messages = res.session.messages ?? [];
       } else {
         messages = [
           ...messages,
           { role: "user", content: text },
-          { role: "assistant", content: `Quick brief: ${res.brief.title}` },
+          {
+            role: "assistant",
+            content: res.reply ?? `Quick brief: ${res.brief.title}`,
+          },
         ];
       }
       input = "";
@@ -224,7 +244,7 @@
       phase = "search";
       progressDone = 0;
       progressTotal = 1;
-      progressCurrent = "Searching Modrinth…";
+      progressCurrent = "Searching Modrinth...";
       draft = await invoke<PackDraft>("assemble_pack_draft", {
         path: $projectPath,
         brief: { ...brief, targetCount },
@@ -257,7 +277,7 @@
     phase = "search";
     progressDone = 0;
     progressTotal = 1;
-    progressCurrent = "Searching Modrinth…";
+    progressCurrent = "Searching Modrinth...";
     try {
       draft = await invoke<PackDraft>("assemble_pack_draft", {
         path: $projectPath,
@@ -329,7 +349,7 @@
     phase = "install";
     progressDone = 0;
     progressTotal = n;
-    progressCurrent = "Installing…";
+    progressCurrent = "Installing...";
     try {
       const res = await invoke<{ installedCount: number; requested: number }>(
         "install_pack_draft",
@@ -388,6 +408,7 @@
       messages = [];
       draft = null;
       brief = null;
+      candidates = [];
       if (p) {
         void refreshSessions().then(() => {
           if (sessions[0]) void selectSession(sessions[0].id);
@@ -403,7 +424,7 @@
   <div class="chats empty">
     <MessagesSquare size={40} strokeWidth={1.5} />
     <h2>Create Mode</h2>
-    <p>Open an instance to plan and assemble a Modrinth pack with AI.</p>
+    <p>Open an instance to plan a PackBrief and assemble a Modrinth pack draft with AI.</p>
   </div>
 {:else}
   <div class="chats">
@@ -438,7 +459,7 @@
     <section class="thread">
       <div class="thread-meta">
         <Sparkles size={16} />
-        <span>Create Mode · {mcLabel} / {loaderLabel}</span>
+        <span>Create Mode ? {mcLabel} / {loaderLabel}</span>
         <label class="target">
           Target
           <input type="range" min="40" max="120" step="5" bind:value={targetCount} disabled={busy} />
@@ -451,9 +472,9 @@
           <div class="welcome">
             <h3>Describe the pack you want</h3>
             <p>
-              Example: “Tech + magic kitchen sink for Fabric, ~80 mods, Create and JEI required.”
-              Plan uses AI for a search brief; Quick assemble works without AI and builds a draft
-              in one step. Install only after you confirm.
+              Example: "Tech + airplanes for NeoForge 1.21.1, ~80 mods, Create required."
+              Plan builds a PackBrief (search JSON + must-haves from hub co-occurrence).
+              Quick assemble builds a Modrinth draft in one step. Install only after you confirm.
             </p>
           </div>
         {/if}
@@ -465,7 +486,7 @@
         {#if busy && phase}
           <div class="bubble system progress">
             <span class="spin"><Loader2 size={14} /></span>
-            {phase}: {progressCurrent || "…"}
+            {phase}: {progressCurrent || "..."}
             {#if progressTotal > 0}
               ({progressDone}/{progressTotal})
             {/if}
@@ -476,7 +497,7 @@
       <div class="composer">
         <textarea
           rows="2"
-          placeholder="Pack brief…"
+          placeholder="Pack brief..."
           bind:value={input}
           disabled={busy}
           on:keydown={(e) => {
@@ -518,7 +539,7 @@
       {#if brief}
         <div class="brief-card">
           <div class="brief-title">{brief.title}</div>
-          <div class="muted">{brief.mcVersion} · {brief.loader} · target {brief.targetCount}</div>
+          <div class="muted">{brief.mcVersion} ? {brief.loader} ? target {brief.targetCount}</div>
           {#if brief.categories?.length}
             <div class="cats">
               {#each brief.categories as c (c.id)}
@@ -529,6 +550,20 @@
         </div>
       {:else}
         <p class="muted pad">Plan a brief first, then Build draft.</p>
+      {/if}
+      {#if candidates.length}
+        <div class="candidates">
+          <div class="draft-head"><span>Catalog candidates</span><strong>{candidates.length}</strong></div>
+          {#each candidates.slice(0, 12) as c (c.slug)}
+            <div class="mod-row compact">
+              <div class="mod-name">{c.name}</div>
+              <div class="mod-meta">
+                <code>{c.slug}</code>
+                <span class="muted">{c.source}</span>
+              </div>
+            </div>
+          {/each}
+        </div>
       {/if}
       <div class="mod-table">
         {#if draft?.mods?.length}
@@ -712,6 +747,13 @@
     color: var(--text-secondary, #9aa3b5);
     font-size: 12px;
     border: 1px dashed var(--border-color, #2a2f3a);
+  }
+  .candidates {
+    border-top: 1px solid var(--border-color, #2a2f3a);
+  }
+  .mod-row.compact {
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
   .bubble.progress {
     display: flex;

@@ -17,7 +17,12 @@
 | Secrets | Anon key OK in client/keyring; **service role NEVER in binary** |
 | Tensor / Tenso / gRPC | **Отложено** на Stage 16+ (только если появится pipeline-parallel inference) |
 | Creation Marketplace | Prior art = **AI Horde** (целая задача воркеру + Kudos без on-chain); **не** Petals/pipeline LLM — Phase **D** |
-| Не делаем сейчас | Pipeline/tensor parallelism, PoUW/Yuma/blockchain DePIN, RepOps/Verde bit-exact, auto-apply без confirm, auto-publish без Confirm |
+| Hot co-occurrence | Pair tables (`mod_cooccurrence_pairs`, `mpi_mod_cooccurrence_pairs`) = **source of truth** for incremental bumps |
+| Hot read path | Precomputed **top-20** JSONB in `mod_partner_tops`; RPC `partners_for_mod` / `_mpi` reads cache (live fallback on miss) |
+| Analytics Buckets / Iceberg | **Отложено** — сырой history не выносим, пока pair tables не упрутся в размер/стоимость |
+| Capsule PK | `content_hash` (= fingerprint.key + solution + actionsJson). **Не** SHA сырого краш-лога (multi-solution + soft-sign) |
+| Capsule lookup | По `fingerprint_key` (+ ranking); ActionPlan в `actions` / `payload` JSONB |
+| Не делаем сейчас | Pipeline/tensor parallelism, PoUW/Yuma/blockchain DePIN, RepOps/Verde bit-exact, auto-apply без confirm, auto-publish без Confirm, Analytics Buckets |
 
 ## Executive summary
 
@@ -49,6 +54,7 @@ Clients **do not** upload raw `crash-report` / `latest.log` by default. They exc
 | Device signing key | `%APPDATA%/TuffBox/swarm/device_signing_key` | Local only (Ed25519 soft-sign) |
 | Project authored export | `.tuffbox/crash_kb/export/` | Pack author |
 | **Supabase** (preferred start) | `experience_capsules` table + `publish-capsule` Edge Function | All clients with project URL + anon key |
+| **Supabase partner cache** | `mod_partner_tops` (top-20 JSONB per mod); refreshed after MPI hub sync | Create Mode / suggest partners via RPC |
 | **TuffSwarm hub** (optional) | `tuffswarm-hub` JSONL store | Clients with hub URL |
 
 ### Deploy Supabase (community inbox)
@@ -141,13 +147,13 @@ flowchart LR
 1. **Snapshots / History** — meta: `tags: ["crash_fix"]`, `crashFingerprintKey`, `planSource` (`ai|kb|swarm|manual|distill`), `matchedCaseIds`. UI badges.
 2. **Distill after success** — если swarm on + share prompts: auto distill from user action timeline → review UI → Confirm/Edit → signed `ExperienceCapsule` → Supabase `publish-capsule` (else optional hub `POST /v1/crash/capsules` / local only).
 3. **Peer pending plan** — сильный network/KB match → `.tuffbox/pending_action_plan.json` → Diagnostics **Apply network fix** (confirm обязателен; **MUST NOT** auto-apply).
-4. **Creation co-occurrence** — локальные пары модов + **Supabase** `mod_cooccurrence_pairs` (Edge `report-cooccurrence`) + optional hub `POST /v1/mods/cooccurrence`. Сигнал пишется после Confirm install в Create Mode / успешного fix apply; Create Mode AI получает `promptHint` из merge local+network.
+4. **Creation co-occurrence** — локальные пары модов + **Supabase** pair tables (Edge `report-cooccurrence` → `mod_cooccurrence_pairs`; hub MPI crawl → `mpi_mod_cooccurrence_pairs`) + optional hub `POST /v1/mods/cooccurrence`. Hot path: hub/`refresh_mod_partner_tops` materializes top-20 into `mod_partner_tops` JSONB; `partners_for_mod` reads cache (live fallback). Сигнал пишется после Confirm install в Create Mode / успешного fix apply; Create Mode AI получает `promptHint` из merge local+network.
 
 ### Remote transports (start = Supabase)
 
 | Transport | Write | Read | Notes |
 |-----------|-------|------|-------|
-| **Supabase** | `POST /functions/v1/publish-capsule` + `report-cooccurrence` | `GET /rest/v1/experience_capsules?…` + `mod_cooccurrence_pairs` | **Built-in** community project; optional Settings override |
+| **Supabase** | `POST /functions/v1/publish-capsule` + `report-cooccurrence` | `GET /rest/v1/experience_capsules?…` + RPC `partners_for_mod` / `_mpi` (via `mod_partner_tops`) | **Built-in** community project; optional Settings override |
 | HTTP hub | `POST /v1/crash/capsules` | `POST /v1/crash/lookup` (+ diagnose) | Optional self-host / team |
 | P2P node | control HTTP publish | control HTTP lookup | Phase C opt-in; code kept |
 

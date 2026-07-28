@@ -779,7 +779,7 @@ export interface RunningInstance {
   id: string;
   pid: number;
   profile: string;
-  startedAt: string;
+  startedAt: number;
 }
 
 export interface KeyboardShortcut {

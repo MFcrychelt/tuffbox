@@ -9,7 +9,7 @@ use tuffbox_core::crash_kb::{AuthorCaseInput, CrashCase};
 use tuffbox_core::swarm::{
     clear_pending_action_plan, format_cooccurrence_for_prompt, load_pending_action_plan,
     mark_pack_observation, maybe_write_pending_from_score, merge_cooccurrence_pairs,
-    normalize_mod_id_list, pack_mod_ids, partners_for_mod, plan_pack_observation,
+    normalize_mod_id_list, pack_mod_ids, plan_pack_observation,
     record_mod_set_cooccurrence, suggest_by_group_affinity, top_cooccurrence_groups,
     top_cooccurrence_pairs, write_pending_action_plan, ExperienceCapsule, ModPairStat,
     STRONG_MATCH_THRESHOLD,
@@ -1164,59 +1164,60 @@ pub async fn get_creation_trends(
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
 
-    // Prefer Supabase community stats when swarm is on.
+    // Prefer hub GET /v1/mods/cooccurrence (MPI-seeded, no user IP to MPI), then Supabase.
     if integrations::swarm_enabled() {
-        if let (Some(url), Some(key)) = (
-            integrations::swarm_supabase_url(),
-            integrations::swarm_supabase_anon_key(),
-        ) {
-            if let Ok(pairs) = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
-                &url,
-                &key,
+        if let Some(endpoint) = integrations::swarm_network_base() {
+            let token = integrations::secret_optional("crash_kb");
+            if let Ok(body) = tuffbox_core::crash_remote::fetch_cooccurrence_async(
+                &endpoint,
+                token.as_deref(),
                 &mc,
                 &loader,
                 limit as u32,
             )
             .await
             {
-                network = Some(json!({ "pairs": pairs, "source": "supabase" }));
-                network_pairs = pairs;
+                if let Some(arr) = body.get("pairs").and_then(|v| v.as_array()) {
+                    network_pairs = arr
+                        .iter()
+                        .filter_map(|p| {
+                            let a = p
+                                .get("modA")
+                                .or_else(|| p.get("mod_a"))
+                                .and_then(|v| v.as_str())?;
+                            let b = p
+                                .get("modB")
+                                .or_else(|| p.get("mod_b"))
+                                .and_then(|v| v.as_str())?;
+                            Some(ModPairStat {
+                                mod_a: a.to_string(),
+                                mod_b: b.to_string(),
+                                count: p.get("count").and_then(|v| v.as_u64()).unwrap_or(1),
+                            })
+                        })
+                        .collect();
+                }
+                if !network_pairs.is_empty() {
+                    network = Some(body);
+                }
             }
         }
-        // Optional hub fallback.
         if network_pairs.is_empty() {
-            if let Some(endpoint) = integrations::swarm_network_base() {
-                let token = integrations::secret_optional("crash_kb");
-                if let Ok(body) = tuffbox_core::crash_remote::fetch_cooccurrence_async(
-                    &endpoint,
-                    token.as_deref(),
+            if let (Some(url), Some(key)) = (
+                integrations::swarm_supabase_url(),
+                integrations::swarm_supabase_anon_key(),
+            ) {
+                if let Ok(pairs) = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
+                    &url,
+                    &key,
                     &mc,
                     &loader,
                     limit as u32,
                 )
                 .await
                 {
-                    if let Some(arr) = body.get("pairs").and_then(|v| v.as_array()) {
-                        network_pairs = arr
-                            .iter()
-                            .filter_map(|p| {
-                                let a = p
-                                    .get("modA")
-                                    .or_else(|| p.get("mod_a"))
-                                    .and_then(|v| v.as_str())?;
-                                let b = p
-                                    .get("modB")
-                                    .or_else(|| p.get("mod_b"))
-                                    .and_then(|v| v.as_str())?;
-                                Some(ModPairStat {
-                                    mod_a: a.to_string(),
-                                    mod_b: b.to_string(),
-                                    count: p.get("count").and_then(|v| v.as_u64()).unwrap_or(1),
-                                })
-                            })
-                            .collect();
-                    }
-                    network = Some(body);
+                    network = Some(json!({ "pairs": pairs, "source": "supabase" }));
+                    network_pairs = pairs;
                 }
             }
         }
@@ -1260,6 +1261,7 @@ pub async fn suggest_mods_from_trends(
 }
 
 /// After installing `modId`, suggest popular co-occurring mods the user may also want.
+/// Primary source: Supabase `partners_for_mod` (launcher + MPI graph). Local pairs soft-boost / fallback.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn suggest_partners_for_mod(
     path: String,
@@ -1267,20 +1269,67 @@ pub async fn suggest_partners_for_mod(
     limit: Option<u32>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let limit = limit.unwrap_or(8).clamp(1, 20) as usize;
-    let trends = get_creation_trends(path.clone(), Some(80)).await?;
-    let pairs: Vec<ModPairStat> = trends
-        .get("mergedPairs")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let project_dir = manifest_parent(&path)?;
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
+    let mc = manifest.minecraft.version.clone();
     let installed: std::collections::HashSet<String> = pack_mod_ids(&manifest).into_iter().collect();
-    let partners = partners_for_mod(&pairs, &mod_id, &installed, limit);
+
+    let mut primary = Vec::new();
+    if let (Some(url), Some(key)) = (
+        integrations::swarm_supabase_url(),
+        integrations::swarm_supabase_anon_key(),
+    ) {
+        if let Ok(batch) = tuffbox_core::swarm_supabase::partners_for_mod_supabase(
+            &url,
+            &key,
+            &mod_id,
+            limit as u32,
+            Some(&loader),
+            Some(&mc),
+        )
+        .await
+        {
+            primary = batch;
+        }
+        // Soft fill/boost from separate Modpack Index graph (does not replace TuffSwarm).
+        if let Ok(mpi) = tuffbox_core::swarm_supabase::partners_for_mod_mpi_supabase(
+            &url,
+            &key,
+            &mod_id,
+            limit as u32,
+            Some(&loader),
+            Some(&mc),
+            None,
+        )
+        .await
+        {
+            if primary.is_empty() {
+                primary = mpi;
+            } else if primary.len() < 3 {
+                primary = tuffbox_core::mod_suggest::merge_partner_stats(&[primary, mpi], limit * 2);
+            } else {
+                primary = tuffbox_core::mod_suggest::soft_boost_partners(&primary, &mpi, limit * 2);
+            }
+        }
+    }
+
+    let local_pairs = top_cooccurrence_pairs(&project_dir, 80);
+    let local = tuffbox_core::mod_suggest::partners_from_pairs(&mod_id, &local_pairs, limit * 2);
+    let partners = tuffbox_core::mod_suggest::soft_boost_partners(&primary, &local, limit * 2);
     Ok(partners
         .into_iter()
-        .map(|(slug, count)| {
+        .filter(|p| {
+            let slug = p.partner.to_ascii_lowercase();
+            !installed.contains(&slug)
+                && !installed.contains(&p.partner)
+                && slug != mod_id.to_ascii_lowercase()
+        })
+        .take(limit)
+        .map(|p| {
             json!({
-                "slug": slug,
-                "count": count,
+                "slug": p.partner,
+                "count": p.pack_count,
             })
         })
         .collect())

@@ -5,6 +5,7 @@
 //! `TUFFBOX_CURSEFORGE_API_KEY`.
 
 use crate::http;
+use crate::manifest::{DependencyKind, ModDependencySpec};
 use crate::provider::{ProviderError, ProviderFileHashes};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -437,6 +438,22 @@ pub struct CurseForgeSearchHit {
     pub class_id: Option<u32>,
 }
 
+/// CurseForge file dependency relation types (API `relationType`).
+/// 1 EmbeddedLibrary, 2 OptionalDependency, 3 RequiredDependency,
+/// 4 Tool, 5 Incompatible, 6 Include.
+pub const CF_REL_EMBEDDED: u32 = 1;
+pub const CF_REL_OPTIONAL: u32 = 2;
+pub const CF_REL_REQUIRED: u32 = 3;
+pub const CF_REL_TOOL: u32 = 4;
+pub const CF_REL_INCOMPATIBLE: u32 = 5;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgeFileDependency {
+    pub mod_id: u64,
+    pub relation_type: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CurseForgeFileInfo {
@@ -452,6 +469,44 @@ pub struct CurseForgeFileInfo {
     /// True when CurseForge withheld the CDN URL (author distribution restrictions).
     pub blocked: bool,
     pub class_id: Option<u32>,
+    #[serde(default)]
+    pub dependencies: Vec<CurseForgeFileDependency>,
+}
+
+/// Map CurseForge `relationType` → manifest dependency kind.
+pub fn cf_relation_kind(relation_type: u32) -> Option<DependencyKind> {
+    match relation_type {
+        CF_REL_REQUIRED => Some(DependencyKind::Requires),
+        CF_REL_OPTIONAL | CF_REL_EMBEDDED | CF_REL_TOOL => Some(DependencyKind::Optional),
+        CF_REL_INCOMPATIBLE => Some(DependencyKind::Conflicts),
+        _ => None,
+    }
+}
+
+/// Convert CF file dependencies into ModDependencySpec (target = CF project id string).
+pub fn cf_deps_to_specs(deps: &[CurseForgeFileDependency]) -> Vec<ModDependencySpec> {
+    deps.iter()
+        .filter_map(|d| {
+            if d.mod_id == 0 {
+                return None;
+            }
+            let kind = cf_relation_kind(d.relation_type)?;
+            Some(ModDependencySpec {
+                kind,
+                target: d.mod_id.to_string(),
+                version_constraint: None,
+                reason: None,
+            })
+        })
+        .collect()
+}
+
+/// Required CurseForge project ids from a file dependency list.
+pub fn cf_required_mod_ids(deps: &[CurseForgeFileDependency]) -> Vec<u64> {
+    deps.iter()
+        .filter(|d| d.relation_type == CF_REL_REQUIRED && d.mod_id != 0)
+        .map(|d| d.mod_id)
+        .collect()
 }
 
 impl CurseForgeFileInfo {
@@ -590,6 +645,15 @@ struct CfFingerprintMatch {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CfFileDependencyRaw {
+    #[serde(default)]
+    mod_id: u64,
+    #[serde(default)]
+    relation_type: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CfFile {
     id: u64,
     #[serde(default)]
@@ -608,6 +672,8 @@ struct CfFile {
     hashes: Vec<CfHash>,
     #[serde(default)]
     file_date: Option<String>,
+    #[serde(default)]
+    dependencies: Vec<CfFileDependencyRaw>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -659,6 +725,15 @@ impl From<CfFile> for CurseForgeFileInfo {
         }
         let url = f.download_url.filter(|u| !u.trim().is_empty());
         let blocked = url.is_none();
+        let dependencies = f
+            .dependencies
+            .into_iter()
+            .filter(|d| d.mod_id != 0)
+            .map(|d| CurseForgeFileDependency {
+                mod_id: d.mod_id,
+                relation_type: d.relation_type,
+            })
+            .collect();
         let mut info = Self {
             id: f.id,
             mod_id: f.mod_id,
@@ -675,6 +750,7 @@ impl From<CfFile> for CurseForgeFileInfo {
             file_date: f.file_date,
             blocked,
             class_id: None,
+            dependencies,
         };
         // Prefer a reconstructed CDN URL so callers that only read `download_url`
         // still work when CurseForge withholds the official link.
@@ -836,6 +912,7 @@ mod tests {
     #[test]
     fn resolved_urls_fill_when_api_withheld() {
         let info = CurseForgeFileInfo {
+            dependencies: vec![],
             id: 3272032,
             mod_id: 1,
             display_name: "jei".into(),
@@ -854,5 +931,28 @@ mod tests {
         let urls = info.resolved_download_urls();
         assert!(!urls.is_empty());
         assert!(urls[0].contains("/files/3272/32/jei.jar"));
+    }
+
+    #[test]
+    fn parses_file_dependencies_required() {
+        let raw = r#"{
+            "id": 1,
+            "modId": 100,
+            "fileName": "foo.jar",
+            "dependencies": [
+                {"modId": 238222, "relationType": 3},
+                {"modId": 306612, "relationType": 2},
+                {"modId": 999, "relationType": 5}
+            ]
+        }"#;
+        let file: CfFile = serde_json::from_str(raw).expect("parse CfFile");
+        let info: CurseForgeFileInfo = file.into();
+        assert_eq!(cf_required_mod_ids(&info.dependencies), vec![238222]);
+        let specs = cf_deps_to_specs(&info.dependencies);
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[0].kind, DependencyKind::Requires);
+        assert_eq!(specs[0].target, "238222");
+        assert_eq!(specs[1].kind, DependencyKind::Optional);
+        assert_eq!(specs[2].kind, DependencyKind::Conflicts);
     }
 }

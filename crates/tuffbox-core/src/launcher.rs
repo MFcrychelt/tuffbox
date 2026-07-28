@@ -30,6 +30,12 @@ pub struct LaunchOptions {
     pub instance_dir: PathBuf,
     pub memory_mb: u32,
     pub jvm_args: Vec<String>,
+    /// "singleplayer" | "multiplayer" | "realms" — omitted for a normal launch.
+    #[serde(default)]
+    pub quick_play_type: Option<String>,
+    /// World folder name, `host:port`, or Realm id depending on type.
+    #[serde(default)]
+    pub quick_play_value: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -313,6 +319,20 @@ impl TestLauncher {
         cmd.arg("-cp").arg(classpath);
         cmd.arg(&game.main_class);
 
+        let qp_type = options.quick_play_type.as_deref().unwrap_or("");
+        let qp_value = options.quick_play_value.as_deref().unwrap_or("");
+        let qp_sp = if qp_type == "singleplayer" {
+            qp_value
+        } else {
+            ""
+        };
+        let qp_mp = if qp_type == "multiplayer" || qp_type == "server" {
+            qp_value
+        } else {
+            ""
+        };
+        let qp_realms = if qp_type == "realms" { qp_value } else { "" };
+
         for arg in &game.game_args {
             let value = arg
                 .replace("${auth_player_name}", &auth_player_name)
@@ -329,13 +349,22 @@ impl TestLauncher {
                 .replace("${version_name}", &game.id)
                 .replace("${natives_directory}", &natives_dir_s)
                 .replace("${client_jar}", &version_jar_s)
-                // Quick play placeholders — empty for now (no quick play support yet)
-                .replace("${quickPlaySingleplayer}", "")
-                .replace("${quickPlayMultiplayer}", "");
+                .replace("${quickPlaySingleplayer}", qp_sp)
+                .replace("${quickPlayMultiplayer}", qp_mp)
+                .replace("${quickPlayRealms}", qp_realms);
             if !value.is_empty() {
                 cmd.arg(value);
             }
         }
+
+        // Version JSON feature-gates quick-play args; our rule matcher skips
+        // feature rules, so append the CLI flags ourselves when requested.
+        apply_quick_play_args(
+            &mut cmd,
+            &manifest.minecraft.version,
+            options.quick_play_type.as_deref(),
+            options.quick_play_value.as_deref(),
+        );
 
         let log_path = options.instance_dir.join("logs").join("latest.log");
         if let Some(parent) = log_path.parent() {
@@ -346,6 +375,88 @@ impl TestLauncher {
 
         Ok((cmd, log_path))
     }
+}
+
+/// Appends Minecraft Quick Play (1.20+) or legacy `--server`/`--port` args.
+pub fn apply_quick_play_args(
+    cmd: &mut Command,
+    mc_version: &str,
+    quick_play_type: Option<&str>,
+    quick_play_value: Option<&str>,
+) {
+    let Some(kind) = quick_play_type.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let value = quick_play_value.unwrap_or("").trim();
+    let modern = mc_version_at_least(mc_version, 1, 20);
+
+    match kind {
+        "multiplayer" | "server" => {
+            if value.is_empty() {
+                return;
+            }
+            if modern {
+                cmd.arg("--quickPlayMultiplayer");
+                cmd.arg(value);
+            } else {
+                let (host, port) = split_server_address(value);
+                cmd.arg("--server");
+                cmd.arg(host);
+                cmd.arg("--port");
+                cmd.arg(port.to_string());
+            }
+        }
+        "singleplayer" | "world" => {
+            if !modern {
+                return;
+            }
+            cmd.arg("--quickPlaySingleplayer");
+            if !value.is_empty() {
+                cmd.arg(value);
+            }
+        }
+        "realms" => {
+            if modern && !value.is_empty() {
+                cmd.arg("--quickPlayRealms");
+                cmd.arg(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mc_version_at_least(version: &str, major: u32, minor: u32) -> bool {
+    let parts: Vec<u32> = version
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    match parts.as_slice() {
+        [maj, min, ..] => *maj > major || (*maj == major && *min >= minor),
+        [maj] => *maj > major,
+        _ => false,
+    }
+}
+
+fn split_server_address(addr: &str) -> (&str, u16) {
+    // Bracketed IPv6: [::1]:25565
+    if let Some(rest) = addr.strip_prefix('[') {
+        if let Some((host, port)) = rest.split_once("]:") {
+            if let Ok(p) = port.parse::<u16>() {
+                return (host, p);
+            }
+        }
+        return (addr, 25565);
+    }
+    // host:port — only when host has no colon (avoids mangling bare IPv6).
+    if let Some((host, port)) = addr.rsplit_once(':') {
+        if !host.is_empty() && !host.contains(':') {
+            if let Ok(p) = port.parse::<u16>() {
+                return (host, p);
+            }
+        }
+    }
+    (addr, 25565)
 }
 
 fn classpath_string(paths: &[PathBuf]) -> String {
@@ -482,5 +593,44 @@ mod tests {
         assert_eq!(fs::read_to_string(dst.join("b.txt")).unwrap(), "diff");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn split_server_address_defaults_port() {
+        assert_eq!(split_server_address("play.example.com"), ("play.example.com", 25565));
+        assert_eq!(split_server_address("play.example.com:25566"), ("play.example.com", 25566));
+        assert_eq!(split_server_address("::1"), ("::1", 25565));
+        assert_eq!(split_server_address("[::1]:25566"), ("::1", 25566));
+    }
+
+    #[test]
+    fn mc_version_at_least_quick_play_cutoff() {
+        assert!(mc_version_at_least("1.20", 1, 20));
+        assert!(mc_version_at_least("1.20.1", 1, 20));
+        assert!(mc_version_at_least("1.21.4", 1, 20));
+        assert!(!mc_version_at_least("1.19.4", 1, 20));
+        assert!(!mc_version_at_least("1.12.2", 1, 20));
+    }
+
+    #[test]
+    fn apply_quick_play_multiplayer_modern() {
+        let mut cmd = Command::new("java");
+        apply_quick_play_args(
+            &mut cmd,
+            "1.20.1",
+            Some("multiplayer"),
+            Some("mc.example.com:25565"),
+        );
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|w| w[0] == "--quickPlayMultiplayer" && w[1] == "mc.example.com:25565"));
+    }
+
+    #[test]
+    fn apply_quick_play_multiplayer_legacy() {
+        let mut cmd = Command::new("java");
+        apply_quick_play_args(&mut cmd, "1.19.2", Some("multiplayer"), Some("host:25566"));
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert!(args.windows(2).any(|w| w[0] == "--server" && w[1] == "host"));
+        assert!(args.windows(2).any(|w| w[0] == "--port" && w[1] == "25566"));
     }
 }

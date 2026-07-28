@@ -89,6 +89,7 @@ import { trapFocus } from "../lib/focusTrap";
     fileName?: string | null;
     side: string;
     dependencies: { type: string; target: string; versionConstraint?: string | null; reason?: string | null }[];
+    dependents?: { id: string; slug: string; name: string }[];
   };
 
   type DownloadItem = {
@@ -394,7 +395,6 @@ import { trapFocus } from "../lib/focusTrap";
   let searchRequestId = 0;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedSide = "auto";
-  let pendingInstallOptional = true;
   let filterGameVersion = "";
   let filterLoader = "fabric";
   let filterCategory = "";
@@ -491,7 +491,6 @@ import { trapFocus } from "../lib/focusTrap";
     searchTotal = 0;
     selectedResultIds = {};
     pendingInstall = null;
-    pendingInstallOptional = provider !== "curseforge";
     searchMods(1);
   }
 
@@ -1832,11 +1831,11 @@ import { trapFocus } from "../lib/focusTrap";
 
   async function loadInstallPreview(result: SearchResult) {
     if (!$projectPath) return;
-    if (isCurseForgeResult(result)) return;
     if (previews[result.id] !== undefined) return;
     previewLoadingId = result.id;
     try {
-      previews[result.id] = await invoke("preview_modrinth_install", { path: $projectPath, modId: result.id });
+      const cmd = isCurseForgeResult(result) ? "preview_curseforge_install" : "preview_modrinth_install";
+      previews[result.id] = await invoke(cmd, { path: $projectPath, modId: result.id });
       previews = { ...previews };
     } catch {
       previews[result.id] = null;
@@ -1896,16 +1895,16 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  async function confirmInstall(withDependencies = false) {
+  async function confirmInstall(_withOptional = false) {
     if (!$projectPath || !pendingInstall) return;
     const installTarget = pendingInstall;
     const curseforge = isCurseForgeResult(installTarget);
     mutating = true;
     error = null;
     openDownloadOverlay(
-      !curseforge && withDependencies
-        ? `Installing ${pendingInstall.name} + deps`
-        : `Installing ${pendingInstall.name}`,
+      curseforge
+        ? `Installing ${pendingInstall.name} + required deps`
+        : `Installing ${pendingInstall.name} + required deps`,
     );
     try {
       if (curseforge) {
@@ -1914,14 +1913,9 @@ import { trapFocus } from "../lib/focusTrap";
           modId: pendingInstall.id,
           side: selectedSide,
         });
-      } else if (withDependencies) {
-        await invoke("add_modrinth_mod_with_dependencies", {
-          path: $projectPath,
-          modId: pendingInstall.id,
-          side: selectedSide,
-        });
       } else {
-        await invoke("add_modrinth_mod", {
+        // Always auto-install Required; optional deps are listed in preview only.
+        await invoke("add_modrinth_mod_with_dependencies", {
           path: $projectPath,
           modId: pendingInstall.id,
           side: selectedSide,
@@ -3096,9 +3090,7 @@ import { trapFocus } from "../lib/focusTrap";
               </button>
               <span class="plan-slug">({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</span>
             </h3>
-            {#if isCurseForgeResult(pendingInstall)}
-              <p class="muted">CurseForge installs the selected project directly (no dependency resolution).</p>
-            {:else if previews[pendingInstall.id]}
+            {#if previews[pendingInstall.id]}
               <div class="dep-list">
                 <h4>Required ({requiredDeps(previews[pendingInstall.id]).length})</h4>
                 {#if requiredDeps(previews[pendingInstall.id]).length === 0}
@@ -3125,10 +3117,18 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 {/if}
               </div>
-              <label class="checkbox-row">
-                <input type="checkbox" bind:checked={pendingInstallOptional} />
-                <span>Install optional dependencies too</span>
-              </label>
+              {#if (previews[pendingInstall.id]?.dependents?.length ?? 0) > 0}
+                <div class="dep-list">
+                  <h4>Used by on Modrinth ({previews[pendingInstall.id]?.dependents?.length})</h4>
+                  {#each previews[pendingInstall.id]?.dependents ?? [] as dep (dep.id)}
+                    <div class="dep-entry optional">
+                      <span class="dep-target">{dep.name}</span>
+                      <small>{dep.slug}</small>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+              <p class="muted">Required dependencies install automatically. Optional are listed for reference only.</p>
               {#if conflictDeps(previews[pendingInstall.id]).length}
                 <div class="conflict-warning">
                   <strong><AlertTriangle size={14} /> Conflict warning</strong>
@@ -3138,6 +3138,8 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 </div>
               {/if}
+            {:else if isCurseForgeResult(pendingInstall)}
+              <p class="muted">Preview unavailable; required CurseForge libraries will still be resolved when possible.</p>
             {:else}
               <p class="muted">Preview unavailable; TuffBox will still create a snapshot before installing.</p>
             {/if}
@@ -3145,15 +3147,11 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="plan-actions">
             <button class="ghost" on:click={() => (pendingInstall = null)}>Cancel</button>
             <button
-              on:click={() => confirmInstall(isCurseForgeResult(pendingInstall) ? false : pendingInstallOptional)}
+              on:click={() => confirmInstall()}
               disabled={mutating}
             >
               <Download size={16} />
-              {#if isCurseForgeResult(pendingInstall)}
-                Install
-              {:else}
-                Install{pendingInstallOptional ? " with dependencies" : ""}
-              {/if}
+              Install with required deps
             </button>
           </div>
         </div>
@@ -3424,6 +3422,33 @@ import { trapFocus } from "../lib/focusTrap";
             </div>
           {:else if planPreviewDeps}
             <div class="plan-no-deps">No required dependencies.</div>
+          {/if}
+
+          {#if planPreviewDeps && optionalDeps(planPreviewDeps).length > 0}
+            <div class="plan-deps-section">
+              <strong>Optional ({optionalDeps(planPreviewDeps).length})</strong>
+              <div class="plan-dep-list">
+                {#each optionalDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
+                  <div class="plan-dep-row">
+                    <code>{dep.target}</code>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if planPreviewDeps && (planPreviewDeps.dependents?.length ?? 0) > 0}
+            <div class="plan-deps-section">
+              <strong>Used by on Modrinth ({planPreviewDeps.dependents?.length})</strong>
+              <div class="plan-dep-list">
+                {#each planPreviewDeps.dependents ?? [] as dep (dep.id)}
+                  <div class="plan-dep-row">
+                    <code>{dep.slug}</code>
+                    <span>{dep.name}</span>
+                  </div>
+                {/each}
+              </div>
+            </div>
           {/if}
 
           {#if planPreviewDeps && conflictDeps(planPreviewDeps).length > 0}

@@ -11,9 +11,11 @@
     Power,
     FolderOpen,
     ExternalLink,
+    Play,
   } from "lucide-svelte";
   import { api, type WorldListItem } from "../lib/api";
   import { toasts } from "../lib/toast";
+  import { launchWithFeedback } from "../lib/launch";
 
   export let projectPath: string;
   export let onOpenMods: () => void = () => {};
@@ -146,6 +148,34 @@
       busyKey = null;
     }
   }
+
+  async function joinServer(address: string) {
+    busyKey = `join:${address}`;
+    try {
+      await launchWithFeedback({
+        path: projectPath,
+        profile: "client",
+        quickPlayType: "multiplayer",
+        quickPlayValue: address,
+      });
+    } finally {
+      busyKey = null;
+    }
+  }
+
+  async function playWorld(name: string) {
+    busyKey = `play:${name}`;
+    try {
+      await launchWithFeedback({
+        path: projectPath,
+        profile: "client",
+        quickPlayType: "singleplayer",
+        quickPlayValue: name,
+      });
+    } finally {
+      busyKey = null;
+    }
+  }
 </script>
 
 <section class="instance-home">
@@ -226,6 +256,13 @@
                 <strong>{world.name}</strong>
                 <span>{world.sizeFormatted}{#if !world.hasLevelDat} · missing level.dat{/if}</span>
               </div>
+              <button
+                class="accent"
+                disabled={busyKey === `play:${world.name}`}
+                on:click={() => playWorld(world.name)}
+              >
+                <Play size={14} /> Play
+              </button>
               <button class="ghost" on:click={onOpenWorld}>Open World tools</button>
             </div>
           {/each}
@@ -258,6 +295,13 @@
                   </span>
                 {/if}
               </div>
+              <button
+                class="accent"
+                disabled={busyKey === `join:${srv.address}`}
+                on:click={() => joinServer(srv.address)}
+              >
+                <Play size={14} /> Join
+              </button>
               <button class="ghost" disabled={busyKey === `ping:${srv.address}`} on:click={() => pingServer(srv.address)}>Ping</button>
               <button class="danger" disabled={busyKey === srv.address} on:click={() => removeServer(srv.address)}>
                 <Trash2 size={14} />

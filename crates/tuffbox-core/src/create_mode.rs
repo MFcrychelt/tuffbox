@@ -8,13 +8,19 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub const CREATE_MODE_SYSTEM_PROMPT: &str = r#"You are TuffBox Create Mode — a Minecraft modpack planner.
-Your job is to turn the user's brief into a PackBrief JSON plan for searching Modrinth.
+Your job is to turn the user's brief into (1) a machine search intent and (2) a PackBrief JSON plan for searching Modrinth.
 Never invent Modrinth project IDs or claim specific mods are installed. Use search queries only.
 Do not output ActionPlan crash JSON.
 
 Respond with a single JSON object:
 {
   "reply": "short human reply (1-3 sentences)",
+  "search": {
+    "loader": "fabric"|"forge"|"neoforge"|"quilt"|null,
+    "version": "1.21.1"|null,
+    "theme": "tech"|"magic"|"sci-fi"|...|null,
+    "keywords": ["airplanes", "flight", "create"]
+  },
   "brief": {
     "title": string,
     "mcVersion": string,
@@ -26,7 +32,8 @@ Respond with a single JSON object:
   }
 }
 Rules:
-- Language: write reply, title, and reason fields in the same language as the user's latest message (Russian→Russian, English→English, etc.). Never switch to Chinese or another language unless the user wrote in it. JSON keys and Modrinth search queries stay English.
+- Language: write reply, title, and reason fields in the same language as the user's latest message (Russian→Russian, English→English, etc.). Never switch to Chinese or another language unless the user wrote in it. JSON keys, search.theme, search.keywords, and Modrinth queries stay English.
+- Always fill search: extract loader/version/theme/keywords from the user prompt (theme aliases: industrial→tech). keywords are English mod-name tokens for Modpack Index + Modrinth.
 - targetCount should match the user's requested size (typically 40–120).
 - categories[].count values should sum approximately to targetCount.
 - Prefer concrete Modrinth search queries (short, 1–3 words: "create", "jei", "iron chests", "airplane").
@@ -35,6 +42,35 @@ Rules:
 - mustHave is for named must-include mods (query by name; optional slugHint if known).
 - exclude lists slugs/names to skip.
 - If refining an existing brief, update fields and keep prior intent unless asked to change it.
+"#;
+
+pub const CREATE_MODE_REFINE_PROMPT: &str = r#"You are refining a Create Mode PackBrief for the TuffBox launcher.
+You are given catalog candidates (name + short description + Modrinth slug) from Modrinth + community co-occurrence
+(seeded from Modpack Index on the hub — never scraped from the user's IP).
+Pick mods that match the user intent (e.g. airplanes/flight → Create Aeronautics) and put them in mustHave.
+Always include the industrial/theme base mod when relevant (e.g. Create).
+
+Do NOT output crash ActionPlan JSON. Create Mode uses PackBrief + PackDraft only.
+
+Return a single JSON object:
+{
+  "reply": "short human explanation in the user's language (1-3 sentences)",
+  "search": { "loader", "version", "theme", "keywords" },
+  "brief": {
+    "title": string,
+    "mcVersion": string,
+    "loader": string,
+    "targetCount": number,
+    "mustHave": [{"query": string, "slugHint": string|null, "reason": string}],
+    "categories": [{"id": string, "query": string, "count": number, "reason": string}],
+    "exclude": string[]
+  }
+}
+Rules:
+- Prefer slugHint values from the candidate list when known.
+- mustHave should cover base + matching addons (typically 2–8 entries).
+- Keep categories budgets summing near targetCount.
+- Never invent jar filenames or crash ActionPlan ops.
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -85,6 +121,36 @@ pub struct PackDraftMod {
     pub category: String,
     #[serde(default)]
     pub downloads: u64,
+    /// `modrinth` (default) or `curseforge`.
+    #[serde(default = "default_provider_modrinth")]
+    pub provider: String,
+}
+
+fn default_provider_modrinth() -> String {
+    "modrinth".into()
+}
+
+fn provider_for_project(p: &ProjectInfo) -> String {
+    if p.description.starts_with("curseforge:")
+        || (!p.id.is_empty() && p.id.chars().all(|c| c.is_ascii_digit()))
+    {
+        "curseforge".into()
+    } else {
+        "modrinth".into()
+    }
+}
+
+fn pack_draft_mod_from_project(p: ProjectInfo, reason: String, category: String) -> PackDraftMod {
+    let provider = provider_for_project(&p);
+    PackDraftMod {
+        slug: p.slug,
+        project_id: p.id,
+        name: p.name,
+        reason,
+        category,
+        downloads: p.downloads.unwrap_or(0),
+        provider,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -102,6 +168,9 @@ pub struct CreateModeAiResponse {
     pub reply: String,
     #[serde(default)]
     pub brief: Option<PackBrief>,
+    /// Machine search intent for Modpack Index / catalogs (step 1).
+    #[serde(default)]
+    pub search: Option<crate::modpack_index::MpiSearchQuery>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,19 +217,114 @@ pub fn parse_pack_brief(raw: &str) -> Result<PackBrief, String> {
 pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, String> {
     let trimmed = strip_json_fences(raw);
     if let Ok(resp) = serde_json::from_str::<CreateModeAiResponse>(trimmed) {
+        let brief = resp.brief.map(normalize_brief);
+        let search = resp.search.or_else(|| {
+            brief
+                .as_ref()
+                .map(search_from_brief)
+                .filter(|s| s.theme.is_some() || !s.keywords.is_empty())
+        });
         return Ok(CreateModeAiResponse {
             reply: resp.reply,
-            brief: resp.brief.map(normalize_brief),
+            brief,
+            search,
         });
     }
     // Fallback: treat whole object as brief.
     if let Ok(brief) = parse_pack_brief(trimmed) {
+        let search = search_from_brief(&brief);
         return Ok(CreateModeAiResponse {
             reply: format!("Draft plan ready: {} ({} mods).", brief.title, brief.target_count),
             brief: Some(brief),
+            search: Some(search).filter(|s| s.theme.is_some() || !s.keywords.is_empty()),
         });
     }
     Err("AI response was not valid Create Mode JSON".into())
+}
+
+/// Build a coarse MpiSearchQuery from an existing PackBrief (no LLM).
+pub fn search_from_brief(brief: &PackBrief) -> crate::modpack_index::MpiSearchQuery {
+    let mut keywords: Vec<String> = brief
+        .must_have
+        .iter()
+        .map(|m| m.query.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    for cat in &brief.categories {
+        let q = cat.query.trim();
+        if !q.is_empty() && !keywords.iter().any(|k| k.eq_ignore_ascii_case(q)) {
+            keywords.push(q.to_string());
+        }
+    }
+    let theme = brief
+        .categories
+        .iter()
+        .find(|c| {
+            matches!(
+                c.id.to_ascii_lowercase().as_str(),
+                "technology" | "tech" | "magic" | "adventure" | "transportation"
+            )
+        })
+        .map(|c| match c.id.to_ascii_lowercase().as_str() {
+            "technology" | "tech" => "tech".into(),
+            "magic" => "magic".into(),
+            "adventure" => "adventure-and-rpg".into(),
+            "transportation" => "exploration".into(),
+            other => other.to_string(),
+        });
+    crate::modpack_index::MpiSearchQuery {
+        loader: Some(brief.loader.clone()),
+        version: Some(brief.mc_version.clone()),
+        theme,
+        keywords,
+    }
+}
+
+/// Merge Modpack Index hints into mustHave (skip duplicates).
+pub fn merge_mpi_hints_into_brief(
+    brief: &mut PackBrief,
+    hints: &[crate::modpack_index::MpiModHint],
+    max_extra: usize,
+) {
+    let existing: HashSet<String> = brief
+        .must_have
+        .iter()
+        .flat_map(|m| {
+            [
+                m.query.to_ascii_lowercase(),
+                m.slug_hint
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_ascii_lowercase(),
+            ]
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut added = 0usize;
+    for h in hints {
+        if added >= max_extra {
+            break;
+        }
+        let slug_l = h.slug.to_ascii_lowercase();
+        let name_l = h.name.to_ascii_lowercase();
+        if existing.contains(&slug_l) || existing.contains(&name_l) {
+            continue;
+        }
+        // Prefer keyword-sourced hits (more specific than broad theme lists).
+        if !h.source.starts_with("keyword:") && !h.source.starts_with("theme-name:") {
+            continue;
+        }
+        brief.must_have.push(MustHaveSpec {
+            query: h.name.clone(),
+            slug_hint: if h.slug.is_empty() {
+                None
+            } else {
+                Some(h.slug.clone())
+            },
+            reason: format!("Catalog hint ({})", h.source),
+        });
+        added += 1;
+    }
 }
 
 fn strip_json_fences(raw: &str) -> &str {
@@ -464,6 +628,131 @@ impl ModSearch for LiveModrinthSearch {
     }
 }
 
+/// Modrinth-first catalog search with CurseForge → Modrinth slug bridge.
+/// Install path stays Modrinth: CF hits are only used to discover a Modrinth slug.
+pub struct LiveCatalogSearch {
+    pub modrinth: ModrinthProvider,
+    pub curseforge: crate::provider::curseforge::CurseForgeProvider,
+}
+
+impl Default for LiveCatalogSearch {
+    fn default() -> Self {
+        Self {
+            modrinth: ModrinthProvider::new(),
+            curseforge: crate::provider::curseforge::CurseForgeProvider::new(),
+        }
+    }
+}
+
+impl LiveCatalogSearch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn resolve_cf_to_modrinth(&self, query: &ProviderSearchQuery) -> Result<SearchPage, String> {
+        let q = query.query.as_deref().unwrap_or("").trim();
+        if q.is_empty() {
+            return Ok(SearchPage {
+                results: vec![],
+                total: 0,
+            });
+        }
+        let loader = query
+            .loader
+            .as_deref()
+            .and_then(crate::provider::curseforge::CurseForgeProvider::mod_loader_type);
+        let page = self
+            .curseforge
+            .search_content(
+                6, // CLASS_MOD
+                q,
+                query.minecraft_version.as_deref(),
+                loader,
+                query.offset.unwrap_or(0),
+                query.limit.unwrap_or(10).clamp(1, 20),
+                Some(2), // popularity
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut results = Vec::new();
+        let mut seen = HashSet::new();
+        for hit in page.hits.into_iter().take(8) {
+            let slug = hit.slug.trim();
+            if slug.is_empty() || !seen.insert(slug.to_ascii_lowercase()) {
+                continue;
+            }
+            // Bridge: same slug on Modrinth → keep install_pack_draft Modrinth-only.
+            if let Ok(proj) = self.modrinth.get_project(slug) {
+                results.push(proj);
+            } else {
+                // CF-only: keep numeric id so install_pack_draft can use CurseForge.
+                results.push(ProjectInfo {
+                    id: hit.id.to_string(),
+                    slug: if slug.is_empty() {
+                        format!("cf-{}", hit.id)
+                    } else {
+                        hit.slug.clone()
+                    },
+                    name: hit.name.clone(),
+                    description: format!("curseforge:{}", hit.id),
+                    project_type: "mod".into(),
+                    icon_url: hit.icon_url.clone(),
+                    author: hit.authors.first().cloned(),
+                    downloads: Some(hit.download_count),
+                    follows: Some(hit.thumbs_up_count),
+                    date_modified: hit.date_modified.clone(),
+                    categories: hit.categories.clone(),
+                    license: None,
+                    client_side: None,
+                    server_side: None,
+                });
+            }
+        }
+        let total = results.len() as u32;
+        Ok(SearchPage { results, total })
+    }
+}
+
+impl ModSearch for LiveCatalogSearch {
+    fn search(&self, query: &ProviderSearchQuery) -> Result<SearchPage, String> {
+        let page = self.modrinth.search(query).map_err(|e| e.to_string())?;
+        if !page.results.is_empty() {
+            return Ok(page);
+        }
+        self.resolve_cf_to_modrinth(query)
+    }
+
+    fn get_project(&self, id_or_slug: &str) -> Result<ProjectInfo, String> {
+        match self.modrinth.get_project(id_or_slug) {
+            Ok(p) => Ok(p),
+            Err(mr_err) => {
+                // CF lookup by slug → retry Modrinth with CF slug (often identical).
+                let loader = None;
+                if let Ok(page) = self.curseforge.search_content(
+                    6,
+                    id_or_slug,
+                    None,
+                    loader,
+                    0,
+                    5,
+                    Some(2),
+                ) {
+                    for hit in page.hits {
+                        if hit.slug.eq_ignore_ascii_case(id_or_slug)
+                            || hit.name.eq_ignore_ascii_case(id_or_slug)
+                        {
+                            if let Ok(p) = self.modrinth.get_project(&hit.slug) {
+                                return Ok(p);
+                            }
+                        }
+                    }
+                }
+                Err(mr_err.to_string())
+            }
+        }
+    }
+}
+
 pub struct AssembleOptions<'a> {
     pub brief: &'a PackBrief,
     pub installed_ids: HashSet<String>,
@@ -621,14 +910,7 @@ fn try_add_mod(
     if lib {
         *library_count += 1;
     }
-    mods.push(PackDraftMod {
-        slug: p.slug,
-        project_id: p.id,
-        name: p.name,
-        reason,
-        category,
-        downloads: p.downloads.unwrap_or(0),
-    });
+    mods.push(pack_draft_mod_from_project(p, reason, category));
     true
 }
 
@@ -908,14 +1190,7 @@ fn force_push_must_have(
     }
     seen.insert(id_key);
     seen.insert(slug_key);
-    mods.push(PackDraftMod {
-        slug: p.slug,
-        project_id: p.id,
-        name: p.name,
-        reason,
-        category: "mustHave".into(),
-        downloads: p.downloads.unwrap_or(0),
-    });
+    mods.push(pack_draft_mod_from_project(p, reason, "mustHave".into()));
     true
 }
 
@@ -1367,5 +1642,27 @@ mod tests {
             unresolved: vec![],
         };
         assert!(draft.mods.is_empty());
+    }
+
+    #[test]
+    fn catalog_cf_bridge_skips_empty_query() {
+        let catalog = LiveCatalogSearch::new();
+        let page = catalog
+            .resolve_cf_to_modrinth(&ProviderSearchQuery {
+                query: Some("  ".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(page.results.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod pack_theme_tests {
+    #[test]
+    fn pack_themes_are_nonempty_offline() {
+        let cats = crate::modpack_index::list_pack_theme_categories();
+        assert!(cats.iter().any(|c| c.slug == "sci-fi" || c.kind == "modpack"));
+        assert!(cats.len() >= 5);
     }
 }

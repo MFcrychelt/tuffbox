@@ -10,10 +10,22 @@ supabase db push
 supabase functions deploy publish-capsule --no-verify-jwt
 supabase functions deploy vote-capsule
 supabase functions deploy report-cooccurrence --no-verify-jwt
+supabase functions deploy fetch-youtube-feed --no-verify-jwt
 ```
 
 `vote-capsule` must keep JWT verification on (Auth login required to vote).
 `report-cooccurrence` is anon-callable (rate-limited; service role inside).
+`fetch-youtube-feed` is cron/service only (`verify_jwt=false`); needs secret `YOUTUBE-API-KEY` (also accepts `YOUTUBE_API_KEY`).
+
+### YouTube home feed
+
+1. Apply migration `011_youtube_feed.sql` (`youtube_feed` table, anon SELECT).
+2. Set secret: `supabase secrets set YOUTUBE-API-KEY=<google-youtube-data-api-v3-key>`
+3. Deploy: `supabase functions deploy fetch-youtube-feed --no-verify-jwt`
+4. Schedule: pg_cron job `fetch-youtube-feed-every-2h` (`0 */2 * * *`) posts to the Edge Function (or Dashboard Schedules).
+5. First fill: `supabase functions invoke fetch-youtube-feed` (or HTTP POST to `/functions/v1/fetch-youtube-feed`).
+
+Launcher home reads `youtube_feed` via PostgREST (thumbnails only; click opens system browser). Clients never call YouTube.
 
 ## Client settings
 
@@ -30,6 +42,7 @@ Optional Advanced override in Settings for self-hosted projects.
 |-------|----------|
 | RLS | `experience_capsules`: SELECT for anon/authenticated on `open`/`saved` only; `rejected` hidden |
 | RLS | `mod_cooccurrence_pairs`: SELECT for anon/authenticated; writes via Edge Function only |
+| RLS | `youtube_feed`: SELECT for anon/authenticated; writes via `fetch-youtube-feed` only |
 | Write path | Edge Function `publish-capsule` with service role (`verify_jwt=false`; Ed25519 soft-sign) |
 | Co-occurrence | Edge Function `report-cooccurrence` expands mod sets → pair counts (`bump_mod_cooccurrence_pairs`) |
 | Capsule | Must include `contentHash` + Ed25519 signature + ≥1 valid action |

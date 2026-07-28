@@ -739,6 +739,480 @@ async fn fetch_cooccurrence_rows(
         .collect())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PartnerStat {
+    pub partner: String,
+    pub pack_count: u64,
+}
+
+/// RPC `partners_for_mod` — top companions for a seed mod.
+pub async fn partners_for_mod_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    mod_id: &str,
+    limit: u32,
+    loader: Option<&str>,
+    mc_version: Option<&str>,
+) -> Result<Vec<PartnerStat>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/partners_for_mod");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = json!({
+        "p_mod": mod_id.trim().to_ascii_lowercase(),
+        "p_limit": limit.clamp(1, 50),
+        "p_loader": loader.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()),
+        "p_mc_version": mc_version.map(str::trim).filter(|s| !s.is_empty()),
+    });
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("partners_for_mod failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("partners_for_mod {status}: {msg}"));
+    }
+    let rows = body.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let partner = row.get("partner")?.as_str()?.trim();
+            if partner.is_empty() {
+                return None;
+            }
+            Some(PartnerStat {
+                partner: partner.to_string(),
+                pack_count: row.get("pack_count").and_then(|v| v.as_u64()).unwrap_or(1),
+            })
+        })
+        .collect())
+}
+
+/// Service-role: seed/bump co-occurrence pairs (hub MPI analytics).
+pub async fn seed_cooccurrence_pairs_supabase(
+    supabase_url: &str,
+    service_role_key: &str,
+    pairs: &[Value],
+) -> Result<u64, String> {
+    let url = supabase_url.trim();
+    let key = service_role_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase service role is not configured".into());
+    }
+    if pairs.is_empty() {
+        return Ok(0);
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/seed_cooccurrence_pairs");
+    let client = reqwest::Client::builder()
+        .user_agent("TuffSwarm-Analytics/1.0")
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    // Chunk to keep payloads reasonable.
+    let mut total = 0u64;
+    for chunk in pairs.chunks(400) {
+        let response = client
+            .post(&endpoint)
+            .headers(supabase_headers(key)?)
+            .header("Accept", "application/json")
+            .json(&json!({ "pairs": chunk }))
+            .send()
+            .await
+            .map_err(|e| format!("seed_cooccurrence_pairs failed: {e}"))?;
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(json!(0));
+        if !status.is_success() {
+            let msg = body
+                .get("message")
+                .or_else(|| body.get("error"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("request rejected");
+            return Err(format!("seed_cooccurrence_pairs {status}: {msg}"));
+        }
+        total += body.as_u64().unwrap_or(chunk.len() as u64);
+    }
+    Ok(total)
+}
+
+/// Service-role: seed/bump Modpack Index co-occurrence pairs (separate table).
+pub async fn seed_mpi_cooccurrence_pairs_supabase(
+    supabase_url: &str,
+    service_role_key: &str,
+    pairs: &[Value],
+) -> Result<u64, String> {
+    let url = supabase_url.trim();
+    let key = service_role_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase service role is not configured".into());
+    }
+    if pairs.is_empty() {
+        return Ok(0);
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/seed_mpi_cooccurrence_pairs");
+    let client = reqwest::Client::builder()
+        .user_agent("TuffSwarm-Analytics/1.0")
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut total = 0u64;
+    for chunk in pairs.chunks(400) {
+        let response = client
+            .post(&endpoint)
+            .headers(supabase_headers(key)?)
+            .header("Accept", "application/json")
+            .json(&json!({ "pairs": chunk }))
+            .send()
+            .await
+            .map_err(|e| format!("seed_mpi_cooccurrence_pairs failed: {e}"))?;
+        let status = response.status();
+        let body: Value = response.json().await.unwrap_or(json!(0));
+        if !status.is_success() {
+            let msg = body
+                .get("message")
+                .or_else(|| body.get("error"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("request rejected");
+            return Err(format!("seed_mpi_cooccurrence_pairs {status}: {msg}"));
+        }
+        total += body.as_u64().unwrap_or(chunk.len() as u64);
+    }
+    Ok(total)
+}
+
+/// Service-role: rebuild `mod_partner_tops` JSONB cache from pair tables.
+pub async fn refresh_mod_partner_tops_supabase(
+    supabase_url: &str,
+    service_role_key: &str,
+) -> Result<u64, String> {
+    let url = supabase_url.trim();
+    let key = service_role_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase service role is not configured".into());
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/refresh_mod_partner_tops");
+    let client = reqwest::Client::builder()
+        .user_agent("TuffSwarm-Analytics/1.0")
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Accept", "application/json")
+        .json(&json!({}))
+        .send()
+        .await
+        .map_err(|e| format!("refresh_mod_partner_tops failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!(0));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("refresh_mod_partner_tops {status}: {msg}"));
+    }
+    Ok(body.as_u64().unwrap_or(0))
+}
+
+/// RPC `partners_for_mod_mpi` — companions from Modpack Index graph only.
+pub async fn partners_for_mod_mpi_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    mod_id: &str,
+    limit: u32,
+    loader: Option<&str>,
+    mc_version: Option<&str>,
+    category_slug: Option<&str>,
+) -> Result<Vec<PartnerStat>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let endpoint = join_url(url, "rest/v1/rpc/partners_for_mod_mpi");
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = json!({
+        "p_mod": mod_id.trim().to_ascii_lowercase(),
+        "p_limit": limit.clamp(1, 50),
+        "p_loader": loader.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()),
+        "p_mc_version": mc_version.map(str::trim).filter(|s| !s.is_empty()),
+        "p_category_slug": category_slug.map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()),
+    });
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("partners_for_mod_mpi failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("partners_for_mod_mpi {status}: {msg}"));
+    }
+    let rows = body.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let partner = row.get("partner")?.as_str()?.trim();
+            if partner.is_empty() {
+                return None;
+            }
+            Some(PartnerStat {
+                partner: partner.to_string(),
+                pack_count: row.get("pack_count").and_then(|v| v.as_u64()).unwrap_or(1),
+            })
+        })
+        .collect())
+}
+
+/// GET top pairs from the MPI-only co-occurrence table.
+pub async fn fetch_mpi_cooccurrence_supabase(
+    supabase_url: &str,
+    anon_key: &str,
+    mc_version: &str,
+    loader: &str,
+    limit: u32,
+) -> Result<Vec<crate::swarm::ModPairStat>, String> {
+    let url = supabase_url.trim();
+    let key = anon_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase is not configured".into());
+    }
+    let limit = limit.clamp(1, 100);
+    let loader = loader.trim().to_ascii_lowercase();
+    let mc = mc_version.trim();
+    let mut pairs =
+        fetch_mpi_cooccurrence_rows(url, key, Some(mc), Some(&loader), limit).await?;
+    if pairs.len() < (limit as usize / 3).max(5) {
+        let broader = fetch_mpi_cooccurrence_rows(url, key, None, Some(&loader), limit).await?;
+        pairs = crate::swarm::merge_cooccurrence_pairs(&pairs, &broader, limit as usize);
+    }
+    if pairs.len() < (limit as usize / 4).max(3) {
+        let global = fetch_mpi_cooccurrence_rows(url, key, None, None, limit).await?;
+        pairs = crate::swarm::merge_cooccurrence_pairs(&pairs, &global, limit as usize);
+    }
+    Ok(pairs)
+}
+
+async fn fetch_mpi_cooccurrence_rows(
+    supabase_url: &str,
+    anon_key: &str,
+    mc_version: Option<&str>,
+    loader: Option<&str>,
+    limit: u32,
+) -> Result<Vec<crate::swarm::ModPairStat>, String> {
+    let mut filters = Vec::new();
+    if let Some(mc) = mc_version.map(str::trim).filter(|s| !s.is_empty()) {
+        filters.push(format!("mc_version=eq.{}", urlencoding_minimal(mc)));
+    }
+    if let Some(ld) = loader.map(str::trim).filter(|s| !s.is_empty()) {
+        filters.push(format!("loader=eq.{}", urlencoding_minimal(ld)));
+    }
+    let filter_q = if filters.is_empty() {
+        String::new()
+    } else {
+        format!("&{}", filters.join("&"))
+    };
+    let query = format!(
+        "mpi_mod_cooccurrence_pairs?select=mod_a,mod_b,count&order=count.desc&limit={limit}{filter_q}"
+    );
+    let endpoint = join_url(supabase_url, &format!("rest/v1/{query}"));
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(&endpoint)
+        .headers(supabase_headers(anon_key)?)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("supabase MPI co-occurrence fetch failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("supabase MPI co-occurrence fetch {status}: {msg}"));
+    }
+    let rows = body.as_array().cloned().unwrap_or_default();
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let a = row.get("mod_a")?.as_str()?.trim();
+            let b = row.get("mod_b")?.as_str()?.trim();
+            if a.is_empty() || b.is_empty() {
+                return None;
+            }
+            Some(crate::swarm::ModPairStat {
+                mod_a: a.to_string(),
+                mod_b: b.to_string(),
+                count: row.get("count").and_then(|v| v.as_u64()).unwrap_or(1),
+            })
+        })
+        .collect())
+}
+
+/// Service-role: true if this MPI pack was already synced for scope.
+pub async fn mpi_pack_already_synced(
+    supabase_url: &str,
+    service_role_key: &str,
+    mpi_pack_id: u64,
+    mc_version: &str,
+    loader: &str,
+) -> Result<bool, String> {
+    mpi_pack_already_synced_scoped(
+        supabase_url,
+        service_role_key,
+        mpi_pack_id,
+        mc_version,
+        loader,
+        "",
+    )
+    .await
+}
+
+pub async fn mpi_pack_already_synced_scoped(
+    supabase_url: &str,
+    service_role_key: &str,
+    mpi_pack_id: u64,
+    mc_version: &str,
+    loader: &str,
+    category_slug: &str,
+) -> Result<bool, String> {
+    let url = supabase_url.trim();
+    let key = service_role_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase service role is not configured".into());
+    }
+    let query = format!(
+        "mpi_pack_sync?select=mpi_pack_id&mpi_pack_id=eq.{mpi_pack_id}&mc_version=eq.{}&loader=eq.{}&category_slug=eq.{}&limit=1",
+        urlencoding_minimal(mc_version.trim()),
+        urlencoding_minimal(&loader.trim().to_ascii_lowercase()),
+        urlencoding_minimal(&category_slug.trim().to_ascii_lowercase())
+    );
+    let endpoint = join_url(url, &format!("rest/v1/{query}"));
+    let client = reqwest::Client::builder()
+        .user_agent("TuffSwarm-Analytics/1.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("mpi_pack_sync lookup failed: {e}"))?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(json!([]));
+    if !status.is_success() {
+        return Err(format!("mpi_pack_sync lookup {status}"));
+    }
+    Ok(body.as_array().map(|a| !a.is_empty()).unwrap_or(false))
+}
+
+/// Service-role: mark MPI pack as synced.
+pub async fn mark_mpi_pack_synced(
+    supabase_url: &str,
+    service_role_key: &str,
+    mpi_pack_id: u64,
+    mc_version: &str,
+    loader: &str,
+    mod_count: i32,
+) -> Result<(), String> {
+    mark_mpi_pack_synced_scoped(
+        supabase_url,
+        service_role_key,
+        mpi_pack_id,
+        mc_version,
+        loader,
+        "",
+        mod_count,
+    )
+    .await
+}
+
+pub async fn mark_mpi_pack_synced_scoped(
+    supabase_url: &str,
+    service_role_key: &str,
+    mpi_pack_id: u64,
+    mc_version: &str,
+    loader: &str,
+    category_slug: &str,
+    mod_count: i32,
+) -> Result<(), String> {
+    let url = supabase_url.trim();
+    let key = service_role_key.trim();
+    if url.is_empty() || key.is_empty() {
+        return Err("Supabase service role is not configured".into());
+    }
+    let endpoint = join_url(url, "rest/v1/mpi_pack_sync");
+    let client = reqwest::Client::builder()
+        .user_agent("TuffSwarm-Analytics/1.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = json!({
+        "mpi_pack_id": mpi_pack_id,
+        "mc_version": mc_version.trim(),
+        "loader": loader.trim().to_ascii_lowercase(),
+        "category_slug": category_slug.trim().to_ascii_lowercase(),
+        "mod_count": mod_count,
+        "synced_at": crate::time_util::rfc3339_now(),
+    });
+    let response = client
+        .post(&endpoint)
+        .headers(supabase_headers(key)?)
+        .header("Prefer", "resolution=merge-duplicates")
+        .header("Accept", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| format!("mpi_pack_sync upsert failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("mpi_pack_sync upsert {status}: {body}"));
+    }
+    Ok(())
+}
+
 /// POST `/rest/v1/rpc/launcher_heartbeat` — mark this device online and open/extend a session.
 pub async fn launcher_heartbeat_supabase(
     supabase_url: &str,
@@ -905,5 +1379,48 @@ mod tests {
     #[test]
     fn urlencoding_encodes_pipe() {
         assert_eq!(urlencoding_minimal("a|b"), "a%7Cb");
+    }
+
+    /// Smoke: `mod_partner_tops.partners` JSONB matches PartnerStat / RPC columns.
+    #[test]
+    fn partner_tops_jsonb_shape_parses() {
+        let cached = json!([
+            {"partner": "jei", "pack_count": 42},
+            {"partner": "sodium", "pack_count": 10},
+            {"partner": "", "pack_count": 99},
+            {"pack_count": 1}
+        ]);
+        let stats: Vec<PartnerStat> = cached
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| {
+                let partner = row.get("partner")?.as_str()?.trim();
+                if partner.is_empty() {
+                    return None;
+                }
+                Some(PartnerStat {
+                    partner: partner.to_string(),
+                    pack_count: row.get("pack_count").and_then(|v| v.as_u64()).unwrap_or(1),
+                })
+            })
+            .collect();
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].partner, "jei");
+        assert_eq!(stats[0].pack_count, 42);
+        assert_eq!(stats[1].partner, "sodium");
+    }
+
+    #[test]
+    fn refresh_mod_partner_tops_rpc_path() {
+        let endpoint = join_url(
+            "https://example.supabase.co",
+            "rest/v1/rpc/refresh_mod_partner_tops",
+        );
+        assert_eq!(
+            endpoint,
+            "https://example.supabase.co/rest/v1/rpc/refresh_mod_partner_tops"
+        );
     }
 }

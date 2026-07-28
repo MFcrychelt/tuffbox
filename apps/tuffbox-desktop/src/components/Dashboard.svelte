@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import {
     Play,
+    Square,
     Plus,
     Settings,
     MoreVertical,
@@ -39,16 +40,17 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, loginTypeLabel, type RecentProject, type CapeProvider, type CapeCatalog } from "../lib/store";
+  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, runningInstances, isProjectRunning, loginTypeLabel, type RecentProject, type CapeProvider, type CapeCatalog } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
-  import { launchWithFeedback, registerLaunchCrashListener } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import InstanceHome from "./InstanceHome.svelte";
+  import YoutubeFeed from "./YoutubeFeed.svelte";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world";
 
@@ -74,6 +76,7 @@
   ];
 
   $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
+  $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
   $: skinUrl = $authState.profile?.skinUrl ?? null;
   $: capeUrl = $authState.profile?.capeUrl ?? null;
   $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
@@ -189,13 +192,13 @@
 
   async function launch() {
     if (!selectedPath) return;
-    isLaunching.set(true);
     await invoke("set_last_opened_project", { path: selectedPath });
-    await launchWithFeedback(
-      { path: selectedPath, profile: "client" },
-      { onStarted: () => { isLaunching.set(false); } },
-    );
-    isLaunching.set(false);
+    await launchWithFeedback({ path: selectedPath, profile: "client" });
+  }
+
+  async function stopGame() {
+    if (!selectedPath) return;
+    await killWithFeedback(selectedPath);
   }
 
   function openSettings() {
@@ -504,10 +507,18 @@
       <!-- Hero: Play button + project info -->
       <section class="hero">
         <div class="hero-left">
-          <button class="play-btn" on:click={launch} disabled={!selectedPath || $isLaunching}>
+          <button
+            class="play-btn"
+            class:stop={selectedRunning && !$isLaunching}
+            on:click={selectedRunning && !$isLaunching ? stopGame : launch}
+            disabled={!selectedPath || $isLaunching}
+          >
             {#if $isLaunching}
               <span class="spinner"></span>
               <span class="play-text">Launching...</span>
+            {:else if selectedRunning}
+              <Square size={24} fill="currentColor" />
+              <span class="play-text">Stop</span>
             {:else}
               <Play size={28} fill="currentColor" />
               <span class="play-text">Play</span>
@@ -569,6 +580,8 @@
           onOpenWorld={() => (currentView = "world")}
         />
       {/if}
+
+      <YoutubeFeed />
 
       <!-- Instances grid -->
       <section class="projects-section">
@@ -1255,6 +1268,15 @@
     opacity: 0.5;
     cursor: not-allowed;
     box-shadow: none;
+  }
+
+  .play-btn.stop {
+    background: var(--accent-danger, #ef4444);
+    box-shadow: 0 8px 24px rgba(239, 68, 68, 0.3);
+  }
+
+  .play-btn.stop:hover {
+    box-shadow: 0 12px 32px rgba(239, 68, 68, 0.4);
   }
 
   .play-text {

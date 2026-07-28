@@ -1,18 +1,20 @@
 <script lang="ts">
-  import { Play, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
+  import { Play, Square, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, isLaunching, openLaunchLog } from "../lib/store";
-  import { launchWithFeedback } from "../lib/launch";
+  import { projectPath, projectInfo, isLaunching, openLaunchLog, runningInstances, isProjectRunning } from "../lib/store";
+  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
 
   export let currentView: string;
 
   let onlineCount = 0;
   let onlineOk = false;
   let onlineTimer: ReturnType<typeof setInterval> | null = null;
+
+  $: projectRunning = isProjectRunning($projectPath, $runningInstances);
 
   async function refreshOnline() {
     try {
@@ -135,15 +137,26 @@
       Logs
     </button>
 
-    <button class="launch-btn" on:click={launch} disabled={!$projectPath || $isLaunching}>
-      {#if $isLaunching}
+    {#if $isLaunching}
+      <button class="launch-btn" disabled>
         <span class="spinner"></span>
         <span>Launching…</span>
-      {:else}
+      </button>
+    {:else if projectRunning}
+      <button
+        class="launch-btn stop"
+        disabled={!$projectPath}
+        on:click={() => $projectPath && killWithFeedback($projectPath)}
+      >
+        <Square size={16} fill="currentColor" />
+        <span>Stop</span>
+      </button>
+    {:else}
+      <button class="launch-btn" on:click={launch} disabled={!$projectPath}>
         <Play size={16} fill="currentColor" />
         <span>Launch</span>
-      {/if}
-    </button>
+      </button>
+    {/if}
   </div>
 </header>
 
@@ -270,6 +283,10 @@
 
   .launch-btn {
     min-width: 100px;
+  }
+
+  .launch-btn.stop {
+    background: var(--accent-danger, #ef4444);
   }
 
   .spinner {

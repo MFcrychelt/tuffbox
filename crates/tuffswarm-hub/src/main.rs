@@ -9,26 +9,35 @@
 //! - POST /v1/crash/lookup
 //! - POST /v1/crash/diagnose
 //! - POST /v1/mods/cooccurrence
+//! - GET  /v1/mods/cooccurrence?version=&loader=&limit=
+//! - GET  /v1/mods/modpacks?query=&page=&limit=&categoryId=&version= (MPI proxy)
+//! - GET  /v1/mods/modpack-categories (pack themes + MPI merge, cached)
+
+mod mpi_analytics;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use clap::Parser;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tuffbox_core::crash_remote::{
     CrashDiagnoseRequest, CrashDiagnoseResponse, CrashLookupRequest, CrashLookupResponse,
 };
 use tuffbox_core::swarm::{CapsuleLibrary, CooccurrenceStore, ExperienceCapsule, ModPairStat};
+
+const MPI_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Parser)]
 #[command(name = "tuffswarm-hub")]
@@ -40,11 +49,25 @@ struct Args {
     /// Directory for durable JSONL capsule store.
     #[arg(long)]
     data_dir: Option<PathBuf>,
+    /// Run one Modpack Index → Supabase co-occurrence sync and exit (requires SUPABASE_* env).
+    #[arg(long, default_value_t = false)]
+    mpi_sync_once: bool,
+    /// Packs per version×loader target for MPI sync (default 20).
+    #[arg(long, default_value_t = 20)]
+    mpi_packs: u32,
+}
+
+struct CacheEntry {
+    at: Instant,
+    body: Value,
 }
 
 struct HubState {
     library: Mutex<CapsuleLibrary>,
     cooccur_path: PathBuf,
+    supabase: Option<mpi_analytics::SupabaseCreds>,
+    /// Short TTL cache for MPI proxy responses (modpacks / categories).
+    mpi_cache: Mutex<HashMap<String, CacheEntry>>,
 }
 
 #[tokio::main]
@@ -57,15 +80,38 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
+    let supabase = mpi_analytics::creds_from_env();
+
+    if args.mpi_sync_once {
+        let Some(creds) = supabase.as_ref() else {
+            anyhow::bail!(
+                "--mpi-sync-once requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
+            );
+        };
+        mpi_analytics::run_mpi_sync_once(creds, args.mpi_packs)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        return Ok(());
+    }
+
     let data_dir = args.data_dir.unwrap_or_else(default_data_dir);
     std::fs::create_dir_all(&data_dir)?;
     let capsules_path = data_dir.join("capsules.jsonl");
     let cooccur_path = data_dir.join("cooccurrence.json");
     tracing::info!(?data_dir, "TuffSwarm hub data directory");
 
+    if let Some(creds) = supabase.clone() {
+        tracing::info!("Supabase configured — scheduling daily MPI analytics sync");
+        mpi_analytics::spawn_daily_loop(creds);
+    } else {
+        tracing::info!("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY unset — MPI sync disabled");
+    }
+
     let state = Arc::new(HubState {
         library: Mutex::new(CapsuleLibrary::open(capsules_path)),
         cooccur_path,
+        supabase,
+        mpi_cache: Mutex::new(HashMap::new()),
     });
 
     let app = Router::new()
@@ -73,7 +119,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/crash/capsules", post(publish_capsule))
         .route("/v1/crash/lookup", post(lookup))
         .route("/v1/crash/diagnose", post(diagnose))
-        .route("/v1/mods/cooccurrence", post(cooccurrence))
+        .route(
+            "/v1/mods/cooccurrence",
+            post(cooccurrence).get(cooccurrence_get),
+        )
+        .route("/v1/mods/modpacks", get(modpacks_get))
+        .route("/v1/mods/modpack-categories", get(modpack_categories_get))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -99,6 +150,9 @@ struct Health {
     ok: bool,
     service: &'static str,
     capsule_count: usize,
+    /// Co-occurrence graph writers: `launcher` (POST / client reports) + `mpi` (hub crawl).
+    cooccurrence_sources: &'static [&'static str],
+    supabase_configured: bool,
 }
 
 async fn health(State(state): State<Arc<HubState>>) -> impl IntoResponse {
@@ -111,6 +165,10 @@ async fn health(State(state): State<Arc<HubState>>) -> impl IntoResponse {
         ok: true,
         service: "tuffswarm-hub",
         capsule_count: count,
+        // last_source in launcher table: "launcher"
+        // MPI graph is separate table mpi_mod_cooccurrence_pairs
+        cooccurrence_sources: &["launcher", "mpi"],
+        supabase_configured: state.supabase.is_some(),
     })
 }
 
@@ -230,7 +288,7 @@ async fn cooccurrence(
     State(state): State<Arc<HubState>>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    // Accept optional upload of pairs; always return current top pairs.
+    let mut seed_rows: Vec<Value> = Vec::new();
     if let Some(pairs) = body.get("pairs").and_then(|v| v.as_array()) {
         let mut store = load_hub_cooccur(&state.cooccur_path);
         if let Some(mc) = body.get("mcVersion").and_then(|v| v.as_str()) {
@@ -239,6 +297,17 @@ async fn cooccurrence(
         if let Some(loader) = body.get("loader").and_then(|v| v.as_str()) {
             store.loader = loader.to_string();
         }
+        let mc = body
+            .get("mcVersion")
+            .or_else(|| body.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let loader = body
+            .get("loader")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
         for p in pairs {
             let a = p
                 .get("modA")
@@ -260,11 +329,245 @@ async fn cooccurrence(
                 format!("{b}||{a}")
             };
             *store.pairs.entry(key).or_insert(0) += count;
+            // Seed row for Supabase (weight = report count).
+            let mut ma = a.trim().to_ascii_lowercase();
+            let mut mb = b.trim().to_ascii_lowercase();
+            if ma > mb {
+                std::mem::swap(&mut ma, &mut mb);
+            }
+            if ma != mb {
+                seed_rows.push(json!({
+                    "mod_a": ma,
+                    "mod_b": mb,
+                    "mc_version": mc,
+                    "loader": loader,
+                    "weight": count.max(1),
+                    "last_source": "launcher",
+                }));
+            }
         }
         let _ = save_hub_cooccur(&state.cooccur_path, &store);
     }
 
-    let store = load_hub_cooccur(&state.cooccur_path);
+    // When service role is set, mirror POST into Supabase (same table MPI uses).
+    if !seed_rows.is_empty() {
+        if let Some(creds) = state.supabase.as_ref() {
+            match tuffbox_core::swarm_supabase::seed_cooccurrence_pairs_supabase(
+                &creds.url,
+                &creds.service_role_key,
+                &seed_rows,
+            )
+            .await
+            {
+                Ok(n) => tracing::info!(pairs = n, "seeded launcher cooccurrence into Supabase"),
+                Err(e) => tracing::warn!(error = %e, "launcher cooccurrence Supabase seed failed"),
+            }
+        }
+    }
+
+    let version = body
+        .get("mcVersion")
+        .or_else(|| body.get("version"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let loader = body.get("loader").and_then(|v| v.as_str()).unwrap_or("");
+    let limit = body
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(25)
+        .min(100) as u32;
+    Json(resolve_cooccurrence(&state, version, loader, limit).await)
+}
+
+#[derive(Debug, Deserialize)]
+struct CooccurrenceGetQuery {
+    version: Option<String>,
+    loader: Option<String>,
+    limit: Option<u64>,
+}
+
+async fn cooccurrence_get(
+    State(state): State<Arc<HubState>>,
+    Query(q): Query<CooccurrenceGetQuery>,
+) -> impl IntoResponse {
+    let version = q.version.unwrap_or_default();
+    let loader = q.loader.unwrap_or_default();
+    let limit = q.limit.unwrap_or(25).min(100) as u32;
+    Json(resolve_cooccurrence(&state, &version, &loader, limit).await)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModpacksGetQuery {
+    query: Option<String>,
+    page: Option<u32>,
+    limit: Option<u32>,
+    category_id: Option<u32>,
+    version: Option<String>,
+}
+
+/// Proxy Modpack Index pack search through the hub (analytics UA; no end-user IP to MPI).
+async fn modpacks_get(
+    State(state): State<Arc<HubState>>,
+    Query(q): Query<ModpacksGetQuery>,
+) -> impl IntoResponse {
+    let query = q.query.clone().unwrap_or_default();
+    let page = q.page.unwrap_or(1);
+    let limit = q.limit.unwrap_or(12).clamp(1, 40);
+    let category_id = q.category_id;
+    let version = q.version.clone().unwrap_or_default();
+    let cache_key = format!(
+        "modpacks|q={query}|p={page}|l={limit}|c={}|v={version}",
+        category_id.unwrap_or(0)
+    );
+    if let Some(cached) = cache_get(&state, &cache_key) {
+        return (StatusCode::OK, Json(cached)).into_response();
+    }
+
+    let query_opt = if query.trim().is_empty() {
+        None
+    } else {
+        Some(query)
+    };
+    let version_opt = if version.trim().is_empty() {
+        None
+    } else {
+        Some(version)
+    };
+    match tokio::task::spawn_blocking(move || {
+        let version_id = version_opt
+            .as_deref()
+            .and_then(tuffbox_core::modpack_index::resolve_mc_version_id);
+        tuffbox_core::modpack_index::search_modpacks_hub(
+            query_opt.as_deref(),
+            page,
+            limit,
+            category_id,
+            version_id,
+        )
+    })
+    .await
+    {
+        Ok(Ok((results, total))) => {
+            let body = json!({
+                "results": results,
+                "total": total,
+                "source": "mpi-hub",
+            });
+            cache_put(&state, cache_key, body.clone());
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Ok(Err(e)) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "message": e, "results": [], "total": 0 })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "message": e.to_string(), "results": [], "total": 0 })),
+        )
+            .into_response(),
+    }
+}
+
+async fn modpack_categories_get(State(state): State<Arc<HubState>>) -> impl IntoResponse {
+    let cache_key = "modpack-categories".to_string();
+    if let Some(cached) = cache_get(&state, &cache_key) {
+        return (StatusCode::OK, Json(cached)).into_response();
+    }
+    // Prefer full hub list; on MPI failure still return static pack themes.
+    let body = match tokio::task::spawn_blocking(tuffbox_core::modpack_index::list_categories_hub)
+        .await
+    {
+        Ok(Ok(cats)) => json!({ "categories": cats, "source": "mpi-hub" }),
+        _ => json!({
+            "categories": tuffbox_core::modpack_index::list_pack_theme_categories(),
+            "source": "builtin-themes",
+        }),
+    };
+    cache_put(&state, cache_key, body.clone());
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+fn cache_get(state: &HubState, key: &str) -> Option<Value> {
+    let Ok(mut map) = state.mpi_cache.lock() else {
+        return None;
+    };
+    let entry = map.get(key)?;
+    if entry.at.elapsed() > MPI_CACHE_TTL {
+        map.remove(key);
+        return None;
+    }
+    Some(entry.body.clone())
+}
+
+fn cache_put(state: &HubState, key: String, body: Value) {
+    if let Ok(mut map) = state.mpi_cache.lock() {
+        map.insert(key, CacheEntry { at: Instant::now(), body });
+        // ponytail: O(n) prune when map grows; upgrade to timed sweep if hub is busy.
+        if map.len() > 256 {
+            map.retain(|_, e| e.at.elapsed() <= MPI_CACHE_TTL);
+        }
+    }
+}
+
+async fn resolve_cooccurrence(
+    state: &HubState,
+    version: &str,
+    loader: &str,
+    limit: u32,
+) -> Value {
+    if let Some(creds) = &state.supabase {
+        let launcher = tuffbox_core::swarm_supabase::fetch_cooccurrence_supabase(
+            &creds.url,
+            &creds.service_role_key,
+            version,
+            loader,
+            limit,
+        )
+        .await
+        .unwrap_or_default();
+        let mpi = tuffbox_core::swarm_supabase::fetch_mpi_cooccurrence_supabase(
+            &creds.url,
+            &creds.service_role_key,
+            version,
+            loader,
+            limit,
+        )
+        .await
+        .unwrap_or_default();
+        if !launcher.is_empty() || !mpi.is_empty() {
+            // Prefer launcher pairs for `pairs`; expose MPI separately.
+            let pairs = if !launcher.is_empty() {
+                launcher.clone()
+            } else {
+                mpi.clone()
+            };
+            return json!({
+                "mcVersion": version,
+                "loader": loader,
+                "pairs": pairs,
+                "launcherPairs": launcher,
+                "mpiPairs": mpi,
+                "source": if !launcher.is_empty() { "supabase-launcher" } else { "supabase-mpi" },
+            });
+        }
+    }
+    let mut payload = cooccurrence_payload(&state.cooccur_path, limit as usize);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("source".into(), json!("local"));
+        if !version.is_empty() {
+            obj.insert("mcVersion".into(), json!(version));
+        }
+        if !loader.is_empty() {
+            obj.insert("loader".into(), json!(loader));
+        }
+    }
+    payload
+}
+
+fn cooccurrence_payload(path: &PathBuf, limit: usize) -> Value {
+    let store = load_hub_cooccur(path);
     let mut pairs: Vec<ModPairStat> = store
         .pairs
         .iter()
@@ -278,17 +581,12 @@ async fn cooccurrence(
         })
         .collect();
     pairs.sort_by(|a, b| b.count.cmp(&a.count));
-    let limit = body
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(25)
-        .min(100) as usize;
     pairs.truncate(limit);
-    Json(json!({
+    json!({
         "mcVersion": store.mc_version,
         "loader": store.loader,
         "pairs": pairs,
-    }))
+    })
 }
 
 fn load_hub_cooccur(path: &PathBuf) -> CooccurrenceStore {

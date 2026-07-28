@@ -491,6 +491,8 @@ fn main() -> anyhow::Result<()> {
                 instance_dir: game_dir,
                 memory_mb: profile.memory_mb.unwrap_or(4096),
                 jvm_args: profile.jvm_args.clone(),
+                quick_play_type: None,
+                quick_play_value: None,
             };
             let (mut cmd, log_path) =
                 tuffbox_core::TestLauncher::build_command(&manifest, profile, &options, &java, &launcher_dir, &progress, None, None, None, None)?;

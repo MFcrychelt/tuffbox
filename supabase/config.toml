@@ -9,3 +9,6 @@ verify_jwt = true
 
 [functions.report-cooccurrence]
 verify_jwt = false
+
+[functions.fetch-youtube-feed]
+verify_jwt = false

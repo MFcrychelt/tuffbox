@@ -4,6 +4,7 @@
     Library as LibraryIcon,
     Search,
     Play,
+    Square,
     Plus,
     Download,
     FolderOpen,
@@ -31,12 +32,14 @@
     projectInfo,
     ideStageRequest,
     newProjectOpen,
+    runningInstances,
+    isProjectRunning,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import type { SearchResult } from "../lib/api";
-  import { launchWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import CreationTrends from "./CreationTrends.svelte";
   import PromptDialog from "./PromptDialog.svelte";
   import AddInstanceModal from "./AddInstanceModal.svelte";
@@ -105,6 +108,10 @@
 
   async function launchPack(project: RecentProject) {
     closeCtxMenu();
+    if (isProjectRunning(project.path, $runningInstances)) {
+      await killWithFeedback(project.path);
+      return;
+    }
     launching = project.path;
     try {
       await invoke("set_last_opened_project", { path: project.path });
@@ -708,13 +715,16 @@
               <button
                 class="pack-play"
                 class:busy={launching === project.path}
+                class:stop={isProjectRunning(project.path, $runningInstances)}
                 type="button"
                 on:click|stopPropagation={() => launchPack(project)}
-                title="Play"
-                aria-label="Play {project.info.name}"
+                title={isProjectRunning(project.path, $runningInstances) ? "Stop" : "Play"}
+                aria-label="{isProjectRunning(project.path, $runningInstances) ? 'Stop' : 'Play'} {project.info.name}"
               >
                 {#if launching === project.path}
                   <span class="mini-spinner"></span>
+                {:else if isProjectRunning(project.path, $runningInstances)}
+                  <Square size={18} fill="currentColor" />
                 {:else}
                   <Play size={20} fill="currentColor" />
                 {/if}
@@ -923,7 +933,11 @@
       <Package size={14} /> Open in IDE → Mods
     </button>
     <button type="button" role="menuitem" on:click={() => runPackAction("play", menuProject)} disabled={actionBusy || launching === menuProject.path}>
-      <Play size={14} /> Play
+      {#if isProjectRunning(menuProject.path, $runningInstances)}
+        <Square size={14} /> Stop
+      {:else}
+        <Play size={14} /> Play
+      {/if}
     </button>
     <button type="button" role="menuitem" on:click={() => runPackAction("open-folder", menuProject)} disabled={actionBusy}>
       <Folder size={14} /> Open folder
@@ -1113,6 +1127,11 @@
   }
   .pack-play:hover { transform: scale(1.1); }
   .pack-play.busy { opacity: 0.8; cursor: default; }
+  .pack-play.stop {
+    background: var(--accent-danger, #ef4444);
+    color: #fff;
+    box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+  }
 
   .pack-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
   .pack-name {

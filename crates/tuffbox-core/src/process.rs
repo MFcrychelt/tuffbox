@@ -5,12 +5,18 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug, Clone)]
 pub struct RunningProcess {
+    /// Stable instance key (usually the project manifest path).
+    pub id: String,
     pub profile_id: String,
+    pub pid: u32,
     pub log_path: PathBuf,
+    /// Unix epoch seconds when the process was spawned.
+    pub started_at: u64,
 }
 
 /// Outcome of a spawned process exiting, handed to [`OnExit`] callbacks.
@@ -56,14 +62,16 @@ pub fn read_lines_lossy(mut reader: impl BufRead) -> impl Iterator<Item = String
 }
 
 pub fn spawn_and_track(
+    instance_id: String,
     profile_id: String,
     cmd: Command,
     log_path: impl AsRef<Path>,
 ) -> std::io::Result<RunningProcess> {
-    spawn_and_track_with_cleanup(profile_id, cmd, log_path, Vec::new(), None)
+    spawn_and_track_with_cleanup(instance_id, profile_id, cmd, log_path, Vec::new(), None)
 }
 
 pub fn spawn_and_track_with_cleanup(
+    instance_id: String,
     profile_id: String,
     mut cmd: Command,
     log_path: impl AsRef<Path>,
@@ -114,9 +122,17 @@ pub fn spawn_and_track_with_cleanup(
         }
     });
 
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
     let info = RunningProcess {
-        profile_id: profile_id.clone(),
+        id: instance_id,
+        profile_id,
+        pid,
         log_path: log_path.clone(),
+        started_at,
     };
     PROCESSES
         .lock()
@@ -146,7 +162,65 @@ pub fn spawn_and_track_with_cleanup(
 }
 
 pub fn list_running() -> Vec<RunningProcess> {
-    PROCESSES.lock().unwrap().values().cloned().collect()
+    PROCESSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect()
+}
+
+/// Force-kill every tracked process for `instance_id`. The wait thread still
+/// runs `on_exit` afterward (playtime / crash classification / UI events).
+pub fn kill_instance(instance_id: &str) -> std::io::Result<usize> {
+    let pids: Vec<u32> = PROCESSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, p)| p.id == instance_id)
+        .map(|(pid, _)| *pid)
+        .collect();
+    for pid in &pids {
+        kill_pid(*pid)?;
+    }
+    Ok(pids.len())
+}
+
+fn kill_pid(pid: u32) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("taskkill exited with {status}"),
+            ))
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("kill exited with {status}"),
+            ))
+        }
+    }
 }
 
 pub fn read_log_tail(path: &Path, limit: usize) -> std::io::Result<String> {

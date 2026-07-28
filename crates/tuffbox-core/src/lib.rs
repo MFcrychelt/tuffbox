@@ -6,6 +6,8 @@
 pub mod action_plan;
 pub mod change_plan;
 pub mod create_mode;
+pub mod mod_suggest;
+pub mod modpack_index;
 pub mod crash;
 pub mod crash_remote;
 pub mod diagnostics;

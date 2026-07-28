@@ -1,8 +1,8 @@
 //! Create Mode chat / pack assemble Tauri commands.
 
 use crate::{
-    auto_snapshot, download_project_mods_tracked, install_modrinth_with_dependencies_rounds,
-    manifest_parent, save_manifest,
+    auto_snapshot, download_project_mods_tracked, install_curseforge_with_dependencies_rounds,
+    install_modrinth_with_dependencies_rounds, manifest_parent, save_manifest,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -11,12 +11,19 @@ use tauri::{AppHandle, Emitter};
 use tuffbox_core::create_mode::{
     assemble_pack_draft as run_assemble_pack_draft, brief_from_prompt,
     delete_create_chat as delete_create_chat_file, list_create_chats as list_create_chat_files,
-    load_create_chat as load_create_chat_file, new_chat_id, now_iso,
-    parse_create_mode_ai_response, save_create_chat as save_create_chat_file, AssembleOptions,
-    CreateChatMessage, CreateChatSession, LiveModrinthSearch, PackBrief, PackDraft,
-    CREATE_MODE_SYSTEM_PROMPT,
+    load_create_chat as load_create_chat_file, merge_mpi_hints_into_brief, new_chat_id, now_iso,
+    parse_create_mode_ai_response, save_create_chat as save_create_chat_file, search_from_brief,
+    AssembleOptions, CreateChatMessage, CreateChatSession, LiveCatalogSearch, PackBrief,
+    PackDraft, CREATE_MODE_REFINE_PROMPT, CREATE_MODE_SYSTEM_PROMPT,
 };
 use tuffbox_core::graph::loader_kind_slug;
+use tuffbox_core::mod_suggest::{
+    enrich_partners_with_descriptions, format_candidates_for_prompt, merge_partner_stats,
+    partners_from_pairs, resolve_seed_mods, soft_boost_partners, CandidateAddon,
+};
+use tuffbox_core::modpack_index::{format_tags_for_prompt, MpiModHint, MpiSearchQuery};
+use tuffbox_core::swarm::ModPairStat;
+use tuffbox_core::swarm_supabase::{partners_for_mod_mpi_supabase, partners_for_mod_supabase};
 use tuffbox_core::{ContentProvider, ModrinthProvider, ProjectManifest};
 
 #[derive(Clone, Serialize)]
@@ -56,6 +63,203 @@ fn ensure_brief_from_manifest(mut brief: PackBrief, manifest: &ProjectManifest) 
     brief
 }
 
+/// Pull reply / brief / search from an AI JSON value.
+fn parse_ai_value(raw: &Value) -> (String, Option<PackBrief>, Option<MpiSearchQuery>) {
+    let reply = raw
+        .get("reply")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Here is a pack plan.")
+        .to_string();
+    let brief = raw
+        .get("brief")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<PackBrief>(v).ok())
+        .or_else(|| {
+            if raw.get("title").is_some() {
+                serde_json::from_value::<PackBrief>(raw.clone()).ok()
+            } else {
+                None
+            }
+        });
+    let search = raw
+        .get("search")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<MpiSearchQuery>(v).ok())
+        .or_else(|| brief.as_ref().map(search_from_brief));
+    (reply, brief, search)
+}
+
+fn candidates_to_mpi_hints(candidates: &[CandidateAddon]) -> Vec<MpiModHint> {
+    candidates
+        .iter()
+        .map(|c| MpiModHint {
+            name: c.name.clone(),
+            slug: c.slug.clone(),
+            summary: c.summary.clone(),
+            categories: vec![],
+            // merge_mpi_hints_into_brief only keeps keyword:/theme-name: sources
+            source: format!("keyword:{}", c.source),
+        })
+        .collect()
+}
+
+/// Seed mods + hub/Supabase co-occurrence partners → catalog candidates for PackBrief refine.
+/// Prefer hub GET /v1/mods/cooccurrence (via get_creation_trends) so clients never hit MPI.
+async fn collect_candidates(
+    path: &str,
+    search: &MpiSearchQuery,
+    mc: &str,
+    loader: &str,
+) -> Vec<CandidateAddon> {
+    let search_owned = search.clone();
+    let mc_owned = mc.to_string();
+    let loader_owned = loader.to_string();
+    let seeds = match tokio::task::spawn_blocking(move || {
+        resolve_seed_mods(&search_owned, &mc_owned, &loader_owned)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => Vec::new(),
+    };
+    if seeds.is_empty() {
+        return seeds;
+    }
+
+    // 1) Supabase TuffSwarm partners_for_mod — primary for suggestions.
+    let mut primary = Vec::new();
+    if let (Some(url), Some(key)) = (
+        crate::integrations::swarm_supabase_url(),
+        crate::integrations::swarm_supabase_anon_key(),
+    ) {
+        let mut batches = Vec::new();
+        for seed in seeds.iter().take(3) {
+            if let Ok(batch) = partners_for_mod_supabase(
+                &url,
+                &key,
+                &seed.slug,
+                12,
+                Some(loader),
+                Some(mc),
+            )
+            .await
+            {
+                batches.push(batch);
+            }
+        }
+        primary = merge_partner_stats(&batches, 24);
+
+        // Soft boost from separate Modpack Index graph.
+        let mut mpi_batches = Vec::new();
+        for seed in seeds.iter().take(3) {
+            if let Ok(batch) = partners_for_mod_mpi_supabase(
+                &url,
+                &key,
+                &seed.slug,
+                12,
+                Some(loader),
+                Some(mc),
+                None,
+            )
+            .await
+            {
+                mpi_batches.push(batch);
+            }
+        }
+        let mpi = merge_partner_stats(&mpi_batches, 24);
+        if primary.is_empty() {
+            primary = mpi;
+        } else if primary.len() < 5 {
+            primary = merge_partner_stats(&[primary, mpi], 24);
+        } else {
+            primary = soft_boost_partners(&primary, &mpi, 24);
+        }
+    }
+
+    // 2) Trends/local pairs — soft boost matches or fallback when SB empty.
+    let mut local = Vec::new();
+    if let Ok(trends) = crate::swarm_api::get_creation_trends(path.to_string(), Some(40)).await {
+        let pairs: Vec<ModPairStat> = trends
+            .get("mergedPairs")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let mut batches = Vec::new();
+        for seed in seeds.iter().take(3) {
+            batches.push(partners_from_pairs(&seed.slug, &pairs, 12));
+        }
+        local = merge_partner_stats(&batches, 24);
+    }
+    let partners = soft_boost_partners(&primary, &local, 24);
+
+    let seeds_for_enrich = seeds.clone();
+    match tokio::task::spawn_blocking(move || {
+        enrich_partners_with_descriptions(&seeds_for_enrich, &partners, 24)
+    })
+    .await
+    {
+        Ok(v) => v,
+        Err(_) => seeds,
+    }
+}
+
+/// Second AI pass: candidates + descriptions → refined PackBrief (not crash ActionPlan).
+async fn refine_pack_brief(
+    message: &str,
+    mut brief: PackBrief,
+    mut search: MpiSearchQuery,
+    candidates: Vec<CandidateAddon>,
+    history: Option<&[CreateChatMessage]>,
+) -> (PackBrief, String, MpiSearchQuery, Vec<CandidateAddon>) {
+    let catalog = format_candidates_for_prompt(&candidates, 30);
+    let tags = format_tags_for_prompt();
+    let system = format!("{CREATE_MODE_REFINE_PROMPT}\n\n{tags}\n\n{catalog}");
+
+    let mut messages: Vec<Value> = Vec::new();
+    if let Some(hist) = history {
+        for m in hist {
+            if m.role == "user" || m.role == "assistant" {
+                messages.push(json!({"role": m.role, "content": m.content}));
+            }
+        }
+    }
+    let brief_json = serde_json::to_string_pretty(&brief).unwrap_or_else(|_| "{}".into());
+    let search_json = serde_json::to_string_pretty(&search).unwrap_or_else(|_| "{}".into());
+    messages.push(json!({
+        "role": "user",
+        "content": format!(
+            "{message}\n\nCurrent PackBrief:\n{brief_json}\n\nCurrent search:\n{search_json}"
+        ),
+    }));
+
+    let settings = crate::integrations::read_settings().ai;
+    let mut reply = String::new();
+
+    if let Ok(raw) = crate::integrations::call_ai_messages(&settings, &system, &messages, true).await
+    {
+        let (r, brief_opt, search_opt) = parse_ai_value(&raw);
+        reply = r;
+        if let Some(b) = brief_opt {
+            brief = b;
+        }
+        if let Some(s) = search_opt {
+            search = s;
+        }
+    }
+
+    let hints = candidates_to_mpi_hints(&candidates);
+    merge_mpi_hints_into_brief(&mut brief, &hints, 8);
+
+    if reply.trim().is_empty() {
+        reply = format!(
+            "Pack brief ready: {} ({} must-have from catalog candidates).",
+            brief.title,
+            brief.must_have.len()
+        );
+    }
+
+    (brief, reply, search, candidates)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn create_mode_chat(
     path: String,
@@ -77,19 +281,19 @@ pub async fn create_mode_chat(
     let target = target_count.unwrap_or(80).clamp(40, 120);
 
     let mut trends_hint = String::new();
-    // Local pairs always; Supabase/hub pairs when swarm is on.
     if let Ok(trends) = crate::swarm_api::get_creation_trends(path.clone(), Some(20)).await {
         if let Some(hint) = trends.get("promptHint").and_then(|v| v.as_str()) {
             if !hint.trim().is_empty() && !hint.contains("(no stats yet") {
                 trends_hint = format!(
-                    "\n\nOptional co-occurrence hints (local + community when available):\n{hint}"
+                    "\n\nOptional co-occurrence hints (hub/community; never scraped as the user):\n{hint}"
                 );
             }
         }
     }
 
+    let tags = format_tags_for_prompt();
     let system = format!(
-        "{CREATE_MODE_SYSTEM_PROMPT}\n\nProject context: Minecraft {mc}, loader {loader}, preferred targetCount {target}.{trends_hint}\n\nImportant: reply, title, and reasons must use the same language as the latest user message (not Chinese unless the user wrote Chinese)."
+        "{CREATE_MODE_SYSTEM_PROMPT}\n\n{tags}\n\nProject context: Minecraft {mc}, loader {loader}, preferred targetCount {target}.{trends_hint}\n\nImportant: reply, title, and reasons must use the same language as the latest user message (not Chinese unless the user wrote Chinese)."
     );
 
     let mut messages: Vec<Value> = Vec::new();
@@ -113,39 +317,37 @@ pub async fn create_mode_chat(
     let settings = crate::integrations::read_settings().ai;
     let raw = crate::integrations::call_ai_messages(&settings, &system, &messages, true).await?;
     let raw_str = serde_json::to_string(&raw).unwrap_or_else(|_| "{}".into());
-    let parsed = parse_create_mode_ai_response(&raw_str)
-        .or_else(|_| {
-            // call_ai_messages already returns Value; serialize fields if present
-            let reply = raw
-                .get("reply")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Here is a pack plan.")
-                .to_string();
-            let brief = raw
-                .get("brief")
-                .cloned()
-                .and_then(|v| serde_json::from_value::<PackBrief>(v).ok());
-            if brief.is_none() && raw.get("title").is_some() {
-                serde_json::from_value::<PackBrief>(raw.clone())
-                    .map(|b| tuffbox_core::create_mode::CreateModeAiResponse {
-                        reply,
-                        brief: Some(b),
-                    })
-                    .map_err(|e| e.to_string())
-            } else {
-                Ok(tuffbox_core::create_mode::CreateModeAiResponse { reply, brief })
+    let parsed = match parse_create_mode_ai_response(&raw_str) {
+        Ok(p) => p,
+        Err(_) => {
+            let (reply, brief, search) = parse_ai_value(&raw);
+            tuffbox_core::create_mode::CreateModeAiResponse {
+                reply,
+                brief,
+                search,
             }
-        })
-        .map_err(|e| e)?;
+        }
+    };
 
     let brief = parsed
         .brief
         .map(|b| ensure_brief_from_manifest(b, &manifest))
-        .ok_or_else(|| {
-            "AI returned no PackBrief; use Quick assemble".to_string()
-        })?;
+        .ok_or_else(|| "AI returned no PackBrief; use Quick assemble".to_string())?;
+    let search = parsed
+        .search
+        .unwrap_or_else(|| search_from_brief(&brief));
 
-    // Persist chat session
+    let candidates = collect_candidates(&path, &search, &mc, &loader).await;
+    let (brief, reply, search, candidates) = refine_pack_brief(
+        &message,
+        brief,
+        search,
+        candidates,
+        history.as_deref(),
+    )
+    .await;
+    let brief = ensure_brief_from_manifest(brief, &manifest);
+
     let id = chat_id
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(new_chat_id);
@@ -163,7 +365,7 @@ pub async fn create_mode_chat(
     });
     session.messages.push(CreateChatMessage {
         role: "assistant".into(),
-        content: parsed.reply.clone(),
+        content: reply.clone(),
         created_at: Some(now_iso()),
     });
     if session.title == "New chat" || session.title.is_empty() {
@@ -174,15 +376,17 @@ pub async fn create_mode_chat(
 
     Ok(json!({
         "chatId": id,
-        "reply": parsed.reply,
+        "reply": reply,
         "brief": brief,
+        "search": search,
+        "candidates": candidates,
         "session": session,
     }))
 }
 
 /// Deterministic PackBrief from free text (no LLM) — fallback when AI is unavailable.
 #[tauri::command(rename_all = "camelCase")]
-pub fn create_mode_quick_brief(
+pub async fn create_mode_quick_brief(
     path: String,
     chat_id: Option<String>,
     message: String,
@@ -199,9 +403,21 @@ pub fn create_mode_quick_brief(
     let loader = loader_kind_slug(&manifest.loader.kind).to_string();
     let target = target_count.unwrap_or(80).clamp(40, 120);
 
-    let brief = ensure_brief_from_manifest(
+    let mut brief = ensure_brief_from_manifest(
         brief_from_prompt(&message, &mc, &loader, target),
         &manifest,
+    );
+    let search = search_from_brief(&brief);
+    let candidates = collect_candidates(&path, &search, &mc, &loader).await;
+    let hints = candidates_to_mpi_hints(&candidates);
+    merge_mpi_hints_into_brief(&mut brief, &hints, 8);
+    let brief = ensure_brief_from_manifest(brief, &manifest);
+
+    let reply = format!(
+        "Quick assemble plan: {} ({} mods, {} must-have from catalog). No AI — default category budgets + names from your prompt.",
+        brief.title,
+        brief.target_count,
+        brief.must_have.len()
     );
 
     let id = chat_id
@@ -219,12 +435,6 @@ pub fn create_mode_quick_brief(
         content: message.clone(),
         created_at: Some(now_iso()),
     });
-    let reply = format!(
-        "Quick assemble plan: {} ({} mods, {} must-have). No AI — default category budgets + names from your prompt.",
-        brief.title,
-        brief.target_count,
-        brief.must_have.len()
-    );
     session.messages.push(CreateChatMessage {
         role: "assistant".into(),
         content: reply.clone(),
@@ -240,6 +450,8 @@ pub fn create_mode_quick_brief(
         "chatId": id,
         "reply": reply,
         "brief": brief,
+        "search": search,
+        "candidates": candidates,
         "session": session,
     }))
 }
@@ -254,7 +466,7 @@ pub async fn assemble_pack_draft(
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let brief = ensure_brief_from_manifest(brief, &manifest);
         let installed = tuffbox_core::create_mode::installed_mod_keys(&manifest);
-        let searcher = LiveModrinthSearch(ModrinthProvider::new());
+        let searcher = LiveCatalogSearch::new();
         let app2 = app.clone();
         let mut progress =
             |phase: &str, done: usize, total: usize, current: &str| {
@@ -339,7 +551,6 @@ pub async fn install_pack_draft(
     }
 
     let side = side.unwrap_or_else(|| "both".into());
-    // Prefer Modrinth slugs for co-occurrence (readable for AI / community).
     let cooccur_ids: Vec<String> = draft
         .mods
         .iter()
@@ -353,9 +564,11 @@ pub async fn install_pack_draft(
             }
         })
         .collect();
-    let mod_ids: Vec<String> = draft
+
+    let mr_ids: Vec<String> = draft
         .mods
         .iter()
+        .filter(|m| m.provider != "curseforge")
         .map(|m| {
             if !m.project_id.is_empty() {
                 m.project_id.clone()
@@ -364,7 +577,14 @@ pub async fn install_pack_draft(
             }
         })
         .collect();
-    let total = mod_ids.len();
+    let cf_ids: Vec<String> = draft
+        .mods
+        .iter()
+        .filter(|m| m.provider == "curseforge")
+        .map(|m| m.project_id.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+    let total = mr_ids.len() + cf_ids.len();
     let path_for_stats = path.clone();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -372,20 +592,44 @@ pub async fn install_pack_draft(
         auto_snapshot(&manifest_path, "create-mode-pack-install").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let mut all_installed = Vec::new();
-        const CHUNK: usize = 25;
-        let chunks: Vec<_> = mod_ids.chunks(CHUNK).collect();
-        let chunk_count = chunks.len();
+        let mut done = 0usize;
 
+        for cf_id in &cf_ids {
+            emit_create_progress(
+                &app,
+                "install",
+                done,
+                total,
+                &format!("curseforge:{cf_id}"),
+            );
+            match install_curseforge_with_dependencies_rounds(
+                &mut manifest,
+                &[cf_id.clone()],
+                &side,
+                50,
+            ) {
+                Ok(ids) => all_installed.extend(ids),
+                Err(e) => {
+                    // Continue remaining mods; surface later via counts.
+                    let _ = e;
+                }
+            }
+            done += 1;
+        }
+
+        const CHUNK: usize = 25;
+        let chunks: Vec<_> = mr_ids.chunks(CHUNK).collect();
+        let chunk_count = chunks.len().max(1);
         for (i, chunk) in chunks.into_iter().enumerate() {
             emit_create_progress(
                 &app,
                 "install",
-                i * CHUNK,
+                done + i * CHUNK,
                 total,
-                &format!("batch {}/{}", i + 1, chunk_count),
+                &format!("modrinth batch {}/{}", i + 1, chunk_count),
             );
             let installed =
-                install_modrinth_with_dependencies_rounds(&mut manifest, chunk, &side, 200);
+                install_modrinth_with_dependencies_rounds(&mut manifest, chunk, &side, 200)?;
             all_installed.extend(installed);
         }
 
@@ -417,6 +661,22 @@ pub async fn install_pack_draft(
         "requested": result.get("requested").cloned().unwrap_or(json!(0)),
         "cooccurrence": stats,
     }))
+}
+
+/// Resolve Modpack Index hints (blocking MPI HTTP from this process).
+/// Prefer hub-seeded co-occurrence for Create Mode; this command is discovery-only
+/// and should not be used as the default pack-builder data path (MPI privacy).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn resolve_modpack_index_search(
+    search: MpiSearchQuery,
+    per_source: Option<u32>,
+) -> Result<Vec<MpiModHint>, String> {
+    let per = per_source.unwrap_or(8).clamp(1, 40) as usize;
+    tokio::task::spawn_blocking(move || {
+        tuffbox_core::modpack_index::gather_search_hints(&search, per)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]

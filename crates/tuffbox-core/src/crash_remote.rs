@@ -344,6 +344,7 @@ pub async fn publish_capsule_async(
 }
 
 /// POST /v1/mods/cooccurrence — optional network stats for Creation trends.
+/// Tries GET first (filtered hub/Supabase), then falls back to POST.
 pub async fn fetch_cooccurrence_async(
     base_url: &str,
     token: Option<&str>,
@@ -354,12 +355,32 @@ pub async fn fetch_cooccurrence_async(
     if base_url.trim().is_empty() {
         return Err("crash KB endpoint is not configured".into());
     }
-    let url = join_url(base_url, "/v1/mods/cooccurrence");
     let client = reqwest::Client::builder()
         .user_agent(APP_USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
+
+    let get_url = format!(
+        "{}?version={}&loader={}&limit={}",
+        join_url(base_url, "/v1/mods/cooccurrence"),
+        urlencoding_simple(mc_version),
+        urlencoding_simple(loader),
+        limit
+    );
+    let mut get_req = client.get(&get_url);
+    if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+        get_req = get_req.bearer_auth(token);
+    }
+    if let Ok(response) = get_req.send().await {
+        let status = response.status();
+        if status.is_success() {
+            let body: serde_json::Value = response.json().await.unwrap_or(json!({}));
+            return Ok(body);
+        }
+    }
+
+    let url = join_url(base_url, "/v1/mods/cooccurrence");
     let payload = json!({
         "mcVersion": mc_version,
         "loader": loader,
@@ -384,4 +405,106 @@ pub async fn fetch_cooccurrence_async(
         return Err(format!("cooccurrence {status}: {msg}"));
     }
     Ok(body)
+}
+
+/// GET /v1/mods/modpacks — hub proxies Modpack Index (analytics UA).
+pub async fn fetch_modpacks_async(
+    base_url: &str,
+    token: Option<&str>,
+    query: Option<&str>,
+    page: u32,
+    limit: u32,
+    category_id: Option<u32>,
+    version: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    if base_url.trim().is_empty() {
+        return Err("hub endpoint is not configured".into());
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(45))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut url = format!(
+        "{}?page={}&limit={}",
+        join_url(base_url, "/v1/mods/modpacks"),
+        page.max(1),
+        limit.clamp(1, 40)
+    );
+    if let Some(q) = query.map(str::trim).filter(|s| !s.is_empty()) {
+        url.push_str(&format!("&query={}", urlencoding_simple(q)));
+    }
+    if let Some(cid) = category_id {
+        url.push_str(&format!("&categoryId={cid}"));
+    }
+    if let Some(v) = version.map(str::trim).filter(|s| !s.is_empty()) {
+        url.push_str(&format!("&version={}", urlencoding_simple(v)));
+    }
+
+    let mut req = client.get(&url);
+    if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(token);
+    }
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("hub modpacks fetch failed: {e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("hub modpacks {status}: {msg}"));
+    }
+    Ok(body)
+}
+
+/// GET /v1/mods/modpack-categories — hub pack themes (+ MPI merge when available).
+pub async fn fetch_modpack_categories_async(
+    base_url: &str,
+    token: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    if base_url.trim().is_empty() {
+        return Err("hub endpoint is not configured".into());
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = join_url(base_url, "/v1/mods/modpack-categories");
+    let mut req = client.get(&url);
+    if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
+        req = req.bearer_auth(token);
+    }
+    let response = req
+        .send()
+        .await
+        .map_err(|e| format!("hub categories fetch failed: {e}"))?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.unwrap_or(json!({}));
+    if !status.is_success() {
+        let msg = body
+            .get("message")
+            .or_else(|| body.get("error"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("request rejected");
+        return Err(format!("hub categories {status}: {msg}"));
+    }
+    Ok(body)
+}
+
+fn urlencoding_simple(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
