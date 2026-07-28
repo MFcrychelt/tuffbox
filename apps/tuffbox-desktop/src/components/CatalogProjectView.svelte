@@ -181,7 +181,9 @@
       {/if}
       <div class="stats">
         <span><Download size={13} /> {formatCount(detail.downloads)}</span>
-        <span><Heart size={13} /> {formatCount(detail.follows)}</span>
+        {#if provider !== "curseforge"}
+          <span><Heart size={13} /> {formatCount(detail.follows)}</span>
+        {/if}
         <span><Clock size={13} /> {formatRelative(detail.dateModified)}</span>
       </div>
       {#if detail.categories?.length}

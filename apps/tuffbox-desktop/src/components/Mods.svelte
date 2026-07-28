@@ -1035,10 +1035,25 @@ import { trapFocus } from "../lib/focusTrap";
 
   // Ideas: after Add-mod install, offer popular co-occurring companions (user can decline).
   const IDEAS_STORAGE_KEY = "tuffbox.mods.ideas";
+  const HERO_STORAGE_KEY = "tuffbox.mods.hero-expanded";
   let ideasEnabled =
     typeof localStorage === "undefined"
       ? true
       : localStorage.getItem(IDEAS_STORAGE_KEY) !== "false";
+  let heroExpanded =
+    typeof localStorage === "undefined"
+      ? true
+      : localStorage.getItem(HERO_STORAGE_KEY) !== "false";
+
+  function toggleHeroExpanded() {
+    heroExpanded = !heroExpanded;
+    try {
+      localStorage.setItem(HERO_STORAGE_KEY, String(heroExpanded));
+    } catch {
+      /* ignore */
+    }
+  }
+
   type IdeaOffer = { slug: string; count: number; selected: boolean };
   let ideasOpen = false;
   let ideasSeedLabel = "";
@@ -2132,26 +2147,35 @@ import { trapFocus } from "../lib/focusTrap";
 </script>
 
 <div class="mods fade-slide-in">
-  <header class="content-hero">
-    <div class="content-hero-copy">
-      <div class="content-kicker"><Package size={14} /> Content library</div>
-      <h1>Your pack, sharpened</h1>
-      <p>Install, update and curate mods with live download feedback — no guessing, no orphan jars.</p>
-    </div>
-    <div class="content-hero-stats">
-      <div class="stat-pill">
-        <strong>{filtered.length}</strong>
-        <span>shown</span>
+  <header class="content-hero" class:collapsed={!heroExpanded}>
+    <button type="button" class="content-hero-toggle" on:click={toggleHeroExpanded} aria-expanded={heroExpanded}>
+      <div class="content-hero-copy">
+        <div class="content-kicker"><Package size={14} /> Content library</div>
+        <h1>Your pack, sharpened</h1>
+        {#if heroExpanded}
+          <p>Install, update and curate mods with live download feedback — no guessing, no orphan jars.</p>
+        {/if}
       </div>
-      <div class="stat-pill accent" class:pulse={updateList.length > 0}>
-        <strong>{updateList.length}</strong>
-        <span>updates</span>
+      <span class="hero-chevron" class:rotated={heroExpanded} aria-hidden="true">
+        <ChevronDown size={18} />
+      </span>
+    </button>
+    {#if heroExpanded}
+      <div class="content-hero-stats">
+        <div class="stat-pill">
+          <strong>{filtered.length}</strong>
+          <span>shown</span>
+        </div>
+        <div class="stat-pill accent" class:pulse={updateList.length > 0}>
+          <strong>{updateList.length}</strong>
+          <span>updates</span>
+        </div>
+        <div class="stat-pill">
+          <strong>{counts.all}</strong>
+          <span>total</span>
+        </div>
       </div>
-      <div class="stat-pill">
-        <strong>{counts.all}</strong>
-        <span>total</span>
-      </div>
-    </div>
+    {/if}
   </header>
 
   {#if duplicateJarGroups.length > 0}
@@ -2480,9 +2504,6 @@ import { trapFocus } from "../lib/focusTrap";
               {#if mod.disabled}
                 <span class="disabled-badge">Disabled</span>
               {/if}
-              {#if mod.updateAvailable}
-                <span class="update-badge">Update</span>
-              {/if}
               <code>{mod.id}</code>
             </div>
             <div class="installed-meta">
@@ -2490,9 +2511,15 @@ import { trapFocus } from "../lib/focusTrap";
               {#if mod.fileName}<span class="filename">{mod.fileName}{mod.disabled && !String(mod.fileName).endsWith('.disabled') ? '.disabled' : ''}</span>{/if}
             </div>
           </div>
-          <div class="installed-tags">
-            <span class="tag side-{mod.side}">{mod.side}</span>
-            <span class="tag source">{mod.source}</span>
+          <div class="installed-tags" aria-label="Mod labels">
+            <span class="tag side-{mod.side}" title={mod.side}>{mod.side}</span>
+            <span class="tag source" title={mod.source}>{mod.source}</span>
+            <span
+              class="tag update-slot"
+              class:on={!!mod.updateAvailable}
+              title={mod.updateAvailable ? "Update available" : undefined}
+              aria-hidden={!mod.updateAvailable}
+            >Update</span>
           </div>
           <div class="card-actions">
             {#if installedModPageUrl(mod)}
@@ -2503,6 +2530,8 @@ import { trapFocus } from "../lib/focusTrap";
               >
                 <ExternalLink size={16} />
               </button>
+            {:else}
+              <span class="action-slot" aria-hidden="true"></span>
             {/if}
             <button
               class="icon-btn"
@@ -2520,12 +2549,13 @@ import { trapFocus } from "../lib/focusTrap";
             <button class="icon-btn" on:click|stopPropagation={() => openVersionPicker(mod)} disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
               <ArrowUpDown size={16} />
             </button>
-            {#if mod.updateAvailable}
-              <button class="icon-btn update-btn hot" on:click|stopPropagation={() => updateMod(mod)} disabled={mutating || selectionMode} title="Update to latest from Modrinth">
-                <RotateCw size={16} />
-                <span class="update-text">Update</span>
-              </button>
-            {/if}
+            <span class="update-action-slot">
+              {#if mod.updateAvailable}
+                <button class="icon-btn update-btn hot" on:click|stopPropagation={() => updateMod(mod)} disabled={mutating || selectionMode} title="Update to latest from Modrinth">
+                  <RotateCw size={16} />
+                </button>
+              {/if}
+            </span>
             <button class="icon-btn danger" on:click|stopPropagation={() => showRemoveConfirm(mod)} disabled={mutating || selectionMode} title="Remove with snapshot">
               <Trash2 size={16} />
             </button>
@@ -2715,15 +2745,47 @@ import { trapFocus } from "../lib/focusTrap";
         <button class="icon-btn" on:click={() => (addOpen = false)}><X size={18} /></button>
       </div>
 
-      <div class="modal-tabs">
-        <button class:active={contentFilter === "mod"} on:click={() => switchContentFilter("mod")}>Mods</button>
-        <button class:active={contentFilter === "resourcepack"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
-        <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
-        <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
-        <button class:active={contentFilter === "favorites"} on:click={() => switchContentFilter("favorites")}>Favorites</button>
-        {#each listTabNames as listName (listName)}
-          <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
-        {/each}
+      <div class="modal-tabs-row">
+        <div class="modal-tabs">
+          <button class:active={contentFilter === "mod"} on:click={() => switchContentFilter("mod")}>Mods</button>
+          <button class:active={contentFilter === "resourcepack"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
+          <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
+          <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
+          <button class:active={contentFilter === "favorites"} on:click={() => switchContentFilter("favorites")}>Favorites</button>
+          {#each listTabNames as listName (listName)}
+            <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
+          {/each}
+        </div>
+        <div class="browser-topbar inline">
+          <div class="search wide">
+            <Search size={16} />
+            <input
+              bind:value={searchQuery}
+              placeholder="Search mods..."
+              on:input={onSearchQueryInput}
+              on:keydown={(e) => e.key === "Enter" && searchMods(1)}
+            />
+            {#if searchLoading}
+              <Loader2 size={16} class="spin search-spinner" />
+            {/if}
+          </div>
+          <div class="topbar-controls">
+            <label class="sort-select">Sort by:
+              <select bind:value={sortBy} on:change={() => searchMods(1)}>
+                {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
+              </select>
+            </label>
+            <label class="sort-select">View:
+              <select bind:value={pageSize} on:change={() => searchMods(1)}>
+                <option value={20}>20</option>
+                <option value={40}>40</option>
+                <option value={60}>60</option>
+              </select>
+            </label>
+            <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => (viewMode = "grid")} title="Grid view"><LayoutGrid size={16} /></button>
+            <button class="view-toggle" class:active={viewMode === "list"} on:click={() => (viewMode = "list")} title="List view"><List size={16} /></button>
+          </div>
+        </div>
       </div>
 
       <div class="browser-layout">
@@ -2815,43 +2877,13 @@ import { trapFocus } from "../lib/focusTrap";
         </aside>
 
         <section class="browser-results">
-          <div class="browser-topbar">
-            <div class="search wide">
-              <Search size={16} />
-              <input
-                bind:value={searchQuery}
-                placeholder="Search mods..."
-                on:input={onSearchQueryInput}
-                on:keydown={(e) => e.key === "Enter" && searchMods(1)}
-              />
-              {#if searchLoading}
-                <Loader2 size={16} class="spin search-spinner" />
-              {/if}
-            </div>
-            <div class="topbar-controls">
-              <label class="sort-select">Sort by:
-                <select bind:value={sortBy} on:change={() => searchMods(1)}>
-                  {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
-                </select>
-              </label>
-              <label class="sort-select">View:
-                <select bind:value={pageSize} on:change={() => searchMods(1)}>
-                  <option value={20}>20</option>
-                  <option value={40}>40</option>
-                  <option value={60}>60</option>
-                </select>
-              </label>
-              <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => (viewMode = "grid")} title="Grid view"><LayoutGrid size={16} /></button>
-              <button class="view-toggle" class:active={viewMode === "list"} on:click={() => (viewMode = "list")} title="List view"><List size={16} /></button>
-            </div>
-            <div class="pagination">
-              <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
-              {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
-                <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
-              {/each}
-              {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
-              <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
-            </div>
+          <div class="pagination">
+            <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
+            {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
+              <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+            {/each}
+            {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+            <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
           </div>
 
           <div class="bulk-bar">
@@ -2954,7 +2986,9 @@ import { trapFocus } from "../lib/focusTrap";
                     </div>
                     <div class="result-footer">
                       <span><Download size={13} />{formatCount(result.downloads)}</span>
-                      <span><Heart size={13} />{formatCount(result.follows)}</span>
+                      {#if result.provider !== "curseforge"}
+                        <span><Heart size={13} />{formatCount(result.follows)}</span>
+                      {/if}
                       <span class="footer-updated"><Clock size={13} />{formatRelative(result.dateModified)}</span>
                     </div>
                   </article>
@@ -3058,7 +3092,9 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
               <div class="result-footer">
                 <span><Download size={13} />{formatCount(result.downloads)}</span>
-                <span><Heart size={13} />{formatCount(result.follows)}</span>
+                {#if result.provider !== "curseforge"}
+                  <span><Heart size={13} />{formatCount(result.follows)}</span>
+                {/if}
                 <span class="footer-updated"><Clock size={13} />{formatRelative(result.dateModified)}</span>
               </div>
             </article>
@@ -3526,6 +3562,63 @@ import { trapFocus } from "../lib/focusTrap";
       var(--bg-secondary);
     overflow: hidden;
     animation: hero-in 0.45s ease both;
+    transition: padding 0.2s ease;
+  }
+
+  .content-hero.collapsed {
+    align-items: center;
+    padding: 12px 16px 12px 20px;
+  }
+
+  .content-hero-toggle {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .content-hero.collapsed .content-hero-toggle {
+    align-items: center;
+  }
+
+  .content-hero.collapsed .content-kicker {
+    margin-bottom: 2px;
+  }
+
+  .content-hero.collapsed h1 {
+    margin: 0;
+    font-size: 18px;
+  }
+
+  .hero-chevron {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 4px;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+  }
+
+  .content-hero.collapsed .hero-chevron {
+    margin-top: 0;
+  }
+
+  .hero-chevron.rotated {
+    transform: rotate(180deg);
+  }
+
+  .hero-chevron :global(svg) {
+    color: var(--text-muted);
   }
 
   .conflicts-jars {
@@ -4003,27 +4096,10 @@ import { trapFocus } from "../lib/focusTrap";
     white-space: nowrap;
   }
 
-  .update-badge {
-    font-size: 10px;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: rgba(245, 166, 35, 0.18);
-    color: #fbbf24;
-    border: 1px solid rgba(245, 166, 35, 0.35);
-  }
-
-  .installed-meta,
-  .installed-tags,
-  .card-actions {
+  .installed-meta {
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .installed-meta {
     margin-top: 5px;
     color: var(--text-muted);
     font-size: 12px;
@@ -4035,6 +4111,52 @@ import { trapFocus } from "../lib/focusTrap";
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 280px;
+  }
+
+  /* Fixed columns so client / source / Update stay aligned across rows. */
+  .installed-tags {
+    display: grid;
+    grid-template-columns: 5.25rem 6.25rem 4.5rem;
+    gap: 8px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .installed-tags .tag {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  .installed-tags .tag.update-slot {
+    background: rgba(245, 166, 35, 0.18);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 166, 35, 0.35);
+  }
+
+  .installed-tags .tag.update-slot:not(.on) {
+    visibility: hidden;
+  }
+
+  .card-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .action-slot,
+  .update-action-slot {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .icon-btn.hot {
@@ -4389,14 +4511,14 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .update-btn {
-    width: auto;
-    padding: 0 10px;
-    gap: 5px;
+    width: 32px;
+    padding: 0;
+    gap: 0;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     color: #1bd96a;
   }
-  .update-btn .update-text { font-size: 12px; font-weight: 700; }
   .update-btn.hot { background: rgba(27, 217, 106, 0.12); border-radius: 8px; }
 
   .empty,
@@ -4463,7 +4585,36 @@ import { trapFocus } from "../lib/focusTrap";
 
   .modal.add-mods-modal .modal-tabs {
     flex-shrink: 0;
-    padding: 0 0 10px;
+    padding: 0;
+  }
+
+  .modal.add-mods-modal .modal-tabs-row {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0 0 12px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 12px;
+  }
+
+  .modal.add-mods-modal .modal-tabs-row .modal-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .modal.add-mods-modal .browser-topbar.inline {
+    flex: 1 1 360px;
+    min-width: min(100%, 320px);
+    justify-content: flex-end;
+  }
+
+  .modal.add-mods-modal .browser-topbar.inline .search.wide {
+    flex: 1 1 180px;
+    min-width: 140px;
+    max-width: 320px;
   }
 
   .modal.add-mods-modal .browser-layout {
@@ -4491,6 +4642,26 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     flex-direction: column;
     gap: 12px;
+    /* Keep thin scrollbar from covering card edges */
+    scrollbar-gutter: stable;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+  }
+
+  .modal.add-mods-modal .browser-results::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .modal.add-mods-modal .browser-results::-webkit-scrollbar-thumb {
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .modal.add-mods-modal .browser-results::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   .catalog-body {
@@ -4834,7 +5005,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .results {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr));
     gap: 14px;
   }
   .results.list { grid-template-columns: 1fr; }

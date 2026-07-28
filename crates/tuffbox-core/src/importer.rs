@@ -954,7 +954,6 @@ fn collect_local_content(game_dir: &Path) -> Vec<crate::manifest::ModSpec> {
                 .trim_end_matches(".zip")
                 .to_string();
             let mut side = Side::Both;
-            let mut version = "unknown".to_string();
             let mut authors = Vec::new();
             let mut name = id.clone();
             if content_type == ContentType::Mod {
@@ -975,7 +974,6 @@ fn collect_local_content(game_dir: &Path) -> Vec<crate::manifest::ModSpec> {
             if name == id {
                 name = file_name.clone();
             }
-            let _ = version;
             out.push(crate::manifest::ModSpec {
                 id: unique_id,
                 name,

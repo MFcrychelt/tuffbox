@@ -386,8 +386,10 @@
     <div class="skin-bg" aria-hidden="true"></div>
     <canvas bind:this={canvas} width={width} height={height}></canvas>
     {#if loading}
-      <div class="loading-overlay">
-        <div class="loading-spinner"></div>
+      <div class="loading-overlay" aria-hidden="true">
+        <div class="loading-shimmer">
+          <div class="loading-figure skeleton skeleton-block"></div>
+        </div>
       </div>
     {/if}
   </div>
@@ -447,17 +449,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(18, 20, 22, 0.28);
+    background: rgba(18, 20, 22, 0.18);
     pointer-events: none;
   }
 
-  .loading-spinner {
-    width: 24px;
-    height: 24px;
-    border: 3px solid rgba(255, 255, 255, 0.15);
-    border-top-color: var(--accent-primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+  .loading-shimmer {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    height: 55%;
+  }
+
+  .loading-figure {
+    width: 72px;
+    height: 160px;
+    border-radius: 36px 36px 12px 12px;
+    opacity: 0.55;
   }
 
   .mc-nick {
@@ -478,9 +485,5 @@
     white-space: nowrap;
     padding: 0 8px;
     text-align: center;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 </style>

@@ -16,7 +16,8 @@
     ScrollText,
     Circle,
   } from "lucide-svelte";
-  import { projectPath, ideStageRequest } from "../lib/store";
+  import { projectPath, ideStageRequest, autoHideWorkflowRail } from "../lib/store";
+  import { onDestroy } from "svelte";
   import ProjectSettings from "./ProjectSettings.svelte";
   import Mods from "./Mods.svelte";
   import Graph from "./Graph.svelte";
@@ -237,11 +238,42 @@
 
   $: if ($projectPath) loadBrief();
 
+  let railRevealed = false;
+  let railHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearRailHideTimer() {
+    if (railHideTimer) {
+      clearTimeout(railHideTimer);
+      railHideTimer = null;
+    }
+  }
+
+  function revealRail() {
+    if (!$autoHideWorkflowRail) return;
+    clearRailHideTimer();
+    railRevealed = true;
+  }
+
+  function scheduleHideRail() {
+    if (!$autoHideWorkflowRail) return;
+    clearRailHideTimer();
+    railHideTimer = setTimeout(() => {
+      railRevealed = false;
+      railHideTimer = null;
+    }, 160);
+  }
+
+  $: if (!$autoHideWorkflowRail) {
+    railRevealed = false;
+    clearRailHideTimer();
+  }
+
+  onDestroy(() => clearRailHideTimer());
 </script>
 
-<div class="ide-workspace">
+<div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
   <section class="stage-shell">
-    <div class="stage-content">
+    <div class="stage-content" class:fill-stage={activeStage === "configs"}>
       {#if activeStage === "brief"}
         <div class="skeleton-page">
           <div class="page-header">
@@ -299,12 +331,26 @@
     </div>
   </section>
 
-  <nav class="workflow-rail" aria-label="Modpack production workflow">
+  {#if $autoHideWorkflowRail}
+    <div
+      class="rail-hotzone"
+      aria-hidden="true"
+      on:mouseenter={revealRail}
+    ></div>
+  {/if}
+  <nav
+    class="workflow-rail"
+    class:revealed={railRevealed || !$autoHideWorkflowRail}
+    aria-label="Modpack production workflow"
+    on:mouseenter={revealRail}
+    on:mouseleave={scheduleHideRail}
+  >
     {#each stages as stage, index (stage.id)}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
         on:click={() => (activeStage = stage.id)}
+        on:focus={revealRail}
         title={stage.goal}
         aria-current={activeStage === stage.id ? "step" : undefined}
       >
@@ -329,6 +375,11 @@
     min-height: 0;
     display: grid;
     grid-template-rows: minmax(0, 1fr) auto;
+    position: relative;
+  }
+
+  .ide-workspace.auto-hide-rail {
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .skeleton-page {
@@ -358,6 +409,27 @@
     scrollbar-gutter: stable;
   }
 
+  .stage-content.fill-stage {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 20px;
+  }
+
+  .stage-content.fill-stage > :global(.config-editor) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .rail-hotzone {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 16px;
+    z-index: 4;
+  }
+
   .workflow-rail {
     flex: 0 0 auto;
     display: flex;
@@ -369,7 +441,29 @@
     overflow: visible;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
-    z-index: 2;
+    z-index: 5;
+  }
+
+  .ide-workspace.auto-hide-rail .workflow-rail {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    transform: translateY(100%);
+    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.28);
+    pointer-events: none;
+  }
+
+  .ide-workspace.auto-hide-rail .workflow-rail.revealed,
+  .ide-workspace.auto-hide-rail .workflow-rail:focus-within {
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone,
+  .ide-workspace.auto-hide-rail:has(.workflow-rail:focus-within) .rail-hotzone {
+    pointer-events: none;
   }
 
   .stage-tab {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { trapFocus } from "../lib/focusTrap";
@@ -970,6 +970,28 @@
   /// group's nodes and edges and dim the rest.
   let hoveredGroup: string | null = null;
 
+  /** Spotlight conflicts or missing deps (toolbar toggle). */
+  let highlightMode: null | "conflicts" | "missing" = null;
+
+  const LEGEND_STORAGE_KEY = "tuffbox.graph.legend-expanded";
+  let legendExpanded =
+    typeof localStorage === "undefined"
+      ? true
+      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false";
+
+  function toggleLegend() {
+    legendExpanded = !legendExpanded;
+    try {
+      localStorage.setItem(LEGEND_STORAGE_KEY, String(legendExpanded));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleHighlight(mode: "conflicts" | "missing") {
+    highlightMode = highlightMode === mode ? null : mode;
+  }
+
   function nodeGroupKey(id: string): string | null {
     return positionById.get(id)?.groupKey ?? null;
   }
@@ -982,6 +1004,23 @@
     const core = (g: string | null) => g === "core" || g === "runtime" || g === null;
     if (core(gf) || core(gt)) return true;
     return gf === hoveredGroup || gt === hoveredGroup;
+  }
+
+  function nodeInHighlight(nodeId: string, kind?: string): boolean {
+    if (!highlightMode) return true;
+    if (highlightMode === "conflicts") {
+      return conflictEdges.some((e) => e.from === nodeId || e.to === nodeId);
+    }
+    if (kind === "Missing") return true;
+    return missingEdges.some((e) => e.from === nodeId || e.to === nodeId);
+  }
+
+  function edgeInHighlight(from: string, to: string, kind: string, danger: boolean): boolean {
+    if (!highlightMode) return true;
+    if (highlightMode === "conflicts") {
+      return danger || ["Conflicts", "BreaksWith"].includes(kind);
+    }
+    return missingEdges.some((e) => e.from === from && e.to === to);
   }
 
   let canvasWidth = 1600;
@@ -1957,40 +1996,66 @@
         >
           {showAllEdges ? "Fewer edges" : "More edges"}
         </button>
+        <button
+          class="ghost mini edge-toggle"
+          class:active={highlightMode === "conflicts"}
+          disabled={conflictEdges.length === 0}
+          on:click={() => toggleHighlight("conflicts")}
+          title="Highlight conflict edges"
+        >
+          <ShieldAlert size={14} /> Conflicts
+        </button>
+        <button
+          class="ghost mini edge-toggle"
+          class:active={highlightMode === "missing"}
+          disabled={missingEdges.length === 0}
+          on:click={() => toggleHighlight("missing")}
+          title="Highlight missing dependencies"
+        >
+          <AlertTriangle size={14} /> Missing
+        </button>
         <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
           {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
         </button>
         <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
       </div>
-      <div class="graph-legend">
-        <div class="legend-block">
-          <span class="legend-title">Edges</span>
-          <span class="legend-row"><i class="lg-line hard"></i> Hard dependency</span>
-          <span class="legend-row"><i class="lg-line conflict"></i> Conflict</span>
-          <span class="legend-row"><i class="lg-line optional"></i> Optional</span>
-          <span class="legend-row"><i class="lg-line runtime"></i> Loader / runtime</span>
-        </div>
-        <div class="legend-block">
-          <span class="legend-title">Nodes</span>
-          <span class="legend-row"><i class="lg-dot client"></i> Client</span>
-          <span class="legend-row"><i class="lg-dot server"></i> Server</span>
-          <span class="legend-row"><i class="lg-dot both"></i> Both</span>
-          <span class="legend-row"><i class="lg-dot dep"></i> Dependency</span>
-          <span class="legend-row"><i class="lg-dot missing"></i> Missing</span>
-        </div>
-        <div class="legend-block legend-groups">
-          <span class="legend-title">Clusters</span>
-          {#each groupMeta as group (group.key)}
-            <button
-              class="legend-chip"
-              class:on={hoveredGroup === group.key}
-              style={`--chip:${group.color}`}
-              on:mouseenter={() => (hoveredGroup = group.key)}
-              on:mouseleave={() => (hoveredGroup = null)}
-              on:click|stopPropagation={() => (hoveredGroup = hoveredGroup === group.key ? null : group.key)}
-            >{group.label}</button>
-          {/each}
-        </div>
+      <div class="graph-legend" class:collapsed={!legendExpanded}>
+        <button type="button" class="legend-toggle" on:click={toggleLegend} aria-expanded={legendExpanded}>
+          <span>Legend</span>
+          <ChevronDown size={14} class={legendExpanded ? "rot" : ""} />
+        </button>
+        {#if legendExpanded}
+          <div class="legend-body">
+            <div class="legend-block">
+              <span class="legend-title">Edges</span>
+              <span class="legend-row"><i class="lg-line hard"></i> Hard dependency</span>
+              <span class="legend-row"><i class="lg-line conflict"></i> Conflict</span>
+              <span class="legend-row"><i class="lg-line optional"></i> Optional</span>
+              <span class="legend-row"><i class="lg-line runtime"></i> Loader / runtime</span>
+            </div>
+            <div class="legend-block">
+              <span class="legend-title">Nodes</span>
+              <span class="legend-row"><i class="lg-dot client"></i> Client</span>
+              <span class="legend-row"><i class="lg-dot server"></i> Server</span>
+              <span class="legend-row"><i class="lg-dot both"></i> Both</span>
+              <span class="legend-row"><i class="lg-dot dep"></i> Dependency</span>
+              <span class="legend-row"><i class="lg-dot missing"></i> Missing</span>
+            </div>
+            <div class="legend-block legend-groups">
+              <span class="legend-title">Clusters</span>
+              {#each groupMeta as group (group.key)}
+                <button
+                  class="legend-chip"
+                  class:on={hoveredGroup === group.key}
+                  style={`--chip:${group.color}`}
+                  on:mouseenter={() => (hoveredGroup = group.key)}
+                  on:mouseleave={() => (hoveredGroup = null)}
+                  on:click|stopPropagation={() => (hoveredGroup = hoveredGroup === group.key ? null : group.key)}
+                >{group.label}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
       <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
       <svg
@@ -2048,7 +2113,8 @@
             class:optional-edge={ep.kind === "Optional"}
             class:hub-edge={ep.hub && !ep.danger}
             class:runtime-edge={["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)}
-            class:dimmed={(selectedId && ep.from !== selectedId && ep.to !== selectedId) || !edgeInHoveredGroup(ep.from, ep.to)}
+            class:dimmed={(selectedId && ep.from !== selectedId && ep.to !== selectedId) || !edgeInHoveredGroup(ep.from, ep.to) || !edgeInHighlight(ep.from, ep.to, ep.kind, ep.danger)}
+            class:spotlight={!!highlightMode && edgeInHighlight(ep.from, ep.to, ep.kind, ep.danger)}
             d={ep.d}
             marker-end={ep.danger ? "url(#arrow-danger)" : ep.kind === "Optional" ? "url(#arrow-optional)" : ["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind) ? "url(#arrow-runtime)" : "url(#arrow)"}
           />
@@ -2065,7 +2131,8 @@
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
             class:clickable-dep={isInstalledDep}
-            class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime")}
+            class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime") || !nodeInHighlight(node.id, node.kind)}
+            class:spotlight={!!highlightMode && nodeInHighlight(node.id, node.kind)}
             role="button"
             tabindex="0"
             on:pointerdown={(e) => handleNodeMouseDown(e, node)}
@@ -2646,6 +2713,9 @@
     padding: 0 10px;
     font-size: 11px;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
   }
 
   .canvas-controls .mini.active {
@@ -2660,6 +2730,15 @@
     padding: 0 6px;
     min-width: 38px;
     text-align: center;
+  }
+
+  .graph-canvas .graph-edge.spotlight:not(.dimmed) {
+    opacity: 1;
+    stroke-width: 2.5;
+  }
+
+  .svg-node.spotlight:not(.dimmed) {
+    filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.35));
   }
 
   .graph-canvas .graph-edge {
@@ -2707,16 +2786,47 @@
     bottom: 12px;
     z-index: 2;
     display: flex;
-    gap: 14px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 8px;
     max-width: calc(100% - 24px);
-    padding: 10px 12px;
+    padding: 8px 10px;
     border: 1px solid var(--border-color);
     border-radius: 12px;
     background: rgba(9, 9, 11, 0.74);
     backdrop-filter: blur(6px);
     color: var(--text-secondary);
     font-size: 11px;
+  }
+  .graph-legend.collapsed {
+    padding: 6px 8px;
+  }
+  .legend-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0;
+    padding: 2px 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+  }
+  .legend-toggle :global(svg) {
+    transition: transform 0.15s ease;
+    color: var(--text-muted);
+  }
+  .legend-toggle :global(svg.rot) {
+    transform: rotate(180deg);
+  }
+  .legend-body {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
   }
   .legend-block { display: flex; flex-direction: column; gap: 4px; }
   .legend-title {

@@ -1,7 +1,10 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PlayCircle, RefreshCw, Terminal, TimerReset, CheckCircle2, AlertTriangle, XCircle, Shield, Server, FileText } from "lucide-svelte";
-  import { onDestroy } from "svelte";
+  import {
+    PlayCircle, RefreshCw, Terminal, TimerReset, CheckCircle2, AlertTriangle, XCircle,
+    Shield, Server, FileText, Square, Cpu, HardDrive, Activity,
+  } from "lucide-svelte";
+  import { onDestroy, tick } from "svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { launchWithFeedback } from "../lib/launch";
@@ -14,10 +17,25 @@
     jvmArgs: string[];
   };
 
+  type LiveDebugStats = {
+    hostCpuPercent: number;
+    hostMemoryUsedMb: number;
+    hostMemoryTotalMb: number;
+    instance: null | {
+      pid: number;
+      profile: string;
+      startedAt: number;
+      cpuPercent: number;
+      memoryMb: number;
+      virtualMemoryMb: number;
+    };
+  };
+
   let profiles: Profile[] = [];
   let selectedProfile = "client";
   let log = "";
   let running = false;
+  let watching = false;
   let loading = false;
   let error: string | null = null;
   let message: string | null = null;
@@ -28,6 +46,10 @@
   let validationReport: any = null;
   let validationLoading = false;
   let validationError: string | null = null;
+  let autoScroll = true;
+  let logEl: HTMLPreElement | null = null;
+  let live: LiveDebugStats | null = null;
+  let killing = false;
 
   // Launch stats
   let launchStats: any = null;
@@ -69,6 +91,12 @@
       await refreshLog();
       await loadRuns();
       await loadStats();
+      await refreshLive();
+      if (live?.instance) {
+        running = true;
+        startedAt = (live.instance.startedAt || 0) * 1000 || Date.now();
+        startPolling();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -101,9 +129,13 @@
     if (!$projectPath) return;
     try {
       log = await invoke("get_launch_log", { path: $projectPath });
+      if (autoScroll && logEl) {
+        await tick();
+        logEl.scrollTop = logEl.scrollHeight;
+      }
       if (log.includes("# Launch error:") || log.includes("Process exited") || log.includes("Stopping!")) {
         const wasRunning = running;
-        running = false;
+        if (!live?.instance) running = false;
         await loadRuns();
         if (wasRunning && runs[0] && !capturedRunIds[runs[0].id]) {
           await captureRunLogs(runs[0], true);
@@ -111,6 +143,21 @@
       }
     } catch {
       // latest.log may not exist before first run.
+    }
+  }
+
+  async function refreshLive() {
+    if (!$projectPath) return;
+    try {
+      live = await invoke("get_live_debug_stats", { instanceId: $projectPath });
+      if (live?.instance) {
+        running = true;
+        if (!startedAt) startedAt = (live.instance.startedAt || 0) * 1000 || Date.now();
+      } else if (running && watching) {
+        // Process gone — keep watching log a bit, mark idle for meters
+      }
+    } catch {
+      // ignore sampler failures
     }
   }
 
@@ -134,26 +181,64 @@
     }
   }
 
+  async function killInstance() {
+    if (!$projectPath || killing) return;
+    killing = true;
+    error = null;
+    try {
+      message = await invoke("kill_running_instance", { instanceId: $projectPath });
+      live = live ? { ...live, instance: null } : null;
+      running = false;
+      await refreshLog();
+      await loadRuns();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      killing = false;
+    }
+  }
+
   function formatRunTime(value: string) {
     const seconds = Number(value);
     if (!Number.isFinite(seconds)) return value;
     return new Date(seconds * 1000).toLocaleString();
   }
 
-  function startPolling() {
-    if (timer) clearInterval(timer);
-    now = Date.now();
-    timer = setInterval(() => { now = Date.now(); refreshLog(); }, 1000);
+  function pct(n: number | null | undefined, max = 100) {
+    if (!Number.isFinite(n as number)) return 0;
+    return Math.max(0, Math.min(100, ((n as number) / max) * 100));
   }
 
-  function stopPolling() {
+  function fmtMb(n: number | null | undefined) {
+    if (!Number.isFinite(n as number)) return "—";
+    const v = n as number;
+    return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`;
+  }
+
+  function startPolling() {
+    if (timer) clearInterval(timer);
+    watching = true;
+    now = Date.now();
+    timer = setInterval(() => {
+      now = Date.now();
+      refreshLog();
+      refreshLive();
+    }, 1000);
+  }
+
+  function stopWatching() {
     if (timer) clearInterval(timer);
     timer = null;
-    running = false;
+    watching = false;
   }
 
   $: selected = profiles.find((p) => p.id === selectedProfile);
   $: elapsed = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
+  $: hostRamPct = live && live.hostMemoryTotalMb > 0
+    ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
+    : 0;
+  $: procRamCap = selected?.memoryMb ?? 4096;
+  $: procRamPct = live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0;
   $: if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
 
   onDestroy(() => {
@@ -183,10 +268,14 @@
         <PlayCircle size={16} />
         {running ? "Running..." : "Run profile"}
       </button>
+      <button class="danger" on:click={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
+        <Square size={16} />
+        {killing ? "Stopping..." : "Kill"}
+      </button>
       <button class="secondary" on:click={async () => {
         if (!$projectPath) return;
         try {
-          const props = await invoke("generate_server_properties", { path: $projectPath });
+          await invoke("generate_server_properties", { path: $projectPath });
           message = "server.properties generated.";
         } catch(e) { error = String(e); }
       }} disabled={!$projectPath} title="Generate server.properties">
@@ -315,18 +404,69 @@
         <div class="run-header">
           <div>
             <h2>{selected?.name ?? "Select profile"}</h2>
-            <p>{selected ? `${selected.side} profile · ${selected.memoryMb ?? 4096} MB` : "Choose a profile to run"}</p>
+            <p>
+              {#if live?.instance}
+                PID {live.instance.pid} · {live.instance.profile} · live
+              {:else if selected}
+                {selected.side} profile · {selected.memoryMb ?? 4096} MB
+              {:else}
+                Choose a profile to run
+              {/if}
+            </p>
           </div>
-          <div class="status" class:running>
+          <div class="status" class:running={!!live?.instance || running}>
             <TimerReset size={16} />
-            {running ? `${elapsed}s` : "idle"}
+            {live?.instance || running ? `${elapsed}s` : "idle"}
           </div>
         </div>
 
-        <pre class="log">{log || "latest.log will appear here after the first run."}</pre>
+        <div class="meters">
+          <div class="meter">
+            <div class="meter-head"><Cpu size={14} /> Host CPU <strong>{live ? live.hostCpuPercent.toFixed(0) : "—"}%</strong></div>
+            <div class="bar"><i style="width: {live ? pct(live.hostCpuPercent) : 0}%"></i></div>
+          </div>
+          <div class="meter">
+            <div class="meter-head"><HardDrive size={14} /> Host RAM <strong>{live ? `${fmtMb(live.hostMemoryUsedMb)} / ${fmtMb(live.hostMemoryTotalMb)}` : "—"}</strong></div>
+            <div class="bar"><i style="width: {hostRamPct}%"></i></div>
+          </div>
+          <div class="meter" class:dim={!live?.instance}>
+            <div class="meter-head"><Activity size={14} /> Process CPU <strong>{live?.instance ? `${live.instance.cpuPercent.toFixed(0)}%` : "—"}</strong></div>
+            <div class="bar proc"><i style="width: {live?.instance ? pct(live.instance.cpuPercent) : 0}%"></i></div>
+          </div>
+          <div class="meter" class:dim={!live?.instance}>
+            <div class="meter-head"><HardDrive size={14} /> Process RAM <strong>{live?.instance ? `${fmtMb(live.instance.memoryMb)} / ${fmtMb(procRamCap)}` : "—"}</strong></div>
+            <div class="bar proc"><i style="width: {procRamPct}%"></i></div>
+          </div>
+        </div>
 
-        {#if running}
-          <button class="secondary stop" on:click={stopPolling}>Stop watching log</button>
+        {#if live?.instance}
+          <div class="live-meta">
+            <span>RSS {fmtMb(live.instance.memoryMb)}</span>
+            <span>Virt {fmtMb(live.instance.virtualMemoryMb)}</span>
+            <span>cap {fmtMb(procRamCap)}</span>
+            {#if !watching}
+              <button class="ghost mini" on:click={startPolling}>Resume poll</button>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="log-tools">
+          <label class="auto-scroll">
+            <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
+          </label>
+          {#if watching}
+            <button class="ghost mini" on:click={stopWatching}>Stop watching</button>
+          {:else if running || live?.instance}
+            <button class="ghost mini" on:click={startPolling}>Watch log</button>
+          {/if}
+        </div>
+
+        <pre class="log" bind:this={logEl}>{log || "latest.log will appear here after the first run."}</pre>
+
+        {#if live?.instance}
+          <button class="secondary stop danger-outline" on:click={killInstance} disabled={killing}>
+            <Square size={16} /> {killing ? "Stopping..." : "Kill process"}
+          </button>
         {/if}
       </section>
     </div>
@@ -335,10 +475,10 @@
 
 <style>
   .test-runs { max-width: none; width: 100%; }
-  .toolbar, .actions, .title, .run-header, .status { display: flex; align-items: center; }
+  .toolbar, .actions, .title, .run-header, .status, .meter-head, .log-tools, .live-meta { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 16px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .actions { gap: 10px; }
+  .actions { gap: 10px; flex-wrap: wrap; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
@@ -359,13 +499,29 @@
   .run-row.finished { border-color: rgba(27, 217, 106, .28); }
   .run-row.started { border-color: rgba(245, 158, 11, .28); }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
-  .run-panel { overflow: hidden; }
+  .run-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   .run-header { justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border-color); }
   .run-header h2 { margin: 0 0 4px; }
   .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; }
   .status.running { color: var(--accent-primary); }
-  .log { min-height: 560px; max-height: 680px; overflow: auto; margin: 0; padding: 18px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+  .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); background: rgba(0,0,0,.12); }
+  .meter { display: grid; gap: 6px; }
+  .meter.dim { opacity: 0.45; }
+  .meter-head { justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 11px; }
+  .meter-head :global(svg) { flex-shrink: 0; }
+  .meter-head strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #34d399, #1bd96a); transition: width 280ms ease; }
+  .bar.proc i { background: linear-gradient(90deg, #60a5fa, #a78bfa); }
+  .live-meta { gap: 12px; padding: 0 16px 8px; color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
+  .log-tools { justify-content: space-between; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); }
+  .auto-scroll { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+  .auto-scroll input { width: auto; }
+  .log { flex: 1; min-height: 420px; max-height: 620px; overflow: auto; margin: 0; padding: 18px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
   .stop { margin: 12px; }
+  .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
+  .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
+  .danger-outline { border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .empty { color: var(--text-muted); padding: 80px; text-align: center; }
   .launch-stats-card { padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); margin-bottom: 14px; display: grid; gap: 6px; }
   .launch-stats-card h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .04em; }
@@ -377,7 +533,10 @@
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  @media (max-width: 920px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 920px) {
+    .layout { grid-template-columns: 1fr; }
+    .meters { grid-template-columns: 1fr; }
+  }
 
   .validation-report { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 18px; margin-bottom: 16px; }
   .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }

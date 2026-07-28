@@ -2016,10 +2016,9 @@ fn set_or_insert_string(nbt: &mut Vec<u8>, key: &str, value: &str, force: bool) 
             return false;
         }
         // Replace whole tag (variable length) by rebuilding around it.
-        let mut end = payload;
         let mut p = payload;
         let old_len = read_u16(nbt, &mut p) as usize;
-        end = p + old_len;
+        let end = p + old_len;
         let mut new_tag = Vec::new();
         new_tag.push(8);
         write_string(&mut new_tag, key);
@@ -2083,10 +2082,9 @@ fn clear_named_lists(nbt: &mut Vec<u8>, names: &[&str]) -> bool {
             }
             // Replace list with empty list of same element type.
             let list_type = nbt.get(payload).copied().unwrap_or(10);
-            let mut end = payload;
             let mut p = payload;
             skip_payload(nbt, &mut p, 9);
-            end = p;
+            let end = p;
             let mut new_tag = Vec::new();
             new_tag.push(9);
             write_string(&mut new_tag, name);

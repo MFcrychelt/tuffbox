@@ -28,7 +28,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale } from "./lib/store";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -141,6 +141,9 @@
         localStorage.setItem("tuffbox-theme", s.theme);
         document.documentElement.setAttribute("data-theme", s.theme === "light" ? "tuffbox-light" : s.theme);
       }
+      autoHideWorkflowRail.set(!!s.autoHideWorkflowRail);
+      sidebarMode.set(normalizeSidebarMode(s.sidebarMode));
+      applyUiScale(s.uiScalePercent);
     }).catch(() => {});
     const onOpenGraph = () => {
       currentView = "graph";
@@ -440,11 +443,13 @@
 <style>
   .app-shell {
     display: flex;
-    height: 100vh;
-    width: 100vw;
+    /* Compensate Chromium zoom so the shell still fills the window. */
+    width: calc(100vw / var(--ui-scale, 1));
+    height: calc(100vh / var(--ui-scale, 1));
     overflow: hidden;
     background: var(--bg-primary);
     color: var(--text-primary);
+    zoom: var(--ui-scale, 1);
   }
 
   .main {

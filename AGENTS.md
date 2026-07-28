@@ -60,5 +60,6 @@ ECC и engram комплементарны: engram — для явных арх�
 | Roadmap Stage 16 | [`docs/07-development-roadmap.md`](docs/07-development-roadmap.md) |
 | Product positioning | [`docs/01-product.md`](docs/01-product.md) |
 | Layered architecture | [`docs/03-architecture.md`](docs/03-architecture.md) |
+| Cosmetics / CSL / Me Appearance | [`docs/14-cosmetics.md`](docs/14-cosmetics.md) |
 
 Перед работой по P2P / swarm / PoUW агент **MUST** прочитать `docs/13-tuffswarm-network.md` (agent checklist внутри).

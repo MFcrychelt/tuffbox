@@ -206,11 +206,25 @@
 
   <div class="panel">
     {#if loading && packs.length === 0 && worlds.length === 0 && servers.length === 0 && tab !== "mods"}
-      <div class="empty muted">Loading…</div>
+      <div class="list home-skel-stagger" aria-busy="true" aria-hidden="true">
+        {#each Array(4) as _, i (i)}
+          <div class="row skel-row" style={`--i: ${i}`}>
+            <div class="row-main" style="gap: 8px; width: 100%;">
+              <span class="skeleton skeleton-block skeleton-line medium" style="height: 12px;"></span>
+              <span class="skeleton skeleton-block skeleton-line short" style="height: 10px;"></span>
+            </div>
+            <span class="skeleton skeleton-block skeleton-round" style="width: 56px; height: 28px; flex-shrink: 0;"></span>
+          </div>
+        {/each}
+      </div>
     {:else if tab === "mods"}
-      <div class="mods-cta">
+      <div class="mods-cta" class:tb-anim-fade-in={!loading}>
         <div>
-          <strong>{modCount == null ? "—" : modCount}</strong>
+          {#if loading && modCount == null}
+            <strong class="skeleton skeleton-block" style="display:inline-block; width: 28px; height: 18px; vertical-align: middle;"></strong>
+          {:else}
+            <strong>{modCount == null ? "—" : modCount}</strong>
+          {/if}
           <span>mods in this instance</span>
         </div>
         <button class="accent" on:click={onOpenMods}>
@@ -361,7 +375,6 @@
   .panel { padding: 12px; min-height: 140px; max-height: 320px; overflow: auto; }
   .empty { color: var(--text-muted); font-size: 13px; padding: 18px 8px; text-align: center; }
   .empty .hint { font-size: 12px; margin-top: 6px; }
-  .empty.muted { opacity: 0.7; }
 
   .list { display: flex; flex-direction: column; gap: 6px; }
   .row {
@@ -370,6 +383,10 @@
     background: var(--bg-primary); border: 1px solid var(--border-color);
   }
   .row.disabled { opacity: 0.55; }
+  .row.skel-row {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
+  }
   .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .row-main strong { font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-main span { font-size: 11px; color: var(--text-muted); }

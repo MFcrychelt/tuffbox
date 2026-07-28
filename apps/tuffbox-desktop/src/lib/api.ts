@@ -782,6 +782,39 @@ export interface RunningInstance {
   startedAt: number;
 }
 
+export interface LiveDebugStats {
+  hostCpuPercent: number;
+  hostMemoryUsedMb: number;
+  hostMemoryTotalMb: number;
+  instance: null | {
+    pid: number;
+    profile: string;
+    startedAt: number;
+    cpuPercent: number;
+    memoryMb: number;
+    virtualMemoryMb: number;
+  };
+}
+
+export interface CosmeticsProfile {
+  playerKey: string;
+  username: string;
+  skinModel: string;
+  sharePublic: boolean;
+  wings?: string | null;
+  hat?: string | null;
+  trail?: boolean;
+  jumpCircles?: boolean;
+  hitParticles?: boolean;
+  hitBubbles?: boolean;
+  targetEsp?: boolean;
+  killEffect?: boolean;
+  capeMeta?: Record<string, unknown>;
+  writeSecret: string;
+  skinPath?: string | null;
+  capePath?: string | null;
+}
+
 export interface KeyboardShortcut {
   key: string;
   description: string;
@@ -876,6 +909,68 @@ export const api = {
     repair(p?: string) { return cmd<ModSyncReport>("repair_project", pathArg(p)); },
     cleanup(p?: string) { return cmd<Record<string, unknown>>("cleanup_project", pathArg(p)); },
     listProfiles(p?: string) { return cmd<ProfileSummary[]>("list_profiles", pathArg(p)); },
+  },
+
+  // ── Cosmetics (TuffBox appearance) ────────────────────────────────
+  cosmetics: {
+    getLocal(playerKey: string) {
+      return cmd<CosmeticsProfile>("cosmetics_get_local_profile", { playerKey });
+    },
+    save(profile: CosmeticsProfile) {
+      return cmd<CosmeticsProfile>("cosmetics_save_profile", { profile });
+    },
+    uploadSkin(playerKey: string, username: string, path: string, model: string) {
+      return cmd<CosmeticsProfile>("cosmetics_upload_skin", { playerKey, username, path, model });
+    },
+    uploadCape(
+      playerKey: string,
+      username: string,
+      path: string,
+      animated = false,
+      frameMs = 100,
+      frames = 1,
+    ) {
+      return cmd<CosmeticsProfile>("cosmetics_upload_cape", {
+        playerKey,
+        username,
+        path,
+        animated,
+        frameMs,
+        frames,
+      });
+    },
+    setWings(playerKey: string, username: string, wings: string | null) {
+      return cmd<CosmeticsProfile>("cosmetics_set_wings", { playerKey, username, wings });
+    },
+    setVisualExtras(
+      playerKey: string,
+      username: string,
+      hat: string | null,
+      trail: boolean,
+      jumpCircles: boolean,
+      hitParticles = true,
+      hitBubbles = true,
+      targetEsp = true,
+      killEffect = true,
+    ) {
+      return cmd<CosmeticsProfile>("cosmetics_set_visual_extras", {
+        playerKey,
+        username,
+        hat,
+        trail,
+        jumpCircles,
+        hitParticles,
+        hitBubbles,
+        targetEsp,
+        killEffect,
+      });
+    },
+    wingsCatalog() {
+      return cmd<Array<{ id: string; label: string }>>("cosmetics_wings_catalog");
+    },
+    hatCatalog() {
+      return cmd<Array<{ id: string; label: string }>>("cosmetics_hat_catalog");
+    },
   },
 
   // ── Mods ──────────────────────────────────────────────────────────
@@ -1013,6 +1108,9 @@ export const api = {
     },
     listRunning() { return cmd<RunningInstance[]>("list_running_instances"); },
     kill(instanceId: string) { return cmd<string>("kill_running_instance", { instanceId }); },
+    liveDebug(instanceId?: string | null) {
+      return cmd<LiveDebugStats>("get_live_debug_stats", { instanceId: instanceId ?? null });
+    },
     generateServerProperties(p?: string) { return cmd<string>("generate_server_properties", pathArg(p)); },
   },
 

@@ -31,7 +31,10 @@
         "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* https://api.mclo.gs https://mclo.gs https://*.supabase.co wss://*.supabase.co https://vsoqnwknpueuubiovyjd.supabase.co wss://vsoqnwknpueuubiovyjd.supabase.co",
         "img-src": "'self' asset: http://asset.localhost https: http: data: blob:",
         "script-src": "'self'",
-        "style-src": "'self' 'unsafe-inline'"
+        "style-src": "'self' 'unsafe-inline'",
+        "frame-src": "'self' https://www.youtube-nocookie.com https://www.youtube.com",
+        "child-src": "'self' https://www.youtube-nocookie.com https://www.youtube.com",
+        "media-src": "'self' https: blob:"
       },
       "assetProtocol": {
         "enable": true,

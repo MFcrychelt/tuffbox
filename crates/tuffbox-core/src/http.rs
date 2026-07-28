@@ -395,6 +395,7 @@ pub fn download_streaming(
     )
 }
 
+#[cfg(test)]
 fn persist_replacing(
     file: tempfile::NamedTempFile,
     dest: &std::path::Path,

@@ -13,9 +13,15 @@
     Library,
     User,
     MessagesSquare,
+    PanelLeftClose,
+    PanelLeftOpen,
   } from "lucide-svelte";
-  import { afterUpdate, tick } from "svelte";
-  import { newProjectOpen } from "../lib/store";
+  import { afterUpdate, onDestroy, tick } from "svelte";
+  import {
+    newProjectOpen,
+    sidebarMode,
+    sidebarIconsCollapsed,
+  } from "../lib/store";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
   export let currentView: View;
@@ -41,12 +47,48 @@
   let indicatorReady = false;
   let indicatorInBottom = false;
 
+  let railRevealed = false;
+  let railHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $: autoHide = $sidebarMode === "autoHide";
+  $: iconsMode = $sidebarMode === "icons";
+  $: iconsCollapsed = iconsMode && $sidebarIconsCollapsed;
+
   function openNewProject() {
     // Dashboard owns the modal, so make sure we're on that view before
     // raising the flag — otherwise the modal component wouldn't be mounted.
     currentView = "dashboard";
     newProjectOpen.set(true);
   }
+
+  function clearRailHideTimer() {
+    if (railHideTimer) {
+      clearTimeout(railHideTimer);
+      railHideTimer = null;
+    }
+  }
+
+  function revealRail() {
+    if (!autoHide) return;
+    clearRailHideTimer();
+    railRevealed = true;
+  }
+
+  function scheduleHideRail() {
+    if (!autoHide) return;
+    clearRailHideTimer();
+    railHideTimer = setTimeout(() => {
+      railRevealed = false;
+      railHideTimer = null;
+    }, 160);
+  }
+
+  $: if (!autoHide) {
+    railRevealed = false;
+    clearRailHideTimer();
+  }
+
+  onDestroy(() => clearRailHideTimer());
 
   async function syncIndicator() {
     await tick();
@@ -65,75 +107,177 @@
     indicatorReady = true;
   }
 
-  $: currentView, void syncIndicator();
+  $: currentView, iconsCollapsed, railRevealed, $sidebarMode, void syncIndicator();
   afterUpdate(() => {
     void syncIndicator();
   });
 </script>
 
-<aside class="sidebar">
-  <div class="brand">
-    <div class="logo">T</div>
-    <span class="brand-name">TuffBox</span>
-  </div>
+<div
+  class="sidebar-slot"
+  class:auto-hide={autoHide}
+  class:icons-collapsed={iconsCollapsed}
+  class:revealed={railRevealed || !autoHide}
+>
+  {#if autoHide}
+    <div class="sidebar-hotzone" aria-hidden="true" on:mouseenter={revealRail}></div>
+  {/if}
 
-  <nav class="nav" bind:this={navEl}>
-    <div
-      class="nav-indicator"
-      class:ready={indicatorReady && !indicatorInBottom}
-      style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
-      aria-hidden="true"
-    ></div>
-    {#each items as item}
+  <aside
+    class="sidebar"
+    class:compact={iconsCollapsed}
+    class:auto-hide-panel={autoHide}
+    class:revealed={railRevealed || !autoHide}
+    on:mouseenter={revealRail}
+    on:mouseleave={scheduleHideRail}
+  >
+    <div class="brand">
+      <div class="logo">T</div>
+      {#if !iconsCollapsed}
+        <span class="brand-name">TuffBox</span>
+      {/if}
+      {#if iconsMode}
+        <button
+          type="button"
+          class="collapse-btn tb-icon-hover"
+          title={iconsCollapsed ? "Expand sidebar" : "Collapse to icons"}
+          aria-expanded={!iconsCollapsed}
+          on:click={() => sidebarIconsCollapsed.toggle()}
+        >
+          {#if iconsCollapsed}
+            <PanelLeftOpen size={16} />
+          {:else}
+            <PanelLeftClose size={16} />
+          {/if}
+        </button>
+      {/if}
+    </div>
+
+    <nav class="nav" bind:this={navEl}>
+      <div
+        class="nav-indicator"
+        class:ready={indicatorReady && !indicatorInBottom}
+        style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
+        aria-hidden="true"
+      ></div>
+      {#each items as item (item.id)}
+        <button
+          class="nav-item tb-icon-hover"
+          class:active={currentView === item.id}
+          class:featured={item.featured}
+          on:click={() => (currentView = item.id)}
+          on:focus={revealRail}
+          title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
+        >
+          <svelte:component this={item.icon} size={20} />
+          {#if !iconsCollapsed}
+            <span class="nav-label">{item.label}</span>
+            {#if item.shortcut}
+              <span class="shortcut">{item.shortcut}</span>
+            {/if}
+          {/if}
+        </button>
+      {/each}
+
       <button
-        class="nav-item tb-icon-hover"
-        class:active={currentView === item.id}
-        class:featured={item.featured}
-        on:click={() => (currentView = item.id)}
-        title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
+        class="nav-item add tb-icon-hover"
+        title="New instance"
+        on:click={openNewProject}
+        on:focus={revealRail}
       >
-        <svelte:component this={item.icon} size={20} />
-        <span class="nav-label">{item.label}</span>
-        {#if item.shortcut}
-          <span class="shortcut">{item.shortcut}</span>
+        <Plus size={20} />
+        {#if !iconsCollapsed}
+          <span class="nav-label">New</span>
         {/if}
       </button>
-    {/each}
+    </nav>
 
-    <button class="nav-item add tb-icon-hover" title="New instance" on:click={openNewProject}>
-      <Plus size={20} />
-      <span class="nav-label">New</span>
-    </button>
-  </nav>
-
-  <div class="bottom" bind:this={bottomEl}>
-    <div
-      class="nav-indicator"
-      class:ready={indicatorReady && indicatorInBottom}
-      style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
-      aria-hidden="true"
-    ></div>
-    <button
-      class="nav-item tb-icon-hover"
-      class:active={currentView === "settings"}
-      on:click={() => (currentView = "settings")}
-      title="Settings"
-    >
-      <Settings size={20} />
-      <span class="nav-label">Settings</span>
-    </button>
-  </div>
-</aside>
+    <div class="bottom" bind:this={bottomEl}>
+      <div
+        class="nav-indicator"
+        class:ready={indicatorReady && indicatorInBottom}
+        style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
+        aria-hidden="true"
+      ></div>
+      <button
+        class="nav-item tb-icon-hover"
+        class:active={currentView === "settings"}
+        on:click={() => (currentView = "settings")}
+        on:focus={revealRail}
+        title="Settings"
+      >
+        <Settings size={20} />
+        {#if !iconsCollapsed}
+          <span class="nav-label">Settings</span>
+        {/if}
+      </button>
+    </div>
+  </aside>
+</div>
 
 <style>
+  .sidebar-slot {
+    flex-shrink: 0;
+    width: 212px;
+    position: relative;
+    z-index: 30;
+    transition: width 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .sidebar-slot.icons-collapsed {
+    width: 68px;
+  }
+
+  .sidebar-slot.auto-hide {
+    width: 0;
+    overflow: visible;
+  }
+
+  .sidebar-hotzone {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 14px;
+    z-index: 32;
+  }
+
+  .sidebar-slot.auto-hide:has(.sidebar.revealed) .sidebar-hotzone,
+  .sidebar-slot.auto-hide:has(.sidebar:focus-within) .sidebar-hotzone {
+    pointer-events: none;
+  }
+
   .sidebar {
     width: 212px;
+    height: 100%;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     padding: 16px 12px;
-    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+
+  .sidebar.compact {
+    width: 68px;
+    padding: 16px 8px;
+  }
+
+  .sidebar.auto-hide-panel {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 10px 0 28px rgba(0, 0, 0, 0.28);
+    pointer-events: none;
+  }
+
+  .sidebar.auto-hide-panel.revealed,
+  .sidebar.auto-hide-panel:focus-within {
+    transform: translateX(0);
+    pointer-events: auto;
   }
 
   .brand {
@@ -141,6 +285,13 @@
     align-items: center;
     gap: 10px;
     padding: 6px 8px 18px;
+    min-height: 48px;
+  }
+
+  .sidebar.compact .brand {
+    flex-direction: column;
+    gap: 8px;
+    padding: 4px 0 14px;
   }
 
   .logo {
@@ -164,6 +315,35 @@
     font-size: 15px;
     color: var(--text-primary);
     letter-spacing: 0.2px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .collapse-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-primary);
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .sidebar.compact .collapse-btn {
+    margin-left: 0;
+  }
+
+  .collapse-btn:hover {
+    color: var(--accent-primary);
+    border-color: rgba(27, 217, 106, 0.4);
   }
 
   .nav,
@@ -234,10 +414,20 @@
       transform var(--motion-fast, 160ms) var(--ease-spring, ease);
   }
 
+  .sidebar.compact .nav-item {
+    justify-content: center;
+    padding: 0;
+    gap: 0;
+  }
+
   .nav-item:hover {
     background: var(--bg-hover);
     color: var(--text-secondary);
     transform: translateX(3px);
+  }
+
+  .sidebar.compact .nav-item:hover {
+    transform: none;
   }
 
   .nav-item.active {
@@ -248,6 +438,10 @@
   .nav-item.active:hover {
     background: transparent;
     transform: translateX(1px);
+  }
+
+  .sidebar.compact .nav-item.active:hover {
+    transform: none;
   }
 
   .nav-label {

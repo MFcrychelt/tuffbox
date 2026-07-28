@@ -9,7 +9,14 @@
     MessageCircle, ExternalLink,
   } from "lucide-svelte";
   import { api } from "../lib/api";
-  import type { PresenceSettings, LauncherSettings } from "../lib/store";
+  import type { PresenceSettings, LauncherSettings, SidebarMode } from "../lib/store";
+  import {
+    autoHideWorkflowRail,
+    sidebarMode,
+    normalizeSidebarMode,
+    applyUiScale,
+    normalizeUiScalePercent,
+  } from "../lib/store";
   import {
     readStoredTheme, commitTheme, type ThemeId,
   } from "../lib/themes";
@@ -130,6 +137,10 @@
     defaultJavaPath: null,
     javaCustomArgs: null,
     defaultMemoryMb: 4096,
+    youtubeInlinePlayer: true,
+    autoHideWorkflowRail: false,
+    sidebarMode: "full",
+    uiScalePercent: 100,
   };
   let launcherSaving = false;
   let launcherMsg = "";
@@ -184,6 +195,9 @@
       applyPotatoPc(reducedMotion);
       localStorage.setItem("tuffbox-reduced-motion", reducedMotion ? "1" : "0");
       commitTheme(theme);
+      autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
+      sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
+      applyUiScale(launcher.uiScalePercent);
       syncResModeFromLauncher();
       const info = await api.launcher.runtimePathInfo();
       defaultRuntimePath = info.default;
@@ -214,7 +228,19 @@
         commitTheme(theme);
         next.theme = theme;
       }
+      if (partial && "uiScalePercent" in partial) {
+        next.uiScalePercent = normalizeUiScalePercent(partial.uiScalePercent);
+      }
       launcher = await api.launcher.save(next);
+      if (partial && "autoHideWorkflowRail" in partial) {
+        autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
+      }
+      if (partial && "sidebarMode" in partial) {
+        sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
+      }
+      if (partial && "uiScalePercent" in partial) {
+        applyUiScale(launcher.uiScalePercent);
+      }
       launcherMsg = "Saved.";
       setTimeout(() => (launcherMsg = ""), 1600);
     } catch (e) {
@@ -687,6 +713,31 @@
           Potato PC mode (reduce motion / animations)
         </label>
         <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
+
+        <div class="settings-row" style="margin-top: 18px;">
+          <div class="settings-row-text">
+            <strong>Interface scale</strong>
+            <p>
+              Zoom the whole UI — buttons, sidebar, Content mod cards, dialogs. Useful on high-DPI or
+              small screens.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              {#each [75, 90, 100, 110, 125, 150] as pct (pct)}
+                <button
+                  type="button"
+                  class="chip press-effect"
+                  class:active={normalizeUiScalePercent(launcher.uiScalePercent) === pct}
+                  disabled={launcherSaving}
+                  on:click={() => void persistLauncher({ uiScalePercent: pct })}
+                >
+                  {pct}%
+                </button>
+              {/each}
+            </div>
+          </div>
+        </div>
       </section>
     {/if}
 
@@ -695,6 +746,111 @@
         <div class="card-title">
           <Settings2 size={18} />
           <h3>General</h3>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>YouTube on home</strong>
+            <p>
+              Litube-style in-app player loads a privacy embed only after you click a thumbnail.
+              Preview-only keeps static images and opens videos in the system browser.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.youtubeInlinePlayer !== false}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ youtubeInlinePlayer: true })}
+              >
+                In-app player
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.youtubeInlinePlayer === false}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ youtubeInlinePlayer: false })}
+              >
+                Preview only
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>Dynamic bottom panel</strong>
+            <p>
+              Hide the IDE workflow rail (Content, Setup, …). Move the cursor to the bottom edge of
+              the window to slide it out quickly; it hides again when you leave.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.autoHideWorkflowRail === true}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ autoHideWorkflowRail: true })}
+              >
+                Auto-hide
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.autoHideWorkflowRail !== true}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ autoHideWorkflowRail: false })}
+              >
+                Always visible
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>Left sidebar</strong>
+            <p>
+              Full labels, icon rail with a collapse button, or auto-hide until you hover the left
+              edge of the window.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={normalizeSidebarMode(launcher.sidebarMode) === "full"}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ sidebarMode: "full" as SidebarMode })}
+              >
+                Expanded
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={normalizeSidebarMode(launcher.sidebarMode) === "icons"}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ sidebarMode: "icons" as SidebarMode })}
+              >
+                Icons toggle
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={normalizeSidebarMode(launcher.sidebarMode) === "autoHide"}
+                disabled={launcherSaving}
+                on:click={() => void persistLauncher({ sidebarMode: "autoHide" as SidebarMode })}
+              >
+                Auto-hide
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="settings-row">

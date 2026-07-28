@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import {
     Play,
     Square,
@@ -35,12 +35,29 @@
     ChevronRight,
     HardDrive,
     Palette,
+    Clock,
+    LayoutGrid,
   } from "lucide-svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-shell";
-  import { recentProjects, projectPath, projectInfo, authState, skinPath, newProjectOpen, isLaunching, runningInstances, isProjectRunning, loginTypeLabel, type RecentProject, type CapeProvider, type CapeCatalog } from "../lib/store";
+  import {
+    recentProjects,
+    projectPath,
+    projectInfo,
+    authState,
+    skinPath,
+    newProjectOpen,
+    isLaunching,
+    runningInstances,
+    isProjectRunning,
+    loginTypeLabel,
+    formatPlaytime,
+    type RecentProject,
+    type CapeProvider,
+    type CapeCatalog,
+  } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
@@ -53,6 +70,72 @@
   import YoutubeFeed from "./YoutubeFeed.svelte";
 
   export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world";
+
+  /** Home layout: 1 classic | 2 yt main + instances under skin | 3 yt under skin | 4 hide yt */
+  type HomeLayout = "classic" | "yt-main" | "yt-under-skin" | "yt-hidden";
+  const HOME_LAYOUT_KEY = "tuffbox-home-layout";
+  const HOME_LAYOUT_OPTIONS: { id: HomeLayout; label: string }[] = [
+    { id: "classic", label: "YouTube then instances" },
+    { id: "yt-main", label: "YouTube main · instances under skin" },
+    { id: "yt-under-skin", label: "Instances main · YouTube under skin" },
+    { id: "yt-hidden", label: "Hide YouTube" },
+  ];
+
+  function loadHomeLayout(): HomeLayout {
+    try {
+      const v = localStorage.getItem(HOME_LAYOUT_KEY);
+      if (v === "classic" || v === "yt-main" || v === "yt-under-skin" || v === "yt-hidden") {
+        return v;
+      }
+    } catch {}
+    return "classic";
+  }
+
+  let homeLayout: HomeLayout = loadHomeLayout();
+  let authReady = false;
+
+  function setHomeLayout(next: HomeLayout) {
+    homeLayout = next;
+    try {
+      localStorage.setItem(HOME_LAYOUT_KEY, next);
+    } catch {}
+  }
+
+  type ProjectStatBrief = { playtime: number; lastLaunch: string | null };
+  let projectStats: Record<string, ProjectStatBrief> = {};
+
+  async function loadProjectStats(path: string) {
+    try {
+      const s = await api.stats.get(path);
+      projectStats[path] = {
+        playtime: s.totalPlaytimeSeconds ?? 0,
+        lastLaunch: s.lastLaunch ?? null,
+      };
+      projectStats = { ...projectStats };
+    } catch {
+      projectStats[path] = { playtime: 0, lastLaunch: null };
+      projectStats = { ...projectStats };
+    }
+  }
+
+  function ensureStats(paths: string[]) {
+    for (const path of paths) {
+      if (projectStats[path] !== undefined) continue;
+      void loadProjectStats(path);
+    }
+  }
+
+  $: ensureStats($recentProjects.map((p) => p.path));
+
+  /** Last launched first; unknown lastLaunch keeps relative store order. */
+  $: sortedProjects = [...$recentProjects].sort((a, b) => {
+    const la = projectStats[a.path]?.lastLaunch;
+    const lb = projectStats[b.path]?.lastLaunch;
+    if (la && lb) return lb.localeCompare(la);
+    if (la && !lb) return -1;
+    if (!la && lb) return 1;
+    return 0;
+  });
 
   let selectedPath: string | null = $projectPath;
   let activeMenuPath: string | null = null;
@@ -159,7 +242,10 @@
           skinPath.set(path);
         } catch {}
       }
-    } catch {}
+    } catch {
+    } finally {
+      authReady = true;
+    }
 
     if (selectedPath && !selectedProject && $recentProjects.length > 0) {
       selectProject($recentProjects[0].path);
@@ -168,6 +254,16 @@
     // Global handler for JVM crashes that happen after the launch command
     // has returned "started" — surfaces a categorized, retryable toast.
     registerLaunchCrashListener();
+
+    // Refresh playtime when a session ends.
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
+      const id = event.payload?.id;
+      if (id) void loadProjectStats(id);
+    });
+    return () => {
+      unlistenExit();
+    };
   });
 
   async function loadProject(path: string) {
@@ -194,6 +290,9 @@
     if (!selectedPath) return;
     await invoke("set_last_opened_project", { path: selectedPath });
     await launchWithFeedback({ path: selectedPath, profile: "client" });
+    const project = $recentProjects.find((p) => p.path === selectedPath);
+    if (project) recentProjects.add(project);
+    void loadProjectStats(selectedPath);
   }
 
   async function stopGame() {
@@ -500,10 +599,9 @@
     </div>
   </div>
 
-  <!-- Main content: Left (hero + instances) + Right (3D skin) -->
-  <div class="main-layout">
-    <!-- Left column -->
-    <div class="left-column">
+  // Main content: CSS grid areas — hero / InstanceHome / YouTube / instances / skin
+  <div class="main-layout" data-layout={homeLayout}>
+    <div class="area-hero">
       <!-- Hero: Play button + project info -->
       <section class="hero">
         <div class="hero-left">
@@ -568,11 +666,23 @@
                 <HardDrive size={14} />
                 <span>{instanceSizes[selectedProject.path] || "..."}</span>
               </div>
+              {#if projectStats[selectedProject.path]?.playtime}
+                <div class="stat">
+                  <Clock size={14} />
+                  <span>{formatPlaytime(projectStats[selectedProject.path].playtime)}</span>
+                </div>
+              {:else if projectStats[selectedProject.path] === undefined}
+                <div class="stat skel-stat" aria-hidden="true">
+                  <span class="skeleton skeleton-block skeleton-line short" style="width: 52px; height: 12px;"></span>
+                </div>
+              {/if}
             </div>
           </div>
         {/if}
       </section>
+    </div>
 
+    <div class="area-ihome">
       {#if selectedPath && selectedProject}
         <InstanceHome
           projectPath={selectedPath}
@@ -580,17 +690,34 @@
           onOpenWorld={() => (currentView = "world")}
         />
       {/if}
+    </div>
 
-      <YoutubeFeed />
+    <div class="area-youtube">
+      {#if homeLayout !== "yt-hidden"}
+        <YoutubeFeed />
+      {/if}
+    </div>
 
+    <div class="area-instances">
       <!-- Instances grid -->
       <section class="projects-section">
         <div class="section-header">
           <h2>Instances</h2>
-          <span class="instance-count">{$recentProjects.length}</span>
+          <span class="instance-count">{sortedProjects.length}</span>
+          <label class="layout-picker" title="Home layout">
+            <LayoutGrid size={14} />
+            <select
+              value={homeLayout}
+              on:change={(e) => setHomeLayout((e.currentTarget as HTMLSelectElement).value as HomeLayout)}
+            >
+              {#each HOME_LAYOUT_OPTIONS as opt (opt.id)}
+                <option value={opt.id}>{opt.label}</option>
+              {/each}
+            </select>
+          </label>
         </div>
 
-        {#if $recentProjects.length === 0}
+        {#if sortedProjects.length === 0}
           <div class="empty-state">
             <div class="empty-icon">
               <Package size={40} />
@@ -604,7 +731,7 @@
           </div>
         {:else}
           <div class="projects-grid tb-stagger">
-            {#each $recentProjects as project, i (project.path)}
+            {#each sortedProjects as project, i (project.path)}
               <div
                 class="project-tile tb-card"
                 style={`--i: ${i}`}
@@ -631,6 +758,16 @@
                       · {instanceSizes[project.path]}
                     {/if}
                   </span>
+                  {#if projectStats[project.path]}
+                    <span class="tile-playtime">
+                      <Clock size={11} />
+                      {formatPlaytime(projectStats[project.path].playtime)}
+                    </span>
+                  {:else}
+                    <span class="tile-playtime skel-playtime" aria-hidden="true">
+                      <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 10px;"></span>
+                    </span>
+                  {/if}
                 </div>
                 <button class="tile-pin" class:pinned={pinnedPaths[project.path]} on:click={(e) => togglePin(e, project.path)} title={pinnedPaths[project.path] ? "Unpin" : "Pin"}>
                   <Pin size={14} />
@@ -711,15 +848,32 @@
       </section>
     </div>
 
-    <!-- Right column: 3D Skin -->
-    <div class="right-column">
-      <div class="skin-panel">
-        {#if $authState.loggedIn && $authState.profile}
+    <div class="area-skin">
+      <div class="skin-panel" aria-busy={!authReady}>
+        {#if !authReady}
+          <div class="skin-skel" aria-hidden="true">
+            <div class="skin-skel-canvas skeleton skeleton-block skeleton-card"></div>
+            <div class="skin-skel-footer">
+              <span class="skeleton skeleton-block skeleton-round" style="width: 72px; height: 22px;"></span>
+              <span class="skeleton skeleton-block skeleton-round" style="width: 88px; height: 28px;"></span>
+            </div>
+            <div class="skin-skel-name skeleton skeleton-block skeleton-line medium" style="width: 40%; height: 14px; margin: 0 auto 12px;"></div>
+            <div class="skin-skel-cape">
+              <span class="skeleton skeleton-block skeleton-line short" style="width: 90px; height: 10px; margin-bottom: 10px;"></span>
+              <div class="skin-skel-cape-row home-skel-stagger">
+                {#each Array(4) as _, i (i)}
+                  <span class="skeleton skeleton-block skeleton-round" style={`--i: ${i}; width: 64px; height: 28px;`}></span>
+                {/each}
+              </div>
+            </div>
+          </div>
+        {:else if $authState.loggedIn && $authState.profile}
           <SkinPreview3D
             skinUrl={skinUrl}
             capeUrl={capeUrl}
             accountKey={accountKey}
             playerName={$authState.profile.name}
+            showName={false}
             width={300}
             height={400}
           />
@@ -746,6 +900,9 @@
               <Palette size={14} />
               Accounts
             </button>
+          </div>
+          <div class="skin-player-name" title={$authState.profile.name}>
+            {$authState.profile.name}
           </div>
 
           <div class="cape-panel">
@@ -1020,31 +1177,88 @@
     background: rgba(168, 85, 247, 0.15);
   }
 
-  /* ─── Main Layout ────────────────────────────────── */
+  /* ─── Main Layout (CSS grid areas by data-layout) ─── */
   .main-layout {
-    display: flex;
-    gap: 24px;
-    align-items: flex-start;
+    display: grid;
+    gap: 24px 24px;
+    align-items: start;
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
 
-  .left-column {
-    flex: 1;
+  .area-hero {
+    grid-area: hero;
     min-width: 0;
-    /* Own stacking layer above the WebGL skin canvas: without this, a
-       compositing glitch in the 3D preview could make tabs/buttons
-       (quick-nav, hero actions) unclickable in some environments. */
     position: relative;
     z-index: 1;
   }
 
-  .right-column {
+  .area-ihome {
+    grid-area: ihome;
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .area-youtube {
+    grid-area: youtube;
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .area-instances {
+    grid-area: instances;
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .area-skin {
+    grid-area: skin;
     width: 320px;
-    flex-shrink: 0;
     position: sticky;
     top: 20px;
     z-index: 0;
     max-height: calc(100vh - 40px);
     overflow-y: auto;
+    align-self: start;
+  }
+
+  /* 1) classic: YouTube then instances (left), skin sticky right */
+  .main-layout[data-layout="classic"] {
+    grid-template-areas:
+      "hero skin"
+      "ihome skin"
+      "youtube skin"
+      "instances skin";
+  }
+
+  /* 2) YouTube where instances were; instances under skin */
+  .main-layout[data-layout="yt-main"] {
+    grid-template-areas:
+      "hero skin"
+      "ihome skin"
+      "youtube instances";
+  }
+
+  /* 3) instances stay; YouTube under skin */
+  .main-layout[data-layout="yt-under-skin"] {
+    grid-template-areas:
+      "hero skin"
+      "ihome youtube"
+      "instances youtube";
+  }
+
+  /* 4) hide YouTube */
+  .main-layout[data-layout="yt-hidden"] {
+    grid-template-areas:
+      "hero skin"
+      "ihome skin"
+      "instances skin";
+  }
+
+  .main-layout[data-layout="yt-hidden"] .area-youtube {
+    display: none;
   }
 
   .skin-panel {
@@ -1100,6 +1314,9 @@
     font-weight: 700;
     font-size: 14px;
     color: var(--text-primary);
+    text-align: center;
+    padding: 0 16px 12px;
+    margin-top: -4px;
   }
 
   .change-skin-btn {
@@ -1193,6 +1410,44 @@
 
   .skin-panel-empty p {
     font-size: 13px;
+  }
+
+  .skin-skel {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .skin-skel-canvas {
+    width: 100%;
+    height: 400px;
+    border-radius: 0;
+  }
+
+  .skin-skel-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+    gap: 8px;
+  }
+
+  .skin-skel-cape {
+    padding: 12px 16px 16px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .skin-skel-cape-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .skel-stat,
+  .skel-playtime {
+    display: inline-flex;
+    align-items: center;
   }
 
   /* ─── Hero ────────────────────────────────────────── */
@@ -1391,6 +1646,26 @@
     border-radius: 12px;
   }
 
+  .layout-picker {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .layout-picker select {
+    max-width: 240px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 11px;
+    padding: 4px 6px;
+    cursor: pointer;
+  }
+
   .projects-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -1460,6 +1735,16 @@
     font-size: 11px;
     color: var(--text-muted);
     text-transform: capitalize;
+  }
+
+  .tile-playtime {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, var(--text-muted));
+    margin-top: 2px;
   }
 
   .size-loading {

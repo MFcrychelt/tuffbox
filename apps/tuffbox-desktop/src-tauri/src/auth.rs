@@ -786,6 +786,7 @@ pub async fn poll_device_code_token_once(device_code: &str) -> Result<TokenRespo
     }
 }
 
+#[allow(dead_code)]
 pub async fn poll_device_code_token(
     device_code: &str,
     interval: u64,

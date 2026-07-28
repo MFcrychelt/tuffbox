@@ -274,14 +274,16 @@
               <div class="timeline-item">
                 <button
                   class="file-strip {entry.kind}"
+                  class:selected={selectedId === entry.id}
                   on:click={() => {
+                    selectedId = entry.id;
                     const el = document.getElementById('change-' + entry.id);
                     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                   }}
-                  title={entry.path}
+                  title={entry.path || entry.operation}
                 >
-                  <span class="file-title">{entry.path}</span>
-                  <small>{entry.kind.replace("_", " ")}</small>
+                  <span class="file-title">{entry.operation || entry.path || entry.kind.replace("_", " ")}</span>
+                  <small>{entry.path || entry.kind.replace("_", " ")}</small>
                 </button>
               </div>
             {/each}
@@ -397,11 +399,10 @@
   .timeline-item { position: relative; margin-bottom: 10px; }
   .timeline-item::before { content: ""; position: absolute; left: -15px; top: 23px; width: 15px; height: 2px; background: rgba(27,217,106,.5); }
   .timeline-item::after { content: ""; position: absolute; left: -19px; top: 18px; width: 10px; height: 10px; border-radius: 50%; background: var(--bg-secondary); border: 2px solid var(--accent-primary); }
-  .file-strip { width: 100%; min-height: 54px; display: grid; grid-template-columns: 18px minmax(0,1fr); align-items: center; gap: 4px 8px; text-align: left; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid transparent; border-radius: 12px; padding: 10px 12px; transform: none; }
+  .file-strip { width: 100%; min-height: 54px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid transparent; border-radius: 12px; padding: 10px 12px; transform: none; }
   .file-strip:hover, .file-strip.selected { border-color: rgba(27, 217, 106, 0.34); background: rgba(27, 217, 106, 0.07); color: var(--text-primary); }
-  .chev { grid-row: 1 / span 2; color: var(--text-muted); }
-  .file-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
-  .file-strip small { grid-column: 2; }
+  .file-title { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; color: inherit; }
+  .file-strip small { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mini-diff { margin: 6px 0 0 26px; max-height: 150px; padding: 10px; border: 1px solid var(--border-color); border-radius: 10px; background: #09090b; color: #a1a1aa; }
   .file-strip small, .preview-header p, .eyebrow { color: var(--text-muted); font-size: 12px; }
   .change-preview { min-width: 0; padding: 16px; overflow-y: auto; max-height: 80vh; }

@@ -1,4 +1,5 @@
 mod auth;
+mod cosmetics_local;
 mod create_mode_api;
 mod integrations;
 mod launcher_presence;
@@ -5477,6 +5478,7 @@ fn get_authored_case_export(path: String, case_id: String) -> Result<String, Str
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(deprecated)]
 fn open_authored_kb_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
     let dir = tuffbox_core::crash_kb::author_export_dir(&project_dir);
@@ -9258,7 +9260,7 @@ fn build_and_spawn(
     launch_jvm_args.extend(launcher_settings::split_custom_jvm_args(
         launch_settings.java_custom_args.as_deref(),
     ));
-    let cleanup_paths = if let Some(bridge) = bridge {
+    let mut cleanup_paths = if let Some(bridge) = bridge {
         progress.log("# JEI live recipe bridge enabled.");
         launch_jvm_args.extend(bridge.jvm_args);
         bridge.cleanup_paths
@@ -9277,6 +9279,23 @@ fn build_and_spawn(
         ),
         None => (None, None, None, None),
     };
+
+    // Cosmetics stack (CSL + tuffbox-cosmetics) — after identity so we know username
+    {
+        let uname = auth_name.unwrap_or("Player");
+        let uid = auth_uuid.unwrap_or("offline");
+        let extras = cosmetics_local::active_extras(uid);
+        match tuffbox_core::prepare_cosmetics_bridge(&manifest, &game_dir, uname, uid, extras) {
+            Ok(Some(cos)) => {
+                progress.log(&format!("# Appearance: {}", cos.message));
+                cleanup_paths.extend(cos.cleanup_paths);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                progress.log(&format!("# WARNING: cosmetics inject: {error}"));
+            }
+        }
+    }
 
     // authlib-injector for Yggdrasil accounts
     if let Some((_, _, _, _, Some(authority))) = &identity {
@@ -12181,7 +12200,86 @@ fn diff_manifest_snapshots(
     }))
 }
 
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_get_local_profile(player_key: String) -> Result<cosmetics_local::CosmeticsProfile, String> {
+    cosmetics_local::load_profile(&player_key)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_save_profile(
+    profile: cosmetics_local::CosmeticsProfile,
+) -> Result<cosmetics_local::CosmeticsProfile, String> {
+    cosmetics_local::save_profile(profile)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_upload_skin(
+    player_key: String,
+    username: String,
+    path: String,
+    model: String,
+) -> Result<cosmetics_local::CosmeticsProfile, String> {
+    cosmetics_local::upload_skin_file(&player_key, &username, &path, &model)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_upload_cape(
+    player_key: String,
+    username: String,
+    path: String,
+    animated: bool,
+    frame_ms: u32,
+    frames: u32,
+) -> Result<cosmetics_local::CosmeticsProfile, String> {
+    cosmetics_local::upload_cape_file(&player_key, &username, &path, animated, frame_ms, frames)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_set_wings(
+    player_key: String,
+    username: String,
+    wings: Option<String>,
+) -> Result<cosmetics_local::CosmeticsProfile, String> {
+    cosmetics_local::set_wings(&player_key, &username, wings)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_set_visual_extras(
+    player_key: String,
+    username: String,
+    hat: Option<String>,
+    trail: bool,
+    jump_circles: bool,
+    hit_particles: bool,
+    hit_bubbles: bool,
+    target_esp: bool,
+    kill_effect: bool,
+) -> Result<cosmetics_local::CosmeticsProfile, String> {
+    cosmetics_local::set_visual_extras(
+        &player_key,
+        &username,
+        hat,
+        trail,
+        jump_circles,
+        hit_particles,
+        hit_bubbles,
+        target_esp,
+        kill_effect,
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_wings_catalog() -> Vec<serde_json::Value> {
+    cosmetics_local::wings_catalog()
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn cosmetics_hat_catalog() -> Vec<serde_json::Value> {
+    cosmetics_local::hat_catalog()
+}
+
 /// ── Running instance tracking ──────────────────────────────────────
+
 
 #[tauri::command(rename_all = "camelCase")]
 fn list_running_instances() -> Result<Vec<serde_json::Value>, String> {
@@ -12205,6 +12303,87 @@ fn kill_running_instance(instance_id: String) -> Result<String, String> {
         return Err(format!("no running instance {instance_id}"));
     }
     Ok(format!("Killed {n} process(es) for {instance_id}"))
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstanceLiveStats {
+    pid: u32,
+    profile: String,
+    started_at: u64,
+    cpu_percent: f32,
+    memory_mb: u64,
+    virtual_memory_mb: u64,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveDebugStats {
+    host_cpu_percent: f32,
+    host_memory_used_mb: u64,
+    host_memory_total_mb: u64,
+    instance: Option<InstanceLiveStats>,
+}
+
+/// Cached sysinfo sampler so successive polls get real CPU deltas (no sleep).
+fn live_sys() -> std::sync::MutexGuard<'static, sysinfo::System> {
+    static SYS: once_cell::sync::Lazy<std::sync::Mutex<sysinfo::System>> =
+        once_cell::sync::Lazy::new(|| std::sync::Mutex::new(sysinfo::System::new()));
+    SYS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_live_debug_stats(instance_id: Option<String>) -> Result<LiveDebugStats, String> {
+    use sysinfo::{Pid, ProcessesToUpdate};
+
+    let mut sys = live_sys();
+    sys.refresh_memory();
+    sys.refresh_cpu_all();
+
+    let host_cpu_percent = sys.global_cpu_usage();
+    let host_memory_used_mb = sys.used_memory() / (1024 * 1024);
+    let host_memory_total_mb = sys.total_memory() / (1024 * 1024);
+
+    let Some(id) = instance_id.filter(|s| !s.is_empty()) else {
+        return Ok(LiveDebugStats {
+            host_cpu_percent,
+            host_memory_used_mb,
+            host_memory_total_mb,
+            instance: None,
+        });
+    };
+
+    let tracked = tuffbox_core::process::list_running()
+        .into_iter()
+        .find(|g| g.id == id);
+
+    let Some(proc) = tracked else {
+        return Ok(LiveDebugStats {
+            host_cpu_percent,
+            host_memory_used_mb,
+            host_memory_total_mb,
+            instance: None,
+        });
+    };
+
+    let pid = Pid::from_u32(proc.pid);
+    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+
+    let instance = sys.process(pid).map(|p| InstanceLiveStats {
+        pid: proc.pid,
+        profile: proc.profile_id.clone(),
+        started_at: proc.started_at,
+        cpu_percent: p.cpu_usage(),
+        memory_mb: p.memory() / (1024 * 1024),
+        virtual_memory_mb: p.virtual_memory() / (1024 * 1024),
+    });
+
+    Ok(LiveDebugStats {
+        host_cpu_percent,
+        host_memory_used_mb,
+        host_memory_total_mb,
+        instance,
+    })
 }
 
 /// Returns true when the mod's jar is missing or its on-disk SHA1 does not
@@ -12829,6 +13008,15 @@ pub fn run() {
             get_home_dir,
             list_running_instances,
             kill_running_instance,
+            get_live_debug_stats,
+            cosmetics_get_local_profile,
+            cosmetics_save_profile,
+            cosmetics_upload_skin,
+            cosmetics_upload_cape,
+            cosmetics_set_wings,
+            cosmetics_set_visual_extras,
+            cosmetics_wings_catalog,
+            cosmetics_hat_catalog,
             get_minecraft_versions,
             get_loader_versions,
             create_instance,

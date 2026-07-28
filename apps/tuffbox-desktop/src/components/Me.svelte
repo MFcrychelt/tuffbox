@@ -14,9 +14,10 @@
     ArrowLeft,
     Upload,
     Link2,
+    Sparkles,
   } from "lucide-svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { api } from "../lib/api";
+  import { api, type CosmeticsProfile } from "../lib/api";
   import {
     authState,
     skinPath,
@@ -43,6 +44,12 @@
   let skinUrlInput = "";
   let skinVariant: "classic" | "slim" = "classic";
   let skinBusy = false;
+
+  let appearance: CosmeticsProfile | null = null;
+  let appearanceBusy = false;
+  let wingsCatalog: Array<{ id: string; label: string }> = [];
+  let hatCatalog: Array<{ id: string; label: string }> = [];
+  let capeAnimated = false;
 
   $: skinUrl = $authState.profile?.skinUrl ?? null;
   $: capeUrl = $authState.profile?.capeUrl ?? null;
@@ -178,6 +185,197 @@
     }
   }
 
+  async function refreshAppearance() {
+    const key = accountKey;
+    if (!key) {
+      appearance = null;
+      return;
+    }
+    try {
+      appearance = await api.cosmetics.getLocal(key);
+      if ($authState.profile?.name && !appearance.username) {
+        appearance = { ...appearance, username: $authState.profile.name };
+      }
+    } catch {
+      appearance = null;
+    }
+  }
+
+  async function uploadAppearanceSkin() {
+    if (!accountKey || !$authState.profile?.name || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Skin PNG", extensions: ["png"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      appearance = await api.cosmetics.uploadSkin(
+        accountKey,
+        $authState.profile.name,
+        selected,
+        skinVariant,
+      );
+      toasts.success("Appearance skin saved — shared with other TuffBox players when enabled.");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function uploadAppearanceCape() {
+    if (!accountKey || !$authState.profile?.name || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Cape PNG", extensions: ["png"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      appearance = await api.cosmetics.uploadCape(
+        accountKey,
+        $authState.profile.name,
+        selected,
+        capeAnimated,
+        100,
+        capeAnimated ? 8 : 1,
+      );
+      toasts.success("Appearance cape saved.");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function setAppearanceWings(id: string) {
+    if (!accountKey || !$authState.profile?.name || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      appearance = await api.cosmetics.setWings(
+        accountKey,
+        $authState.profile.name,
+        id || null,
+      );
+      toasts.success(id ? `Wings: ${id}` : "Wings cleared");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function setAppearanceHat(id: string) {
+    if (!accountKey || !$authState.profile?.name || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      appearance = await pushVisualExtras(id || null, appearance?.trail ?? false, appearance?.jumpCircles ?? false);
+      toasts.success(id ? `Hat: ${id}` : "Hat cleared");
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function pushVisualExtras(
+    hat: string | null,
+    trail: boolean,
+    jumpCircles: boolean,
+    overrides: Partial<{
+      hitParticles: boolean;
+      hitBubbles: boolean;
+      targetEsp: boolean;
+      killEffect: boolean;
+    }> = {},
+  ) {
+    return api.cosmetics.setVisualExtras(
+      accountKey,
+      $authState.profile!.name,
+      hat,
+      trail,
+      jumpCircles,
+      overrides.hitParticles ?? appearance?.hitParticles ?? true,
+      overrides.hitBubbles ?? appearance?.hitBubbles ?? true,
+      overrides.targetEsp ?? appearance?.targetEsp ?? true,
+      overrides.killEffect ?? appearance?.killEffect ?? true,
+    );
+  }
+
+  async function toggleTrail() {
+    if (!accountKey || !$authState.profile?.name || !appearance || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      appearance = await pushVisualExtras(
+        appearance.hat ?? null,
+        !appearance.trail,
+        appearance.jumpCircles ?? false,
+      );
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function toggleJumpCircles() {
+    if (!accountKey || !$authState.profile?.name || !appearance || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      appearance = await pushVisualExtras(
+        appearance.hat ?? null,
+        appearance.trail ?? false,
+        !(appearance.jumpCircles ?? false),
+      );
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function toggleCombatFlag(
+    key: "hitParticles" | "hitBubbles" | "targetEsp" | "killEffect",
+  ) {
+    if (!accountKey || !$authState.profile?.name || !appearance || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      appearance = await pushVisualExtras(
+        appearance.hat ?? null,
+        appearance.trail ?? false,
+        appearance.jumpCircles ?? false,
+        { [key]: !(appearance[key] ?? true) },
+      );
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
+  async function toggleSharePublic() {
+    if (!appearance || appearanceBusy) return;
+    appearanceBusy = true;
+    try {
+      const next = {
+        ...appearance,
+        sharePublic: !appearance.sharePublic,
+        username: appearance.username || $authState.profile?.name || "Player",
+      };
+      appearance = await api.cosmetics.save(next);
+      toasts.success(
+        appearance.sharePublic
+          ? "Sharing with other TuffBox players"
+          : "Local only — others won’t see your TuffBox look",
+      );
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      appearanceBusy = false;
+    }
+  }
+
   async function applySkinFromUrl() {
     const url = skinUrlInput.trim();
     if (!url) {
@@ -216,10 +414,15 @@
     }
   }
 
+  $: if (accountKey) void refreshAppearance();
+
   onMount(() => {
     void refreshAuth();
     void refreshPlaytime();
     void refreshCapes();
+    void api.cosmetics.wingsCatalog().then((c) => (wingsCatalog = c)).catch(() => {});
+    void api.cosmetics.hatCatalog().then((c) => (hatCatalog = c)).catch(() => {});
+    void refreshAppearance();
   });
 </script>
 
@@ -384,6 +587,129 @@
           </div>
         {/if}
       </section>
+
+      {#if $authState.loggedIn && accountKey}
+        <section class="card appearance-card">
+          <div class="card-head">
+            <Sparkles size={16} />
+            <h3>Appearance</h3>
+          </div>
+          <p class="hint">
+            Upload HD skin/cape, pick wings/hat, trails and jump circles. Applied on Play (CustomSkinLoader + TuffBox cosmetics). Mojang, Ely.by and TLauncher skins still load for others. Your TuffBox look is visible to other TuffBox players when sharing is on.
+          </p>
+          <div class="variant-row" style="margin-bottom: 8px;">
+            <button
+              class="chip"
+              class:active={skinVariant === "classic"}
+              on:click={() => (skinVariant = "classic")}
+            >Classic</button>
+            <button
+              class="chip"
+              class:active={skinVariant === "slim"}
+              on:click={() => (skinVariant = "slim")}
+            >Slim</button>
+          </div>
+          <div class="appearance-actions">
+            <button class="accent-btn wide" disabled={appearanceBusy} on:click={uploadAppearanceSkin}>
+              <Upload size={16} /> Upload skin PNG
+            </button>
+            <button class="mini wide" disabled={appearanceBusy} on:click={uploadAppearanceCape}>
+              Upload cape PNG
+            </button>
+            <label class="auto-scroll share-row">
+              <input type="checkbox" bind:checked={capeAnimated} /> Cape is spritesheet (animated)
+            </label>
+            <label class="auto-scroll share-row">
+              <input
+                type="checkbox"
+                checked={appearance?.sharePublic ?? true}
+                on:change={toggleSharePublic}
+                disabled={appearanceBusy || !appearance}
+              />
+              Share with other TuffBox players
+            </label>
+          </div>
+          <div class="wings-row">
+            <span class="hint" style="margin:0;">Wings</span>
+            {#each wingsCatalog as w (w.id)}
+              <button
+                class="chip"
+                class:active={(appearance?.wings ?? "") === w.id}
+                disabled={appearanceBusy}
+                on:click={() => setAppearanceWings(w.id)}
+              >{w.label}</button>
+            {/each}
+          </div>
+          <div class="wings-row">
+            <span class="hint" style="margin:0;">Hat</span>
+            {#each hatCatalog as h (h.id)}
+              <button
+                class="chip"
+                class:active={(appearance?.hat ?? "") === h.id}
+                disabled={appearanceBusy}
+                on:click={() => setAppearanceHat(h.id)}
+              >{h.label}</button>
+            {/each}
+          </div>
+          <label class="auto-scroll share-row">
+            <input
+              type="checkbox"
+              checked={appearance?.trail ?? false}
+              on:change={toggleTrail}
+              disabled={appearanceBusy || !appearance}
+            />
+            Movement trail
+          </label>
+          <label class="auto-scroll share-row">
+            <input
+              type="checkbox"
+              checked={appearance?.jumpCircles ?? false}
+              on:change={toggleJumpCircles}
+              disabled={appearanceBusy || !appearance}
+            />
+            Jump circles
+          </label>
+          <label class="auto-scroll share-row">
+            <input
+              type="checkbox"
+              checked={appearance?.hitParticles ?? true}
+              on:change={() => toggleCombatFlag("hitParticles")}
+              disabled={appearanceBusy || !appearance}
+            />
+            Hit particles
+          </label>
+          <label class="auto-scroll share-row">
+            <input
+              type="checkbox"
+              checked={appearance?.hitBubbles ?? true}
+              on:change={() => toggleCombatFlag("hitBubbles")}
+              disabled={appearanceBusy || !appearance}
+            />
+            Hit bubbles
+          </label>
+          <label class="auto-scroll share-row">
+            <input
+              type="checkbox"
+              checked={appearance?.targetEsp ?? true}
+              on:change={() => toggleCombatFlag("targetEsp")}
+              disabled={appearanceBusy || !appearance}
+            />
+            Target ESP
+          </label>
+          <label class="auto-scroll share-row">
+            <input
+              type="checkbox"
+              checked={appearance?.killEffect ?? true}
+              on:change={() => toggleCombatFlag("killEffect")}
+              disabled={appearanceBusy || !appearance}
+            />
+            Kill effect
+          </label>
+          {#if appearance?.skinPath}
+            <p class="csl-status">Local skin ready</p>
+          {/if}
+        </section>
+      {/if}
 
       <section class="card">
         <div class="card-head">
@@ -633,6 +959,50 @@
     font-size: 12px;
     color: var(--text-muted);
     margin: 6px 0 0;
+  }
+
+  .appearance-card .hint {
+    margin-bottom: 12px;
+    line-height: 1.45;
+  }
+
+  .appearance-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .appearance-actions .wide,
+  .mini.wide {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .share-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .share-row input {
+    width: auto;
+  }
+
+  .wings-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-top: 12px;
+  }
+
+  .csl-status {
+    margin: 8px 0 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-primary);
   }
 
   .skin-form {

@@ -42,6 +42,18 @@ pub struct LauncherSettings {
     pub java_custom_args: Option<String>,
     #[serde(default = "default_memory")]
     pub default_memory_mb: u32,
+    /// In-app YouTube player (lite nocookie embed). `false` = preview thumbnails only → system browser.
+    #[serde(default = "default_youtube_inline_player")]
+    pub youtube_inline_player: bool,
+    /// Hide IDE workflow rail (Content / Setup / …); reveal on bottom-edge hover.
+    #[serde(default)]
+    pub auto_hide_workflow_rail: bool,
+    /// Left nav: `full` | `icons` (toggle labels) | `autoHide` (left-edge hover).
+    #[serde(default = "default_sidebar_mode")]
+    pub sidebar_mode: String,
+    /// UI zoom percent (75–150). Applied as CSS `--ui-scale` on the app shell.
+    #[serde(default = "default_ui_scale_percent")]
+    pub ui_scale_percent: u32,
 }
 
 fn default_theme() -> String {
@@ -52,6 +64,15 @@ fn default_concurrent() -> u32 {
 }
 fn default_memory() -> u32 {
     4096
+}
+fn default_youtube_inline_player() -> bool {
+    true
+}
+fn default_sidebar_mode() -> String {
+    "full".into()
+}
+fn default_ui_scale_percent() -> u32 {
+    100
 }
 
 impl Default for LauncherSettings {
@@ -69,6 +90,10 @@ impl Default for LauncherSettings {
             default_java_path: None,
             java_custom_args: None,
             default_memory_mb: default_memory(),
+            youtube_inline_player: default_youtube_inline_player(),
+            auto_hide_workflow_rail: false,
+            sidebar_mode: default_sidebar_mode(),
+            ui_scale_percent: default_ui_scale_percent(),
         }
     }
 }

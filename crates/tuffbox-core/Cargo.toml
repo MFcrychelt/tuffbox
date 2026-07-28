@@ -25,6 +25,7 @@ rayon.workspace = true
 chrono.workspace = true
 pulldown-cmark.workspace = true
 tempfile.workspace = true
+dirs.workspace = true
 semver = "1"
 lz4 = { version = "1", optional = true }
 

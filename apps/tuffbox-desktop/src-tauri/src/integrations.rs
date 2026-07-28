@@ -10,8 +10,6 @@ const DEFAULT_GITHUB_REPOSITORY: &str = "MFcrychelt/tuffbox";
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 /// Default Ollama tag for crash plans (smarter; user still must pull once).
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:7b";
-/// Alias kept for call sites that talk about “recommended crash model”.
-pub const RECOMMENDED_OLLAMA_CRASH_MODEL: &str = DEFAULT_OLLAMA_MODEL;
 
 /// Pick full vs compact crash Explain prompt for the configured AI settings.
 pub fn crash_explain_prompt_for(

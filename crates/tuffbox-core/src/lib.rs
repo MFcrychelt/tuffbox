@@ -64,6 +64,7 @@ pub mod packwiz;
 pub mod properties_parser;
 pub mod recipe_layout;
 pub mod recipe_runtime;
+pub mod cosmetics_runtime;
 pub mod recipe_scan;
 pub mod registry;
 pub mod tag_normalizer;
@@ -96,6 +97,10 @@ pub use process::*;
 pub use provider::*;
 pub use quest_plan::*;
 pub use recipe_runtime::*;
+pub use cosmetics_runtime::{
+    prepare_cosmetics_bridge, resolve_cosmetics_artifact, CosmeticsBridgeLaunch,
+    CosmeticsLaunchExtras, COSMETICS_ANCHORS, McVersion,
+};
 pub use resolver::*;
 pub use snapshot::*;
 pub use swarm::*;
