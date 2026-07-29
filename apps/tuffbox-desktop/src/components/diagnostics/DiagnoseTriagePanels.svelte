@@ -1,0 +1,462 @@
+<script lang="ts">
+  import { createEventDispatcher } from "svelte";
+  import {
+    AlertTriangle,
+    ChevronDown,
+    Database,
+    Search,
+    Layers,
+    Ban,
+    ArrowUpCircle,
+  } from "lucide-svelte";
+
+  export let signalGroups: {
+    title: string;
+    hint: string;
+    items: { source: string; lineNumber: number; kind: string; text: string }[];
+  }[] = [];
+  export let sections: { title: string; startLine: number; endLine: number; preview: string }[] = [];
+  export let suspected: {
+    id: string;
+    name: string;
+    confidence: number;
+    knownInManifest: boolean;
+    blameRole?: string;
+    evidence?: { text: string; lineNumber: number }[];
+  }[] = [];
+  export let recentSnapshots: { id: string; name: string; createdAt: string; reason: string }[] = [];
+  export let mcreatorMods: string[] = [];
+  export let classFinderResults: { className: string; modId: string; modName: string }[] = [];
+  export let classQuery = "";
+  export let classBusy = false;
+  export let classResults: { className: string; modId: string; modName: string }[] = [];
+  export let dependentResults: { className: string; modId: string; modName: string }[] = [];
+  export let toolsOpen = false;
+  export let disablingModId: string | null = null;
+  export let bisectMods: string[] = [];
+  export let worldCoords: { x: number; y: number; z: number; label: string } | null = null;
+  export let memoryHint: string | null = null;
+  export let cascadingBanner: string | null = null;
+  export let sourceHint = "";
+
+  const dispatch = createEventDispatcher<{
+    jumpLine: number;
+    disableMod: string;
+    updateMod: string;
+    toggleBisect: string;
+    findClass: string;
+    findDependents: string;
+    openSnapshots: void;
+  }>();
+</script>
+
+{#if sourceHint}
+  <p class="dx-source-hint muted-inline">{sourceHint}</p>
+{/if}
+
+{#if cascadingBanner}
+  <div class="dx-banner warn">
+    <AlertTriangle size={14} />
+    <span>{cascadingBanner}</span>
+    <button type="button" class="ghost mini" on:click={() => dispatch("jumpLine", 0)}>Jump to early error</button>
+  </div>
+{/if}
+
+{#if memoryHint}
+  <div class="dx-banner info">
+    <strong>Memory</strong>
+    <span>{memoryHint}</span>
+    <button type="button" class="ghost mini" on:click={() => dispatch("openSnapshots")}>Setup / JVM</button>
+  </div>
+{/if}
+
+{#if worldCoords}
+  <div class="dx-banner info">
+    <strong>{worldCoords.label} coords</strong>
+    <code>{worldCoords.x}, {worldCoords.y}, {worldCoords.z}</code>
+    <span class="muted-inline">Hint: restore nearby chunk or teleport away if a ticking entity is stuck.</span>
+  </div>
+{/if}
+
+{#if signalGroups.length > 0 || sections.length > 0}
+  <details class="panel collapsible-block" open>
+    <summary>
+      <span><Layers size={16} /> Evidence</span>
+      <span class="tools-hint">
+        {signalGroups.reduce((n, g) => n + g.items.length, 0)} signals
+        {#if sections.length} · {sections.length} sections{/if}
+        <ChevronDown size={14} />
+      </span>
+    </summary>
+    <div class="dx-ev-body">
+      {#if signalGroups.length}
+        <div class="sig-groups">
+          {#each signalGroups as g (g.title)}
+            <div class="sig-group">
+              <strong>{g.title}</strong>
+              <small>{g.hint}</small>
+              <ul>
+                {#each g.items.slice(0, 6) as item, i (g.title + i + item.lineNumber)}
+                  <li>
+                    <button
+                      type="button"
+                      class="sig-line"
+                      on:click={() => dispatch("jumpLine", item.lineNumber)}
+                      title={item.text}
+                    >
+                      L{item.lineNumber}: {item.text.slice(0, 120)}
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if sections.length}
+        <div class="sec-list">
+          {#each sections as sec (sec.title + sec.startLine)}
+            <button type="button" class="sec-card" on:click={() => dispatch("jumpLine", sec.startLine)}>
+              <strong>{sec.title}</strong>
+              <pre>{sec.preview.slice(0, 280)}</pre>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </details>
+{/if}
+
+{#if suspected.length > 0 || recentSnapshots.length > 0}
+  <section class="panel dx-suspects">
+    <div class="dx-suspects-grid">
+      {#if suspected.length}
+        <div>
+          <h3><AlertTriangle size={14} /> Suspected mods</h3>
+          <ul class="suspect-list">
+            {#each suspected.slice(0, 8) as m (m.id)}
+              <li>
+                <div class="suspect-main">
+                  <strong>{m.name}</strong>
+                  <code>{m.id}</code>
+                  <span class="pill">{m.confidence}%</span>
+                  {#if m.blameRole}<span class="pill">{m.blameRole}</span>{/if}
+                </div>
+                <div class="suspect-acts">
+                  {#if m.knownInManifest}
+                    <button
+                      type="button"
+                      class="ghost mini"
+                      disabled={disablingModId === m.id}
+                      on:click={() => dispatch("disableMod", m.id)}
+                    >
+                      <Ban size={12} /> Disable
+                    </button>
+                    <button type="button" class="ghost mini" on:click={() => dispatch("updateMod", m.id)}>
+                      <ArrowUpCircle size={12} /> Update
+                    </button>
+                  {/if}
+                  <label class="bisect-check" title="Include in bisect checklist">
+                    <input
+                      type="checkbox"
+                      checked={bisectMods.includes(m.id)}
+                      on:change={() => dispatch("toggleBisect", m.id)}
+                    />
+                    Bisect
+                  </label>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+      {#if recentSnapshots.length}
+        <div>
+          <h3><Database size={14} /> Recent snapshots</h3>
+          <ul class="snap-list">
+            {#each recentSnapshots.slice(0, 5) as s (s.id)}
+              <li>
+                <strong>{s.name}</strong>
+                <small>{s.reason} · {s.createdAt?.slice(0, 19)}</small>
+              </li>
+            {/each}
+          </ul>
+          <button type="button" class="ghost mini" on:click={() => dispatch("openSnapshots")}>Open Snapshots</button>
+        </div>
+      {/if}
+    </div>
+  </section>
+{/if}
+
+<details class="panel collapsible-block" bind:open={toolsOpen}>
+  <summary>
+    <span><Search size={16} /> Analysis tools</span>
+    <span class="tools-hint">
+      Class finder · MCreator
+      {#if mcreatorMods.length} · {mcreatorMods.length} MCreator{/if}
+      <ChevronDown size={14} />
+    </span>
+  </summary>
+  <div class="dx-tools-body">
+    <div class="class-finder">
+      <label>
+        Class / package
+        <input
+          type="search"
+          placeholder="e.g. me.jellysquid.mods.sodium"
+          bind:value={classQuery}
+          on:keydown={(e) => {
+            if (e.key === "Enter") dispatch("findClass", classQuery);
+          }}
+        />
+      </label>
+      <div class="actions">
+        <button
+          type="button"
+          class="secondary small"
+          disabled={classBusy || !classQuery.trim()}
+          on:click={() => dispatch("findClass", classQuery)}
+        >
+          Find in mods
+        </button>
+        <button
+          type="button"
+          class="ghost mini"
+          disabled={classBusy || !classQuery.trim()}
+          on:click={() => dispatch("findDependents", classQuery)}
+        >
+          Who depends?
+        </button>
+      </div>
+      {#if classResults.length}
+        <ul class="class-hits">
+          {#each classResults as r (r.modId + r.className)}
+            <li><code>{r.modId}</code> — {r.modName} <small>{r.className}</small></li>
+          {/each}
+        </ul>
+      {/if}
+      {#if dependentResults.length}
+        <ul class="class-hits">
+          {#each dependentResults as r (r.modId + "d" + r.className)}
+            <li>depends: <code>{r.modId}</code> — {r.modName}</li>
+          {/each}
+        </ul>
+      {/if}
+      {#if classFinderResults.length && !classResults.length}
+        <p class="muted-inline">From crash analysis:</p>
+        <ul class="class-hits">
+          {#each classFinderResults.slice(0, 8) as r (r.modId + r.className)}
+            <li><code>{r.modId}</code> — {r.className}</li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+    {#if mcreatorMods.length}
+      <div class="mcreator">
+        <strong>MCreator mods</strong>
+        <div class="crash-tags">
+          {#each mcreatorMods as id (id)}
+            <code>{id}</code>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </div>
+</details>
+
+<style>
+  .dx-source-hint {
+    margin: 0 0 8px;
+    font-size: 12px;
+  }
+  .dx-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    font-size: 12px;
+    background: var(--bg-secondary);
+  }
+  .dx-banner.warn {
+    border-color: rgba(251, 191, 36, 0.45);
+    background: rgba(251, 191, 36, 0.08);
+  }
+  .dx-banner.info {
+    border-color: rgba(96, 165, 250, 0.35);
+    background: rgba(96, 165, 250, 0.06);
+  }
+  .dx-ev-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 8px 0 4px;
+  }
+  .sig-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .sig-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+  }
+  .sig-group small {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+  .sig-group ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .sig-line {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .sig-line:hover {
+    color: var(--accent-primary, #93c5fd);
+  }
+  .sec-list {
+    display: grid;
+    gap: 8px;
+  }
+  .sec-card {
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: inherit;
+    cursor: pointer;
+  }
+  .sec-card pre {
+    margin: 6px 0 0;
+    font-size: 11px;
+    white-space: pre-wrap;
+    color: var(--text-muted);
+    max-height: 72px;
+    overflow: hidden;
+  }
+  .dx-suspects {
+    margin-bottom: 12px;
+    padding: 12px;
+  }
+  .dx-suspects-grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    gap: 16px;
+  }
+  .dx-suspects h3 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 8px;
+    font-size: 13px;
+  }
+  .suspect-list,
+  .snap-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .suspect-list li,
+  .snap-list li {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+  }
+  .suspect-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .suspect-acts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .bisect-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .pill {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+    color: var(--text-muted);
+  }
+  .dx-tools-body {
+    display: grid;
+    gap: 12px;
+    padding-top: 8px;
+  }
+  .class-finder label {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .class-finder input {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: inherit;
+  }
+  .class-hits {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    font-size: 12px;
+  }
+  .class-hits li {
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .crash-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .muted-inline {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  @media (max-width: 900px) {
+    .dx-suspects-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -39,10 +39,11 @@
     Maximize2,
     ArrowDownToLine,
   } from "lucide-svelte";
-  import { projectPath } from "../lib/store";
+  import { diagnoseFocusPaths, historyFocusEventId, ideStageRequest, projectPath } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
+  import DiagnoseTriagePanels from "./diagnostics/DiagnoseTriagePanels.svelte";
   import { open as openShell } from "@tauri-apps/plugin-shell";
 
   type Diagnostic = {
@@ -136,13 +137,24 @@
     analysisSource?: string;
     crashReportStale?: boolean;
     sessionHealthy?: boolean;
+    hsErrLogs?: {
+      id: string;
+      name: string;
+      kind: string;
+      problematicFrame?: string | null;
+      preview: string;
+    }[];
+    worldCoords?: { x: number; y: number; z: number; label: string } | null;
+    memoryHint?: string | null;
   };
 
   let diagnosis: CrashDiagnosis | null = null;
   let selectedReportId = "";
   let preferLatestLog = true;
+  let preferLauncherLog = false;
   /// Sentinel: force latest.log analysis (never auto-pick a crash file).
   const LATEST_LOG_SOURCE = "__latest_log__";
+  const LAUNCHER_LOG_SOURCE = "__launcher_log__";
   let analysisBusy = false;
   /** Detail panel under the verdict: rules findings vs AI explanation. */
   let detailTab: "rules" | "ai" = "rules";
@@ -164,6 +176,7 @@
     const el = e.currentTarget;
     if (!(el instanceof HTMLSelectElement)) return;
     if (el.value === LATEST_LOG_SOURCE) chooseLatestLog();
+    else if (el.value === LAUNCHER_LOG_SOURCE) chooseLauncherLog();
     else chooseReport(el.value);
   }
 
@@ -185,7 +198,11 @@
     error = null;
     const requestedLatest = preferLatestLog;
     try {
-      const reportId = preferLatestLog ? LATEST_LOG_SOURCE : selectedReportId || null;
+      const reportId = preferLatestLog
+        ? LATEST_LOG_SOURCE
+        : preferLauncherLog
+          ? LAUNCHER_LOG_SOURCE
+          : selectedReportId || null;
       const data: CrashDiagnosis = await invoke("get_crash_diagnosis", {
         path: $projectPath,
         reportId,
@@ -193,9 +210,15 @@
       diagnosis = data;
       if (requestedLatest || data.analysisSource === "latest_log") {
         preferLatestLog = true;
+        preferLauncherLog = false;
+        selectedReportId = "";
+      } else if (data.analysisSource === "launcher_log") {
+        preferLatestLog = false;
+        preferLauncherLog = true;
         selectedReportId = "";
       } else {
         preferLatestLog = false;
+        preferLauncherLog = false;
         selectedReportId = data.selectedReport?.summary.id ?? selectedReportId;
       }
       plan = null;
@@ -229,18 +252,29 @@
 
   async function chooseReport(reportId: string) {
     preferLatestLog = false;
+    preferLauncherLog = false;
     selectedReportId = reportId;
     await load(true);
   }
 
   async function chooseLatestLog() {
     preferLatestLog = true;
+    preferLauncherLog = false;
+    selectedReportId = "";
+    await load(true);
+  }
+
+  async function chooseLauncherLog() {
+    preferLatestLog = false;
+    preferLauncherLog = true;
     selectedReportId = "";
     await load(true);
   }
 
   function activeReportId(): string | null {
-    return preferLatestLog ? LATEST_LOG_SOURCE : selectedReportId || null;
+    if (preferLatestLog) return LATEST_LOG_SOURCE;
+    if (preferLauncherLog) return LAUNCHER_LOG_SOURCE;
+    return selectedReportId || null;
   }
 
   async function createFixPlan() {
@@ -423,6 +457,182 @@
   let crashFindings: any[] = [];
   let crashMcreator: string[] = [];
   let crashClassFinder: any[] = [];
+  let analysisToolsOpen = false;
+  let classQuery = "";
+  let classBusy = false;
+  let classResults: { className: string; modId: string; modName: string }[] = [];
+  let dependentResults: { className: string; modId: string; modName: string }[] = [];
+  let bisectMods: string[] = [];
+  let supportBusy = false;
+  let importBusy = false;
+  let importUrl = "";
+
+  async function runClassFinder(q: string) {
+    if (!$projectPath || !q.trim()) return;
+    classBusy = true;
+    classResults = [];
+    try {
+      classResults = await invoke("find_class_in_mods", {
+        path: $projectPath,
+        className: q.trim(),
+      });
+      message = classResults.length
+        ? `Found ${classResults.length} mod(s) containing «${q.trim()}»`
+        : `No mod jar contains «${q.trim()}»`;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      classBusy = false;
+    }
+  }
+
+  async function runFindDependents(q: string) {
+    if (!$projectPath || !q.trim()) return;
+    classBusy = true;
+    dependentResults = [];
+    try {
+      dependentResults = await invoke("find_dependents_on_class", {
+        path: $projectPath,
+        className: q.trim(),
+      });
+      message = dependentResults.length
+        ? `${dependentResults.length} mod(s) depend on «${q.trim()}»`
+        : `No dependents for «${q.trim()}»`;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      classBusy = false;
+    }
+  }
+
+  function toggleBisect(modId: string) {
+    if (bisectMods.includes(modId)) bisectMods = bisectMods.filter((id) => id !== modId);
+    else bisectMods = [...bisectMods, modId];
+  }
+
+  async function applyBisectDisableHalf() {
+    if (!$projectPath || bisectMods.length < 2) {
+      message = "Select at least 2 suspected mods for bisect.";
+      return;
+    }
+    const half = bisectMods.slice(0, Math.ceil(bisectMods.length / 2));
+    for (const id of half) {
+      await fixDisableMod(id);
+    }
+    message = `Bisect: disabled ${half.join(", ")}. Retest, then toggle the other half if still crashing.`;
+    try {
+      await invoke("scan_project_changes", { path: $projectPath });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function exportSupportPack() {
+    if (!$projectPath || supportBusy) return;
+    supportBusy = true;
+    try {
+      const findings = [
+        ...(topFinding ? [`${topFinding.title}: ${topFinding.description}`] : []),
+        ...crashFindings.slice(0, 8).map((f: any) => `${f.code}: ${f.title}`),
+      ].join("\n");
+      const events = recentPackEvents
+        .slice(0, 8)
+        .map((e) => `${e.ts} [${e.actor}] ${e.summary}`)
+        .join("\n");
+      const planJson = aiAnalysis
+        ? JSON.stringify(
+            {
+              explanation: aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation,
+              actions: aiPlanActions(aiAnalysis),
+            },
+            null,
+            2,
+          )
+        : null;
+      const result: { path: string; fileCount: number } = await invoke(
+        "export_diagnose_support_pack",
+        {
+          path: $projectPath,
+          reportId: activeReportId(),
+          findingsSummary: findings,
+          recentEventsSummary: events,
+          actionPlanJson: planJson,
+        },
+      );
+      message = `Support pack ready (${result.fileCount} files): ${result.path}`;
+      try {
+        await navigator.clipboard.writeText(result.path);
+        message += " — path copied.";
+      } catch {
+        /* ignore */
+      }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      supportBusy = false;
+    }
+  }
+
+  async function importExternalCrashFile(file: File) {
+    if (!$projectPath) return;
+    importBusy = true;
+    try {
+      const content = await file.text();
+      const id: string = await invoke("import_external_crash", {
+        path: $projectPath,
+        fileName: file.name,
+        content,
+      });
+      message = `Imported player crash → ${id}`;
+      preferLatestLog = false;
+      preferLauncherLog = false;
+      selectedReportId = id;
+      await load(true);
+      await runUnifiedAnalysis();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      importBusy = false;
+    }
+  }
+
+  async function importFromMclogsUrl() {
+    if (!$projectPath || !importUrl.trim()) return;
+    importBusy = true;
+    try {
+      const url = importUrl.trim();
+      if (!/^https:\/\/(api\.)?mclo\.gs\//i.test(url) && !/^https:\/\/mclo\.gs\//i.test(url)) {
+        throw new Error("Only https://mclo.gs/… URLs are allowed");
+      }
+      const rawId = url.replace(/\/+$/, "").split("/").pop() || "";
+      const fetchUrl = `https://api.mclo.gs/1/raw/${rawId}`;
+      const res = await fetch(fetchUrl);
+      if (!res.ok) throw new Error(`mclo.gs fetch failed (${res.status})`);
+      const content = await res.text();
+      const id: string = await invoke("import_external_crash", {
+        path: $projectPath,
+        fileName: `mclogs-${rawId}.txt`,
+        content,
+      });
+      message = `Imported from mclo.gs → ${id}`;
+      preferLatestLog = false;
+      preferLauncherLog = false;
+      selectedReportId = id;
+      importUrl = "";
+      await load(true);
+      await runUnifiedAnalysis();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      importBusy = false;
+    }
+  }
+
+  function onDropCrash(e: DragEvent) {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0];
+    if (file) void importExternalCrashFile(file);
+  }
 
   async function runCrashAssistant() {
     if (!$projectPath) return;
@@ -507,6 +717,28 @@
   let pendingBusy = false;
   let swarmEnabled = false;
 
+  /** ActionPlan review modal (replaces window.confirm). */
+  let planReviewOpen = false;
+  let planReviewSource: "ai" | "network" = "ai";
+  let planReviewRows: {
+    key: string;
+    selected: boolean;
+    op: string;
+    modId: string | null;
+    path: string | null;
+    patchPreview: string | null;
+    reason: string;
+    risk: string;
+    raw: any;
+  }[] = [];
+  let planReviewAcknowledged = false;
+  let planReviewNeedsAck = false;
+  let planReviewExplanation = "";
+  let showApplyTrail = false;
+  $: planReviewSelectedCount = planReviewRows.filter((r) => r.selected).length;
+  $: planReviewCanApply =
+    planReviewSelectedCount > 0 && (!planReviewNeedsAck || planReviewAcknowledged);
+
   // Author KB case form (pack author — crash + resolution)
   let authorOpen = false;
   let authorBusy = false;
@@ -521,6 +753,68 @@
   let authorCases: any[] = [];
   let authorExportPreview = "";
 
+  let recentPackEvents: {
+    id: string;
+    ts: string;
+    actor: string;
+    op: string;
+    summary: string;
+    paths?: string[];
+  }[] = [];
+
+  async function loadRecentPackEvents() {
+    if (!$projectPath) return;
+    try {
+      recentPackEvents = await invoke("list_recent_pack_events", {
+        path: $projectPath,
+        limit: 12,
+      });
+    } catch {
+      recentPackEvents = [];
+    }
+  }
+
+  function openHistoryEvent(eventId: string) {
+    historyFocusEventId.set(eventId);
+    ideStageRequest.set("history");
+  }
+
+  let lastRecentPackPath: string | null = null;
+  $: if ($projectPath && $projectPath !== lastRecentPackPath) {
+    lastRecentPackPath = $projectPath;
+    void loadRecentPackEvents();
+  }
+  $: if ($diagnoseFocusPaths?.length) {
+    const paths = $diagnoseFocusPaths;
+    diagnoseFocusPaths.set(null);
+    void applyHistoryFocus(paths);
+  }
+
+  async function applyHistoryFocus(paths: string[]) {
+    message = `Focus from History: ${paths.join(", ")}`;
+    if (!diagnosis && $projectPath) await load(true);
+    const d = diagnosis;
+    if (!d) return;
+    const joined = paths.join(" ").toLowerCase().replace(/\\/g, "/");
+    const matchReport = d.reports.find((r) => {
+      const id = r.id.toLowerCase();
+      const name = r.name.toLowerCase();
+      const path = (r.path || "").toLowerCase().replace(/\\/g, "/");
+      return paths.some((p) => {
+        const n = p.toLowerCase().replace(/\\/g, "/");
+        return id.includes(n) || name.includes(n) || path.includes(n) || n.includes(name);
+      });
+    });
+    if (matchReport) {
+      await chooseReport(matchReport.id);
+    } else if (joined.includes("launcher")) {
+      await chooseLauncherLog();
+    } else if (joined.includes("latest.log") || joined.includes("/logs/")) {
+      await chooseLatestLog();
+    }
+    setTimeout(() => jumpToFirstError(), 250);
+  }
+
   async function runAiExplain(opts: { quiet?: boolean } = {}) {
     if (!$projectPath) return;
     aiLoading = true;
@@ -528,6 +822,13 @@
     aiSoftError = null;
     aiFeedbackMsg = null;
     try {
+      // Catch external disk edits before building AI context.
+      try {
+        await invoke("scan_project_changes", { path: $projectPath });
+        await loadRecentPackEvents();
+      } catch {
+        // non-fatal
+      }
       try {
         const prep = await invoke<{ ok?: boolean; model?: string; skipped?: boolean }>(
           "ensure_ollama_model",
@@ -699,7 +1000,35 @@
     return out.slice(0, 12);
   }
 
-  async function applyAiPlan() {
+  function buildPlanRows(actions: any[]) {
+    return actions.map((a: any, idx: number) => {
+      const op = String(a.op ?? a.action_type ?? a.actionType ?? "action");
+      const modId = a.modId ?? a.mod_id ?? null;
+      const path = a.path ?? null;
+      let patchPreview: string | null = null;
+      if (op === "edit_config" || path) {
+        const patch = a.patch ?? null;
+        patchPreview = patch
+          ? `${path ?? "?"}\n${typeof patch === "string" ? patch : JSON.stringify(patch, null, 2)}`.slice(0, 800)
+          : path
+            ? String(path)
+            : null;
+      }
+      return {
+        key: `${op}:${modId ?? path ?? idx}`,
+        selected: true,
+        op,
+        modId,
+        path,
+        patchPreview,
+        reason: String(a.reason ?? a.description ?? ""),
+        risk: String(a.risk ?? "medium"),
+        raw: a,
+      };
+    });
+  }
+
+  function openAiPlanReview() {
     if (!$projectPath || !aiAnalysis) return;
     const actions = aiPlanActions(aiAnalysis);
     if (!actions.length) {
@@ -710,22 +1039,62 @@
       error = `Plan invalid: ${(aiAnalysis.validation.errors ?? []).join("; ")}`;
       return;
     }
-    const ok = confirm(
-      `Apply ${actions.length} action(s) from the AI/KB plan?\nA snapshot will be created first.`,
-    );
-    if (!ok) return;
+    planReviewSource = "ai";
+    planReviewRows = buildPlanRows(actions);
+    planReviewNeedsAck = !!(aiAnalysis.needsUserReview ?? aiAnalysis.needs_user_review ?? true);
+    planReviewAcknowledged = !planReviewNeedsAck;
+    planReviewExplanation =
+      aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? "AI / KB ActionPlan";
+    planReviewOpen = true;
+  }
+
+  function openNetworkPlanReview() {
+    if (!$projectPath || !pendingPlan) return;
+    const actions = pendingPlan.actions ?? [];
+    if (!actions.length) {
+      error = "Pending network plan has no actions.";
+      return;
+    }
+    planReviewSource = "network";
+    planReviewRows = buildPlanRows(actions);
+    planReviewNeedsAck = !!(pendingPlan.needsUserReview ?? pendingPlan.needs_user_review ?? true);
+    planReviewAcknowledged = !planReviewNeedsAck;
+    planReviewExplanation =
+      pendingPlan.humanExplanation ?? pendingPlan.human_explanation ?? "Network ActionPlan";
+    planReviewOpen = true;
+  }
+
+  async function applyAiPlan() {
+    openAiPlanReview();
+  }
+
+  async function confirmPlanReviewApply() {
+    if (!$projectPath || !planReviewCanApply) return;
+    const selected = planReviewRows.filter((r) => r.selected);
+    if (!selected.length) return;
+    planReviewOpen = false;
+    if (planReviewSource === "network") {
+      await executeNetworkPlanApply(selected.map((r) => r.raw));
+    } else {
+      await executeAiPlanApply(selected.map((r) => r.raw));
+    }
+  }
+
+  async function executeAiPlanApply(actionsRaw: any[]) {
+    if (!$projectPath || !aiAnalysis) return;
     aiApplyBusy = true;
     error = null;
+    showApplyTrail = false;
     try {
       const plan = {
         schemaVersion: aiAnalysis.schemaVersion ?? 1,
         humanExplanation: aiAnalysis.humanExplanation ?? aiAnalysis.human_explanation ?? "",
         confidence: aiAnalysis.confidence ?? 0.5,
         suspectedMods: aiAnalysis.suspectedMods ?? aiAnalysis.suspected_mods ?? [],
-        needsUserReview: aiAnalysis.needsUserReview ?? aiAnalysis.needs_user_review ?? true,
+        needsUserReview: false,
         source: aiAnalysis.source ?? null,
         matchedCaseIds: aiAnalysis.matchedCaseIds ?? [],
-        actions: (aiAnalysis.actions ?? []).map((a: any) => ({
+        actions: actionsRaw.map((a: any) => ({
           op: a.op ?? a.action_type ?? a.actionType,
           modId: a.modId ?? a.mod_id ?? null,
           provider: a.provider ?? null,
@@ -739,7 +1108,6 @@
         })),
         additionalContext: aiAnalysis.additionalContext ?? aiAnalysis.additional_context ?? null,
       };
-      // If only legacy recommended_actions exist, map them.
       if (!plan.actions.length) {
         plan.actions = (aiAnalysis.recommended_actions ?? aiAnalysis.recommendedActions ?? []).map(
           (a: any) => ({
@@ -763,7 +1131,8 @@
       });
       const applied = result?.applied ?? [];
       const errs = result?.errors ?? [];
-      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""} Next: Test launch to verify the fix.`;
+      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""} Snapshot first — next: Test launch to verify.`;
+      showApplyTrail = applied.length > 0;
       if (errs.length) error = errs.join("; ");
       await load(true);
       if (applied.length && !errs.length) {
@@ -773,7 +1142,6 @@
         if (launchNow) {
           await runTest();
         } else {
-          // Prefill share form only when they skip launch — verify path offers share later.
           await openAuthorForm({ fromAnalysis: true });
         }
       }
@@ -781,6 +1149,36 @@
       error = String(e);
     } finally {
       aiApplyBusy = false;
+    }
+  }
+
+  async function executeNetworkPlanApply(actionsRaw: any[]) {
+    if (!$projectPath || !pendingPlan) return;
+    if (!swarmEnabled) {
+      error = "Enable TuffSwarm network in Settings to apply network fixes.";
+      return;
+    }
+    pendingBusy = true;
+    error = null;
+    showApplyTrail = false;
+    try {
+      const plan = { ...pendingPlan, needsUserReview: false, actions: actionsRaw };
+      const result: any = await invoke("apply_action_plan", {
+        path: $projectPath,
+        plan,
+        fingerprintKey: pendingPlan.matchedCaseIds?.[0] ?? null,
+      });
+      const applied = result?.applied ?? [];
+      const errs = result?.errors ?? [];
+      message = `Network fix applied (${applied.length}).${errs.length ? ` Errors: ${errs.join("; ")}` : ""}`;
+      showApplyTrail = applied.length > 0;
+      if (errs.length) error = errs.join("; ");
+      await invoke("clear_pending_network_plan", { path: $projectPath });
+      pendingPlan = null;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      pendingBusy = false;
     }
   }
 
@@ -798,39 +1196,7 @@
   }
 
   async function applyPendingNetworkFix() {
-    if (!$projectPath || !pendingPlan) return;
-    if (!swarmEnabled) {
-      error = "Enable TuffSwarm network in Settings to apply network fixes.";
-      return;
-    }
-    const actions = pendingPlan.actions ?? [];
-    if (!actions.length) {
-      error = "Pending network plan has no actions.";
-      return;
-    }
-    const ok = confirm(
-      `Apply network fix with ${actions.length} action(s)?\nA snapshot will be created first. Nothing runs without this confirm.`,
-    );
-    if (!ok) return;
-    pendingBusy = true;
-    error = null;
-    try {
-      const result: any = await invoke("apply_action_plan", {
-        path: $projectPath,
-        plan: pendingPlan,
-        fingerprintKey: pendingPlan.matchedCaseIds?.[0] ?? null,
-      });
-      const applied = result?.applied ?? [];
-      const errs = result?.errors ?? [];
-      message = `Network fix applied (${applied.length}).${errs.length ? ` Errors: ${errs.join("; ")}` : ""}`;
-      if (errs.length) error = errs.join("; ");
-      await invoke("clear_pending_network_plan", { path: $projectPath });
-      pendingPlan = null;
-    } catch (e) {
-      error = String(e);
-    } finally {
-      pendingBusy = false;
-    }
+    openNetworkPlanReview();
   }
 
   function parseAuthorActions(): any[] {
@@ -1313,7 +1679,9 @@
 
   $: currentLogText = preferLatestLog
     ? (diagnosis?.latestLog?.tail ?? "")
-    : (selectedReport?.content ?? "");
+    : preferLauncherLog
+      ? (diagnosis?.launcherLog?.tail ?? "")
+      : (selectedReport?.content ?? "");
   $: logDisplayText =
     currentLogText.length > 160_000 ? currentLogText.slice(currentLogText.length - 160_000) : currentLogText;
   $: logLines = logDisplayText ? logDisplayText.split("\n") : [];
@@ -1509,10 +1877,29 @@
       ];
   $: signalGroups = [
     { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", items: allSignals.filter((s) => s.kind === "Entrypoint") },
-    { title: "Loader mismatch", hint: "Wrong loader/API/version bridge, NoSuchMethod/NoSuchField", items: allSignals.filter((s) => s.kind === "LoaderMismatch") },
-    { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline signals", items: allSignals.filter((s) => s.kind === "OpenGl") },
-    { title: "Performance", hint: "Tick stalls and overload warnings", items: allSignals.filter((s) => s.kind === "Performance") },
+    { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", items: allSignals.filter((s) => s.kind === "LoaderMismatch" || s.kind === "WrongLoader") },
+    { title: "Mixin", hint: "Mixin apply / inject conflicts", items: allSignals.filter((s) => s.kind === "Mixin") },
+    { title: "OutOfMemory", hint: "Java heap / native OOM", items: allSignals.filter((s) => s.kind === "OutOfMemory") },
+    { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", items: allSignals.filter((s) => s.kind === "OpenGl") },
+    { title: "Ticking / world", hint: "Ticking entity or world corruption signals", items: allSignals.filter((s) => s.kind === "TickingEntity") },
+    { title: "Performance", hint: "Tick stalls and overload", items: allSignals.filter((s) => s.kind === "Performance") },
   ].filter((group) => group.items.length > 0);
+
+  $: cascadingFinding = crashFindings.find(
+    (f: any) => String(f.code ?? "").toUpperCase() === "CASCADING_CONFIG_ERROR",
+  );
+  $: mixinFinding = crashFindings.find(
+    (f: any) => /mixin/i.test(String(f.code ?? "") + String(f.title ?? "")),
+  );
+  $: sideMismatchFinding = crashFindings.find(
+    (f: any) => /client.?only|side.?mismatch|SERVER/i.test(String(f.code ?? "") + String(f.title ?? "")),
+  );
+  $: isHsErr =
+    diagnosis?.analysisSource === "hs_err" ||
+    (selectedReportId?.startsWith("hs_err/") ?? false);
+  $: hsErrKind =
+    diagnosis?.hsErrLogs?.find((h) => h.id === selectedReportId)?.kind ??
+    (isHsErr ? "native" : null);
 
   $: errorCount = graphDiagnostics.filter((d) => d.severity === "Error").length;
   $: warningCount = graphDiagnostics.filter((d) => d.severity === "Warning").length;
@@ -1547,6 +1934,24 @@
     </div>
   </div>
 
+  {#if recentPackEvents.length > 0}
+    <section class="panel recent-pack-panel">
+      <div class="recent-head">
+        <strong><History size={14} /> Recent pack changes</strong>
+        <button class="ghost mini" on:click={() => ideStageRequest.set("history")}>Open History</button>
+      </div>
+      <div class="recent-list">
+        {#each recentPackEvents as ev (ev.id)}
+          <button type="button" class="recent-row" on:click={() => openHistoryEvent(ev.id)}>
+            <span class="recent-actor">{ev.actor}</span>
+            <span class="recent-sum">{ev.summary}</span>
+            <small>{ev.ts?.slice(0, 19) ?? ""}</small>
+          </button>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
   <!-- Tools first — always visible action strip -->
   <section class="tools-strip panel">
     <div class="tools-group">
@@ -1575,6 +1980,9 @@
       <span class="tools-label">Log</span>
       <button class="ghost" on:click={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
         <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
+      </button>
+      <button class="ghost" on:click={exportSupportPack} disabled={!$projectPath || supportBusy} title="Zip crash + findings for Discord/GitHub">
+        <Download size={15} /> {supportBusy ? "…" : "Support pack"}
       </button>
       <button class="ghost" on:click={copyCurrentLog} disabled={!currentLogText} title="Copy the full raw log to clipboard">
         <Copy size={15} /> Copy log
@@ -1622,7 +2030,18 @@
   </section>
 
   {#if error}<div class="notice error">{error}</div>{/if}
-  {#if message}<div class="notice success">{message}</div>{/if}
+  {#if message}
+    <div class="notice success trail-notice">
+      <span>{message}</span>
+      {#if showApplyTrail}
+        <div class="trail-links">
+          <button class="ghost mini" type="button" on:click={() => ideStageRequest.set("history")}><History size={12} /> History</button>
+          <button class="ghost mini" type="button" on:click={() => ideStageRequest.set("test")}><Play size={12} /> Test</button>
+          <button class="ghost mini" type="button" on:click={() => ideStageRequest.set("snapshots")}><Database size={12} /> Snapshots</button>
+        </div>
+      {/if}
+    </div>
+  {/if}
   {#if aiSoftError}
     <div class="notice warning">
       AI unavailable — rules still work.
@@ -1631,9 +2050,9 @@
   {/if}
   {#if pendingPlan && swarmEnabled}
     <div class="notice warning">
-      Network fix ready ({(pendingPlan.actions ?? []).length} action(s)).
+      Network ActionPlan ready ({(pendingPlan.actions ?? []).length} action(s)).
       <button class="secondary small" on:click={applyPendingNetworkFix} disabled={pendingBusy}>
-        {pendingBusy ? "Applying…" : "Apply"}
+        {pendingBusy ? "Applying…" : "Review & apply"}
       </button>
     </div>
   {/if}
@@ -1649,19 +2068,56 @@
       <select
         id="dx-source-select"
         class="dx-source-select"
-        value={preferLatestLog ? LATEST_LOG_SOURCE : selectedReportId}
+        value={preferLatestLog ? LATEST_LOG_SOURCE : preferLauncherLog ? LAUNCHER_LOG_SOURCE : selectedReportId}
         on:change={onSourceChange}
       >
         <option value={LATEST_LOG_SOURCE}>
           latest.log{diagnosis.latestLog.exists ? ` · ${diagnosis.latestLog.signals.length} signals` : " · missing"}
         </option>
+        <option value={LAUNCHER_LOG_SOURCE}>
+          launcher.log{diagnosis.launcherLog?.exists ? ` · ${diagnosis.launcherLog.signals.length} signals` : " · missing"}
+        </option>
         {#each diagnosis.reports as report (report.id)}
           <option value={report.id}>{report.name} · {formatBytes(report.size)}</option>
         {/each}
       </select>
+      <p class="muted-inline">
+        Prefer a crash-report when present. If crash-reports is empty, use latest.log, launcher.log, or an hs_err_pid*.log.
+      </p>
       {#if diagnosis.crashReportStale}
         <p class="muted-inline">Crash report is older than latest.log — live log is preferred.</p>
       {/if}
+      {#if !diagnosis.reports.some((r) => r.id.startsWith("crash-reports/"))}
+        <div class="dx-empty-sources">
+          <span>No crash-reports yet.</span>
+          <button type="button" class="ghost mini" on:click={chooseLatestLog}>latest.log</button>
+          <button type="button" class="ghost mini" on:click={chooseLauncherLog}>launcher.log</button>
+          {#if diagnosis.hsErrLogs?.length}
+            <button type="button" class="ghost mini" on:click={() => chooseReport(diagnosis.hsErrLogs[0].id)}>
+              {diagnosis.hsErrLogs[0].name}
+            </button>
+          {/if}
+          <button type="button" class="ghost mini" on:click={runTest} disabled={launching}>Test launch</button>
+        </div>
+      {/if}
+      <div
+        class="dx-drop"
+        role="region"
+        aria-label="Import player crash"
+        on:dragover|preventDefault
+        on:drop={onDropCrash}
+      >
+        <span>Drop a player crash-*.txt here, or paste mclo.gs URL:</span>
+        <div class="dx-drop-row">
+          <input type="url" placeholder="https://mclo.gs/…" bind:value={importUrl} />
+          <button type="button" class="ghost mini" disabled={importBusy || !importUrl.trim()} on:click={importFromMclogsUrl}>
+            {importBusy ? "…" : "Import"}
+          </button>
+          <button type="button" class="secondary small" disabled={supportBusy} on:click={exportSupportPack}>
+            {supportBusy ? "…" : "Support pack"}
+          </button>
+        </div>
+      </div>
     </section>
 
     <!-- Verdict first (answer before the scary log) -->
@@ -1740,7 +2196,7 @@
               on:click={applyAiPlan}
               disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
             >
-              {aiApplyBusy ? "Applying…" : "Apply full AI plan"}
+              {aiApplyBusy ? "Applying…" : "Review & apply AI plan"}
             </button>
           {/if}
           {#if !sessionOk}
@@ -1751,6 +2207,113 @@
         </div>
       </div>
     </section>
+
+    {#if !sessionOk && (isHsErr || diagnosis.memoryHint || cascadingFinding || mixinFinding || sideMismatchFinding || diagnosis.worldCoords)}
+      <div class="dx-class-cards">
+        {#if isHsErr}
+          <div class="dx-class-card">
+            <strong>Java native crash (hs_err)</strong>
+            <p>
+              {hsErrKind === "oom"
+                ? "JVM ran out of memory (native/heap). Raise -Xmx carefully and check for leaks."
+                : "JVM fatal error — check Problematic frame and GPU/Java version."}
+            </p>
+            <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("setup")}>Open Setup</button>
+          </div>
+        {/if}
+        {#if diagnosis.memoryHint && !isHsErr}
+          <div class="dx-class-card">
+            <strong>Out of memory</strong>
+            <p>{diagnosis.memoryHint}</p>
+            <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("setup")}>JVM / Setup</button>
+          </div>
+        {/if}
+        {#if cascadingFinding}
+          <div class="dx-class-card warn">
+            <strong>Cascading error</strong>
+            <p>{cascadingFinding.description}</p>
+            <button type="button" class="ghost mini" on:click={jumpToFirstError}>Jump to early error</button>
+          </div>
+        {/if}
+        {#if mixinFinding}
+          <div class="dx-class-card">
+            <strong>Mixin conflict</strong>
+            <p>{mixinFinding.description}</p>
+            <button type="button" class="ghost mini" on:click={jumpToFirstError}>Open log at mixin</button>
+            {#if suspected.length >= 2}
+              <button type="button" class="ghost mini" on:click={applyBisectDisableHalf}>Try disable half (bisect)</button>
+            {/if}
+          </div>
+        {/if}
+        {#if sideMismatchFinding}
+          <div class="dx-class-card">
+            <strong>Client-only / wrong side</strong>
+            <p>{sideMismatchFinding.description}</p>
+            <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("export")}>Server pack checklist</button>
+          </div>
+        {/if}
+        {#if diagnosis.worldCoords}
+          <div class="dx-class-card">
+            <strong>{diagnosis.worldCoords.label} @ {diagnosis.worldCoords.x}, {diagnosis.worldCoords.y}, {diagnosis.worldCoords.z}</strong>
+            <p>Hint: restore nearby chunk or teleport away if a ticking entity is stuck.</p>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    <DiagnoseTriagePanels
+      signalGroups={signalGroups}
+      sections={selectedReport?.sections ?? []}
+      suspected={suspected}
+      recentSnapshots={diagnosis.recentSnapshots ?? []}
+      mcreatorMods={crashMcreator}
+      classFinderResults={crashClassFinder}
+      bind:classQuery
+      classBusy={classBusy}
+      classResults={classResults}
+      dependentResults={dependentResults}
+      bind:toolsOpen={analysisToolsOpen}
+      disablingModId={disablingModId}
+      bisectMods={bisectMods}
+      worldCoords={null}
+      memoryHint={null}
+      cascadingBanner={cascadingFinding ? cascadingFinding.description : null}
+      sourceHint=""
+      on:jumpLine={(e) => {
+        const ln = Number(e.detail) || 0;
+        if (ln <= 0) jumpToFirstError();
+        else scrollLogToLine(Math.max(0, ln - 1));
+      }}
+      on:disableMod={(e) => fixDisableMod(e.detail)}
+      on:updateMod={async (e) => {
+        const id = e.detail;
+        if (!id) return;
+        fixingIdx = -1;
+        try {
+          await invoke("apply_fix_action", {
+            path: $projectPath,
+            action: { kind: "updateMod", label: `Update ${id}`, modId: id },
+          });
+          message = `Update requested for ${id}`;
+          await load(true);
+        } catch (err) {
+          error = String(err);
+        } finally {
+          fixingIdx = null;
+        }
+      }}
+      on:toggleBisect={(e) => toggleBisect(e.detail)}
+      on:findClass={(e) => runClassFinder(e.detail)}
+      on:findDependents={(e) => runFindDependents(e.detail)}
+      on:openSnapshots={() => ideStageRequest.set("snapshots")}
+    />
+
+    {#if bisectMods.length >= 2}
+      <div class="notice warning">
+        Bisect checklist: {bisectMods.join(", ")}
+        <button type="button" class="secondary small" on:click={applyBisectDisableHalf}>Disable first half & retest</button>
+      </div>
+    {/if}
 
     <!-- Extra actions (only if more than the primary) -->
     {#if !sessionOk && mergedRecommendations.length > 1}
@@ -1949,13 +2512,14 @@
               {/if}
               {#if aiPlanActions(aiAnalysis).length}
                 <div class="ai-list">
-                  <strong>Plan</strong>
+                  <strong>AI ActionPlan</strong>
                   <ul>
                     {#each aiPlanActions(aiAnalysis) as action, aIdx (aIdx)}
                       <li>
                         <strong>{aiActionLabel(action)}</strong>
                         {#if action.modId ?? action.mod_id}<code>{action.modId ?? action.mod_id}</code>{/if}
                         {#if aiActionVersion(action)}<span class="ai-ver">v{aiActionVersion(action)}</span>{/if}
+                        <span class="risk-pill">{action.risk ?? "medium"}</span>
                         <span>{action.reason ?? action.description ?? ""}</span>
                       </li>
                     {/each}
@@ -1964,7 +2528,7 @@
               {/if}
               <div class="ai-feedback">
                 <button class="secondary small" disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)} on:click={applyAiPlan}>
-                  {aiApplyBusy ? "Applying…" : "Apply plan"}
+                  {aiApplyBusy ? "Applying…" : "Review & apply AI plan"}
                 </button>
                 <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(true)}>Helped</button>
                 <button class="ghost mini" disabled={aiFeedbackBusy} on:click={() => sendAiFeedback(false)}>Wrong</button>
@@ -2083,30 +2647,79 @@
         {/if}
         {#if plan}
           <div class="plan-card">
-            <h3>Fix plan</h3>
+            <h3>Heuristic Fix plan (Crash Assistant)</h3>
+            <p class="muted-inline">Rule-based — separate from AI ActionPlan above.</p>
             <p>{plan.summary}</p>
-            <button class="primary" on:click={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply fix plan"}</button>
+            <button class="primary" on:click={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
           </div>
-        {/if}
-        {#if oreFindings?.length}
-          <div class="muted-box"><strong>Ore gen</strong>: {oreFindings.length} finding(s)</div>
-        {/if}
-        {#if duplicateFindings?.length}
-          <div class="muted-box"><strong>Duplicates</strong>: {duplicateFindings.length} finding(s)</div>
-        {/if}
-        {#if unifyConfigResult}
-          <div class="muted-box"><pre>{JSON.stringify(unifyConfigResult, null, 2).slice(0, 4000)}</pre></div>
         {/if}
         {#if authorOpen}
           <div class="author-form">
             <h3>Save KB case</h3>
+            <label>Case id<input bind:value={authorId} placeholder="authored-outofmemory" /></label>
             <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
+            <label>Symptoms (one per line)<textarea bind:value={authorSymptoms} rows="3"></textarea></label>
             <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
+            <label>Actions JSON<textarea bind:value={authorActionsJson} rows="6" class="mono"></textarea></label>
+            <label>Notes (local only)<textarea bind:value={authorNotes} rows="2"></textarea></label>
             <div class="actions">
-              <button class="primary" on:click={saveAuthorCase} disabled={authorBusy}>Save</button>
+              <button class="primary" on:click={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
+              <button class="ghost" on:click={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
+              <button class="ghost" on:click={openAuthorExportFolder}>Open folder</button>
               <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
             </div>
+            {#if authorCases.length}
+              <div class="author-cases">
+                <strong>Saved cases</strong>
+                {#each authorCases.slice(0, 6) as c (c.id)}
+                  <button type="button" class="ghost mini" on:click={() => copyAuthorExport(c.id)}>{c.id}</button>
+                {/each}
+              </div>
+            {/if}
             {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
+            {#if authorExportPreview}
+              <pre class="log-pre">{authorExportPreview.slice(0, 4000)}</pre>
+            {/if}
+          </div>
+        {/if}
+        {#if oreFindings?.length || duplicateFindings?.length || unifyConfigResult || wrongLoaderJars.length || duplicateJarGroups.length}
+          <div class="scanner-cards">
+            {#if oreFindings?.length}
+              <div class="scanner-card">
+                <strong>Ore gen</strong>
+                <p>{oreFindings.length} finding(s)</p>
+                <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("world-map")}>World map</button>
+              </div>
+            {/if}
+            {#if duplicateFindings?.length}
+              <div class="scanner-card">
+                <strong>Duplicate items</strong>
+                <p>{duplicateFindings.length} finding(s)</p>
+                <button type="button" class="ghost mini" on:click={generateUnify} disabled={unifyLoading}>Generate unify</button>
+                <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("resolve")}>Resolve</button>
+              </div>
+            {/if}
+            {#if unifyConfigResult}
+              <div class="scanner-card">
+                <strong>Unify config</strong>
+                <p>Generated — review before applying.</p>
+                <pre>{JSON.stringify(unifyConfigResult, null, 2).slice(0, 1200)}</pre>
+              </div>
+            {/if}
+            {#if wrongLoaderJars.length}
+              <div class="scanner-card">
+                <strong>Wrong-loader jars</strong>
+                <p>{wrongLoaderJars.length} jar(s)</p>
+                <button type="button" class="ghost mini" on:click={() => detectWrongLoaderMods()}>Refresh</button>
+              </div>
+            {/if}
+            {#if duplicateJarGroups.length}
+              <div class="scanner-card">
+                <strong>Duplicate mod jars</strong>
+                <p>{duplicateJarGroups.length} group(s)</p>
+                <button type="button" class="ghost mini" on:click={() => detectDuplicateModJars()}>Refresh</button>
+              </div>
+            {/if}
           </div>
         {/if}
       </section>
@@ -2115,6 +2728,62 @@
     <div class="empty">Press Refresh to load diagnosis.</div>
   {/if}
 </div>
+
+{#if planReviewOpen}
+  <div
+    class="modal-backdrop"
+    role="button"
+    tabindex="-1"
+    on:click|self={() => (planReviewOpen = false)}
+    on:keydown={() => {}}
+  >
+    <div class="modal plan-review-modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <h2>{planReviewSource === "network" ? "Review network ActionPlan" : "Review AI ActionPlan"}</h2>
+          <p>Snapshot will be created first. Uncheck actions you do not want applied.</p>
+        </div>
+        <button class="icon-btn" type="button" on:click={() => (planReviewOpen = false)} aria-label="Close">×</button>
+      </div>
+      <p class="plan-review-expl">{planReviewExplanation}</p>
+      <div class="plan-review-list">
+        {#each planReviewRows as row (row.key)}
+          <label class="plan-review-row">
+            <input type="checkbox" bind:checked={row.selected} />
+            <div class="plan-review-body">
+              <div class="plan-review-top">
+                <strong>{row.op}</strong>
+                {#if row.modId}<code>{row.modId}</code>{/if}
+                <span class="risk-pill">{row.risk}</span>
+              </div>
+              {#if row.reason}<p>{row.reason}</p>{/if}
+              {#if row.patchPreview}
+                <pre class="patch-preview">{row.patchPreview}</pre>
+              {/if}
+            </div>
+          </label>
+        {/each}
+      </div>
+      {#if planReviewNeedsAck}
+        <label class="plan-review-ack">
+          <input type="checkbox" bind:checked={planReviewAcknowledged} />
+          I reviewed these actions (required — plan flagged needsUserReview)
+        </label>
+      {/if}
+      <div class="plan-review-actions">
+        <button class="ghost" type="button" on:click={() => (planReviewOpen = false)}>Cancel</button>
+        <button
+          class="primary"
+          type="button"
+          disabled={!planReviewCanApply || aiApplyBusy || pendingBusy}
+          on:click={confirmPlanReviewApply}
+        >
+          Apply {planReviewSelectedCount} action{planReviewSelectedCount === 1 ? "" : "s"} (snapshot first)
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <AiConnectionModal bind:open={aiModalOpen} />
 
@@ -2137,6 +2806,61 @@
     border-radius: var(--border-radius-lg);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
+  }
+  .recent-pack-panel {
+    margin-bottom: 14px;
+  }
+  .recent-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .recent-head strong {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+  .recent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .recent-row {
+    display: grid;
+    grid-template-columns: 64px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    text-align: left;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: var(--bg-primary);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+  }
+  .recent-row:hover {
+    border-color: var(--border-color);
+  }
+  .recent-actor {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .recent-sum {
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .recent-row small {
+    color: var(--text-muted);
+    font-size: 10px;
   }
   .tools-group {
     display: flex;
@@ -2578,6 +3302,166 @@
   }
   :global(.spin) { animation: dx-spin 0.9s linear infinite; }
   @keyframes dx-spin { to { transform: rotate(360deg); } }
+  .trail-notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .trail-links { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 16px;
+  }
+  .plan-review-modal {
+    width: min(560px, 100%);
+    max-height: 85vh;
+    overflow: auto;
+    padding: 16px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+  .plan-review-modal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .plan-review-modal h2 { margin: 0 0 4px; font-size: 16px; }
+  .plan-review-modal p { margin: 0; font-size: 13px; color: var(--text-muted); }
+  .plan-review-expl { margin: 0 0 12px !important; color: var(--text-secondary) !important; }
+  .plan-review-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .plan-review-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    cursor: pointer;
+  }
+  .plan-review-top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .plan-review-body p { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
+  .patch-preview {
+    margin: 6px 0 0;
+    padding: 8px;
+    max-height: 120px;
+    overflow: auto;
+    font-size: 11px;
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-muted);
+  }
+  .plan-review-ack {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .plan-review-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .risk-pill {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
+  .dx-empty-sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .dx-drop {
+    margin-top: 4px;
+    padding: 10px;
+    border: 1px dashed var(--border-color);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .dx-drop-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .dx-drop-row input {
+    flex: 1;
+    min-width: 160px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: inherit;
+  }
+  .dx-class-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .dx-class-card {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .dx-class-card.warn {
+    border-color: rgba(251, 191, 36, 0.45);
+    background: rgba(251, 191, 36, 0.08);
+  }
+  .dx-class-card p { margin: 0; color: var(--text-secondary); }
+  .scanner-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+  }
+  .scanner-card {
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    font-size: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .scanner-card pre {
+    margin: 0;
+    max-height: 120px;
+    overflow: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  .author-form textarea.mono { font-family: ui-monospace, monospace; font-size: 11px; }
+  .author-cases { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
   @media (max-width: 720px) {
     .dx-verdict { grid-template-columns: 1fr; }
     .merged-item { grid-template-columns: 1fr; }

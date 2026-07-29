@@ -270,6 +270,21 @@ export function closeLaunchLog() {
 /** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
 export const ideStageRequest = writable<string | null>(null);
 
+/** Focus a History event id after navigating to History stage. */
+export const historyFocusEventId = writable<string | null>(null);
+
+/** Optional paths to highlight when opening Diagnose from History. */
+export const diagnoseFocusPaths = writable<string[] | null>(null);
+
+/** True while Tune/ConfigEditor has unsaved edits — IdeWorkspace confirms leave. */
+export const tuneDirty = writable(false);
+
+/** True while Brief listing editor has unsaved edits — IdeWorkspace confirms leave. */
+export const briefDirty = writable(false);
+
+/** True while Quests editor has unsaved edits — IdeWorkspace confirms leave. */
+export const questDirty = writable(false);
+
 /** Live mirror of launcherSettings.autoHideWorkflowRail for IDE rail. */
 export const autoHideWorkflowRail = writable(false);
 

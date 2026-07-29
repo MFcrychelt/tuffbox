@@ -9,6 +9,8 @@
   /** questId → progress status when overlay is on */
   export let progressStatuses: Record<string, QuestProgressStatus> = {};
   export let progressOverlay = false;
+  /** Shown when quests array is empty (filter miss vs true empty chapter). */
+  export let emptyHint = "Double-click to add a quest";
   export let onSelect: (q: QuestData | null) => void;
   export let onMove: (q: QuestData, x: number, y: number) => void;
   export let onAddAt: (x: number, y: number) => void;
@@ -373,7 +375,7 @@
     {/each}
 
     {#if quests.length === 0}
-      <div class="empty-hint">Double-click to add a quest</div>
+      <div class="empty-hint">{emptyHint}</div>
     {/if}
   </div>
 </div>

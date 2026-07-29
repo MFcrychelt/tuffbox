@@ -6,6 +6,24 @@
 
 ИИ — это помощник для анализа логов, объяснений и генерации гипотез. Исполняет изменения только детерминированный код лаунчера после подтверждения пользователя.
 
+## Три контура (не смешивать контракты)
+
+| Контур | Контракт | UI | Источник |
+|--------|----------|-----|----------|
+| **Create Mode** | `PackBrief` → `PackDraft` | Sidebar **Chats** | LLM + catalog assemble |
+| **Ideas** | `{ slug, count, name? }` | Content modal | Co-occurrence graph (**не** LLM) |
+| **Crash diagnose** | `ActionPlan` | IDE **Diagnose** | LLM / KB / swarm lookup |
+
+Общая грамматика для игрока:
+
+```text
+Context → Proposal → Review (чекбоксы / risk) → Confirm → validate → snapshot → apply → verify / feedback
+```
+
+- ИИ / граф **предлагает**; игрок **решает**; лаунчер **исполняет**.
+- Create Mode **не** эмитит ActionPlan; Ideas **не** зовёт crash planner.
+- Review UI обязателен: ActionPlanReviewPanel / DraftConfirmPanel / Ideas checkboxes — **не** silent `window.confirm` как единственный шаг (confirm может остаться только для Test-launch prompt).
+
 ## Dual-mode диагностика крашей
 
 Настройка `ai.diagnoseMode` (Settings → Crash KB):
@@ -121,14 +139,23 @@ Legacy `recommended_actions` / `action_type` ещё парсятся и норм
 ```text
 ActionPlan
 → validate_action_plan (unknown op = reject)
-→ UI diff / review
-→ user confirms
+→ ActionPlanReviewPanel (per-action checkbox; needsUserReview → ack required)
+→ user confirms Apply
 → snapshot
 → apply_action_plan → FixAction / ChangeAction / edit_config patch
-→ test run
+→ test run / soft-verify
 ```
 
 `edit_config.patchType`: `json_merge` | `toml_set` | `properties_set` | `replace_file`.
+
+## Diagnose triage checklist (author)
+
+1. Prefer **crash-report** → else `latest.log` / `launcher.log` / `hs_err_pid*.log`.
+2. Read **Evidence** (signal groups + sections) and **Suspected mods** before AI.
+3. Watch **cascading / OOM / mixin / coords** cards — they often beat a noisy stacktrace.
+4. **Review → Apply** ActionPlan (snapshot first). Rules/heuristic Fix plan is separate.
+5. For player tickets: **Support pack** or drop/import their crash / mclo.gs URL.
+6. Optional: Class finder / MCreator tools; **Save KB** after a verified fix.
 
 ## Как расширять приватную Crash KB (авторский workflow)
 
@@ -192,6 +219,39 @@ Fingerprint подставляется автоматически из теку�
 
 Authored export из Diagnostics («Save KB case») — прямой вход в capsule format для будущей сети.
 
+## Create Mode (PackBrief → PackDraft)
+
+Sidebar **Chats**: игрок описывает сборку → ИИ (или Quick assemble) предлагает `PackBrief` → лаунчер собирает `PackDraft` поиском по Modrinth (версии выбирает код, не LLM).
+
+```text
+Описание
+→ PackBrief / Quick heuristic
+→ assemble_pack_draft
+→ DraftConfirmPanel (чекбоксы модов)
+→ confirm → snapshot → install_pack_draft
+→ Open Content / Resolve
+```
+
+Жёсткие правила:
+
+- ИИ **не** эмитит ActionPlan и **не** выбирает `file_id`.
+- Install только после явного Confirm (`confirmed: true`).
+- Creation Marketplace / remote GPU — отдельный Phase D, не этот путь.
+
+## Ideas (Often installed together)
+
+После Add-mod в Content: граф co-occurrence (Supabase / MPI / local pairs) предлагает companions. Это **не** LLM.
+
+```text
+Install mod X
+→ suggest_partners_for_mod (compat-filtered)
+→ Ideas modal (name/icon/count)
+→ Install selected → snapshot via add_*_with_dependencies
+→ missing-deps / Resolve
+```
+
+Dismiss пишет soft-blocklist в localStorage (без сети).
+
 ## Формат ответа ИИ — QuestPlan (FTB Quests)
 
 Второй executable контракт (`schemaVersion: 1`), рядом с ActionPlan. Канон и system prompt: `tuffbox_core::quest_plan`.
@@ -204,7 +264,18 @@ Prompt / model JSON
 → UI confirm → Save chapter SNBT → play in game
 ```
 
-ИИ **не** пишет `.snbt` сам. Лаунчер понимает declarative `chapters[]` (upsert/replace), генерирует hex id, резолвит `dependencies` по id **или** точному title.
+ИИ **не** пишет `.snbt` сам. Лаунчер понимает declarative `chapters[]` (upsert/replace), генерирует hex id, резолвит `dependencies` по id **или** точному title. Опционально `rewardTables[]` и `chapterGroups[]`.
+
+### Multi-pass (линии 20+)
+
+Для больших линий (`generate_quest_line` / Quest AI chat):
+
+1. **Outline** — titles, deps, tasks/rewards skeletons  
+2. **Lore** — `description[]` чанками (3–6 строк), иначе template fill  
+3. **Ground** — item ids → catalog  
+4. **Layout** — DAG auto-layout (x/y)
+
+Сессии чата: `.tuffbox/quest_chats/`. Review с чекбоксами chapter/quest → Apply в память редактора → **Save all**.
 
 Минимальный пример:
 
@@ -220,12 +291,13 @@ Prompt / model JSON
     "quests": [{
       "title": "Cobblestone",
       "x": 0, "y": 0,
+      "description": ["&7Collect cobble", "&aRequired for the line"],
       "tasks": [{ "type": "item", "properties": { "item": "minecraft:cobblestone" } }]
     }]
   }]
 }
 ```
 
-UI: Quest editor → **Создать** → текст запроса → Сгенерировать → Применить → Save all.
+UI: Quest editor → **AI** sidebar → multi-turn chat → Review → Apply → Save all.
 
-Простые нумерованные запросы (как «добудь 10 дерева… награда 10 палок») разбирает офлайн-эвристика; свободный текст — через настроенный AI (Ollama / OpenAI-compatible) в `QuestPlan` JSON.
+Простые нумерованные запросы (как «добудь 10 дерева… награда 10 палок») разбирает офлайн-эвристика; свободный текст / «линейка на 24» — multi-pass через настроенный AI (Ollama / OpenAI-compatible).

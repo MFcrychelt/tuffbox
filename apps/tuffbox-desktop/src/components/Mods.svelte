@@ -37,8 +37,11 @@
     PowerOff,
     ExternalLink,
     Users,
+    History,
+    Camera,
+    FilePlus,
   } from "lucide-svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import { toasts } from "../lib/toast";
@@ -405,17 +408,72 @@ import { trapFocus } from "../lib/focusTrap";
   let previewLoadingId = "";
 
   // --- Add-mods browser chrome ---
+  const ADD_VIEW_KEY = "tuffbox.mods.addView";
+  function readAddViewPref(): { viewMode: "grid" | "list"; pageSize: number } {
+    try {
+      const raw = localStorage.getItem(ADD_VIEW_KEY);
+      if (!raw) return { viewMode: "grid", pageSize: 40 };
+      const parsed = JSON.parse(raw);
+      return {
+        viewMode: parsed.viewMode === "list" ? "list" : "grid",
+        pageSize: [20, 40, 60].includes(Number(parsed.pageSize)) ? Number(parsed.pageSize) : 40,
+      };
+    } catch {
+      return { viewMode: "grid", pageSize: 40 };
+    }
+  }
+  const addViewPref = readAddViewPref();
   let versionSearch = "";
   let loaderExpanded = false;
-  let viewMode: "grid" | "list" = "grid";
+  let viewMode: "grid" | "list" = addViewPref.viewMode;
   let page = 1;
-  let pageSize = 20;
+  let pageSize = addViewPref.pageSize;
+  let addSearchInput: HTMLInputElement | null = null;
+  let brokenCatalogIcons: string[] = [];
   let accordionOpen: Record<string, boolean> = {
     gameVersion: true,
     loader: true,
     category: true,
     cfSort: true,
   };
+
+  function persistAddView() {
+    try {
+      localStorage.setItem(ADD_VIEW_KEY, JSON.stringify({ viewMode, pageSize }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function setViewMode(mode: "grid" | "list") {
+    viewMode = mode;
+    persistAddView();
+  }
+
+  function onPageSizeChange() {
+    pageSize = Number(pageSize) || 40;
+    persistAddView();
+    searchMods(1);
+  }
+
+  function markCatalogIconBroken(id: string) {
+    if (!brokenCatalogIcons.includes(id)) {
+      brokenCatalogIcons = [...brokenCatalogIcons, id];
+    }
+  }
+
+  function catalogIconOk(result: { id: string; iconUrl?: string | null }) {
+    return !!result.iconUrl && !brokenCatalogIcons.includes(result.id);
+  }
+
+  function onAddModalKeydown(e: KeyboardEvent) {
+    if (!addOpen) return;
+    if (e.key === "/" && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLTextAreaElement)) {
+      e.preventDefault();
+      addSearchInput?.focus();
+      addSearchInput?.select();
+    }
+  }
 
   function toggleAccordion(key: string) {
     accordionOpen[key] = !accordionOpen[key];
@@ -543,8 +601,11 @@ import { trapFocus } from "../lib/focusTrap";
           ? "server"
           : result.clientSide ?? result.serverSide ?? null;
     if (env) badges.push({ icon: "side", label: humanize(env) });
-    for (const c of result.categories ?? []) badges.push({ icon: "tag", label: humanize(c) });
-    return badges;
+    const cats = result.categories ?? [];
+    for (const c of cats.slice(0, 2)) badges.push({ icon: "tag", label: humanize(c) });
+    const extra = cats.length - 2;
+    if (extra > 0) badges.push({ icon: "tag", label: `+${extra}` });
+    return badges.slice(0, 3);
   }
 
   $: filteredVersions = gameVersions.filter((v) =>
@@ -697,6 +758,7 @@ import { trapFocus } from "../lib/focusTrap";
     try {
       await invoke("remove_project_mod", { path: $projectPath, modId: target.id });
       confirmMod = null;
+      setSuccessMessage(`Removed ${target.name}.`);
     } catch (e) {
       error = `Failed to remove ${target.name}: ${String(e)}`;
       confirmMod = null;
@@ -876,6 +938,7 @@ import { trapFocus } from "../lib/focusTrap";
       }
       await reloadModsSilent();
       message = `Disabled ${targets.length} item${targets.length === 1 ? "" : "s"}.`;
+      showWorkflowTrail = true;
       clearSelection();
     } catch (e) {
       error = String(e);
@@ -920,6 +983,7 @@ import { trapFocus } from "../lib/focusTrap";
         await invoke("remove_project_mod", { path: $projectPath, modId: id });
       }
       message = `Removed ${ids.length} item${ids.length === 1 ? "" : "s"}.`;
+      showWorkflowTrail = true;
       clearSelection();
     } catch (e) {
       error = String(e);
@@ -945,6 +1009,7 @@ import { trapFocus } from "../lib/focusTrap";
       }
       await reloadModsSilent();
       message = `Updated ${updatable.length} item${updatable.length === 1 ? "" : "s"}.`;
+      showWorkflowTrail = true;
       clearSelection();
     } catch (e) {
       error = String(e);
@@ -1054,12 +1119,60 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  type IdeaOffer = { slug: string; count: number; selected: boolean };
+  type IdeaOffer = {
+    slug: string;
+    count: number;
+    selected: boolean;
+    name?: string;
+    iconUrl?: string | null;
+    compatibleVersion?: string | null;
+  };
   let ideasOpen = false;
   let ideasSeedLabel = "";
   let ideasOffers: IdeaOffer[] = [];
   let ideasBusy = false;
   let ideasPendingDepsCheck = false;
+  const IDEAS_BLOCKLIST_KEY = "tuffbox.mods.ideas-blocklist";
+
+  function loadIdeasBlocklist(): Set<string> {
+    try {
+      const raw = localStorage.getItem(IDEAS_BLOCKLIST_KEY);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr.map((s: string) => String(s).toLowerCase()) : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  function saveIdeasBlocklist(set: Set<string>) {
+    try {
+      localStorage.setItem(IDEAS_BLOCKLIST_KEY, JSON.stringify([...set].slice(0, 200)));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function resolveIdeaSeeds(seedIds: string[]): string[] {
+    const out: string[] = [];
+    for (const seed of seedIds) {
+      const m = mods.find(
+        (x) =>
+          x.id === seed ||
+          x.projectId === seed ||
+          x.projectId === String(seed) ||
+          (x.id && x.id.toLowerCase() === seed.toLowerCase()),
+      );
+      if (m) {
+        if (m.id && !/^\d+$/.test(m.id)) out.push(m.id);
+        else if (m.projectId && !/^\d+$/.test(String(m.projectId))) out.push(String(m.projectId));
+        else out.push(seed);
+      } else {
+        out.push(seed);
+      }
+    }
+    return [...new Set(out.map((s) => s.trim()).filter(Boolean))];
+  }
 
   function setIdeasEnabled(next: boolean) {
     ideasEnabled = next;
@@ -1073,18 +1186,30 @@ import { trapFocus } from "../lib/focusTrap";
   async function maybeOfferIdeas(seedIds: string[], seedLabel: string): Promise<boolean> {
     if (!ideasEnabled || !$projectPath || seedIds.length === 0) return false;
     try {
+      const block = loadIdeasBlocklist();
+      const seeds = resolveIdeaSeeds(seedIds);
       const seen = new Set<string>();
       const merged: IdeaOffer[] = [];
-      for (const seed of seedIds) {
-        const partners = await invoke<{ slug: string; count: number }[]>(
-          "suggest_partners_for_mod",
-          { path: $projectPath, modId: seed, limit: 8 },
-        );
+      for (const seed of seeds) {
+        const partners = await invoke<{
+          slug: string;
+          count: number;
+          name?: string;
+          iconUrl?: string | null;
+          compatibleVersion?: string | null;
+        }[]>("suggest_partners_for_mod", { path: $projectPath, modId: seed, limit: 8 });
         for (const p of partners ?? []) {
           const slug = (p.slug || "").trim().toLowerCase();
-          if (!slug || seen.has(slug)) continue;
+          if (!slug || seen.has(slug) || block.has(slug)) continue;
           seen.add(slug);
-          merged.push({ slug, count: p.count ?? 1, selected: true });
+          merged.push({
+            slug,
+            count: p.count ?? 1,
+            selected: true,
+            name: p.name,
+            iconUrl: p.iconUrl,
+            compatibleVersion: p.compatibleVersion,
+          });
         }
       }
       merged.sort((a, b) => b.count - a.count);
@@ -1109,6 +1234,16 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   function dismissIdeas() {
+    // Soft-block unchecked (and all shown if none selected) for this project session.
+    const block = loadIdeasBlocklist();
+    for (const o of ideasOffers) {
+      if (!o.selected) block.add(o.slug.toLowerCase());
+    }
+    if (ideasOffers.length && ideasOffers.every((o) => o.selected)) {
+      // "No thanks" with all still selected → soft-block all shown this session
+      for (const o of ideasOffers) block.add(o.slug.toLowerCase());
+    }
+    saveIdeasBlocklist(block);
     ideasOpen = false;
     ideasOffers = [];
     ideasBusy = false;
@@ -1127,6 +1262,14 @@ import { trapFocus } from "../lib/focusTrap";
     }
     ideasBusy = true;
     ideasOpen = false;
+    // Soft-block declined companions only.
+    {
+      const block = loadIdeasBlocklist();
+      for (const o of ideasOffers) {
+        if (!o.selected) block.add(o.slug.toLowerCase());
+      }
+      saveIdeasBlocklist(block);
+    }
     mutating = true;
     openDownloadOverlay(
       selected.length === 1
@@ -1156,8 +1299,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   async function resolveDepsViaGraph() {
     dependencyDialogOpen = false;
-    // Switch to graph view — signal via a custom event
-    window.dispatchEvent(new CustomEvent("tuffbox:open-graph"));
+    ideStageRequest.set("resolve");
   }
 
   async function autoResolveDeps() {
@@ -1186,6 +1328,19 @@ import { trapFocus } from "../lib/focusTrap";
   let duplicateJarGroups: DupJarGroup[] = [];
   let duplicateJarFixing: string | null = null;
 
+  type WrongLoaderHit = {
+    fileName: string;
+    detectedLoader?: string;
+    projectLoader?: string;
+    recommendation?: string;
+    reason?: string;
+  };
+  let wrongLoaderHits: WrongLoaderHit[] = [];
+  let wrongLoaderFixing: string | null = null;
+  let showWorkflowTrail = false;
+  let importingLocal = false;
+  let lastSyncSummary: string | null = null;
+
   async function detectDuplicateModJars() {
     if (!$projectPath) {
       duplicateJarGroups = [];
@@ -1195,6 +1350,106 @@ import { trapFocus } from "../lib/focusTrap";
       duplicateJarGroups = await api.mods.detectDuplicateModJars($projectPath);
     } catch {
       duplicateJarGroups = [];
+    }
+  }
+
+  async function detectWrongLoaderMods() {
+    if (!$projectPath) {
+      wrongLoaderHits = [];
+      return;
+    }
+    try {
+      wrongLoaderHits = (await api.mods.detectWrongLoader($projectPath)) as WrongLoaderHit[];
+    } catch {
+      wrongLoaderHits = [];
+    }
+  }
+
+  async function disableWrongLoaderJar(fileName: string) {
+    if (!$projectPath) return;
+    wrongLoaderFixing = fileName;
+    error = null;
+    try {
+      message = await api.mods.disableJar(fileName, $projectPath);
+      showWorkflowTrail = true;
+      await detectWrongLoaderMods();
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      wrongLoaderFixing = null;
+    }
+  }
+
+  async function removeWrongLoaderJar(fileName: string) {
+    if (!$projectPath) return;
+    wrongLoaderFixing = fileName;
+    error = null;
+    try {
+      message = await api.mods.removeLooseJar(fileName, $projectPath);
+      showWorkflowTrail = true;
+      await detectWrongLoaderMods();
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      wrongLoaderFixing = null;
+    }
+  }
+
+  function openHistory() {
+    ideStageRequest.set("history");
+  }
+  function openResolve() {
+    ideStageRequest.set("resolve");
+  }
+  function openSnapshots() {
+    ideStageRequest.set("snapshots");
+  }
+
+  function setSuccessMessage(text: string, withTrail = true) {
+    message = text;
+    showWorkflowTrail = withTrail;
+  }
+
+  async function importLocalFiles() {
+    if (!$projectPath || importingLocal) return;
+    const filter =
+      contentFilter === "resourcepack" || contentFilter === "datapack" || contentFilter === "shader"
+        ? [{ name: "Zip packs", extensions: ["zip"] }]
+        : [{ name: "Mod jars", extensions: ["jar"] }];
+    const selected = await open({
+      multiple: true,
+      filters: filter,
+      title: "Import local content",
+    });
+    if (!selected) return;
+    const paths = (Array.isArray(selected) ? selected : [selected]).filter(Boolean) as string[];
+    if (paths.length === 0) return;
+    importingLocal = true;
+    error = null;
+    try {
+      const ct =
+        contentFilter === "resourcepack" || contentFilter === "datapack" || contentFilter === "shader"
+          ? contentFilter
+          : "mod";
+      const res = await api.mods.importLocal(paths, ct, $projectPath);
+      const imported = res.imported?.length ?? 0;
+      const identified = res.identified?.length ?? 0;
+      const skipped = res.skipped?.length ?? 0;
+      setSuccessMessage(
+        `Imported ${imported} file${imported === 1 ? "" : "s"}` +
+          (identified ? ` · ${identified} matched on Modrinth` : "") +
+          (skipped ? ` · ${skipped} skipped` : "") +
+          ".",
+      );
+      await load(true);
+      await detectWrongLoaderMods();
+      await detectDuplicateModJars();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      importingLocal = false;
     }
   }
 
@@ -1476,7 +1731,9 @@ import { trapFocus } from "../lib/focusTrap";
     planPreviewOpen = true;
     planPreviewLoading = true;
     try {
-      planPreviewDeps = await invoke("preview_modrinth_install", { path: $projectPath, modId: result.id });
+      planPreviewDeps = isCurseForgeResult(result)
+        ? await api.mods.previewCurseforgeInstall(result.id, $projectPath)
+        : await api.mods.previewInstall(result.id, $projectPath);
     } catch {
       planPreviewDeps = null;
     } finally {
@@ -1488,20 +1745,25 @@ import { trapFocus } from "../lib/focusTrap";
     if (!$projectPath || !planPreviewMod) return;
     const seedId = planPreviewMod.id;
     const seedLabel = planPreviewMod.name || planPreviewMod.slug || planPreviewMod.id;
+    const curseforge = isCurseForgeResult(planPreviewMod);
     planPreviewOpen = false;
     mutating = true;
     error = null;
     openDownloadOverlay(withDeps ? `Installing ${planPreviewMod.name} + deps` : `Installing ${planPreviewMod.name}`);
     try {
-      if (withDeps) {
-        await invoke("add_modrinth_mod_with_dependencies", { path: $projectPath, modId: planPreviewMod.id, side: selectedSide });
+      if (curseforge) {
+        // CF always resolves required deps when installing.
+        await api.mods.addCurseforge(planPreviewMod.id, selectedSide, $projectPath);
+      } else if (withDeps) {
+        await api.mods.addWithDeps(planPreviewMod.id, selectedSide, $projectPath);
       } else {
-        await invoke("add_modrinth_mod", { path: $projectPath, modId: planPreviewMod.id, side: selectedSide });
+        await api.mods.add(planPreviewMod.id, selectedSide, $projectPath);
       }
       addOpen = false;
       selectedResultIds = {};
       searchResults = [];
       searchQuery = "";
+      setSuccessMessage(`Installed ${seedLabel}.`);
       await afterAddModInstall([seedId], seedLabel);
     } catch (e) {
       error = String(e);
@@ -1551,6 +1813,7 @@ import { trapFocus } from "../lib/focusTrap";
       brokenIcons = [];
       await loadUserState();
       void detectDuplicateModJars();
+      void detectWrongLoaderMods();
     } catch (e) {
       error = String(e);
       loading = false;
@@ -1789,36 +2052,30 @@ import { trapFocus } from "../lib/focusTrap";
     const requestId = ++searchRequestId;
     searchLoading = true;
     error = null;
+    brokenCatalogIcons = [];
     try {
       const loader =
         contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null;
       const contentType = contentTypeForFilter(contentFilter);
-      const args = {
-        path: $projectPath,
-        query: searchQuery.trim(),
+      const common = {
         gameVersion: filterGameVersion || null,
         loader,
         contentType,
         page: targetPage,
         pageSize,
+        p: $projectPath,
       };
       let payload: { results: SearchResult[]; total: number };
       if (catalogProvider === "curseforge") {
-        payload = await invoke("search_curseforge_mods", {
-          ...args,
+        payload = await api.mods.searchCurseforge(searchQuery.trim(), {
+          ...common,
           sortField: cfSortField,
         });
       } else if (catalogProvider === "both") {
-        payload = await invoke("search_unified_mods", {
-          ...args,
-          sortField: cfSortField,
-        });
+        payload = await api.mods.searchUnified(searchQuery.trim(), common);
       } else {
-        // Resourcepacks/datapacks/shaders aren't tied to a mod loader on
-        // Modrinth; sending a loader facet for them would return zero
-        // results, so only apply it for the "mod" tab.
-        payload = await invoke("search_modrinth_mods", {
-          ...args,
+        payload = await api.mods.search(searchQuery.trim(), {
+          ...common,
           category: filterCategory || null,
           environment: filterEnvironment || null,
           license: filterLicense || null,
@@ -1849,10 +2106,12 @@ import { trapFocus } from "../lib/focusTrap";
     if (previews[result.id] !== undefined) return;
     previewLoadingId = result.id;
     try {
-      const cmd = isCurseForgeResult(result) ? "preview_curseforge_install" : "preview_modrinth_install";
-      previews[result.id] = await invoke(cmd, { path: $projectPath, modId: result.id });
+      previews[result.id] = isCurseForgeResult(result)
+        ? await api.mods.previewCurseforgeInstall(result.id, $projectPath)
+        : await api.mods.previewInstall(result.id, $projectPath);
       previews = { ...previews };
-    } catch {
+    } catch (e) {
+      console.warn("[Content] install preview failed", e);
       previews[result.id] = null;
       previews = { ...previews };
     } finally {
@@ -1888,19 +2147,35 @@ import { trapFocus } from "../lib/focusTrap";
       selectedResults.length === 1
         ? selectedResults[0].name
         : `${selectedResults.length} mods`;
+    const allCf = selectedResults.every((r) => isCurseForgeResult(r));
+    const allMr = selectedResults.every((r) => !isCurseForgeResult(r));
+    if (!allCf && !allMr) {
+      error = "Bulk install requires all selected projects from the same provider (Modrinth or CurseForge).";
+      return;
+    }
+    const installCount = selectedResults.length;
     mutating = true;
     error = null;
-    openDownloadOverlay(`Installing ${selectedResults.length} projects`);
+    openDownloadOverlay(`Installing ${installCount} projects`);
     try {
-      await invoke("add_modrinth_mods_with_dependencies", {
-        path: $projectPath,
-        modIds: selectedResults.map((result) => result.id),
-        side: selectedSide,
-      });
+      if (allCf) {
+        await api.mods.addCurseforgeManyWithDeps(
+          selectedResults.map((result) => result.id),
+          selectedSide,
+          $projectPath,
+        );
+      } else {
+        await api.mods.addManyWithDeps(
+          selectedResults.map((result) => result.id),
+          selectedSide,
+          $projectPath,
+        );
+      }
       addOpen = false;
       selectedResultIds = {};
       searchResults = [];
       searchQuery = "";
+      setSuccessMessage(`Installed ${installCount} project${installCount === 1 ? "" : "s"} (+ deps).`);
       await afterAddModInstall(seeds, seedLabel);
     } catch (e) {
       error = String(e);
@@ -1923,31 +2198,20 @@ import { trapFocus } from "../lib/focusTrap";
     );
     try {
       if (curseforge) {
-        await invoke("add_curseforge_mod", {
-          path: $projectPath,
-          modId: pendingInstall.id,
-          side: selectedSide,
-        });
+        await api.mods.addCurseforge(pendingInstall.id, selectedSide, $projectPath);
       } else {
         // Always auto-install Required; optional deps are listed in preview only.
-        await invoke("add_modrinth_mod_with_dependencies", {
-          path: $projectPath,
-          modId: pendingInstall.id,
-          side: selectedSide,
-        });
+        await api.mods.addWithDeps(pendingInstall.id, selectedSide, $projectPath);
       }
       addOpen = false;
       pendingInstall = null;
       searchResults = [];
       searchQuery = "";
-      if (!curseforge) {
-        await afterAddModInstall(
-          [installTarget.slug || installTarget.id],
-          installTarget.name,
-        );
-      } else {
-        await reloadModsSilent();
-      }
+      setSuccessMessage(`Installed ${installTarget.name}.`);
+      await afterAddModInstall(
+        [installTarget.slug || installTarget.id],
+        installTarget.name,
+      );
     } catch (e) {
       downloadError = String(e);
       error = downloadError;
@@ -2026,12 +2290,23 @@ import { trapFocus } from "../lib/focusTrap";
   async function syncModsFolderFromUi() {
     if (!$projectPath) return;
     loading = true;
+    error = null;
+    const beforeCount = mods.length;
     try {
-      const synced: ModRow[] = await invoke("sync_mods_folder", { path: $projectPath });
+      const synced: ModRow[] = (await api.mods.syncFolder($projectPath)) as unknown as ModRow[];
       mods = synced;
       brokenIcons = [];
       hydrateMissingIcons().catch(() => {});
       refreshUpdateDots().catch(() => {});
+      await detectDuplicateModJars();
+      await detectWrongLoaderMods();
+      const added = Math.max(0, synced.length - beforeCount);
+      lastSyncSummary =
+        `Resync complete · ${synced.length} tracked` +
+        (added ? ` · ${added} newly registered` : "") +
+        (wrongLoaderHits.length ? ` · ${wrongLoaderHits.length} wrong-loader` : "") +
+        (duplicateJarGroups.length ? ` · ${duplicateJarGroups.length} dup groups` : "");
+      setSuccessMessage(lastSyncSummary);
     } catch (e) {
       error = String(e);
     } finally {
@@ -2146,6 +2421,8 @@ import { trapFocus } from "../lib/focusTrap";
 
 </script>
 
+<svelte:window on:keydown={onAddModalKeydown} />
+
 <div class="mods fade-slide-in">
   <header class="content-hero" class:collapsed={!heroExpanded}>
     <button type="button" class="content-hero-toggle" on:click={toggleHeroExpanded} aria-expanded={heroExpanded}>
@@ -2174,6 +2451,18 @@ import { trapFocus } from "../lib/focusTrap";
           <strong>{counts.all}</strong>
           <span>total</span>
         </div>
+        {#if wrongLoaderHits.length > 0}
+          <div class="stat-pill warn">
+            <strong>{wrongLoaderHits.length}</strong>
+            <span>wrong loader</span>
+          </div>
+        {/if}
+        {#if duplicateJarGroups.length > 0}
+          <div class="stat-pill warn">
+            <strong>{duplicateJarGroups.length}</strong>
+            <span>dup groups</span>
+          </div>
+        {/if}
       </div>
     {/if}
   </header>
@@ -2218,6 +2507,41 @@ import { trapFocus } from "../lib/focusTrap";
     </section>
   {/if}
 
+  {#if wrongLoaderHits.length > 0}
+    <section class="panel conflicts-jars wrong-loader">
+      <div class="conflicts-head">
+        <h2><AlertTriangle size={16} /> Wrong loader jars</h2>
+        <p>Loose jars in mods/ built for a different loader — disable or remove them.</p>
+      </div>
+      <ul class="dup-list">
+        {#each wrongLoaderHits as hit (hit.fileName)}
+          <li>
+            <div>
+              <code>{hit.fileName}</code>
+              <small>{hit.reason || `${hit.detectedLoader} ≠ ${hit.projectLoader}`}</small>
+            </div>
+            <div class="dup-meta">
+              <button
+                class="secondary small"
+                disabled={wrongLoaderFixing !== null}
+                on:click={() => disableWrongLoaderJar(hit.fileName)}
+              >
+                {wrongLoaderFixing === hit.fileName ? "…" : "Disable"}
+              </button>
+              <button
+                class="ghost mini danger"
+                disabled={wrongLoaderFixing !== null}
+                on:click={() => removeWrongLoaderJar(hit.fileName)}
+              >
+                Remove
+              </button>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
   <div class="toolbar">
     <div class="tabs content-tabs">
       <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
@@ -2236,7 +2560,7 @@ import { trapFocus } from "../lib/focusTrap";
     </div>
     <div class="toolbar-row">
       <div class="search wide">
-        <Search size={16} />
+        <span class="search-glyph"><Search size={16} /></span>
         <input bind:value={filter} placeholder={searchPlaceholder} />
       </div>
       <div class="actions">
@@ -2244,8 +2568,26 @@ import { trapFocus } from "../lib/focusTrap";
           <Plus size={16} />
           Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
         </button>
-        <button class="secondary" on:click={syncModsFolderFromUi} disabled={!$projectPath || loading} title="Scan all content folders (mods/, resourcepacks/, shaderpacks/, datapacks/)">
-          <RotateCw size={16} /> Sync
+        <button
+          class="secondary"
+          on:click={importLocalFiles}
+          disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
+          title="Copy local jars/zips into the pack and register them in the manifest"
+        >
+          <FilePlus size={16} />
+          {importingLocal ? "Importing…" : "Import…"}
+        </button>
+        <button class="secondary" on:click={syncModsFolderFromUi} disabled={!$projectPath || loading} title="Rescan content folders and register new files">
+          <RotateCw size={16} /> Resync
+        </button>
+        <button class="ghost mini" on:click={openHistory} disabled={!$projectPath} title="Open History timeline">
+          <History size={14} /> History
+        </button>
+        <button class="ghost mini" on:click={openResolve} disabled={!$projectPath} title="Open Resolve graph">
+          <GitGraph size={14} /> Resolve
+        </button>
+        <button class="ghost mini" on:click={openSnapshots} disabled={!$projectPath} title="Open Snapshots">
+          <Camera size={14} /> Snapshots
         </button>
         <button class="secondary glow-btn" on:click={applyAllUpdates} disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"} title="Update all mods to the latest build for this Minecraft version">
           <Sparkles size={16} />
@@ -2274,7 +2616,7 @@ import { trapFocus } from "../lib/focusTrap";
             on:change={(e) => setIdeasEnabled(e.currentTarget.checked)}
           />
           <Sparkles size={14} />
-          Ideas
+          Often together
         </label>
         <button
           class="secondary"
@@ -2362,7 +2704,16 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="error">{error}</div>
   {/if}
   {#if message}
-    <div class="notice success">{message}</div>
+    <div class="notice success trail-notice">
+      <span>{message}</span>
+      {#if showWorkflowTrail}
+        <div class="trail-links">
+          <button class="ghost mini" on:click={openHistory}><History size={12} /> History</button>
+          <button class="ghost mini" on:click={openResolve}><GitGraph size={12} /> Resolve</button>
+          <button class="ghost mini" on:click={openSnapshots}><Camera size={12} /> Snapshots</button>
+        </div>
+      {/if}
+    </div>
   {/if}
 
   {#if loading}
@@ -2375,12 +2726,12 @@ import { trapFocus } from "../lib/focusTrap";
     {:else if savedMods.length === 0}
       <div class="empty">
         {#if contentFilter === "favorites"}
-          No favorites yet. Open <strong>Add mod</strong> and use the heart icon on Modrinth projects.
+          No favorites yet. Open <strong>Add</strong> and heart projects from Modrinth or CurseForge.
         {:else}
-          List <strong>{savedViewLabel(contentFilter)}</strong> is empty. Bookmark projects from the Modrinth browser.
+          List <strong>{savedViewLabel(contentFilter)}</strong> is empty. Bookmark projects from the Add browser.
         {/if}
         <button class="secondary" style="margin-top: 12px" on:click={openAddModal} disabled={!$projectPath}>
-          <Plus size={16} /> Browse Modrinth
+          <Plus size={16} /> Browse catalog
         </button>
       </div>
     {:else if filteredSavedMods.length === 0}
@@ -2396,7 +2747,7 @@ import { trapFocus } from "../lib/focusTrap";
           <button class="secondary" on:click={() => { renameTarget = listName; showRenamePrompt = true; }}>Rename</button>
           <button class="secondary danger" on:click={() => { deleteTarget = listName; showDeleteConfirm = true; }}>Delete list</button>
         {/if}
-        <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse Modrinth</button>
+        <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse catalog</button>
       </div>
       <div class="results list saved-results tb-stagger">
         {#each filteredSavedMods as result, i (result.id)}
@@ -2411,8 +2762,8 @@ import { trapFocus } from "../lib/focusTrap";
             on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
           >
             <div class="result-icon">
-              {#if result.iconUrl}
-                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
+              {#if catalogIconOk(result)}
+                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
               {:else}
                 <span class="tb-cover-media">{iconFallback(result.name)}</span>
               {/if}
@@ -2579,7 +2930,7 @@ import { trapFocus } from "../lib/focusTrap";
       <div class="modal-header">
         <div>
           <h2>Remove {confirmMod.name}?</h2>
-          <p>Deletes the jar from disk and removes the Modrinth index entry. A snapshot is taken first.</p>
+          <p>Deletes the file from disk and removes the manifest entry. A snapshot is taken first.</p>
         </div>
         <button class="icon-btn" on:click={() => { confirmOpen = false; confirmMod = null; }}><X size={18} /></button>
       </div>
@@ -2758,15 +3109,16 @@ import { trapFocus } from "../lib/focusTrap";
         </div>
         <div class="browser-topbar inline">
           <div class="search wide">
-            <Search size={16} />
+            <span class="search-glyph"><Search size={16} /></span>
             <input
+              bind:this={addSearchInput}
               bind:value={searchQuery}
-              placeholder="Search mods..."
+              placeholder={searchPlaceholder}
               on:input={onSearchQueryInput}
               on:keydown={(e) => e.key === "Enter" && searchMods(1)}
             />
             {#if searchLoading}
-              <Loader2 size={16} class="spin search-spinner" />
+              <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
             {/if}
           </div>
           <div class="topbar-controls">
@@ -2776,14 +3128,14 @@ import { trapFocus } from "../lib/focusTrap";
               </select>
             </label>
             <label class="sort-select">View:
-              <select bind:value={pageSize} on:change={() => searchMods(1)}>
+              <select bind:value={pageSize} on:change={onPageSizeChange}>
                 <option value={20}>20</option>
                 <option value={40}>40</option>
                 <option value={60}>60</option>
               </select>
             </label>
-            <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => (viewMode = "grid")} title="Grid view"><LayoutGrid size={16} /></button>
-            <button class="view-toggle" class:active={viewMode === "list"} on:click={() => (viewMode = "list")} title="List view"><List size={16} /></button>
+            <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
+            <button class="view-toggle" class:active={viewMode === "list"} on:click={() => setViewMode("list")} title="List view"><List size={16} /></button>
           </div>
         </div>
       </div>
@@ -2798,7 +3150,7 @@ import { trapFocus } from "../lib/focusTrap";
             {#if accordionOpen.gameVersion}
               <div class="filter-body">
                 <div class="search mini">
-                  <Search size={14} />
+                  <span class="search-glyph"><Search size={14} /></span>
                   <input bind:value={versionSearch} placeholder="Search version..." />
                 </div>
                 <div class="filter-list">
@@ -2894,7 +3246,7 @@ import { trapFocus } from "../lib/focusTrap";
             <div class="bulk-actions">
               <button class="ghost" on:click={selectVisibleResults} disabled={pagedResults.length === 0}>Select visible</button>
               <button class="ghost" on:click={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
-              <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating || catalogProvider === "curseforge"} title={catalogProvider === "curseforge" ? "Bulk install with dependencies is Modrinth-only" : undefined}>Install selected + dependencies</button>
+              <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
             </div>
           </div>
 
@@ -2905,7 +3257,7 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="loading compact">Loading saved projects...</div>
             {:else if savedMods.length === 0}
               {#if contentFilter === "favorites"}
-                <EmptyState icon={Bookmark} compact={true} title="No favorites yet" description="Favorite mods will appear here." />
+                <EmptyState icon={Bookmark} compact={true} title="No favorites yet" description="Heart projects in Add (Modrinth or CurseForge) to see them here." />
               {:else}
                 <EmptyState icon={Bookmark} compact={true} title="This list is empty" description="Saved projects will appear here." />
               {/if}
@@ -2923,8 +3275,8 @@ import { trapFocus } from "../lib/focusTrap";
                     on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
                   >
                     <div class="result-icon">
-                      {#if result.iconUrl}
-                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
+                      {#if catalogIconOk(result)}
+                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
                       {:else}
                         <span class="tb-cover-media">{iconFallback(result.name)}</span>
                       {/if}
@@ -3015,8 +3367,8 @@ import { trapFocus } from "../lib/focusTrap";
                 <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
               </label>
               <div class="result-icon">
-                {#if result.iconUrl}
-                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" />
+                {#if catalogIconOk(result)}
+                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
                 {:else}
                   <span class="tb-cover-media">{iconFallback(result.name)}</span>
                 {/if}
@@ -3175,7 +3527,7 @@ import { trapFocus } from "../lib/focusTrap";
                 </div>
               {/if}
             {:else if isCurseForgeResult(pendingInstall)}
-              <p class="muted">Preview unavailable; required CurseForge libraries will still be resolved when possible.</p>
+              <p class="muted">CurseForge preview failed (API key / network). Required libraries will still be resolved when possible.</p>
             {:else}
               <p class="muted">Preview unavailable; TuffBox will still create a snapshot before installing.</p>
             {/if}
@@ -3221,7 +3573,7 @@ import { trapFocus } from "../lib/focusTrap";
       {:else}
         <div class="version-toolbar">
           <div class="search wide">
-            <Search size={16} />
+            <span class="search-glyph"><Search size={16} /></span>
             <input bind:value={versionPickerQuery} placeholder="Search version, channel, MC…" />
           </div>
           <button
@@ -3351,8 +3703,8 @@ import { trapFocus } from "../lib/focusTrap";
     >
       <div class="modal-header">
         <div>
-          <h2><Sparkles size={18} /> Ideas for {ideasSeedLabel}</h2>
-          <p>These mods often appear together in other packs. Install any you want, or skip.</p>
+          <h2><Sparkles size={18} /> Often installed together</h2>
+          <p>People who added <strong>{ideasSeedLabel}</strong> often install these too. Uncheck any you do not want.</p>
         </div>
         <button class="icon-btn" on:click={dismissIdeas} aria-label="Close"><X size={18} /></button>
       </div>
@@ -3360,7 +3712,16 @@ import { trapFocus } from "../lib/focusTrap";
         {#each ideasOffers as offer (offer.slug)}
           <label class="ideas-row">
             <input type="checkbox" bind:checked={offer.selected} />
-            <code>{offer.slug}</code>
+            {#if offer.iconUrl}
+              <img class="ideas-icon" src={offer.iconUrl} alt="" />
+            {:else}
+              <span class="ideas-icon fallback">{(offer.name || offer.slug)[0]?.toUpperCase() ?? "?"}</span>
+            {/if}
+            <div class="ideas-meta">
+              <strong>{offer.name || offer.slug}</strong>
+              <code>{offer.slug}</code>
+              {#if offer.compatibleVersion}<small>v{offer.compatibleVersion}</small>{/if}
+            </div>
             <span class="muted">×{offer.count}</span>
           </label>
         {/each}
@@ -3393,7 +3754,7 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
       <div class="dep-dialog-actions">
         <button class="secondary" on:click={resolveDepsViaGraph}>
-          <GitGraph size={18} /> Open in Graph
+          <GitGraph size={18} /> Open in Resolve
           <span>See which mods need which dependencies and install them one by one.</span>
         </button>
         <button on:click={autoResolveDeps} disabled={dependencyResolving}>
@@ -3440,7 +3801,7 @@ import { trapFocus } from "../lib/focusTrap";
             </div>
             <div class="plan-item">
               <strong>File</strong>
-              <span class="mono">{planPreviewDeps?.fileName ?? "downloaded from Modrinth"}</span>
+              <span class="mono">{planPreviewDeps?.fileName ?? (isCurseForgeResult(planPreviewMod) ? "downloaded from CurseForge" : "downloaded from Modrinth")}</span>
             </div>
           </div>
 
@@ -3627,6 +3988,34 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid rgba(251, 191, 36, 0.28);
     border-radius: var(--border-radius-lg);
     background: rgba(251, 191, 36, 0.05);
+  }
+  .wrong-loader .dup-list li {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .wrong-loader small {
+    display: block;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 2px;
+  }
+  .stat-pill.warn {
+    border-color: rgba(251, 191, 36, 0.45);
+    color: #fbbf24;
+  }
+  .trail-notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .trail-links {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
   }
   .conflicts-head h2 {
     display: flex;
@@ -3821,6 +4210,31 @@ import { trapFocus } from "../lib/focusTrap";
     font-size: 13px;
     cursor: pointer;
   }
+  .ideas-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+  .ideas-icon.fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .ideas-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .ideas-meta strong { font-size: 13px; color: var(--text-primary); }
+  .ideas-meta code { font-size: 11px; color: var(--text-muted); }
+  .ideas-meta small { font-size: 10px; color: var(--text-muted); }
   .ideas-row .muted {
     margin-left: auto;
     color: var(--text-muted);
@@ -3844,23 +4258,47 @@ import { trapFocus } from "../lib/focusTrap";
     max-width: none;
   }
 
-  .search :global(svg) {
+  .search-glyph {
     position: absolute;
-    left: 14px;
+    left: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-muted);
     pointer-events: none;
+    z-index: 1;
   }
 
   .search input {
     width: 100%;
-    padding-left: 40px;
+    padding-left: 38px;
+    padding-right: 12px;
   }
 
-  .search :global(.search-spinner) {
+  .search-spinner {
     position: absolute;
     right: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-muted);
     pointer-events: none;
+    z-index: 1;
+  }
+
+  .search:has(.search-spinner) input {
+    padding-right: 36px;
+  }
+
+  .search.mini .search-glyph {
+    left: 8px;
+  }
+
+  .search.mini input {
+    padding-left: 30px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    font-size: 12px;
   }
 
   .actions,
@@ -4035,8 +4473,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .icon-btn.warn { color: #fbbf24; }
 
-  .mod-icon,
-  .result-icon {
+  .mod-icon {
     width: 52px;
     height: 52px;
     border-radius: 14px;
@@ -4052,8 +4489,7 @@ import { trapFocus } from "../lib/focusTrap";
     box-shadow: 0 4px 14px rgba(27, 217, 106, 0.15);
   }
 
-  .mod-icon img,
-  .result-icon img {
+  .mod-icon img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -4702,8 +5138,7 @@ import { trapFocus } from "../lib/focusTrap";
     margin: 0 0 4px;
   }
 
-  .modal-header p,
-  .result-card p {
+  .modal-header p {
     margin: 0;
     color: var(--text-muted);
     font-size: 13px;
@@ -4795,8 +5230,8 @@ import { trapFocus } from "../lib/focusTrap";
 
   .browser-layout {
     display: grid;
-    grid-template-columns: 25% minmax(0, 1fr);
-    gap: 16px;
+    grid-template-columns: minmax(160px, 20%) minmax(0, 1fr);
+    gap: 10px;
     min-height: 650px;
     align-items: start;
   }
@@ -4808,13 +5243,13 @@ import { trapFocus } from "../lib/focusTrap";
     max-height: calc(100vh - 170px);
     overflow: auto;
     display: grid;
-    gap: 10px;
-    padding-right: 4px;
+    gap: 6px;
+    padding-right: 2px;
   }
 
   .filter-block {
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
+    border-radius: 8px;
     background: rgba(255,255,255,0.018);
     overflow: hidden;
   }
@@ -4824,10 +5259,10 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 14px;
+    padding: 8px 10px;
     background: transparent;
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: .06em;
@@ -4839,8 +5274,8 @@ import { trapFocus } from "../lib/focusTrap";
 
   .filter-body {
     display: grid;
-    gap: 6px;
-    padding: 4px 12px 14px;
+    gap: 4px;
+    padding: 2px 8px 8px;
   }
 
   .filter-list {
@@ -4964,7 +5399,7 @@ import { trapFocus } from "../lib/focusTrap";
   .page-ellipsis { color: var(--text-muted); padding: 0 2px; }
 
   .pagination.bottom {
-    margin: 16px auto 8px;
+    margin: 8px auto 4px;
     justify-content: center;
     flex-wrap: wrap;
   }
@@ -4992,46 +5427,47 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
-    padding: 12px;
+    gap: 8px;
+    padding: 8px 10px;
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
+    border-radius: 8px;
     background: rgba(255,255,255,.018);
   }
 
-  .bulk-bar strong { color: var(--accent-primary); font-size: 20px; }
-  .bulk-bar span { color: var(--text-muted); margin-left: 6px; }
-  .bulk-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .bulk-bar strong { color: var(--accent-primary); font-size: 16px; }
+  .bulk-bar span { color: var(--text-muted); margin-left: 6px; font-size: 12px; }
+  .bulk-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
   .results {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: 8px;
   }
   .results.list { grid-template-columns: 1fr; }
 
   .result-card {
     position: relative;
     display: grid;
-    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-columns: 48px minmax(0, 1fr);
     grid-template-areas: "icon main" "icon actions" "footer footer";
-    gap: 10px 14px;
+    gap: 6px 8px;
     align-items: start;
-    padding: 16px;
-    border-radius: var(--border-radius-lg);
-    background: #2d2d2d;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     cursor: pointer;
   }
 
   .result-card:hover {
-    background: #333;
+    background: var(--bg-elevated, var(--bg-tertiary));
   }
 
   .results.list .result-card {
-    grid-template-columns: 64px minmax(0,1fr) auto;
+    grid-template-columns: 48px minmax(0,1fr) auto;
     grid-template-areas: "icon main actions" "footer footer footer";
     align-items: center;
+    padding: 6px 10px;
   }
 
   .result-card.installed {
@@ -5046,21 +5482,22 @@ import { trapFocus } from "../lib/focusTrap";
 
   .select-result {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: 6px;
+    right: 6px;
     z-index: 2;
   }
-  .select-result input { width: 16px; height: 16px; }
+  .select-result input { width: 14px; height: 14px; }
 
   .result-icon {
     grid-area: icon;
-    width: 64px;
-    height: 64px;
-    border-radius: 16px;
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
     overflow: hidden;
     background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
     display: flex; align-items: center; justify-content: center;
-    color: #fff; font-weight: 900; font-size: 22px;
+    color: #fff; font-weight: 900; font-size: 16px;
+    flex-shrink: 0;
   }
   .result-icon img,
   .result-icon .tb-cover-media {
@@ -5084,7 +5521,7 @@ import { trapFocus } from "../lib/focusTrap";
     flex-wrap: wrap;
     gap: 8px;
   }
-  .result-name { color: var(--text-primary); font-weight: 800; font-size: 15px; }
+  .result-name { color: var(--text-primary); font-weight: 800; font-size: 14px; }
   button.result-name.linkish,
   button.installed-name.linkish {
     background: none;
@@ -5095,7 +5532,7 @@ import { trapFocus } from "../lib/focusTrap";
     text-align: left;
     font: inherit;
     font-weight: 800;
-    font-size: 15px;
+    font-size: 14px;
     color: var(--text-primary);
   }
   button.result-name.linkish:hover,
@@ -5121,17 +5558,21 @@ import { trapFocus } from "../lib/focusTrap";
   .result-author { color: #60a5fa; font-size: 12px; cursor: pointer; }
   .result-author:hover { text-decoration: underline; }
   .result-desc {
-    margin: 6px 0 0;
+    margin: 4px 0 0;
     color: var(--text-muted);
-    font-size: 13px;
-    line-height: 1.45;
+    font-size: 12px;
+    line-height: 1.35;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .result-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .results.list .result-desc {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+  .result-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
   .badge {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 9px;
@@ -5147,25 +5588,37 @@ import { trapFocus } from "../lib/focusTrap";
     grid-area: actions;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     flex-wrap: wrap;
   }
   .download-btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 9px 16px;
-    border-radius: 10px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
     background: var(--accent-primary);
     color: #fff;
     font-weight: 800;
+    font-size: 12px;
     border: none;
     transform: none;
   }
   .download-btn:hover:not(:disabled) { filter: brightness(1.08); }
   .download-btn:disabled { opacity: .5; cursor: default; }
 
-  .quick-actions { display: flex; gap: 6px; align-items: center; }
+  .quick-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    opacity: 0.55;
+    transition: opacity 0.12s;
+  }
+  .result-card:hover .quick-actions,
+  .result-card:focus-within .quick-actions,
+  .results.list .quick-actions {
+    opacity: 1;
+  }
   .qa {
-    width: 34px; height: 34px;
+    width: 28px; height: 28px;
     padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: 999px;
@@ -5204,10 +5657,10 @@ import { trapFocus } from "../lib/focusTrap";
     grid-area: footer;
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
     color: var(--text-muted);
-    font-size: 12px;
-    padding-top: 10px;
+    font-size: 11px;
+    padding-top: 4px;
     border-top: 1px solid var(--border-color);
   }
   .result-footer span { display: inline-flex; align-items: center; gap: 5px; }

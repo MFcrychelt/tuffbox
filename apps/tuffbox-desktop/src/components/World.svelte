@@ -102,6 +102,7 @@
       <div class="sidebar-header">
         <Globe size={18} />
         <span>Worlds</span>
+        <span class="sidebar-sub">MCA map</span>
         <button class="icon-btn" on:click={loadWorlds} disabled={loading} title="Refresh">
           <RefreshCw size={14} class={loading ? "spin" : ""} />
         </button>
@@ -238,6 +239,13 @@
     font-size: 14px;
     color: var(--text-primary);
     border-bottom: 1px solid var(--border-color);
+  }
+
+  .sidebar-sub {
+    margin-left: 2px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
   }
 
   .sidebar-header .icon-btn {

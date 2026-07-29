@@ -11,8 +11,9 @@
     Loader2,
     CheckCircle2,
     Trash2,
+    GitGraph,
   } from "lucide-svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
   import { toasts } from "../lib/toast";
 
   export let currentView: string;
@@ -67,10 +68,15 @@
   let progressCurrent = "";
   let unlisten: UnlistenFn | null = null;
   let lastPath = "";
+  let draftConfirmOpen = false;
+  let draftSelected: Record<string, boolean> = {};
+  let postInstallTrail = false;
+  let lastInstallCount = 0;
 
   $: active = sessions.find((s) => s.id === activeId) ?? null;
   $: mcLabel = $projectInfo?.minecraftVersion ?? "?";
   $: loaderLabel = $projectInfo?.loaderKind ?? "?";
+  $: draftConfirmCount = draft?.mods?.filter((m) => draftSelected[m.projectId || m.slug] !== false).length ?? 0;
 
   async function refreshSessions() {
     if (!$projectPath) {
@@ -340,22 +346,35 @@
 
   async function confirmInstall() {
     if (!$projectPath || !draft?.mods?.length || busy) return;
-    const n = draft.mods.length;
-    const ok = confirm(
-      `Install ${n} mods (plus dependencies) from Modrinth into this instance?\nA snapshot will be created first.`,
+    // Open DraftConfirmPanel — replace browser confirm.
+    draftSelected = Object.fromEntries(
+      draft.mods.map((m) => [m.projectId || m.slug, true]),
     );
-    if (!ok) return;
+    draftConfirmOpen = true;
+  }
+
+  async function executeDraftInstall() {
+    if (!$projectPath || !draft?.mods?.length || busy) return;
+    const mods = draft.mods.filter((m) => draftSelected[m.projectId || m.slug] !== false);
+    if (!mods.length) {
+      toasts.error("Select at least one mod to install");
+      return;
+    }
+    draftConfirmOpen = false;
+    const n = mods.length;
+    const filteredDraft = { ...draft, mods };
     busy = true;
     phase = "install";
     progressDone = 0;
     progressTotal = n;
     progressCurrent = "Installing...";
+    postInstallTrail = false;
     try {
       const res = await invoke<{ installedCount: number; requested: number }>(
         "install_pack_draft",
         {
           path: $projectPath,
-          draft,
+          draft: filteredDraft,
           confirmed: true,
           side: "both",
         },
@@ -364,10 +383,12 @@
         ...messages,
         {
           role: "system",
-          content: `Installed ${res.installedCount} of ${res.requested} requested mods (deps may add more).`,
+          content: `Installed ${res.installedCount} of ${res.requested} requested mods (deps may add more). Snapshot was created first.`,
         },
       ];
       await persistDraft();
+      lastInstallCount = res.installedCount;
+      postInstallTrail = true;
       toasts.success(`Installed ${res.installedCount} mods`);
     } catch (e) {
       toasts.error(String(e));
@@ -379,7 +400,13 @@
   }
 
   function openMods() {
-    currentView = "mods";
+    ideStageRequest.set("content");
+    currentView = "ide";
+  }
+
+  function openResolve() {
+    ideStageRequest.set("resolve");
+    currentView = "ide";
   }
 
   onMount(async () => {
@@ -526,8 +553,15 @@
           <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} on:click={confirmInstall}>
             <CheckCircle2 size={14} /> Confirm install
           </button>
-          <button type="button" class="btn ghost" on:click={openMods}>Open in Mods</button>
+          <button type="button" class="btn ghost" on:click={openMods}>Open in Content</button>
         </div>
+        {#if postInstallTrail}
+          <div class="post-trail">
+            Installed {lastInstallCount} mods.
+            <button type="button" class="btn ghost mini" on:click={openMods}><Package size={12} /> Content</button>
+            <button type="button" class="btn ghost mini" on:click={openResolve}><GitGraph size={12} /> Resolve</button>
+          </div>
+        {/if}
       </div>
     </section>
 
@@ -585,6 +619,59 @@
         </div>
       {/if}
     </aside>
+  </div>
+{/if}
+
+{#if draftConfirmOpen && draft}
+  <div
+    class="modal-backdrop"
+    role="button"
+    tabindex="-1"
+    on:click|self={() => (draftConfirmOpen = false)}
+    on:keydown={() => {}}
+  >
+    <div class="modal draft-confirm" role="dialog" aria-modal="true">
+      <div class="draft-confirm-head">
+        <h2>Confirm pack install</h2>
+        <p>
+          Install <strong>{draftConfirmCount}</strong> of {draft.mods.length} mods (+ dependencies) into this instance.
+          A snapshot will be created first. Uncheck anything you do not want.
+        </p>
+      </div>
+      <div class="draft-confirm-list">
+        {#each draft.mods as m (m.projectId || m.slug)}
+          <label class="draft-confirm-row">
+            <input
+              type="checkbox"
+              checked={draftSelected[m.projectId || m.slug] !== false}
+              on:change={(e) => {
+                draftSelected[m.projectId || m.slug] = e.currentTarget.checked;
+                draftSelected = { ...draftSelected };
+              }}
+            />
+            <div>
+              <strong>{m.name}</strong>
+              <code>{m.slug}</code>
+              <span class="muted">{m.category}</span>
+            </div>
+          </label>
+        {/each}
+      </div>
+      {#if draft.unresolved?.length}
+        <p class="warn">Unresolved must-haves: {draft.unresolved.join(", ")}</p>
+      {/if}
+      <div class="draft-confirm-actions">
+        <button type="button" class="btn ghost" on:click={() => (draftConfirmOpen = false)}>Cancel</button>
+        <button
+          type="button"
+          class="btn accent"
+          disabled={busy || draftConfirmCount === 0}
+          on:click={executeDraftInstall}
+        >
+          Install {draftConfirmCount} mod{draftConfirmCount === 1 ? "" : "s"} (snapshot first)
+        </button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -879,6 +966,62 @@
       transform: rotate(360deg);
     }
   }
+  .post-trail {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .btn.mini { padding: 4px 8px; font-size: 11px; }
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 16px;
+  }
+  .draft-confirm {
+    width: min(520px, 100%);
+    max-height: 85vh;
+    overflow: auto;
+    padding: 16px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color, #2a2f3a);
+    background: var(--bg-secondary, #151922);
+  }
+  .draft-confirm-head h2 { margin: 0 0 6px; font-size: 16px; }
+  .draft-confirm-head p { margin: 0 0 12px; font-size: 13px; color: var(--text-secondary, #9aa3b5); }
+  .draft-confirm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 40vh;
+    overflow: auto;
+    margin-bottom: 12px;
+  }
+  .draft-confirm-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #2a2f3a);
+    cursor: pointer;
+  }
+  .draft-confirm-row strong { display: block; font-size: 13px; }
+  .draft-confirm-row code { font-size: 11px; color: #7dd3fc; margin-right: 6px; }
+  .draft-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .warn { color: #fbbf24; font-size: 12px; margin: 0 0 10px; }
   @media (max-width: 1100px) {
     .chats {
       grid-template-columns: 1fr;

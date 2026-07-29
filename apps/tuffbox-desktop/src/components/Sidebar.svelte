@@ -39,7 +39,7 @@
     { id: "configs", label: "Configs", icon: FolderCog, shortcut: "Ctrl+5", needsProject: true },
     { id: "recipes", label: "Recipes", icon: CookingPot, needsProject: true },
     { id: "quests", label: "Quests", icon: ScrollText, needsProject: true },
-    { id: "world", label: "World", icon: Globe, shortcut: "Ctrl+8" },
+    { id: "world", label: "World map", icon: Globe, shortcut: "Ctrl+8" },
     { id: "library", label: "Library", icon: Library },
     { id: "chats", label: "Chats", icon: MessagesSquare },
     { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, shortcut: "Ctrl+6" },

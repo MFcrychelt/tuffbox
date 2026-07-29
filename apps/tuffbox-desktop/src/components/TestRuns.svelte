@@ -1,13 +1,16 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { open as openShell } from "@tauri-apps/plugin-shell";
   import {
     PlayCircle, RefreshCw, Terminal, TimerReset, CheckCircle2, AlertTriangle, XCircle,
-    Shield, Server, FileText, Square, Cpu, HardDrive, Activity,
+    Shield, Server, FileText, Square, Cpu, HardDrive, Activity, Stethoscope, Zap,
+    ListChecks, Camera,
   } from "lucide-svelte";
   import { onDestroy, tick } from "svelte";
-  import { projectPath } from "../lib/store";
+  import { ideStageRequest, projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { launchWithFeedback } from "../lib/launch";
+  import type { TestRunRecord } from "../lib/api";
 
   type Profile = {
     id: string;
@@ -31,6 +34,39 @@
     };
   };
 
+  type Verdict = "pass" | "fail" | "timedOut" | "crashed";
+  type LivePhase = "idle" | "launching" | "bootstrapping" | Verdict;
+
+  type MatrixRow = {
+    profile: string;
+    verdict: Verdict | "skipped" | "running";
+    durationSeconds: number | null;
+    reason?: string;
+  };
+
+  const PASS_SIGNALS = [
+    "Sound engine started",
+    "Reloading ResourceManager",
+    "Done (",
+    "Done loading",
+    "Minecraft has been loaded",
+    "Started serving on",
+    "For help, type \"help\"",
+    "Preparing spawn area: 100%",
+  ];
+
+  const FAIL_SIGNALS = [
+    "# Launch error:",
+    "Exception in thread",
+    "Minecraft has crashed",
+    "---- Minecraft Crash Report ----",
+    "Failed to start the minecraft server",
+    "A fatal error has been detected",
+  ];
+
+  const LOW_END_MEMORY_MB = 2048;
+  const DEFAULT_TIMEOUT_S = 180;
+
   let profiles: Profile[] = [];
   let selectedProfile = "client";
   let log = "";
@@ -50,18 +86,162 @@
   let logEl: HTMLPreElement | null = null;
   let live: LiveDebugStats | null = null;
   let killing = false;
-
-  // Launch stats
   let launchStats: any = null;
-  let statsLoading = false;
+  let forceRun = false;
+  let autoSnapshot = false;
+  let levelSeed = "";
+  let onlineModeOff = true;
+  let timeoutSeconds = DEFAULT_TIMEOUT_S;
+  let livePhase: LivePhase = "idle";
+  let verdictReason: string | null = null;
+  let startupSeconds: number | null = null;
+  let activeRunId: string | null = null;
+  let finalizeInFlight = false;
+  let sawProcess = false;
+  let historyFilter: "all" | "pass" | "fail" | "crashed" = "all";
+  let worlds: { name: string }[] = [];
+  let quickPlayWorld = "";
+  let showQuickPlay = false;
+  let showServerOpts = false;
+  let showMatrix = false;
+  let matrixIds: Record<string, boolean> = {};
+  let matrixRunning = false;
+  let matrixStopOnFail = true;
+  let matrixSummary: MatrixRow[] = [];
+  let matrixAbort = false;
+
+  let runs: TestRunRecord[] = [];
+  let capturedRunIds: Record<string, boolean> = {};
+
+  $: selected = profiles.find((p) => p.id === selectedProfile);
+  $: elapsed = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
+  $: hostRamPct = live && live.hostMemoryTotalMb > 0
+    ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
+    : 0;
+  $: procRamCap = selected?.memoryMb ?? 4096;
+  $: procRamPct = live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0;
+  $: validationCritical = !!validationReport && (
+    !validationReport.passed
+    || (validationReport.graphErrors ?? 0) > 0
+    || (validationReport.jsonErrors?.length ?? 0) > 0
+  );
+  $: validationBadge = !validationReport
+    ? null
+    : validationReport.passed
+      ? { ok: true, label: "OK" }
+      : {
+          ok: false,
+          label: `${(validationReport.graphErrors ?? 0) + (validationReport.jsonErrors?.length ?? 0)} errors`,
+        };
+  $: lowEndProfile = profiles.find((p) =>
+    /low[\s_-]?end|lowend|potato|lite/i.test(`${p.id} ${p.name}`),
+  );
+  $: filteredRuns = runs.filter((r) => {
+    if (historyFilter === "all") return true;
+    const s = normalizeStatus(r.status);
+    if (historyFilter === "pass") return s === "pass" || s === "finished";
+    if (historyFilter === "fail") return s === "fail" || s === "failed" || s === "timedOut";
+    if (historyFilter === "crashed") return s === "crashed";
+    return true;
+  });
+  $: statusLabel = (() => {
+    switch (livePhase) {
+      case "launching": return "Launching…";
+      case "bootstrapping": return `Bootstrapping… ${elapsed}s`;
+      case "pass": return `Pass (${startupSeconds ?? elapsed}s)`;
+      case "fail": return "Fail";
+      case "timedOut": return "TimedOut";
+      case "crashed": return "Crashed";
+      default: return live?.instance || running ? `${elapsed}s` : "idle";
+    }
+  })();
+  $: if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
+
+  function normalizeStatus(s: string) {
+    return s;
+  }
+
+  function logSliceForCurrentRun(text: string): string {
+    const marker = "# TuffBox launching";
+    const idx = text.lastIndexOf(marker);
+    if (idx >= 0) return text.slice(idx);
+    return text;
+  }
+
+  function detectPass(text: string): string | null {
+    const slice = logSliceForCurrentRun(text);
+    for (const sig of PASS_SIGNALS) {
+      if (slice.includes(sig)) return sig;
+    }
+    return null;
+  }
+
+  function detectFail(text: string): string | null {
+    const slice = logSliceForCurrentRun(text);
+    for (const sig of FAIL_SIGNALS) {
+      if (slice.includes(sig)) return sig;
+    }
+    // Early Stopping! before any pass is fail-ish
+    if (slice.includes("Stopping!") && !detectPass(text)) return "Stopping!";
+    return null;
+  }
+
+  function pct(n: number | null | undefined, max = 100) {
+    if (!Number.isFinite(n as number)) return 0;
+    return Math.max(0, Math.min(100, ((n as number) / max) * 100));
+  }
+
+  function fmtMb(n: number | null | undefined) {
+    if (!Number.isFinite(n as number)) return "—";
+    const v = n as number;
+    return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`;
+  }
+
+  function formatRunTime(value: string) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds)) return value;
+    return new Date(seconds * 1000).toLocaleString();
+  }
+
+  function verdictClass(status: string) {
+    const s = status.toLowerCase();
+    if (s === "pass" || s === "finished") return "pass";
+    if (s === "crashed") return "crashed";
+    if (s === "timedout" || s === "timeout") return "timedOut";
+    if (s === "fail" || s === "failed") return "fail";
+    if (s === "started") return "started";
+    return status;
+  }
+
+  function verdictLabel(status: string) {
+    const s = status.toLowerCase();
+    if (s === "finished") return "Pass*";
+    if (s === "failed") return "Fail";
+    if (s === "timedout") return "TimedOut";
+    if (s === "pass") return "Pass";
+    if (s === "fail") return "Fail";
+    if (s === "crashed") return "Crashed";
+    if (s === "started") return "Running";
+    return status;
+  }
 
   async function loadStats() {
     if (!$projectPath) return;
-    statsLoading = true;
     try {
       launchStats = await invoke("get_launch_stats", { path: $projectPath });
-    } catch { launchStats = null; }
-    finally { statsLoading = false; }
+    } catch {
+      launchStats = null;
+    }
+  }
+
+  async function loadWorlds() {
+    if (!$projectPath) return;
+    try {
+      worlds = await invoke("list_worlds", { path: $projectPath });
+      if (!quickPlayWorld && worlds[0]) quickPlayWorld = worlds[0].name;
+    } catch {
+      worlds = [];
+    }
   }
 
   async function runValidation() {
@@ -76,8 +256,6 @@
       validationLoading = false;
     }
   }
-  let runs: { id: string; profile: string; startedAt: string; status: string; logPath: string; durationSeconds?: number | null }[] = [];
-  let capturedRunIds: Record<string, boolean> = {};
 
   async function loadProfiles(force = false) {
     if (!$projectPath) return;
@@ -87,13 +265,21 @@
     try {
       profiles = await invoke("list_profiles", { path: $projectPath });
       selectedProfile = profiles.find((p) => p.id === selectedProfile)?.id ?? profiles[0]?.id ?? "client";
+      const defaults: Record<string, boolean> = {};
+      for (const p of profiles) {
+        defaults[p.id] = /client|server|low/i.test(p.id) || p.id === selectedProfile;
+      }
+      if (Object.keys(matrixIds).length === 0) matrixIds = defaults;
       lastLoadedPath = $projectPath;
       await refreshLog();
       await loadRuns();
       await loadStats();
+      await loadWorlds();
       await refreshLive();
       if (live?.instance) {
         running = true;
+        sawProcess = true;
+        livePhase = "bootstrapping";
         startedAt = (live.instance.startedAt || 0) * 1000 || Date.now();
         startPolling();
       }
@@ -104,24 +290,241 @@
     }
   }
 
-  async function launch() {
-    if (!$projectPath || !selectedProfile) return;
+  async function loadRuns() {
+    if (!$projectPath) return;
+    try {
+      runs = await invoke("list_test_runs", { path: $projectPath });
+      for (const r of runs) {
+        if ((r.capturedPaths?.length ?? 0) > 0) {
+          capturedRunIds = { ...capturedRunIds, [r.id]: true };
+        }
+      }
+    } catch {
+      runs = [];
+    }
+  }
+
+  function projectDir(): string {
+    if (!$projectPath) return "";
+    return $projectPath.replace(/[/\\][^/\\]+$/, "");
+  }
+
+  async function maybeSnapshot(label: string) {
+    if (!autoSnapshot || !$projectPath) return;
+    const dir = projectDir();
+    try {
+      await invoke("create_snapshot", {
+        projectDir: dir,
+        name: `pre-test-${Date.now()}`,
+        reason: `Auto snapshot before ${label}`,
+      });
+      message = `Snapshot taken before ${label}.`;
+    } catch (e) {
+      error = `Snapshot failed: ${e}`;
+    }
+  }
+
+  function canLaunch(): boolean {
+    if (!$projectPath || running || matrixRunning) return false;
+    if (validationCritical && !forceRun) {
+      error = "Validation has critical issues. Enable Force run to launch anyway.";
+      return false;
+    }
+    return true;
+  }
+
+  async function beginRun(opts: {
+    profile: string;
+    label: string;
+    memoryMbOverride?: number | null;
+    quickPlayType?: string | null;
+    quickPlayValue?: string | null;
+    prepareServer?: boolean;
+  }): Promise<boolean> {
+    if (!canLaunch()) return false;
     running = true;
+    sawProcess = false;
+    finalizeInFlight = false;
     startedAt = Date.now();
     error = null;
     message = null;
     log = "";
+    livePhase = "launching";
+    verdictReason = null;
+    startupSeconds = null;
+    activeRunId = null;
     try {
+      await maybeSnapshot(opts.label);
+      if (opts.prepareServer) {
+        await invoke("generate_server_properties", {
+          path: $projectPath,
+          levelSeed: levelSeed.trim() || null,
+          onlineMode: onlineModeOff ? false : true,
+        });
+      }
       await invoke("record_launch", { path: $projectPath });
-      const res = await launchWithFeedback({ path: $projectPath, profile: selectedProfile });
-      if (!res) { running = false; return; }
+      const res = await launchWithFeedback({
+        path: $projectPath!,
+        profile: opts.profile,
+        memoryMbOverride: opts.memoryMbOverride ?? null,
+        quickPlayType: opts.quickPlayType ?? null,
+        quickPlayValue: opts.quickPlayValue ?? null,
+      });
+      if (!res) {
+        running = false;
+        livePhase = "idle";
+        return false;
+      }
       await loadStats();
-      message = `Started profile ${selectedProfile}. Watch latest.log below.`;
       await loadRuns();
+      activeRunId = runs[0]?.id ?? null;
+      livePhase = "bootstrapping";
+      message = `${opts.label} started — watching latest.log.`;
       startPolling();
+      return true;
     } catch (e) {
       error = String(e);
       running = false;
+      livePhase = "fail";
+      verdictReason = String(e);
+      return false;
+    }
+  }
+
+  async function smokeClient() {
+    await beginRun({ profile: selectedProfile, label: "Smoke client" });
+  }
+
+  async function serverDryRun() {
+    await beginRun({
+      profile: "server",
+      label: "Server dry run",
+      prepareServer: true,
+    });
+  }
+
+  async function lowEndSmoke() {
+    if (lowEndProfile) {
+      await beginRun({ profile: lowEndProfile.id, label: "Low-end smoke" });
+      return;
+    }
+    const client = profiles.find((p) => p.id === "client") ?? profiles.find((p) => String(p.side).toLowerCase() !== "server");
+    if (!client) {
+      error = "No client profile found. Create a low-end profile (≈2048 MB) in Setup.";
+      return;
+    }
+    await beginRun({
+      profile: client.id,
+      label: "Low-end smoke",
+      memoryMbOverride: LOW_END_MEMORY_MB,
+    });
+  }
+
+  async function quickPlay() {
+    if (!quickPlayWorld) {
+      error = "Pick a world in saves/ for Quick Play.";
+      return;
+    }
+    await beginRun({
+      profile: selectedProfile,
+      label: `Quick Play · ${quickPlayWorld}`,
+      quickPlayType: "singleplayer",
+      quickPlayValue: quickPlayWorld,
+    });
+  }
+
+  async function finalizeActive(verdict: Verdict, reason: string, kill = false) {
+    if (finalizeInFlight) return;
+    finalizeInFlight = true;
+    livePhase = verdict;
+    verdictReason = reason;
+    if (verdict === "pass") startupSeconds = elapsed;
+    const duration = elapsed;
+    const runId = activeRunId;
+    const shouldKill = kill || matrixRunning;
+    if (shouldKill && $projectPath) {
+      try {
+        await invoke("kill_running_instance", { instanceId: $projectPath });
+        live = live ? { ...live, instance: null } : null;
+      } catch {
+        // ignore
+      }
+    }
+    running = false;
+    if ($projectPath && runId) {
+      try {
+        await invoke("finalize_test_run", {
+          path: $projectPath,
+          runId,
+          status: verdict,
+          durationSeconds: duration,
+          verdictReason: reason,
+        });
+      } catch {
+        // ignore
+      }
+      try {
+        await captureRunLogs({ id: runId }, true);
+      } catch {
+        // ignore
+      }
+    }
+    await loadRuns();
+    await loadStats();
+  }
+
+  async function evaluateLogAndLifecycle() {
+    if (!running || finalizeInFlight) return;
+    if (livePhase === "launching" && (live?.instance || log.length > 40)) {
+      livePhase = "bootstrapping";
+    }
+    if (live?.instance) sawProcess = true;
+
+    const fail = detectFail(log);
+    if (fail && livePhase !== "pass") {
+      // Prefer crash check after exit; while alive treat as fail signal
+      if (!live?.instance && sawProcess) {
+        let crashed = false;
+        try {
+          crashed = await invoke<boolean>("has_crashed", { path: $projectPath });
+        } catch {
+          crashed = false;
+        }
+        await finalizeActive(crashed ? "crashed" : "fail", fail);
+        return;
+      }
+      if (fail.includes("Launch error") || fail.includes("Crash Report") || fail.includes("fatal")) {
+        await finalizeActive("fail", fail);
+        return;
+      }
+    }
+
+    const pass = detectPass(log);
+    if (pass && livePhase !== "pass") {
+      await finalizeActive("pass", pass);
+      return;
+    }
+
+    if (timeoutSeconds > 0 && elapsed >= timeoutSeconds && livePhase === "bootstrapping") {
+      await finalizeActive("timedOut", `No pass signal within ${timeoutSeconds}s`, true);
+      return;
+    }
+
+    // Process exited without pass
+    if (sawProcess && !live?.instance && watching && livePhase === "bootstrapping") {
+      let crashed = false;
+      try {
+        crashed = await invoke<boolean>("has_crashed", { path: $projectPath });
+      } catch {
+        crashed = false;
+      }
+      if (crashed) {
+        await finalizeActive("crashed", "Crash report detected after exit");
+      } else if (fail) {
+        await finalizeActive("fail", fail);
+      } else if (log.includes("Process exited") || log.includes("Stopping!")) {
+        await finalizeActive("fail", "Process exited before pass signal");
+      }
     }
   }
 
@@ -133,14 +536,7 @@
         await tick();
         logEl.scrollTop = logEl.scrollHeight;
       }
-      if (log.includes("# Launch error:") || log.includes("Process exited") || log.includes("Stopping!")) {
-        const wasRunning = running;
-        if (!live?.instance) running = false;
-        await loadRuns();
-        if (wasRunning && runs[0] && !capturedRunIds[runs[0].id]) {
-          await captureRunLogs(runs[0], true);
-        }
-      }
+      await evaluateLogAndLifecycle();
     } catch {
       // latest.log may not exist before first run.
     }
@@ -152,21 +548,12 @@
       live = await invoke("get_live_debug_stats", { instanceId: $projectPath });
       if (live?.instance) {
         running = true;
+        sawProcess = true;
         if (!startedAt) startedAt = (live.instance.startedAt || 0) * 1000 || Date.now();
-      } else if (running && watching) {
-        // Process gone — keep watching log a bit, mark idle for meters
+        if (livePhase === "idle" || livePhase === "launching") livePhase = "bootstrapping";
       }
     } catch {
       // ignore sampler failures
-    }
-  }
-
-  async function loadRuns() {
-    if (!$projectPath) return;
-    try {
-      runs = await invoke("list_test_runs", { path: $projectPath });
-    } catch {
-      runs = [];
     }
   }
 
@@ -176,9 +563,35 @@
       const dir: string = await invoke("capture_test_run_logs", { path: $projectPath, runId: run.id });
       capturedRunIds = { ...capturedRunIds, [run.id]: true };
       if (!silent) message = `Captured logs to ${dir}`;
+      await loadRuns();
     } catch (e) {
       if (!silent) error = String(e);
     }
+  }
+
+  async function openRunLogs(run: TestRunRecord) {
+    if (!$projectPath) return;
+    const captureDir = `${projectDir()}/.tuffbox/test-runs/${run.id}`.replace(/\//g, "\\");
+    try {
+      if (!capturedRunIds[run.id]) await captureRunLogs(run, true);
+      await openShell(captureDir);
+    } catch {
+      try {
+        await openShell(run.logPath);
+      } catch (e) {
+        error = String(e);
+      }
+    }
+  }
+
+  function openDiagnose() {
+    ideStageRequest.set("diagnose");
+  }
+
+  async function reRun(run: TestRunRecord) {
+    selectedProfile = run.profile;
+    if (run.profile === "server") await serverDryRun();
+    else await beginRun({ profile: run.profile, label: `Re-run · ${run.profile}` });
   }
 
   async function killInstance() {
@@ -188,7 +601,12 @@
     try {
       message = await invoke("kill_running_instance", { instanceId: $projectPath });
       live = live ? { ...live, instance: null } : null;
-      running = false;
+      if (running && !finalizeInFlight && livePhase === "bootstrapping") {
+        await finalizeActive("fail", "Killed by user");
+      } else {
+        running = false;
+        if (livePhase === "launching" || livePhase === "bootstrapping") livePhase = "idle";
+      }
       await refreshLog();
       await loadRuns();
     } catch (e) {
@@ -198,21 +616,90 @@
     }
   }
 
-  function formatRunTime(value: string) {
-    const seconds = Number(value);
-    if (!Number.isFinite(seconds)) return value;
-    return new Date(seconds * 1000).toLocaleString();
+  async function runMatrix() {
+    if (!$projectPath || running || matrixRunning) return;
+    if (validationCritical && !forceRun) {
+      error = "Validation has critical issues. Enable Force run to launch matrix.";
+      return;
+    }
+    const queue = profiles.filter((p) => matrixIds[p.id]);
+    if (queue.length === 0) {
+      error = "Select at least one profile for the matrix.";
+      return;
+    }
+    matrixRunning = true;
+    matrixAbort = false;
+    matrixSummary = queue.map((p) => ({
+      profile: p.id,
+      verdict: "running",
+      durationSeconds: null,
+    }));
+    message = `Matrix: ${queue.length} profile(s), sequential.`;
+
+    for (let i = 0; i < queue.length; i++) {
+      if (matrixAbort) {
+        for (let j = i; j < queue.length; j++) {
+          matrixSummary[j] = { ...matrixSummary[j], verdict: "skipped", reason: "Aborted" };
+        }
+        break;
+      }
+      const profile = queue[i];
+      matrixSummary[i] = { ...matrixSummary[i], verdict: "running" };
+      const isServer = profile.id === "server" || String(profile.side).toLowerCase() === "server";
+      const ok = await beginRun({
+        profile: profile.id,
+        label: `Matrix · ${profile.name}`,
+        prepareServer: isServer,
+        memoryMbOverride:
+          /low[\s_-]?end|lowend/i.test(`${profile.id} ${profile.name}`)
+            ? null
+            : null,
+      });
+      if (!ok) {
+        matrixSummary[i] = {
+          profile: profile.id,
+          verdict: "fail",
+          durationSeconds: elapsed,
+          reason: error ?? "Launch failed",
+        };
+        if (matrixStopOnFail) {
+          for (let j = i + 1; j < queue.length; j++) {
+            matrixSummary[j] = { ...matrixSummary[j], verdict: "skipped", reason: "Stop on fail" };
+          }
+          break;
+        }
+        continue;
+      }
+
+      // Wait until current run finalizes
+      while (running && !matrixAbort) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      const verdict = (livePhase === "pass" || livePhase === "fail" || livePhase === "timedOut" || livePhase === "crashed")
+        ? livePhase
+        : "fail";
+      matrixSummary[i] = {
+        profile: profile.id,
+        verdict,
+        durationSeconds: startupSeconds ?? elapsed,
+        reason: verdictReason ?? undefined,
+      };
+      // Brief pause between JVMs
+      await new Promise((r) => setTimeout(r, 800));
+      if (matrixStopOnFail && verdict !== "pass") {
+        for (let j = i + 1; j < queue.length; j++) {
+          matrixSummary[j] = { ...matrixSummary[j], verdict: "skipped", reason: "Stop on fail" };
+        }
+        break;
+      }
+    }
+
+    matrixRunning = false;
+    message = "Matrix finished.";
   }
 
-  function pct(n: number | null | undefined, max = 100) {
-    if (!Number.isFinite(n as number)) return 0;
-    return Math.max(0, Math.min(100, ((n as number) / max) * 100));
-  }
-
-  function fmtMb(n: number | null | undefined) {
-    if (!Number.isFinite(n as number)) return "—";
-    const v = n as number;
-    return v >= 1024 ? `${(v / 1024).toFixed(1)} GB` : `${Math.round(v)} MB`;
+  function stopMatrix() {
+    matrixAbort = true;
   }
 
   function startPolling() {
@@ -232,15 +719,6 @@
     watching = false;
   }
 
-  $: selected = profiles.find((p) => p.id === selectedProfile);
-  $: elapsed = startedAt ? Math.floor((now - startedAt) / 1000) : 0;
-  $: hostRamPct = live && live.hostMemoryTotalMb > 0
-    ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
-    : 0;
-  $: procRamCap = selected?.memoryMb ?? 4096;
-  $: procRamPct = live?.instance ? pct(live.instance.memoryMb, procRamCap) : 0;
-  $: if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
-
   onDestroy(() => {
     if (timer) clearInterval(timer);
   });
@@ -248,7 +726,7 @@
 
 <div class="test-runs">
   <div class="toolbar">
-    <div class="title"><PlayCircle size={18} /> Test runs</div>
+    <div class="title"><PlayCircle size={18} /> Test · launch lab</div>
     <div class="actions">
       <button class="ghost" on:click={() => loadProfiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
@@ -259,109 +737,176 @@
       </button>
       <button class="secondary" on:click={runValidation} disabled={!$projectPath || validationLoading}>
         <Shield size={16} />
-        {validationLoading ? "Checking..." : "Validate project"}
+        {validationLoading ? "Checking…" : "Validate"}
       </button>
-      <button class="ghost" on:click={loadStats} disabled={!$projectPath} title="Refresh stats">
-        <RefreshCw size={16} />
-      </button>
-      <button on:click={launch} disabled={!$projectPath || running || !selectedProfile}>
-        <PlayCircle size={16} />
-        {running ? "Running..." : "Run profile"}
-      </button>
+      {#if validationBadge}
+        <span class="val-badge" class:ok={validationBadge.ok} class:bad={!validationBadge.ok}>
+          {validationBadge.label}
+        </span>
+      {/if}
       <button class="danger" on:click={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
         <Square size={16} />
-        {killing ? "Stopping..." : "Kill"}
-      </button>
-      <button class="secondary" on:click={async () => {
-        if (!$projectPath) return;
-        try {
-          await invoke("generate_server_properties", { path: $projectPath });
-          message = "server.properties generated.";
-        } catch(e) { error = String(e); }
-      }} disabled={!$projectPath} title="Generate server.properties">
-        <FileText size={16} />
-      </button>
-      <button class="secondary" on:click={async () => {
-        if (!$projectPath) return;
-        running = true; startedAt = Date.now(); error = null; message = null; log = "";
-        try {
-          await invoke("record_launch", { path: $projectPath });
-          const res = await launchWithFeedback({ path: $projectPath, profile: "server" });
-          if (!res) { running = false; return; }
-          message = "Server started. Watch log below.";
-          await loadStats();
-          startPolling();
-        } catch(e) { error = String(e); running = false; }
-      }} disabled={!$projectPath || running} title="Launch server">
-        <Server size={16} /> Server
+        {killing ? "Stopping…" : "Kill"}
       </button>
     </div>
   </div>
 
   {#if error}<div class="notice error">{error}</div>{/if}
   {#if message}<div class="notice success">{message}</div>{/if}
+  {#if validationError}<div class="notice error">{validationError}</div>{/if}
 
   {#if !$projectPath}
     <EmptyState icon={PlayCircle} title="No project selected" description="Open a project to run test profiles." />
-  {:else if validationReport}
-    <div class="validation-report">
-      <div class="val-header">
-        <h3><Shield size={18} /> Project health check</h3>
-        {#if validationReport.passed}
-          <span class="val-passed"><CheckCircle2 size={16} /> All checks passed</span>
-        {:else}
-          <span class="val-failed"><XCircle size={16} /> Issues found</span>
+  {:else}
+    <div class="presets">
+      <button class="preset primary" on:click={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
+        <PlayCircle size={16} /> Smoke client
+      </button>
+      <button class="preset" on:click={serverDryRun} disabled={running || matrixRunning}>
+        <Server size={16} /> Server dry run
+      </button>
+      <button class="preset" on:click={lowEndSmoke} disabled={running || matrixRunning} title={lowEndProfile ? `Profile: ${lowEndProfile.id}` : `Override ${LOW_END_MEMORY_MB} MB`}>
+        <Zap size={16} /> Low-end smoke
+      </button>
+      <button class="preset ghost" on:click={() => (showQuickPlay = !showQuickPlay)} disabled={running || matrixRunning}>
+        Quick Play
+      </button>
+      <button class="preset ghost" on:click={() => (showServerOpts = !showServerOpts)}>
+        <FileText size={14} /> Server opts
+      </button>
+      <button class="preset ghost" on:click={() => (showMatrix = !showMatrix)}>
+        <ListChecks size={14} /> Matrix
+      </button>
+    </div>
+
+    <div class="preflight">
+      <label class="chk" title="Allow launch even when validation has errors">
+        <input type="checkbox" bind:checked={forceRun} /> Force run
+      </label>
+      <label class="chk" title="Create a snapshot before smoke / dry run">
+        <input type="checkbox" bind:checked={autoSnapshot} />
+        <Camera size={12} /> Auto-snapshot
+      </label>
+      <label class="timeout">
+        Timeout
+        <input type="number" min="30" max="900" bind:value={timeoutSeconds} /> s
+      </label>
+      {#if selected}
+        <span class="hint">
+          {selected.name} · {selected.side} · {selected.memoryMb ?? 4096} MB
+        </span>
+      {/if}
+      {#if startupSeconds != null && livePhase === "pass"}
+        <span class="metric">Startup {startupSeconds}s</span>
+      {/if}
+    </div>
+
+    {#if showQuickPlay}
+      <div class="opts-row">
+        <label>
+          World
+          <select bind:value={quickPlayWorld}>
+            {#if worlds.length === 0}
+              <option value="">No worlds in saves/</option>
+            {:else}
+              {#each worlds as w (w.name)}
+                <option value={w.name}>{w.name}</option>
+              {/each}
+            {/if}
+          </select>
+        </label>
+        <button class="secondary" on:click={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
+          Launch Quick Play
+        </button>
+      </div>
+    {/if}
+
+    {#if showServerOpts}
+      <div class="opts-row">
+        <label>
+          level-seed
+          <input type="text" placeholder="optional" bind:value={levelSeed} />
+        </label>
+        <label class="chk">
+          <input type="checkbox" bind:checked={onlineModeOff} /> online-mode=false
+        </label>
+        <button class="ghost" on:click={async () => {
+          try {
+            await invoke("generate_server_properties", {
+              path: $projectPath,
+              levelSeed: levelSeed.trim() || null,
+              onlineMode: onlineModeOff ? false : true,
+            });
+            message = "server.properties written.";
+          } catch (e) { error = String(e); }
+        }}>Write server.properties</button>
+      </div>
+    {/if}
+
+    {#if showMatrix}
+      <div class="matrix-panel">
+        <div class="matrix-head">
+          <strong>Profile matrix</strong>
+          <label class="chk"><input type="checkbox" bind:checked={matrixStopOnFail} /> Stop on fail</label>
+          <button class="secondary" on:click={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
+          {#if matrixRunning}
+            <button class="danger" on:click={stopMatrix}>Stop queue</button>
+          {/if}
+        </div>
+        <div class="matrix-checks">
+          {#each profiles as p (p.id)}
+            <label class="chk">
+              <input type="checkbox" bind:checked={matrixIds[p.id]} />
+              {p.name} <small>({p.id})</small>
+            </label>
+          {/each}
+        </div>
+        {#if matrixSummary.length > 0}
+          <table class="matrix-table">
+            <thead><tr><th>Profile</th><th>Verdict</th><th>Time</th><th>Reason</th></tr></thead>
+            <tbody>
+              {#each matrixSummary as row, i (row.profile + '-' + i)}
+                <tr class={row.verdict}>
+                  <td>{row.profile}</td>
+                  <td><span class="vbadge {row.verdict}">{row.verdict}</span></td>
+                  <td>{row.durationSeconds != null ? `${row.durationSeconds}s` : "—"}</td>
+                  <td class="muted">{row.reason ?? ""}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
       </div>
-      <div class="val-stats">
-        <div class="val-stat"><strong>{validationReport.totalMods}</strong><span>mods</span></div>
-        <div class="val-stat" class:danger={validationReport.graphErrors > 0}>
-          <strong>{validationReport.graphErrors}</strong><span>graph errors</span>
+    {/if}
+
+    {#if validationReport && !validationReport.passed}
+      <div class="validation-report compact">
+        <div class="val-header">
+          <h3><Shield size={16} /> Validation</h3>
+          <span class="val-failed"><XCircle size={14} /> Issues — use Force run to launch</span>
         </div>
-        <div class="val-stat" class:warning={validationReport.graphWarnings > 0}>
-          <strong>{validationReport.graphWarnings}</strong><span>graph warnings</span>
+        <div class="val-stats">
+          <div class="val-stat" class:danger={validationReport.graphErrors > 0}>
+            <strong>{validationReport.graphErrors}</strong><span>graph</span>
+          </div>
+          <div class="val-stat" class:danger={validationReport.jsonErrors?.length > 0}>
+            <strong>{validationReport.jsonErrors?.length ?? 0}</strong><span>JSON</span>
+          </div>
+          <div class="val-stat" class:danger={validationReport.circularDeps?.length > 0}>
+            <strong>{validationReport.circularDeps?.length ?? 0}</strong><span>cycles</span>
+          </div>
         </div>
-        <div class="val-stat" class:danger={validationReport.jsonErrors?.length > 0}>
-          <strong>{validationReport.jsonErrors?.length ?? 0}</strong><span>JSON errors</span>
-        </div>
-        <div class="val-stat" class:danger={validationReport.circularDeps?.length > 0}>
-          <strong>{validationReport.circularDeps?.length ?? 0}</strong><span>circular deps</span>
-        </div>
+        <button class="ghost" on:click={() => (validationReport = null)}>Hide</button>
       </div>
-      {#if validationReport.graphErrorList?.length > 0}
-        <div class="val-section">
-          <h4><XCircle size={14} /> Graph errors</h4>
-          {#each validationReport.graphErrorList as err}
-            <div class="val-item error"><code>{err.code}</code> {err.message}</div>
-          {/each}
-        </div>
-      {/if}
-      {#if validationReport.jsonErrors?.length > 0}
-        <div class="val-section">
-          <h4><AlertTriangle size={14} /> Broken JSON configs</h4>
-          {#each validationReport.jsonErrors as je}
-            <div class="val-item warning"><code>{je.path}</code> {je.error}</div>
-          {/each}
-        </div>
-      {/if}
-      {#if validationReport.circularDeps?.length > 0}
-        <div class="val-section">
-          <h4><AlertTriangle size={14} /> Circular dependencies</h4>
-          {#each validationReport.circularDeps as pair}
-            <div class="val-item warning">{pair[0]} ⇄ {pair[1]}</div>
-          {/each}
-        </div>
-      {/if}
-      <button class="ghost" on:click={() => (validationReport = null)}>Close report</button>
-    </div>
-  {:else}
+    {/if}
+
     <div class="layout">
       <aside class="profiles">
         <h2>Profiles</h2>
         {#if profiles.length === 0}
           <div class="muted">No profiles found.</div>
         {:else}
-          {#each profiles as profile}
+          {#each profiles as profile (profile.id)}
             <button
               class="profile-card"
               class:selected={selectedProfile === profile.id}
@@ -383,17 +928,40 @@
           </div>
         {/if}
 
-        <h2 class="history-title">Run history</h2>
-        {#if runs.length === 0}
+        <div class="history-head">
+          <h2>Run history</h2>
+          <div class="filters">
+            <button class="ghost mini" class:active={historyFilter === "all"} on:click={() => (historyFilter = "all")}>All</button>
+            <button class="ghost mini" class:active={historyFilter === "pass"} on:click={() => (historyFilter = "pass")}>Pass</button>
+            <button class="ghost mini" class:active={historyFilter === "fail"} on:click={() => (historyFilter = "fail")}>Fail</button>
+            <button class="ghost mini" class:active={historyFilter === "crashed"} on:click={() => (historyFilter = "crashed")}>Crashed</button>
+          </div>
+        </div>
+        {#if filteredRuns.length === 0}
           <div class="muted">No test runs recorded yet.</div>
         {:else}
           <div class="run-history">
-            {#each runs.slice(0, 10) as run}
-              <div class="run-row {run.status}">
-                <strong>{run.profile}</strong>
+            {#each filteredRuns.slice(0, 12) as run (run.id)}
+              <div class="run-row {verdictClass(run.status)}">
+                <div class="run-top">
+                  <strong>{run.profile}</strong>
+                  <span class="vbadge {verdictClass(run.status)}">{verdictLabel(run.status)}</span>
+                </div>
                 <span>{formatRunTime(run.startedAt)}</span>
-                <small>{run.status}{run.durationSeconds ? ` · ${run.durationSeconds}s` : ""}</small>
-                <button class="ghost mini" on:click={() => captureRunLogs(run)}>{capturedRunIds[run.id] ? "Logs captured" : "Capture logs"}</button>
+                <small>
+                  {run.durationSeconds != null ? `${run.durationSeconds}s` : "—"}
+                  {#if run.verdictReason} · {run.verdictReason}{/if}
+                </small>
+                <div class="run-actions">
+                  <button class="ghost mini" on:click={() => openRunLogs(run)}>Open logs</button>
+                  {#if !capturedRunIds[run.id]}
+                    <button class="ghost mini" on:click={() => captureRunLogs(run)}>Capture</button>
+                  {/if}
+                  <button class="ghost mini" on:click={openDiagnose} title="Open Diagnose stage">
+                    <Stethoscope size={12} /> Diagnose
+                  </button>
+                  <button class="ghost mini" on:click={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
+                </div>
               </div>
             {/each}
           </div>
@@ -412,11 +980,14 @@
               {:else}
                 Choose a profile to run
               {/if}
+              {#if verdictReason}
+                · {verdictReason}
+              {/if}
             </p>
           </div>
-          <div class="status" class:running={!!live?.instance || running}>
+          <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
             <TimerReset size={16} />
-            {live?.instance || running ? `${elapsed}s` : "idle"}
+            {statusLabel}
           </div>
         </div>
 
@@ -454,18 +1025,21 @@
           <label class="auto-scroll">
             <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
           </label>
-          {#if watching}
-            <button class="ghost mini" on:click={stopWatching}>Stop watching</button>
-          {:else if running || live?.instance}
-            <button class="ghost mini" on:click={startPolling}>Watch log</button>
-          {/if}
+          <div class="log-tools-right">
+            <button class="ghost mini" on:click={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
+            {#if watching}
+              <button class="ghost mini" on:click={stopWatching}>Stop watching</button>
+            {:else if running || live?.instance}
+              <button class="ghost mini" on:click={startPolling}>Watch log</button>
+            {/if}
+          </div>
         </div>
 
         <pre class="log" bind:this={logEl}>{log || "latest.log will appear here after the first run."}</pre>
 
         {#if live?.instance}
           <button class="secondary stop danger-outline" on:click={killInstance} disabled={killing}>
-            <Square size={16} /> {killing ? "Stopping..." : "Kill process"}
+            <Square size={16} /> {killing ? "Stopping…" : "Kill process"}
           </button>
         {/if}
       </section>
@@ -475,35 +1049,72 @@
 
 <style>
   .test-runs { max-width: none; width: 100%; }
-  .toolbar, .actions, .title, .run-header, .status, .meter-head, .log-tools, .live-meta { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+  .toolbar, .actions, .title, .run-header, .status, .meter-head, .log-tools, .live-meta, .presets, .preflight, .opts-row, .matrix-head, .run-top, .run-actions, .history-head, .filters, .log-tools-right { display: flex; align-items: center; }
+  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 12px; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 10px; flex-wrap: wrap; }
+  .presets { gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .preset { display: inline-flex; align-items: center; gap: 8px; }
+  .preset.primary { background: rgba(27, 217, 106, 0.18); border-color: rgba(27, 217, 106, 0.45); color: var(--accent-primary); font-weight: 700; }
+  .preflight { gap: 14px; flex-wrap: wrap; margin-bottom: 12px; color: var(--text-muted); font-size: 12px; }
+  .chk { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .chk input { width: auto; }
+  .timeout { display: inline-flex; align-items: center; gap: 6px; }
+  .timeout input { width: 72px; }
+  .hint { color: var(--text-secondary); }
+  .metric { color: var(--accent-primary); font-weight: 700; }
+  .val-badge { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-color); }
+  .val-badge.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
+  .val-badge.bad { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+  .opts-row { gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 10px 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .opts-row label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); }
+  .opts-row input[type="text"], .opts-row select { min-width: 180px; }
+  .matrix-panel { margin-bottom: 12px; padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); display: grid; gap: 10px; }
+  .matrix-head { gap: 12px; flex-wrap: wrap; }
+  .matrix-checks { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+  .matrix-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .matrix-table th, .matrix-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border-color); }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
-  .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
-  .profiles, .run-panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
+  .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; }
+  .profiles, .run-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .profiles { padding: 16px; }
   .profiles h2 { font-size: 15px; margin-bottom: 12px; }
   .profile-card { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid var(--border-color); padding: 12px; margin-bottom: 8px; text-align: left; }
   .profile-card:hover, .profile-card.selected { transform: none; border-color: rgba(27, 217, 106, 0.4); background: rgba(27, 217, 106, 0.08); }
   .profile-card strong { color: var(--text-primary); }
   .profile-card span, .profile-card small, .muted, .run-header p { color: var(--text-muted); }
-  .history-title { margin-top: 22px; }
-  .run-history { display: grid; gap: 8px; }
+  .history-head { margin-top: 18px; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .history-head h2 { margin: 0; }
+  .filters { gap: 4px; flex-wrap: wrap; }
+  .filters .active { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); }
+  .run-history { display: grid; gap: 8px; margin-top: 10px; }
   .run-row { display: grid; gap: 3px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .run-row strong { color: var(--text-primary); }
   .run-row span, .run-row small { color: var(--text-muted); font-size: 12px; }
-  .run-row.failed { border-color: rgba(239, 68, 68, .35); }
-  .run-row.finished { border-color: rgba(27, 217, 106, .28); }
+  .run-top { justify-content: space-between; gap: 8px; }
+  .run-actions { gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .run-row.fail, .run-row.failed { border-color: rgba(239, 68, 68, .35); }
+  .run-row.pass, .run-row.finished { border-color: rgba(27, 217, 106, .28); }
+  .run-row.crashed { border-color: rgba(248, 113, 113, .55); }
+  .run-row.timedOut { border-color: rgba(245, 158, 11, .45); }
   .run-row.started { border-color: rgba(245, 158, 11, .28); }
+  .vbadge { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-color); }
+  .vbadge.pass, .vbadge.finished { color: var(--accent-primary); border-color: rgba(27, 217, 106, .4); }
+  .vbadge.fail, .vbadge.failed { color: #fca5a5; border-color: rgba(239, 68, 68, .4); }
+  .vbadge.crashed { color: #fecaca; background: rgba(239, 68, 68, .12); }
+  .vbadge.timedOut { color: #fbbf24; border-color: rgba(245, 158, 11, .4); }
+  .vbadge.started, .vbadge.running { color: #93c5fd; }
+  .vbadge.skipped { color: var(--text-muted); }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
   .run-panel { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
   .run-header { justify-content: space-between; gap: 12px; padding: 16px 18px; border-bottom: 1px solid var(--border-color); }
   .run-header h2 { margin: 0 0 4px; }
   .status { gap: 8px; color: var(--text-muted); background: var(--bg-tertiary); border-radius: 999px; padding: 8px 12px; }
   .status.running { color: var(--accent-primary); }
+  .status.pass { color: var(--accent-primary); }
+  .status.fail { color: #fca5a5; }
   .meters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); background: rgba(0,0,0,.12); }
   .meter { display: grid; gap: 6px; }
   .meter.dim { opacity: 0.45; }
@@ -515,6 +1126,7 @@
   .bar.proc i { background: linear-gradient(90deg, #60a5fa, #a78bfa); }
   .live-meta { gap: 12px; padding: 0 16px 8px; color: var(--text-muted); font-size: 11px; flex-wrap: wrap; }
   .log-tools { justify-content: space-between; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); }
+  .log-tools-right { gap: 6px; }
   .auto-scroll { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
   .auto-scroll input { width: auto; }
   .log { flex: 1; min-height: 420px; max-height: 620px; overflow: auto; margin: 0; padding: 18px; background: #09090b; color: #d4d4d8; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
@@ -522,7 +1134,6 @@
   .danger { background: rgba(239, 68, 68, 0.18); border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
   .danger:hover:not(:disabled) { background: rgba(239, 68, 68, 0.28); }
   .danger-outline { border-color: rgba(239, 68, 68, 0.4); color: #fecaca; }
-  .empty { color: var(--text-muted); padding: 80px; text-align: center; }
   .launch-stats-card { padding: 12px; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-tertiary); margin-bottom: 14px; display: grid; gap: 6px; }
   .launch-stats-card h3 { color: var(--text-secondary); font-size: 12px; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .04em; }
   .ls-row { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
@@ -538,23 +1149,15 @@
     .meters { grid-template-columns: 1fr; }
   }
 
-  .validation-report { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 18px; margin-bottom: 16px; }
-  .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
-  .val-header h3 { display: flex; align-items: center; gap: 8px; font-size: 16px; color: var(--text-primary); }
-  .val-passed { display: flex; align-items: center; gap: 6px; color: var(--accent-primary); font-weight: 700; font-size: 13px; }
-  .val-failed { display: flex; align-items: center; gap: 6px; color: #fca5a5; font-weight: 700; font-size: 13px; }
-  .val-stats { display: grid; grid-template-columns: repeat(5, minmax(80px, 1fr)); gap: 10px; margin-bottom: 16px; }
-  .val-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 10px; display: grid; gap: 3px; text-align: center; }
-  .val-stat strong { font-size: 22px; color: var(--text-primary); }
+  .validation-report { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; margin-bottom: 12px; }
+  .validation-report.compact { padding: 12px; }
+  .val-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 8px; }
+  .val-header h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-primary); margin: 0; }
+  .val-failed { display: flex; align-items: center; gap: 6px; color: #fca5a5; font-weight: 700; font-size: 12px; }
+  .val-stats { display: grid; grid-template-columns: repeat(3, minmax(70px, 1fr)); gap: 8px; margin-bottom: 8px; }
+  .val-stat { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; padding: 8px; display: grid; gap: 2px; text-align: center; }
+  .val-stat strong { font-size: 18px; color: var(--text-primary); }
   .val-stat span { font-size: 11px; color: var(--text-muted); }
   .val-stat.danger { border-color: rgba(239,68,68,.35); background: rgba(239,68,68,.06); }
   .val-stat.danger strong { color: #fca5a5; }
-  .val-stat.warning { border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.06); }
-  .val-stat.warning strong { color: #fbbf24; }
-  .val-section { margin-bottom: 14px; }
-  .val-section h4 { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
-  .val-item { padding: 7px 10px; border-radius: 8px; font-size: 12px; border: 1px solid var(--border-color); margin-bottom: 4px; display: flex; gap: 6px; align-items: baseline; }
-  .val-item.error { border-color: rgba(239,68,68,.3); color: #fca5a5; background: rgba(239,68,68,.04); }
-  .val-item.warning { border-color: rgba(245,158,11,.3); color: #fde68a; background: rgba(245,158,11,.04); }
-  .val-item code { font-size: 11px; color: var(--accent-primary); }
 </style>

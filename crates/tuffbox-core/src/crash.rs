@@ -200,6 +200,36 @@ pub struct LatestLogAnalysis {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorldCrashCoords {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HsErrSummary {
+    pub id: String,
+    pub name: String,
+    pub path: PathBuf,
+    pub size: u64,
+    pub modified: Option<u64>,
+    /// `oom` | `native` | `unknown`
+    pub kind: String,
+    pub problematic_frame: Option<String>,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SupportPackResult {
+    pub path: PathBuf,
+    pub file_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CrashDiagnosis {
     pub reports: Vec<CrashReportSummary>,
     pub selected_report: Option<CrashReportAnalysis>,
@@ -221,6 +251,15 @@ pub struct CrashDiagnosis {
     /// (no fresh crash markers). Diagnose should not push crash-log fix plans.
     #[serde(default)]
     pub session_healthy: bool,
+    /// JVM fatal error logs (`hs_err_pid*.log`) in the instance root.
+    #[serde(default)]
+    pub hs_err_logs: Vec<HsErrSummary>,
+    /// Entity/block coordinates parsed from the selected crash report (if any).
+    #[serde(default)]
+    pub world_coords: Option<WorldCrashCoords>,
+    /// Allocated / max heap hint from System Details or hs_err (human-readable).
+    #[serde(default)]
+    pub memory_hint: Option<String>,
 }
 
 fn default_analysis_source() -> String {
@@ -407,23 +446,46 @@ pub fn build_crash_diagnosis(
     recent_snapshots: Vec<Snapshot>,
 ) -> Result<CrashDiagnosis, CrashError> {
     let project_dir = project_dir.as_ref();
-    let reports = list_crash_reports(project_dir)?;
+    let mut reports = list_crash_reports(project_dir)?;
+    let hs_err_logs = list_hs_err_logs(project_dir)?;
+    // Surface hs_err in the same picker as crash-reports (id prefix hs_err/).
+    for hs in &hs_err_logs {
+        reports.push(CrashReportSummary {
+            id: hs.id.clone(),
+            name: format!("[JVM] {}", hs.name),
+            path: hs.path.clone(),
+            size: hs.size,
+            modified: hs.modified,
+        });
+    }
+    reports.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then_with(|| b.name.cmp(&a.name))
+    });
+
     let latest_log = analyze_latest_log(project_dir, manifest);
     let launcher_log = analyze_launcher_log(project_dir, manifest);
 
     // Explicit user pick always wins. Special id `__latest_log__` forces live-log
     // analysis (AI Explain / Diagnose sidebar) and never auto-selects a crash file.
+    // `__launcher_log__` forces launcher.log.
     // Auto-pick the newest crash report only when latest.log does not supersede it.
     let force_latest_log = selected_report_id == Some("__latest_log__");
+    let force_launcher_log = selected_report_id == Some("__launcher_log__");
     let explicit = selected_report_id
-        .filter(|id| !id.is_empty() && *id != "__latest_log__")
-        .filter(|id| reports.iter().any(|report| report.id == *id));
-    let newest = reports.first();
+        .filter(|id| !id.is_empty() && *id != "__latest_log__" && *id != "__launcher_log__")
+        .filter(|id| {
+            reports.iter().any(|report| report.id == *id) || validate_report_id(id).is_ok()
+        });
+    let newest = reports
+        .iter()
+        .find(|r| r.id.starts_with("crash-reports/"));
     let stale = newest
         .map(|r| latest_log_supersedes_crash(project_dir, Some(r.path.as_path()), &latest_log.tail))
         .unwrap_or(false);
 
-    let selected_id = if force_latest_log {
+    let selected_id = if force_latest_log || force_launcher_log {
         None
     } else if let Some(id) = explicit {
         Some(id)
@@ -437,7 +499,15 @@ pub fn build_crash_diagnosis(
         .map(|id| analyze_crash_report(project_dir, id, manifest))
         .transpose()?;
 
-    let analysis_source = if selected_report.is_some() {
+    let analysis_source = if force_launcher_log {
+        "launcher_log".to_string()
+    } else if selected_report
+        .as_ref()
+        .map(|r| r.summary.id.starts_with("hs_err/"))
+        .unwrap_or(false)
+    {
+        "hs_err".to_string()
+    } else if selected_report.is_some() {
         "crash_report".to_string()
     } else {
         "latest_log".to_string()
@@ -447,7 +517,7 @@ pub fn build_crash_diagnosis(
     // suppress crash-log suspects / fix plans so Diagnose doesn't nag about
     // a crash that was already fixed and successfully relaunched.
     let session_healthy =
-        explicit.is_none() && log_indicates_healthy_session(&latest_log.tail);
+        explicit.is_none() && !force_launcher_log && log_indicates_healthy_session(&latest_log.tail);
 
     let mut suspect_sets = Vec::new();
     let mut combined_signals = Vec::new();
@@ -456,10 +526,15 @@ pub fn build_crash_diagnosis(
             suspect_sets.push(report.suspected_mods.clone());
             combined_signals.extend(report.signals.clone());
         }
-        suspect_sets.push(latest_log.suspected_mods.clone());
-        suspect_sets.push(launcher_log.suspected_mods.clone());
-        combined_signals.extend(latest_log.signals.clone());
-        combined_signals.extend(launcher_log.signals.clone());
+        if force_launcher_log {
+            suspect_sets.push(launcher_log.suspected_mods.clone());
+            combined_signals.extend(launcher_log.signals.clone());
+        } else {
+            suspect_sets.push(latest_log.suspected_mods.clone());
+            suspect_sets.push(launcher_log.suspected_mods.clone());
+            combined_signals.extend(latest_log.signals.clone());
+            combined_signals.extend(launcher_log.signals.clone());
+        }
     }
     let suspected_mods = merge_suspected_mods(suspect_sets.into_iter().flatten());
     let suspected_mods = if session_healthy {
@@ -516,6 +591,14 @@ pub fn build_crash_diagnosis(
         });
     }
 
+    let world_coords = selected_report
+        .as_ref()
+        .and_then(|r| extract_world_coords(&r.content));
+    let memory_hint = selected_report
+        .as_ref()
+        .and_then(|r| extract_memory_hint(&r.content))
+        .or_else(|| extract_memory_hint(&latest_log.tail));
+
     Ok(CrashDiagnosis {
         reports,
         selected_report,
@@ -529,6 +612,9 @@ pub fn build_crash_diagnosis(
         analysis_source,
         crash_report_stale: stale && explicit.is_none(),
         session_healthy,
+        hs_err_logs,
+        world_coords,
+        memory_hint,
     })
 }
 
@@ -2657,10 +2743,365 @@ fn validate_report_id(report_id: &str) -> Result<PathBuf, CrashError> {
         return Err(CrashError::InvalidReportPath(report_id.to_string()));
     }
     let normalized = report_id.replace('\\', "/");
-    if !normalized.starts_with("crash-reports/") || !normalized.to_lowercase().ends_with(".txt") {
+    let ok = (normalized.starts_with("crash-reports/") && normalized.to_lowercase().ends_with(".txt"))
+        || (normalized.starts_with("hs_err/")
+            && normalized
+                .rsplit('/')
+                .next()
+                .map(|n| {
+                    let lower = n.to_lowercase();
+                    lower.starts_with("hs_err_pid") && lower.ends_with(".log")
+                })
+                .unwrap_or(false))
+        || (normalized.starts_with(".tuffbox/imported-crashes/")
+            && (normalized.to_lowercase().ends_with(".txt")
+                || normalized.to_lowercase().ends_with(".log")));
+    if !ok {
         return Err(CrashError::InvalidReportPath(report_id.to_string()));
     }
+    // hs_err ids are virtual (`hs_err/name`) — resolve to instance root file.
+    if normalized.starts_with("hs_err/") {
+        let name = normalized.trim_start_matches("hs_err/");
+        return Ok(PathBuf::from(name));
+    }
     Ok(relative)
+}
+
+/// List JVM fatal error logs in the instance root (`hs_err_pid*.log`).
+pub fn list_hs_err_logs(project_dir: impl AsRef<Path>) -> Result<Vec<HsErrSummary>, CrashError> {
+    let project_dir = project_dir.as_ref();
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(project_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(out),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let lower = name.to_lowercase();
+        if !(lower.starts_with("hs_err_pid") && lower.ends_with(".log")) {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        let content = fs::read_to_string(&path).unwrap_or_default();
+        let (kind, frame, preview) = summarize_hs_err(&content);
+        out.push(HsErrSummary {
+            id: format!("hs_err/{name}"),
+            name,
+            path,
+            size: metadata.len(),
+            modified,
+            kind,
+            problematic_frame: frame,
+            preview,
+        });
+    }
+    out.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then_with(|| b.name.cmp(&a.name))
+    });
+    Ok(out)
+}
+
+pub fn summarize_hs_err(content: &str) -> (String, Option<String>, String) {
+    let lower = content.to_lowercase();
+    let kind = if lower.contains("outofmemory")
+        || lower.contains("java heap space")
+        || lower.contains("native memory allocation")
+        || lower.contains("# there is insufficient memory")
+    {
+        "oom".to_string()
+    } else if lower.contains("problematic frame") || lower.contains("a fatal error has been detected")
+    {
+        "native".to_string()
+    } else {
+        "unknown".to_string()
+    };
+    let frame = content.lines().find_map(|line| {
+        let t = line.trim();
+        if t.to_lowercase().starts_with("# problematic frame:") {
+            Some(t.trim_start_matches('#').trim().to_string())
+        } else if t.starts_with("C  [") || t.starts_with("j  ") || t.starts_with("v  ~") {
+            Some(t.to_string())
+        } else {
+            None
+        }
+    });
+    let preview: String = content
+        .lines()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .chars()
+        .take(600)
+        .collect();
+    (kind, frame, preview)
+}
+
+pub fn extract_world_coords(text: &str) -> Option<WorldCrashCoords> {
+    for line in text.lines() {
+        let lower = line.to_lowercase();
+        let label = if lower.contains("entity") && lower.contains("coordinate") {
+            "Entity"
+        } else if lower.contains("block location") {
+            "Block"
+        } else if lower.contains("location:") && lower.contains("world:") {
+            "Location"
+        } else {
+            continue;
+        };
+        if let Some((x, y, z)) = parse_three_numbers(line) {
+            return Some(WorldCrashCoords {
+                x,
+                y,
+                z,
+                label: label.into(),
+            });
+        }
+    }
+    None
+}
+
+fn parse_three_numbers(line: &str) -> Option<(f64, f64, f64)> {
+    let mut nums = Vec::new();
+    let mut cur = String::new();
+    for ch in line.chars() {
+        if ch.is_ascii_digit() || ch == '-' || ch == '.' {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            if let Ok(v) = cur.parse::<f64>() {
+                nums.push(v);
+            }
+            cur.clear();
+            if nums.len() >= 3 {
+                break;
+            }
+        }
+    }
+    if !cur.is_empty() {
+        if let Ok(v) = cur.parse::<f64>() {
+            nums.push(v);
+        }
+    }
+    if nums.len() >= 3 {
+        Some((nums[0], nums[1], nums[2]))
+    } else {
+        None
+    }
+}
+
+pub fn extract_memory_hint(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.to_lowercase().starts_with("memory:") {
+            let s = trimmed.trim_start_matches(|c: char| {
+                c.eq_ignore_ascii_case(&'m')
+                    || c.eq_ignore_ascii_case(&'e')
+                    || c.eq_ignore_ascii_case(&'o')
+                    || c.eq_ignore_ascii_case(&'r')
+                    || c.eq_ignore_ascii_case(&'y')
+                    || c == ':'
+                    || c.is_whitespace()
+            });
+            // Simpler: split once on ':'
+            if let Some((_, rest)) = trimmed.split_once(':') {
+                let s = rest.trim();
+                if !s.is_empty() {
+                    return Some(s.chars().take(160).collect());
+                }
+            }
+            let _ = s;
+        }
+    }
+    let lower = text.to_lowercase();
+    if lower.contains("outofmemory") || lower.contains("java heap space") {
+        return Some("OutOfMemoryError detected — raise -Xmx or reduce loaded chunks/mods.".into());
+    }
+    None
+}
+
+/// Copy an external player crash into `.tuffbox/imported-crashes/` and return its report id.
+pub fn import_external_crash(
+    project_dir: impl AsRef<Path>,
+    file_name: &str,
+    content: &str,
+) -> Result<String, CrashError> {
+    let project_dir = project_dir.as_ref();
+    let safe = file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let safe = if safe.to_lowercase().ends_with(".txt") || safe.to_lowercase().ends_with(".log") {
+        safe
+    } else {
+        format!("{safe}.txt")
+    };
+    let dir = project_dir.join(".tuffbox").join("imported-crashes");
+    fs::create_dir_all(&dir).map_err(|source| CrashError::ReadCrashReport {
+        path: dir.clone(),
+        source,
+    })?;
+    let path = dir.join(&safe);
+    if content.len() as u64 > MAX_REPORT_BYTES {
+        return Err(CrashError::ReportTooLarge {
+            size: content.len() as u64,
+        });
+    }
+    fs::write(&path, content).map_err(|source| CrashError::ReadCrashReport {
+        path: path.clone(),
+        source,
+    })?;
+    Ok(format!(".tuffbox/imported-crashes/{safe}"))
+}
+
+/// Export a support pack zip for Discord/GitHub (no secrets beyond log tails).
+pub fn export_diagnose_support_pack(
+    project_dir: impl AsRef<Path>,
+    report_id: Option<&str>,
+    findings_summary: &str,
+    recent_events_summary: &str,
+    action_plan_json: Option<&str>,
+    mod_ids: &[String],
+) -> Result<SupportPackResult, CrashError> {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    let project_dir = project_dir.as_ref();
+    let stamp = chrono_like_stamp();
+    let out_dir = project_dir.join(".tuffbox").join("support");
+    fs::create_dir_all(&out_dir).map_err(|source| CrashError::ReadCrashReport {
+        path: out_dir.clone(),
+        source,
+    })?;
+    let out_path = out_dir.join(format!("diagnose-{stamp}.zip"));
+    let file = fs::File::create(&out_path).map_err(|source| CrashError::ReadCrashReport {
+        path: out_path.clone(),
+        source,
+    })?;
+    let mut zip = ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut file_count = 0usize;
+
+    let meta = format!(
+        "{{\n  \"generatedAt\": \"{stamp}\",\n  \"reportId\": {report},\n  \"findings\": {findings},\n  \"recentEvents\": {events}\n}}\n",
+        stamp = stamp,
+        report = serde_json::to_string(&report_id).unwrap_or_else(|_| "null".into()),
+        findings = serde_json::to_string(findings_summary).unwrap_or_else(|_| "\"\"".into()),
+        events = serde_json::to_string(recent_events_summary).unwrap_or_else(|_| "\"\"".into()),
+    );
+    zip.start_file("meta.json", options)
+        .map_err(|e| CrashError::InvalidReportPath(e.to_string()))?;
+    zip.write_all(meta.as_bytes())
+        .map_err(|source| CrashError::ReadCrashReport {
+            path: out_path.clone(),
+            source,
+        })?;
+    file_count += 1;
+
+    if let Some(plan) = action_plan_json {
+        zip.start_file("action-plan.json", options)
+            .map_err(|e| CrashError::InvalidReportPath(e.to_string()))?;
+        zip.write_all(plan.as_bytes())
+            .map_err(|source| CrashError::ReadCrashReport {
+                path: out_path.clone(),
+                source,
+            })?;
+        file_count += 1;
+    }
+
+    // Attach selected crash / hs_err / imported file.
+    if let Some(id) = report_id {
+        if id != "__latest_log__" && id != "__launcher_log__" {
+            if let Ok(rel) = validate_report_id(id) {
+                let path = project_dir.join(rel);
+                if path.is_file() {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("crash.txt");
+                    if let Ok(bytes) = fs::read(&path) {
+                        zip.start_file(format!("logs/{name}"), options)
+                            .map_err(|e| CrashError::InvalidReportPath(e.to_string()))?;
+                        zip.write_all(&bytes)
+                            .map_err(|source| CrashError::ReadCrashReport {
+                                path: path.clone(),
+                                source,
+                            })?;
+                        file_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Always include latest.log tail if present.
+    let latest = project_dir.join("logs").join("latest.log");
+    if latest.is_file() {
+        let tail = read_tail_bytes(&latest, 256 * 1024).unwrap_or_default();
+        zip.start_file("logs/latest.log.tail.txt", options)
+            .map_err(|e| CrashError::InvalidReportPath(e.to_string()))?;
+        zip.write_all(&tail)
+            .map_err(|source| CrashError::ReadCrashReport {
+                path: latest.clone(),
+                source,
+            })?;
+        file_count += 1;
+    }
+
+    if !mod_ids.is_empty() {
+        let body = format!("mod_count={}\n{}\n", mod_ids.len(), mod_ids.join("\n"));
+        zip.start_file("modlist-ids.txt", options)
+            .map_err(|e| CrashError::InvalidReportPath(e.to_string()))?;
+        zip.write_all(body.as_bytes())
+            .map_err(|source| CrashError::ReadCrashReport {
+                path: out_path.clone(),
+                source,
+            })?;
+        file_count += 1;
+    }
+
+    zip.finish()
+        .map_err(|e| CrashError::InvalidReportPath(e.to_string()))?;
+    Ok(SupportPackResult {
+        path: out_path,
+        file_count,
+    })
+}
+
+fn chrono_like_stamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
+}
+
+fn read_tail_bytes(path: &Path, max: usize) -> Result<Vec<u8>, std::io::Error> {
+    let data = fs::read(path)?;
+    if data.len() <= max {
+        Ok(data)
+    } else {
+        Ok(data[data.len() - max..].to_vec())
+    }
 }
 
 #[cfg(test)]
@@ -2689,6 +3130,7 @@ mod tests {
                 version: "0.15.0".to_string(),
             },
             brief: None,
+            listing: None,
             java: None,
             profiles: Vec::new(),
             mods: vec![ModSpec {
@@ -3382,6 +3824,24 @@ Caused by: java.lang.IllegalStateException: boom
         }"#;
         let m: ModSpec = serde_json::from_str(json).unwrap();
         assert!(m.authors.is_empty());
+    }
+
+    #[test]
+    fn summarizes_hs_err_oom() {
+        let text = "# A fatal error has been detected by the Java Runtime Environment:\n# OutOfMemoryError\n# Problematic frame:\n# C  [jvm.dll+0x123]\n";
+        let (kind, frame, _) = summarize_hs_err(text);
+        assert_eq!(kind, "oom");
+        assert!(frame.is_some());
+    }
+
+    #[test]
+    fn extracts_world_coords_and_memory() {
+        let text = "Entity Coordinates: 12.5, 64.0, -8.25\nMemory: 2048MB / 4096MB up to 8192MB\n";
+        let c = extract_world_coords(text).expect("coords");
+        assert!((c.x - 12.5).abs() < 0.01);
+        assert_eq!(c.label, "Entity");
+        let mem = extract_memory_hint(text).expect("mem");
+        assert!(mem.contains("2048"));
     }
 }
 

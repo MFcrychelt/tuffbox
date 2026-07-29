@@ -24,7 +24,7 @@
   const STATUS_FULL = 3;
 
   type ColorMode = "status" | "date" | "inhabited" | "biome" | "height";
-  type Tool = "pan" | "click" | "box" | "radius" | "region";
+  type Tool = "pan" | "click" | "box" | "radius" | "region" | "poly";
 
   export let worldName: string = "";
   /** "top" = horizontal toolbar (OreGen embed); "dock" = left tools panel + large map */
@@ -39,10 +39,14 @@
   let dimension = "overworld";
 
   let showRegions = true;
+  let showSpawn = true;
+  let spawnChunk: { cx: number; cz: number } | null = null;
   let colorMode: ColorMode = "status";
   let tool: Tool = "box";
   let selection = new Set<string>();
   let statusFilter: "all" | "empty" | "partial" | "full" = "all";
+  let polyPoints: { x: number; y: number }[] = [];
+  let polyAdd = true;
 
   let hover: {
     rx: number; rz: number; cx: number; cz: number;
@@ -178,9 +182,22 @@
     error = null;
     selection = new Set();
     filterActive = false;
+    polyPoints = [];
+    spawnChunk = null;
     try {
       await loadDimensions();
       map = await api.worlds.map(worldName, dimension, $projectPath);
+      try {
+        const info = await api.worlds.readInfo(worldName, $projectPath);
+        if (typeof info.spawnX === "number" && typeof info.spawnZ === "number") {
+          spawnChunk = {
+            cx: Math.floor(info.spawnX / 16),
+            cz: Math.floor(info.spawnZ / 16),
+          };
+        }
+      } catch {
+        spawnChunk = null;
+      }
       loading = false;
       // Canvas mounts with {#if map}; wait for layout so viewport has non-zero size.
       await tick();
@@ -399,6 +416,46 @@
       ctx.stroke();
     }
 
+    if (tool === "poly" && polyPoints.length > 0) {
+      ctx.beginPath();
+      ctx.moveTo(polyPoints[0].x, polyPoints[0].y);
+      for (let i = 1; i < polyPoints.length; i++) {
+        ctx.lineTo(polyPoints[i].x, polyPoints[i].y);
+      }
+      ctx.strokeStyle = polyAdd ? "rgba(120, 200, 255, 0.95)" : "rgba(255, 90, 95, 0.95)";
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.stroke();
+      if (polyPoints.length >= 3) {
+        ctx.closePath();
+        ctx.fillStyle = polyAdd ? "rgba(120, 200, 255, 0.12)" : "rgba(255, 90, 95, 0.12)";
+        ctx.fill();
+      }
+      for (const p of polyPoints) {
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.2 / zoom, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    if (showSpawn && spawnChunk && map) {
+      const wx =
+        (spawnChunk.cx - map.minRegionX * GRID) * CELL + CELL / 2;
+      const wy =
+        (spawnChunk.cz - map.minRegionZ * GRID) * CELL + CELL / 2;
+      const r = Math.max(5 / zoom, 3);
+      ctx.beginPath();
+      ctx.arc(wx, wy, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(34, 197, 94, 0.95)";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.font = `${Math.max(10 / zoom, 8)}px sans-serif`;
+      ctx.fillText("Spawn", wx + r + 2 / zoom, wy + 3 / zoom);
+    }
+
     ctx.restore();
   }
 
@@ -508,6 +565,16 @@
   }
 
   function onClick(evt: MouseEvent) {
+    if (tool === "poly") {
+      const w = screenToWorld(evt.clientX, evt.clientY);
+      if (!w) return;
+      if (polyPoints.length === 0) {
+        polyAdd = !(evt.shiftKey || evt.ctrlKey || evt.metaKey);
+      }
+      polyPoints = [...polyPoints, w];
+      draw();
+      return;
+    }
     if (tool === "region") {
       const hit = cellAt(evt);
       if (!hit) return;
@@ -522,6 +589,58 @@
     if (next.has(key)) next.delete(key); else next.add(key);
     selection = next;
     draw();
+  }
+
+  function pointInPoly(px: number, py: number, pts: { x: number; y: number }[]): boolean {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i].x, yi = pts[i].y;
+      const xj = pts[j].x, yj = pts[j].y;
+      const intersect =
+        yi > py !== yj > py &&
+        px < ((xj - xi) * (py - yi)) / (yj - yi + 1e-12) + xi;
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function applyPolySelection() {
+    if (!map || polyPoints.length < 3) {
+      polyPoints = [];
+      draw();
+      return;
+    }
+    const next = new Set(selection);
+    const xs = polyPoints.map((p) => p.x);
+    const ys = polyPoints.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const lx1 = Math.floor(minX / CELL);
+    const lz1 = Math.floor(minY / CELL);
+    const lx2 = Math.floor(maxX / CELL);
+    const lz2 = Math.floor(maxY / CELL);
+    for (let lz = lz1; lz <= lz2; lz++) {
+      for (let lx = lx1; lx <= lx2; lx++) {
+        const wx = lx * CELL + CELL / 2;
+        const wy = lz * CELL + CELL / 2;
+        if (!pointInPoly(wx, wy, polyPoints)) continue;
+        const hit = cellAtWorld(wx, wy);
+        if (!hit || !hit.cell.present) continue;
+        const key = `${hit.rx}:${hit.rz}:${hit.idx}`;
+        if (polyAdd) next.add(key); else next.delete(key);
+      }
+    }
+    selection = next;
+    polyPoints = [];
+    draw();
+  }
+
+  function onDblClick(evt: MouseEvent) {
+    if (tool !== "poly") return;
+    evt.preventDefault();
+    applyPolySelection();
   }
 
   function onDown(evt: MouseEvent) {
@@ -1073,7 +1192,13 @@
   async function deleteSelected() {
     if (!map || selection.size === 0 || !$projectPath || !worldName) return;
     const n = selection.size;
-    if (!confirm(`Delete ${n} selected chunk(s) in ${dimLabel(dimension)}?\n\nThis cannot be undone (make a Backup first).`)) {
+    if (
+      !confirm(
+        `Delete ${n} selected chunk(s) in ${dimLabel(dimension)}?\n\n` +
+          `This permanently removes chunk data from the save (like MCA Selector).\n` +
+          `Make a Backup first — this cannot be undone.`,
+      )
+    ) {
       return;
     }
     error = null;
@@ -1306,7 +1431,11 @@
     else if (ctrl && e.key === "x") { e.preventDefault(); cutSelected(); }
     else if (ctrl && e.key === "v") { e.preventDefault(); pasteFromClipboard(); }
     else if (ctrl && e.key === "a") { e.preventDefault(); selectAll(); }
-    else if (e.key === "Escape") { clearClipboard(); clearSelection(); }
+    else if (e.key === "Enter" && tool === "poly") { e.preventDefault(); applyPolySelection(); }
+    else if (e.key === "Escape") {
+      if (polyPoints.length > 0) { polyPoints = []; draw(); return; }
+      clearClipboard(); clearSelection();
+    }
     else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }
     else if (e.key === "+" || e.key === "=") zoomBy(1.15);
     else if (e.key === "-") zoomBy(1 / 1.15);
@@ -1355,12 +1484,12 @@
 
   $: if (worldName && $projectPath) load();
   $: if (map) requestAnimationFrame(draw);
-  $: canvasCursor = tool === "pan" ? "grab" : (tool === "click" || tool === "region") ? "pointer" : "crosshair";
+  $: canvasCursor = tool === "pan" ? "grab" : (tool === "click" || tool === "region" || tool === "poly") ? "pointer" : "crosshair";
 </script>
 
 <div class="world-map" class:layout-dock={layout === "dock"} class:layout-top={layout === "top"}>
   <aside class="tools-panel">
-    <div class="title"><MapIcon size={16} /> MCA map{#if layout === "top"} · {worldName}{/if}</div>
+    <div class="title"><MapIcon size={16} /> MCA map · chunk select/delete/export{#if layout === "top"} · {worldName}{/if}</div>
     <div class="tools">
       <select class="ghost select" bind:value={dimension} on:change={load} title="Dimension">
         {#each dimensions as d (d)}
@@ -1370,6 +1499,10 @@
       <label class="toggle" title="Overlay region boundaries">
         <Layers size={14} /> Regions
         <input type="checkbox" bind:checked={showRegions} on:change={draw} />
+      </label>
+      <label class="toggle" title="Show world spawn from level.dat">
+        <MapIcon size={14} /> Spawn
+        <input type="checkbox" bind:checked={showSpawn} on:change={draw} />
       </label>
       <select class="ghost select" bind:value={colorMode} on:change={draw} title="Color mode (N to cycle)">
         <option value="status">by status</option>
@@ -1391,8 +1524,27 @@
         <button class="ghost" class:active={tool === "radius"} on:click={() => (tool = "radius")} title="Drag radius (or click with default radius)">
           <Circle size={14} /> Radius
         </button>
+        <button
+          class="ghost"
+          class:active={tool === "poly"}
+          on:click={() => { tool = "poly"; polyPoints = []; draw(); }}
+          title="Polygon: click vertices, Enter or double-click to apply (Shift = subtract)"
+        >
+          <Pencil size={14} /> Poly
+        </button>
         <button class="ghost" class:active={tool === "region"} on:click={() => (tool = "region")} title="Select whole region (Shift = deselect)">
           <Layers size={14} /> Region
+        </button>
+      </div>
+      <div class="tool-group">
+        <button class="ghost" on:click={selectAll} disabled={!map} title="Select all present chunks (Ctrl+A)">
+          <CheckSquare size={14} /> All
+        </button>
+        <button class="ghost" on:click={invertSelection} disabled={!map} title="Invert selection">
+          <CheckSquare size={14} /> Invert
+        </button>
+        <button class="ghost" on:click={clearSelection} disabled={selection.size === 0} title="Clear selection (Esc)">
+          <XSquare size={14} /> Clear
         </button>
       </div>
       <div class="tool-group">
@@ -1637,6 +1789,7 @@
           style="cursor: {canvasCursor}"
           on:mousemove={onMove}
           on:click={onClick}
+          on:dblclick={onDblClick}
           on:mousedown={onDown}
           on:mouseup={onUp}
           on:mouseleave={onLeave}
@@ -1810,7 +1963,12 @@
 
   .layout-dock .viewport-col {
     padding: 8px 10px 10px;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
     height: 100%;
+    display: flex;
+    flex-direction: column;
   }
 
   .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
@@ -1879,7 +2037,7 @@
 
   .layout-dock .map-scroll {
     flex: 1 1 0;
-    min-height: 0;
+    min-height: 240px;
     height: auto;
   }
 

@@ -40,7 +40,7 @@
     ide: "IDE Workflow",
     mods: "Mods",
     graph: "Dependency Graph",
-    world: "World Map",
+    world: "World · MCA map",
     library: "Library",
     chats: "Chats",
     diagnostics: "Health Check",

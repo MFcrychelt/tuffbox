@@ -149,6 +149,7 @@ pub fn import_modrinth_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, I
             version: loader_version,
         },
         brief: None,
+        listing: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -332,6 +333,7 @@ pub fn import_curseforge_pack(path: impl AsRef<Path>) -> Result<ProjectManifest,
             version: loader_version,
         },
         brief: None,
+        listing: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -769,6 +771,7 @@ pub fn import_instance_directory(
             version: loader_version,
         },
         brief: None,
+        listing: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -1204,6 +1207,7 @@ pub fn import_prism_instance(path: impl AsRef<Path>) -> Result<ProjectManifest, 
             version: loader_version,
         },
         brief: None,
+        listing: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,

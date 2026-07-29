@@ -13,7 +13,7 @@ Media → Cut → Edit → Fusion → Color → Fairlight → Deliver
 Для Minecraft-сборок:
 
 ```text
-Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snapshots → Export → Release
+Brief → Setup → Content → Resolve → Tune → History → Test → Diagnose → Snapshots → Export → Release
 ```
 
 Каждая вкладка отвечает за один этап разработки, имеет понятный результат и не смешивает задачи.
@@ -39,24 +39,27 @@ Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snaps
 
 ## IDE Workflow Pages
 
-### 1. Brief — идея сборки
+### 1. Brief — storefront listing
 
-Цель: зафиксировать, что именно автор делает.
+Цель: собрать карточку релиза так, как её увидит игрок на Modrinth / CurseForge, и параллельно сохранить внутренние planning notes.
 
-Поля будущей реализации:
+Действия:
 
-- название и описание модпака;
-- целевая аудитория: dev/server/casual/low-end;
-- gameplay pillars: tech, magic, exploration, performance, QoL;
-- hard constraints: loader, Minecraft version, Java, RAM budget;
-- forbidden mods / required mods;
-- release target: Modrinth, CurseForge, private server, Prism zip.
+- **Identity** — название, summary (мягкий лимит ~256 символов), авторы, категории;
+- **Icon** — загрузка квадратной иконки в `.tuffbox/listing/icon.*` (в экспорт уходит как `overrides/icon.png` / CurseForge `pack.png`);
+- **Description** — длинный markdown body с live-превью (картинки по URL и локальные из gallery);
+- **Gallery** — локальные скрины / URL, вставка в описание, paste из буфера;
+- **Author notes** (свёрнуто) — goal / audience / pillars / constraints / release targets / notes в `manifest.brief`.
+
+Live preview справа: переключатель Modrinth | CurseForge card + вкладка Page preview.
+
+При Save: `manifest.listing` + sync `project.name` ← listing.name, `project.description` ← listing.summary; auto-snapshot `update-listing`.
 
 Результат:
 
-- pack brief;
-- список ограничений;
-- базовый чеклист качества.
+- готовая storefront-карточка (summary + icon + body);
+- артефакты для Export (`.mrpack` summary/icon, CF pack.png);
+- planning notes без удаления контракта `manifest.brief`.
 
 ### 2. Setup — проект и runtime
 
@@ -84,12 +87,16 @@ Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snaps
 
 Действия:
 
-- поиск Modrinth;
-- add/update/remove;
-- local jar import;
-- side labeling;
-- source metadata;
-- auto snapshot перед опасными изменениями.
+- **Add** browser: плотная сетка карточек (≈300px), Search glyph слева / spinner справа; placeholder по content-type; `/` фокус поиска, Esc закрывает;
+- поиск Modrinth / CurseForge (и unified);
+- add/update/remove + bulk install с deps (MR и CF);
+- **Import…** — local jar/zip → copy в `mods/`/`resourcepacks/`/… + sync/identify;
+- **Resync** folders с summary (новые / wrong-loader / duplicates);
+- side labeling; source metadata;
+- wrong-loader panel (disable / remove loose jars);
+- missing deps → Auto-download или **Open in Resolve**;
+- trail: History / Resolve / Snapshots после мутаций;
+- auto snapshot перед опасными изменениями (+ pack events в History).
 
 Результат:
 
@@ -119,15 +126,16 @@ Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snaps
 
 ### 5. Tune — configs/scripts/overrides
 
-Цель: настроить сборку без потери контроля.
+Цель: настроить сборку без потери контроля (config lab; Recipes/Quests — отдельные экраны).
 
 Действия:
 
-- редактировать `config/`, `defaultconfigs/`, `kubejs/`, `scripts/`;
-- format JSON/TOML;
-- поиск по конфигам;
-- snippets для KubeJS/CraftTweaker;
-- auto snapshot перед сохранением.
+- редактировать `config/`, `defaultconfigs/`, `kubejs/`, `scripts/`, `overrides/`, `options.txt`;
+- filter по имени + content search с прыжком к строке;
+- Format JSON/TOML; Lint on open/save;
+- snippets KubeJS / CraftTweaker (вставка в курсор);
+- auto snapshot перед сохранением + ссылки в History / Snapshots;
+- confirm при уходе со stage с unsaved edits.
 
 Результат:
 
@@ -135,48 +143,96 @@ Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snaps
 - rollback-safe tuning;
 - scripts/overrides готовы к экспорту.
 
-### 6. Test — тестовые запуски
+### 5b. Quests — FTB Quests editor + AI
 
-Цель: проверить, что сборка реально запускается.
-
-Действия:
-
-- client smoke test;
-- server dry run;
-- low-end profile run;
-- matrix по Java/loader/profile;
-- tail `logs/latest.log`;
-- сохранить run result.
-
-Результат:
-
-- run history;
-- latest.log;
-- startup time;
-- pass/fail для профилей.
-
-### 7. Diagnose — здоровье и краши
-
-Цель: превратить ошибки в понятный список действий.
+Цель: собирать полноценные quest lines (описания, deps, tasks/rewards) без in-game editor.
 
 Действия:
 
-- graph diagnostics;
-- crash report parser;
-- suspected mods;
-- связь с последними изменениями;
-- AI explanation только как advisor;
-- proposed fix plan без авто-применения.
+- визуальный canvas + inspector (SNBT round-trip); AI sidebar **закрыт по умолчанию** (открыть кнопкой; состояние в `localStorage`);
+- **Ctrl/Cmd+S** — Save all (SNBT); уход со stage / Reload при dirty — confirm;
+- клик по validation issues → jump + fit к квесту; search: Enter = first match, Esc = clear;
+- **AI sidebar** — example chips, multi-turn chat, multi-pass для линий на 20+ квестов; Advanced: Force AI / Paste JSON / Lore / Extend;
+- Review → **Apply** обновляет editor в памяти; **Save** пишет SNBT (Apply ≠ Save);
+- Book / Groups — drawer под toolbar (dirty-dot); Save book/groups входит в Save all;
+- quest search; description formatting (`&` codes).
 
 Результат:
 
-- объяснение проблемы;
-- список гипотез;
-- безопасный change plan.
+- валидные `config/ftbquests/quests/**` главы;
+- lore + progression, читаемые FTB Quests in-game.
 
-### 8. Snapshots — история и rollback
+### 6. History — timeline сборки
 
-Цель: дать автору свободу экспериментировать.
+Цель: хронологический журнал всего, что произошло со сборкой (activity feed; Snapshots — отдельно, checkpoints).
+
+Действия:
+
+- смотреть ленту по времени (launcher ops, AI apply, ручные правки на диске);
+- **Scan now** — delta vs baseline (mtime/size/hash), не dump всех файлов;
+- фильтры по category / actor (`Launcher` / `Disk` / `AI` / `You`);
+- jar drift: jar в `mods/` без записи в манифесте;
+- Explain change / Open in Diagnose (контекст для AI, без auto-apply);
+- opt-in focused scan (debounce ~60s, пока IDE открыта).
+
+Результат:
+
+- видимые внешние правки;
+- `recent_changes` для Diagnose/AI из того же журнала;
+- ссылки на snapshot при rollback-safe ops.
+
+### 7. Test — тестовые запуски
+
+Цель: проверить, что сборка реально запускается (launch lab; Diagnose — для разбора крашей).
+
+Действия:
+
+- **Smoke client** — выбранный client-профиль + preflight;
+- **Server dry run** — `server.properties` (seed / online-mode) → server launch;
+- **Low-end smoke** — low-end профиль или override ~2048 MB;
+- Quick Play в мир из `saves/`;
+- sequential **matrix** профилей (stop-on-fail);
+- tail `logs/latest.log` + CPU/RAM meters;
+- Pass / Fail / TimedOut / Crashed + auto-capture логов и crash-reports.
+
+Результат:
+
+- run history с verdict badge и startup time;
+- captured logs в `.tuffbox/test-runs/{id}/`;
+- переход в Diagnose без дублирования ActionPlan.
+
+### 8. Diagnose — здоровье и краши
+
+Цель: превратить ошибки в понятный список действий (author workspace).
+
+Действия:
+
+- source picker: crash-report / `latest.log` / `launcher.log` / `hs_err_pid*.log`; empty-state подсказки;
+- Evidence: signal groups + crash sections (клик → jump в лог);
+- Suspected mods + recent snapshots; bisect checklist (disable half);
+- Analysis tools: Class finder / Who depends / MCreator list;
+- Failure cards: OOM, cascading (NeoForge mask), mixin, client-only, world coords;
+- graph diagnostics + wrong/dup jars;
+- Recent pack changes + History focus (auto-select log + highlight);
+- AI ActionPlan / Rules — Review → snapshot → Apply (без silent write);
+- Support pack zip (`.tuffbox/support/`) + drop/import player crash / mclo.gs URL;
+- Save KB: solution, symptoms, actions JSON, notes, copy export, open folder.
+
+Shortcuts / UX:
+
+- Prefer crash-report; if folder empty → latest / launcher / hs_err;
+- Apply ≠ auto-fix: всегда review;
+- Support pack path копируется в clipboard.
+
+Результат:
+
+- объяснение проблемы + гипотезы;
+- безопасный change plan;
+- пакет для Discord/GitHub поддержки.
+
+### 9. Snapshots — checkpoints и rollback
+
+Цель: дать автору свободу экспериментировать. Это **не** activity feed — лента изменений живёт во вкладке History.
 
 Действия:
 
@@ -190,9 +246,9 @@ Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snaps
 
 - безопасные checkpoint'ы;
 - быстрый откат;
-- понятная история изменений.
+- точки восстановления (events ссылаются на `snapshotId` когда есть).
 
-### 9. Export — сборка артефактов
+### 10. Export — сборка артефактов
 
 Цель: подготовить модпак к распространению.
 
@@ -211,7 +267,7 @@ Brief → Setup → Content → Resolve → Tune → Test → Diagnose → Snaps
 - reproducible lockfile;
 - server/client file split.
 
-### 10. Release — публикация и поддержка
+### 11. Release — публикация и поддержка
 
 Цель: довести сборку до пользователей.
 
@@ -252,19 +308,20 @@ Sidebar → Open IDE → IdeWorkspace
 Внутри IDE уже есть workflow rail:
 
 ```text
-Brief | Setup | Content | Resolve | Tune | Test | Diagnose | Snapshots | Export | Release
+Brief | Setup | Content | Resolve | Tune | History | Test | Diagnose | Snapshots | Export | Release
 ```
 
 Реальные подключённые страницы:
 
-- Brief → сохраняемый pack brief в manifest;
+- Brief → storefront `manifest.listing` + collapsed Author notes (`manifest.brief`);
 - Setup → ProjectSettings;
-- Content → Mods;
+- Content → Mods (Import/Resync, CF+MR bulk, wrong-loader, Ideas «Often together», Resolve/History trails);
 - Resolve → Graph;
-- Tune → ConfigEditor;
+- Tune → ConfigEditor (roots + search jump + format/lint + snippets + snapshot trail);
+- History → ChangeHistory (chrono timeline, delta scan, AI context);
 - Test → запуск выбранного profile и tail `latest.log`;
-- Diagnose → Diagnostics;
-- Snapshots → Snapshots with compare, rollback and inline tracked-file diff;
+- Diagnose → Diagnostics (+ Recent pack changes; **AI ActionPlanReviewPanel** vs heuristic Fix plan);
+- Snapshots → Snapshots with compare, rollback and inline tracked-file diff (checkpoints, not activity feed);
 - Export → базовый `.mrpack` и server pack builder;
 - Release → version bump, export validation, generated changelog and release snapshot.
 

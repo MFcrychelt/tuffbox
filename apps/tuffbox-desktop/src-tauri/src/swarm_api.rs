@@ -14,7 +14,7 @@ use tuffbox_core::swarm::{
     top_cooccurrence_pairs, write_pending_action_plan, ExperienceCapsule, ModPairStat,
     STRONG_MATCH_THRESHOLD,
 };
-use tuffbox_core::{ProjectManifest, Snapshot, SnapshotMeta, SnapshotStore};
+use tuffbox_core::{ContentProvider, ProjectManifest, Snapshot, SnapshotMeta, SnapshotStore};
 use tauri::Emitter;
 
 fn manifest_parent(path: &str) -> Result<PathBuf, String> {
@@ -1275,6 +1275,27 @@ pub async fn suggest_partners_for_mod(
     let mc = manifest.minecraft.version.clone();
     let installed: std::collections::HashSet<String> = pack_mod_ids(&manifest).into_iter().collect();
 
+    // Bridge CF numeric / project ids → Modrinth-style slug when the mod is already in the pack.
+    let mod_id = {
+        let raw = mod_id.trim().to_string();
+        let bridged = manifest.mods.iter().find_map(|m| {
+            let id_match = m.id.eq_ignore_ascii_case(&raw)
+                || m.source
+                    .project_id
+                    .as_deref()
+                    .is_some_and(|p| p.eq_ignore_ascii_case(&raw));
+            if !id_match {
+                return None;
+            }
+            if !m.id.is_empty() && !m.id.chars().all(|c| c.is_ascii_digit()) {
+                return Some(m.id.clone());
+            }
+            m.source.project_id.clone().filter(|p| !p.chars().all(|c| c.is_ascii_digit()))
+        });
+        bridged.unwrap_or(raw)
+    };
+    let mod_id_lower = mod_id.to_ascii_lowercase();
+
     let mut primary = Vec::new();
     if let (Some(url), Some(key)) = (
         integrations::swarm_supabase_url(),
@@ -1317,22 +1338,57 @@ pub async fn suggest_partners_for_mod(
     let local_pairs = top_cooccurrence_pairs(&project_dir, 80);
     let local = tuffbox_core::mod_suggest::partners_from_pairs(&mod_id, &local_pairs, limit * 2);
     let partners = tuffbox_core::mod_suggest::soft_boost_partners(&primary, &local, limit * 2);
-    Ok(partners
+    let filtered: Vec<_> = partners
         .into_iter()
         .filter(|p| {
             let slug = p.partner.to_ascii_lowercase();
             !installed.contains(&slug)
                 && !installed.contains(&p.partner)
-                && slug != mod_id.to_ascii_lowercase()
+                && slug != mod_id_lower
         })
-        .take(limit)
-        .map(|p| {
-            json!({
-                "slug": p.partner,
-                "count": p.pack_count,
-            })
-        })
-        .collect())
+        .take(limit * 2)
+        .collect();
+
+    // Compat filter + name/icon enrichment (Modrinth versions for this MC+loader).
+    let enriched = tokio::task::spawn_blocking({
+        let mc = mc.clone();
+        let loader = loader.clone();
+        move || {
+            let provider = tuffbox_core::ModrinthProvider::new();
+            let query = tuffbox_core::ProviderSearchQuery {
+                minecraft_version: Some(mc),
+                loader: Some(loader),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            for p in filtered {
+                let slug = p.partner.clone();
+                let versions = provider.get_versions(&slug, &query).unwrap_or_default();
+                if versions.is_empty() {
+                    continue;
+                }
+                let (name, icon) = provider
+                    .get_project(&slug)
+                    .map(|proj| (proj.name, proj.icon_url))
+                    .unwrap_or_else(|_| (slug.clone(), None));
+                out.push(json!({
+                    "slug": slug,
+                    "count": p.pack_count,
+                    "name": name,
+                    "iconUrl": icon,
+                    "compatibleVersion": versions.first().map(|v| v.version_number.clone()),
+                }));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+            out
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(enriched)
 }
 
 fn collect_crash_fix_timeline(

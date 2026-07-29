@@ -122,7 +122,37 @@ export interface QuestPlan {
   needsUserReview?: boolean;
   source?: string | null;
   chapterGroups?: QuestChapterGroup[];
+  rewardTables?: QuestPlanRewardTable[];
   chapters: QuestPlanChapter[];
+}
+
+export interface QuestPlanRewardTable {
+  id: string;
+  title?: string | null;
+  entries: { rewardId: string; weight: number }[];
+  emptyWeight?: number;
+}
+
+export interface QuestChatMessage {
+  role: string;
+  content: string;
+  createdAt?: string | null;
+  plan?: QuestPlan | null;
+  progressLog?: string[] | null;
+}
+
+export interface QuestChatSession {
+  id: string;
+  title: string;
+  messages: QuestChatMessage[];
+  pendingPlan?: QuestPlan | null;
+  updatedAt: string;
+}
+
+export interface QuestChatTurnResult {
+  session: QuestChatSession;
+  merge: QuestPlanMergeResult;
+  progressLog: string[];
 }
 
 export interface QuestPlanChapter {
@@ -310,6 +340,22 @@ export interface PackBrief {
   notes: string;
 }
 
+export interface ListingGalleryItem {
+  path?: string | null;
+  url?: string | null;
+  caption?: string | null;
+}
+
+export interface ProjectListing {
+  name: string;
+  summary: string;
+  bodyMarkdown: string;
+  iconPath?: string | null;
+  gallery: ListingGalleryItem[];
+  categories: string[];
+  authors: string[];
+}
+
 export interface ModDependencySpec {
   type: "requires" | "optional" | "recommended" | "incompatible" | "embedded";
   target: string;
@@ -375,6 +421,7 @@ export interface ChangeAction {
 
 export interface HistorySettings {
   tracked: Record<string, boolean>;
+  focusedScan?: boolean;
 }
 
 export interface ProjectChangeEntry {
@@ -389,6 +436,33 @@ export interface ProjectChangeEntry {
   preview: string;
   diff: string;
   canOpen: boolean;
+  tags?: string[];
+  crashFingerprintKey?: string | null;
+  planSource?: string | null;
+  actor?: string;
+  op?: string;
+}
+
+export interface PackEvent {
+  id: string;
+  ts: string;
+  actor: string;
+  op: string;
+  paths: string[];
+  category: string;
+  summary: string;
+  snapshotId?: string | null;
+  tags?: string[];
+  meta?: Record<string, unknown> | null;
+}
+
+export interface ScanProjectChangesResult {
+  events: PackEvent[];
+  baselineUpdated: boolean;
+  added: number;
+  modified: number;
+  removed: number;
+  jarDrift: number;
 }
 
 export interface HistoryFileContent {
@@ -426,6 +500,8 @@ export interface TestRunRecord {
   status: string;
   logPath: string;
   durationSeconds: number | null;
+  verdictReason?: string | null;
+  capturedPaths?: string[];
 }
 
 export interface LaunchResult {
@@ -902,6 +978,51 @@ export const api = {
     migrateSchema(p?: string) { return cmd<SchemaStatus>("migrate_project_schema", pathArg(p)); },
     getBrief(p?: string) { return cmd<PackBrief>("get_project_brief", pathArg(p)); },
     updateBrief(brief: PackBrief, p?: string) { return cmd<void>("update_project_brief", { ...pathArg(p), brief }); },
+    getListing(p?: string) { return cmd<ProjectListing>("get_project_listing", pathArg(p)); },
+    updateListing(listing: ProjectListing, p?: string) {
+      return cmd<void>("update_project_listing", { ...pathArg(p), listing });
+    },
+    updateBriefAndListing(brief: PackBrief, listing: ProjectListing, p?: string) {
+      return cmd<void>("update_project_brief_and_listing", { ...pathArg(p), brief, listing });
+    },
+    setListingIcon(sourceFile: string, p?: string) {
+      return cmd<ProjectListing>("set_project_listing_icon", { ...pathArg(p), sourceFile });
+    },
+    clearListingIcon(p?: string) {
+      return cmd<ProjectListing>("clear_project_listing_icon", pathArg(p));
+    },
+    addListingGalleryImage(opts: {
+      sourceFile?: string | null;
+      url?: string | null;
+      caption?: string | null;
+    }, p?: string) {
+      return cmd<ProjectListing>("add_listing_gallery_image", {
+        ...pathArg(p),
+        sourceFile: opts.sourceFile ?? null,
+        url: opts.url ?? null,
+        caption: opts.caption ?? null,
+      });
+    },
+    addListingGalleryBytes(bytesBase64: string, extension?: string | null, caption?: string | null, p?: string) {
+      return cmd<ProjectListing>("add_listing_gallery_bytes", {
+        ...pathArg(p),
+        bytesBase64,
+        extension: extension ?? null,
+        caption: caption ?? null,
+      });
+    },
+    removeListingGalleryImage(index: number, p?: string) {
+      return cmd<ProjectListing>("remove_listing_gallery_image", { ...pathArg(p), index });
+    },
+    reorderListingGallery(from: number, to: number, p?: string) {
+      return cmd<ProjectListing>("reorder_listing_gallery", { ...pathArg(p), from, to });
+    },
+    readListingAsset(relativePath: string, p?: string) {
+      return cmd<string>("read_listing_asset", { ...pathArg(p), relativePath });
+    },
+    ensureListingFolder(p?: string) {
+      return cmd<string>("ensure_listing_folder", pathArg(p));
+    },
     getDir(p?: string) { return cmd<string>("get_project_dir", pathArg(p)); },
     getManifestSchema(p?: string) { return cmd<Record<string, unknown>>("get_manifest_schema", pathArg(p)); },
     runValidation(p?: string) { return cmd<Record<string, unknown>>("run_project_validation", pathArg(p)); },
@@ -929,9 +1050,31 @@ export const api = {
   mods: {
     list(p?: string) { return cmd<ModInfo[]>("list_mods", pathArg(p)); },
     syncFolder(p?: string) { return cmd<Record<string, unknown>[]>("sync_mods_folder", pathArg(p)); },
+    importLocal(
+      sourcePaths: string[],
+      contentType?: string | null,
+      p?: string,
+    ) {
+      return cmd<{
+        imported: string[];
+        identified: string[];
+        skipped: string[];
+        baselineUpdated?: boolean;
+      }>("import_local_content_files", {
+        ...pathArg(p),
+        sourcePaths,
+        contentType: contentType ?? null,
+      });
+    },
     add(modId: string, side: string, p?: string) { return cmd<void>("add_modrinth_mod", { ...pathArg(p), modId, side }); },
     addWithDeps(modId: string, side: string, p?: string) { return cmd<string[]>("add_modrinth_mod_with_dependencies", { ...pathArg(p), modId, side }); },
     addManyWithDeps(modIds: string[], side: string, p?: string) { return cmd<string[]>("add_modrinth_mods_with_dependencies", { ...pathArg(p), modIds, side }); },
+    addCurseforge(modId: string, side: string, p?: string) {
+      return cmd<void>("add_curseforge_mod", { ...pathArg(p), modId, side });
+    },
+    addCurseforgeManyWithDeps(modIds: string[], side: string, p?: string) {
+      return cmd<string[]>("add_curseforge_mods_with_dependencies", { ...pathArg(p), modIds, side });
+    },
     /** Install Steam Bridge jar matching this pack's MC + loader (GitHub releases). */
     installSteamBridge(p?: string) {
       return cmd<{
@@ -991,16 +1134,45 @@ export const api = {
     getInfo(slug: string) { return cmd<Record<string, unknown> | null>("get_mod_info", { slug }); },
     compareModpacks(pathA: string, pathB: string) { return cmd<Record<string, unknown>>("compare_modpacks", { pathA, pathB }); },
 
-    // Modrinth search
+    // Modrinth / CurseForge / unified search
     search(query: string, opts?: {
-      gameVersion?: string; loader?: string; category?: string;
-      environment?: string; license?: string; sort?: string; contentType?: string;
-      p?: string;
+      gameVersion?: string | null; loader?: string | null; category?: string | null;
+      environment?: string | null; license?: string | null; sort?: string | null;
+      contentType?: string | null; page?: number; pageSize?: number; p?: string;
     }) {
       const { p, ...rest } = opts ?? {};
-      return cmd<SearchResult[]>("search_modrinth_mods", { ...pathArg(p), query, ...rest });
+      return cmd<{ results: SearchResult[]; total: number }>("search_modrinth_mods", {
+        ...pathArg(p),
+        query,
+        ...rest,
+      });
+    },
+    searchCurseforge(query: string, opts?: {
+      gameVersion?: string | null; loader?: string | null; contentType?: string | null;
+      page?: number; pageSize?: number; sortField?: number | null; p?: string;
+    }) {
+      const { p, ...rest } = opts ?? {};
+      return cmd<{ results: SearchResult[]; total: number }>("search_curseforge_mods", {
+        ...pathArg(p),
+        query,
+        ...rest,
+      });
+    },
+    searchUnified(query: string, opts?: {
+      gameVersion?: string | null; loader?: string | null; contentType?: string | null;
+      page?: number; pageSize?: number; p?: string;
+    }) {
+      const { p, ...rest } = opts ?? {};
+      return cmd<{ results: SearchResult[]; total: number }>("search_unified_mods", {
+        ...pathArg(p),
+        query,
+        ...rest,
+      });
     },
     previewInstall(modId: string, p?: string) { return cmd<ModInstallPreview>("preview_modrinth_install", { ...pathArg(p), modId }); },
+    previewCurseforgeInstall(modId: string, p?: string) {
+      return cmd<ModInstallPreview>("preview_curseforge_install", { ...pathArg(p), modId });
+    },
     getIcon(projectId: string) { return cmd<string | null>("get_modrinth_project_icon", { projectId }); },
     getProject(projectId: string) { return cmd<SearchResult>("get_modrinth_project", { projectId }); },
     getUserState(p?: string) {
@@ -1035,9 +1207,12 @@ export const api = {
   config: {
     list(p?: string) { return cmd<ConfigFileSummary[]>("list_config_files", pathArg(p)); },
     read(relativePath: string, p?: string) { return cmd<string>("read_config_file", { ...pathArg(p), relativePath }); },
-    write(relativePath: string, content: string, p?: string) { return cmd<void>("write_config_file", { ...pathArg(p), relativePath, content }); },
+    write(relativePath: string, content: string, p?: string) {
+      return cmd<{ snapshotId: string }>("write_config_file", { ...pathArg(p), relativePath, content });
+    },
     search(query: string, p?: string) { return cmd<ConfigSearchMatch[]>("search_in_configs", { ...pathArg(p), query }); },
     lint(relativePath: string, p?: string) { return cmd<LintResult[]>("lint_config", { ...pathArg(p), relativePath }); },
+    formatToml(content: string) { return cmd<string>("format_toml", { content }); },
   },
 
   // ── Graph & Resolve ───────────────────────────────────────────────
@@ -1053,17 +1228,44 @@ export const api = {
 
   // ── Launch ────────────────────────────────────────────────────────
   launch: {
-    profile(profile: string, p?: string) { return cmd<LaunchResult>("launch_profile", { ...pathArg(p), profile }); },
+    profile(profile: string, p?: string, memoryMbOverride?: number | null) {
+      return cmd<LaunchResult>("launch_profile", {
+        ...pathArg(p),
+        profile,
+        memoryMbOverride: memoryMbOverride ?? null,
+      });
+    },
     server(p?: string) { return cmd<LaunchResult>("launch_server", pathArg(p)); },
-    quickPlay(profile: string, quickPlayType?: string | null, quickPlayValue?: string | null, p?: string) {
-      return cmd<LaunchResult>("launch_with_quick_play", { ...pathArg(p), profile, quickPlayType, quickPlayValue });
+    quickPlay(
+      profile: string,
+      quickPlayType?: string | null,
+      quickPlayValue?: string | null,
+      p?: string,
+      memoryMbOverride?: number | null,
+    ) {
+      return cmd<LaunchResult>("launch_with_quick_play", {
+        ...pathArg(p),
+        profile,
+        quickPlayType,
+        quickPlayValue,
+        memoryMbOverride: memoryMbOverride ?? null,
+      });
     },
     listRunning() { return cmd<RunningInstance[]>("list_running_instances"); },
     kill(instanceId: string) { return cmd<string>("kill_running_instance", { instanceId }); },
     liveDebug(instanceId?: string | null) {
       return cmd<LiveDebugStats>("get_live_debug_stats", { instanceId: instanceId ?? null });
     },
-    generateServerProperties(p?: string) { return cmd<string>("generate_server_properties", pathArg(p)); },
+    generateServerProperties(
+      p?: string,
+      opts?: { levelSeed?: string | null; onlineMode?: boolean | null },
+    ) {
+      return cmd<string>("generate_server_properties", {
+        ...pathArg(p),
+        levelSeed: opts?.levelSeed ?? null,
+        onlineMode: opts?.onlineMode ?? null,
+      });
+    },
   },
 
   // ── Stats & History ───────────────────────────────────────────────
@@ -1079,6 +1281,13 @@ export const api = {
     readFile(relativePath: string, p?: string) { return cmd<HistoryFileContent>("read_project_history_file", { ...pathArg(p), relativePath }); },
     createSnapshot(roots: string[], p?: string) { return cmd<Snapshot>("create_tracked_history_snapshot", { ...pathArg(p), roots }); },
     rollbackFile(snapshotId: string, relativePath: string, p?: string) { return cmd<void>("rollback_history_file", { ...pathArg(p), snapshotId, relativePath }); },
+    scan(p?: string) { return cmd<ScanProjectChangesResult>("scan_project_changes", pathArg(p)); },
+    recentEvents(limit?: number, p?: string) {
+      return cmd<PackEvent[]>("list_recent_pack_events", { ...pathArg(p), limit: limit ?? 20 });
+    },
+    explain(eventId: string, p?: string) {
+      return cmd<Record<string, unknown>>("explain_pack_change", { ...pathArg(p), eventId });
+    },
   },
 
   // ── Snapshots ─────────────────────────────────────────────────────
@@ -1486,6 +1695,61 @@ export const api = {
         forceAi,
       });
     },
+    /** Multi-pass outline → lore → ground → layout (20+ quest lines). */
+    generateQuestLine(prompt: string, forceAi = false, p?: string) {
+      return cmd<QuestPlanMergeResult>("generate_quest_line", {
+        ...pathArg(p),
+        prompt,
+        forceAi,
+      });
+    },
+    filterAndMergePlan(
+      plan: QuestPlan,
+      chapterKeys: string[],
+      questKeys: string[],
+      p?: string,
+    ) {
+      return cmd<QuestPlanMergeResult>("filter_and_merge_quest_plan", {
+        ...pathArg(p),
+        plan,
+        chapterKeys,
+        questKeys,
+      });
+    },
+    listChats(p?: string) {
+      return cmd<QuestChatSession[]>("list_quest_chat_sessions", pathArg(p));
+    },
+    newChat(title?: string | null, p?: string) {
+      return cmd<QuestChatSession>("new_quest_chat_session", {
+        ...pathArg(p),
+        title: title ?? null,
+      });
+    },
+    loadChat(chatId: string, p?: string) {
+      return cmd<QuestChatSession>("load_quest_chat_session", {
+        ...pathArg(p),
+        chatId,
+      });
+    },
+    saveChat(session: QuestChatSession, p?: string) {
+      return cmd<void>("save_quest_chat_session", { ...pathArg(p), session });
+    },
+    deleteChat(chatId: string, p?: string) {
+      return cmd<void>("delete_quest_chat_session", { ...pathArg(p), chatId });
+    },
+    chatTurn(
+      message: string,
+      opts?: { chatId?: string | null; forceAi?: boolean; intent?: string | null },
+      p?: string,
+    ) {
+      return cmd<QuestChatTurnResult>("quest_chat_turn", {
+        ...pathArg(p),
+        message,
+        chatId: opts?.chatId ?? null,
+        forceAi: opts?.forceAi ?? false,
+        intent: opts?.intent ?? null,
+      });
+    },
     validatePlan(plan: QuestPlan) {
       return cmd<QuestPlanValidation>("validate_quest_plan", { plan });
     },
@@ -1609,6 +1873,20 @@ export const api = {
   // ── Test Runs ─────────────────────────────────────────────────────
   testRuns: {
     list(p?: string) { return cmd<TestRunRecord[]>("list_test_runs", pathArg(p)); },
+    finalize(
+      runId: string,
+      status: string,
+      opts?: { durationSeconds?: number | null; verdictReason?: string | null },
+      p?: string,
+    ) {
+      return cmd<TestRunRecord>("finalize_test_run", {
+        ...pathArg(p),
+        runId,
+        status,
+        durationSeconds: opts?.durationSeconds ?? null,
+        verdictReason: opts?.verdictReason ?? null,
+      });
+    },
   },
 
   // ── Templates ─────────────────────────────────────────────────────

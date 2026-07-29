@@ -304,7 +304,7 @@ pub fn export_modrinth_pack(
         game: "minecraft".to_string(),
         version_id: manifest.project.version.clone(),
         name: manifest.project.name.clone(),
-        summary: manifest.project.description.clone(),
+        summary: crate::listing::pack_summary(manifest),
         files,
         dependencies,
     };
@@ -316,7 +316,8 @@ pub fn export_modrinth_pack(
     zip.start_file("modrinth.index.json", options)?;
     zip.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
 
-    let override_count = add_overrides(&mut zip, project_dir, options)?;
+    let mut override_count = add_overrides(&mut zip, project_dir, options)?;
+    override_count += add_listing_pack_icon(&mut zip, manifest, project_dir, options, ListingIconMode::Modrinth)?;
     zip.finish()?;
 
     Ok(ExportResult {
@@ -519,6 +520,13 @@ pub fn export_curseforge_pack(
     }
 
     let mut override_count = add_overrides(&mut zip, project_dir, options)?;
+    override_count += add_listing_pack_icon(
+        &mut zip,
+        manifest,
+        project_dir,
+        options,
+        ListingIconMode::CurseForge,
+    )?;
     for jar in &override_jars {
         let dest = format!(
             "overrides/mods/{}",
@@ -778,6 +786,45 @@ fn add_overrides<W: Write + Seek>(
         let dir = project_dir.join(root);
         if dir.is_dir() {
             count += add_dir(zip, project_dir, &dir, options, &ignore)?;
+        }
+    }
+    Ok(count)
+}
+
+#[derive(Clone, Copy)]
+enum ListingIconMode {
+    Modrinth,
+    CurseForge,
+}
+
+fn add_listing_pack_icon<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    manifest: &ProjectManifest,
+    project_dir: &Path,
+    options: SimpleFileOptions,
+    mode: ListingIconMode,
+) -> Result<usize, ExportError> {
+    let Some(listing) = manifest.listing.as_ref() else {
+        return Ok(0);
+    };
+    let Some(src) = crate::listing::resolve_listing_icon(project_dir, listing) else {
+        return Ok(0);
+    };
+    let bytes = fs::read(&src)?;
+    let mut count = 0;
+    match mode {
+        ListingIconMode::Modrinth => {
+            zip.start_file("overrides/icon.png", options)?;
+            zip.write_all(&bytes)?;
+            count += 1;
+        }
+        ListingIconMode::CurseForge => {
+            zip.start_file("pack.png", options)?;
+            zip.write_all(&bytes)?;
+            count += 1;
+            zip.start_file("overrides/icon.png", options)?;
+            zip.write_all(&bytes)?;
+            count += 1;
         }
     }
     Ok(count)
@@ -1064,6 +1111,7 @@ mod tests {
                 version: "0.16.0".to_string(),
             },
             brief: None,
+            listing: None,
             java: None,
             profiles: vec![ProfileSpec {
                 id: "client".to_string(),
@@ -1183,6 +1231,53 @@ mod tests {
         assert!(out.exists(), "output mrpack not created");
         // Both "both"-side and "client"-side mods get a download entry
         assert_eq!(res.file_count, 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_modrinth_pack_uses_listing_summary_and_icon() {
+        use crate::manifest::ProjectListing;
+        use std::io::Read;
+        use zip::ZipArchive;
+
+        let dir = std::env::temp_dir().join("tuffbox_export_test_listing");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".tuffbox/listing")).unwrap();
+        let icon = dir.join(".tuffbox/listing/icon.png");
+        fs::write(&icon, b"fake-png-bytes").unwrap();
+
+        let mut manifest = fixture_manifest(&dir);
+        manifest.project.description = Some("fallback desc".into());
+        manifest.listing = Some(ProjectListing {
+            name: "Listed".into(),
+            summary: "Listing summary wins".into(),
+            body_markdown: String::new(),
+            icon_path: Some(".tuffbox/listing/icon.png".into()),
+            gallery: vec![],
+            categories: vec![],
+            authors: vec![],
+        });
+
+        let manifest_path = dir.join("tuffbox.project.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let out = dir.join("pack.mrpack");
+        let result = export_modrinth_pack(&manifest, &manifest_path, &out);
+        assert!(result.is_ok(), "{:?}", result.err());
+
+        let file = fs::File::open(&out).unwrap();
+        let mut zip = ZipArchive::new(file).unwrap();
+        let mut index = String::new();
+        zip.by_name("modrinth.index.json")
+            .unwrap()
+            .read_to_string(&mut index)
+            .unwrap();
+        assert!(index.contains("Listing summary wins"));
+        assert!(!index.contains("fallback desc"));
+        assert!(zip.by_name("overrides/icon.png").is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 

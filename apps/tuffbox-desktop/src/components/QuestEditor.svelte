@@ -1,22 +1,37 @@
 <script lang="ts">
   import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult } from "../lib/api";
-  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map, Eye, Sparkles } from "lucide-svelte";
-  import { projectPath } from "../lib/store";
+  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map, Eye, Sparkles, X } from "lucide-svelte";
+  import { onDestroy } from "svelte";
+  import { projectPath, questDirty } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import ChapterRail from "./quests/ChapterRail.svelte";
   import QuestCanvas from "./quests/QuestCanvas.svelte";
   import QuestInspector from "./quests/QuestInspector.svelte";
   import ChapterSettings from "./quests/ChapterSettings.svelte";
   import RewardTablesPanel from "./quests/RewardTablesPanel.svelte";
+  import QuestAiSidebar from "./quests/QuestAiSidebar.svelte";
   import { wouldCreateQuestCycle } from "./quests/deps";
   import type { QuestRewardTable } from "../lib/api";
+
+  const AI_SIDEBAR_KEY = "tuffbox.quests.aiSidebar";
+
+  function readAiSidebarPref(): boolean {
+    try {
+      return localStorage.getItem(AI_SIDEBAR_KEY) === "true";
+    } catch {
+      return false;
+    }
+  }
 
   let chapters: QuestChapter[] = [];
   let chapterGroups: QuestChapterGroup[] = [];
   let bookTitle: string | null = null;
+  let bookSubtitle: string | null = null;
   let bookSettings: Record<string, unknown> = {};
   let rewardTables: QuestRewardTable[] = [];
   let rewardTablesDirty = false;
+  let bookDirty = false;
+  let groupsDirty = false;
   let loading = false;
   let saving = false;
   let error: string | null = null;
@@ -27,6 +42,11 @@
   let dirtyChapters = new Set<string>();
   let lastLoadedPath: string | null = null;
   let fitToken = 0;
+  let questSearch = "";
+  let showBookPanel = false;
+  let showGroupsPanel = false;
+  let issuesOpen = false;
+  let progressOpen = false;
 
   // Phase C — player progress overlay (read-only)
   let progressTeams: QuestProgressTeamRef[] = [];
@@ -35,15 +55,16 @@
   let progressSnap: QuestProgressSnapshot | null = null;
   let progressLoading = false;
 
-  // AI QuestPlan: natural-language prompt → merge preview
-  let aiPanelOpen = false;
-  let aiPrompt =
-    "создай главу 1: начало развития, в ней квесты - 1. добудь 10 дерева, накопай 20 булыги - награда 10 палок.";
-  let aiRaw = "";
-  let aiShowJson = false;
-  let aiForceAi = false;
-  let aiMerging = false;
-  let aiPreview: QuestPlanMergeResult | null = null;
+  let aiSidebarOpen = readAiSidebarPref();
+
+  function setAiSidebar(open: boolean) {
+    aiSidebarOpen = open;
+    try {
+      localStorage.setItem(AI_SIDEBAR_KEY, open ? "true" : "false");
+    } catch {
+      /* ignore */
+    }
+  }
 
   async function load() {
     if (!$projectPath) return;
@@ -55,7 +76,10 @@
       chapters = book.chapters ?? [];
       chapterGroups = book.chapterGroups ?? [];
       bookTitle = book.title ?? null;
+      bookSubtitle = book.subtitle ?? null;
       bookSettings = book.bookSettings ?? {};
+      bookDirty = false;
+      groupsDirty = false;
       rewardTables = (book.rewardTables ?? []).map((t) => ({
         ...t,
         entries: t.entries ?? [],
@@ -76,6 +100,11 @@
     } finally {
       loading = false;
     }
+  }
+
+  function requestReload() {
+    if (hasDirty && !confirm("Reload and discard unsaved quest edits?")) return;
+    void load();
   }
 
   async function refreshProgressTeams() {
@@ -143,6 +172,8 @@
         await saveRewardTable(t);
       }
     }
+    if (bookDirty) await saveBookData();
+    if (groupsDirty) await saveGroups();
   }
 
   function markDirty(chapterId: string) {
@@ -194,6 +225,7 @@
   }
 
   function removeQuest(q: QuestData) {
+    if (!confirm(`Delete quest "${q.title}" from this chapter?`)) return;
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
     ch.quests = ch.quests.filter((x) => x.id !== q.id);
@@ -277,72 +309,198 @@
   $: selectedChapterObj = chapters.find((c) => c.id === selectedChapter) ?? null;
   $: rewardTableIds = rewardTables.map((t) => t.id);
   $: totalQuests = chapters.reduce((n, c) => n + c.quests.length, 0);
-  $: hasDirty = dirtyChapters.size > 0 || rewardTablesDirty;
-  $: if ($projectPath && $projectPath !== lastLoadedPath) load();
-  $: if (selectedQuest) {
-    const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
-    if (fresh && fresh !== selectedQuest) selectedQuest = fresh;
-  }
 
   /** Strip Minecraft formatting codes for toolbar display. */
   function stripMc(s: string): string {
     return s.replace(/§[0-9a-fk-or]/gi, "").replace(/&[0-9a-fk-or]/gi, "").trim();
   }
 
-  async function previewAiPlan() {
-    if (!$projectPath) return;
-    aiMerging = true;
-    error = null;
-    aiPreview = null;
-    try {
-      if (aiShowJson && aiRaw.trim()) {
-        aiPreview = await api.quests.parseAndMergePlan(aiRaw, $projectPath);
-      } else if (aiPrompt.trim()) {
-        aiPreview = await api.quests.generateFromPrompt(aiPrompt, aiForceAi, $projectPath);
-      } else {
-        error = "Напиши запрос или вставь QuestPlan JSON.";
-        return;
-      }
-      if (!aiPreview.validation.valid) {
-        error = aiPreview.validation.errors.slice(0, 3).join("; ");
-      }
-    } catch (e) {
-      error = String(e);
-    } finally {
-      aiMerging = false;
+  function applyMergeResult(result: QuestPlanMergeResult) {
+    if (!result.validation?.valid) {
+      error = (result.validation?.errors ?? []).slice(0, 3).join("; ") || "Plan invalid";
+      return;
     }
-  }
-
-  function applyAiPreview() {
-    if (!aiPreview || !aiPreview.validation.valid) return;
-    const b = aiPreview.book;
+    const b = result.book;
     chapters = b.chapters ?? [];
     chapterGroups = b.chapterGroups ?? chapterGroups;
     bookTitle = b.title ?? bookTitle;
+    bookSubtitle = b.subtitle ?? bookSubtitle;
     if (b.rewardTables?.length) {
       rewardTables = b.rewardTables.map((t) => ({
         ...t,
         entries: t.entries ?? [],
         emptyWeight: t.emptyWeight ?? 0,
       }));
+      rewardTablesDirty = true;
+    }
+    if ((b.chapterGroups?.length ?? 0) > 0) {
+      groupsDirty = true;
     }
     const dirty = new Set(dirtyChapters);
-    for (const id of aiPreview.touchedChapterIds ?? []) dirty.add(id);
+    for (const id of result.touchedChapterIds ?? []) dirty.add(id);
     dirtyChapters = dirty;
     if (chapters.length && !chapters.some((c) => c.id === selectedChapter)) {
       selectedChapter = chapters[0].id;
     }
     selectedQuest = null;
-    validationIssues = (aiPreview.validation.bookErrors ?? []).map((e) => ({
+    validationIssues = (result.validation.bookErrors ?? []).map((e) => ({
       questId: e.questId,
       message: e.message,
     }));
-    message = `AI plan applied in editor (${aiPreview.touchedChapterIds.length} chapter(s)). Save to write SNBT.`;
-    aiPanelOpen = false;
-    aiPreview = null;
+    message = `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Save to write SNBT.`;
     fitToken += 1;
   }
+
+  async function saveBookData() {
+    if (!$projectPath) return;
+    saving = true;
+    error = null;
+    try {
+      await api.quests.saveBookData(
+        { title: bookTitle, subtitle: bookSubtitle, bookSettings },
+        $projectPath,
+      );
+      bookDirty = false;
+      message = "Book data.snbt saved.";
+    } catch (e) {
+      error = String(e);
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function saveGroups() {
+    if (!$projectPath) return;
+    saving = true;
+    error = null;
+    try {
+      await api.quests.saveChapterGroups(chapterGroups, $projectPath);
+      groupsDirty = false;
+      message = "Chapter groups saved.";
+    } catch (e) {
+      error = String(e);
+    } finally {
+      saving = false;
+    }
+  }
+
+  function addChapterGroup() {
+    const id = Math.random().toString(16).slice(2, 10).toUpperCase();
+    chapterGroups = [...chapterGroups, { id, title: `Group ${chapterGroups.length + 1}` }];
+    groupsDirty = true;
+  }
+
+  function removeChapterGroup(id: string) {
+    chapterGroups = chapterGroups.filter((g) => g.id !== id);
+    for (const ch of chapters) {
+      if (ch.group === id) {
+        ch.group = null;
+        markDirty(ch.id);
+      }
+    }
+    groupsDirty = true;
+  }
+
+  function deleteChapter(id: string) {
+    if (
+      !confirm(
+        "Remove this chapter from the editor? The SNBT file may remain on disk — delete or empty it manually if needed.",
+      )
+    ) {
+      return;
+    }
+    chapters = chapters.filter((c) => c.id !== id);
+    dirtyChapters.delete(id);
+    dirtyChapters = dirtyChapters;
+    if (selectedChapter === id) {
+      selectedChapter = chapters[0]?.id ?? "";
+      selectedQuest = null;
+    }
+  }
+
+  function moveChapter(id: string, dir: -1 | 1) {
+    const idx = chapters.findIndex((c) => c.id === id);
+    if (idx < 0) return;
+    const j = idx + dir;
+    if (j < 0 || j >= chapters.length) return;
+    const next = [...chapters];
+    const tmp = next[idx];
+    next[idx] = next[j];
+    next[j] = tmp;
+    next.forEach((c, i) => {
+      c.orderIndex = i;
+      markDirty(c.id);
+    });
+    chapters = next;
+  }
+
+  function jumpToIssue(issue: QuestValidationIssue) {
+    issuesOpen = false;
+    const qid = issue.questId;
+    for (const ch of chapters) {
+      const q = ch.quests.find((x) => x.id === qid);
+      if (q) {
+        selectedChapter = ch.id;
+        selectedQuest = q;
+        fitToken += 1;
+        return;
+      }
+    }
+    // Chapter-level or unknown — try chapter id match
+    if (chapters.some((c) => c.id === qid)) {
+      selectedChapter = qid;
+      selectedQuest = null;
+    }
+  }
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      questSearch = "";
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const first = filteredChapterQuests[0];
+      if (first) {
+        selectedQuest = first;
+        fitToken += 1;
+      }
+    }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      if (hasDirty && !saving) void saveAll();
+    }
+  }
+
+  $: filteredChapterQuests = questSearch.trim()
+    ? chapterQuests.filter((q) => {
+        const s = questSearch.toLowerCase();
+        return (
+          q.title.toLowerCase().includes(s) ||
+          q.id.toLowerCase().includes(s) ||
+          (q.subtitle ?? "").toLowerCase().includes(s)
+        );
+      })
+    : chapterQuests;
+
+  $: hasDirty = dirtyChapters.size > 0 || rewardTablesDirty || bookDirty || groupsDirty;
+  $: questDirty.set(hasDirty);
+  $: if ($projectPath && $projectPath !== lastLoadedPath) load();
+  $: if (selectedQuest) {
+    const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
+    if (fresh && fresh !== selectedQuest) selectedQuest = fresh;
+  }
+  $: if (progressKey || progressOverlay) progressOpen = true;
+
+  onDestroy(() => {
+    questDirty.set(false);
+  });
 </script>
+
+<svelte:window on:keydown={handleKeydown} />
 
 <div class="qe ftbq">
   <div class="qe-tb">
@@ -351,136 +509,193 @@
       {#if bookTitle}<span class="book-name">{stripMc(bookTitle)}</span>{:else}Quest editor{/if}
     </div>
     <div class="qe-actions">
+      <div class="tb-pop">
+        <button
+          type="button"
+          class="ghost"
+          class:active={showBookPanel}
+          class:has-dirty={bookDirty}
+          title="Book settings (data.snbt)"
+          on:click={() => {
+            showBookPanel = !showBookPanel;
+            showGroupsPanel = false;
+          }}
+        >
+          Book{#if bookDirty}<span class="dot-mini">●</span>{/if}
+        </button>
+        {#if showBookPanel && $projectPath}
+          <div class="drawer">
+            <div class="drawer-h">
+              <strong>Book (data.snbt)</strong>
+              <button type="button" class="ghost ico" on:click={() => (showBookPanel = false)}
+                ><X size={14} /></button
+              >
+            </div>
+            <label
+              >Title<input
+                value={bookTitle ?? ""}
+                on:input={(e) => {
+                  bookTitle = (e.currentTarget as HTMLInputElement).value;
+                  bookDirty = true;
+                }}
+              /></label
+            >
+            <label
+              >Subtitle<input
+                value={bookSubtitle ?? ""}
+                on:input={(e) => {
+                  bookSubtitle = (e.currentTarget as HTMLInputElement).value;
+                  bookDirty = true;
+                }}
+              /></label
+            >
+            <p class="drawer-hint">Included in Save all · or save here</p>
+            <button type="button" on:click={saveBookData} disabled={saving || !bookDirty}
+              >Save book</button
+            >
+          </div>
+        {/if}
+      </div>
+      <div class="tb-pop">
+        <button
+          type="button"
+          class="ghost"
+          class:active={showGroupsPanel}
+          class:has-dirty={groupsDirty}
+          title="Chapter groups"
+          on:click={() => {
+            showGroupsPanel = !showGroupsPanel;
+            showBookPanel = false;
+          }}
+        >
+          Groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
+        </button>
+        {#if showGroupsPanel && $projectPath}
+          <div class="drawer drawer-wide">
+            <div class="drawer-h">
+              <strong>Chapter groups</strong>
+              <button type="button" class="ghost" on:click={addChapterGroup}>+ Group</button>
+              <button type="button" class="ghost ico" on:click={() => (showGroupsPanel = false)}
+                ><X size={14} /></button
+              >
+            </div>
+            {#each chapterGroups as g (g.id)}
+              <div class="group-row">
+                <code>{g.id}</code>
+                <input bind:value={g.title} on:input={() => (groupsDirty = true)} />
+                <button type="button" class="ghost" on:click={() => removeChapterGroup(g.id)}
+                  >Remove</button
+                >
+              </div>
+            {/each}
+            <p class="drawer-hint">Included in Save all</p>
+            <button type="button" on:click={saveGroups} disabled={saving || !groupsDirty}
+              >Save groups</button
+            >
+          </div>
+        {/if}
+      </div>
       <button
         type="button"
         class="ghost"
-        class:active={aiPanelOpen}
-        title="Paste AI QuestPlan JSON"
-        on:click={() => (aiPanelOpen = !aiPanelOpen)}
+        class:active={aiSidebarOpen}
+        title="Quest AI sidebar"
+        on:click={() => setAiSidebar(!aiSidebarOpen)}
       >
-        <Sparkles size={16} /> Создать
+        <Sparkles size={16} /> AI
       </button>
       {#if hasDirty}
         <span class="dirty-badge"
-          >{dirtyChapters.size + (rewardTablesDirty ? 1 : 0)} unsaved</span
+          >{dirtyChapters.size +
+            (rewardTablesDirty ? 1 : 0) +
+            (bookDirty ? 1 : 0) +
+            (groupsDirty ? 1 : 0)} unsaved</span
         >
-        <button type="button" on:click={saveAll} disabled={!$projectPath || saving}>
+        <button type="button" on:click={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
           <Save size={16} /> {saving ? "Saving…" : "Save all"}
         </button>
       {/if}
-      <button type="button" class="ghost" on:click={load} disabled={!$projectPath || loading}>
+      <button
+        type="button"
+        class="ghost"
+        on:click={requestReload}
+        disabled={!$projectPath || loading}
+        title="Reload from disk"
+      >
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
   </div>
 
-  {#if aiPanelOpen && $projectPath}
-    <div class="ai-panel">
-      <div class="ai-h">
-        <strong>Создать квесты</strong>
-        <span>Опиши главу обычным текстом → Сгенерировать → Применить → Save</span>
-      </div>
-      <textarea
-        class="ai-raw"
-        rows="3"
-        placeholder="создай главу 1: начало развития, в ней квесты - 1. добудь 10 дерева, накопай 20 булыги - награда 10 палок."
-        bind:value={aiPrompt}
-      ></textarea>
-      <label class="ai-opt">
-        <input type="checkbox" bind:checked={aiForceAi} />
-        Всегда через нейросеть (не эвристику)
-      </label>
-      <label class="ai-opt">
-        <input type="checkbox" bind:checked={aiShowJson} />
-        Вставить готовый QuestPlan JSON
-      </label>
-      {#if aiShowJson}
-        <textarea class="ai-raw" rows="6" placeholder={'{ "schemaVersion": 1, … }'} bind:value={aiRaw}
-        ></textarea>
-      {/if}
-      <div class="ai-actions">
-        <button
-          type="button"
-          disabled={aiMerging || (!aiPrompt.trim() && !(aiShowJson && aiRaw.trim()))}
-          on:click={previewAiPlan}
-        >
-          {aiMerging ? "Генерация…" : "Сгенерировать"}
-        </button>
-        <button type="button" disabled={!aiPreview?.validation?.valid} on:click={applyAiPreview}>
-          Применить в редактор
-        </button>
-      </div>
-      {#if aiPreview}
-        <div class="ai-preview" class:bad={!aiPreview.validation.valid}>
-          <p>{aiPreview.plan.humanExplanation}</p>
-          <p class="meta">
-            {aiPreview.plan.source ?? "ai"} · confidence {(aiPreview.plan.confidence * 100).toFixed(0)}% ·
-            touched {aiPreview.touchedChapterIds.length} ·
-            {aiPreview.validation.valid ? "ok" : "errors"}
-          </p>
-          {#if aiPreview.notes?.length}
-            <ul>{#each aiPreview.notes as n}<li>{n}</li>{/each}</ul>
-          {/if}
-          {#if aiPreview.validation.errors?.length}
-            <ul class="errs">{#each aiPreview.validation.errors as e}<li>{e}</li>{/each}</ul>
-          {/if}
-          {#if aiPreview.validation.warnings?.length}
-            <ul class="warns">{#each aiPreview.validation.warnings as w}<li>{w}</li>{/each}</ul>
-          {/if}
-        </div>
-      {/if}
-    </div>
-  {/if}
-
   {#if $projectPath}
     <div class="qe-stats">
       <span>{chapters.length} chapters</span>
       <span>{totalQuests} quests</span>
-      <span class:warn={validationIssues.length > 0}>
-        {validationIssues.length === 0 ? "✓ valid" : `${validationIssues.length} issues`}
-      </span>
+      <div class="issues-wrap">
+        <button
+          type="button"
+          class="issues-btn"
+          class:warn={validationIssues.length > 0}
+          disabled={validationIssues.length === 0}
+          on:click={() => (issuesOpen = !issuesOpen)}
+        >
+          {validationIssues.length === 0 ? "✓ valid" : `${validationIssues.length} issues`}
+        </button>
+        {#if issuesOpen && validationIssues.length > 0}
+          <div class="issues-pop">
+            {#each validationIssues.slice(0, 40) as iss, i (`${iss.questId}-${i}`)}
+              <button type="button" class="issue-row" on:click={() => jumpToIssue(iss)}>
+                <code>{iss.questId.slice(0, 8)}</code>
+                <span>{iss.message}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
       {#if progressSnap && progressOverlay}
         <span class="prog-stat"
           >{progressSnap.completedCount} done · {progressSnap.startedCount} started · {progressSnap.name}</span
         >
       {/if}
     </div>
-    <div class="prog-bar">
-      <Eye size={14} />
-      <label class="prog-toggle">
-        <input
-          type="checkbox"
-          bind:checked={progressOverlay}
-          disabled={!progressSnap}
-          title="Show player progress on canvas"
-        />
-        Progress overlay
-      </label>
-      <select
-        bind:value={progressKey}
-        on:change={loadProgress}
-        disabled={progressLoading || progressTeams.length === 0}
-      >
-        <option value="">
-          {progressTeams.length === 0 ? "No saves/*/ftbquests progress" : "Select team / player…"}
-        </option>
-        {#each progressTeams as t (t.relativePath)}
-          <option value={t.relativePath}>{t.world} — {t.name}</option>
-        {/each}
-      </select>
-      <button
-        type="button"
-        class="ghost"
-        disabled={progressLoading || !progressKey}
-        on:click={loadProgress}
-        title="Reload progress"
-      >
-        <RefreshCw size={14} class={progressLoading ? "spin" : ""} />
-      </button>
-      {#if progressTeamLabel}
-        <code class="prog-path">{progressTeamLabel.relativePath}</code>
-      {/if}
-    </div>
+    <details class="prog-details" bind:open={progressOpen}>
+      <summary><Eye size={14} /> Progress</summary>
+      <div class="prog-bar">
+        <label class="prog-toggle">
+          <input
+            type="checkbox"
+            bind:checked={progressOverlay}
+            disabled={!progressSnap}
+            title="Show player progress on canvas"
+          />
+          Overlay
+        </label>
+        <select
+          bind:value={progressKey}
+          on:change={loadProgress}
+          disabled={progressLoading || progressTeams.length === 0}
+        >
+          <option value="">
+            {progressTeams.length === 0 ? "No saves/*/ftbquests progress" : "Select team / player…"}
+          </option>
+          {#each progressTeams as t (t.relativePath)}
+            <option value={t.relativePath}>{t.world} — {t.name}</option>
+          {/each}
+        </select>
+        <button
+          type="button"
+          class="ghost"
+          disabled={progressLoading || !progressKey}
+          on:click={loadProgress}
+          title="Reload progress"
+        >
+          <RefreshCw size={14} class={progressLoading ? "spin" : ""} />
+        </button>
+        {#if progressTeamLabel}
+          <code class="prog-path">{progressTeamLabel.relativePath}</code>
+        {/if}
+      </div>
+    </details>
   {/if}
 
   {#if error}<div class="notice error"><AlertTriangle size={14} /> {error}</div>{/if}
@@ -499,6 +714,7 @@
       <button type="button" on:click={createChapter}><span>+</span> Create first chapter</button>
     </div>
   {:else}
+    <div class="qe-body-row">
     <div class="qe-lay" class:with-insp={!!selectedQuest || !!selectedChapterObj}>
       <ChapterRail
         {chapters}
@@ -510,19 +726,37 @@
         onCreate={createChapter}
         onSave={saveChapter}
         onDirty={markDirty}
+        onDelete={deleteChapter}
+        onMove={moveChapter}
       />
-      <QuestCanvas
-        quests={chapterQuests}
-        selectedId={selectedQuest?.id ?? null}
-        issues={validationIssues}
-        {fitToken}
-        {progressOverlay}
-        {progressStatuses}
-        onSelect={(q) => (selectedQuest = q)}
-        onMove={moveQuest}
-        onAddAt={addQuestAt}
-        onLink={linkQuests}
-      />
+      <div class="canvas-wrap">
+        <div class="canvas-tools">
+          <input
+            type="search"
+            placeholder="Filter quests… (Enter = jump, Esc = clear)"
+            bind:value={questSearch}
+            on:keydown={onSearchKey}
+          />
+          {#if questSearch}
+            <span class="filt-count">{filteredChapterQuests.length}/{chapterQuests.length}</span>
+          {/if}
+        </div>
+        <QuestCanvas
+          quests={filteredChapterQuests}
+          selectedId={selectedQuest?.id ?? null}
+          issues={validationIssues}
+          {fitToken}
+          {progressOverlay}
+          {progressStatuses}
+          emptyHint={questSearch.trim()
+            ? `No quests match “${questSearch.trim()}”`
+            : "Double-click to add a quest"}
+          onSelect={(q) => (selectedQuest = q)}
+          onMove={moveQuest}
+          onAddAt={addQuestAt}
+          onLink={linkQuests}
+        />
+      </div>
       {#if selectedQuest}
         <QuestInspector
           quest={selectedQuest}
@@ -548,6 +782,14 @@
         />
       {/if}
     </div>
+    {#if aiSidebarOpen}
+      <QuestAiSidebar
+        open={aiSidebarOpen}
+        on:close={() => setAiSidebar(false)}
+        on:apply={(e) => applyMergeResult(e.detail)}
+      />
+    {/if}
+    </div>
     <RewardTablesPanel
       tables={rewardTables}
       dirty={rewardTablesDirty}
@@ -561,7 +803,7 @@
     />
     <div class="qe-footer">
       <p class="hint">
-        Edits save as SNBT to <code>config/ftbquests/quests/chapters/</code>. Auto-snapshot on save.
+        Edits save as SNBT to <code>config/ftbquests/quests/chapters/</code>. Auto-snapshot on save. AI merge is memory-only until Save.
       </p>
     </div>
   {/if}
@@ -601,7 +843,138 @@
   .qe-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    flex-wrap: wrap;
+    position: relative;
+  }
+  .tb-pop {
+    position: relative;
+  }
+  .dot-mini {
+    color: var(--ftbq-quest-started, #f2c94c);
+    margin-left: 4px;
+    font-size: 10px;
+  }
+  .drawer {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    width: 280px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--ftbq-bg-panel, #212126);
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    border-radius: 2px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  }
+  .drawer-wide {
+    width: 360px;
+  }
+  .drawer-h {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .drawer-h strong {
+    flex: 1;
+  }
+  .drawer label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .drawer input {
+    background: var(--ftbq-bg, #1a1a1e);
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    color: inherit;
+    border-radius: 2px;
+    padding: 6px 8px;
+  }
+  .drawer-hint {
+    margin: 0;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .group-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .group-row input {
+    flex: 1;
+  }
+  .issues-wrap {
+    position: relative;
+  }
+  .issues-btn {
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: transparent;
+    color: var(--ftbq-quest-completed, #55c95a);
+    border-radius: 2px;
+    padding: 2px 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .issues-btn.warn {
+    color: #fbbf24;
+  }
+  .issues-btn:disabled {
+    cursor: default;
+  }
+  .issues-pop {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 30;
+    min-width: 320px;
+    max-height: 240px;
+    overflow: auto;
+    background: var(--ftbq-bg-panel, #212126);
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    border-radius: 2px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+  }
+  .issue-row {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    background: transparent;
+    color: var(--ftbq-text, #e8e8e8);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .issue-row:hover {
+    background: rgba(61, 184, 168, 0.1);
+  }
+  .prog-details {
+    flex-shrink: 0;
+    margin: 0 12px 8px;
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    border-radius: 2px;
+    background: var(--ftbq-bg-panel, #212126);
+    padding: 0 8px;
+  }
+  .prog-details summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 6px 4px;
+    font-size: 12px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    list-style: none;
+  }
+  .prog-details summary::-webkit-details-marker {
+    display: none;
   }
   .qe-tb {
     justify-content: space-between;
@@ -727,6 +1100,44 @@
     border-radius: 2px;
     overflow: hidden;
     background: var(--ftbq-bg-canvas, #2b2b30);
+    min-width: 0;
+  }
+  .qe-body-row {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    gap: 0;
+    align-items: stretch;
+  }
+  .qe-body-row .qe-lay {
+    flex: 1;
+  }
+  .canvas-wrap {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .canvas-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg-panel, #212126);
+  }
+  .canvas-tools input {
+    flex: 1;
+    background: var(--ftbq-bg, #1a1a1e);
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    color: inherit;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .filt-count {
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .qe-lay.with-insp {
     grid-template-columns: 200px 1fr 280px;
@@ -738,70 +1149,6 @@
   .qe-footer .hint {
     margin: 0;
     color: var(--text-muted);
-  }
-  .ai-panel {
-    margin-bottom: 8px;
-    padding: 10px 12px;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg-panel, #212126);
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .ai-h {
-    display: flex;
-    gap: 12px;
-    align-items: baseline;
-    flex-wrap: wrap;
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-  .ai-h strong {
-    color: var(--text-primary);
-  }
-  .ai-raw {
-    width: 100%;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    resize: vertical;
-    min-height: 120px;
-  }
-  .ai-actions {
-    display: flex;
-    gap: 8px;
-  }
-  .ai-opt {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-  .ai-preview {
-    font-size: 12px;
-    color: var(--text-secondary);
-    border-top: 1px solid var(--border-color);
-    padding-top: 8px;
-  }
-  .ai-preview.bad {
-    color: #fca5a5;
-  }
-  .ai-preview .meta {
-    color: var(--text-muted);
-    margin: 4px 0;
-  }
-  .ai-preview ul {
-    margin: 4px 0 0;
-    padding-left: 18px;
-  }
-  .ai-preview .errs {
-    color: #fca5a5;
-  }
-  .ai-preview .warns {
-    color: #fbbf24;
   }
   .qe-actions .active {
     color: var(--accent, #93c5fd);

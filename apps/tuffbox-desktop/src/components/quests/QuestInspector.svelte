@@ -19,7 +19,7 @@
   let descText = "";
   let extraKey = "";
   let extraVal = "";
-  let showAdvanced = true;
+  let showAdvanced = false;
 
   $: depOptions = buildDepOptions(chapterQuests, quest);
   $: myIssues = issues.filter((i) => i.questId === quest.id);
@@ -69,6 +69,22 @@
       quest.description.pop();
     }
     onDirty();
+  }
+
+  function wrapFmt(code: string) {
+    descText = `${descText}${descText && !descText.endsWith("\n") ? "" : ""}${code}`;
+    commitDescription();
+  }
+
+  function insertTemplate(kind: string) {
+    const lines =
+      kind === "objective"
+        ? ["&7Objective:", "&fComplete the listed tasks.", "&8Rewards unlock the next step."]
+        : kind === "story"
+          ? ["&l&6Chapter beat", "&7A story beat for this pack.", "&aFinish to continue the line."]
+          : ["&eHint: &7check JEI for recipes."];
+    descText = [...(descText ? descText.split("\n") : []), ...lines].join("\n");
+    commitDescription();
   }
 
   function tri(field: keyof QuestData, e: Event) {
@@ -144,14 +160,24 @@
       >Subtitle<input bind:value={quest.subtitle} on:input={onDirty} placeholder="Optional" /></label
     >
     <label
-      >Description<textarea
-        rows="3"
+      >Description
+      <div class="fmt-bar">
+        <button type="button" class="ghost" on:click={() => wrapFmt("&l")}>Bold</button>
+        <button type="button" class="ghost" on:click={() => wrapFmt("&a")}>Green</button>
+        <button type="button" class="ghost" on:click={() => wrapFmt("&7")}>Gray</button>
+        <button type="button" class="ghost" on:click={() => wrapFmt("&e")}>Gold</button>
+        <button type="button" class="ghost" on:click={() => insertTemplate("objective")}>Objective</button>
+        <button type="button" class="ghost" on:click={() => insertTemplate("story")}>Story</button>
+      </div>
+      <textarea
+        rows="4"
         value={descText}
         on:input={(e) => (descText = textareaVal(e))}
         on:change={commitDescription}
-        placeholder="One line per paragraph"
-      ></textarea></label
-    >
+        placeholder="One line per paragraph · & codes · JSON text lines ok"
+      ></textarea>
+      <small class="fmt-hint">Lines starting with {"{"} or [ are treated as raw JSON text by FTB Quests.</small>
+    </label>
     <label class="checkbox">
       <input type="checkbox" bind:checked={quest.optional} on:change={onDirty} />
       Optional quest
@@ -497,6 +523,21 @@
   }
   .add-btn:disabled {
     opacity: 0.4;
+  }
+  .fmt-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .fmt-bar button {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+  .fmt-hint {
+    color: var(--ftbq-text-muted, #9a9aa0);
+    font-size: 10px;
+    font-weight: 500;
   }
   .ico {
     border: none;

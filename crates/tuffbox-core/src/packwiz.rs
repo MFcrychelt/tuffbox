@@ -199,6 +199,7 @@ pub fn import_packwiz_pack(path: impl AsRef<Path>) -> Result<ProjectManifest, Pa
             version: loader_version,
         },
         brief: None,
+        listing: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,

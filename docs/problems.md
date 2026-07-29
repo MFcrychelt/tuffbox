@@ -97,20 +97,19 @@
   `save_quest_chapter` / `validate_quest_book`. `QuestEditor.svelte` — загрузка
   квестов, карта зависимостей, валидация, сохранение в SNBT с auto-snapshot.
 
-## 4. Вкладка World — плохой UI, нет функционала
-- **Симптом:** UI некрасивый, функционал отсутствует (по сути заглушка).
-- **Статус:** исправлено (вкладка World = ore-gen, теперь с управлением мирами)
-- **Что сделано:** вкладка "World" в workflow-рейле (`IdeWorkspace.svelte`,
-  stage `ore-gen` → `OreGenVisualizer.svelte`) содержит:
-  1. визуализацию генерации руды (график Y-уровней + список, уже был);
-  2. **новое** (2026-07-09) управление мирами поверх команд бэкенда —
-     `list_worlds` (lib.rs:2184) → список миров из `saves/` с размером,
-     `read_world_info` (lib.rs:2434) → метаданные из `level.dat` (seed,
-     game type, version, difficulty, spawn, hardcore/cheats) при выборе,
-     `backup_world` (lib.rs:2216) → кнопка бэкапа в zip.
-     Загрузка миров и ore-scan идут реактивно при открытии проекта.
-- **Примечание:** дублирование с Dashboard устранено — миры теперь и в
-  выделенной вкладке World. `svelte-check`: 0 errors.
+## 4. Вкладка World — карта и инструменты (MCA Selector)
+
+- **Симптом (исторический):** UI казался без карты — IDE stage «World / Ores»
+  показывал только ore-chart; MCA-карта была спрятана ниже или в sidebar Ctrl+8.
+- **Статус:** исправлено (2026-07-29)
+- **Что сделано:**
+  1. IDE stage **World / Map** (`world-map`) → полный [`World.svelte`](apps/tuffbox-desktop/src/components/World.svelte)
+     с [`WorldMap`](apps/tuffbox-desktop/src/components/WorldMap.svelte) dock (как MCA Selector):
+     select / delete / export-import / NBT / filters, spawn overlay, polygon.
+  2. IDE stage **Ores / Heights** (`ore-gen`) → только график руды; ссылка на World map.
+  3. Sidebar **World (Ctrl+8)** — тот же MCA map UI.
+  4. Бэкап мира перед destructive ops остаётся в World header; delete подтверждается диалогом.
+- **Бэкенд:** `region.rs` / `region_edit.rs` + `api.worlds.*` (anvil .mca).
 
 ## 5. Вкладка Resolve полностью сломана
 - **Симптом:** нельзя взаимодействовать с графом (не кликабелен/не рендерится),

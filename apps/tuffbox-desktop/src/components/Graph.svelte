@@ -1981,7 +1981,14 @@
       </section>
     {/if}
 
-    <section bind:this={graphCanvasEl} class="graph-canvas" class:fullscreen={graphFullscreen} aria-label="Dependency graph canvas">
+    <section
+      bind:this={graphCanvasEl}
+      class="graph-canvas"
+      class:fullscreen={graphFullscreen}
+      class:hl-conflicts={highlightMode === "conflicts"}
+      class:hl-missing={highlightMode === "missing"}
+      aria-label="Dependency graph canvas"
+    >
       <div class="canvas-controls">
         <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
         <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
@@ -1997,20 +2004,20 @@
           {showAllEdges ? "Fewer edges" : "More edges"}
         </button>
         <button
-          class="ghost mini edge-toggle"
+          class="ghost mini edge-toggle hl-btn conflicts"
           class:active={highlightMode === "conflicts"}
           disabled={conflictEdges.length === 0}
           on:click={() => toggleHighlight("conflicts")}
-          title="Highlight conflict edges"
+          title="Spotlight conflict edges (high contrast)"
         >
           <ShieldAlert size={14} /> Conflicts
         </button>
         <button
-          class="ghost mini edge-toggle"
+          class="ghost mini edge-toggle hl-btn missing"
           class:active={highlightMode === "missing"}
           disabled={missingEdges.length === 0}
           on:click={() => toggleHighlight("missing")}
-          title="Highlight missing dependencies"
+          title="Spotlight missing dependencies (high contrast)"
         >
           <AlertTriangle size={14} /> Missing
         </button>
@@ -2082,12 +2089,32 @@
           <marker id="arrow-danger" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(239,68,68,.95)" />
           </marker>
+          <marker id="arrow-danger-hot" markerWidth="12" markerHeight="12" refX="10" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L0,9 L10,4.5 z" fill="#ff3b3b" />
+          </marker>
+          <marker id="arrow-missing-hot" markerWidth="12" markerHeight="12" refX="10" refY="4.5" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L0,9 L10,4.5 z" fill="#fbbf24" />
+          </marker>
           <marker id="arrow-optional" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(132,204,22,.85)" />
           </marker>
           <marker id="arrow-runtime" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
             <path d="M0,0 L0,6 L7,3 z" fill="rgba(161,161,170,.45)" />
           </marker>
+          <filter id="glow-conflict" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="3.5" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <filter id="glow-missing" x="-80%" y="-80%" width="260%" height="260%">
+            <feGaussianBlur stdDeviation="3.5" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
         {#each groupMeta as group (group.key)}
           <g
@@ -2105,6 +2132,7 @@
           </g>
         {/each}
         {#each edgePaths as ep (ep.key)}
+          {@const inHl = !!highlightMode && edgeInHighlight(ep.from, ep.to, ep.kind, ep.danger)}
           <path
             use:registerEdge={ep.edge}
             class="graph-edge"
@@ -2114,9 +2142,23 @@
             class:hub-edge={ep.hub && !ep.danger}
             class:runtime-edge={["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)}
             class:dimmed={(selectedId && ep.from !== selectedId && ep.to !== selectedId) || !edgeInHoveredGroup(ep.from, ep.to) || !edgeInHighlight(ep.from, ep.to, ep.kind, ep.danger)}
-            class:spotlight={!!highlightMode && edgeInHighlight(ep.from, ep.to, ep.kind, ep.danger)}
+            class:spotlight={inHl}
+            class:spotlight-conflicts={inHl && highlightMode === "conflicts"}
+            class:spotlight-missing={inHl && highlightMode === "missing"}
             d={ep.d}
-            marker-end={ep.danger ? "url(#arrow-danger)" : ep.kind === "Optional" ? "url(#arrow-optional)" : ["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind) ? "url(#arrow-runtime)" : "url(#arrow)"}
+            marker-end={
+              inHl && highlightMode === "conflicts"
+                ? "url(#arrow-danger-hot)"
+                : inHl && highlightMode === "missing"
+                  ? "url(#arrow-missing-hot)"
+                  : ep.danger
+                    ? "url(#arrow-danger)"
+                    : ep.kind === "Optional"
+                      ? "url(#arrow-optional)"
+                      : ["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)
+                        ? "url(#arrow-runtime)"
+                        : "url(#arrow)"
+            }
           />
         {/each}
         {#each positioned as node (node.id)}
@@ -2126,13 +2168,16 @@
           {@const isGhost = node.kind === "Missing" || node.ghost}
           {@const isInstalledDep = node.kind === "Mod" && depNodeIds.has(node.id)}
           {@const isClickableDep = isGhost || isInstalledDep}
+          {@const inHl = !!highlightMode && nodeInHighlight(node.id, node.kind)}
           <g
             use:registerNode={node}
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
             class:clickable-dep={isInstalledDep}
             class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime") || !nodeInHighlight(node.id, node.kind)}
-            class:spotlight={!!highlightMode && nodeInHighlight(node.id, node.kind)}
+            class:spotlight={inHl}
+            class:spotlight-conflicts={inHl && highlightMode === "conflicts"}
+            class:spotlight-missing={inHl && highlightMode === "missing"}
             role="button"
             tabindex="0"
             on:pointerdown={(e) => handleNodeMouseDown(e, node)}
@@ -2141,6 +2186,14 @@
             on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
             aria-label={node.label}
           >
+            {#if inHl}
+              <circle
+                class="spotlight-ring"
+                class:conflicts={highlightMode === "conflicts"}
+                class:missing={highlightMode === "missing"}
+                r={half + 14}
+              />
+            {/if}
             {#if isClickableDep}
               <g
                 class="dep-icon-hit"
@@ -2724,6 +2777,20 @@
     color: #c4b5fd;
   }
 
+  .canvas-controls .hl-btn.conflicts.active {
+    background: rgba(239, 68, 68, 0.28);
+    border-color: rgba(248, 113, 113, 0.95);
+    color: #fecaca;
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35), 0 0 18px rgba(239, 68, 68, 0.35);
+  }
+
+  .canvas-controls .hl-btn.missing.active {
+    background: rgba(245, 158, 11, 0.28);
+    border-color: rgba(251, 191, 36, 0.95);
+    color: #fde68a;
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35), 0 0 18px rgba(245, 158, 11, 0.35);
+  }
+
   .zoom-readout {
     font-size: 11px;
     color: var(--text-muted);
@@ -2732,13 +2799,105 @@
     text-align: center;
   }
 
+  /* ── High-contrast Conflicts / Missing spotlight ───────────────── */
+  .graph-canvas.hl-conflicts .graph-edge.dimmed,
+  .graph-canvas.hl-missing .graph-edge.dimmed {
+    opacity: 0.04;
+    stroke-width: 1;
+  }
+
+  .graph-canvas.hl-conflicts .svg-node.dimmed,
+  .graph-canvas.hl-missing .svg-node.dimmed {
+    opacity: 0.12;
+    filter: grayscale(0.85);
+  }
+
+  .graph-canvas.hl-conflicts .graph-group,
+  .graph-canvas.hl-missing .graph-group {
+    opacity: 0.18;
+  }
+
   .graph-canvas .graph-edge.spotlight:not(.dimmed) {
     opacity: 1;
-    stroke-width: 2.5;
+  }
+
+  .graph-canvas .graph-edge.spotlight-conflicts:not(.dimmed) {
+    stroke: #ff2d2d;
+    stroke-width: 5.5;
+    stroke-dasharray: 10 6;
+    filter: url(#glow-conflict);
+    animation: edge-pulse-conflict 1.1s ease-in-out infinite;
+  }
+
+  .graph-canvas .graph-edge.spotlight-missing:not(.dimmed) {
+    stroke: #fbbf24;
+    stroke-width: 5;
+    stroke-dasharray: 8 5;
+    filter: url(#glow-missing);
+    animation: edge-pulse-missing 1.2s ease-in-out infinite;
   }
 
   .svg-node.spotlight:not(.dimmed) {
-    filter: drop-shadow(0 0 8px rgba(251, 191, 36, 0.35));
+    opacity: 1;
+  }
+
+  .svg-node.spotlight-conflicts:not(.dimmed) {
+    filter: drop-shadow(0 0 14px rgba(255, 45, 45, 0.95))
+      drop-shadow(0 0 28px rgba(239, 68, 68, 0.7));
+  }
+
+  .svg-node.spotlight-missing:not(.dimmed) {
+    filter: drop-shadow(0 0 14px rgba(251, 191, 36, 0.95))
+      drop-shadow(0 0 28px rgba(245, 158, 11, 0.7));
+  }
+
+  .svg-node.spotlight-conflicts:not(.dimmed) rect {
+    stroke: #ff4d4d;
+    stroke-width: 3.2;
+    fill: rgba(239, 68, 68, 0.22);
+  }
+
+  .svg-node.spotlight-missing:not(.dimmed) rect {
+    stroke: #fbbf24;
+    stroke-width: 3.2;
+    stroke-dasharray: 5 3;
+    fill: rgba(245, 158, 11, 0.2);
+  }
+
+  .svg-node .spotlight-ring {
+    fill: none;
+    pointer-events: none;
+    stroke-width: 3.5;
+  }
+
+  .svg-node .spotlight-ring.conflicts {
+    stroke: #ff3b3b;
+    animation: ring-pulse-conflict 1.15s ease-in-out infinite;
+  }
+
+  .svg-node .spotlight-ring.missing {
+    stroke: #fbbf24;
+    animation: ring-pulse-missing 1.25s ease-in-out infinite;
+  }
+
+  @keyframes edge-pulse-conflict {
+    0%, 100% { stroke-opacity: 1; stroke-width: 5.5; }
+    50% { stroke-opacity: 0.72; stroke-width: 7; }
+  }
+
+  @keyframes edge-pulse-missing {
+    0%, 100% { stroke-opacity: 1; stroke-width: 5; }
+    50% { stroke-opacity: 0.75; stroke-width: 6.5; }
+  }
+
+  @keyframes ring-pulse-conflict {
+    0%, 100% { stroke-opacity: 0.95; stroke-width: 3.5; }
+    50% { stroke-opacity: 0.35; stroke-width: 6; }
+  }
+
+  @keyframes ring-pulse-missing {
+    0%, 100% { stroke-opacity: 0.95; stroke-width: 3.5; }
+    50% { stroke-opacity: 0.4; stroke-width: 6; }
   }
 
   .graph-canvas .graph-edge {

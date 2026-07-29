@@ -37,6 +37,8 @@ pub struct ProjectManifest {
     #[serde(default)]
     pub brief: Option<PackBrief>,
     #[serde(default)]
+    pub listing: Option<ProjectListing>,
+    #[serde(default)]
     pub java: Option<JavaSpec>,
     #[serde(default)]
     pub profiles: Vec<ProfileSpec>,
@@ -151,6 +153,43 @@ pub struct PackBrief {
     pub release_targets: Vec<String>,
     #[serde(default)]
     pub notes: String,
+}
+
+/// Storefront listing (Modrinth/CurseForge card + long description).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListingGalleryItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectListing {
+    #[serde(default)]
+    pub name: String,
+    /// Card blurb — Modrinth soft limit ~256 chars.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub body_markdown: String,
+    /// Project-relative path, e.g. `.tuffbox/listing/icon.png`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_path: Option<String>,
+    #[serde(default)]
+    pub gallery: Vec<ListingGalleryItem>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
+}
+
+impl ProjectListing {
+    pub const SUMMARY_SOFT_LIMIT: usize = 256;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

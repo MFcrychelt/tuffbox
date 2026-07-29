@@ -9,15 +9,17 @@
     PlayCircle,
     Stethoscope,
     History,
+    Camera,
     UploadCloud,
     Rocket,
     Mountain,
     PackageOpen,
     ScrollText,
     Circle,
+    Map as MapIcon,
   } from "lucide-svelte";
-  import { projectPath, ideStageRequest, autoHideWorkflowRail } from "../lib/store";
-  import { onDestroy } from "svelte";
+  import { projectPath, ideStageRequest, autoHideWorkflowRail, tuneDirty, briefDirty, questDirty } from "../lib/store";
+  import { onDestroy, onMount } from "svelte";
   import ProjectSettings from "./ProjectSettings.svelte";
   import Mods from "./Mods.svelte";
   import Graph from "./Graph.svelte";
@@ -27,15 +29,19 @@
   import TestRuns from "./TestRuns.svelte";
   import ChangeHistory from "./ChangeHistory.svelte";
   import OreGenVisualizer from "./OreGenVisualizer.svelte";
+  import World from "./World.svelte";
   import RecipeBrowser from "./RecipeBrowser.svelte";
   import QuestEditor from "./QuestEditor.svelte";
   import ExportBuilder from "./ExportBuilder.svelte";
   import ReleaseRoom from "./ReleaseRoom.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
+  import BriefEditor from "./BriefEditor.svelte";
 
   type StageId =
     | "brief"
     | "setup"
     | "content"
+    | "world-map"
     | "ore-gen"
     | "recipes"
     | "quests"
@@ -63,8 +69,8 @@
       label: "Brief",
       short: "Idea",
       icon: ClipboardList,
-      goal: "Define the pack: audience, Minecraft version, loader, gameplay pillars and constraints.",
-      outputs: ["pack brief", "target player", "risk notes"],
+      goal: "Shape the storefront listing: icon, summary, markdown description, and live Modrinth/CurseForge card preview.",
+      outputs: ["listing card", "summary + icon", "author notes"],
     },
     {
       id: "setup",
@@ -87,8 +93,8 @@
       label: "Quests",
       short: "Lore",
       icon: ScrollText,
-      goal: "Design FTB Quests chapters and quests visually without launching Minecraft.",
-      outputs: ["quest tree", "SNBT files", "validation report"],
+      goal: "Author FTB Quests lines with AI sidebar (20+ quests, lore, tasks/rewards) and edit SNBT visually.",
+      outputs: ["quest tree", "AI QuestPlan", "SNBT files", "validation report"],
     },
     {
       id: "recipes",
@@ -99,9 +105,17 @@
       outputs: ["recipe list", "disable scripts", "ingredient search"],
     },
     {
-      id: "ore-gen",
+      id: "world-map",
       label: "World",
-      short: "Ores",
+      short: "Map",
+      icon: MapIcon,
+      goal: "MCA Selector-style chunk map: select, delete, export/import, NBT edit.",
+      outputs: ["chunk map", "selection", "export / backup"],
+    },
+    {
+      id: "ore-gen",
+      label: "Ores",
+      short: "Heights",
       icon: Mountain,
       goal: "Visualize ore generation heights, vein sizes and toggle worldgen from configs.",
       outputs: ["ore layers", "generation config", "spawn rates"],
@@ -127,8 +141,8 @@
       label: "History",
       short: "Changes",
       icon: History,
-      goal: "Review tracked changes across mods, configs, shaders, resource packs and project files.",
-      outputs: ["file tree", "change preview", "editor"],
+      goal: "Chronological pack activity: launcher ops, external disk edits, AI fixes.",
+      outputs: ["timeline", "delta scan", "AI context"],
     },
     {
       id: "test",
@@ -149,9 +163,9 @@
     {
       id: "snapshots",
       label: "Snapshots",
-      short: "History",
-      icon: History,
-      goal: "Checkpoint risky edits, compare states and rollback broken experiments.",
+      short: "Checkpoints",
+      icon: Camera,
+      goal: "Checkpoint risky edits, compare states and rollback — not the activity feed (see History).",
       outputs: ["snapshots", "diff", "rollback point"],
     },
     {
@@ -173,70 +187,101 @@
   ];
 
   let activeStage: StageId = "brief";
+  let leaveConfirmOpen = false;
+  let pendingStage: StageId | null = null;
+  let leaveKind: "tune" | "brief" | "quests" = "tune";
+
+  function goToStage(id: StageId) {
+    if (id === activeStage) return;
+    if (activeStage === "configs" && $tuneDirty) {
+      leaveKind = "tune";
+      pendingStage = id;
+      leaveConfirmOpen = true;
+      return;
+    }
+    if (activeStage === "brief" && $briefDirty) {
+      leaveKind = "brief";
+      pendingStage = id;
+      leaveConfirmOpen = true;
+      return;
+    }
+    if (activeStage === "quests" && $questDirty) {
+      leaveKind = "quests";
+      pendingStage = id;
+      leaveConfirmOpen = true;
+      return;
+    }
+    activeStage = id;
+  }
+
+  function confirmLeaveStage() {
+    leaveConfirmOpen = false;
+    if (leaveKind === "tune") tuneDirty.set(false);
+    else if (leaveKind === "brief") briefDirty.set(false);
+    else questDirty.set(false);
+    if (pendingStage) {
+      activeStage = pendingStage;
+      pendingStage = null;
+    }
+  }
+
+  function cancelLeaveStage() {
+    leaveConfirmOpen = false;
+    pendingStage = null;
+  }
+
   $: if ($ideStageRequest) {
     const req = $ideStageRequest;
-    if (stages.some((s) => s.id === req)) {
-      activeStage = req as StageId;
-    }
     ideStageRequest.set(null);
-  }
-  let briefGoal = "";
-  let briefAudience = "";
-  let briefPillars = "";
-  let briefConstraints = "";
-  let briefReleaseTargets = "";
-  let briefNotes = "";
-  let briefMessage = "";
-  let briefError = "";
-  let lastBriefPath: string | null = null;
-
-  async function loadBrief() {
-    if (!$projectPath || lastBriefPath === $projectPath) return;
-    briefError = "";
-    try {
-      const brief: any = await invoke("get_project_brief", { path: $projectPath });
-      briefGoal = brief.goal ?? "";
-      briefAudience = brief.targetAudience ?? "";
-      briefPillars = (brief.gameplayPillars ?? []).join("\n");
-      briefConstraints = (brief.constraints ?? []).join("\n");
-      briefReleaseTargets = (brief.releaseTargets ?? []).join("\n");
-      briefNotes = brief.notes ?? "";
-      lastBriefPath = $projectPath;
-    } catch (e) {
-      briefError = String(e);
+    if (stages.some((s) => s.id === req)) {
+      goToStage(req as StageId);
     }
   }
 
-  async function saveBrief() {
+  let focusedScanTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function refreshFocusedScanLoop() {
+    if (focusedScanTimer) {
+      clearInterval(focusedScanTimer);
+      focusedScanTimer = null;
+    }
     if (!$projectPath) return;
-    briefError = "";
-    briefMessage = "";
     try {
-      await invoke("update_project_brief", {
+      const settings: { focusedScan?: boolean } = await invoke("get_history_settings", {
         path: $projectPath,
-        brief: {
-          goal: briefGoal,
-          targetAudience: briefAudience,
-          gameplayPillars: lines(briefPillars),
-          constraints: lines(briefConstraints),
-          releaseTargets: lines(briefReleaseTargets),
-          notes: briefNotes,
-        },
       });
-      briefMessage = "Brief saved. Auto snapshot created.";
-    } catch (e) {
-      briefError = String(e);
+      if (!settings?.focusedScan) return;
+      focusedScanTimer = setInterval(() => {
+        if (!$projectPath) return;
+        void invoke("scan_project_changes", { path: $projectPath }).catch(() => {});
+      }, 60_000);
+    } catch {
+      // ignore
     }
   }
 
-  function lines(value: string) {
-    return value
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-  }
+  $: if ($projectPath) void refreshFocusedScanLoop();
 
-  $: if ($projectPath) loadBrief();
+  onMount(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") void refreshFocusedScanLoop();
+      else if (focusedScanTimer) {
+        clearInterval(focusedScanTimer);
+        focusedScanTimer = null;
+      }
+    };
+    const onSettings = () => void refreshFocusedScanLoop();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("tuffbox:history-settings-changed", onSettings);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("tuffbox:history-settings-changed", onSettings);
+    };
+  });
+
+  onDestroy(() => {
+    if (focusedScanTimer) clearInterval(focusedScanTimer);
+  });
 
   let railRevealed = false;
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -273,27 +318,9 @@
 
 <div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
   <section class="stage-shell">
-    <div class="stage-content" class:fill-stage={activeStage === "configs"}>
+    <div class="stage-content" class:fill-stage={activeStage === "configs" || activeStage === "world-map" || activeStage === "brief" || activeStage === "quests"}>
       {#if activeStage === "brief"}
-        <div class="skeleton-page">
-          <div class="page-header">
-            <div>
-              <h2>Pack brief</h2>
-              <p>Pre-production document saved into the project manifest. Use it to keep the pack direction clear before dependency work.</p>
-            </div>
-            <button on:click={saveBrief} disabled={!$projectPath}>Save brief</button>
-          </div>
-          {#if briefError}<div class="inline-error">{briefError}</div>{/if}
-          {#if briefMessage}<div class="inline-success">{briefMessage}</div>{/if}
-          <div class="brief-grid">
-            <label>Pack goal<textarea bind:value={briefGoal} placeholder="Example: low-end-friendly tech + exploration Fabric pack for 1.21.x" /></label>
-            <label>Target player<textarea bind:value={briefAudience} placeholder="Developers, server owners, casual players, low-end PCs..." /></label>
-            <label>Gameplay pillars<textarea bind:value={briefPillars} placeholder="One pillar per line: Performance, progression, QoL..." /></label>
-            <label>Hard constraints<textarea bind:value={briefConstraints} placeholder="One constraint per line: No client-only mods in server profile..." /></label>
-            <label>Release targets<textarea bind:value={briefReleaseTargets} placeholder="Modrinth, private server, Prism zip, GitHub Releases..." /></label>
-            <label>Notes<textarea bind:value={briefNotes} placeholder="Open questions, references, balancing notes..." /></label>
-          </div>
-        </div>
+        <BriefEditor />
       {:else if activeStage === "setup"}
         {#if $projectPath}
           <ProjectSettings showBack={false} stayAfterSave={true} />
@@ -307,6 +334,8 @@
         <QuestEditor />
       {:else if activeStage === "recipes"}
         <RecipeBrowser />
+      {:else if activeStage === "world-map"}
+        <World />
       {:else if activeStage === "ore-gen"}
         <OreGenVisualizer />
       {:else if activeStage === "content"}
@@ -349,7 +378,7 @@
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
-        on:click={() => (activeStage = stage.id)}
+        on:click={() => goToStage(stage.id)}
         on:focus={revealRail}
         title={stage.goal}
         aria-current={activeStage === stage.id ? "step" : undefined}
@@ -366,6 +395,25 @@
       {/each}
     </nav>
 </div>
+
+{#if leaveConfirmOpen}
+  <ConfirmDialog
+    title={leaveKind === "tune"
+      ? "Discard Tune changes?"
+      : leaveKind === "brief"
+        ? "Discard Brief changes?"
+        : "Discard Quests changes?"}
+    message={leaveKind === "tune"
+      ? "You have unsaved config edits. Leave Tune and discard them?"
+      : leaveKind === "brief"
+        ? "You have unsaved listing edits. Leave Brief and discard them?"
+        : "You have unsaved quest edits. Leave Quests and discard them?"}
+    danger={false}
+    confirmLabel="Discard & leave"
+    on:confirm={confirmLeaveStage}
+    on:cancel={cancelLeaveStage}
+  />
+{/if}
 
 <style>
   .ide-workspace {
@@ -413,12 +461,24 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    padding: 16px 20px;
+    padding: 0;
   }
 
   .stage-content.fill-stage > :global(.config-editor) {
     flex: 1;
     min-height: 0;
+    padding: 16px 20px;
+  }
+
+  .stage-content.fill-stage > :global(.worlds-view) {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .stage-content.fill-stage > :global(.qe.ftbq) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
   }
 
   .rail-hotzone {

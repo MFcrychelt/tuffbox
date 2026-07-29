@@ -22,6 +22,8 @@ export interface LaunchParams {
   profile?: string;
   quickPlayType?: string | null;
   quickPlayValue?: string | null;
+  /** One-shot memory override for smoke/low-end runs (does not mutate manifest). */
+  memoryMbOverride?: number | null;
 }
 
 // Retryable error categories — mirrors `LaunchErrorKind::retryable` on the Rust
@@ -56,20 +58,23 @@ let lastOnStarted: ((r: LaunchResult) => void) | null = null;
 
 async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
   const profile = params.profile ?? "client";
+  const memoryMbOverride = params.memoryMbOverride ?? null;
   if (params.quickPlayType || params.quickPlayValue) {
     return invoke<LaunchResult>("launch_with_quick_play", {
       path: params.path,
       profile,
       quickPlayType: params.quickPlayType ?? null,
       quickPlayValue: params.quickPlayValue ?? null,
+      memoryMbOverride,
     });
   }
-  if (profile === "server") {
+  if (profile === "server" && memoryMbOverride == null) {
     return invoke<LaunchResult>("launch_server", { path: params.path });
   }
   return invoke<LaunchResult>("launch_profile", {
     path: params.path,
     profile,
+    memoryMbOverride,
   });
 }
 

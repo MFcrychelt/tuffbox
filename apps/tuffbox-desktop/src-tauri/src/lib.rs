@@ -4,7 +4,10 @@ mod create_mode_api;
 mod integrations;
 mod launcher_presence;
 mod launcher_settings;
+mod listing_api;
+mod pack_events;
 mod presence;
+mod quest_chat_api;
 mod swarm_api;
 mod swarm_node;
 mod task_progress_api;
@@ -93,6 +96,10 @@ struct ProjectChangeEntry {
     crash_fingerprint_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     plan_source: Option<String>,
+    #[serde(default)]
+    actor: String,
+    #[serde(default)]
+    op: String,
 }
 
 #[derive(serde::Serialize)]
@@ -106,6 +113,9 @@ struct HistoryFileContent {
 #[serde(rename_all = "camelCase")]
 struct HistorySettings {
     tracked: std::collections::HashMap<String, bool>,
+    /// When true, IdeWorkspace debounces scan_project_changes while IDE is focused.
+    #[serde(default)]
+    focused_scan: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -140,6 +150,10 @@ struct TestRunRecord {
     status: String,
     log_path: String,
     duration_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    verdict_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    captured_paths: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -588,6 +602,152 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Copy local jars/zips into the project content folders, then register via sync.
+#[tauri::command(rename_all = "camelCase")]
+async fn import_local_content_files(
+    path: String,
+    source_paths: Vec<String>,
+    content_type: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let copy_result = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || {
+            let _guard = MODS_IO_LOCK
+                .lock()
+                .map_err(|_| "mods I/O lock poisoned".to_string())?;
+            let manifest_path = PathBuf::from(&path);
+            let project_dir = if manifest_path.is_file() {
+                manifest_path
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            } else {
+                manifest_path.clone()
+            };
+
+            let ct = content_type
+                .as_deref()
+                .unwrap_or("mod")
+                .to_lowercase();
+            let (dir_name, expected_ext) = match ct.as_str() {
+                "resourcepack" | "resourcepacks" => ("resourcepacks", "zip"),
+                "shader" | "shaderpack" | "shaderpacks" => ("shaderpacks", "zip"),
+                "datapack" | "datapacks" => ("datapacks", "zip"),
+                _ => ("mods", "jar"),
+            };
+            let dest_dir = project_dir.join(dir_name);
+            std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+
+            auto_snapshot(&manifest_path, "import-local-content").map_err(|e| e.to_string())?;
+
+            let mut imported = Vec::new();
+            let mut skipped = Vec::new();
+
+            for src_raw in source_paths {
+                let src = PathBuf::from(&src_raw);
+                if !src.is_file() {
+                    skipped.push(format!("{}: not a file", src_raw));
+                    continue;
+                }
+                let ext = src
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if ext != expected_ext {
+                    skipped.push(format!(
+                        "{}: expected .{}, got .{}",
+                        src.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| src_raw.clone()),
+                        expected_ext,
+                        ext
+                    ));
+                    continue;
+                }
+                let base_name = src
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| format!("import.{}", expected_ext));
+                let mut dest_name = base_name.clone();
+                let mut dest = dest_dir.join(&dest_name);
+                if dest.exists() {
+                    // Same path already in folder — skip duplicate copy.
+                    if std::fs::canonicalize(&src).ok() == std::fs::canonicalize(&dest).ok() {
+                        skipped.push(format!("{}: already in place", base_name));
+                        continue;
+                    }
+                    let stem = base_name
+                        .trim_end_matches(&format!(".{}", expected_ext))
+                        .to_string();
+                    let mut n = 2u32;
+                    loop {
+                        dest_name = format!("{}-{}.{}", stem, n, expected_ext);
+                        dest = dest_dir.join(&dest_name);
+                        if !dest.exists() {
+                            break;
+                        }
+                        n += 1;
+                        if n > 1000 {
+                            skipped.push(format!("{}: could not pick unique name", base_name));
+                            break;
+                        }
+                    }
+                    if dest.exists() {
+                        continue;
+                    }
+                }
+                std::fs::copy(&src, &dest).map_err(|e| {
+                    format!("copy {}: {}", src.display(), e)
+                })?;
+                imported.push(format!("{}/{}", dir_name, dest_name));
+            }
+
+            Ok::<(Vec<String>, Vec<String>), String>((imported, skipped))
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let (imported, skipped) = copy_result;
+    // Register new files (Modrinth identify or Local) via existing sync path.
+    let before_ids: std::collections::HashSet<String> = {
+        let listed = list_mods(path.clone()).await.unwrap_or_default();
+        listed
+            .into_iter()
+            .filter_map(|v| {
+                v.get("id")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string())
+            })
+            .collect()
+    };
+    let _mods = sync_mods_folder(path.clone()).await?;
+    let after = list_mods(path).await.unwrap_or_default();
+    let identified: Vec<String> = after
+        .iter()
+        .filter_map(|v| {
+            let id = v.get("id")?.as_str()?;
+            if before_ids.contains(id) {
+                return None;
+            }
+            let source = v.get("source")?.as_str().unwrap_or("local");
+            if source != "local" {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "imported": imported,
+        "identified": identified,
+        "skipped": skipped,
+        "baselineUpdated": true,
+    }))
 }
 
 /// Resolve a jar to a ModSpec via the local hash index, refreshing Modrinth
@@ -1076,6 +1236,7 @@ async fn add_curseforge_mod(
     mod_id: String,
     side: String,
 ) -> Result<(), String> {
+    let path_for_stats = path.clone();
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
         auto_snapshot(&manifest_path, "add-curseforge-mod").map_err(|e| e.to_string())?;
@@ -1084,10 +1245,38 @@ async fn add_curseforge_mod(
             .map_err(|e| e.to_string())?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
-        Ok(())
+        Ok::<(), String>(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn add_curseforge_mods_with_dependencies(
+    app: tauri::AppHandle,
+    path: String,
+    mod_ids: Vec<String>,
+    side: String,
+) -> Result<Vec<String>, String> {
+    let path_for_stats = path.clone();
+    let installed = tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        auto_snapshot(&manifest_path, "bulk-add-curseforge-mods-with-dependencies")
+            .map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let installed =
+            install_curseforge_with_dependencies_rounds(&mut manifest, &mod_ids, &side, 50)
+                .map_err(|e| e.to_string())?;
+        save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
+        download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
+        Ok::<Vec<String>, String>(installed)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
+    Ok(installed)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -2909,10 +3098,30 @@ async fn keep_one_duplicate_mod_jar(
 fn list_config_files(path: String) -> Result<Vec<ConfigFileSummary>, String> {
     let project_dir = manifest_parent(&path)?;
     let mut files = Vec::new();
-    for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
+    for root in ["config", "defaultconfigs", "kubejs", "scripts", "overrides"] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
             collect_config_files(&project_dir, &dir, &mut files).map_err(|e| e.to_string())?;
+        }
+    }
+    // Root-level options.txt (History tracks it; Tune should edit it too).
+    let options = project_dir.join("options.txt");
+    if options.is_file() {
+        if let Ok(metadata) = std::fs::metadata(&options) {
+            if metadata.len() <= 2 * 1024 * 1024 {
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_secs());
+                files.push(ConfigFileSummary {
+                    name: "options.txt".into(),
+                    extension: "txt".into(),
+                    path: "options.txt".into(),
+                    size: metadata.len(),
+                    modified,
+                });
+            }
         }
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -2930,28 +3139,50 @@ fn read_config_file(path: String, relative_path: String) -> Result<String, Strin
     std::fs::read_to_string(target).map_err(|e| e.to_string())
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteConfigResult {
+    snapshot_id: String,
+}
+
 #[tauri::command(rename_all = "camelCase")]
-fn write_config_file(path: String, relative_path: String, content: String) -> Result<(), String> {
+fn write_config_file(
+    path: String,
+    relative_path: String,
+    content: String,
+) -> Result<WriteConfigResult, String> {
     if content.len() > 2 * 1024 * 1024 {
         return Err("file is too large for the MVP config editor".to_string());
     }
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let target = safe_project_file(&project_dir, &relative_path)?;
-    auto_snapshot_with_changed_files(
+    let snap = auto_snapshot_with_changed_files(
         &manifest_path,
         "edit-config",
         &[PathBuf::from(&relative_path)],
     )
     .map_err(|e| e.to_string())?;
-    std::fs::write(target, content).map_err(|e| e.to_string())
+    std::fs::write(target, content).map_err(|e| e.to_string())?;
+    Ok(WriteConfigResult {
+        snapshot_id: snap.id,
+    })
+}
+
+/// Pretty-print a TOML document; returns Err on parse failure.
+#[tauri::command(rename_all = "camelCase")]
+fn format_toml(content: String) -> Result<String, String> {
+    let value: toml::Value = content
+        .parse()
+        .map_err(|e| format!("TOML parse error: {e}"))?;
+    toml::to_string_pretty(&value).map_err(|e| e.to_string())
 }
 
 /// Full-text search across all config and script files in the project.
 #[tauri::command(rename_all = "camelCase")]
 fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Value>, String> {
     let project_dir = manifest_parent(&path)?;
-    let roots = ["config", "defaultconfigs", "kubejs", "scripts"];
+    let roots = ["config", "defaultconfigs", "kubejs", "scripts", "overrides"];
     let whitelist: &[&str] = &[
         "json",
         "json5",
@@ -3009,7 +3240,7 @@ fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Valu
                 if line.to_lowercase().contains(&query_lower) {
                     if let Ok(rel) = file_path.strip_prefix(&project_dir) {
                         results.push(serde_json::json!({
-                            "path": rel.to_string_lossy(),
+                            "path": rel.to_string_lossy().replace('\\', "/"),
                             "line": line_no + 1,
                             "text": line.trim().chars().take(200).collect::<String>(),
                         }));
@@ -3022,6 +3253,26 @@ fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Valu
         });
         if results.len() >= 200 {
             break;
+        }
+    }
+    // Also search root options.txt
+    let options = project_dir.join("options.txt");
+    if options.is_file() && results.len() < 200 {
+        if let Ok(content) = std::fs::read_to_string(&options) {
+            if content.len() <= 1024 * 1024 {
+                for (line_no, line) in content.lines().enumerate() {
+                    if line.to_lowercase().contains(&query_lower) {
+                        results.push(serde_json::json!({
+                            "path": "options.txt",
+                            "line": line_no + 1,
+                            "text": line.trim().chars().take(200).collect::<String>(),
+                        }));
+                        if results.len() >= 200 {
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(results)
@@ -4704,35 +4955,19 @@ fn prepare_ai_crash_context(
 }
 
 fn recent_crash_history_lines(project_dir: &Path, limit: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    // Resolved crash fixes (successful relaunch after apply).
+    // Prefer the pack activity journal (launcher + external scan + crash_fix).
+    let mut lines = pack_events::recent_pack_change_lines(project_dir, limit);
+    if lines.len() >= limit {
+        return lines;
+    }
+    // Fallback / supplement: resolved crash fixes.
     if let Ok(entries) = swarm_api::list_crash_resolutions(project_dir) {
-        for r in entries.into_iter().take(limit) {
+        for r in entries.into_iter().take(limit.saturating_sub(lines.len())) {
             lines.push(format!(
                 "RESOLVED [{}] via {}: {}",
                 r.fingerprint_key,
                 r.verified_by,
                 tuffbox_core::crash_kb::truncate_at_char_boundary(&r.human_explanation, 160)
-            ));
-        }
-    }
-    // Recent crash_fix snapshots.
-    let store = SnapshotStore::new(project_dir);
-    if let Ok(snaps) = store.list() {
-        for snap in snaps
-            .into_iter()
-            .filter(|s| s.tags.iter().any(|t| t == "crash_fix" || t == "crash_resolved"))
-            .take(limit)
-        {
-            lines.push(format!(
-                "{} [{}] {}",
-                if snap.tags.iter().any(|t| t == "crash_resolved") {
-                    "RESOLVED_SNAP"
-                } else {
-                    "FIX_APPLIED"
-                },
-                snap.crash_fingerprint_key.as_deref().unwrap_or("-"),
-                snap.reason
             ));
         }
     }
@@ -6167,12 +6402,16 @@ async fn launch_server(
     record_launch(path.clone()).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
     })?;
-    launch_profile(app, path, "server".into()).await
+    launch_profile(app, path, "server".into(), None).await
 }
 
 /// Generates a default server.properties file for the project.
 #[tauri::command(rename_all = "camelCase")]
-fn generate_server_properties(path: String) -> Result<String, String> {
+fn generate_server_properties(
+    path: String,
+    level_seed: Option<String>,
+    online_mode: Option<bool>,
+) -> Result<String, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let profile = manifest
         .profiles
@@ -6180,63 +6419,29 @@ fn generate_server_properties(path: String) -> Result<String, String> {
         .find(|p| p.id == "server")
         .or_else(|| manifest.profiles.first());
 
+    let online = online_mode.unwrap_or(true);
     let mut props = String::new();
-    props.push_str(
-        "# TuffBox generated server.properties
-",
-    );
-    props.push_str(&format!(
-        "server-port=25565
-"
-    ));
-    props.push_str(&format!(
-        "max-players=20
-"
-    ));
-    props.push_str(&format!(
-        "view-distance=10
-"
-    ));
-    props.push_str(&format!(
-        "simulation-distance=10
-"
-    ));
-    props.push_str(&format!(
-        "max-world-size=29999984
-"
-    ));
-    props.push_str(&format!(
-        "allow-flight=false
-"
-    ));
-    props.push_str(&format!(
-        "online-mode=true
-"
-    ));
-    props.push_str(&format!(
-        "difficulty=normal
-"
-    ));
-    props.push_str(&format!(
-        "gamemode=survival
-"
-    ));
-    props.push_str(&format!(
-        "enable-command-block=false
-"
-    ));
-    props.push_str(&format!(
-        "spawn-protection=16
-"
-    ));
-    props.push_str(&format!(
-        "max-tick-time=60000
-"
-    ));
-    props.push_str(&format!(
-        "level-name=world
-"
-    ));
+    props.push_str("# TuffBox generated server.properties\n");
+    props.push_str("server-port=25565\n");
+    props.push_str("max-players=20\n");
+    props.push_str("view-distance=10\n");
+    props.push_str("simulation-distance=10\n");
+    props.push_str("max-world-size=29999984\n");
+    props.push_str("allow-flight=false\n");
+    props.push_str(&format!("online-mode={online}\n"));
+    props.push_str("difficulty=normal\n");
+    props.push_str("gamemode=survival\n");
+    props.push_str("enable-command-block=false\n");
+    props.push_str("spawn-protection=16\n");
+    props.push_str("max-tick-time=60000\n");
+    props.push_str("level-name=world\n");
+    if let Some(seed) = level_seed
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        props.push_str(&format!("level-seed={seed}\n"));
+    }
     props.push_str(&format!(
         "motd=A TuffBox {} Server\n",
         manifest.project.name
@@ -6244,11 +6449,7 @@ fn generate_server_properties(path: String) -> Result<String, String> {
 
     if let Some(profile) = profile {
         if let Some(mem) = profile.memory_mb {
-            props.push_str(&format!(
-                "# Memory: {} MB
-",
-                mem
-            ));
+            props.push_str(&format!("# Memory: {mem} MB\n"));
         }
     }
 
@@ -6465,7 +6666,7 @@ fn save_quest_chapter(
     Ok(serde_json::json!({ "relativePath": rel, "questCount": chapter.quests.len() }))
 }
 
-fn collect_catalog_item_ids(
+pub(crate) fn collect_catalog_item_ids(
     manifest_path: &std::path::Path,
 ) -> Result<std::collections::HashSet<String>, String> {
     let scan = tuffbox_core::recipe_scan::scan_project_recipes(manifest_path)?;
@@ -8107,6 +8308,39 @@ fn get_crash_diagnosis(
     Ok(diagnosis)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+fn import_external_crash(
+    path: String,
+    file_name: String,
+    content: String,
+) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::crash::import_external_crash(&project_dir, &file_name, &content)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn export_diagnose_support_pack(
+    path: String,
+    report_id: Option<String>,
+    findings_summary: String,
+    recent_events_summary: String,
+    action_plan_json: Option<String>,
+) -> Result<tuffbox_core::crash::SupportPackResult, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_parent(&path)?;
+    let mod_ids: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
+    tuffbox_core::crash::export_diagnose_support_pack(
+        &project_dir,
+        report_id.as_deref(),
+        &findings_summary,
+        &recent_events_summary,
+        action_plan_json.as_deref(),
+        &mod_ids,
+    )
+    .map_err(|e| e.to_string())
+}
+
 fn run_crash_assistant_analysis(
     path: &str,
     manifest: &ProjectManifest,
@@ -8309,6 +8543,38 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
     let snapshots = store.list().map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
 
+    // Pack activity journal (launcher + external scan + AI).
+    for ev in pack_events::list_pack_events(&project_dir, Some(500)) {
+        let path_text = ev.paths.first().cloned().unwrap_or_else(|| ev.op.clone());
+        let can_open = {
+            let p = project_dir.join(&path_text);
+            p.is_file() && is_editable_config_path(&p)
+        };
+        entries.push(ProjectChangeEntry {
+            id: ev.id.clone(),
+            snapshot_id: ev.snapshot_id.clone().unwrap_or_default(),
+            operation: ev.summary.clone(),
+            reason: format!("{} · {}", ev.actor, ev.op),
+            created_at: ev.ts.clone(),
+            path: path_text,
+            category: ev.category.clone(),
+            kind: ev.op.clone(),
+            preview: ev.summary.clone(),
+            diff: ev
+                .paths
+                .iter()
+                .map(|p| format!("• {p}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            can_open,
+            tags: ev.tags.clone(),
+            crash_fingerprint_key: None,
+            plan_source: None,
+            actor: ev.actor.clone(),
+            op: ev.op.clone(),
+        });
+    }
+
     // Resolved crash fixes (successful relaunch after apply).
     let mut seen_resolution_keys = std::collections::HashSet::new();
     if let Ok(resolutions) = swarm_api::list_crash_resolutions(&project_dir) {
@@ -8344,6 +8610,8 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 tags: vec!["crash_resolved".into(), "crash_fix".into()],
                 crash_fingerprint_key: Some(rec.fingerprint_key),
                 plan_source: rec.plan_source,
+                actor: "ai".into(),
+                op: "crash_resolved".into(),
             });
         }
     }
@@ -8385,11 +8653,20 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
+                actor: "ai".into(),
+                op: "crash_resolved".into(),
             });
         }
 
         for relative in &snapshot.changed_files {
             let relative_text = relative.to_string_lossy().replace('\\', "/");
+            // Prefer journal entries when present for the same snapshot+path.
+            let dup = entries.iter().any(|e| {
+                e.snapshot_id == snapshot.id && e.path == relative_text && e.kind == "file_edit"
+            });
+            if dup {
+                continue;
+            }
             let before_path = project_dir
                 .join(".tuffbox")
                 .join("snapshots")
@@ -8415,6 +8692,8 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
+                actor: pack_events::actor_for_operation(&snapshot.name).into(),
+                op: "file_changed".into(),
             });
         }
     }
@@ -8425,6 +8704,88 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
             .then_with(|| a.path.cmp(&b.path))
     });
     Ok(entries)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn scan_project_changes(path: String) -> Result<pack_events::ScanProjectChangesResult, String> {
+    let project_dir = manifest_parent(&path)?;
+    let settings = get_history_settings(path)?;
+    pack_events::scan_project_changes(&project_dir, &settings.tracked)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_recent_pack_events(
+    path: String,
+    limit: Option<usize>,
+) -> Result<Vec<pack_events::PackEvent>, String> {
+    let project_dir = manifest_parent(&path)?;
+    Ok(pack_events::list_pack_events(
+        &project_dir,
+        Some(limit.unwrap_or(20)),
+    ))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn explain_pack_change(path: String, event_id: String) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let events = pack_events::list_pack_events(&project_dir, Some(500));
+    let Some(ev) = events.into_iter().find(|e| e.id == event_id) else {
+        return Err(format!("event {event_id} not found"));
+    };
+    let mut excerpts = Vec::new();
+    for rel in ev.paths.iter().take(3) {
+        let p = project_dir.join(rel);
+        if p.is_file() && is_editable_config_path(&p) {
+            if let Ok(raw) = std::fs::read_to_string(&p) {
+                let take: String = raw.chars().take(1200).collect();
+                excerpts.push(serde_json::json!({ "path": rel, "excerpt": take }));
+            }
+        } else if p.is_file() {
+            excerpts.push(serde_json::json!({
+                "path": rel,
+                "excerpt": format!("(binary/large file, {} bytes)", p.metadata().map(|m| m.len()).unwrap_or(0)),
+            }));
+        }
+    }
+    let neighbors: Vec<_> = pack_events::list_pack_events(&project_dir, Some(8))
+        .into_iter()
+        .filter(|e| e.id != event_id)
+        .take(5)
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "ts": e.ts,
+                "actor": e.actor,
+                "op": e.op,
+                "summary": e.summary,
+            })
+        })
+        .collect();
+    let explanation = format!(
+        "Change by {} ({}) at {}: {}. Category: {}. {}",
+        ev.actor,
+        ev.op,
+        ev.ts,
+        ev.summary,
+        ev.category,
+        if ev.tags.iter().any(|t| t == "jar_drift") {
+            "This jar is on disk but not in the project manifest — import it or remove the orphan file."
+        } else if ev.actor == "scan" {
+            "Detected by delta scan (edit outside the launcher)."
+        } else if ev.actor == "ai" {
+            "Associated with an AI/swarm fix or crash resolution. Review Diagnose for the ActionPlan."
+        } else {
+            "Recorded from a launcher operation (auto-snapshot)."
+        }
+    );
+    Ok(serde_json::json!({
+        "eventId": ev.id,
+        "explanation": explanation,
+        "excerpts": excerpts,
+        "neighbors": neighbors,
+        "canOpenDiagnose": ev.tags.iter().any(|t| t == "crash_fix" || t == "crash_resolved")
+            || ev.op.contains("crash"),
+    }))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -8911,6 +9272,10 @@ fn capture_test_run_logs(path: String, run_id: String) -> Result<String, String>
     std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
     let candidates = [
         (project_dir.join("logs").join("latest.log"), "latest.log"),
+        (
+            project_dir.join("logs").join("tuffbox-console.log"),
+            "tuffbox-console.log",
+        ),
         (project_dir.join("launcher.log"), "launcher.log"),
         (project_dir.join("launcher_log.txt"), "launcher_log.txt"),
         (
@@ -8922,17 +9287,109 @@ fn capture_test_run_logs(path: String, run_id: String) -> Result<String, String>
             "logs-launcher_log.txt",
         ),
     ];
-    let mut copied = 0usize;
+    let mut captured_paths: Vec<String> = Vec::new();
     for (src, name) in candidates {
         if src.is_file() {
             std::fs::copy(&src, target_dir.join(name)).map_err(|e| e.to_string())?;
-            copied += 1;
+            captured_paths.push(name.to_string());
         }
     }
-    if copied == 0 {
+
+    // Copy recent crash-reports if present.
+    let crash_src = project_dir.join("crash-reports");
+    let crash_dst = target_dir.join("crash-reports");
+    if crash_src.is_dir() {
+        let _ = std::fs::create_dir_all(&crash_dst);
+        if let Ok(entries) = std::fs::read_dir(&crash_src) {
+            let mut reports: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |x| x == "txt"))
+                .collect();
+            reports.sort_by_key(|e| {
+                e.metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0)
+            });
+            for entry in reports.into_iter().rev().take(5) {
+                let name = entry.file_name();
+                let dest = crash_dst.join(&name);
+                if std::fs::copy(entry.path(), &dest).is_ok() {
+                    captured_paths.push(format!(
+                        "crash-reports/{}",
+                        name.to_string_lossy()
+                    ));
+                }
+            }
+        }
+    }
+
+    if captured_paths.is_empty() {
         return Err("no logs found to capture".to_string());
     }
+
+    // Persist captured paths onto the run record when present.
+    let runs_path = project_dir.join(".tuffbox").join("test-runs.json");
+    if runs_path.is_file() {
+        if let Ok(raw) = std::fs::read_to_string(&runs_path) {
+            if let Ok(mut runs) = serde_json::from_str::<Vec<TestRunRecord>>(&raw) {
+                if let Some(run) = runs.iter_mut().find(|r| r.id == run_id) {
+                    run.captured_paths = captured_paths.clone();
+                    let _ = std::fs::write(
+                        &runs_path,
+                        serde_json::to_string_pretty(&runs).unwrap_or_default(),
+                    );
+                }
+            }
+        }
+    }
+
     Ok(target_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn finalize_test_run(
+    path: String,
+    run_id: String,
+    status: String,
+    duration_seconds: Option<u64>,
+    verdict_reason: Option<String>,
+) -> Result<TestRunRecord, String> {
+    let project_dir = manifest_parent(&path)?;
+    let runs_path = project_dir.join(".tuffbox").join("test-runs.json");
+    if !runs_path.is_file() {
+        return Err("no test runs recorded".to_string());
+    }
+    let raw = std::fs::read_to_string(&runs_path).map_err(|e| e.to_string())?;
+    let mut runs: Vec<TestRunRecord> = serde_json::from_str(&raw).unwrap_or_default();
+    let run = runs
+        .iter_mut()
+        .find(|r| r.id == run_id)
+        .ok_or_else(|| format!("run {run_id} not found"))?;
+    run.status = status;
+    if let Some(secs) = duration_seconds {
+        run.duration_seconds = Some(secs);
+    } else if run.duration_seconds.is_none() {
+        if let Ok(started) = run.started_at.parse::<u64>() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            run.duration_seconds = Some(now.saturating_sub(started));
+        }
+    }
+    if verdict_reason.is_some() {
+        run.verdict_reason = verdict_reason;
+    }
+    let finished = run.clone();
+    std::fs::write(
+        &runs_path,
+        serde_json::to_string_pretty(&runs).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(finished)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -8945,10 +9402,16 @@ fn list_test_runs(path: String) -> Result<Vec<TestRunRecord>, String> {
     let raw = std::fs::read_to_string(&runs_path).map_err(|e| e.to_string())?;
     let mut runs: Vec<TestRunRecord> = serde_json::from_str(&raw).unwrap_or_default();
     for run in &mut runs {
+        // Only soft-update in-flight runs; finalized verdicts are authoritative.
+        if run.status != "started" {
+            continue;
+        }
         let log_path = PathBuf::from(&run.log_path);
         if let Ok(log) = tuffbox_core::process::read_log_tail(&log_path, 200) {
             if log.contains("# Launch error:") {
-                run.status = "failed".to_string();
+                run.status = "fail".to_string();
+            } else if log.contains("Minecraft has crashed") || log.contains("Exception in thread") {
+                run.status = "fail".to_string();
             } else if log.contains("Process exited") || log.contains("Stopping!") {
                 run.status = "finished".to_string();
             }
@@ -8992,8 +9455,17 @@ async fn launch_with_quick_play(
     profile: String,
     quick_play_type: Option<String>,
     quick_play_value: Option<String>,
+    memory_mb_override: Option<u32>,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
-    launch_profile_impl(app, path, profile, quick_play_type, quick_play_value).await
+    launch_profile_impl(
+        app,
+        path,
+        profile,
+        quick_play_type,
+        quick_play_value,
+        memory_mb_override,
+    )
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -9001,8 +9473,9 @@ async fn launch_profile(
     app: tauri::AppHandle,
     path: String,
     profile: String,
+    memory_mb_override: Option<u32>,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
-    launch_profile_impl(app, path, profile, None, None).await
+    launch_profile_impl(app, path, profile, None, None, memory_mb_override).await
 }
 
 async fn launch_profile_impl(
@@ -9011,6 +9484,7 @@ async fn launch_profile_impl(
     profile: String,
     quick_play_type: Option<String>,
     quick_play_value: Option<String>,
+    memory_mb_override: Option<u32>,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
     let path = resolve_manifest_path(&path).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e)
@@ -9046,6 +9520,9 @@ async fn launch_profile_impl(
             .open(&console_log)
             .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
         writeln!(console, "# TuffBox launching profile {profile}").ok();
+        if let Some(mb) = memory_mb_override {
+            writeln!(console, "# Memory override: {mb} MB").ok();
+        }
         if let (Some(ref t), Some(ref v)) = (&quick_play_type, &quick_play_value) {
             writeln!(console, "# Quick Play: {t} → {v}").ok();
         }
@@ -9076,6 +9553,7 @@ async fn launch_profile_impl(
             app,
             quick_play_type,
             quick_play_value,
+            memory_mb_override,
         )
     })
     .await
@@ -9104,6 +9582,7 @@ fn build_and_spawn(
     app: tauri::AppHandle,
     quick_play_type: Option<String>,
     quick_play_value: Option<String>,
+    memory_mb_override: Option<u32>,
 ) -> Result<(), LaunchErrorInfo> {
     use tuffbox_core::{LaunchOptions, TestLauncher};
 
@@ -9311,7 +9790,8 @@ fn build_and_spawn(
     let options = LaunchOptions {
         profile_id: profile.clone(),
         instance_dir: game_dir.clone(),
-        memory_mb: project_profile.memory_mb.unwrap_or(4096),
+        memory_mb: memory_mb_override
+            .unwrap_or_else(|| project_profile.memory_mb.unwrap_or(4096)),
         jvm_args: launch_jvm_args,
         quick_play_type,
         quick_play_value,
@@ -10358,6 +10838,8 @@ fn append_test_run_record(
         status: "started".to_string(),
         log_path: log_path.to_string_lossy().to_string(),
         duration_seconds: None,
+        verdict_reason: None,
+        captured_paths: Vec::new(),
     });
     if runs.len() > 100 {
         let keep_from = runs.len().saturating_sub(100);
@@ -10833,6 +11315,7 @@ fn create_instance(
             version: loader_version,
         },
         brief: None,
+        listing: None,
         java: Some(JavaSpec {
             major: Some(17),
             distribution: None,
@@ -11174,6 +11657,8 @@ fn mod_change_entries(
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
+                actor: "launcher".into(),
+                op: "mod_added".into(),
             });
         }
     }
@@ -11198,6 +11683,8 @@ fn mod_change_entries(
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
+                actor: "launcher".into(),
+                op: "mod_removed".into(),
             });
         }
     }
@@ -11236,11 +11723,17 @@ fn mod_change_entries(
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
+                actor: "launcher".into(),
+                op: "mod_updated".into(),
             });
         }
     }
 
     entries
+}
+
+fn change_category(path: &str) -> &'static str {
+    pack_events::category_for_path(path)
 }
 
 fn default_history_settings() -> HistorySettings {
@@ -11251,21 +11744,9 @@ fn default_history_settings() -> HistorySettings {
     tracked.insert("Resource Packs".to_string(), true);
     tracked.insert("World/Data".to_string(), false);
     tracked.insert("Other".to_string(), true);
-    HistorySettings { tracked }
-}
-
-fn change_category(path: &str) -> &'static str {
-    let normalized = path.replace('\\', "/").to_lowercase();
-    let root = normalized.split('/').next().unwrap_or("");
-    if matches!(normalized.as_str(), "options.txt" | "servers.dat") {
-        return "Configs";
-    }
-    match root {
-        "config" | "defaultconfigs" | "kubejs" | "scripts" => "Configs",
-        "shaderpacks" | "shaders" => "Shaders",
-        "resourcepacks" | "texturepacks" => "Resource Packs",
-        "datapacks" | "world" | "saves" => "World/Data",
-        _ => "Other",
+    HistorySettings {
+        tracked,
+        focused_scan: false,
     }
 }
 
@@ -12090,13 +12571,21 @@ fn auto_snapshot_with_changed_files(
     let store = SnapshotStore::new(project_dir);
     let name = format!("auto-before-{operation}");
     let reason = format!("Auto snapshot before {operation}");
-    Ok(store.create(
+    let snapshot = store.create(
         &name,
         &reason,
         manifest_path,
         lockfile_path.as_ref(),
         changed_files,
-    )?)
+    )?;
+    let _ = pack_events::append_from_snapshot(
+        project_dir,
+        operation,
+        &snapshot.id,
+        changed_files,
+        &reason,
+    );
+    Ok(snapshot)
 }
 
 pub(crate) fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> {
@@ -12757,9 +13246,21 @@ pub fn run() {
             resolve_project_path,
             get_project_brief,
             update_project_brief,
+            listing_api::get_project_listing,
+            listing_api::update_project_listing,
+            listing_api::set_project_listing_icon,
+            listing_api::clear_project_listing_icon,
+            listing_api::add_listing_gallery_image,
+            listing_api::remove_listing_gallery_image,
+            listing_api::reorder_listing_gallery,
+            listing_api::read_listing_asset,
+            listing_api::ensure_listing_folder,
+            listing_api::update_project_brief_and_listing,
+            listing_api::add_listing_gallery_bytes,
             list_profiles,
             list_mods,
             sync_mods_folder,
+            import_local_content_files,
             search_modrinth_mods,
             search_modpack_index,
             list_modpack_index_categories,
@@ -12796,6 +13297,7 @@ pub fn run() {
             create_mode_api::new_create_chat,
             create_mode_api::resolve_modpack_index_search,
             add_curseforge_mod,
+            add_curseforge_mods_with_dependencies,
             remove_project_mod,
             disable_project_mod,
             enable_project_mod,
@@ -12812,6 +13314,7 @@ pub fn run() {
             list_config_files,
             read_config_file,
             write_config_file,
+            format_toml,
             search_in_configs,
             get_manifest_schema,
             record_launch,
@@ -12893,6 +13396,14 @@ pub fn run() {
             validate_quest_plan,
             quest_plan_system_prompt,
             generate_quest_plan_from_prompt,
+            quest_chat_api::list_quest_chat_sessions,
+            quest_chat_api::save_quest_chat_session,
+            quest_chat_api::load_quest_chat_session,
+            quest_chat_api::delete_quest_chat_session,
+            quest_chat_api::new_quest_chat_session,
+            quest_chat_api::quest_chat_turn,
+            quest_chat_api::generate_quest_line,
+            quest_chat_api::filter_and_merge_quest_plan,
             list_quest_item_catalog,
             list_quest_progress_teams,
             load_quest_progress,
@@ -12964,12 +13475,17 @@ pub fn run() {
             install_graph_dep,
             download_missing_files,
             get_crash_diagnosis,
+            import_external_crash,
+            export_diagnose_support_pack,
             create_crash_fix_plan,
             apply_crash_fix_plan,
             apply_fix_action,
             get_history_settings,
             update_history_settings,
             list_project_change_history,
+            scan_project_changes,
+            list_recent_pack_events,
+            explain_pack_change,
             read_project_history_file,
             create_tracked_history_snapshot,
             rollback_history_file,
@@ -12993,6 +13509,7 @@ pub fn run() {
             generate_lockfile,
             capture_test_run_logs,
             list_test_runs,
+            finalize_test_run,
             launch_profile,
             launch_with_quick_play,
             import_project,

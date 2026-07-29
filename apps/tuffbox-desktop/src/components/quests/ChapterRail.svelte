@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus, Save, ChevronDown, ChevronRight } from "lucide-svelte";
+  import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "lucide-svelte";
   import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
 
   export let chapters: QuestChapter[];
@@ -11,9 +11,12 @@
   export let onCreate: () => void;
   export let onSave: (id: string) => void;
   export let onDirty: (id: string) => void;
+  export let onDelete: ((id: string) => void) | null = null;
+  export let onMove: ((id: string, dir: -1 | 1) => void) | null = null;
 
   let collapsed = new Set<string>();
   let editingId: string | null = null;
+  let menuId: string | null = null;
 
   $: groupTitle = new Map(chapterGroups.map((g) => [g.id, g.title]));
   $: groups = buildGroups(chapters, groupTitle);
@@ -98,12 +101,25 @@
       {/if}
       {#if !collapsed.has(g.key)}
         {#each g.chapters as ch (ch.id)}
-          <div class="ch-row-wrap" class:sel={selectedChapter === ch.id} class:dirty={dirtyIds.has(ch.id)}>
+          <div
+            class="ch-row-wrap"
+            class:sel={selectedChapter === ch.id}
+            class:dirty={dirtyIds.has(ch.id)}
+          >
             <button
               type="button"
               class="ch-row"
-              on:click={() => onSelect(ch.id)}
+              on:click={() => {
+                onSelect(ch.id);
+                menuId = null;
+              }}
               on:dblclick={() => (editingId = ch.id)}
+              on:keydown={(e) => {
+                if (e.key === "Delete" && onDelete) {
+                  e.preventDefault();
+                  onDelete(ch.id);
+                }
+              }}
             >
               <span class="glyph" title={ch.icon || ""}>{glyph(ch)}</span>
               <span class="ch-text">
@@ -126,6 +142,31 @@
               </span>
               {#if dirtyIds.has(ch.id)}<span class="dot" title="Unsaved">●</span>{/if}
             </button>
+            {#if onMove || onDelete}
+              <div class="ch-menu-wrap">
+                <button
+                  type="button"
+                  class="ico tiny"
+                  title="Chapter actions"
+                  on:click|stopPropagation={() => (menuId = menuId === ch.id ? null : ch.id)}
+                >
+                  <MoreVertical size={12} />
+                </button>
+                {#if menuId === ch.id}
+                  <div class="ch-menu">
+                    {#if onMove}
+                      <button type="button" on:click={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
+                      <button type="button" on:click={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
+                    {/if}
+                    {#if onDelete}
+                      <button type="button" class="danger" on:click={() => { onDelete?.(ch.id); menuId = null; }}
+                        >Delete…</button
+                      >
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/if}
           </div>
         {/each}
       {/if}
@@ -212,6 +253,8 @@
   }
   .ch-row-wrap {
     position: relative;
+    display: flex;
+    align-items: stretch;
     border: none;
     border-left: 3px solid transparent;
   }
@@ -242,18 +285,48 @@
   .ch-row-wrap.dirty:not(.sel) {
     border-left-color: rgba(242, 201, 76, 0.4);
   }
-  .ch-row {
-    width: 100%;
+  .ch-menu-wrap {
+    position: relative;
+    padding: 4px 4px 4px 0;
+    opacity: 0.4;
+  }
+  .ch-row-wrap:hover .ch-menu-wrap,
+  .ch-row-wrap.sel .ch-menu-wrap {
+    opacity: 1;
+  }
+  .ch-menu {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    z-index: 20;
+    min-width: 120px;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    background: var(--ftbq-bg, #1a1a1e);
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    border-radius: 2px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  }
+  .ch-menu button {
     text-align: left;
-    padding: 6px 10px 6px 12px;
     border: none;
     background: transparent;
     color: var(--ftbq-text, #e8e8e8);
+    padding: 8px 10px;
+    font-size: 11px;
     cursor: pointer;
-    position: relative;
+  }
+  .ch-menu button:hover {
+    background: rgba(61, 184, 168, 0.12);
+  }
+  .ch-menu button.danger {
+    color: #f87171;
+  }
+  .ico.tiny {
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
+    padding: 0;
   }
   .ch-row:hover {
     background: rgba(255, 255, 255, 0.04);
