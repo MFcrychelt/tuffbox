@@ -10,7 +10,7 @@ See `crates/tuffbox-core/src/cosmetics_runtime.rs` (`resolve_cosmetics_artifact`
 | 1.12.2 | scaffold | — | — | session/core stub |
 | 1.16.5 | scaffold | scaffold | — | session/core stub |
 | 1.20.1 | scaffold | scaffold | scaffold | session/core stub |
-| 1.21.1 | — | **full FX** | session + core | Fabric = production |
+| 1.21.1 | — | **full FX** | **next port** (session + core) | Fabric = production; see `PORT_NEOFORGE_1.21.1.md` |
 | 1.21.4 | — | scaffold | scaffold | port from 1.21.1 |
 | 1.21.11 | — | scaffold | scaffold | port from 1.21.1 |
 | 26.1.2 | — | scaffold | scaffold | port from 1.21.1 |

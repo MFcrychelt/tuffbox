@@ -1,13 +1,15 @@
 # TuffBox Cosmetics
 
-Appearance system for Me + in-game: HD skin/cape, wings, hats, trails, jump/combat FX; Mojang / Ely.by / TLauncher via CustomSkinLoader; TuffBox-only sharing of custom looks.
+In-game appearance for TuffBox players: HD skin/cape, wings, hats, trails, jump/combat FX; Mojang / Ely.by / TLauncher via CustomSkinLoader; TuffBox-only sharing of custom looks.
+
+**Launcher Me tab** only sets the **account skin** (Microsoft) and **cape source** for the launcher preview. Wings, FX, and other cosmetics are configured **in-game** (Right Shift) through the TuffBox cosmetics mod; saves update local session and `cosmetics-upsert` for peers.
 
 ## Layers
 
-1. **Me → Appearance** — upload skin/cape, pick wings/hat, FX toggles ([`Me.svelte`](../apps/tuffbox-desktop/src/components/Me.svelte)).
-2. **Launch inject** — [`cosmetics_runtime.rs`](../crates/tuffbox-core/src/cosmetics_runtime.rs) injects CSL + nearest **anchor** cosmetics jar, writes `.tuffbox/cosmetics-session.json`.
+1. **In-game cosmetics mod** — player configures look in the running client ([`bridges/cosmetics`](../bridges/cosmetics)); GUI save → session + Supabase upsert.
+2. **Launch inject** — [`cosmetics_runtime.rs`](../crates/tuffbox-core/src/cosmetics_runtime.rs) injects CSL + nearest **anchor** cosmetics jar, merges disk profile + `.tuffbox/cosmetics-gui.json`, writes `.tuffbox/cosmetics-session.json` (incl. `writeSecret`).
 3. **Supabase** — `cosmetics_profiles` + Storage; edge `cosmetics-get` / `cosmetics-upsert`.
-4. **Client mod** — [`bridges/cosmetics`](../bridges/cosmetics): `core` (Java 8 protocol) + per-anchor platform jars.
+4. **Client mod** — `core` (Java 8 protocol) + per-anchor platform jars.
 
 ## CSL load order
 
@@ -23,7 +25,7 @@ Inject selects the **highest anchor ≤ pack MC** that supports the loader (Quil
 | 1.12.2 | scaffold | — | — |
 | 1.16.5 | scaffold | scaffold | — |
 | 1.20.1 | scaffold | scaffold | scaffold |
-| **1.21.1** | — | **full FX** | session/core |
+| **1.21.1** | — | **full FX** | next port (session/core) |
 | 1.21.4 | — | scaffold | scaffold |
 | 1.21.11 | — | scaffold | scaffold |
 | 26.1.2 | — | scaffold | scaffold |

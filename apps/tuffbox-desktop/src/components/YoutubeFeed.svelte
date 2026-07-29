@@ -13,14 +13,24 @@
     channel_name: string | null;
     source?: string | null;
     lang?: string | null;
+    view_count?: number | null;
+    published_at?: string | null;
   };
+
+  /** `row` = horizontal home strip; `rail` = vertical under-skin column. */
+  export let variant: "row" | "rail" = "row";
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
   const FEED_LIMIT = 20;
   const SKEL_COUNT = 5;
+  /** Cap clips from the same channel so mega-creators don't fill the strip. */
+  const MAX_PER_CHANNEL = 2;
+  /** Share of tracked-creator videos in the final strip. */
+  const CHANNEL_SHARE = 0.4;
 
   let videos: FeedVideo[] = [];
   let loading = true;
+  let loadError = "";
   let expanded = true;
   let inlinePlayer = true;
   let activeVideo: FeedVideo | null = null;
@@ -37,6 +47,115 @@
     } catch {
       return "en";
     }
+  }
+
+  function channelKey(v: FeedVideo): string {
+    return (v.channel_name || "").trim().toLowerCase() || "?";
+  }
+
+  function hashStr(s: string): number {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  /** Mix view popularity with freshness; soft daily shuffle so the strip rotates. */
+  function scoreVideo(v: FeedVideo, daySeed: number): number {
+    const views = Math.max(0, Number(v.view_count) || 0);
+    const published = v.published_at ? Date.parse(v.published_at) : NaN;
+    const ageDays = Number.isFinite(published)
+      ? Math.max(0, (Date.now() - published) / 86_400_000)
+      : 120;
+    const freshness = Math.max(0, 1 - ageDays / 150);
+    const base = Math.log10(views + 10) * (0.5 + 0.5 * freshness);
+    // Small jitter (±8%) keyed by day + id so order isn't identical every open,
+    // but stays stable within a calendar day.
+    const jitter = ((hashStr(`${v.video_id}:${daySeed}`) % 1000) / 1000 - 0.5) * 0.16;
+    return base * (1 + jitter);
+  }
+
+  /**
+   * Build a varied strip: channel caps, popular↔creator interleave,
+   * native-lang preference with English filler.
+   */
+  function diversifyFeed(rows: FeedVideo[], limit: number, preferLang: string): FeedVideo[] {
+    if (rows.length === 0) return [];
+
+    const daySeed = Math.floor(Date.now() / 86_400_000);
+    const ranked = [...rows].sort(
+      (a, b) => scoreVideo(b, daySeed) - scoreVideo(a, daySeed),
+    );
+
+    const popularPool = ranked.filter((v) => v.source !== "channel");
+    const channelPool = ranked.filter((v) => v.source === "channel");
+    const channelTarget = Math.min(
+      channelPool.length,
+      Math.max(4, Math.round(limit * CHANNEL_SHARE)),
+    );
+    const popularTarget = limit - channelTarget;
+
+    function pick(pool: FeedVideo[], n: number): FeedVideo[] {
+      const out: FeedVideo[] = [];
+      const counts = new Map<string, number>();
+      const passes: Array<(v: FeedVideo) => boolean> =
+        preferLang === "en"
+          ? [() => true]
+          : [
+              (v) => (v.lang || "en") === preferLang,
+              (v) => (v.lang || "en") === "en",
+              () => true,
+            ];
+
+      for (const pass of passes) {
+        for (const v of pool) {
+          if (out.length >= n) break;
+          if (out.some((p) => p.video_id === v.video_id)) continue;
+          if (!pass(v)) continue;
+          const ch = channelKey(v);
+          const used = counts.get(ch) ?? 0;
+          if (used >= MAX_PER_CHANNEL) continue;
+          counts.set(ch, used + 1);
+          out.push(v);
+        }
+      }
+      return out;
+    }
+
+    const popular = pick(popularPool, popularTarget);
+    const creators = pick(channelPool, channelTarget);
+
+    // Interleave ~3 popular : 2 creators for a mixed strip.
+    const out: FeedVideo[] = [];
+    let pi = 0;
+    let ci = 0;
+    while (out.length < limit && (pi < popular.length || ci < creators.length)) {
+      for (let k = 0; k < 3 && pi < popular.length && out.length < limit; k++) {
+        out.push(popular[pi++]);
+      }
+      for (let k = 0; k < 2 && ci < creators.length && out.length < limit; k++) {
+        out.push(creators[ci++]);
+      }
+    }
+
+    if (out.length < limit) {
+      const used = new Set(out.map((v) => v.video_id));
+      const counts = new Map<string, number>();
+      for (const v of out) counts.set(channelKey(v), (counts.get(channelKey(v)) ?? 0) + 1);
+      for (const v of ranked) {
+        if (out.length >= limit) break;
+        if (used.has(v.video_id)) continue;
+        const ch = channelKey(v);
+        if ((counts.get(ch) ?? 0) >= MAX_PER_CHANNEL) continue;
+        counts.set(ch, (counts.get(ch) ?? 0) + 1);
+        used.add(v.video_id);
+        out.push(v);
+      }
+    }
+
+    return out;
   }
 
   onMount(() => {
@@ -61,30 +180,54 @@
 
   async function loadFeed() {
     loading = true;
+    loadError = "";
     try {
       const lang = userLang();
       const langs = lang === "en" ? ["en"] : [lang, "en"];
-      const { data, error } = await supabase
-        .from("youtube_feed")
-        .select("video_id,title,thumbnail_url,channel_name,source,lang")
-        .in("lang", langs)
-        .order("view_count", { ascending: false })
-        .limit(60);
-      if (error || !data) {
+      const cols =
+        "video_id,title,thumbnail_url,channel_name,source,lang,view_count,published_at";
+
+      // Separate pools so mega popular hits don't crowd out tracked creators.
+      const [popularRes, channelRes] = await Promise.all([
+        supabase
+          .from("youtube_feed")
+          .select(cols)
+          .in("lang", langs)
+          .eq("source", "popular")
+          .order("view_count", { ascending: false })
+          .limit(80),
+        supabase
+          .from("youtube_feed")
+          .select(cols)
+          .in("lang", langs)
+          .eq("source", "channel")
+          .order("view_count", { ascending: false })
+          .limit(60),
+      ]);
+
+      if (popularRes.error && channelRes.error) {
+        loadError = popularRes.error.message || channelRes.error.message || "Failed to load feed";
         videos = [];
         return;
       }
-      const rows = data as FeedVideo[];
-      // Popular keyword hits first, then tracked creators (each by views).
-      // Reserve room so creators are not crowded out by a long popular list.
-      const popularAll = rows.filter((v) => v.source !== "channel");
-      const channelAll = rows.filter((v) => v.source === "channel");
-      const popularCap = Math.min(popularAll.length, Math.max(12, FEED_LIMIT - Math.min(8, channelAll.length)));
-      const popular = popularAll.slice(0, popularCap);
-      const channel = channelAll.slice(0, FEED_LIMIT - popular.length);
-      videos = [...popular, ...channel];
-    } catch {
+
+      const popular =
+        !popularRes.error && popularRes.data ? (popularRes.data as FeedVideo[]) : [];
+      const channel =
+        !channelRes.error && channelRes.data ? (channelRes.data as FeedVideo[]) : [];
+
+      // Dedup by video_id (prefer popular row when both match).
+      const byId = new Map<string, FeedVideo>();
+      for (const v of channel) byId.set(v.video_id, v);
+      for (const v of popular) byId.set(v.video_id, v);
+
+      videos = diversifyFeed([...byId.values()], FEED_LIMIT, lang);
+      if (videos.length === 0) {
+        loadError = "";
+      }
+    } catch (e) {
       videos = [];
+      loadError = String(e);
     } finally {
       loading = false;
     }
@@ -114,8 +257,8 @@
   }
 </script>
 
-{#if loading || videos.length > 0}
-  <section class="youtube-feed" aria-busy={loading}>
+{#if loading || videos.length > 0 || loadError !== "" || (!loading && videos.length === 0)}
+  <section class="youtube-feed" class:rail={variant === "rail"} aria-busy={loading}>
     <button type="button" class="section-header" on:click={toggleExpanded} disabled={loading}>
       <Youtube size={18} />
       <h2>Minecraft on YouTube</h2>
@@ -133,6 +276,17 @@
               <span class="skeleton skeleton-block skeleton-line short"></span>
             </div>
           {/each}
+        </div>
+      {:else if loadError}
+        <div class="feed-status">
+          <p>Couldn’t load YouTube feed.</p>
+          <span class="feed-status-detail">{loadError}</span>
+          <button type="button" class="retry-btn" on:click={() => loadFeed()}>Retry</button>
+        </div>
+      {:else if videos.length === 0}
+        <div class="feed-status">
+          <p>No videos yet. The feed fills every few hours.</p>
+          <button type="button" class="retry-btn" on:click={() => loadFeed()}>Refresh</button>
         </div>
       {:else}
         <div class="feed-row tb-anim-fade-in">
@@ -173,7 +327,7 @@
 
 <style>
   .youtube-feed {
-    margin-bottom: 32px;
+    margin-bottom: 0;
   }
 
   .section-header {
@@ -203,6 +357,10 @@
     color: var(--text-primary);
   }
 
+  .rail .section-header h2 {
+    font-size: 14px;
+  }
+
   .chevron {
     display: flex;
     align-items: center;
@@ -228,8 +386,21 @@
     scrollbar-color: var(--bg-elevated) transparent;
   }
 
+  .rail .feed-row {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: min(70vh, 640px);
+    padding-bottom: 0;
+  }
+
   .feed-row::-webkit-scrollbar {
     height: 6px;
+  }
+
+  .rail .feed-row::-webkit-scrollbar {
+    width: 6px;
+    height: auto;
   }
 
   .feed-row::-webkit-scrollbar-thumb {
@@ -251,6 +422,11 @@
     cursor: pointer;
     color: inherit;
     transition: transform 0.15s ease;
+  }
+
+  .rail .video-card {
+    flex: 0 0 auto;
+    width: 100%;
   }
 
   .skel-card {
@@ -309,5 +485,41 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .feed-status {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 12px 0;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .feed-status p {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+
+  .feed-status-detail {
+    font-size: 11px;
+    opacity: 0.85;
+    word-break: break-word;
+  }
+
+  .retry-btn {
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .retry-btn:hover {
+    border-color: var(--accent-primary);
   }
 </style>

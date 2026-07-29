@@ -22,6 +22,16 @@
 
   $: embedSrc = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`;
 
+  /** Mount overlay on document.body so .fade-slide-in transform / .content overflow cannot clip it. */
+  function bodyPortal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
+
   function destroyEmbed() {
     embedAlive = false;
   }
@@ -129,6 +139,7 @@
   class:yp-out={backdropOut}
   role="button"
   tabindex="-1"
+  use:bodyPortal
   on:click={(e) => e.target === e.currentTarget && close()}
   on:keydown={() => {}}
 >
@@ -171,7 +182,7 @@
   .yp-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 400;
+    z-index: 10000;
     display: flex;
     align-items: center;
     justify-content: center;

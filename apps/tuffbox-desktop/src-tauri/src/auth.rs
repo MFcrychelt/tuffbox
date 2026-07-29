@@ -9,6 +9,15 @@ use std::time::{Duration, Instant};
 
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
 const MICROSOFT_CLIENT_ID: &str = "89484d4e-6ac2-4643-a786-21386f3269c5";
+/// Official Minecraft launcher public client — used for device code + auth-code URL login.
+const MS_OAUTH_TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+const MS_OAUTH_AUTHORIZE_URL: &str =
+    "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
+const MS_OAUTH_DEVICE_CODE_URL: &str =
+    "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+const MS_REDIRECT_NATIVE: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
+const MS_REDIRECT_LIVE_DESKTOP: &str = "https://login.live.com/oauth20_desktop.srf";
+const MS_SCOPE: &str = "XboxLive.signin offline_access";
 const MC_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
 
 // Mutex protecting concurrent reads/writes to auth.json and mc_accounts.json.
@@ -152,8 +161,8 @@ pub struct McCapeEntry {
     pub state: String,
 }
 
+/// Microsoft identity platform returns snake_case OAuth fields (not camelCase).
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct DeviceCodeResponse {
     device_code: String,
     user_code: String,
@@ -162,14 +171,17 @@ struct DeviceCodeResponse {
     verification_uri_complete: Option<String>,
     expires_in: u64,
     interval: u64,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct TokenResponse {
     access_token: String,
+    #[serde(default)]
     refresh_token: Option<String>,
+    #[serde(default)]
     #[allow(dead_code)]
     expires_in: u64,
 }
@@ -706,15 +718,17 @@ pub struct DeviceCodeInfo {
     pub verification_uri: String,
     pub message: String,
     pub expires_in: u64,
+    /// Suggested poll interval in seconds (from Microsoft).
+    pub interval: u64,
 }
 
 pub async fn start_device_code_flow() -> Result<(DeviceCodeInfo, String, u64), String> {
     let c = client()?;
     let resp = c
-        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
+        .post(MS_OAUTH_DEVICE_CODE_URL)
         .form(&[
             ("client_id", MICROSOFT_CLIENT_ID),
-            ("scope", "XboxLive.signin offline_access"),
+            ("scope", MS_SCOPE),
         ])
         .send()
         .await
@@ -726,20 +740,24 @@ pub async fn start_device_code_flow() -> Result<(DeviceCodeInfo, String, u64), S
         return Err(format!("device code failed ({status}): {body}"));
     }
 
-    let data: DeviceCodeResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let verification_uri = data
-        .verification_uri_complete
-        .clone()
-        .filter(|u| !u.trim().is_empty())
-        .unwrap_or_else(|| data.verification_uri.clone());
+    let data: DeviceCodeResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("device code parse failed: {e}"))?;
+    // Prefer the short microsoft.com/link page + separate user code UI (not the huge
+    // verification_uri_complete deep-link, which confuses copy/paste flows).
+    let verification_uri = data.verification_uri.clone();
     let info = DeviceCodeInfo {
         user_code: data.user_code.clone(),
         verification_uri: verification_uri.clone(),
-        message: format!(
-            "Go to {} and enter code: {}",
-            data.verification_uri, data.user_code
-        ),
+        message: data.message.unwrap_or_else(|| {
+            format!(
+                "Go to {} and enter code: {}",
+                data.verification_uri, data.user_code
+            )
+        }),
         expires_in: data.expires_in,
+        interval: data.interval.max(1),
     };
     Ok((info, data.device_code, data.interval.max(1)))
 }
@@ -749,7 +767,7 @@ pub async fn start_device_code_flow() -> Result<(DeviceCodeInfo, String, u64), S
 pub async fn poll_device_code_token_once(device_code: &str) -> Result<TokenResponse, String> {
     let c = client()?;
     let resp = c
-        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+        .post(MS_OAUTH_TOKEN_URL)
         .form(&[
             ("client_id", MICROSOFT_CLIENT_ID),
             ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -763,7 +781,8 @@ pub async fn poll_device_code_token_once(device_code: &str) -> Result<TokenRespo
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
 
     if status.is_success() {
-        return serde_json::from_value(body).map_err(|e| e.to_string());
+        return serde_json::from_value(body)
+            .map_err(|e| format!("token response parse failed: {e}"));
     }
 
     let error = body
@@ -993,13 +1012,25 @@ pub async fn check_minecraft_entitlement(mc_token: &str) -> Result<bool, String>
     }
 
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    // Mojang / Game Pass variants seen in the wild.
+    const OWNED: &[&str] = &[
+        "game_minecraft",
+        "product_minecraft",
+        "product_minecraft_java",
+        "game_minecraft_bedrock",
+        "product_game_pass",
+        "product_minecraft_java_realtime",
+    ];
     let has_game = body
         .get("items")
         .and_then(|items| items.as_array())
         .map(|items| {
-            items
-                .iter()
-                .any(|item| item.get("name").and_then(|n| n.as_str()) == Some("game_minecraft"))
+            items.iter().any(|item| {
+                item.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|name| OWNED.iter().any(|o| *o == name) || name.contains("minecraft"))
+                    .unwrap_or(false)
+            })
         })
         .unwrap_or(false);
     Ok(has_game)
@@ -1100,12 +1131,12 @@ pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), S
 pub async fn refresh_minecraft_token(refresh_token: &str) -> Result<TokenResponse, String> {
     let c = client()?;
     let resp = c
-        .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
+        .post(MS_OAUTH_TOKEN_URL)
         .form(&[
             ("client_id", MICROSOFT_CLIENT_ID),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
-            ("scope", "XboxLive.signin offline_access"),
+            ("scope", MS_SCOPE),
         ])
         .send()
         .await
@@ -1118,11 +1149,158 @@ pub async fn refresh_minecraft_token(refresh_token: &str) -> Result<TokenRespons
         let error = body
             .get("error_description")
             .and_then(|v| v.as_str())
+            .or_else(|| body.get("error").and_then(|v| v.as_str()))
             .unwrap_or("unknown");
         return Err(format!("Token refresh failed: {error}"));
     }
 
-    serde_json::from_value(body).map_err(|e| e.to_string())
+    serde_json::from_value(body).map_err(|e| format!("token refresh parse failed: {e}"))
+}
+
+// ─── Authorization-code (paste URL) flow ─────────────────────────
+
+pub fn microsoft_authorize_url() -> String {
+    format!(
+        "{MS_OAUTH_AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&scope={}&prompt=select_account",
+        urlencoding_encode(MICROSOFT_CLIENT_ID),
+        urlencoding_encode(MS_REDIRECT_NATIVE),
+        urlencoding_encode(MS_SCOPE),
+    )
+}
+
+fn urlencoding_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Pull `code` from a redirect URL, raw query string, or bare authorization code.
+pub fn extract_oauth_code(input: &str) -> Result<(String, &'static str), String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Paste the redirect URL (or authorization code)".into());
+    }
+
+    // Bare code (no URL)
+    if !trimmed.contains("://") && !trimmed.contains('=') && !trimmed.contains('?') {
+        let code = trimmed.trim_matches(|c| c == '"' || c == '\'' || c == '<' || c == '>');
+        if code.len() < 8 {
+            return Err("Authorization code looks too short".into());
+        }
+        return Ok((code.to_string(), MS_REDIRECT_NATIVE));
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let redirect = if lower.contains("oauth20_desktop.srf") || lower.contains("login.live.com")
+    {
+        MS_REDIRECT_LIVE_DESKTOP
+    } else {
+        MS_REDIRECT_NATIVE
+    };
+
+    // Prefer query string; fall back to fragment (some browsers).
+    let query = if let Some(q) = trimmed.split_once('?').map(|(_, rest)| rest) {
+        q.split('#').next().unwrap_or(q)
+    } else if let Some(frag) = trimmed.split_once('#').map(|(_, rest)| rest) {
+        frag.trim_start_matches('?')
+    } else {
+        return Err(
+            "Could not parse URL. Paste the full redirect address from the browser address bar."
+                .into(),
+        );
+    };
+
+    let mut code: Option<String> = None;
+    let mut error: Option<String> = None;
+    let mut error_desc: Option<String> = None;
+    for part in query.split('&') {
+        let Some((k, v)) = part.split_once('=') else {
+            continue;
+        };
+        let key = urlencoding_decode(k);
+        let val = urlencoding_decode(v);
+        match key.as_str() {
+            "code" => code = Some(val),
+            "error" => error = Some(val),
+            "error_description" => error_desc = Some(val),
+            _ => {}
+        }
+    }
+
+    if let Some(err) = error {
+        let desc = error_desc.unwrap_or(err);
+        return Err(format!("Microsoft login error: {desc}"));
+    }
+
+    let code = code.ok_or_else(|| {
+        "No authorization code found in the URL. Copy the full address after Microsoft redirects you."
+            .to_string()
+    })?;
+
+    Ok((code, redirect))
+}
+
+fn urlencoding_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = &s[i + 1..i + 3];
+            if let Ok(v) = u8::from_str_radix(hex, 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        if bytes[i] == b'+' {
+            out.push(b' ');
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub async fn exchange_authorization_code(
+    code: &str,
+    redirect_uri: &str,
+) -> Result<TokenResponse, String> {
+    let c = client()?;
+    let resp = c
+        .post(MS_OAUTH_TOKEN_URL)
+        .form(&[
+            ("client_id", MICROSOFT_CLIENT_ID),
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+            ("scope", MS_SCOPE),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("code exchange failed: {e}"))?;
+
+    let status = resp.status();
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    if !status.is_success() {
+        let error = body
+            .get("error_description")
+            .and_then(|v| v.as_str())
+            .or_else(|| body.get("error").and_then(|v| v.as_str()))
+            .unwrap_or("unknown");
+        return Err(format!("Authorization code exchange failed: {error}"));
+    }
+
+    serde_json::from_value(body).map_err(|e| format!("token response parse failed: {e}"))
 }
 
 // ─── Full login flow ─────────────────────────────────────────────
@@ -1145,9 +1323,88 @@ pub async fn complete_microsoft_login(ms_token: &str) -> Result<LoginResult, Str
     })
 }
 
-pub async fn login_with_refresh_token(refresh_token: &str) -> Result<LoginResult, String> {
+/// MS access → Minecraft profile, then persist tokens + account list.
+async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<LoginResult, String> {
+    let login = complete_microsoft_login(&token_resp.access_token).await?;
+
+    // Soft entitlement gate — warn via Err only when we are sure ownership is missing.
+    match check_minecraft_entitlement(&login.mc_access_token).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(
+                "This Microsoft account does not own Minecraft Java (or Game Pass entitlement was not found). Buy the game or use Game Pass, then try again."
+                    .into(),
+            );
+        }
+        Err(e) => {
+            // Network blip on entitlement — continue; launch will fail later if needed.
+            eprintln!("entitlement check skipped: {e}");
+        }
+    }
+
+    if let Some(ref rt) = token_resp.refresh_token {
+        save_token(&account_refresh_key(&login.profile.uuid), rt)?;
+    } else {
+        return Err(
+            "Microsoft did not return a refresh token. Try device-code login again (do not revoke offline_access)."
+                .into(),
+        );
+    }
+    save_token(
+        &account_access_key(&login.profile.uuid),
+        &login.mc_access_token,
+    )?;
+    save_token("mc-access-token", &login.mc_access_token)?;
+
+    let entry = AccountEntry {
+        uuid: login.profile.uuid.clone(),
+        name: login.profile.name.clone(),
+        login_type: LoginType::Microsoft,
+        skin_source: SkinSource::Mojang,
+        added_at: now_secs(),
+        authority: None,
+    };
+    add_account_to_list(&entry)?;
+
+    let mut profile = login.profile.clone();
+    let cape_provider = load_auth_state().cape_provider;
+    profile.cape_url = resolve_display_cape(
+        &profile.name,
+        &profile.uuid,
+        &cape_provider,
+        &profile.capes,
+    )
+    .await;
+
+    let accounts = load_accounts_file();
+    let state = AuthState {
+        logged_in: true,
+        profile: Some(profile.clone()),
+        expires_at: Some(now_secs() + 86400),
+        login_type: LoginType::Microsoft,
+        skin_source: SkinSource::Mojang,
+        cape_provider,
+        accounts: accounts.accounts,
+        active_account_uuid: accounts.active_account_uuid,
+    };
+    save_auth_state(&state)?;
+
+    if let Some(ref skin_url) = profile.skin_url {
+        let _ = download_and_cache_skin(skin_url, &profile.uuid).await;
+    }
+
+    Ok(LoginResult {
+        profile,
+        mc_access_token: login.mc_access_token,
+    })
+}
+
+pub async fn login_with_refresh_token(
+    refresh_token: &str,
+) -> Result<(LoginResult, Option<String>), String> {
     let token_resp = refresh_minecraft_token(refresh_token).await?;
-    complete_microsoft_login(&token_resp.access_token).await
+    let login = complete_microsoft_login(&token_resp.access_token).await?;
+    Ok((login, token_resp.refresh_token))
 }
 
 // ─── Skin caching ────────────────────────────────────────────────
@@ -1300,62 +1557,24 @@ pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     // long-running blocking polls that race on the same device code.
     let token_resp = poll_device_code_token_once(&device_code).await?;
 
+    // Only clear after Xbox/MC chain succeeds — otherwise the user can retry poll.
+    let result = finalize_microsoft_token_login(token_resp).await?;
     let _ = clear_token("mc-device-code");
     let _ = clear_token("mc-device-interval");
-    let login = complete_microsoft_login(&token_resp.access_token).await?;
+    Ok(result)
+}
 
-    // Save per-account tokens
-    if let Some(ref rt) = token_resp.refresh_token {
-        save_token(&account_refresh_key(&login.profile.uuid), rt)?;
-    }
-    save_token(&account_access_key(&login.profile.uuid), &login.mc_access_token)?;
+#[tauri::command(rename_all = "camelCase")]
+pub fn mc_get_microsoft_login_url() -> Result<String, String> {
+    Ok(microsoft_authorize_url())
+}
 
-    // Also save legacy keys for load_mc_access_token
-    save_token("mc-access-token", &login.mc_access_token)?;
-
-    // Add to accounts list
-    let entry = AccountEntry {
-        uuid: login.profile.uuid.clone(),
-        name: login.profile.name.clone(),
-        login_type: LoginType::Microsoft,
-        skin_source: SkinSource::Mojang,
-        added_at: now_secs(),
-        authority: None,
-    };
-    add_account_to_list(&entry)?;
-
-    // Update auth state
-    let mut profile = login.profile.clone();
-    let cape_provider = load_auth_state().cape_provider;
-    profile.cape_url = resolve_display_cape(
-        &profile.name,
-        &profile.uuid,
-        &cape_provider,
-        &profile.capes,
-    )
-    .await;
-
-    let accounts = load_accounts_file();
-    let state = AuthState {
-        logged_in: true,
-        profile: Some(profile.clone()),
-        expires_at: Some(now_secs() + 86400),
-        login_type: LoginType::Microsoft,
-        skin_source: SkinSource::Mojang,
-        cape_provider,
-        accounts: accounts.accounts,
-        active_account_uuid: accounts.active_account_uuid,
-    };
-    save_auth_state(&state)?;
-
-    if let Some(ref skin_url) = profile.skin_url {
-        let _ = download_and_cache_skin(skin_url, &profile.uuid).await;
-    }
-
-    Ok(LoginResult {
-        profile,
-        mc_access_token: login.mc_access_token,
-    })
+/// Complete Microsoft login by pasting the browser redirect URL (or raw auth code).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_login_with_auth_url(url_or_code: String) -> Result<LoginResult, String> {
+    let (code, redirect_uri) = extract_oauth_code(&url_or_code)?;
+    let token_resp = exchange_authorization_code(&code, redirect_uri).await?;
+    finalize_microsoft_token_login(token_resp).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1443,7 +1662,7 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
         if let Some(ref uuid) = state.active_account_uuid {
             if let Ok(refresh_token) = load_token(&account_refresh_key(uuid)) {
                 match login_with_refresh_token(&refresh_token).await {
-                    Ok(login) => {
+                    Ok((login, new_refresh)) => {
                         let mut profile = login.profile.clone();
                         // Keep the selected display cape provider (OptiFine / TLauncher / …)
                         // over the raw Mojang ACTIVE cape from the profile endpoint.
@@ -1459,6 +1678,9 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
                         state.profile = Some(profile);
                         save_token(&account_access_key(uuid), &login.mc_access_token)?;
                         save_token("mc-access-token", &login.mc_access_token)?;
+                        if let Some(rt) = new_refresh {
+                            let _ = save_token(&account_refresh_key(uuid), &rt);
+                        }
                         if let Some(ref skin_url) = login.profile.skin_url {
                             let _ =
                                 download_and_cache_skin(skin_url, &login.profile.uuid).await;
@@ -1468,12 +1690,24 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
                             *last = Some(Instant::now());
                         }
                     }
-                    Err(_) => {
-                        state.logged_in = false;
-                        state.profile = None;
-                        save_auth_state(&state)?;
-                        let _ = clear_token(&account_refresh_key(uuid));
-                        let _ = clear_token(&account_access_key(uuid));
+                    Err(e) => {
+                        let el = e.to_lowercase();
+                        let fatal = el.contains("invalid_grant")
+                            || el.contains("revoked")
+                            || (el.contains("expired") && el.contains("refresh"));
+                        if fatal {
+                            state.logged_in = false;
+                            state.profile = None;
+                            save_auth_state(&state)?;
+                            let _ = clear_token(&account_refresh_key(uuid));
+                            let _ = clear_token(&account_access_key(uuid));
+                        } else {
+                            // Soft-fail network / transient errors — keep last known profile.
+                            eprintln!("token refresh soft-fail: {e}");
+                            if let Ok(mut last) = LAST_AUTH_REFRESH.lock() {
+                                *last = Some(Instant::now());
+                            }
+                        }
                     }
                 }
             }
@@ -1521,9 +1755,12 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     if state.login_type == LoginType::Microsoft {
         if let Some(ref uuid) = state.active_account_uuid {
             let refresh_token = load_token(&account_refresh_key(uuid))?;
-            let login = login_with_refresh_token(&refresh_token).await?;
+            let (login, new_refresh) = login_with_refresh_token(&refresh_token).await?;
             save_token(&account_access_key(uuid), &login.mc_access_token)?;
             save_token("mc-access-token", &login.mc_access_token)?;
+            if let Some(rt) = new_refresh {
+                let _ = save_token(&account_refresh_key(uuid), &rt);
+            }
 
             let accounts = load_accounts_file();
             let new_state = AuthState {
@@ -1914,9 +2151,12 @@ pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
             let mut profile = None;
             let mut expires = None;
             if let Ok(refresh_token) = load_token(&account_refresh_key(&uuid)) {
-                if let Ok(login) = login_with_refresh_token(&refresh_token).await {
+                if let Ok((login, new_refresh)) = login_with_refresh_token(&refresh_token).await {
                     let _ = save_token(&account_access_key(&uuid), &login.mc_access_token);
                     let _ = save_token("mc-access-token", &login.mc_access_token);
+                    if let Some(rt) = new_refresh {
+                        let _ = save_token(&account_refresh_key(&uuid), &rt);
+                    }
                     if let Some(ref skin_url) = login.profile.skin_url {
                         let _ = download_and_cache_skin(skin_url, &login.profile.uuid).await;
                     }

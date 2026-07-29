@@ -415,7 +415,7 @@ Control HTTP: `/health` is open for probes; `/v1/*` requires `Authorization: Bea
 | **A** | Local ActionPlan + authored export + dual-mode diagnose | В продукте / foundation |
 | **B** | Opt-in swarm gate + **tuffswarm-hub** + durable capsules + pending plan + co-occurrence | Client + hub binary in repo |
 | **B+** | **Supabase-first** capsule publish/lookup (Edge verify + RLS read); device Ed25519 soft-sign; P2P/hub kept | In product path |
-| **C** | P2P ExperienceCapsule gossip / DHT (`tuffswarm-node`) + desktop spawn/bridge + HTTP hub fallback; AutoNAT/Relay client; signed content-hash capsules; control bearer token | Scaffold + harden (opt-in) |
+| **C** | P2P ExperienceCapsule gossip / DHT (`tuffswarm-node`) + desktop spawn/bridge + HTTP hub fallback; AutoNAT/Relay client; signed content-hash capsules; control bearer token | Scaffold + harden (opt-in) — **separate track** from cosmetics / launcher UX (do not mix with Appearance / MATRIX ports) |
 | **D** | Creation Marketplace (AI Horde–style whole jobs + off-chain Kudos) + customer verifier | Future (Stage 16) |
 | **E** | Lightweight adapters / federated weight updates | Future |
 | **F** | RepOps / Verde / TAO-style verification | Future |

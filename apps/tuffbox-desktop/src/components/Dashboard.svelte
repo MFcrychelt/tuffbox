@@ -34,7 +34,7 @@
     RefreshCw,
     ChevronRight,
     HardDrive,
-    Palette,
+    Users,
     Clock,
     LayoutGrid,
   } from "lucide-svelte";
@@ -237,7 +237,12 @@
     }
   }
 
-  $: if ($authState.loggedIn && $authState.profile?.uuid) {
+  let lastCapeRefreshKey = "";
+  $: capeRefreshKey = $authState.loggedIn
+    ? `${$authState.activeAccountUuid ?? ""}:${$authState.capeProvider ?? "mojang"}`
+    : "";
+  $: if (capeRefreshKey && capeRefreshKey !== lastCapeRefreshKey) {
+    lastCapeRefreshKey = capeRefreshKey;
     void refreshCapes();
   }
 
@@ -608,7 +613,6 @@
     </div>
   </div>
 
-  // Main content: CSS grid areas — hero / InstanceHome / YouTube / instances / skin
   <div class="main-layout" data-layout={homeLayout}>
     <div class="area-hero">
       <!-- Hero: Play button + project info -->
@@ -702,12 +706,12 @@
     </div>
 
     <div class="area-youtube">
-      {#if homeLayout !== "yt-hidden"}
-        <YoutubeFeed />
+      {#if homeLayout !== "yt-hidden" && homeLayout !== "yt-under-skin"}
+        <YoutubeFeed variant="row" />
       {/if}
     </div>
 
-    <div class="area-instances">
+    <div class="area-instances" class:side-col={homeLayout === "yt-main"}>
       <!-- Instances grid -->
       <section class="projects-section">
         <div class="section-header">
@@ -896,15 +900,12 @@
                   $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority
                 )}
               </span>
-              {#if $authState.accounts.length > 1}
-                <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
-                  {$authState.accounts.length} accounts
-                </button>
-              {/if}
             </div>
             <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
-              <Palette size={14} />
-              Accounts
+              <Users size={14} />
+              {$authState.accounts.length > 1
+                ? `${$authState.accounts.length} accounts`
+                : "Accounts"}
             </button>
           </div>
           <div class="skin-player-name" title={$authState.profile.name}>
@@ -1027,6 +1028,11 @@
           </div>
         {/if}
       </div>
+      {#if homeLayout === "yt-under-skin"}
+        <div class="skin-rail-youtube">
+          <YoutubeFeed variant="rail" />
+        </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -1134,30 +1140,16 @@
     background: rgba(27, 217, 106, 0.04);
   }
 
-
-  .avatar-img {
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
-    object-fit: cover;
-    image-rendering: pixelated;
-  }
-
-  .avatar-fallback {
-    width: 32px;
-    height: 32px;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-elevated);
-    color: var(--text-muted);
-  }
-
   .avatar-name {
-    font-weight: 700;
-    font-size: 13px;
+    font-family: var(--font-minecraft);
+    font-weight: 400;
+    font-size: 10px;
+    letter-spacing: 0.4px;
     color: var(--text-primary);
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .avatar-badge {
@@ -1194,37 +1186,40 @@
   .area-hero {
     grid-area: hero;
     min-width: 0;
-    position: relative;
-    z-index: 1;
   }
 
   .area-ihome {
     grid-area: ihome;
     min-width: 0;
-    position: relative;
-    z-index: 1;
   }
 
   .area-youtube {
     grid-area: youtube;
     min-width: 0;
-    position: relative;
-    z-index: 1;
   }
 
   .area-instances {
     grid-area: instances;
     min-width: 0;
-    position: relative;
-    z-index: 1;
   }
 
   .area-skin {
     grid-area: skin;
     width: 320px;
+    max-width: 100%;
     position: sticky;
     top: 20px;
-    z-index: 0;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    align-self: start;
+  }
+
+  .area-youtube.side-col,
+  .area-instances.side-col {
+    width: 320px;
+    max-width: 100%;
+    position: sticky;
+    top: 20px;
     max-height: calc(100vh - 40px);
     overflow-y: auto;
     align-self: start;
@@ -1247,12 +1242,40 @@
       "youtube instances";
   }
 
-  /* 3) instances stay; YouTube under skin */
+  .main-layout[data-layout="yt-main"] .projects-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .main-layout[data-layout="yt-main"] .layout-picker select {
+    max-width: 160px;
+  }
+
+  /* 3) instances stay left; YouTube stacked under skin in the right rail */
   .main-layout[data-layout="yt-under-skin"] {
     grid-template-areas:
       "hero skin"
-      "ihome youtube"
-      "instances youtube";
+      "ihome skin"
+      "instances skin";
+  }
+
+  .main-layout[data-layout="yt-under-skin"] .area-skin {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 320px;
+    max-width: 100%;
+    position: sticky;
+    top: 20px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+  }
+
+  .main-layout[data-layout="yt-under-skin"] .area-youtube {
+    display: none;
+  }
+
+  .skin-rail-youtube {
+    min-width: 0;
   }
 
   /* 4) hide YouTube */
@@ -1317,12 +1340,24 @@
   }
 
   .skin-player-name {
-    font-weight: 700;
-    font-size: 14px;
+    font-family: var(--font-minecraft);
+    font-weight: 400;
+    font-size: 12px;
+    line-height: 1.4;
+    letter-spacing: 0.5px;
     color: var(--text-primary);
+    text-shadow:
+      2px 2px 0 color-mix(in srgb, var(--text-primary) 18%, #3f3f3f),
+      -1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
+      1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
+      0 -1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
+      0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000);
     text-align: center;
     padding: 0 16px 12px;
     margin-top: -4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .change-skin-btn {
@@ -1465,7 +1500,7 @@
     background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
-    margin-bottom: 24px;
+    margin-bottom: 0;
     gap: 24px;
   }
 
@@ -1627,7 +1662,7 @@
 
   /* ─── Instances ───────────────────────────────────── */
   .projects-section {
-    margin-bottom: 32px;
+    margin-bottom: 0;
   }
 
   .section-header {

@@ -39,6 +39,8 @@ struct CosmeticsSessionFile {
     uuid: String,
     api_base: String,
     anon_key: String,
+    #[serde(default)]
+    write_secret: String,
     wings: String,
     hat: String,
     trail: bool,
@@ -59,6 +61,7 @@ pub struct CosmeticsLaunchExtras {
     pub hit_bubbles: bool,
     pub target_esp: bool,
     pub kill_effect: bool,
+    pub write_secret: String,
 }
 
 /// Prepare cosmetics inject for a launch. Returns None when MC/loader unsupported
@@ -135,6 +138,7 @@ pub fn prepare_cosmetics_bridge(
         uuid: uuid.to_string(),
         api_base: cosmetics_api_base(),
         anon_key: cosmetics_anon_key(),
+        write_secret: extras.write_secret.clone(),
         wings: extras.wings.unwrap_or_default(),
         hat: extras.hat.unwrap_or_default(),
         trail: extras.trail,

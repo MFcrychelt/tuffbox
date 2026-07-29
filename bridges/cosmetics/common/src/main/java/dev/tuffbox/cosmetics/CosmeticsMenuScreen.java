@@ -132,7 +132,7 @@ public final class CosmeticsMenuScreen extends Screen {
         renderBackground(g, mouseX, mouseY, delta);
         super.render(g, mouseX, mouseY, delta);
         g.drawCenteredString(font, title, width / 2, 12, 0xFFFFFF);
-        g.drawCenteredString(font, "Local only — not uploaded", width / 2, 24, 0xA0A0A0);
+        g.drawCenteredString(font, "Saved locally + shared to peers", width / 2, 24, 0xA0A0A0);
     }
 
     @Override

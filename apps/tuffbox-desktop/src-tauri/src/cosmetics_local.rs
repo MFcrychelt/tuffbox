@@ -87,7 +87,23 @@ fn ensure_secret(p: &mut CosmeticsProfile) {
 }
 
 pub fn active_extras(player_key: &str) -> tuffbox_core::CosmeticsLaunchExtras {
-    let p = load_profile(player_key).unwrap_or_default();
+    let mut p = load_profile(player_key).unwrap_or_else(|_| CosmeticsProfile {
+        player_key: player_key.to_string(),
+        ..Default::default()
+    });
+    if p.player_key.trim().is_empty() {
+        p.player_key = player_key.to_string();
+    }
+    ensure_secret(&mut p);
+    // Persist secret so in-game upsert and next launch share the same key.
+    if !player_key.is_empty() && player_key != "offline" {
+        let dir = profile_dir(player_key);
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(
+            dir.join("profile.json"),
+            serde_json::to_string_pretty(&p).unwrap_or_default(),
+        );
+    }
     tuffbox_core::CosmeticsLaunchExtras {
         wings: p.wings.filter(|w| !w.is_empty()),
         hat: p.hat.filter(|h| !h.is_empty()),
@@ -97,7 +113,57 @@ pub fn active_extras(player_key: &str) -> tuffbox_core::CosmeticsLaunchExtras {
         hit_bubbles: p.hit_bubbles,
         target_esp: p.target_esp,
         kill_effect: p.kill_effect,
+        write_secret: p.write_secret,
     }
+}
+
+/// Merge in-game GUI prefs from `{game_dir}/.tuffbox/cosmetics-gui.json` over disk profile.
+pub fn merge_gui_extras(
+    game_dir: &std::path::Path,
+    mut base: tuffbox_core::CosmeticsLaunchExtras,
+) -> tuffbox_core::CosmeticsLaunchExtras {
+    let path = game_dir.join(".tuffbox").join("cosmetics-gui.json");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return base;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return base;
+    };
+    let wings_on = v.get("wingsEnabled").and_then(|x| x.as_bool()).unwrap_or(true);
+    let hat_on = v.get("hatEnabled").and_then(|x| x.as_bool()).unwrap_or(true);
+    if let Some(w) = v.get("wingsId").and_then(|x| x.as_str()) {
+        base.wings = if wings_on && !w.is_empty() {
+            Some(w.to_string())
+        } else {
+            None
+        };
+    }
+    if let Some(h) = v.get("hatId").and_then(|x| x.as_str()) {
+        base.hat = if hat_on && !h.is_empty() {
+            Some(h.to_string())
+        } else {
+            None
+        };
+    }
+    if let Some(b) = v.get("trail").and_then(|x| x.as_bool()) {
+        base.trail = b;
+    }
+    if let Some(b) = v.get("jumpCircles").and_then(|x| x.as_bool()) {
+        base.jump_circles = b;
+    }
+    if let Some(b) = v.get("hitParticles").and_then(|x| x.as_bool()) {
+        base.hit_particles = b;
+    }
+    if let Some(b) = v.get("hitBubbles").and_then(|x| x.as_bool()) {
+        base.hit_bubbles = b;
+    }
+    if let Some(b) = v.get("targetEsp").and_then(|x| x.as_bool()) {
+        base.target_esp = b;
+    }
+    if let Some(b) = v.get("killEffect").and_then(|x| x.as_bool()) {
+        base.kill_effect = b;
+    }
+    base
 }
 
 pub fn active_wings(player_key: &str) -> Option<String> {

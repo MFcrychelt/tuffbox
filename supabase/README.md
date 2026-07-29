@@ -29,7 +29,7 @@ supabase functions deploy cosmetics-upsert --no-verify-jwt
 5. First fill: `supabase functions invoke fetch-youtube-feed` (or HTTP POST to `/functions/v1/fetch-youtube-feed`).
 
 Launcher home reads `youtube_feed` via PostgREST (thumbnails only; click opens system browser). Clients never call YouTube.
-Client shows **popular** hits first, then tracked creators; filters to the OS UI language **or English**.
+Client diversifies the strip: channel caps, popular↔creator interleave, freshness + soft daily rotation; filters to the OS UI language **or English**.
 
 Tracked sources: per-locale keyword searches (en/ru/uk/de/es/fr/pt/pl) plus channel uploads for Dr Donut, Dream, Carvs, Kaisora, JudeLow.
 

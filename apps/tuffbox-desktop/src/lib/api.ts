@@ -911,59 +911,11 @@ export const api = {
     listProfiles(p?: string) { return cmd<ProfileSummary[]>("list_profiles", pathArg(p)); },
   },
 
-  // ── Cosmetics (TuffBox appearance) ────────────────────────────────
+  // ── Cosmetics (internal — Me UI removed; launch inject + in-game mod) ──
+  /** @internal Prefer in-game cosmetics menu (Right Shift). Kept for debug/inject tooling. */
   cosmetics: {
     getLocal(playerKey: string) {
       return cmd<CosmeticsProfile>("cosmetics_get_local_profile", { playerKey });
-    },
-    save(profile: CosmeticsProfile) {
-      return cmd<CosmeticsProfile>("cosmetics_save_profile", { profile });
-    },
-    uploadSkin(playerKey: string, username: string, path: string, model: string) {
-      return cmd<CosmeticsProfile>("cosmetics_upload_skin", { playerKey, username, path, model });
-    },
-    uploadCape(
-      playerKey: string,
-      username: string,
-      path: string,
-      animated = false,
-      frameMs = 100,
-      frames = 1,
-    ) {
-      return cmd<CosmeticsProfile>("cosmetics_upload_cape", {
-        playerKey,
-        username,
-        path,
-        animated,
-        frameMs,
-        frames,
-      });
-    },
-    setWings(playerKey: string, username: string, wings: string | null) {
-      return cmd<CosmeticsProfile>("cosmetics_set_wings", { playerKey, username, wings });
-    },
-    setVisualExtras(
-      playerKey: string,
-      username: string,
-      hat: string | null,
-      trail: boolean,
-      jumpCircles: boolean,
-      hitParticles = true,
-      hitBubbles = true,
-      targetEsp = true,
-      killEffect = true,
-    ) {
-      return cmd<CosmeticsProfile>("cosmetics_set_visual_extras", {
-        playerKey,
-        username,
-        hat,
-        trail,
-        jumpCircles,
-        hitParticles,
-        hitBubbles,
-        targetEsp,
-        killEffect,
-      });
     },
     wingsCatalog() {
       return cmd<Array<{ id: string; label: string }>>("cosmetics_wings_catalog");
@@ -1704,6 +1656,10 @@ export const api = {
   mcAuth: {
     startDeviceCode() { return cmd<DeviceCodeInfo>("mc_start_device_code"); },
     pollDeviceCode() { return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_poll_device_code"); },
+    getMicrosoftLoginUrl() { return cmd<string>("mc_get_microsoft_login_url"); },
+    loginWithAuthUrl(urlOrCode: string) {
+      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_login_with_auth_url", { urlOrCode });
+    },
     offlineLogin(username: string, skinSource: SkinSource) {
       return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_offline_login", { username, skinSource });
     },

@@ -9284,7 +9284,10 @@ fn build_and_spawn(
     {
         let uname = auth_name.unwrap_or("Player");
         let uid = auth_uuid.unwrap_or("offline");
-        let extras = cosmetics_local::active_extras(uid);
+        let extras = cosmetics_local::merge_gui_extras(
+            &game_dir,
+            cosmetics_local::active_extras(uid),
+        );
         match tuffbox_core::prepare_cosmetics_bridge(&manifest, &game_dir, uname, uid, extras) {
             Ok(Some(cos)) => {
                 progress.log(&format!("# Appearance: {}", cos.message));
@@ -13036,6 +13039,8 @@ pub fn run() {
             update_project_settings,
             auth::mc_start_device_code,
             auth::mc_poll_device_code,
+            auth::mc_get_microsoft_login_url,
+            auth::mc_login_with_auth_url,
             auth::mc_get_auth_status,
             auth::mc_logout,
             auth::mc_refresh_profile,

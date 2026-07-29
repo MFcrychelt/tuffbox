@@ -21,7 +21,9 @@ const LOCALES: LocaleCrawl[] = [
       { q: "Minecraft mods", duration: "medium" },
       { q: "Minecraft 1.21 survival", duration: "medium" },
       { q: "Minecraft modpack", duration: "medium" },
-      { q: "popular Minecraft", duration: "medium" },
+      { q: "Minecraft redstone", duration: "medium" },
+      { q: "Minecraft hardcore", duration: "medium" },
+      { q: "Minecraft build tutorial", duration: "medium" },
     ],
   },
   {
@@ -31,7 +33,9 @@ const LOCALES: LocaleCrawl[] = [
       { q: "Майнкрафт моды", duration: "medium" },
       { q: "Minecraft 1.21 выживание", duration: "medium" },
       { q: "Майнкрафт модпак", duration: "medium" },
-      { q: "популярный Майнкрафт", duration: "medium" },
+      { q: "Майнкрафт редстоун", duration: "medium" },
+      { q: "Майнкрафт хардкор", duration: "medium" },
+      { q: "Майнкрафт постройки", duration: "medium" },
     ],
   },
   {
@@ -100,11 +104,13 @@ const TRACKED_CHANNELS = [
 ] as const;
 
 const SEARCH_MAX = 6;
-const CHANNEL_UPLOADS = 5;
-/** Cap popular rows kept per language (after view sort). */
-const POPULAR_PER_LANG = 10;
+const CHANNEL_UPLOADS = 6;
+/** Cap popular rows kept per language (after diverse pick). */
+const POPULAR_PER_LANG = 14;
 /** Cap channel rows kept overall. */
-const CHANNEL_TOP = 15;
+const CHANNEL_TOP = 24;
+/** Max popular clips kept from one channel per language. */
+const MAX_PER_CHANNEL_POPULAR = 2;
 const LOOKBACK_DAYS = 14;
 
 const corsHeaders: Record<string, string> = {
@@ -144,6 +150,61 @@ function publishedAfterIso(days: number): string {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString();
+}
+
+/** Prefer high views but cap per channel so one creator can't own the pool. */
+function pickDiverseByChannel(
+  rows: FeedRow[],
+  limit: number,
+  maxPerChannel: number,
+): FeedRow[] {
+  const sorted = [...rows].sort((a, b) => b.view_count - a.view_count);
+  const out: FeedRow[] = [];
+  const counts = new Map<string, number>();
+  for (const row of sorted) {
+    if (out.length >= limit) break;
+    const key = row.channel_name.trim().toLowerCase() || "?";
+    const n = counts.get(key) ?? 0;
+    if (n >= maxPerChannel) continue;
+    counts.set(key, n + 1);
+    out.push(row);
+  }
+  if (out.length < limit) {
+    for (const row of sorted) {
+      if (out.length >= limit) break;
+      if (out.some((r) => r.video_id === row.video_id)) continue;
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+/** Round-robin across creators so Dream/etc. don't fill CHANNEL_TOP alone. */
+function pickChannelRoundRobin(rows: FeedRow[], limit: number): FeedRow[] {
+  const byChannel = new Map<string, FeedRow[]>();
+  for (const row of rows) {
+    const key = row.channel_name.trim().toLowerCase() || "?";
+    const list = byChannel.get(key) ?? [];
+    list.push(row);
+    byChannel.set(key, list);
+  }
+  for (const list of byChannel.values()) {
+    list.sort((a, b) => b.view_count - a.view_count);
+  }
+  const out: FeedRow[] = [];
+  let round = 0;
+  while (out.length < limit) {
+    let added = false;
+    for (const list of byChannel.values()) {
+      if (round < list.length && out.length < limit) {
+        out.push(list[round]);
+        added = true;
+      }
+    }
+    if (!added) break;
+    round++;
+  }
+  return out;
 }
 
 function pickThumb(snippet: Record<string, unknown>): string {
@@ -195,6 +256,25 @@ function resolveVideoLang(
   );
 }
 
+async function ytFetch(url: string, attempts = 3): Promise<Response> {
+  let lastErr: Error | null = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url);
+      if (res.status === 429 || res.status >= 500) {
+        lastErr = new Error(`YouTube HTTP ${res.status}`);
+        await new Promise((r) => setTimeout(r, 350 * (i + 1) * (i + 1)));
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e instanceof Error ? e : new Error(String(e));
+      await new Promise((r) => setTimeout(r, 350 * (i + 1) * (i + 1)));
+    }
+  }
+  throw lastErr ?? new Error("YouTube fetch failed");
+}
+
 async function searchVideoIds(
   apiKey: string,
   query: string,
@@ -233,7 +313,7 @@ async function searchVideoIds(
   if (opts.duration && opts.duration !== "any") {
     params.set("videoDuration", opts.duration);
   }
-  const res = await fetch(
+  const res = await ytFetch(
     `https://www.googleapis.com/youtube/v3/search?${params}`,
   );
   if (!res.ok) {
@@ -261,7 +341,7 @@ async function resolveChannelId(
     maxResults: "1",
     key: apiKey,
   });
-  const res = await fetch(
+  const res = await ytFetch(
     `https://www.googleapis.com/youtube/v3/search?${params}`,
   );
   if (!res.ok) return null;
@@ -283,7 +363,7 @@ async function fetchVideoDetails(
       id: chunk.join(","),
       key: apiKey,
     });
-    const res = await fetch(
+    const res = await ytFetch(
       `https://www.googleapis.com/youtube/v3/videos?${params}`,
     );
     if (!res.ok) {
@@ -442,11 +522,9 @@ Deno.serve(async (req) => {
 
     const stored: FeedRow[] = [];
     for (const [, list] of popularByLang) {
-      list.sort((a, b) => b.view_count - a.view_count);
-      stored.push(...list.slice(0, POPULAR_PER_LANG));
+      stored.push(...pickDiverseByChannel(list, POPULAR_PER_LANG, MAX_PER_CHANNEL_POPULAR));
     }
-    channelRows.sort((a, b) => b.view_count - a.view_count);
-    stored.push(...channelRows.slice(0, CHANNEL_TOP));
+    stored.push(...pickChannelRoundRobin(channelRows, CHANNEL_TOP));
 
     // Deduplicate by video_id (same clip can win popular+channel race across langs)
     const dedup = new Map<string, FeedRow>();
@@ -465,19 +543,32 @@ Deno.serve(async (req) => {
     }
     const top = [...dedup.values()];
 
+    // Never wipe-then-insert: upsert first; only prune orphans after a non-empty batch.
+    if (top.length === 0) {
+      return jsonResponse(200, {
+        ok: true,
+        candidates: allIds.length,
+        stored: 0,
+        skippedWipe: true,
+        message: "empty crawl — left existing youtube_feed rows intact",
+      });
+    }
+
+    const { error: upsertErr } = await admin
+      .from("youtube_feed")
+      .upsert(top, { onConflict: "video_id" });
+    if (upsertErr) {
+      return jsonResponse(500, { error: `upsert failed: ${upsertErr.message}` });
+    }
+
+    const keepIds = top.map((r) => r.video_id);
     const { error: delErr } = await admin
       .from("youtube_feed")
       .delete()
-      .neq("video_id", "");
+      .not("video_id", "in", `(${keepIds.join(",")})`);
     if (delErr) {
-      return jsonResponse(500, { error: `delete failed: ${delErr.message}` });
-    }
-
-    if (top.length > 0) {
-      const { error: upsertErr } = await admin.from("youtube_feed").insert(top);
-      if (upsertErr) {
-        return jsonResponse(500, { error: `insert failed: ${upsertErr.message}` });
-      }
+      // Non-fatal: feed still has fresh rows; orphans may linger until next success.
+      console.error("youtube_feed prune failed:", delErr.message);
     }
 
     const byLang: Record<string, number> = {};

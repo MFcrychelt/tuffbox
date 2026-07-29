@@ -210,6 +210,8 @@ export interface DeviceCodeInfo {
   verificationUri: string;
   message: string;
   expiresIn: number;
+  /** Suggested poll interval in seconds (from Microsoft). */
+  interval: number;
 }
 
 export const authState = writable<AuthState>({

@@ -26,6 +26,8 @@ public final class CosmeticsCore {
         public String uuid;
         public String apiBase;
         public String anonKey;
+        /** Local write secret for cosmetics-upsert (from launcher profile). */
+        public String writeSecret = "";
         public String wings = "";
         public String hat = "";
         public boolean trail;
@@ -75,6 +77,7 @@ public final class CosmeticsCore {
         s.uuid = jsonString(json, "uuid");
         s.apiBase = jsonString(json, "apiBase");
         s.anonKey = jsonString(json, "anonKey");
+        s.writeSecret = nullToEmpty(jsonString(json, "writeSecret"));
         s.wings = nullToEmpty(jsonString(json, "wings"));
         s.hat = nullToEmpty(jsonString(json, "hat"));
         s.trail = jsonBool(json, "trail", false);
@@ -149,6 +152,117 @@ public final class CosmeticsCore {
             }
         }
         return snap;
+    }
+
+    /**
+     * Push local cosmetics to Supabase so peers can fetch via cosmetics-get.
+     * Requires writeSecret from the launch session (launcher profile).
+     */
+    public static boolean upsertProfile(Session session, Snapshot snap) {
+        if (session == null || snap == null) {
+            return false;
+        }
+        if (session.apiBase == null || session.apiBase.isEmpty()) {
+            return false;
+        }
+        if (session.writeSecret == null || session.writeSecret.length() < 16) {
+            return false;
+        }
+        if (session.uuid == null || session.uuid.isEmpty()) {
+            return false;
+        }
+        if (session.username == null || session.username.isEmpty()) {
+            return false;
+        }
+        HttpURLConnection conn = null;
+        try {
+            String base = session.apiBase.replaceAll("/$", "");
+            String url = base + "/functions/v1/cosmetics-upsert";
+            String wings = snap.wings == null ? "" : snap.wings;
+            String hat = snap.hat == null ? "" : snap.hat;
+            String body = "{"
+                    + "\"playerKey\":\"" + esc(session.uuid) + "\","
+                    + "\"username\":\"" + esc(session.username) + "\","
+                    + "\"writeSecret\":\"" + esc(session.writeSecret) + "\","
+                    + "\"skinModel\":\"classic\","
+                    + "\"sharePublic\":true,"
+                    + "\"capeMeta\":{},"
+                    + "\"cosmetics\":{"
+                    + "\"wings\":" + strOrNull(wings) + ","
+                    + "\"hat\":" + strOrNull(hat) + ","
+                    + "\"trail\":" + snap.trail + ","
+                    + "\"jumpCircles\":" + snap.jumpCircles + ","
+                    + "\"hitParticles\":" + snap.hitParticles + ","
+                    + "\"hitBubbles\":" + snap.hitBubbles + ","
+                    + "\"targetEsp\":" + snap.targetEsp + ","
+                    + "\"killEffect\":" + snap.killEffect
+                    + "}"
+                    + "}";
+            conn = (HttpURLConnection) URI.create(url).toURL().openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(12000);
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            if (session.anonKey != null && !session.anonKey.isEmpty()) {
+                conn.setRequestProperty("apikey", session.anonKey);
+                conn.setRequestProperty("Authorization", "Bearer " + session.anonKey);
+            }
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            conn.setFixedLengthStreamingMode(bytes.length);
+            conn.getOutputStream().write(bytes);
+            int code = conn.getResponseCode();
+            return code >= 200 && code < 300;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    /** Rewrite cosmetics-session.json so next launch inject picks GUI choices. */
+    public static void writeSession(Path gameDir, Session session) {
+        if (gameDir == null || session == null) {
+            return;
+        }
+        try {
+            Path dir = gameDir.resolve(".tuffbox");
+            Files.createDirectories(dir);
+            Path path = dir.resolve("cosmetics-session.json");
+            String json = "{\n"
+                    + "  \"username\": \"" + esc(session.username) + "\",\n"
+                    + "  \"uuid\": \"" + esc(session.uuid) + "\",\n"
+                    + "  \"apiBase\": \"" + esc(session.apiBase) + "\",\n"
+                    + "  \"anonKey\": \"" + esc(session.anonKey) + "\",\n"
+                    + "  \"writeSecret\": \"" + esc(session.writeSecret) + "\",\n"
+                    + "  \"wings\": \"" + esc(session.wings) + "\",\n"
+                    + "  \"hat\": \"" + esc(session.hat) + "\",\n"
+                    + "  \"trail\": " + session.trail + ",\n"
+                    + "  \"jumpCircles\": " + session.jumpCircles + ",\n"
+                    + "  \"hitParticles\": " + session.hitParticles + ",\n"
+                    + "  \"hitBubbles\": " + session.hitBubbles + ",\n"
+                    + "  \"targetEsp\": " + session.targetEsp + ",\n"
+                    + "  \"killEffect\": " + session.killEffect + "\n"
+                    + "}\n";
+            Files.write(path, json.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static String esc(String s) {
+        if (s == null) {
+            return "";
+        }
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String strOrNull(String s) {
+        if (s == null || s.isEmpty()) {
+            return "null";
+        }
+        return "\"" + esc(s) + "\"";
     }
 
     static void applyCosmeticsObject(String body, Snapshot snap) {

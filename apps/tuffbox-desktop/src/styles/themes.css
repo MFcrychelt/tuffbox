@@ -199,7 +199,8 @@
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    /* `none` — avoid leaving a transform containing-block that breaks position:fixed overlays */
+    transform: none;
   }
 }
 

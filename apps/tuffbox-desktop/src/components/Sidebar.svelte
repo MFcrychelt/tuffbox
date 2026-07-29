@@ -15,23 +15,30 @@
     MessagesSquare,
     PanelLeftClose,
     PanelLeftOpen,
+    FolderCog,
+    CookingPot,
+    ScrollText,
   } from "lucide-svelte";
   import { afterUpdate, onDestroy, tick } from "svelte";
   import {
     newProjectOpen,
     sidebarMode,
     sidebarIconsCollapsed,
+    projectPath,
   } from "../lib/store";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
   export let currentView: View;
 
-  const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string }[] = [
+  const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string; needsProject?: boolean }[] = [
     { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
     { id: "me", label: "Me", icon: User },
     { id: "ide", label: "Open IDE", icon: Workflow, featured: true, shortcut: "Ctrl+2" },
     { id: "mods", label: "Mods", icon: Package, shortcut: "Ctrl+3" },
     { id: "graph", label: "Graph", icon: GitGraph, shortcut: "Ctrl+4" },
+    { id: "configs", label: "Configs", icon: FolderCog, shortcut: "Ctrl+5", needsProject: true },
+    { id: "recipes", label: "Recipes", icon: CookingPot, needsProject: true },
+    { id: "quests", label: "Quests", icon: ScrollText, needsProject: true },
     { id: "world", label: "World", icon: Globe, shortcut: "Ctrl+8" },
     { id: "library", label: "Library", icon: Library },
     { id: "chats", label: "Chats", icon: MessagesSquare },
@@ -40,6 +47,7 @@
     { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
   ];
 
+  $: hasProject = !!$projectPath;
   let navEl: HTMLElement | null = null;
   let bottomEl: HTMLElement | null = null;
   let indicatorY = 0;
@@ -165,9 +173,17 @@
           class="nav-item tb-icon-hover"
           class:active={currentView === item.id}
           class:featured={item.featured}
-          on:click={() => (currentView = item.id)}
+          disabled={item.needsProject && !hasProject}
+          on:click={() => {
+            if (item.needsProject && !hasProject) return;
+            currentView = item.id;
+          }}
           on:focus={revealRail}
-          title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
+          title={item.needsProject && !hasProject
+            ? `${item.label} (open an instance first)`
+            : item.shortcut
+              ? `${item.label} (${item.shortcut})`
+              : item.label}
         >
           <svelte:component this={item.icon} size={20} />
           {#if !iconsCollapsed}
@@ -219,6 +235,8 @@
   .sidebar-slot {
     flex-shrink: 0;
     width: 212px;
+    height: 100%;
+    min-height: 0;
     position: relative;
     z-index: 30;
     transition: width 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -250,6 +268,8 @@
   .sidebar {
     width: 212px;
     height: 100%;
+    min-height: 0;
+    overflow: hidden;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
@@ -286,6 +306,7 @@
     gap: 10px;
     padding: 6px 8px 18px;
     min-height: 48px;
+    flex-shrink: 0;
   }
 
   .sidebar.compact .brand {
@@ -357,6 +378,21 @@
 
   .nav {
     flex: 1;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+    padding-right: 2px;
+  }
+
+  .nav::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .nav::-webkit-scrollbar-thumb {
+    background: var(--bg-elevated);
+    border-radius: 3px;
   }
 
   .nav-indicator {
@@ -426,6 +462,18 @@
     transform: translateX(3px);
   }
 
+  .nav-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  .nav-item:disabled:hover {
+    background: transparent;
+    color: var(--text-muted);
+    transform: none;
+  }
+
   .sidebar.compact .nav-item:hover {
     transform: none;
   }
@@ -490,5 +538,8 @@
 
   .bottom {
     margin-top: 12px;
+    flex-shrink: 0;
+    padding-top: 4px;
+    border-top: 1px solid var(--border-color);
   }
 </style>

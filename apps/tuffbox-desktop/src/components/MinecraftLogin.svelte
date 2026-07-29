@@ -8,12 +8,14 @@
 
   const dispatch = createEventDispatcher();
 
-  let mode: "select" | "microsoft-code" | "microsoft-polling" | "offline-form" | "yggdrasil-form" = "select";
+  let mode: "select" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form" = "select";
   let deviceCode: { userCode: string; verificationUri: string } | null = null;
   let polling = false;
   let errorMsg = "";
   let copied = false;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let authUrlPaste = "";
+  let msAuthorizeUrl = "";
 
   // Offline form
   let offlineUsername = "";
@@ -66,19 +68,78 @@
     }
   }
 
-  let pollInFlight = false;
+  async function openMicrosoftUrlLogin() {
+    clearPollTimer();
+    polling = false;
+    errorMsg = "";
+    authUrlPaste = "";
+    try {
+      msAuthorizeUrl = await api.mcAuth.getMicrosoftLoginUrl();
+      mode = "microsoft-url";
+      try { await open(msAuthorizeUrl); } catch {}
+    } catch (e) {
+      errorMsg = String(e);
+      mode = "select";
+    }
+  }
 
-  function startPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    polling = true;
-    pollInFlight = false;
-    pollTimer = setInterval(async () => {
-      if (pollInFlight) return;
+  async function reopenMicrosoftAuthorize() {
+    if (!msAuthorizeUrl) {
+      try {
+        msAuthorizeUrl = await api.mcAuth.getMicrosoftLoginUrl();
+      } catch (e) {
+        errorMsg = String(e);
+        return;
+      }
+    }
+    try { await open(msAuthorizeUrl); } catch {}
+  }
+
+  async function submitMicrosoftUrlLogin() {
+    if (!authUrlPaste.trim()) {
+      errorMsg = "Paste the redirect URL from the browser";
+      return;
+    }
+    loggingIn = true;
+    errorMsg = "";
+    try {
+      const result = await api.mcAuth.loginWithAuthUrl(authUrlPaste.trim());
+      const state = await api.mcAuth.getAuthStatus();
+      authState.set(state);
+      if (result.profile.uuid) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {
+          skinPath.set(null);
+        }
+      }
+      toasts.success(`Logged in as ${result.profile.name}`);
+      mode = "select";
+      authUrlPaste = "";
+      setTimeout(() => dispatch("close"), 600);
+    } catch (e) {
+      errorMsg = String(e);
+    } finally {
+      loggingIn = false;
+    }
+  }
+
+  let pollInFlight = false;
+  let pollIntervalMs = 3500;
+
+  function scheduleNextPoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      if (!polling || pollInFlight) {
+        scheduleNextPoll();
+        return;
+      }
       pollInFlight = true;
       try {
         const result = await api.mcAuth.pollDeviceCode();
         polling = false;
-        if (pollTimer) clearInterval(pollTimer);
+        if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = null;
         const state = await api.mcAuth.getAuthStatus();
         authState.set(state);
         if (result.profile.uuid) {
@@ -93,8 +154,13 @@
         setTimeout(() => dispatch("close"), 800);
       } catch (e) {
         const msg = String(e);
-        // Single-shot backend poll — keep waiting until the user finishes.
-        if (msg.includes("authorization_pending") || msg.includes("slow_down")) {
+        if (msg.includes("slow_down")) {
+          pollIntervalMs = Math.min(pollIntervalMs + 2000, 15000);
+          scheduleNextPoll();
+          return;
+        }
+        if (msg.includes("authorization_pending")) {
+          scheduleNextPoll();
           return;
         }
         if (
@@ -104,14 +170,26 @@
           msg.includes("Invalid device")
         ) {
           polling = false;
-          if (pollTimer) clearInterval(pollTimer);
+          if (pollTimer) clearTimeout(pollTimer);
+          pollTimer = null;
           errorMsg = msg;
           mode = "select";
+        } else {
+          scheduleNextPoll();
         }
       } finally {
         pollInFlight = false;
       }
-    }, 3500);
+    }, pollIntervalMs);
+  }
+
+  function startPolling() {
+    clearPollTimer();
+    polling = true;
+    pollInFlight = false;
+    const sec = deviceCode?.interval && deviceCode.interval > 0 ? deviceCode.interval : 5;
+    pollIntervalMs = Math.max(sec, 1) * 1000;
+    scheduleNextPoll();
   }
 
   async function handleOfflineLogin() {
@@ -208,14 +286,21 @@
     setTimeout(() => (copied = false), 2000);
   }
 
+  function clearPollTimer() {
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
   function close() {
-    if (pollTimer) clearInterval(pollTimer);
+    clearPollTimer();
     polling = false;
     dispatch("close");
   }
 
   onDestroy(() => {
-    if (pollTimer) clearInterval(pollTimer);
+    clearPollTimer();
   });
 </script>
 
@@ -230,6 +315,7 @@
           {#if mode === "offline-form"}Offline Login
           {:else if mode === "yggdrasil-form"}Yggdrasil Login
           {:else if mode === "microsoft-polling"}Microsoft Login
+          {:else if mode === "microsoft-url"}Microsoft Login (URL)
           {:else}Sign In{/if}
         </h3>
       </div>
@@ -286,7 +372,18 @@
             </div>
             <div class="option-info">
               <span class="option-title">Microsoft / Mojang</span>
-              <span class="option-desc">Online play, skins, Realms, cape switch</span>
+              <span class="option-desc">Device code — online play, skins, Realms, capes</span>
+            </div>
+            <Check size={16} class="option-arrow" />
+          </button>
+
+          <button class="login-option" on:click={openMicrosoftUrlLogin}>
+            <div class="option-icon ms-url">
+              <Globe size={20} />
+            </div>
+            <div class="option-info">
+              <span class="option-title">Microsoft via URL</span>
+              <span class="option-desc">Browser login, then paste the redirect URL</span>
             </div>
             <Check size={16} class="option-arrow" />
           </button>
@@ -314,6 +411,10 @@
           </button>
         </div>
 
+        {#if errorMsg}
+          <div class="error-msg">{errorMsg}</div>
+        {/if}
+
         <p class="hint">Offline mode fetches skins from Ely.by, TLauncher, or Mojang. Capes can be shown from OptiFine / TLauncher / Mojang.</p>
 
       {:else if mode === "microsoft-polling" && deviceCode}
@@ -332,7 +433,49 @@
             <Loader2 size={16} class="spin" />
             <span>Waiting for authentication...</span>
           </div>
+          <button class="link-btn" type="button" on:click={openMicrosoftUrlLogin}>
+            Prefer paste URL instead?
+          </button>
+          {#if errorMsg}
+            <div class="error-msg">{errorMsg}</div>
+          {/if}
         </div>
+
+      {:else if mode === "microsoft-url"}
+        <form class="offline-form" on:submit|preventDefault={submitMicrosoftUrlLogin}>
+          <p class="instruction url-steps">
+            1. Sign in in the browser window<br />
+            2. When you land on a blank / “nativeclient” page, copy the full address from the address bar<br />
+            3. Paste it below
+          </p>
+          <button class="secondary-btn" type="button" on:click={reopenMicrosoftAuthorize} disabled={loggingIn}>
+            <Globe size={14} /> Open Microsoft login again
+          </button>
+          <label class="field">
+            <span>Redirect URL</span>
+            <textarea
+              bind:value={authUrlPaste}
+              rows={3}
+              placeholder="https://login.microsoftonline.com/common/oauth2/nativeclient?code=..."
+              disabled={loggingIn}
+            ></textarea>
+          </label>
+
+          {#if errorMsg}
+            <div class="error-msg">{errorMsg}</div>
+          {/if}
+
+          <button class="primary-btn" type="submit" disabled={loggingIn || !authUrlPaste.trim()}>
+            {#if loggingIn}
+              <Loader2 size={16} class="spin" /> Signing in...
+            {:else}
+              <LogIn size={16} /> Complete login
+            {/if}
+          </button>
+          <button class="link-btn" type="button" disabled={loggingIn} on:click={() => { mode = "select"; errorMsg = ""; }}>
+            Back
+          </button>
+        </form>
 
       {:else if mode === "offline-form"}
         <form class="offline-form" on:submit|preventDefault={handleOfflineLogin}>
@@ -342,7 +485,6 @@
               bind:value={offlineUsername}
               placeholder="Enter username"
               maxlength={16}
-              autofocus
               disabled={loggingIn}
             />
           </label>
@@ -405,7 +547,7 @@
       {:else if mode === "yggdrasil-form"}
         <form class="offline-form" on:submit|preventDefault={handleYggdrasilLogin}>
           <div class="skin-source-grid ygg-presets">
-            {#each yggPresets as preset}
+            {#each yggPresets as preset (preset.id)}
               <button
                 type="button"
                 class="source-option"
@@ -429,7 +571,7 @@
 
           <label class="field">
             <span>Email / Username</span>
-            <input bind:value={yggUsername} placeholder="account@example.com" autofocus disabled={loggingIn} />
+            <input bind:value={yggUsername} placeholder="account@example.com" disabled={loggingIn} />
           </label>
 
           <label class="field">
@@ -464,7 +606,7 @@
 
   .modal {
     background: var(--bg-elevated); border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-xl); width: 420px; max-width: 90vw;
+    border-radius: var(--border-radius-xl); width: 460px; max-width: 90vw;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5); overflow: hidden;
   }
 
@@ -537,6 +679,7 @@
     display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
+  .option-icon.ms-url { background: linear-gradient(135deg, #0ea5e9, #2563eb); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
   .option-icon.ygg { background: rgba(168, 85, 247, 0.2); color: #e9d5ff; }
 
@@ -569,8 +712,24 @@
   .instruction { color: var(--text-secondary); font-size: 13px; text-align: center; line-height: 1.6; }
   .instruction a { color: var(--accent-primary); text-decoration: none; font-weight: 600; }
   .instruction a:hover { text-decoration: underline; }
+  .instruction.url-steps { text-align: left; margin: 0; }
 
   .polling-indicator { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
+
+  .link-btn {
+    background: transparent; border: none; color: var(--accent-primary);
+    font-size: 12px; font-weight: 600; cursor: pointer; padding: 4px 0;
+  }
+  .link-btn:hover { text-decoration: underline; }
+  .link-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .secondary-btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    width: 100%; padding: 10px 14px; border-radius: var(--border-radius-md);
+    background: var(--bg-primary); border: 1px solid var(--border-color);
+    color: var(--text-secondary); font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .secondary-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
 
   /* ─── Offline form ───────────────────────── */
   .offline-form { display: flex; flex-direction: column; gap: 16px; }
@@ -578,12 +737,16 @@
   .field { display: flex; flex-direction: column; gap: 6px; }
   .field span { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 
-  .field input {
+  .field input,
+  .field textarea {
     width: 100%; padding: 10px 14px; background: var(--bg-primary);
     border: 1px solid var(--border-color); border-radius: var(--border-radius-md);
     color: var(--text-primary); font-size: 14px; outline: none;
+    font-family: inherit; resize: vertical; box-sizing: border-box;
   }
-  .field input:focus { border-color: var(--accent-primary); }
+  .field input:focus,
+  .field textarea:focus { border-color: var(--accent-primary); }
+  .field textarea { min-height: 72px; line-height: 1.4; font-size: 12px; }
 
   .skin-source-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
   .ygg-presets { grid-template-columns: repeat(3, 1fr); }

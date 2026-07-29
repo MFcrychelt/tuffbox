@@ -8,8 +8,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Client-side GUI overrides (local only). Persisted under
- * {@code .tuffbox/cosmetics-gui.json}. Does not push to Supabase.
+ * Client-side GUI overrides. Persisted under {@code .tuffbox/cosmetics-gui.json}
+ * and synced to Supabase via {@link CosmeticsCore#upsertProfile} when writeSecret
+ * is present in the launch session.
  */
 public final class CosmeticsClientConfig {
     public boolean master = true;
@@ -65,6 +66,39 @@ public final class CosmeticsClientConfig {
             Files.write(path, json.getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             TuffBoxCosmeticsClient.LOG.warn("cosmetics gui save: {}", e.toString());
+        }
+        syncSessionAndRemote();
+    }
+
+    /** Update session file + async upsert so peers see the look. */
+    private void syncSessionAndRemote() {
+        try {
+            Path gameDir = gameDir();
+            CosmeticsCore.Session sess = CosmeticsCore.loadSession(gameDir);
+            if (sess == null) {
+                return;
+            }
+            sess.wings = wingsEnabled ? (wingsId == null ? "" : wingsId) : "";
+            sess.hat = hatEnabled ? (hatId == null ? "" : hatId) : "";
+            sess.trail = trail;
+            sess.jumpCircles = jumpCircles;
+            sess.hitParticles = hitParticles;
+            sess.hitBubbles = hitBubbles;
+            sess.targetEsp = targetEsp;
+            sess.killEffect = killEffect;
+            CosmeticsCore.writeSession(gameDir, sess);
+
+            CosmeticsCore.Snapshot snap = CosmeticsCore.snapshotFromSession(sess);
+            Thread t = new Thread(() -> {
+                boolean ok = CosmeticsCore.upsertProfile(sess, snap);
+                if (!ok) {
+                    TuffBoxCosmeticsClient.LOG.warn("cosmetics-upsert failed (peers may not see look)");
+                }
+            }, "tuffbox-cosmetics-upsert");
+            t.setDaemon(true);
+            t.start();
+        } catch (Exception e) {
+            TuffBoxCosmeticsClient.LOG.warn("cosmetics sync: {}", e.toString());
         }
     }
 
