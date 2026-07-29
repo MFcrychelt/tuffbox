@@ -409,23 +409,26 @@ import { trapFocus } from "../lib/focusTrap";
 
   // --- Add-mods browser chrome ---
   const ADD_VIEW_KEY = "tuffbox.mods.addView";
-  function readAddViewPref(): { viewMode: "grid" | "list"; pageSize: number } {
+  type CardSize = "S" | "M" | "L";
+  function readAddViewPref(): { viewMode: "grid" | "list"; pageSize: number; cardSize: CardSize } {
     try {
       const raw = localStorage.getItem(ADD_VIEW_KEY);
-      if (!raw) return { viewMode: "grid", pageSize: 40 };
+      if (!raw) return { viewMode: "grid", pageSize: 40, cardSize: "M" };
       const parsed = JSON.parse(raw);
       return {
         viewMode: parsed.viewMode === "list" ? "list" : "grid",
         pageSize: [20, 40, 60].includes(Number(parsed.pageSize)) ? Number(parsed.pageSize) : 40,
+        cardSize: ["S", "M", "L"].includes(parsed.cardSize) ? parsed.cardSize : "M",
       };
     } catch {
-      return { viewMode: "grid", pageSize: 40 };
+      return { viewMode: "grid", pageSize: 40, cardSize: "M" };
     }
   }
   const addViewPref = readAddViewPref();
   let versionSearch = "";
   let loaderExpanded = false;
   let viewMode: "grid" | "list" = addViewPref.viewMode;
+  let cardSize: CardSize = addViewPref.cardSize;
   let page = 1;
   let pageSize = addViewPref.pageSize;
   let addSearchInput: HTMLInputElement | null = null;
@@ -439,7 +442,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   function persistAddView() {
     try {
-      localStorage.setItem(ADD_VIEW_KEY, JSON.stringify({ viewMode, pageSize }));
+      localStorage.setItem(ADD_VIEW_KEY, JSON.stringify({ viewMode, pageSize, cardSize }));
     } catch {
       /* ignore */
     }
@@ -447,6 +450,11 @@ import { trapFocus } from "../lib/focusTrap";
 
   function setViewMode(mode: "grid" | "list") {
     viewMode = mode;
+    persistAddView();
+  }
+
+  function setCardSize(size: CardSize) {
+    cardSize = size;
     persistAddView();
   }
 
@@ -2559,15 +2567,7 @@ import { trapFocus } from "../lib/focusTrap";
       {/each}
     </div>
     <div class="toolbar-row">
-      <div class="search toolbar-search">
-        <span class="search-glyph"><Search size={16} /></span>
-        <input bind:value={filter} placeholder={searchPlaceholder} />
-      </div>
       <div class="actions toolbar-actions">
-        <button class="primary-action" on:click={openAddModal} disabled={!$projectPath || mutating}>
-          <Plus size={16} />
-          Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
-        </button>
         <button
           class="ghost mini quiet-action"
           on:click={importLocalFiles}
@@ -2659,13 +2659,25 @@ import { trapFocus } from "../lib/focusTrap";
     </div>
   </div>
 
-  <div class="quick-filters" aria-label="Side filters">
-    {#if contentFilter === "mod"}
-    <button class:active={sideFilter === "all"} on:click={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
-    <button class:active={sideFilter === "both"} on:click={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
-    <button class:active={sideFilter === "client"} on:click={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
-    <button class:active={sideFilter === "server"} on:click={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
-    {/if}
+  <div class="filters-search-row">
+    <div class="quick-filters" aria-label="Side filters">
+      {#if contentFilter === "mod"}
+      <button class:active={sideFilter === "all"} on:click={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
+      <button class:active={sideFilter === "both"} on:click={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
+      <button class:active={sideFilter === "client"} on:click={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
+      <button class:active={sideFilter === "server"} on:click={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+      {/if}
+    </div>
+    <div class="toolbar-search-cluster">
+      <div class="search toolbar-search">
+        <span class="search-glyph"><Search size={16} /></span>
+        <input bind:value={filter} placeholder={searchPlaceholder} />
+      </div>
+      <button class="primary-action" on:click={openAddModal} disabled={!$projectPath || mutating}>
+        <Plus size={16} />
+        Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
+      </button>
+    </div>
   </div>
 
   {#if selectionMode}
@@ -3062,7 +3074,7 @@ import { trapFocus } from "../lib/focusTrap";
 
 {#if addOpen}
   <div
-    class="modal-backdrop"
+    class="modal-backdrop add-mods-backdrop"
     role="button"
     tabindex="-1"
     aria-label="Close add mod dialog"
@@ -3125,36 +3137,42 @@ import { trapFocus } from "../lib/focusTrap";
             <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
           {/each}
         </div>
-        <div class="browser-topbar inline">
-          <div class="search wide">
-            <span class="search-glyph"><Search size={16} /></span>
-            <input
-              bind:this={addSearchInput}
-              bind:value={searchQuery}
-              placeholder={searchPlaceholder}
-              on:input={onSearchQueryInput}
-              on:keydown={(e) => e.key === "Enter" && searchMods(1)}
-            />
-            {#if searchLoading}
-              <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
-            {/if}
-          </div>
-          <div class="topbar-controls">
-            <label class="sort-select">Sort by:
-              <select bind:value={sortBy} on:change={() => searchMods(1)}>
-                {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
-              </select>
-            </label>
-            <label class="sort-select">View:
-              <select bind:value={pageSize} on:change={onPageSizeChange}>
-                <option value={20}>20</option>
-                <option value={40}>40</option>
-                <option value={60}>60</option>
-              </select>
-            </label>
-            <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
-            <button class="view-toggle" class:active={viewMode === "list"} on:click={() => setViewMode("list")} title="List view"><List size={16} /></button>
-          </div>
+      </div>
+      <div class="browser-topbar modal-topbar">
+        <div class="search wide">
+          <span class="search-glyph"><Search size={16} /></span>
+          <input
+            bind:this={addSearchInput}
+            bind:value={searchQuery}
+            placeholder={searchPlaceholder}
+            on:input={onSearchQueryInput}
+            on:keydown={(e) => e.key === "Enter" && searchMods(1)}
+          />
+          {#if searchLoading}
+            <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
+          {/if}
+        </div>
+        <div class="topbar-controls">
+          <label class="sort-select">Sort by:
+            <select bind:value={sortBy} on:change={() => searchMods(1)}>
+              {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
+            </select>
+          </label>
+          <label class="sort-select">View:
+            <select bind:value={pageSize} on:change={onPageSizeChange}>
+              <option value={20}>20</option>
+              <option value={40}>40</option>
+              <option value={60}>60</option>
+            </select>
+          </label>
+          <span class="size-select" role="group" aria-label="Card size">
+            Size:
+            <button type="button" class="size-toggle" class:active={cardSize === "S"} on:click={() => setCardSize("S")} title="Compact cards">S</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "M"} on:click={() => setCardSize("M")} title="Default cards">M</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "L"} on:click={() => setCardSize("L")} title="Large cards">L</button>
+          </span>
+          <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "list"} on:click={() => setViewMode("list")} title="List view"><List size={16} /></button>
         </div>
       </div>
 
@@ -3280,7 +3298,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <EmptyState icon={Bookmark} compact={true} title="This list is empty" description="Saved projects will appear here." />
               {/if}
             {:else}
-              <div class="results {viewMode} tb-stagger">
+              <div class="results {viewMode} card-size-{cardSize.toLowerCase()} tb-stagger">
                 {#each savedMods as result, i (result.id)}
                   <article
                     class="result-card tb-card"
@@ -3310,6 +3328,7 @@ import { trapFocus } from "../lib/focusTrap";
                             title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
                           >{result.provider === "curseforge" ? "CF" : "MR"}</span>
                         {/if}
+                        {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
                         {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                       </div>
                       <p class="result-desc">{result.description}</p>
@@ -3368,7 +3387,7 @@ import { trapFocus } from "../lib/focusTrap";
           {:else if pagedResults.length === 0}
             <EmptyState icon={Search} compact={true} title="No results" description="Adjust filters or search text." />
           {:else}
-            <div class="results {viewMode} tb-stagger">
+            <div class="results {viewMode} card-size-{cardSize.toLowerCase()} tb-stagger">
           {#each pagedResults as result, i (result.id)}
             <article
               class="result-card tb-card"
@@ -3402,6 +3421,7 @@ import { trapFocus } from "../lib/focusTrap";
                       title={result.provider === "curseforge" ? "CurseForge" : "Modrinth"}
                     >{result.provider === "curseforge" ? "CF" : "MR"}</span>
                   {/if}
+                  {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
                   {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                 </div>
                 <p class="result-desc">{result.description}</p>
@@ -4182,15 +4202,37 @@ import { trapFocus } from "../lib/focusTrap";
   .toolbar-row {
     display: flex;
     justify-content: flex-start;
-    gap: 12px;
+    gap: 4px;
     align-items: center;
     flex-wrap: wrap;
   }
 
+  .filters-search-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+
+  .filters-search-row .quick-filters {
+    margin-bottom: 0;
+  }
+
+  .toolbar-search-cluster {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
   .toolbar-search {
-    flex: 1 1 220px;
+    flex: 0 1 320px;
     min-width: 200px;
     max-width: 360px;
+    position: relative;
   }
 
   .toolbar-search input {
@@ -4214,14 +4256,12 @@ import { trapFocus } from "../lib/focusTrap";
     flex-wrap: wrap;
     gap: 4px;
     align-items: center;
-    flex: 1 1 auto;
-    min-width: 0;
   }
 
-  .toolbar-actions .primary-action {
+  .toolbar-search-cluster .primary-action {
     padding: 8px 14px;
     font-size: 13px;
-    margin-right: 4px;
+    white-space: nowrap;
   }
 
   .quiet-action {
@@ -4363,6 +4403,8 @@ import { trapFocus } from "../lib/focusTrap";
 
   .search input {
     width: 100%;
+    min-height: 38px;
+    box-sizing: border-box;
     padding-left: 38px;
     padding-right: 12px;
   }
@@ -5084,6 +5126,11 @@ import { trapFocus } from "../lib/focusTrap";
     backdrop-filter: blur(10px);
   }
 
+  .modal-backdrop.add-mods-backdrop {
+    background: rgba(0, 0, 0, 0.48);
+    backdrop-filter: blur(5px);
+  }
+
   .modal {
     width: min(1560px, calc(100vw - 28px));
     max-height: min(940px, calc(100vh - 28px));
@@ -5095,11 +5142,11 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
-  /* Add content browser: nearly full viewport so filters + grid aren't cramped. */
+  /* Add content browser: large but leaves backdrop visible around edges. */
   .modal.add-mods-modal {
-    width: min(1760px, calc(100vw - 16px));
-    height: min(1000px, calc(100vh - 16px));
-    max-height: calc(100vh - 16px);
+    width: min(1680px, calc(100vw - 64px));
+    height: min(920px, calc(100vh - 72px));
+    max-height: calc(100vh - 72px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -5122,9 +5169,9 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
-    padding: 0 0 12px;
+    padding: 0 0 10px;
     border-bottom: 1px solid var(--border-color);
-    margin-bottom: 12px;
+    margin-bottom: 0;
   }
 
   .modal.add-mods-modal .modal-tabs-row .modal-tabs {
@@ -5133,16 +5180,24 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 0;
   }
 
-  .modal.add-mods-modal .browser-topbar.inline {
-    flex: 1 1 360px;
-    min-width: min(100%, 320px);
-    justify-content: flex-end;
+  .modal.add-mods-modal .browser-topbar.modal-topbar {
+    flex-shrink: 0;
+    width: 100%;
+    padding: 10px 0 12px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 12px;
+    gap: 12px;
   }
 
-  .modal.add-mods-modal .browser-topbar.inline .search.wide {
-    flex: 1 1 180px;
-    min-width: 140px;
-    max-width: 320px;
+  .modal.add-mods-modal .browser-topbar.modal-topbar .search.wide {
+    flex: 1 1 240px;
+    min-width: 240px;
+    max-width: none;
+    position: relative;
+  }
+
+  .modal.add-mods-modal .browser-topbar.modal-topbar .search.wide input {
+    min-height: 38px;
   }
 
   .modal.add-mods-modal .browser-layout {
@@ -5463,6 +5518,39 @@ import { trapFocus } from "../lib/focusTrap";
   .view-toggle.active { color: var(--accent-primary); border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.08); }
   .view-toggle :global(svg) { width: 16px; height: 16px; flex-shrink: 0; }
 
+  .size-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .size-toggle {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 700;
+    transform: none;
+    flex-shrink: 0;
+  }
+
+  .size-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
+  .size-toggle.active {
+    color: var(--accent-primary);
+    border-color: rgba(27, 217, 106, 0.4);
+    background: rgba(27, 217, 106, 0.08);
+  }
+
   .pagination {
     display: flex;
     align-items: center;
@@ -5537,6 +5625,16 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .results.list { grid-template-columns: 1fr; }
 
+  .results.card-size-s {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+    gap: 6px;
+  }
+
+  .results.card-size-l {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
+    gap: 10px;
+  }
+
   .result-card {
     position: relative;
     display: grid;
@@ -5563,8 +5661,51 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .result-card.installed {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.07);
+    border-color: rgba(27, 217, 106, 0.65);
+    background:
+      linear-gradient(90deg, rgba(27, 217, 106, 0.16) 0%, rgba(27, 217, 106, 0.07) 22%, var(--bg-secondary) 42%);
+    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.22) inset;
+  }
+
+  .result-card.installed::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: #1bd96a;
+  }
+
+  .results.card-size-s .result-card {
+    grid-template-columns: 40px minmax(0, 1fr);
+    padding: 6px 8px;
+    gap: 4px 6px;
+  }
+
+  .results.card-size-s .result-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+
+  .results.card-size-l .result-card {
+    grid-template-columns: 56px minmax(0, 1fr);
+    padding: 10px 12px;
+    gap: 8px 10px;
+  }
+
+  .results.card-size-l .result-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    font-size: 18px;
+  }
+
+  .results.card-size-l .result-name {
+    font-size: 15px;
   }
 
   .result-card.selected {

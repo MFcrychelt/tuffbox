@@ -44,7 +44,6 @@
   let briefNotes = "";
 
   let cardStyle: "modrinth" | "curseforge" = "modrinth";
-  let previewTab: "card" | "page" = "card";
   let message = "";
   let error = "";
   let loading = false;
@@ -64,7 +63,6 @@
   $: nameEmpty = !name.trim();
 
   $: renderedHtml = renderMarkdown(bodyMarkdown, galleryUrls);
-  $: previewGalleryUrl = gallery.map(gallerySrc).find(Boolean) ?? null;
 
   function lines(value: string) {
     return value
@@ -543,145 +541,179 @@
     {#if error}<div class="inline-error">{error}</div>{/if}
     {#if message}<div class="inline-success">{message}</div>{/if}
 
-    <div class="layout">
-      <div class="editor-col">
-        <section class="panel">
-          <h3>Identity</h3>
-          <label>
-            Pack name
-            <input
-              bind:value={name}
-              on:input={markDirty}
-              placeholder="My Pack"
-              class:invalid={nameEmpty}
-            />
-            {#if nameEmpty}<small class="hint warn">Name is required</small>{/if}
-          </label>
-          <label>
-            Summary
-            <textarea
-              bind:value={summary}
-              on:input={markDirty}
-              maxlength={512}
-              rows="3"
-              placeholder="Short card blurb (Modrinth soft limit 256)"
-            ></textarea>
-            <small class="hint" class:warn={summaryWarn} class:bad={summaryOver}>
-              {summaryLen}/{SUMMARY_LIMIT}
-              {#if summaryOver} — over Modrinth limit{/if}
-              {#if summaryWarn && !summaryOver} — getting long{/if}
-            </small>
-          </label>
-          <label>
-            Categories
-            <div class="cat-picker" role="group" aria-label="Modrinth modpack categories">
-              {#if categoriesLoading && modrinthCategories.length === 0}
-                <span class="muted">Loading Modrinth categories…</span>
-              {:else}
-                {#each modrinthCategories as cat (cat.name)}
-                  <button
-                    type="button"
-                    class="cat-chip"
-                    class:on={isCategorySelected(cat.name)}
-                    on:click={() => toggleCategory(cat.name)}
-                    title={cat.name}
-                  >
-                    {prettyCat(cat.name)}
-                  </button>
-                {/each}
-              {/if}
-            </div>
-            {#if categoriesError}
-              <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
-            {:else}
-              <small class="hint">Official Modrinth modpack tags</small>
-            {/if}
-            {#if categories.length}
-              <small class="hint">Selected: {categories.map(prettyCat).join(", ")}</small>
-            {/if}
-          </label>
-        </section>
-
-        <section class="panel">
-          <h3>Icon</h3>
-          <div class="icon-row">
-            <div class="icon-preview">
-              {#if iconUrl}
-                <img src={iconUrl} alt="Pack icon" />
-              {:else}
-                <span>No icon</span>
-              {/if}
-            </div>
-            <div class="icon-actions">
-              <button type="button" on:click={pickIcon}>Choose image…</button>
-              <button type="button" class="ghost" on:click={clearIcon} disabled={!iconPath}>
-                Clear
+    <section class="panel identity-panel">
+      <h3>Identity</h3>
+      <label>
+        Pack name
+        <input
+          bind:value={name}
+          on:input={markDirty}
+          placeholder="My Pack"
+          class:invalid={nameEmpty}
+        />
+        {#if nameEmpty}<small class="hint warn">Name is required</small>{/if}
+      </label>
+      <label>
+        Summary
+        <textarea
+          bind:value={summary}
+          on:input={markDirty}
+          maxlength={512}
+          rows="3"
+          placeholder="Short card blurb (Modrinth soft limit 256)"
+        ></textarea>
+        <small class="hint" class:warn={summaryWarn} class:bad={summaryOver}>
+          {summaryLen}/{SUMMARY_LIMIT}
+          {#if summaryOver} — over Modrinth limit{/if}
+          {#if summaryWarn && !summaryOver} — getting long{/if}
+        </small>
+      </label>
+      <label>
+        Categories
+        <div class="cat-picker" role="group" aria-label="Modrinth modpack categories">
+          {#if categoriesLoading && modrinthCategories.length === 0}
+            <span class="muted">Loading Modrinth categories…</span>
+          {:else}
+            {#each modrinthCategories as cat (cat.name)}
+              <button
+                type="button"
+                class="cat-chip"
+                class:on={isCategorySelected(cat.name)}
+                on:click={() => toggleCategory(cat.name)}
+                title={cat.name}
+              >
+                {prettyCat(cat.name)}
               </button>
-              <small class="hint">Square PNG/WebP/JPG · exported as icon.png / pack.png</small>
-            </div>
-          </div>
-        </section>
+            {/each}
+          {/if}
+        </div>
+        {#if categoriesError}
+          <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
+        {:else}
+          <small class="hint">Official Modrinth modpack tags</small>
+        {/if}
+        {#if categories.length}
+          <small class="hint">Selected: {categories.map(prettyCat).join(", ")}</small>
+        {/if}
+      </label>
+    </section>
 
-        <section class="panel">
-          <div class="panel-head">
-            <h3>Description</h3>
-            <div class="seg">
-              <button type="button" class:active={mdView === "edit"} on:click={() => (mdView = "edit")}
-                >Edit</button
-              >
-              <button
-                type="button"
-                class:active={mdView === "split"}
-                on:click={() => (mdView = "split")}>Split</button
-              >
-              <button
-                type="button"
-                class:active={mdView === "preview"}
-                on:click={() => (mdView = "preview")}>Preview</button
-              >
-            </div>
-          </div>
-          <div class="md-toolbar">
-            <button type="button" class="ghost" title="Bold" on:click={() => insertAround("**")}
-              ><Bold size={14} /></button
-            >
-            <button type="button" class="ghost" title="Italic" on:click={() => insertAround("_")}
-              ><Italic size={14} /></button
-            >
-            <button type="button" class="ghost" title="Heading" on:click={insertHeading}
-              ><Heading size={14} /></button
-            >
-            <button type="button" class="ghost" title="Link" on:click={insertLink}
-              ><Link size={14} /></button
-            >
-            <button type="button" class="ghost" title="Image URL" on:click={insertImageUrl}
-              ><ImageIcon size={14} /></button
-            >
-            <button type="button" class="ghost" on:click={insertLocalImage}>Insert local image</button>
-          </div>
-          <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
-            {#if mdView !== "preview"}
-              <div class="cm-wrap">
-                <CodeMirror
-                  value={bodyMarkdown}
-                  lang={markdown()}
-                  theme={oneDark}
-                  on:change={onBodyChange}
-                />
-              </div>
-            {/if}
-            {#if mdView !== "edit"}
-              <div class="md-preview prose">
-                {#if bodyMarkdown.trim()}
-                  {@html renderedHtml}
-                {:else}
-                  <p class="muted">Markdown preview — paste images or insert from gallery.</p>
-                {/if}
-              </div>
+    <div class="icon-preview-row">
+      <section class="panel icon-panel">
+        <h3>Icon</h3>
+        <div class="icon-row">
+          <div class="icon-preview">
+            {#if iconUrl}
+              <img src={iconUrl} alt="Pack icon" />
+            {:else}
+              <span>No icon</span>
             {/if}
           </div>
-        </section>
+          <div class="icon-actions">
+            <button type="button" on:click={pickIcon}>Choose image…</button>
+            <button type="button" class="ghost" on:click={clearIcon} disabled={!iconPath}>
+              Clear
+            </button>
+            <small class="hint">Square PNG/WebP/JPG · exported as icon.png / pack.png</small>
+          </div>
+        </div>
+      </section>
 
+      <aside class="panel preview-panel">
+        <div class="preview-sticky">
+          <div class="preview-heading">Listing preview</div>
+          <div class="style-toggle">
+            <button
+              type="button"
+              class:active={cardStyle === "modrinth"}
+              on:click={() => (cardStyle = "modrinth")}>Modrinth</button
+            >
+            <button
+              type="button"
+              class:active={cardStyle === "curseforge"}
+              on:click={() => (cardStyle = "curseforge")}>CurseForge</button
+            >
+          </div>
+          <ListingCardPreview
+            style={cardStyle}
+            variant="card"
+            {name}
+            {summary}
+            {categories}
+            {iconUrl}
+            author={name}
+            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+            loaderKind={$projectInfo?.loaderKind ?? null}
+            version={$projectInfo?.version ?? null}
+          />
+          <p class="muted preview-note">
+            Live Modrinth / CurseForge-style card preview from your listing fields.
+          </p>
+        </div>
+      </aside>
+    </div>
+
+    <section class="panel description-full">
+      <div class="panel-head">
+        <h3>Description</h3>
+        <div class="seg">
+          <button type="button" class:active={mdView === "edit"} on:click={() => (mdView = "edit")}
+            >Edit</button
+          >
+          <button
+            type="button"
+            class:active={mdView === "split"}
+            on:click={() => (mdView = "split")}>Split</button
+          >
+          <button
+            type="button"
+            class:active={mdView === "preview"}
+            on:click={() => (mdView = "preview")}>Preview</button
+          >
+        </div>
+      </div>
+      <div class="md-toolbar">
+        <button type="button" class="ghost" title="Bold" on:click={() => insertAround("**")}
+          ><Bold size={14} /></button
+        >
+        <button type="button" class="ghost" title="Italic" on:click={() => insertAround("_")}
+          ><Italic size={14} /></button
+        >
+        <button type="button" class="ghost" title="Heading" on:click={insertHeading}
+          ><Heading size={14} /></button
+        >
+        <button type="button" class="ghost" title="Link" on:click={insertLink}
+          ><Link size={14} /></button
+        >
+        <button type="button" class="ghost" title="Image URL" on:click={insertImageUrl}
+          ><ImageIcon size={14} /></button
+        >
+        <button type="button" class="ghost" on:click={insertLocalImage}>Insert local image</button>
+      </div>
+      <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
+        {#if mdView !== "preview"}
+          <div class="cm-wrap">
+            <CodeMirror
+              value={bodyMarkdown}
+              lang={markdown()}
+              theme={oneDark}
+              on:change={onBodyChange}
+            />
+          </div>
+        {/if}
+        {#if mdView !== "edit"}
+          <div class="md-preview prose">
+            {#if bodyMarkdown.trim()}
+              {@html renderedHtml}
+            {:else}
+              <p class="muted">Markdown preview — paste images or insert from gallery.</p>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    </section>
+
+    <div class="brief-below">
         <section class="panel">
           <div class="panel-head">
             <h3>Gallery</h3>
@@ -786,48 +818,6 @@
             ><Rocket size={14} /> Release</button
           >
         </div>
-      </div>
-
-      <aside class="preview-col">
-        <div class="preview-sticky">
-          <div class="preview-tabs">
-            <button type="button" class:active={previewTab === "card"} on:click={() => (previewTab = "card")}
-              >Card</button
-            >
-            <button type="button" class:active={previewTab === "page"} on:click={() => (previewTab = "page")}
-              >Page preview</button
-            >
-          </div>
-          <div class="style-toggle">
-            <button
-              type="button"
-              class:active={cardStyle === "modrinth"}
-              on:click={() => (cardStyle = "modrinth")}>Modrinth</button
-            >
-            <button
-              type="button"
-              class:active={cardStyle === "curseforge"}
-              on:click={() => (cardStyle = "curseforge")}>CurseForge</button
-            >
-          </div>
-          <ListingCardPreview
-            style={cardStyle}
-            variant={previewTab === "page" ? "page" : "card"}
-            {name}
-            {summary}
-            {categories}
-            {iconUrl}
-            galleryUrl={previewGalleryUrl}
-            bodyHtml={bodyMarkdown.trim() ? renderedHtml : null}
-            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
-            loaderKind={$projectInfo?.loaderKind ?? null}
-            version={$projectInfo?.version ?? null}
-          />
-          <p class="muted preview-note">
-            Live Modrinth / CurseForge-style preview from your listing fields.
-          </p>
-        </div>
-      </aside>
     </div>
   {/if}
 </div>
@@ -881,27 +871,55 @@
     gap: 6px;
   }
 
-  .layout {
+  .icon-preview-row {
     display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+    grid-template-columns: minmax(240px, 0.9fr) minmax(320px, 1.4fr);
     gap: 18px;
-    align-items: start;
+    align-items: stretch;
   }
 
-  .editor-col {
+  .icon-panel,
+  .preview-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .preview-panel .preview-sticky {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .description-full {
+    width: 100%;
+  }
+
+  .description-full .md-split {
+    min-height: 320px;
+  }
+
+  .description-full .cm-wrap,
+  .description-full .md-preview {
+    min-height: 320px;
+  }
+
+  .brief-below {
     display: flex;
     flex-direction: column;
     gap: 14px;
-    min-width: 0;
+    width: 100%;
   }
 
-  .preview-col {
-    min-width: 0;
+  .preview-heading {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
   }
 
   .preview-sticky {
-    position: sticky;
-    top: 8px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1143,7 +1161,6 @@
     font-size: 13px;
   }
 
-  .preview-tabs,
   .style-toggle,
   .seg {
     display: inline-flex;
@@ -1154,7 +1171,6 @@
     border: 1px solid var(--border-color);
   }
 
-  .preview-tabs button,
   .style-toggle button,
   .seg button {
     border: none;
@@ -1166,7 +1182,6 @@
     cursor: pointer;
   }
 
-  .preview-tabs button.active,
   .style-toggle button.active,
   .seg button.active {
     background: var(--bg-elevated);
@@ -1231,11 +1246,8 @@
   }
 
   @media (max-width: 1100px) {
-    .layout {
+    .icon-preview-row {
       grid-template-columns: 1fr;
-    }
-    .preview-sticky {
-      position: static;
     }
     .brief-grid {
       grid-template-columns: 1fr;

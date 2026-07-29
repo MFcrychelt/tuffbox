@@ -28,7 +28,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners } from "./lib/store";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -129,6 +129,9 @@
     if (localStorage.getItem("tuffbox-reduced-motion") === "1") {
       document.documentElement.classList.add("potato-pc");
     }
+    // Apply rounded corners ASAP (before launcher settings resolve).
+    const storedRounded = localStorage.getItem("tuffbox-rounded-corners");
+    applyRoundedCorners(storedRounded !== "0");
     void registerLaunchCrashListener();
     void registerProcessListeners();
     void refreshRunningInstances();
@@ -146,6 +149,7 @@
       autoHideWorkflowRail.set(!!s.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(s.sidebarMode));
       applyUiScale(s.uiScalePercent);
+      applyRoundedCorners(s.roundedCorners !== false);
     }).catch(() => {});
     const onOpenGraph = () => {
       currentView = "graph";

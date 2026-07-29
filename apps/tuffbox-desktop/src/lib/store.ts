@@ -137,6 +137,8 @@ export interface LauncherSettings {
   sidebarMode: SidebarMode;
   /** Interface zoom percent (75–150). */
   uiScalePercent: number;
+  /** Round corners on panels/cards/buttons everywhere. */
+  roundedCorners: boolean;
 }
 
 export type SidebarMode = "full" | "icons" | "autoHide";
@@ -158,6 +160,19 @@ export function applyUiScale(percent: unknown) {
   if (typeof document === "undefined") return p;
   document.documentElement.style.setProperty("--ui-scale", String(p / 100));
   return p;
+}
+
+/** Toggle rounded-corners appearance mode (`data-rounded-corners` on <html>). */
+export function applyRoundedCorners(enabled: unknown) {
+  const on = enabled !== false;
+  if (typeof document === "undefined") return on;
+  document.documentElement.setAttribute("data-rounded-corners", on ? "on" : "off");
+  try {
+    localStorage.setItem("tuffbox-rounded-corners", on ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+  return on;
 }
 
 /** Human label for account provider badges. */

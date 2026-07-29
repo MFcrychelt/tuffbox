@@ -221,7 +221,12 @@
         isRoot: depth === 0,
       });
       if (dir.expanded) {
-        const children = [...dir.children].sort((a, b) => a.name.localeCompare(b.name));
+        const children = [...dir.children].sort((a, b) => {
+          const aZero = (a.size ?? 0) === 0 ? 1 : 0;
+          const bZero = (b.size ?? 0) === 0 ? 1 : 0;
+          if (aZero !== bZero) return aZero - bZero;
+          return a.name.localeCompare(b.name);
+        });
         for (const child of children) {
           const childName = child.path.split("/").pop() ?? child.path;
           result.push({
@@ -247,7 +252,12 @@
 
     const topLevelFiles = list
       .filter((f) => !f.path.includes("/"))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const aZero = (a.size ?? 0) === 0 ? 1 : 0;
+        const bZero = (b.size ?? 0) === 0 ? 1 : 0;
+        if (aZero !== bZero) return aZero - bZero;
+        return a.name.localeCompare(b.name);
+      });
     for (const f of topLevelFiles) {
       result.push({ name: f.path, fullPath: f.path, isDir: false, depth: 0, expanded: false, file: f });
     }
@@ -654,8 +664,10 @@
         </div>
 
         <div class="search">
-          <Search size={16} />
-          <input bind:value={filter} placeholder="Filter files…" />
+          <div class="search-field">
+            <span class="search-glyph"><Search size={16} /></span>
+            <input bind:value={filter} placeholder="Filter files…" />
+          </div>
         </div>
 
         <div class="search-across">
@@ -849,17 +861,24 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    display: flex;
-    align-items: center;
     margin-bottom: 10px;
     background: var(--bg-secondary);
     padding-bottom: 8px;
   }
-  .search :global(svg) {
+  .search-field {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
+  }
+  .search-glyph {
     position: absolute;
     left: 12px;
     top: 50%;
     transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-muted);
     pointer-events: none;
     z-index: 1;

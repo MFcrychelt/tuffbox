@@ -15,6 +15,7 @@
     sidebarMode,
     normalizeSidebarMode,
     applyUiScale,
+    applyRoundedCorners,
     normalizeUiScalePercent,
   } from "../lib/store";
   import {
@@ -141,6 +142,7 @@
     autoHideWorkflowRail: false,
     sidebarMode: "full",
     uiScalePercent: 100,
+    roundedCorners: true,
   };
   let launcherSaving = false;
   let launcherMsg = "";
@@ -198,6 +200,7 @@
       autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
       applyUiScale(launcher.uiScalePercent);
+      applyRoundedCorners(launcher.roundedCorners !== false);
       syncResModeFromLauncher();
       const info = await api.launcher.runtimePathInfo();
       defaultRuntimePath = info.default;
@@ -240,6 +243,9 @@
       }
       if (partial && "uiScalePercent" in partial) {
         applyUiScale(launcher.uiScalePercent);
+      }
+      if (partial && "roundedCorners" in partial) {
+        applyRoundedCorners(launcher.roundedCorners !== false);
       }
       launcherMsg = "Saved.";
       setTimeout(() => (launcherMsg = ""), 1600);
@@ -713,6 +719,17 @@
           Potato PC mode (reduce motion / animations)
         </label>
         <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
+
+        <label class="check-row" style="margin-top: 14px;">
+          <input
+            type="checkbox"
+            checked={launcher.roundedCorners !== false}
+            disabled={launcherSaving}
+            on:change={(e) => void persistLauncher({ roundedCorners: e.currentTarget.checked })}
+          />
+          Rounded corners
+        </label>
+        <p class="hint">Round edges on panels, cards, modals, and chrome across the whole app.</p>
 
         <div class="settings-row" style="margin-top: 18px;">
           <div class="settings-row-text">

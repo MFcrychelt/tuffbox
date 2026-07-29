@@ -589,3 +589,128 @@
 .tb-list-enter > *:nth-child(n + 20) {
   animation-delay: calc(19 * 36ms);
 }
+
+/* ── Rounded corners mode (Settings → Appearance) ──
+   Must load after theme tokens so it can override themes that force radius: 0. */
+html[data-rounded-corners="on"] {
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 18px;
+  --border-radius-xl: 28px;
+}
+
+html[data-rounded-corners="off"] {
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
+}
+
+/* When rounded mode is on, force common block chrome to use the tokens
+   (covers hardcoded radius:0 / sharp theme leftovers on panels & cards). */
+html[data-rounded-corners="on"] :where(
+  .panel,
+  .card,
+  .modal,
+  .tb-card,
+  .skin-panel,
+  .hero,
+  .notice,
+  .empty,
+  .loading,
+  .file-panel,
+  .editor-panel,
+  .projects-section,
+  .installed-card,
+  .result-card,
+  .project-tile,
+  .section,
+  .settings-grid > .card,
+  .modal-backdrop > .modal,
+  .backdrop > .modal,
+  .content > section,
+  .sidebar,
+  .header,
+  .command-palette,
+  .toast,
+  .tb-toast-enter,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select,
+  .search input,
+  .chip,
+  .badge,
+  .type-badge
+) {
+  border-radius: var(--border-radius-lg);
+}
+
+html[data-rounded-corners="on"] :where(
+  button,
+  .action-btn,
+  .quiet-action,
+  .ghost,
+  .primary-action,
+  .view-toggle,
+  .size-toggle,
+  .mini-btn,
+  .icon-btn
+) {
+  border-radius: var(--border-radius-md);
+}
+
+html[data-rounded-corners="on"] :where(
+  .mr-card,
+  .cf-card,
+  .mr-page,
+  .cf-page,
+  .mr-icon,
+  .cf-icon,
+  .cf-thumb-wrap,
+  .icon-preview,
+  .result-icon,
+  .tile-icon
+) {
+  border-radius: var(--border-radius-lg);
+}
+
+/* Pills / round avatars stay fully round */
+html[data-rounded-corners="on"] :where(
+  .chip,
+  .cat-chip,
+  .mr-tag,
+  .badge,
+  .tab-count,
+  .avatar-badge
+) {
+  border-radius: 999px;
+}
+
+html[data-rounded-corners="off"] :where(
+  .panel,
+  .card,
+  .modal,
+  .tb-card,
+  .skin-panel,
+  .hero,
+  .notice,
+  .empty,
+  .loading,
+  .file-panel,
+  .editor-panel,
+  .installed-card,
+  .result-card,
+  .project-tile,
+  .mr-card,
+  .cf-card,
+  .mr-page,
+  .cf-page,
+  .sidebar,
+  .header,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select,
+  button
+) {
+  border-radius: 0;
+}

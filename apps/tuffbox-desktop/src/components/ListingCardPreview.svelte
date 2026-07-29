@@ -1,4 +1,15 @@
 <script lang="ts">
+  import {
+    Download,
+    Heart,
+    Bookmark,
+    Link2,
+    Clock,
+    Gamepad2,
+    Monitor,
+    Tag,
+  } from "lucide-svelte";
+
   export let style: "modrinth" | "curseforge" = "modrinth";
   export let name = "Untitled pack";
   export let summary = "";
@@ -11,9 +22,13 @@
   export let galleryUrl: string | null = null;
   export let bodyHtml: string | null = null;
   export let variant: "card" | "page" = "card";
+  export let author: string | null = null;
 
   $: catChips = categories.filter(Boolean).slice(0, 8);
   $: loaderLabel = (loaderKind || "").replace(/_/g, " ");
+  $: authorLabel = author || name || "Author";
+  $: cfExtraCats = Math.max(0, catChips.length - 1);
+  $: cfGameMeta = [minecraftVersion, loaderLabel].filter(Boolean).join(" ");
 
   function prettyCat(c: string) {
     return c
@@ -78,28 +93,44 @@
           <div class="icon-ph">?</div>
         {/if}
       </div>
-      <div class="mr-body">
-        <div class="mr-title-row">
+      <div class="mr-center">
+        <div class="mr-title-line">
           <h3>{name || "Untitled pack"}</h3>
-          <div class="mr-stats">
-            <span title="Downloads">↓ —</span>
-            <span title="Followers">♡ —</span>
-          </div>
+          <span class="mr-by">by {authorLabel}</span>
         </div>
-        <p class="mr-summary">{summary || "No summary yet."}</p>
-        <div class="mr-meta">
-          {#if catChips.length}
-            <div class="chips">
-              {#each catChips as c (c)}
-                <span class="chip">{prettyCat(c)}</span>
-              {/each}
-            </div>
+        <p class="mr-summary card-summary">{summary || "No summary yet."}</p>
+        <div class="mr-tags">
+          <span class="mr-tag env"><Monitor size={11} /> Client</span>
+          {#each catChips as c (c)}
+            <span class="mr-tag">{prettyCat(c)}</span>
+          {/each}
+          {#if loaderLabel}
+            <span class="mr-tag loader"><Tag size={11} /> {loaderLabel}</span>
           {/if}
-          <div class="tags">
-            {#if version}<span class="tag">v{version}</span>{/if}
-            {#if minecraftVersion}<span class="tag">MC {minecraftVersion}</span>{/if}
-            {#if loaderLabel}<span class="tag">{loaderLabel}</span>{/if}
-          </div>
+        </div>
+      </div>
+      <div class="mr-actions">
+        <div class="mr-action-row">
+          <button type="button" class="mr-dl-btn card-dl" tabindex="-1">
+            <Download size={14} />
+            Download
+          </button>
+          <button type="button" class="mr-icon-btn" tabindex="-1" aria-hidden="true">
+            <Heart size={14} />
+          </button>
+          <button type="button" class="mr-icon-btn" tabindex="-1" aria-hidden="true">
+            <Bookmark size={14} />
+          </button>
+          <button type="button" class="mr-icon-btn" tabindex="-1" aria-hidden="true">
+            <Link2 size={14} />
+          </button>
+        </div>
+        <div class="mr-stat-row">
+          <span class="mr-stat-item"><Download size={12} /> —</span>
+          <span class="mr-stat-item"><Heart size={12} /> —</span>
+        </div>
+        <div class="mr-stat-row time">
+          <span class="mr-stat-item"><Clock size={12} /> just now</span>
         </div>
       </div>
     </article>
@@ -149,24 +180,32 @@
     </article>
   {:else}
     <article class="cf-card" aria-label="CurseForge-style listing preview">
-      <div class="cf-icon">
-        {#if iconUrl}
-          <img src={iconUrl} alt="" />
-        {:else}
-          <div class="icon-ph">?</div>
-        {/if}
+      <div class="cf-thumb-wrap">
+        <div class="cf-icon">
+          {#if iconUrl}
+            <img src={iconUrl} alt="" />
+          {:else}
+            <div class="icon-ph">?</div>
+          {/if}
+        </div>
+        <span class="cf-badge">Modpacks</span>
       </div>
       <div class="cf-body">
-        <div class="cf-kicker">Modpack</div>
         <h3>{name || "Untitled pack"}</h3>
-        <p class="cf-summary">{summary || "No summary yet."}</p>
-        <div class="cf-foot">
-          <div class="cf-cats inline">
-            {#each catChips.slice(0, 3) as c (c)}
-              <span>{prettyCat(c)}</span>
-            {/each}
-          </div>
-          {#if minecraftVersion}<span class="cf-mc">{minecraftVersion}</span>{/if}
+        <p class="cf-author">By {authorLabel}</p>
+        <p class="cf-summary card-summary">{summary || "No summary yet."}</p>
+        <div class="cf-meta-row">
+          {#if catChips.length}
+            <span class="cf-cat-tag">{prettyCat(catChips[0])}</span>
+            {#if cfExtraCats > 0}
+              <span class="cf-cat-more">+{cfExtraCats}</span>
+            {/if}
+          {/if}
+          <span class="cf-meta-item"><Download size={12} /> —</span>
+          <span class="cf-meta-item"><Clock size={12} /> —</span>
+          {#if cfGameMeta}
+            <span class="cf-meta-item game"><Gamepad2 size={12} /> {cfGameMeta}</span>
+          {/if}
         </div>
       </div>
     </article>
@@ -174,31 +213,18 @@
 {/if}
 
 <style>
-  .mr-card,
-  .cf-card {
-    display: grid;
-    grid-template-columns: 96px 1fr;
-    gap: 14px;
-    padding: 14px;
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-elevated);
-  }
-
+  /* ── Modrinth card ── */
   .mr-card {
+    display: flex;
+    align-items: stretch;
+    gap: 16px;
+    padding: 16px;
+    border-radius: 12px;
+    border: 1px solid #2d323a;
     background: #16181c;
-    border-color: #2d323a;
   }
 
-  .cf-card {
-    background: #1c1c1f;
-    border-color: #3a3a40;
-  }
-
-  .mr-icon,
-  .cf-icon,
-  .mr-page-icon,
-  .cf-page-icon {
+  .mr-icon {
     width: 96px;
     height: 96px;
     border-radius: 10px;
@@ -208,13 +234,269 @@
     flex-shrink: 0;
   }
 
-  .mr-page-icon,
-  .cf-page-icon {
-    width: 72px;
-    height: 72px;
-    border-radius: 12px;
+  .mr-center {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    justify-content: center;
   }
 
+  .mr-title-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .mr-title-line h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: #ecf0f3;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mr-by {
+    font-size: 13px;
+    color: #8b949e;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .mr-summary {
+    margin: 0;
+    color: #a8b0b9;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .card-summary {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .cf-summary.card-summary {
+    -webkit-line-clamp: 1;
+  }
+
+  .mr-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 2px;
+  }
+
+  .mr-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid #3a3f47;
+    color: #b0b8c1;
+    background: #22262c;
+    line-height: 1.2;
+  }
+
+  .mr-tag.loader {
+    border-color: rgba(196, 130, 60, 0.55);
+    color: #e8b87a;
+    background: rgba(196, 130, 60, 0.15);
+  }
+
+  .mr-tag.env {
+    border-color: #3a3f47;
+    color: #9aa3ad;
+    background: #1e2228;
+  }
+
+  .mr-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px;
+    flex-shrink: 0;
+    min-width: 0;
+  }
+
+  .mr-action-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .mr-dl-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: default;
+    pointer-events: none;
+    background: #1bd96a;
+    color: #04140a;
+  }
+
+  .mr-dl-btn.card-dl {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+
+  .mr-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid #3a3f47;
+    background: transparent;
+    color: #8b949e;
+    cursor: default;
+    pointer-events: none;
+  }
+
+  .mr-stat-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: #8b949e;
+  }
+
+  .mr-stat-row.time {
+    gap: 0;
+  }
+
+  .mr-stat-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ── CurseForge card ── */
+  .cf-card {
+    display: flex;
+    align-items: stretch;
+    gap: 16px;
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid #3a3a40;
+    background: #1c1c1f;
+  }
+
+  .cf-thumb-wrap {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .cf-icon {
+    width: 120px;
+    height: 120px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #0f0f11;
+    border: 1px solid #3a3a40;
+  }
+
+  .cf-badge {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+    letter-spacing: 0.02em;
+    line-height: 1.3;
+  }
+
+  .cf-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    justify-content: center;
+  }
+
+  .cf-body h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    color: #f4f4f5;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cf-author {
+    margin: 0;
+    font-size: 13px;
+    color: #a1a1aa;
+  }
+
+  .cf-summary {
+    margin: 0;
+    color: #a8b0b9;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .cf-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #8b949e;
+  }
+
+  .cf-cat-tag {
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid #52525b;
+    color: #d4d4d8;
+    background: transparent;
+    font-size: 11px;
+  }
+
+  .cf-cat-more {
+    color: #71717a;
+    font-size: 11px;
+  }
+
+  .cf-meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  .cf-meta-item.game {
+    color: #a1a1aa;
+  }
+
+  /* ── Shared icon placeholder ── */
   .mr-icon img,
   .cf-icon img,
   .mr-page-icon img,
@@ -230,129 +512,15 @@
     font-weight: 700;
   }
 
-  .mr-body,
-  .cf-body {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  h3,
+  /* ── Page layouts (unchanged) ── */
   h2 {
     margin: 0;
-    font-size: 16px;
+    font-size: 20px;
     color: #ecf0f3;
     line-height: 1.25;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  h2 {
-    font-size: 20px;
     white-space: normal;
   }
 
-  .mr-title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .mr-stats {
-    display: inline-flex;
-    gap: 8px;
-    color: #8b949e;
-    font-size: 12px;
-    flex: 0 0 auto;
-  }
-
-  .mr-summary,
-  .cf-summary {
-    margin: 0;
-    color: #a8b0b9;
-    font-size: 13px;
-    line-height: 1.4;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  .mr-meta {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: auto;
-  }
-
-  .chips,
-  .tags,
-  .cf-cats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-
-  .chip,
-  .tag,
-  .cf-mc,
-  .mr-badge,
-  .cf-cats span {
-    font-size: 11px;
-    padding: 2px 7px;
-    border-radius: 999px;
-    border: 1px solid #2d323a;
-    color: #c5ccd4;
-    background: #22262c;
-  }
-
-  .chip {
-    border-color: rgba(30, 181, 116, 0.45);
-    color: #9ae6c0;
-    background: rgba(30, 181, 116, 0.1);
-  }
-
-  .mr-badge.loader {
-    border-color: rgba(96, 165, 250, 0.4);
-    color: #93c5fd;
-  }
-
-  .cf-kicker {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #f16424;
-  }
-
-  .cf-foot {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    margin-top: auto;
-    font-size: 12px;
-    color: #8b949e;
-    align-items: center;
-  }
-
-  .cf-cats.inline span {
-    border-radius: 4px;
-    background: #2a2a2e;
-    border-color: #3f3f46;
-    color: #d4d4d8;
-  }
-
-  .cf-mc {
-    border-radius: 4px;
-    border-color: rgba(241, 100, 36, 0.4);
-    color: #fdba8c;
-    background: rgba(241, 100, 36, 0.1);
-  }
-
-  /* Page layouts */
   .mr-page,
   .cf-page {
     border-radius: 12px;
@@ -388,6 +556,17 @@
     align-items: flex-start;
   }
 
+  .mr-page-icon,
+  .cf-page-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #0f1115;
+    border: 1px solid #2d323a;
+    flex-shrink: 0;
+  }
+
   .mr-page-titles,
   .cf-page-titles {
     min-width: 0;
@@ -404,6 +583,36 @@
     gap: 6px;
   }
 
+  .chip,
+  .mr-badge,
+  .cf-cats span {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid #2d323a;
+    color: #c5ccd4;
+    background: #22262c;
+  }
+
+  .chip {
+    border-color: rgba(30, 181, 116, 0.45);
+    color: #9ae6c0;
+    background: rgba(30, 181, 116, 0.1);
+  }
+
+  .mr-badge.loader {
+    border-color: rgba(96, 165, 250, 0.4);
+    color: #93c5fd;
+  }
+
+  .cf-kicker {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #f16424;
+  }
+
   .cf-page-meta span {
     font-size: 12px;
     color: #a1a1aa;
@@ -417,7 +626,6 @@
     flex: 0 0 auto;
   }
 
-  .mr-dl-btn,
   .cf-install-btn {
     border: none;
     border-radius: 8px;
@@ -426,14 +634,6 @@
     font-size: 13px;
     cursor: default;
     pointer-events: none;
-  }
-
-  .mr-dl-btn {
-    background: #1bd96a;
-    color: #04140a;
-  }
-
-  .cf-install-btn {
     background: #f16424;
     color: #fff;
     align-self: flex-start;
@@ -443,6 +643,14 @@
     font-size: 11px;
     color: #8b949e;
     text-align: center;
+  }
+
+  .chips,
+  .page-chips,
+  .cf-cats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
   }
 
   .page-chips,

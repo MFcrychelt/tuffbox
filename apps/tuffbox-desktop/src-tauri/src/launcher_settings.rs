@@ -54,6 +54,9 @@ pub struct LauncherSettings {
     /// UI zoom percent (75–150). Applied as CSS `--ui-scale` on the app shell.
     #[serde(default = "default_ui_scale_percent")]
     pub ui_scale_percent: u32,
+    /// Round corners on panels/cards/chrome everywhere (CSS `--border-radius-*`).
+    #[serde(default = "default_rounded_corners")]
+    pub rounded_corners: bool,
 }
 
 fn default_theme() -> String {
@@ -73,6 +76,9 @@ fn default_sidebar_mode() -> String {
 }
 fn default_ui_scale_percent() -> u32 {
     100
+}
+fn default_rounded_corners() -> bool {
+    true
 }
 
 impl Default for LauncherSettings {
@@ -94,6 +100,7 @@ impl Default for LauncherSettings {
             auto_hide_workflow_rail: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
+            rounded_corners: default_rounded_corners(),
         }
     }
 }
