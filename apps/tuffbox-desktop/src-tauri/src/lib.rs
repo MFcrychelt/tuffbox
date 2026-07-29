@@ -1407,6 +1407,20 @@ async fn get_modrinth_project(project_id: String) -> Result<tuffbox_core::Projec
     .map_err(|e| e.to_string())?
 }
 
+/// Live Modrinth category tags (`GET /v2/tag/category`), optionally filtered by project type.
+#[tauri::command(rename_all = "camelCase")]
+async fn list_modrinth_categories(
+    project_type: Option<String>,
+) -> Result<Vec<tuffbox_core::ModrinthCategory>, String> {
+    tokio::task::spawn_blocking(move || {
+        tuffbox_core::ModrinthProvider::new()
+            .list_categories(project_type.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Unified catalog project detail for the in-launcher project page
 /// (Modrinth or CurseForge), GDLauncher-style.
 #[tauri::command(rename_all = "camelCase")]
@@ -8917,9 +8931,15 @@ fn diff_snapshots(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn rollback_snapshot(project_dir: String, id: String) -> Result<tuffbox_core::Snapshot, String> {
+fn rollback_snapshot(
+    app: tauri::AppHandle,
+    project_dir: String,
+    id: String,
+) -> Result<tuffbox_core::Snapshot, String> {
     let store = SnapshotStore::new(&project_dir);
-    store.rollback(id).map_err(|e| e.to_string())
+    let snapshot = store.rollback(id.clone()).map_err(|e| e.to_string())?;
+    let _ = swarm_api::note_snapshot_rollback(&app, Path::new(&project_dir), &id);
+    Ok(snapshot)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -13271,6 +13291,7 @@ pub fn run() {
             preview_curseforge_install,
             get_modrinth_project_icon,
             get_modrinth_project,
+            list_modrinth_categories,
             get_catalog_project,
             get_catalog_versions,
             get_modrinth_pack_download,
@@ -13345,6 +13366,9 @@ pub fn run() {
             swarm_api::dismiss_share_prompt,
             swarm_api::confirm_crash_resolution_after_launch,
             swarm_api::confirm_crash_resolution_from_diagnose,
+            swarm_api::get_crash_fix_banner,
+            swarm_api::report_soft_verify_failure,
+            swarm_api::rollback_last_crash_fix,
             swarm_api::distill_resolved_crash_plan,
             swarm_api::publish_experience_capsule,
             swarm_api::list_community_crash_capsules,

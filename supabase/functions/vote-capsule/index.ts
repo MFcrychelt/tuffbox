@@ -26,7 +26,8 @@ function asString(v: unknown): string {
 function trustFromCounts(confirm: number, reject: number): number {
   const c = Math.max(0, confirm);
   const r = Math.max(0, reject);
-  return c / (c + r + 1);
+  // Soft-verify: rejects/rollbacks weigh 2× (NotebookLM ranking).
+  return c / (c + 2 * r + 1);
 }
 
 Deno.serve(async (req) => {

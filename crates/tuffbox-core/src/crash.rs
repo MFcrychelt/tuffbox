@@ -676,7 +676,8 @@ pub fn log_indicates_healthy_session(log: &str) -> bool {
         && !log_has_fresh_crash_markers(log)
 }
 
-fn log_has_fresh_crash_markers(log: &str) -> bool {
+/// True when `latest.log` / crash text contains a fresh JVM/Minecraft crash dump.
+pub fn log_has_fresh_crash_markers(log: &str) -> bool {
     let l = log.to_ascii_lowercase();
     l.contains("---- minecraft crash report ----")
         || l.contains("#@!@# game crashed")

@@ -11,7 +11,7 @@
 | Start transport | **Supabase** (Edge Function write + PostgREST read); P2P остаётся opt-in Phase C, код **не удалять** |
 | Transport pattern (P2P) | **Sidecar** `tuffswarm-node` + local control HTTP (`127.0.0.1`) + bearer token; не вшивать libp2p в UI-процесс |
 | Knowledge exchange | Целые **ExperienceCapsule** (JSON); content-hash + Ed25519 soft-sign (device key) |
-| Soft verify | Human-in-the-loop: confirm → snapshot → apply → successful launch = reward signal; library `success_count` ranking |
+| Soft verify | Human-in-the-loop: confirm → snapshot → apply → **soft-verify** (healthy log + ~3 min stable / no rollback) = reward signal; library ranking uses weighted trust |
 | Anti-spam ingest | Edge Function: schema + hash + Ed25519 verify + rate-limit by `signerPublicKey`; RLS: anon SELECT only, no direct INSERT |
 | Publish gate | **MUST NOT** auto-upload solutions. Post-resolution **Distill** → human Confirm/Edit → then `ExperienceCapsule` |
 | Secrets | Anon key OK in client/keyring; **service role NEVER in binary** |
@@ -136,8 +136,9 @@ flowchart LR
   plan --> confirm[Confirm]
   confirm --> snap["Snapshot tags=crash_fix"]
   snap --> apply[Apply]
-  apply --> launch[Successful launch]
-  launch --> distill[Distill AI]
+  apply --> launch[Launch MC]
+  launch --> softVerify["Soft-verify playtime + no crash + no rollback"]
+  softVerify --> distill[Distill AI]
   distill --> review[Confirm or Edit]
   review -->|confirmed + swarm| capsule[POST /v1/crash/capsules]
   peer[Peer lookup] --> pending[".tuffbox/pending_action_plan.json"]
@@ -145,9 +146,22 @@ flowchart LR
 ```
 
 1. **Snapshots / History** — meta: `tags: ["crash_fix"]`, `crashFingerprintKey`, `planSource` (`ai|kb|swarm|manual|distill`), `matchedCaseIds`. UI badges.
-2. **Distill after success** — если swarm on + share prompts: auto distill from user action timeline → review UI → Confirm/Edit → signed `ExperienceCapsule` → Supabase `publish-capsule` (else optional hub `POST /v1/crash/capsules` / local only).
-3. **Peer pending plan** — сильный network/KB match → `.tuffbox/pending_action_plan.json` → Diagnostics **Apply network fix** (confirm обязателен; **MUST NOT** auto-apply).
-4. **Creation co-occurrence** — локальные пары модов + **Supabase** pair tables (Edge `report-cooccurrence` → `mod_cooccurrence_pairs`; hub MPI crawl → `mpi_mod_cooccurrence_pairs`) + optional hub `POST /v1/mods/cooccurrence`. Hot path: hub/`refresh_mod_partner_tops` materializes top-20 into `mod_partner_tops` JSONB; `partners_for_mod` reads cache (live fallback). Сигнал пишется после Confirm install в Create Mode / успешного fix apply; Create Mode AI получает `promptHint` из merge local+network.
+2. **Soft-verify (post-apply)** — after apply, a successful launch alone is **not** enough. Client waits for a healthy `latest.log` **and** a stable window (~3 minutes playtime / no fresh crash markers / no snapshot rollback). Outcome emits `tuffbox:soft-verify-outcome` (`confirm` | `reject`). Signed-in Crash Votes users cast a passive Keep/Discard on matched capsules. Home shows a **Restore snapshot** banner while soft-verify is pending. Explicit thumbs toast is cooldown-limited (≤1/day).
+3. **Trust ranking** — `trust_score = confirm / (confirm + 2×reject + 1)` (rejects weigh 2×). Lookup order stays `trust_score.desc, success_count.desc`. See migration `014_soft_verify_trust.sql` + `vote-capsule`.
+4. **Distill after success** — если swarm on + share prompts: auto distill from user action timeline → review UI → Confirm/Edit → signed `ExperienceCapsule` → Supabase `publish-capsule` (else optional hub `POST /v1/crash/capsules` / local only).
+5. **Peer pending plan** — сильный network/KB match → `.tuffbox/pending_action_plan.json` → Diagnostics **Review & apply** with trust card + ActionPlan diff (confirm обязателен; **MUST NOT** auto-apply). Destructive ops (`disable_mod` / `remove_*`) get an explicit warning.
+6. **Creation co-occurrence** — локальные пары модов + **Supabase** pair tables (Edge `report-cooccurrence` → `mod_cooccurrence_pairs`; hub MPI crawl → `mpi_mod_cooccurrence_pairs`) + optional hub `POST /v1/mods/cooccurrence`. Hot path: hub/`refresh_mod_partner_tops` materializes top-20 into `mod_partner_tops` JSONB; `partners_for_mod` reads cache (live fallback). Сигнал пишется после Confirm install в Create Mode / успешного fix apply; Create Mode AI получает `promptHint` из merge local+network.
+
+### Soft-verify signals (locked for MVP)
+
+| Signal | Effect |
+|--------|--------|
+| Healthy `latest.log` after fix + ≥ ~3 min stable | `confirm` (passive vote if signed in) |
+| Snapshot rollback of crash-fix marker | `reject` |
+| Crash / unhealthy log during soft-verify window | `reject` |
+| Diagnose “healthy” button | May confirm without full playtime (explicit user check) |
+
+**Not in this MVP:** Kudos ledger, Creation Marketplace worker queue, on-chain PoUW (still Phase D — see Mode 2).
 
 ### Remote transports (start = Supabase)
 
@@ -207,7 +221,7 @@ flowchart TB
 
 1. Краш → local parser / Crash Assistant / **AI Explain** → `ActionPlan`.
 2. Пользователь подтверждает → snapshot → apply.
-3. Успешный запуск Minecraft → **positive signal** (implicit reward) + resolution в History.
+3. Запуск Minecraft → **soft-verify** (healthy `latest.log` + ~3 min stable / no rollback / no post-fix crash) → positive signal + resolution в History.
 4. **Resolution Distill** (auto, beta): ИИ сжимает историю действий в минимальный план → UI Confirm/Edit.
 5. Только после Confirm узел публикует **ExperienceCapsule** (opt-in), не raw crash-log.
 
@@ -241,11 +255,11 @@ Research references (не обязательства реализации): SAPO
 Когда пользователь хочет собрать сложную сборку / KubeJS / баланс рецептов с нуля, он публикует **CreationJob**.
 
 1. **Маршрутизация:** задача дробится (руды / магия / квесты / конфиги); пайплайн ищет idle GPU с низким пингом.
-2. **PoUW (Proof of Useful Work):** воркер получает награду только после верификации.
+2. **PoUW (Proof of Useful Work):** воркер получает награду только после верификации. **Отложено** (Phase D) — MVP использует soft-verify + Crash Votes, не Kudos/стейкинг.
 3. **Верификатор:** лаунчер заказчика — hard verifier: синтаксис JSON/скриптов, опционально headless / test launch. Краш из-за мусора → нет награды (позже: slash стейка).
 4. **Anti reward-hacking:** hybrid verify (локальные проверки + ensemble / HERO-style), не доверять самооценке воркера.
 
-Экономика MVP: **Kudos / premium-функции лаунчера**. On-chain токены — поздний опциональный слой, не обязательный для архитектуры.
+Экономика MVP: **Crash Votes Keep/Discard + soft-verify playtime** (без токенов). **Kudos / premium-функции** и on-chain — поздний опциональный слой (Phase D), не обязательный для архитектуры.
 
 ## Protocols & data shapes
 

@@ -1175,6 +1175,12 @@ export const api = {
     },
     getIcon(projectId: string) { return cmd<string | null>("get_modrinth_project_icon", { projectId }); },
     getProject(projectId: string) { return cmd<SearchResult>("get_modrinth_project", { projectId }); },
+    listCategories(projectType?: string | null) {
+      return cmd<Array<{ name: string; projectType: string; header: string; icon: string }>>(
+        "list_modrinth_categories",
+        { projectType: projectType ?? null },
+      );
+    },
     getUserState(p?: string) {
       return cmd<{ favorites: Record<string, boolean>; lists: Record<string, string[]>; ratings: Record<string, number> }>("get_mod_user_state", pathArg(p));
     },

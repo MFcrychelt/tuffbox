@@ -39,6 +39,7 @@
     registerProcessListeners,
     refreshRunningInstances,
   } from "./lib/launch";
+  import { registerSoftVerifyListeners } from "./lib/softVerify";
 
   type View =
     | "dashboard"
@@ -131,6 +132,7 @@
     void registerLaunchCrashListener();
     void registerProcessListeners();
     void refreshRunningInstances();
+    const unlistenSoftVerify = registerSoftVerifyListeners();
     // Sync potato + concurrency from persisted launcher settings (best-effort).
     void api.launcher.get().then((s) => {
       if (s.potatoPc) {
@@ -227,6 +229,7 @@
       window.removeEventListener("tuffbox:open-me", onOpenMe);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
       unlistenDistill?.();
+      unlistenSoftVerify();
     };
   });
 
@@ -335,7 +338,7 @@
     <main
       class="content"
       class:ide-view={currentView === "ide"}
-      class:fill-view={currentView === "world"}
+      class:fill-view={currentView === "world" || currentView === "configs" || currentView === "quests"}
       bind:this={contentEl}
     >
       {#key currentView}
@@ -513,5 +516,15 @@
   .content.fill-view .view-pane > :global(.worlds-view) {
     flex: 1;
     min-height: 0;
+  }
+  .content.fill-view .view-pane > :global(.config-editor) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+  .content.fill-view .view-pane > :global(.qe.ftbq) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
   }
 </style>

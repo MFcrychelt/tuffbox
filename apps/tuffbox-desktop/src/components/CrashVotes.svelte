@@ -302,6 +302,7 @@
         solution: c.solution,
         actions: c.actions ?? [],
         matchedId: c.id || null,
+        trustMeta: `trust:${c.trustPercent}|keeps:${c.confirmCount}|discards:${c.rejectCount}|mc:${c.mcMajor ?? "-"}|loader:${c.loader ?? "-"}`,
       });
       toasts.success("Pending plan written — open Diagnostics to confirm apply");
       window.dispatchEvent(new CustomEvent("tuffbox:open-diagnostics"));
@@ -521,6 +522,7 @@
                 <span class="vote-counts">
                   <ThumbsUp size={12} /> {c.confirmCount}
                   <ThumbsDown size={12} /> {c.rejectCount}
+                  · checked {c.confirmCount + c.rejectCount}
                 </span>
               </div>
               <div class="trust-meter" role="meter" aria-valuenow={c.trustPercent} aria-valuemin={0} aria-valuemax={100}>
@@ -614,7 +616,16 @@
             {#if expanded.actions?.length}
               <ul class="action-list">
                 {#each expanded.actions as a, i (a.op + "-" + (a.modId ?? "") + "-" + i)}
+                  {@const kind =
+                    a.op?.includes("disable") || a.op?.includes("remove")
+                      ? "remove"
+                      : a.op?.includes("edit") || a.op?.includes("update") || a.op?.includes("change")
+                        ? "change"
+                        : "add"}
                   <li>
+                    <span class="diff-chip {kind}">
+                      {kind === "add" ? "+" : kind === "remove" ? "−" : "~"}
+                    </span>
                     <code class="op">{a.op}</code>
                     {#if a.modId}<span class="mod-id">{a.modId}</span>{/if}
                     {#if a.reason}<span class="reason">{a.reason}</span>{/if}
@@ -1229,12 +1240,27 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     font-size: 12px;
-    padding: 8px 10px;
+    padding: 6px 8px;
     background: var(--bg-elevated);
     border-radius: 8px;
   }
+
+  .diff-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 800;
+    border: 1px solid var(--border-color);
+  }
+  .diff-chip.add { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); }
+  .diff-chip.remove { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
+  .diff-chip.change { color: #fde68a; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
 
   .op {
     color: var(--accent-primary);

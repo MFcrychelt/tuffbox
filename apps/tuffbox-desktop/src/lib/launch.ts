@@ -13,6 +13,7 @@ import {
 } from "./store";
 import { shareCrashLogWithFeedback } from "./mclogs";
 import { get } from "svelte/store";
+import { reportSoftVerifyCrash } from "./softVerify";
 
 export type { LaunchErrorInfo };
 
@@ -196,6 +197,10 @@ export function registerLaunchCrashListener(): Promise<UnlistenFn> {
   if (!crashListener) {
     crashListener = listen<LaunchErrorInfo>("launch-crashed", (event) => {
       const info = event.payload;
+      const path = lastLaunch?.path ?? get(projectPath);
+      if (path) {
+        void reportSoftVerifyCrash(path);
+      }
       const retry = lastLaunch
         ? () =>
             launchWithFeedback(

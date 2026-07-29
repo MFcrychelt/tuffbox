@@ -61,6 +61,10 @@
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
+  import {
+    fetchCrashFixBanner,
+    rollbackLastCrashFix,
+  } from "../lib/softVerify";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
   import PromptDialog from "./PromptDialog.svelte";
@@ -169,6 +173,7 @@
 
   $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
   $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
+  $: hasInstanceHome = !!(selectedPath && selectedProject);
   $: skinUrl = $authState.profile?.skinUrl ?? null;
   $: capeUrl = $authState.profile?.capeUrl ?? null;
   $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
@@ -176,6 +181,43 @@
   $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
   $: canChangeMojangCape =
     $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
+
+  type CrashFixBanner = {
+    snapshotId: string;
+    fingerprintKey: string;
+    planSource?: string | null;
+    humanExplanation: string;
+    matchedCaseIds: string[];
+    actionsSummary: string[];
+    createdAt: string;
+    resolved: boolean;
+    rolledBack: boolean;
+    softVerifyStartedUnix?: number | null;
+    minPlaytimeSecs: number;
+  };
+  let crashFixBanner: CrashFixBanner | null = null;
+  let crashFixBusy = false;
+
+  async function refreshCrashFixBanner(path: string | null) {
+    if (!path) {
+      crashFixBanner = null;
+      return;
+    }
+    crashFixBanner = await fetchCrashFixBanner(path);
+  }
+
+  $: void refreshCrashFixBanner(selectedPath);
+
+  async function onRollbackCrashFix() {
+    if (!selectedPath || crashFixBusy) return;
+    crashFixBusy = true;
+    try {
+      const ok = await rollbackLastCrashFix(selectedPath);
+      if (ok) await refreshCrashFixBanner(selectedPath);
+    } finally {
+      crashFixBusy = false;
+    }
+  }
 
   async function refreshCapes() {
     if (!$authState.loggedIn || !$authState.profile) {
@@ -275,8 +317,17 @@
       const id = event.payload?.id;
       if (id) void loadProjectStats(id);
     });
+    const unlistenSoft = await listen("tuffbox:soft-verify-outcome", () => {
+      void refreshCrashFixBanner(selectedPath);
+    });
+    const onCrashFixApplied = () => {
+      void refreshCrashFixBanner(selectedPath);
+    };
+    window.addEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
     return () => {
       unlistenExit();
+      unlistenSoft();
+      window.removeEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
     };
   });
 
@@ -613,7 +664,11 @@
     </div>
   </div>
 
-  <div class="main-layout" data-layout={homeLayout}>
+  <div
+    class="main-layout"
+    data-layout={homeLayout}
+    class:has-ihome={hasInstanceHome}
+  >
     <div class="area-hero">
       <!-- Hero: Play button + project info -->
       <section class="hero">
@@ -669,6 +724,40 @@
                 New
               </button>
             </div>
+
+            {#if crashFixBanner}
+              <div class="crash-fix-banner" role="status">
+                <ShieldAlert size={16} />
+                <div class="crash-fix-banner-body">
+                  <strong>Crash fix applied</strong>
+                  <span>
+                    {crashFixBanner.softVerifyStartedUnix
+                      ? `Soft-verify in progress (≥${crashFixBanner.minPlaytimeSecs}s stable play)…`
+                      : "Launch to soft-verify. One-click restore available."}
+                  </span>
+                  {#if crashFixBanner.actionsSummary?.length}
+                    <span class="crash-fix-actions">
+                      {crashFixBanner.actionsSummary.slice(0, 3).join(" · ")}
+                    </span>
+                  {/if}
+                </div>
+                <button
+                  class="action-btn"
+                  type="button"
+                  disabled={crashFixBusy}
+                  on:click={onRollbackCrashFix}
+                >
+                  Restore snapshot
+                </button>
+                <button
+                  class="action-btn"
+                  type="button"
+                  on:click={() => (currentView = "diagnostics")}
+                >
+                  <Stethoscope size={14} /> Diagnostics
+                </button>
+              </div>
+            {/if}
           </div>
         </div>
 
@@ -696,7 +785,7 @@
     </div>
 
     <div class="area-ihome">
-      {#if selectedPath && selectedProject}
+      {#if hasInstanceHome && selectedPath}
         <InstanceHome
           projectPath={selectedPath}
           onOpenMods={() => (currentView = "mods")}
@@ -1193,6 +1282,12 @@
     min-width: 0;
   }
 
+  /* Empty ihome must not stay in the grid — a tall sticky skin spans rows and
+     stretches the vacant ihome track into a huge blank hole under the hero. */
+  .main-layout:not(.has-ihome) .area-ihome {
+    display: none;
+  }
+
   .area-youtube {
     grid-area: youtube;
     min-width: 0;
@@ -1234,11 +1329,24 @@
       "instances skin";
   }
 
+  .main-layout[data-layout="classic"]:not(.has-ihome) {
+    grid-template-areas:
+      "hero skin"
+      "youtube skin"
+      "instances skin";
+  }
+
   /* 2) YouTube where instances were; instances under skin */
   .main-layout[data-layout="yt-main"] {
     grid-template-areas:
       "hero skin"
       "ihome skin"
+      "youtube instances";
+  }
+
+  .main-layout[data-layout="yt-main"]:not(.has-ihome) {
+    grid-template-areas:
+      "hero skin"
       "youtube instances";
   }
 
@@ -1250,11 +1358,22 @@
     max-width: 160px;
   }
 
+  /* Keep the YouTube strip from inheriting a stretched row height. */
+  .main-layout[data-layout="yt-main"] .area-youtube {
+    align-self: start;
+  }
+
   /* 3) instances stay left; YouTube stacked under skin in the right rail */
   .main-layout[data-layout="yt-under-skin"] {
     grid-template-areas:
       "hero skin"
       "ihome skin"
+      "instances skin";
+  }
+
+  .main-layout[data-layout="yt-under-skin"]:not(.has-ihome) {
+    grid-template-areas:
+      "hero skin"
       "instances skin";
   }
 
@@ -1283,6 +1402,12 @@
     grid-template-areas:
       "hero skin"
       "ihome skin"
+      "instances skin";
+  }
+
+  .main-layout[data-layout="yt-hidden"]:not(.has-ihome) {
+    grid-template-areas:
+      "hero skin"
       "instances skin";
   }
 
@@ -1606,6 +1731,38 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .crash-fix-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary, #1bd96a) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary, #1bd96a) 10%, var(--bg-secondary));
+    max-width: 560px;
+  }
+
+  .crash-fix-banner-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 160px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .crash-fix-banner-body strong {
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  .crash-fix-actions {
+    opacity: 0.85;
   }
 
   .action-btn {

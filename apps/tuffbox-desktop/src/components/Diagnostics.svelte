@@ -729,6 +729,8 @@
     patchPreview: string | null;
     reason: string;
     risk: string;
+    diffKind?: "add" | "remove" | "change" | "other";
+    destructive?: boolean;
     raw: any;
   }[] = [];
   let planReviewAcknowledged = false;
@@ -1001,6 +1003,12 @@
   }
 
   function buildPlanRows(actions: any[]) {
+    const destructiveOps = new Set([
+      "disable_mod",
+      "remove_mod",
+      "remove_file",
+      "uninstall_mod",
+    ]);
     return actions.map((a: any, idx: number) => {
       const op = String(a.op ?? a.action_type ?? a.actionType ?? "action");
       const modId = a.modId ?? a.mod_id ?? null;
@@ -1014,6 +1022,13 @@
             ? String(path)
             : null;
       }
+      const diffKind = destructiveOps.has(op)
+        ? "remove"
+        : op === "edit_config" || op === "update_config" || op === "update_mod" || op === "change_mod_version"
+          ? "change"
+          : op.includes("install") || op.includes("download") || op === "reinstall_mod"
+            ? "add"
+            : "other";
       return {
         key: `${op}:${modId ?? path ?? idx}`,
         selected: true,
@@ -1023,10 +1038,38 @@
         patchPreview,
         reason: String(a.reason ?? a.description ?? ""),
         risk: String(a.risk ?? "medium"),
+        diffKind,
+        destructive: destructiveOps.has(op) || (op === "edit_config" && String(a.risk ?? "") === "high"),
         raw: a,
       };
     });
   }
+
+  function parseNetworkTrust(plan: any): {
+    trustPercent: number | null;
+    keeps: number | null;
+    discards: number | null;
+    mc: string | null;
+    loader: string | null;
+  } {
+    const ctx = String(plan?.additionalContext ?? plan?.additional_context ?? "");
+    const m = ctx.match(
+      /trust:(\d+)\|keeps:(\d+)\|discards:(\d+)\|mc:([^|]*)\|loader:([^|]*)/,
+    );
+    if (!m) {
+      return { trustPercent: null, keeps: null, discards: null, mc: null, loader: null };
+    }
+    return {
+      trustPercent: Number(m[1]),
+      keeps: Number(m[2]),
+      discards: Number(m[3]),
+      mc: m[4] && m[4] !== "-" ? m[4] : null,
+      loader: m[5] && m[5] !== "-" ? m[5] : null,
+    };
+  }
+
+  $: networkTrust = pendingPlan ? parseNetworkTrust(pendingPlan) : null;
+  $: planReviewHasDestructive = planReviewRows.some((r: any) => r.destructive);
 
   function openAiPlanReview() {
     if (!$projectPath || !aiAnalysis) return;
@@ -1136,6 +1179,7 @@
       if (errs.length) error = errs.join("; ");
       await load(true);
       if (applied.length && !errs.length) {
+        window.dispatchEvent(new CustomEvent("tuffbox:crash-fix-applied"));
         const launchNow = confirm(
           "Fix applied. Run a Test launch now to verify?\n\nAfter the game starts cleanly, TuffBox can soft-verify and offer to share the fix.",
         );
@@ -1175,6 +1219,7 @@
       if (errs.length) error = errs.join("; ");
       await invoke("clear_pending_network_plan", { path: $projectPath });
       pendingPlan = null;
+      window.dispatchEvent(new CustomEvent("tuffbox:crash-fix-applied"));
     } catch (e) {
       error = String(e);
     } finally {
@@ -2049,11 +2094,39 @@
     </div>
   {/if}
   {#if pendingPlan && swarmEnabled}
-    <div class="notice warning">
-      Network ActionPlan ready ({(pendingPlan.actions ?? []).length} action(s)).
-      <button class="secondary small" on:click={applyPendingNetworkFix} disabled={pendingBusy}>
-        {pendingBusy ? "Applying…" : "Review & apply"}
-      </button>
+    <div class="notice warning network-pending">
+      <div class="network-pending-head">
+        <span>Network ActionPlan ready ({(pendingPlan.actions ?? []).length} action(s)).</span>
+        <button class="secondary small" on:click={applyPendingNetworkFix} disabled={pendingBusy}>
+          {pendingBusy ? "Applying…" : "Review & apply"}
+        </button>
+      </div>
+      {#if networkTrust && networkTrust.trustPercent != null}
+        <div class="trust-card-line" title="Community soft-verify trust">
+          <strong>{networkTrust.trustPercent}% trust</strong>
+          {#if networkTrust.keeps != null}
+            <span>· {networkTrust.keeps} keep / {networkTrust.discards ?? 0} discard</span>
+          {/if}
+          {#if networkTrust.mc || networkTrust.loader}
+            <span>· {[networkTrust.mc, networkTrust.loader].filter(Boolean).join(" · ")}</span>
+          {/if}
+        </div>
+      {/if}
+      <div class="action-diff-row">
+        {#each (pendingPlan.actions ?? []).slice(0, 6) as a, i (i + ":" + (a.op ?? ""))}
+          {@const op = String(a.op ?? "action")}
+          {@const kind =
+            op.includes("disable") || op.includes("remove")
+              ? "remove"
+              : op.includes("edit") || op.includes("update") || op.includes("change")
+                ? "change"
+                : "add"}
+          <span class="diff-chip {kind}">
+            {kind === "add" ? "+" : kind === "remove" ? "−" : "~"}
+            {op}{a.modId || a.mod_id ? ` ${a.modId ?? a.mod_id}` : ""}
+          </span>
+        {/each}
+      </div>
     </div>
   {/if}
 
@@ -2746,12 +2819,20 @@
         <button class="icon-btn" type="button" on:click={() => (planReviewOpen = false)} aria-label="Close">×</button>
       </div>
       <p class="plan-review-expl">{planReviewExplanation}</p>
+      {#if planReviewSource === "network" && planReviewHasDestructive}
+        <p class="plan-review-warn">
+          This plan includes destructive actions (disable/remove). A snapshot will be created first — use Restore on the home screen if something breaks.
+        </p>
+      {/if}
       <div class="plan-review-list">
         {#each planReviewRows as row (row.key)}
           <label class="plan-review-row">
             <input type="checkbox" bind:checked={row.selected} />
             <div class="plan-review-body">
               <div class="plan-review-top">
+                <span class="diff-chip {row.diffKind ?? 'other'}">
+                  {row.diffKind === "add" ? "+" : row.diffKind === "remove" ? "−" : row.diffKind === "change" ? "~" : "·"}
+                </span>
                 <strong>{row.op}</strong>
                 {#if row.modId}<code>{row.modId}</code>{/if}
                 <span class="risk-pill">{row.risk}</span>
@@ -3275,6 +3356,34 @@
   }
   .merged-item.ai .src-tag { color: var(--accent-primary); background: rgba(27, 217, 106, 0.12); }
   .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .network-pending { display: flex; flex-direction: column; gap: 8px; }
+  .network-pending-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
+  .trust-card-line { font-size: 12px; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .action-diff-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .diff-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+  }
+  .diff-chip.add { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.1); }
+  .diff-chip.remove { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.1); }
+  .diff-chip.change { color: #fde68a; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
+  .plan-review-warn {
+    margin: 0 0 10px !important;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 12px !important;
+    color: #fde68a !important;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.28);
+  }
   .notice.tight { padding: 8px 10px; margin-bottom: 10px; font-size: 12px; }
   .muted-box { padding: 12px; border-radius: 10px; border: 1px dashed var(--border-color); }
   .loading, .empty { padding: 24px; text-align: center; color: var(--text-muted); }

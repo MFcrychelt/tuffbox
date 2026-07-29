@@ -31,6 +31,9 @@ fn last_crash_fix_path(project_dir: &Path) -> PathBuf {
         .join("last_crash_fix.json")
 }
 
+/// Soft-verify: healthy session must hold this long before success (seconds).
+const SOFT_VERIFY_MIN_SECS: u64 = 180;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LastCrashFixMarker {
@@ -52,6 +55,37 @@ pub struct LastCrashFixMarker {
     pub resolved: bool,
     #[serde(default)]
     pub resolved_at: Option<String>,
+    /// Absolute path to the project manifest (for rollback / soft-verify events).
+    #[serde(default)]
+    pub manifest_path: Option<String>,
+    /// When a post-fix healthy log was first observed (playtime gate).
+    #[serde(default)]
+    pub soft_verify_started_unix: Option<u64>,
+    /// Explicit snapshot rollback after apply — counts as soft-verify reject.
+    #[serde(default)]
+    pub rolled_back: bool,
+    /// Soft-verify ended in failure (crash) without rollback.
+    #[serde(default)]
+    pub soft_verify_failed: bool,
+    /// Whether UI already received a soft-verify outcome event for this marker.
+    #[serde(default)]
+    pub vote_emitted: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashFixBanner {
+    pub snapshot_id: String,
+    pub fingerprint_key: String,
+    pub plan_source: Option<String>,
+    pub human_explanation: String,
+    pub matched_case_ids: Vec<String>,
+    pub actions_summary: Vec<String>,
+    pub created_at: String,
+    pub resolved: bool,
+    pub rolled_back: bool,
+    pub soft_verify_started_unix: Option<u64>,
+    pub min_playtime_secs: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -172,15 +206,75 @@ fn pending_fix_marker_exists(project_dir: &Path) -> bool {
     let Ok(marker) = serde_json::from_str::<LastCrashFixMarker>(&raw) else {
         return false;
     };
-    !marker.resolved
+    !marker.resolved && !marker.rolled_back && !marker.soft_verify_failed
+}
+
+fn load_crash_fix_marker(project_dir: &Path) -> Result<Option<LastCrashFixMarker>, String> {
+    let path = last_crash_fix_path(project_dir);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let marker: LastCrashFixMarker =
+        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    Ok(Some(marker))
+}
+
+fn save_crash_fix_marker(project_dir: &Path, marker: &LastCrashFixMarker) -> Result<(), String> {
+    let path = last_crash_fix_path(project_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(marker).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn running_playtime_for_manifest(manifest_path: &Path) -> Option<u64> {
+    let id = manifest_path.to_string_lossy();
+    let now = tuffbox_core::time_util::unix_now_secs();
+    tuffbox_core::process::list_running()
+        .into_iter()
+        .filter(|p| p.id == id)
+        .map(|p| now.saturating_sub(p.started_at))
+        .max()
+}
+
+fn bypass_playtime_for(verified_by: &str) -> bool {
+    verified_by == "diagnose_healthy"
+}
+
+fn emit_soft_verify_outcome(
+    app: &tauri::AppHandle,
+    manifest_path: &str,
+    marker: &LastCrashFixMarker,
+    outcome: &str,
+    reason: &str,
+) {
+    let _ = app.emit(
+        "tuffbox:soft-verify-outcome",
+        json!({
+            "path": manifest_path,
+            "outcome": outcome,
+            "reason": reason,
+            "snapshotId": marker.snapshot_id,
+            "fingerprintKey": marker.fingerprint_key,
+            "matchedCaseIds": marker.matched_case_ids,
+            "planSource": marker.plan_source,
+            "humanExplanation": marker.human_explanation,
+        }),
+    );
 }
 
 /// When a crash fix was applied and the game later launches cleanly, record a
 /// durable "resolved" history entry so the History tab shows the successful fix.
 ///
-/// Requires `latest.log` to be **newer than the fix marker** and indicate a
-/// healthy session — so we don't confirm from a stale pre-crash healthy log,
-/// or the empty/mid-boot log right after spawn.
+/// Soft-verify gates:
+/// 1. `latest.log` newer than the fix marker and healthy (no fresh crash markers)
+/// 2. Stable window ≥ [`SOFT_VERIFY_MIN_SECS`] (running playtime or elapsed since healthy)
+/// 3. Marker not rolled back
 pub fn maybe_confirm_crash_resolution(
     manifest_path: &Path,
     verified_by: &str,
@@ -188,14 +282,11 @@ pub fn maybe_confirm_crash_resolution(
     let project_dir = manifest_path
         .parent()
         .ok_or_else(|| "manifest path has no parent".to_string())?;
-    let marker_path = last_crash_fix_path(project_dir);
-    if !marker_path.is_file() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&marker_path).map_err(|e| e.to_string())?;
-    let mut marker: LastCrashFixMarker =
-        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    if marker.resolved {
+    let mut marker = match load_crash_fix_marker(project_dir)? {
+        Some(m) => m,
+        None => return Ok(None),
+    };
+    if marker.resolved || marker.rolled_back || marker.soft_verify_failed {
         return Ok(None);
     }
 
@@ -219,7 +310,34 @@ pub fn maybe_confirm_crash_resolution(
         return Ok(None);
     }
 
-    let now = tuffbox_core::time_util::rfc3339_now();
+    let now = tuffbox_core::time_util::unix_now_secs();
+    let running_secs = running_playtime_for_manifest(manifest_path).unwrap_or(0);
+    let bypass = bypass_playtime_for(verified_by);
+    // Only advance soft-verify while the game process is alive.
+    // Reset the clock on quit so a 30s session + idle wall-clock cannot confirm.
+    if running_secs == 0 && !bypass {
+        if marker.soft_verify_started_unix.is_some() {
+            marker.soft_verify_started_unix = None;
+            save_crash_fix_marker(project_dir, &marker)?;
+        }
+        return Ok(None);
+    }
+    if marker.soft_verify_started_unix.is_none() {
+        // Backdate by known process uptime so the gate matches this session.
+        marker.soft_verify_started_unix = Some(now.saturating_sub(running_secs));
+        save_crash_fix_marker(project_dir, &marker)?;
+    }
+    let started = marker.soft_verify_started_unix.unwrap_or(now);
+    let elapsed_this_session = now.saturating_sub(started);
+    let playtime_ok =
+        running_secs >= SOFT_VERIFY_MIN_SECS || elapsed_this_session >= SOFT_VERIFY_MIN_SECS;
+    // Diagnose path may confirm without waiting full playtime (user explicitly
+    // checked health); launch path always requires the soft-verify window.
+    if !playtime_ok && !bypass {
+        return Ok(None);
+    }
+
+    let now_rfc = tuffbox_core::time_util::rfc3339_now();
     let mut actions_summary: Vec<String> = marker
         .actions
         .iter()
@@ -242,12 +360,9 @@ pub fn maybe_confirm_crash_resolution(
         actions_summary,
         verified_by: verified_by.to_string(),
         created_at: marker.created_at.clone(),
-        resolved_at: now.clone(),
+        resolved_at: now_rfc.clone(),
     };
     append_crash_resolution(project_dir, &rec)?;
-
-    // Peer soft-verify: if this fix came from the network, confirm matched capsules.
-    maybe_spawn_supabase_confirm_votes(&rec);
 
     // Snapshot so History / ChangeHistory surfaces a crash_resolved card.
     let lockfile_path = manifest_path.with_extension("lock.json");
@@ -283,19 +398,59 @@ pub fn maybe_confirm_crash_resolution(
     );
 
     marker.resolved = true;
-    marker.resolved_at = Some(now);
-    std::fs::write(
-        marker_path,
-        serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
+    marker.resolved_at = Some(now_rfc);
+    save_crash_fix_marker(project_dir, &marker)?;
 
     Ok(Some(rec))
 }
 
-/// Auto confirm-after-success is disabled: votes require a signed-in Supabase user JWT.
-fn maybe_spawn_supabase_confirm_votes(_rec: &CrashResolutionRecord) {
-    // Voting is gated on Crash Votes auth (access_token). No headless device vote path.
+/// Mark a pending soft-verify as failed (crash / rollback) and emit outcome for UI votes.
+pub fn fail_soft_verify(
+    app: &tauri::AppHandle,
+    manifest_path: &Path,
+    reason: &str,
+) -> Result<Option<LastCrashFixMarker>, String> {
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let mut marker = match load_crash_fix_marker(project_dir)? {
+        Some(m) => m,
+        None => return Ok(None),
+    };
+    if marker.resolved || marker.rolled_back || marker.soft_verify_failed {
+        return Ok(None);
+    }
+    let path_str = manifest_path.to_string_lossy().to_string();
+    if reason == "rollback" {
+        marker.rolled_back = true;
+    } else {
+        marker.soft_verify_failed = true;
+    }
+    if !marker.vote_emitted {
+        marker.vote_emitted = true;
+        save_crash_fix_marker(project_dir, &marker)?;
+        emit_soft_verify_outcome(app, &path_str, &marker, "reject", reason);
+    } else {
+        save_crash_fix_marker(project_dir, &marker)?;
+    }
+    Ok(Some(marker))
+}
+
+fn emit_success_soft_verify(
+    app: &tauri::AppHandle,
+    manifest_path: &str,
+    project_dir: &Path,
+    rec: &CrashResolutionRecord,
+) {
+    let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) else {
+        return;
+    };
+    if marker.vote_emitted {
+        return;
+    }
+    marker.vote_emitted = true;
+    let _ = save_crash_fix_marker(project_dir, &marker);
+    emit_soft_verify_outcome(app, manifest_path, &marker, "confirm", &rec.verified_by);
 }
 
 /// Whether swarm share/distill UI should run after a verified resolution.
@@ -322,30 +477,84 @@ pub fn emit_distill_resolution(
     );
 }
 
-/// Poll `latest.log` after launch until a post-fix healthy session appears
-/// (or the pending marker disappears / times out).
+/// Poll `latest.log` after launch until soft-verify succeeds
+/// (playtime gate + healthy session) or the pending marker disappears / times out.
 fn spawn_crash_resolution_watcher(app: tauri::AppHandle, manifest_path: PathBuf) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static ACTIVE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+    let path_key = manifest_path.to_string_lossy().to_string();
+    {
+        let mut guard = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+        let set = guard.get_or_insert_with(HashSet::new);
+        if !set.insert(path_key.clone()) {
+            // Already watching this project.
+            return;
+        }
+    }
+
     std::thread::Builder::new()
         .name("tuffbox-crash-resolution".into())
         .spawn(move || {
+            let clear_active = || {
+                if let Ok(mut guard) = ACTIVE.lock() {
+                    if let Some(set) = guard.as_mut() {
+                        set.remove(&path_key);
+                    }
+                }
+            };
             let Some(project_dir) = manifest_path.parent().map(|p| p.to_path_buf()) else {
+                clear_active();
                 return;
             };
             let path_str = manifest_path.to_string_lossy().to_string();
-            // ~10 minutes: Minecraft can take a while on first boot / heavy packs.
-            for _ in 0..120 {
+            // ~15 minutes: first boot + soft-verify playtime window.
+            for _ in 0..180 {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 if !pending_fix_marker_exists(&project_dir) {
+                    clear_active();
                     return;
+                }
+                // Mid-watch crash: only fail on explicit crash dump markers.
+                // "Not healthy yet" (mid-boot / relaunch truncate) must NOT reject —
+                // otherwise a second Play click after a good boot false-fails soft-verify.
+                if let Ok(Some(marker)) = load_crash_fix_marker(&project_dir) {
+                    if marker.soft_verify_started_unix.is_some() {
+                        if let Some(marker_secs) = marker_created_unix(&marker) {
+                            let latest = project_dir.join("logs").join("latest.log");
+                            if let Some(log_mtime) = file_mtime_secs(&latest) {
+                                if log_mtime > marker_secs {
+                                    let latest_log =
+                                        tuffbox_core::process::read_log_tail(&latest, 900)
+                                            .unwrap_or_default();
+                                    if tuffbox_core::crash::log_has_fresh_crash_markers(
+                                        &latest_log,
+                                    ) {
+                                        let _ = fail_soft_verify(
+                                            &app,
+                                            &manifest_path,
+                                            "post_fix_crash",
+                                        );
+                                        clear_active();
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 match maybe_confirm_crash_resolution(&manifest_path, "successful_launch") {
                     Ok(Some(rec)) => {
+                        emit_success_soft_verify(&app, &path_str, &project_dir, &rec);
                         emit_distill_resolution(&app, &path_str, &rec);
+                        clear_active();
                         return;
                     }
                     Ok(None) | Err(_) => {}
                 }
             }
+            clear_active();
         })
         .ok();
 }
@@ -356,17 +565,17 @@ pub fn confirm_crash_resolution_after_launch(
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
     let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest path has no parent".to_string())?;
     // Immediate attempt (game already healthy / relaunch into existing session).
     if let Some(rec) = maybe_confirm_crash_resolution(&manifest_path, "successful_launch")? {
+        emit_success_soft_verify(&app, &path, project_dir, &rec);
         emit_distill_resolution(&app, &path, &rec);
         return Ok(Some(rec));
     }
-    // Otherwise watch until latest.log is rewritten with a healthy post-fix session.
-    if pending_fix_marker_exists(
-        manifest_path
-            .parent()
-            .ok_or_else(|| "manifest path has no parent".to_string())?,
-    ) {
+    // Otherwise watch until soft-verify playtime + healthy post-fix session.
+    if pending_fix_marker_exists(project_dir) {
         spawn_crash_resolution_watcher(app, manifest_path);
     }
     Ok(None)
@@ -378,11 +587,105 @@ pub fn confirm_crash_resolution_from_diagnose(
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
     let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest path has no parent".to_string())?;
     let rec = maybe_confirm_crash_resolution(&manifest_path, "diagnose_healthy")?;
     if let Some(ref r) = rec {
+        emit_success_soft_verify(&app, &path, project_dir, r);
         emit_distill_resolution(&app, &path, r);
     }
     Ok(rec)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_crash_fix_banner(path: String) -> Result<Option<CrashFixBanner>, String> {
+    let project_dir = manifest_parent(&path)?;
+    let Some(marker) = load_crash_fix_marker(&project_dir)? else {
+        return Ok(None);
+    };
+    if marker.resolved || marker.rolled_back || marker.soft_verify_failed || marker.shared {
+        return Ok(None);
+    }
+    let actions_summary: Vec<String> = marker
+        .actions
+        .iter()
+        .map(format_launcher_action_summary)
+        .collect();
+    Ok(Some(CrashFixBanner {
+        snapshot_id: marker.snapshot_id,
+        fingerprint_key: marker.fingerprint_key,
+        plan_source: marker.plan_source,
+        human_explanation: marker.human_explanation,
+        matched_case_ids: marker.matched_case_ids,
+        actions_summary,
+        created_at: marker.created_at,
+        resolved: marker.resolved,
+        rolled_back: marker.rolled_back,
+        soft_verify_started_unix: marker.soft_verify_started_unix,
+        min_playtime_secs: SOFT_VERIFY_MIN_SECS,
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn report_soft_verify_failure(
+    app: tauri::AppHandle,
+    path: String,
+    reason: Option<String>,
+) -> Result<Option<LastCrashFixMarker>, String> {
+    let manifest_path = PathBuf::from(&path);
+    let why = reason.unwrap_or_else(|| "launch_crash".into());
+    fail_soft_verify(&app, &manifest_path, &why)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn rollback_last_crash_fix(
+    app: tauri::AppHandle,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let Some(marker) = load_crash_fix_marker(&project_dir)? else {
+        return Err("No pending crash-fix snapshot to roll back".into());
+    };
+    if marker.snapshot_id.trim().is_empty() {
+        return Err("Crash-fix marker has no snapshot id".into());
+    }
+    let store = SnapshotStore::new(&project_dir);
+    let snapshot = store
+        .rollback(marker.snapshot_id.clone())
+        .map_err(|e| e.to_string())?;
+    let manifest_path = PathBuf::from(&path);
+    let _ = fail_soft_verify(&app, &manifest_path, "rollback");
+    Ok(json!({
+        "ok": true,
+        "snapshotId": snapshot.id,
+        "name": snapshot.name,
+    }))
+}
+
+/// If a snapshot rollback matches the pending crash-fix marker, emit reject.
+pub fn note_snapshot_rollback(
+    app: &tauri::AppHandle,
+    project_dir: &Path,
+    snapshot_id: &str,
+) -> Result<(), String> {
+    let Some(marker) = load_crash_fix_marker(project_dir)? else {
+        return Ok(());
+    };
+    if marker.resolved || marker.rolled_back || marker.soft_verify_failed {
+        return Ok(());
+    }
+    if marker.snapshot_id != snapshot_id {
+        return Ok(());
+    }
+    let manifest_path = marker
+        .manifest_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|p| p.as_os_str().len() > 0)
+        .unwrap_or_else(|| project_dir.join("__soft_verify__.json"));
+    let _ = fail_soft_verify(app, &manifest_path, "rollback");
+    Ok(())
 }
 
 fn resolve_fingerprint_key(manifest_path: &Path) -> String {
@@ -488,6 +791,11 @@ pub fn write_last_crash_fix_marker(
     fingerprint_key: &str,
 ) -> Result<(), String> {
     let now_unix = tuffbox_core::time_util::unix_now_secs();
+    let manifest_path = snapshot
+        .manifest_path
+        .to_str()
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
     let marker = LastCrashFixMarker {
         snapshot_id: snapshot.id.clone(),
         fingerprint_key: fingerprint_key.to_string(),
@@ -500,16 +808,13 @@ pub fn write_last_crash_fix_marker(
         shared: false,
         resolved: false,
         resolved_at: None,
+        manifest_path,
+        soft_verify_started_unix: None,
+        rolled_back: false,
+        soft_verify_failed: false,
+        vote_emitted: false,
     };
-    let path = last_crash_fix_path(project_dir);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(
-        path,
-        serde_json::to_vec_pretty(&marker).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
+    save_crash_fix_marker(project_dir, &marker)
 }
 
 pub fn auto_snapshot_crash_fix(
@@ -766,9 +1071,16 @@ pub fn propose_community_capsule_plan(
     solution: String,
     actions: Vec<tuffbox_core::action_plan::LauncherAction>,
     matched_id: Option<String>,
+    trust_meta: Option<String>,
 ) -> Result<String, String> {
     integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
+    let trust_suffix = trust_meta
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!(" | {s}"))
+        .unwrap_or_default();
     let mut plan = ActionPlan {
         schema_version: tuffbox_core::action_plan::ACTION_PLAN_SCHEMA_VERSION,
         human_explanation: solution,
@@ -781,9 +1093,9 @@ pub fn propose_community_capsule_plan(
         source: Some("swarm".into()),
         matched_case_ids: vec![matched_id.unwrap_or(content_hash)],
         actions,
-        additional_context: Some(
-            "Proposed from Crash Votes. Confirm in Diagnostics before apply.".into(),
-        ),
+        additional_context: Some(format!(
+            "Proposed from Crash Votes. Confirm in Diagnostics before apply.{trust_suffix}"
+        )),
     };
     let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
     if !validation.ok {
@@ -815,7 +1127,7 @@ pub fn get_share_prompt_after_launch(path: String) -> Result<Option<LastCrashFix
         return Ok(None);
     }
     // Soft-verify gate: only after a verified healthy session (resolved).
-    if !marker.resolved {
+    if !marker.resolved || marker.rolled_back || marker.soft_verify_failed {
         return Ok(None);
     }
     Ok(Some(marker))
