@@ -2559,85 +2559,103 @@ import { trapFocus } from "../lib/focusTrap";
       {/each}
     </div>
     <div class="toolbar-row">
-      <div class="search wide">
+      <div class="search toolbar-search">
         <span class="search-glyph"><Search size={16} /></span>
         <input bind:value={filter} placeholder={searchPlaceholder} />
       </div>
-      <div class="actions">
-        <button on:click={openAddModal} disabled={!$projectPath || mutating}>
+      <div class="actions toolbar-actions">
+        <button class="primary-action" on:click={openAddModal} disabled={!$projectPath || mutating}>
           <Plus size={16} />
           Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
         </button>
         <button
-          class="secondary"
+          class="ghost mini quiet-action"
           on:click={importLocalFiles}
           disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
           title="Copy local jars/zips into the pack and register them in the manifest"
         >
-          <FilePlus size={16} />
-          {importingLocal ? "Importing…" : "Import…"}
+          <FilePlus size={14} />
+          {importingLocal ? "…" : "Import"}
         </button>
-        <button class="secondary" on:click={syncModsFolderFromUi} disabled={!$projectPath || loading} title="Rescan content folders and register new files">
-          <RotateCw size={16} /> Resync
+        <button
+          class="ghost mini quiet-action"
+          on:click={syncModsFolderFromUi}
+          disabled={!$projectPath || loading}
+          title="Rescan content folders and register new files"
+        >
+          <RotateCw size={14} /> Resync
         </button>
-        <button class="ghost mini" on:click={openHistory} disabled={!$projectPath} title="Open History timeline">
+        <button class="ghost mini quiet-action" on:click={openHistory} disabled={!$projectPath} title="Open History timeline">
           <History size={14} /> History
         </button>
-        <button class="ghost mini" on:click={openResolve} disabled={!$projectPath} title="Open Resolve graph">
+        <button class="ghost mini quiet-action" on:click={openResolve} disabled={!$projectPath} title="Open Resolve graph">
           <GitGraph size={14} /> Resolve
         </button>
-        <button class="ghost mini" on:click={openSnapshots} disabled={!$projectPath} title="Open Snapshots">
+        <button class="ghost mini quiet-action" on:click={openSnapshots} disabled={!$projectPath} title="Open Snapshots">
           <Camera size={14} /> Snapshots
         </button>
-        <button class="secondary glow-btn" on:click={applyAllUpdates} disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"} title="Update all mods to the latest build for this Minecraft version">
-          <Sparkles size={16} />
+        <button
+          class="ghost mini quiet-action"
+          class:has-updates={updateList.length > 0}
+          on:click={applyAllUpdates}
+          disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
+          title="Update all mods to the latest build for this Minecraft version"
+        >
+          <Sparkles size={14} />
           {#if updateApplying}
-            Updating...
+            Updating…
           {:else if updateCheckLoading}
-            Checking...
+            Checking…
           {:else if updateList.length > 0}
-            Update all ({updateList.length})
+            Update ({updateList.length})
           {:else}
             Update all
           {/if}
         </button>
-        <button class="secondary" on:click={loadRecommendations} disabled={!$projectPath || recsLoading || contentFilter !== "mod"} title="Suggest optimization mods for this loader, Minecraft version, and pack">
-          <Lightbulb size={16} />
-          {recsLoading ? "Analyzing..." : "Suggestions"}
-        </button>
-        <label
-          class="ideas-toggle"
-          class:on={ideasEnabled}
-          title="After installing from Add mods, offer popular companion mods from community stats"
-        >
-          <input
-            type="checkbox"
-            checked={ideasEnabled}
-            on:change={(e) => setIdeasEnabled(e.currentTarget.checked)}
-          />
-          <Sparkles size={14} />
-          Often together
-        </label>
         <button
-          class="secondary"
-          on:click={installSteamBridge}
-          disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
-          title={hasSteamBridge
-            ? "Steam Bridge is already installed"
-            : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
+          class="ghost mini quiet-action"
+          on:click={loadRecommendations}
+          disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
+          title="Suggest optimization mods for this loader, Minecraft version, and pack"
         >
-          {#if steamBridgeInstalling}
-            <Loader2 size={16} class="spin" />
-            Steam Bridge…
-          {:else if hasSteamBridge}
-            <Check size={16} />
-            Steam Bridge
-          {:else}
-            <Users size={16} />
-            Steam Bridge
-          {/if}
+          <Lightbulb size={14} />
+          {recsLoading ? "…" : "Ideas"}
         </button>
       </div>
+    </div>
+    <div class="toolbar-quiet" aria-label="Optional tools">
+      <label
+        class="ideas-toggle"
+        class:on={ideasEnabled}
+        title="After installing from Add mods, offer popular companion mods from community stats"
+      >
+        <input
+          type="checkbox"
+          checked={ideasEnabled}
+          on:change={(e) => setIdeasEnabled(e.currentTarget.checked)}
+        />
+        <Sparkles size={12} />
+        Often together
+      </label>
+      <button
+        class="ghost mini quiet-action"
+        on:click={installSteamBridge}
+        disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
+        title={hasSteamBridge
+          ? "Steam Bridge is already installed"
+          : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
+      >
+        {#if steamBridgeInstalling}
+          <Loader2 size={14} class="spin" />
+          Steam Bridge…
+        {:else if hasSteamBridge}
+          <Check size={14} />
+          Steam Bridge
+        {:else}
+          <Users size={14} />
+          Steam Bridge
+        {/if}
+      </button>
     </div>
   </div>
 
@@ -4163,8 +4181,76 @@ import { trapFocus } from "../lib/focusTrap";
 
   .toolbar-row {
     display: flex;
-    justify-content: space-between;
-    gap: 16px;
+    justify-content: flex-start;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .toolbar-search {
+    flex: 1 1 220px;
+    min-width: 200px;
+    max-width: 360px;
+  }
+
+  .toolbar-search input {
+    width: 100%;
+    min-height: 38px;
+    box-sizing: border-box;
+    padding: 8px 12px 8px 38px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font: inherit;
+  }
+
+  .toolbar-search input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .toolbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .toolbar-actions .primary-action {
+    padding: 8px 14px;
+    font-size: 13px;
+    margin-right: 4px;
+  }
+
+  .quiet-action {
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    gap: 5px !important;
+    color: var(--text-muted) !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    transform: none !important;
+    min-height: 30px;
+  }
+
+  .quiet-action:hover:not(:disabled) {
+    color: var(--text-secondary) !important;
+    background: var(--bg-hover) !important;
+    border-color: var(--border-color) !important;
+    transform: none !important;
+  }
+
+  .quiet-action.has-updates {
+    color: var(--accent-primary) !important;
+  }
+
+  .toolbar-quiet {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
     align-items: center;
   }
 
@@ -4175,23 +4261,26 @@ import { trapFocus } from "../lib/focusTrap";
   .ideas-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-elevated);
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
     cursor: pointer;
     user-select: none;
   }
   .ideas-toggle.on {
-    color: var(--text-primary);
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.08);
+    color: var(--text-secondary);
+    border-color: rgba(27, 217, 106, 0.28);
+    background: rgba(27, 217, 106, 0.06);
   }
   .ideas-toggle input {
     margin: 0;
+    width: 12px;
+    height: 12px;
   }
   .ideas-dialog {
     max-width: 420px;
@@ -4252,6 +4341,7 @@ import { trapFocus } from "../lib/focusTrap";
     position: relative;
     display: flex;
     align-items: center;
+    min-width: 0;
   }
 
   .search.wide {
@@ -4261,6 +4351,8 @@ import { trapFocus } from "../lib/focusTrap";
   .search-glyph {
     position: absolute;
     left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
     display: inline-flex;
     align-items: center;
     justify-content: center;

@@ -4,7 +4,7 @@ pub mod modrinth;
 
 pub use curseforge::CurseForgeProvider;
 pub use local::LocalJarProvider;
-pub use modrinth::{markdown_to_html, ModrinthProvider};
+pub use modrinth::{markdown_to_html, ModrinthCategory, ModrinthProvider};
 
 use crate::manifest::{DependencyKind, ModDependencySpec};
 use serde::{Deserialize, Serialize};

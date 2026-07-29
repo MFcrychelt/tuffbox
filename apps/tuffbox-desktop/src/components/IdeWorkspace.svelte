@@ -279,12 +279,10 @@
     };
   });
 
-  onDestroy(() => {
-    if (focusedScanTimer) clearInterval(focusedScanTimer);
-  });
-
   let railRevealed = false;
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Grace before hide — enough to move from hotzone onto the rail. */
+  const RAIL_HIDE_MS = 280;
 
   function clearRailHideTimer() {
     if (railHideTimer) {
@@ -299,13 +297,22 @@
     railRevealed = true;
   }
 
-  function scheduleHideRail() {
+  function scheduleHideRail(delay = RAIL_HIDE_MS) {
     if (!$autoHideWorkflowRail) return;
     clearRailHideTimer();
     railHideTimer = setTimeout(() => {
       railRevealed = false;
       railHideTimer = null;
-    }, 160);
+    }, delay);
+  }
+
+  function onRailFocusOut(e: FocusEvent) {
+    if (!$autoHideWorkflowRail) return;
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget instanceof Node && e.currentTarget.contains(next)) {
+      return;
+    }
+    scheduleHideRail();
   }
 
   $: if (!$autoHideWorkflowRail) {
@@ -313,7 +320,10 @@
     clearRailHideTimer();
   }
 
-  onDestroy(() => clearRailHideTimer());
+  onDestroy(() => {
+    if (focusedScanTimer) clearInterval(focusedScanTimer);
+    clearRailHideTimer();
+  });
 </script>
 
 <div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
@@ -365,6 +375,7 @@
       class="rail-hotzone"
       aria-hidden="true"
       on:mouseenter={revealRail}
+      on:mouseleave={() => scheduleHideRail()}
     ></div>
   {/if}
   <nav
@@ -372,14 +383,19 @@
     class:revealed={railRevealed || !$autoHideWorkflowRail}
     aria-label="Modpack production workflow"
     on:mouseenter={revealRail}
-    on:mouseleave={scheduleHideRail}
+    on:mouseleave={() => scheduleHideRail()}
+    on:focusin={revealRail}
+    on:focusout={onRailFocusOut}
   >
-    {#each stages as stage, index (stage.id)}
+    {#each stages as stage (stage.id)}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
-        on:click={() => goToStage(stage.id)}
-        on:focus={revealRail}
+        on:click={(e) => {
+          goToStage(stage.id);
+          if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
+          scheduleHideRail(320);
+        }}
         title={stage.goal}
         aria-current={activeStage === stage.id ? "step" : undefined}
       >
@@ -392,8 +408,8 @@
           <small>{stage.short}</small>
         </span>
       </button>
-      {/each}
-    </nav>
+    {/each}
+  </nav>
 </div>
 
 {#if leaveConfirmOpen}
@@ -467,7 +483,9 @@
   .stage-content.fill-stage > :global(.config-editor) {
     flex: 1;
     min-height: 0;
+    height: 100%;
     padding: 16px 20px;
+    box-sizing: border-box;
   }
 
   .stage-content.fill-stage > :global(.worlds-view) {
@@ -481,13 +499,19 @@
     height: 100%;
   }
 
+  .stage-content.fill-stage > :global(.brief-editor) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+
   .rail-hotzone {
     position: absolute;
     left: 0;
     right: 0;
     bottom: 0;
-    height: 16px;
-    z-index: 4;
+    height: 22px;
+    z-index: 6;
   }
 
   .workflow-rail {
@@ -509,20 +533,30 @@
     left: 0;
     right: 0;
     bottom: 0;
-    transform: translateY(100%);
-    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
-    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.28);
+    transform: translateY(calc(100% + 2px));
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.16s ease,
+      visibility 0s linear 0.2s;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.32);
     pointer-events: none;
+    will-change: transform, opacity;
   }
 
-  .ide-workspace.auto-hide-rail .workflow-rail.revealed,
-  .ide-workspace.auto-hide-rail .workflow-rail:focus-within {
+  .ide-workspace.auto-hide-rail .workflow-rail.revealed {
     transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
     pointer-events: auto;
+    transition:
+      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.14s ease,
+      visibility 0s linear 0s;
   }
 
-  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone,
-  .ide-workspace.auto-hide-rail:has(.workflow-rail:focus-within) .rail-hotzone {
+  .ide-workspace.auto-hide-rail:has(.workflow-rail.revealed) .rail-hotzone {
     pointer-events: none;
   }
 

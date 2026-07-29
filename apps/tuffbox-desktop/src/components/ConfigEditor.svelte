@@ -15,7 +15,28 @@
   import { yaml } from "@codemirror/lang-yaml";
   import { StreamLanguage, LanguageSupport } from "@codemirror/language";
   import { toml } from "@codemirror/legacy-modes/mode/toml";
+  import { properties as propertiesMode } from "@codemirror/legacy-modes/mode/properties";
   import { oneDark } from "@codemirror/theme-one-dark";
+
+  /** CM6 doesn't map legacy token "quote" → string; remap so key=value actually colors. */
+  const mcProperties = {
+    name: "mc-properties",
+    startState: propertiesMode.startState,
+    token(stream: any, state: any) {
+      const t = propertiesMode.token(stream, state);
+      if (t === "quote") return "string";
+      if (t === "def") return "property";
+      return t;
+    },
+  };
+
+  function propsLang(): LanguageSupport {
+    return new LanguageSupport(StreamLanguage.define(mcProperties as any));
+  }
+
+  function tomlLang(): LanguageSupport {
+    return new LanguageSupport(StreamLanguage.define(toml));
+  }
 
   type ConfigFile = {
     path: string;
@@ -242,26 +263,59 @@
 
   function setRootChip(root: string | null) {
     rootFilter = rootFilter === root ? null : root;
-    if (rootFilter) {
-      expandedDirs.add(rootFilter);
-      flatTree = buildFlatTree(files, filter, rootFilter);
-    }
+    if (rootFilter) expandedDirs.add(rootFilter);
+    flatTree = buildFlatTree(files, filter, rootFilter);
   }
 
   $: flatTree = buildFlatTree(files, filter, rootFilter);
   $: presentRoots = ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/")));
 
-  function langForExt(ext: string) {
+  function langForFile(file: ConfigFile | null) {
+    if (!file) return undefined;
+    const ext = file.extension?.toLowerCase() ?? "";
     switch (ext) {
-      case "json": case "json5": return json();
-      case "js": case "zs": return javascript();
-      case "yaml": case "yml": return yaml();
-      case "toml": return StreamLanguage.define(toml) as unknown as LanguageSupport;
-      default: return undefined;
+      case "json":
+      case "json5":
+        return json();
+      case "js":
+      case "zs":
+        return javascript();
+      case "yaml":
+      case "yml":
+        return yaml();
+      case "toml":
+        return tomlLang();
+      // Minecraft options.txt + mod configs: key=value / key:value
+      case "txt":
+      case "properties":
+      case "cfg":
+      case "conf":
+      case "ini":
+        return propsLang();
+      default:
+        return undefined;
     }
   }
 
-  $: currentLang = langForExt(selected?.extension?.toLowerCase() ?? "");
+  function looksLikeProps(text: string): boolean {
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !l.startsWith("!") && !l.startsWith(";"));
+    if (lines.length < 1) return false;
+    const hit = lines.filter((l) => /^[\w.\[\]/-]+\s*[=:]/.test(l)).length;
+    return hit / lines.length >= 0.6;
+  }
+
+  function langBadge(file: ConfigFile | null) {
+    if (!file) return "text";
+    const ext = (file.extension || "text").toLowerCase();
+    const path = file.path.toLowerCase().replace(/\\/g, "/");
+    if (path === "options.txt" || path.endsWith("/options.txt")) return "options";
+    if (ext === "txt" || ext === "properties" || ext === "cfg" || ext === "conf" || ext === "ini") {
+      return "props";
+    }
+    return ext || "text";
+  }
+
+  $: currentLang = langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined);
   $: dirty = content !== originalContent;
   $: tuneDirty.set(dirty);
   $: canFormat = ["json", "toml"].includes(selected?.extension?.toLowerCase() ?? "");
@@ -308,6 +362,8 @@
   async function openFileInternal(file: ConfigFile, line?: number) {
     if (!$projectPath) return;
     selected = file;
+    content = "";
+    originalContent = "";
     loading = true;
     error = null;
     message = null;
@@ -683,17 +739,19 @@
               <span>{content.split("\n").length} lines</span>
               <span>{formatSize(content.length)}</span>
               {#if dirty}<strong>Unsaved</strong>{/if}
-              <span class="lang-badge">{selected.extension || "text"}</span>
+              <span class="lang-badge">{langBadge(selected)}</span>
             </div>
           </div>
           <div class="cm-wrapper" class:line-hl={highlightLine != null}>
-            <CodeMirror
-              value={content}
-              lang={currentLang}
-              theme={oneDark}
-              on:change={handleCmChange}
-              on:ready={onCmReady}
-            />
+            {#key selected.path}
+              <CodeMirror
+                value={content}
+                lang={currentLang}
+                theme={oneDark}
+                on:change={handleCmChange}
+                on:ready={onCmReady}
+              />
+            {/key}
           </div>
 
           {#if lintIssues.length > 0}
@@ -737,11 +795,15 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    box-sizing: border-box;
   }
   .toolbar, .toolbar-actions, .title, .editor-header, .editor-stats, .notice, .trail-actions, .root-chips { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 12px; flex-shrink: 0; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .toolbar-actions { gap: 8px; flex-wrap: wrap; }
+  .toolbar-actions button {
+    transform: none !important;
+  }
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
   .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
@@ -783,13 +845,52 @@
   .file-panel, .editor-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .file-panel { padding: 14px; overflow: auto; min-height: 0; height: 100%; }
 
-  .search { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; margin-bottom: 10px; background: var(--bg-secondary); padding-bottom: 8px; }
-  .search :global(svg) { position: absolute; left: 12px; color: var(--text-muted); }
-  .search input { width: 100%; padding-left: 38px; }
+  .search {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    background: var(--bg-secondary);
+    padding-bottom: 8px;
+  }
+  .search :global(svg) {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .search input {
+    width: 100%;
+    min-height: 36px;
+    box-sizing: border-box;
+    padding: 8px 12px 8px 38px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font: inherit;
+  }
 
   .search-across { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
-  .search-across-row { display: flex; gap: 6px; }
-  .search-across-row input { flex: 1; font-size: 12px; padding: 7px 10px; }
+  .search-across-row { display: flex; gap: 6px; align-items: center; }
+  .search-across-row input {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    padding: 7px 10px;
+    min-height: 32px;
+    box-sizing: border-box;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font: inherit;
+  }
   .mini-btn { width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center; background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); color: var(--text-secondary); cursor: pointer; }
   .mini-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
   .search-error, .search-status { color: #fecaca; font-size: 11px; margin-top: 6px; }

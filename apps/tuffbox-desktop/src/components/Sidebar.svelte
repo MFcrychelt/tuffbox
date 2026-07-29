@@ -57,6 +57,8 @@
 
   let railRevealed = false;
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Grace before hide — enough to move from hotzone onto the panel. */
+  const RAIL_HIDE_MS = 280;
 
   $: autoHide = $sidebarMode === "autoHide";
   $: iconsMode = $sidebarMode === "icons";
@@ -82,13 +84,28 @@
     railRevealed = true;
   }
 
-  function scheduleHideRail() {
+  function scheduleHideRail(delay = RAIL_HIDE_MS) {
     if (!autoHide) return;
     clearRailHideTimer();
     railHideTimer = setTimeout(() => {
       railRevealed = false;
       railHideTimer = null;
-    }, 160);
+    }, delay);
+  }
+
+  function onRailFocusOut(e: FocusEvent) {
+    if (!autoHide) return;
+    const next = e.relatedTarget;
+    if (next instanceof Node && e.currentTarget instanceof Node && e.currentTarget.contains(next)) {
+      return;
+    }
+    scheduleHideRail();
+  }
+
+  function selectNav(view: View, el?: EventTarget | null) {
+    currentView = view;
+    if (el instanceof HTMLElement) el.blur();
+    scheduleHideRail(320);
   }
 
   $: if (!autoHide) {
@@ -108,10 +125,9 @@
       indicatorReady = false;
       return;
     }
-    const hr = host.getBoundingClientRect();
-    const br = btn.getBoundingClientRect();
-    indicatorY = br.top - hr.top;
-    indicatorH = br.height;
+    // offsetTop is stable vs getBoundingClientRect (ignores global button hover transforms).
+    indicatorY = btn.offsetTop;
+    indicatorH = btn.offsetHeight;
     indicatorReady = true;
   }
 
@@ -128,7 +144,12 @@
   class:revealed={railRevealed || !autoHide}
 >
   {#if autoHide}
-    <div class="sidebar-hotzone" aria-hidden="true" on:mouseenter={revealRail}></div>
+    <div
+      class="sidebar-hotzone"
+      aria-hidden="true"
+      on:mouseenter={revealRail}
+      on:mouseleave={() => scheduleHideRail()}
+    ></div>
   {/if}
 
   <aside
@@ -137,7 +158,9 @@
     class:auto-hide-panel={autoHide}
     class:revealed={railRevealed || !autoHide}
     on:mouseenter={revealRail}
-    on:mouseleave={scheduleHideRail}
+    on:mouseleave={() => scheduleHideRail()}
+    on:focusin={revealRail}
+    on:focusout={onRailFocusOut}
   >
     <div class="brand">
       <div class="logo">T</div>
@@ -174,11 +197,10 @@
           class:active={currentView === item.id}
           class:featured={item.featured}
           disabled={item.needsProject && !hasProject}
-          on:click={() => {
+          on:click={(e) => {
             if (item.needsProject && !hasProject) return;
-            currentView = item.id;
+            selectNav(item.id, e.currentTarget);
           }}
-          on:focus={revealRail}
           title={item.needsProject && !hasProject
             ? `${item.label} (open an instance first)`
             : item.shortcut
@@ -198,8 +220,11 @@
       <button
         class="nav-item add tb-icon-hover"
         title="New instance"
-        on:click={openNewProject}
-        on:focus={revealRail}
+        on:click={(e) => {
+          openNewProject();
+          if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
+          scheduleHideRail(320);
+        }}
       >
         <Plus size={20} />
         {#if !iconsCollapsed}
@@ -218,8 +243,7 @@
       <button
         class="nav-item tb-icon-hover"
         class:active={currentView === "settings"}
-        on:click={() => (currentView = "settings")}
-        on:focus={revealRail}
+        on:click={(e) => selectNav("settings", e.currentTarget)}
         title="Settings"
       >
         <Settings size={20} />
@@ -239,7 +263,7 @@
     min-height: 0;
     position: relative;
     z-index: 30;
-    transition: width 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .sidebar-slot.icons-collapsed {
@@ -256,12 +280,11 @@
     left: 0;
     top: 0;
     bottom: 0;
-    width: 14px;
+    width: 20px;
     z-index: 32;
   }
 
-  .sidebar-slot.auto-hide:has(.sidebar.revealed) .sidebar-hotzone,
-  .sidebar-slot.auto-hide:has(.sidebar:focus-within) .sidebar-hotzone {
+  .sidebar-slot.auto-hide:has(.sidebar.revealed) .sidebar-hotzone {
     pointer-events: none;
   }
 
@@ -288,16 +311,27 @@
     left: 0;
     top: 0;
     bottom: 0;
-    transform: translateX(-100%);
-    transition: transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1);
-    box-shadow: 10px 0 28px rgba(0, 0, 0, 0.28);
+    transform: translateX(calc(-100% - 2px));
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.16s ease,
+      visibility 0s linear 0.2s;
+    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.32);
     pointer-events: none;
+    will-change: transform, opacity;
   }
 
-  .sidebar.auto-hide-panel.revealed,
-  .sidebar.auto-hide-panel:focus-within {
+  .sidebar.auto-hide-panel.revealed {
     transform: translateX(0);
+    opacity: 1;
+    visibility: visible;
     pointer-events: auto;
+    transition:
+      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.14s ease,
+      visibility 0s linear 0s;
   }
 
   .brand {
@@ -444,10 +478,11 @@
     gap: 12px;
     font-size: 14px;
     font-weight: 500;
+    /* Kill global button hover translate — it desyncs the sliding indicator. */
+    transform: none !important;
     transition: background var(--motion-fast, 160ms) var(--ease-out, ease),
       color var(--motion-fast, 160ms) var(--ease-out, ease),
-      border-color var(--motion-fast, 160ms) var(--ease-out, ease),
-      transform var(--motion-fast, 160ms) var(--ease-spring, ease);
+      border-color var(--motion-fast, 160ms) var(--ease-out, ease);
   }
 
   .sidebar.compact .nav-item {
@@ -459,23 +494,16 @@
   .nav-item:hover {
     background: var(--bg-hover);
     color: var(--text-secondary);
-    transform: translateX(3px);
   }
 
   .nav-item:disabled {
     opacity: 0.4;
     cursor: not-allowed;
-    transform: none;
   }
 
   .nav-item:disabled:hover {
     background: transparent;
     color: var(--text-muted);
-    transform: none;
-  }
-
-  .sidebar.compact .nav-item:hover {
-    transform: none;
   }
 
   .nav-item.active {
@@ -485,11 +513,6 @@
 
   .nav-item.active:hover {
     background: transparent;
-    transform: translateX(1px);
-  }
-
-  .sidebar.compact .nav-item.active:hover {
-    transform: none;
   }
 
   .nav-label {
@@ -512,17 +535,20 @@
 
   .nav-item.featured {
     margin-top: 8px;
-    border: 1px solid rgba(27, 217, 106, 0.24);
-    background: linear-gradient(135deg, rgba(27, 217, 106, 0.12), rgba(139, 92, 246, 0.08));
+    border-color: rgba(27, 217, 106, 0.18);
+    background: transparent;
     color: var(--text-secondary);
   }
 
   .nav-item.featured:hover {
     color: var(--accent-primary);
+    background: var(--bg-hover);
   }
 
   .nav-item.featured.active {
-    box-shadow: 0 0 22px rgba(27, 217, 106, 0.18);
+    color: var(--accent-primary);
+    border-color: transparent;
+    box-shadow: none;
   }
 
   .nav-item.add {

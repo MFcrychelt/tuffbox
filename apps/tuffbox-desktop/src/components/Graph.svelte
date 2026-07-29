@@ -53,6 +53,9 @@
   let resolving = false;
   let message: string | null = null;
   let changePlan: any | null = null;
+  /** Monotonic token so stale loadChangePlan / refresh results never overwrite a newer load. */
+  let changePlanGen = 0;
+  let changePlanLoading = false;
   let graphSource = "local";
   let graphGeneratedAt: string | null = null;
   let graphRefreshing = false;
@@ -159,23 +162,32 @@
     resetViewOnNextLayout = false;
     pendingRestorePositions = prevPos;
     applyGraph(raw, { preserveLayout: true });
-    await loadChangePlan();
+    const gen = ++changePlanGen;
+    await loadChangePlan(gen);
   }
 
-  async function refreshGraph(manual = true) {
+  async function refreshGraph(manual = true, gen?: number) {
     if (!$projectPath || graphRefreshing) return;
     graphRefreshing = true;
     refreshError = null;
+    const myGen = gen ?? ++changePlanGen;
     try {
       const raw: any = await invoke("refresh_graph", { path: $projectPath });
+      if (myGen !== changePlanGen) return;
       applyGraph(raw);
-      await loadChangePlan();
+      await loadChangePlan(myGen);
       if (manual) message = "Dependency metadata refreshed.";
     } catch (e) {
+      if (myGen !== changePlanGen) return;
       refreshError = String(e);
       if (!graph) error = refreshError;
+      // Still try a local plan so the panel isn't stuck empty after a failed refresh.
+      await loadChangePlan(myGen);
     } finally {
-      graphRefreshing = false;
+      if (myGen === changePlanGen) {
+        graphRefreshing = false;
+        changePlanLoading = false;
+      }
     }
   }
 
@@ -189,20 +201,47 @@
     simulationLayoutKey = "";
     resetViewOnNextLayout = true;
     pendingRestorePositions = null;
+    // Drop previous project's plan immediately — avoids flashing the wrong summary.
+    const gen = ++changePlanGen;
+    changePlan = null;
+    changePlanLoading = true;
     try {
       const raw: any = await invoke("get_graph", { path: $projectPath });
+      if (gen !== changePlanGen) return;
       applyGraph(raw, { resetSelection: true });
       // Don't pre-select a node — otherwise every unrelated edge is dimmed
       // to near-invisible and the graph looks disconnected.
-      await loadChangePlan();
       lastLoadedPath = $projectPath;
-      if (raw.source !== "network") {
-        queueMicrotask(() => refreshGraph(false));
+
+      // Local/cache graphs can disagree with the post-refresh Modrinth-enriched
+      // plan. Never paint an interim plan — wait for network when needed.
+      if (raw.source === "network") {
+        await loadChangePlan(gen);
+        changePlanLoading = false;
+      } else {
+        await refreshGraph(false, gen);
       }
     } catch (e) {
+      if (gen !== changePlanGen) return;
       error = String(e);
+      changePlanLoading = false;
     } finally {
-      loading = false;
+      if (gen === changePlanGen) loading = false;
+    }
+  }
+
+  async function loadChangePlan(gen?: number) {
+    if (!$projectPath) return;
+    const myGen = gen ?? changePlanGen;
+    try {
+      const plan = await invoke("get_resolve_change_plan", { path: $projectPath });
+      if (myGen !== changePlanGen) return;
+      changePlan = plan;
+    } catch {
+      if (myGen !== changePlanGen) return;
+      changePlan = null;
+    } finally {
+      if (myGen === changePlanGen) changePlanLoading = false;
     }
   }
 
@@ -415,15 +454,6 @@
     } else if (node.kind === "Mod" && depNodeIds.has(node.id)) {
       // Already installed as a dep — re-download the file in case it's missing
       downloadMissingFiles();
-    }
-  }
-
-  async function loadChangePlan() {
-    if (!$projectPath) return;
-    try {
-      changePlan = await invoke("get_resolve_change_plan", { path: $projectPath });
-    } catch {
-      changePlan = null;
     }
   }
 
@@ -1957,7 +1987,14 @@
       </div>
     </div>
 
-    {#if changePlan}
+    {#if changePlanLoading && !changePlan}
+      <section class="change-plan-panel loading">
+        <div class="change-plan-head">
+          <span class="eyebrow">Change plan</span>
+          <strong class="change-plan-summary muted">Resolving dependencies…</strong>
+        </div>
+      </section>
+    {:else if changePlan}
       <section class="change-plan-panel">
         <div class="change-plan-head">
           <span class="eyebrow">Change plan</span>
@@ -2665,6 +2702,14 @@
     border: 1px solid rgba(27, 217, 106, .28);
     border-radius: var(--border-radius-lg);
     background: radial-gradient(circle at top left, rgba(27,217,106,.09), transparent 42%), var(--bg-secondary);
+  }
+  .change-plan-panel.loading {
+    opacity: 0.72;
+    border-color: var(--border-color);
+  }
+  .change-plan-summary.muted {
+    color: var(--text-muted);
+    font-weight: 600;
   }
   .change-plan-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .change-plan-summary { font-size: 14px; font-weight: 700; color: var(--text-primary); }

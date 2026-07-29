@@ -3,7 +3,7 @@ use super::{
     ProviderDependency, ProviderError, ProviderFileHashes, ProviderFileInfo, ProviderSearchQuery,
     SearchPage, VersionInfo,
 };
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 const BASE_URL: &str = "https://api.modrinth.com/v2";
 
@@ -46,6 +46,26 @@ impl ModrinthProvider {
     fn get_json<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, ProviderError> {
         let url = format!("{BASE_URL}{path}");
         crate::http::get_json_with_context(&url).map_err(ProviderError::NetworkContext)
+    }
+
+    /// Live category tags from Modrinth (`GET /v2/tag/category`).
+    ///
+    /// Pass `project_type` (e.g. `"modpack"`) to filter; `None` returns all.
+    pub fn list_categories(
+        &self,
+        project_type: Option<&str>,
+    ) -> Result<Vec<ModrinthCategory>, ProviderError> {
+        let all: Vec<ModrinthCategory> = self.get_json("/tag/category")?;
+        let Some(wanted) = project_type.map(|s| s.trim().to_ascii_lowercase()) else {
+            return Ok(all);
+        };
+        if wanted.is_empty() {
+            return Ok(all);
+        }
+        Ok(all
+            .into_iter()
+            .filter(|c| c.project_type.eq_ignore_ascii_case(&wanted))
+            .collect())
     }
 
     /// Looks up the Modrinth version that produced a given file, by SHA1 hash.
@@ -359,6 +379,20 @@ fn urlencode(value: &str) -> String {
         .replace('?', "%3F")
         .replace('/', "%2F")
         .replace('@', "%40")
+}
+
+/// Category tag from Modrinth `GET /v2/tag/category`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModrinthCategory {
+    pub name: String,
+    /// Modrinth API uses `project_type`; IPC to UI uses `projectType`.
+    #[serde(alias = "project_type")]
+    pub project_type: String,
+    #[serde(default)]
+    pub header: String,
+    #[serde(default)]
+    pub icon: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

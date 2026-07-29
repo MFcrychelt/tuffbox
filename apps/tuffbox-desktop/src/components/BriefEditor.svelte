@@ -30,8 +30,7 @@
   let name = "";
   let summary = "";
   let bodyMarkdown = "";
-  let authorsText = "";
-  let categoriesText = "";
+  let categories: string[] = [];
   let iconPath: string | null = null;
   let gallery: ListingGalleryItem[] = [];
   let iconUrl: string | null = null;
@@ -54,6 +53,10 @@
   let dirty = false;
   let mdView: "split" | "edit" | "preview" = "split";
 
+  let modrinthCategories: Array<{ name: string; header: string; icon: string }> = [];
+  let categoriesLoading = false;
+  let categoriesError = "";
+
   $: briefDirty.set(dirty);
   $: summaryLen = summary.length;
   $: summaryWarn = summaryLen > 200;
@@ -61,18 +64,12 @@
   $: nameEmpty = !name.trim();
 
   $: renderedHtml = renderMarkdown(bodyMarkdown, galleryUrls);
+  $: previewGalleryUrl = gallery.map(gallerySrc).find(Boolean) ?? null;
 
   function lines(value: string) {
     return value
       .split("\n")
       .map((line) => line.trim())
-      .filter(Boolean);
-  }
-
-  function chips(value: string) {
-    return value
-      .split(/[,;\n]+/)
-      .map((s) => s.trim())
       .filter(Boolean);
   }
 
@@ -88,8 +85,8 @@
       bodyMarkdown,
       iconPath,
       gallery,
-      categories: chips(categoriesText),
-      authors: chips(authorsText),
+      categories: [...categories],
+      authors: [],
     };
   }
 
@@ -110,8 +107,62 @@
     bodyMarkdown = listing.bodyMarkdown ?? "";
     iconPath = listing.iconPath ?? null;
     gallery = listing.gallery ?? [];
-    authorsText = (listing.authors ?? []).join(", ");
-    categoriesText = (listing.categories ?? []).join(", ");
+    categories = [...(listing.categories ?? [])];
+  }
+
+  function toggleCategory(cat: string) {
+    const key = cat.trim().toLowerCase();
+    if (!key) return;
+    if (categories.some((c) => c.toLowerCase() === key)) {
+      categories = categories.filter((c) => c.toLowerCase() !== key);
+    } else {
+      categories = [...categories, key];
+    }
+    markDirty();
+  }
+
+  function isCategorySelected(cat: string) {
+    const key = cat.toLowerCase();
+    return categories.some((c) => c.toLowerCase() === key);
+  }
+
+  function prettyCat(c: string) {
+    return c
+      .split("-")
+      .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : p))
+      .join(" ");
+  }
+
+  async function loadModrinthCategories() {
+    categoriesLoading = true;
+    categoriesError = "";
+    try {
+      const rows = await api.mods.listCategories("modpack");
+      modrinthCategories = rows
+        .map((r) => ({
+          name: r.name,
+          header: r.header || "categories",
+          icon: r.icon || "",
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e) {
+      categoriesError = e instanceof Error ? e.message : String(e);
+      // Known Modrinth modpack tags as offline fallback
+      modrinthCategories = [
+        "adventure",
+        "challenging",
+        "combat",
+        "kitchen-sink",
+        "lightweight",
+        "magic",
+        "multiplayer",
+        "optimization",
+        "quests",
+        "technology",
+      ].map((name) => ({ name, header: "categories", icon: "" }));
+    } finally {
+      categoriesLoading = false;
+    }
   }
 
   function applyBrief(brief: PackBrief) {
@@ -162,7 +213,7 @@
       applyBrief(brief);
       lastPath = $projectPath;
       dirty = false;
-      await refreshAssets();
+      await Promise.all([refreshAssets(), loadModrinthCategories()]);
     } catch (e) {
       error = String(e);
     } finally {
@@ -522,20 +573,32 @@
             </small>
           </label>
           <label>
-            Authors
-            <input
-              bind:value={authorsText}
-              on:input={markDirty}
-              placeholder="You, Co-author"
-            />
-          </label>
-          <label>
             Categories
-            <input
-              bind:value={categoriesText}
-              on:input={markDirty}
-              placeholder="adventure, optimization"
-            />
+            <div class="cat-picker" role="group" aria-label="Modrinth modpack categories">
+              {#if categoriesLoading && modrinthCategories.length === 0}
+                <span class="muted">Loading Modrinth categories…</span>
+              {:else}
+                {#each modrinthCategories as cat (cat.name)}
+                  <button
+                    type="button"
+                    class="cat-chip"
+                    class:on={isCategorySelected(cat.name)}
+                    on:click={() => toggleCategory(cat.name)}
+                    title={cat.name}
+                  >
+                    {prettyCat(cat.name)}
+                  </button>
+                {/each}
+              {/if}
+            </div>
+            {#if categoriesError}
+              <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
+            {:else}
+              <small class="hint">Official Modrinth modpack tags</small>
+            {/if}
+            {#if categories.length}
+              <small class="hint">Selected: {categories.map(prettyCat).join(", ")}</small>
+            {/if}
           </label>
         </section>
 
@@ -735,49 +798,34 @@
               >Page preview</button
             >
           </div>
-          {#if previewTab === "card"}
-            <div class="style-toggle">
-              <button
-                type="button"
-                class:active={cardStyle === "modrinth"}
-                on:click={() => (cardStyle = "modrinth")}>Modrinth</button
-              >
-              <button
-                type="button"
-                class:active={cardStyle === "curseforge"}
-                on:click={() => (cardStyle = "curseforge")}>CurseForge</button
-              >
-            </div>
-            <ListingCardPreview
-              style={cardStyle}
-              {name}
-              {summary}
-              authors={chips(authorsText)}
-              categories={chips(categoriesText)}
-              {iconUrl}
-              minecraftVersion={$projectInfo?.minecraftVersion ?? null}
-              loaderKind={$projectInfo?.loaderKind ?? null}
-              version={$projectInfo?.version ?? null}
-            />
-            <p class="muted preview-note">
-              Close-enough layout — not a pixel-perfect clone of the storefronts.
-            </p>
-          {:else}
-            <div class="page-preview prose">
-              <div class="page-hero">
-                {#if iconUrl}<img class="page-icon" src={iconUrl} alt="" />{/if}
-                <div>
-                  <h2>{name || "Untitled pack"}</h2>
-                  <p>{summary || "No summary."}</p>
-                </div>
-              </div>
-              {#if bodyMarkdown.trim()}
-                {@html renderedHtml}
-              {:else}
-                <p class="muted">Long description preview appears here.</p>
-              {/if}
-            </div>
-          {/if}
+          <div class="style-toggle">
+            <button
+              type="button"
+              class:active={cardStyle === "modrinth"}
+              on:click={() => (cardStyle = "modrinth")}>Modrinth</button
+            >
+            <button
+              type="button"
+              class:active={cardStyle === "curseforge"}
+              on:click={() => (cardStyle = "curseforge")}>CurseForge</button
+            >
+          </div>
+          <ListingCardPreview
+            style={cardStyle}
+            variant={previewTab === "page" ? "page" : "card"}
+            {name}
+            {summary}
+            {categories}
+            {iconUrl}
+            galleryUrl={previewGalleryUrl}
+            bodyHtml={bodyMarkdown.trim() ? renderedHtml : null}
+            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+            loaderKind={$projectInfo?.loaderKind ?? null}
+            version={$projectInfo?.version ?? null}
+          />
+          <p class="muted preview-note">
+            Live Modrinth / CurseForge-style preview from your listing fields.
+          </p>
         </div>
       </aside>
     </div>
@@ -786,10 +834,15 @@
 
 <style>
   .brief-editor {
-    min-height: 100%;
+    height: 100%;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 12px;
+    overflow: auto;
+    padding: 16px 20px 28px;
+    box-sizing: border-box;
+    scrollbar-gutter: stable;
   }
 
   .page-header {
@@ -797,6 +850,7 @@
     justify-content: space-between;
     gap: 16px;
     align-items: flex-start;
+    flex-shrink: 0;
   }
 
   .page-header h2 {
@@ -885,6 +939,36 @@
     color: var(--text-secondary);
     font-weight: 600;
     font-size: 13px;
+  }
+
+  .cat-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .cat-chip {
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transform: none !important;
+  }
+
+  .cat-chip:hover {
+    border-color: rgba(27, 217, 106, 0.4);
+    color: var(--text-primary);
+    transform: none !important;
+  }
+
+  .cat-chip.on {
+    border-color: rgba(27, 217, 106, 0.5);
+    background: rgba(27, 217, 106, 0.12);
+    color: var(--accent-primary);
   }
 
   input,
