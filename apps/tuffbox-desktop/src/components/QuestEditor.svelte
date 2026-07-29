@@ -138,6 +138,10 @@
     }
   }
 
+  function inputVal(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
+  }
+
   $: progressStatuses = (progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>;
   $: progressTeamLabel = progressTeams.find((t) => t.relativePath === progressKey);
 
@@ -535,7 +539,7 @@
               >Title<input
                 value={bookTitle ?? ""}
                 on:input={(e) => {
-                  bookTitle = (e.currentTarget as HTMLInputElement).value;
+                  bookTitle = inputVal(e);
                   bookDirty = true;
                 }}
               /></label
@@ -544,7 +548,7 @@
               >Subtitle<input
                 value={bookSubtitle ?? ""}
                 on:input={(e) => {
-                  bookSubtitle = (e.currentTarget as HTMLInputElement).value;
+                  bookSubtitle = inputVal(e);
                   bookDirty = true;
                 }}
               /></label
