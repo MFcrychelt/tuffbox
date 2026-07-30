@@ -961,7 +961,7 @@
         {#if isQuestChat}
           <span>Quest AI · FTB Quests</span>
           {#if activeId}
-            <button type="button" class="btn ghost mini quest-open" on:click={() => openQuestChatInEditor(activeId!)}>
+              <button type="button" class="btn ghost mini quest-open" on:click={() => activeId && openQuestChatInEditor(activeId)}>
               Open in Quests
             </button>
           {/if}
