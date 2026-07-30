@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { CheckCircle, AlertTriangle, CircleHelp, Wrench, ArrowDownToLine, Lightbulb } from "lucide-svelte";
+  import { CheckCircle, AlertTriangle, CircleHelp, Wrench, ArrowDownToLine, Lightbulb } from "@lucide/svelte";
   import { ideStageRequest } from "../../lib/store";
 
   type MergedRec = {
@@ -14,42 +13,63 @@
   };
   type WorldCoords = { x: number; y: number; z: number; label: string };
 
-  /** Verdict banner + "class card" hints + secondary recommendations list.
-   *  The single biggest, most state-coupled seam in Diagnostics: it reads
-   *  from nearly every derived signal the parent computes, but owns none of
-   *  it — every button here either calls a self-contained callback already
-   *  bound by the parent (`rec.apply`) or dispatches an event for the
-   *  parent's invoke-backed fix functions. */
-  export let sessionOk = false;
-  export let topSuspect: any = null;
-  export let topFinding: any = null;
-  export let heroCulpritLabel = "";
-  export let strongestEvidence: any = null;
-  export let analysisBusy = false;
-  export let primaryRec: MergedRec | null = null;
-  export let mergedRecommendations: MergedRec[] = [];
-  export let aiApplyBusy = false;
-  export let applyingHintId: string | null = null;
-  export let disablingModId: string | null = null;
-  export let fixingIdx: number | null = null;
-  export let aiAnalysis: any = null;
-  export let logDisplayText = "";
-  export let isHsErr = false;
-  export let hsErrKind: string | null = null;
-  export let memoryHint: string | null = null;
-  export let worldCoords: WorldCoords | null | undefined = null;
-  export let cascadingFinding: any = null;
-  export let mixinFinding: any = null;
-  export let sideMismatchFinding: any = null;
-  export let suspected: any[] = [];
-
-  const dispatch = createEventDispatcher<{
-    fixDisableMod: string;
-    applyTopSuspectUpdate: void;
-    applyAiPlan: void;
-    jumpToFirstError: void;
-    applyBisectDisableHalf: void;
-  }>();
+  let {
+    sessionOk = false,
+    topSuspect = null,
+    topFinding = null,
+    heroCulpritLabel = "",
+    strongestEvidence = null,
+    analysisBusy = false,
+    primaryRec = null,
+    mergedRecommendations = [],
+    aiApplyBusy = false,
+    applyingHintId = null,
+    disablingModId = null,
+    fixingIdx = null,
+    aiAnalysis = null,
+    logDisplayText = "",
+    isHsErr = false,
+    hsErrKind = null,
+    memoryHint = null,
+    worldCoords = null,
+    cascadingFinding = null,
+    mixinFinding = null,
+    sideMismatchFinding = null,
+    suspected = [],
+    onFixDisableMod,
+    onApplyTopSuspectUpdate,
+    onApplyAiPlan,
+    onJumpToFirstError,
+    onApplyBisectDisableHalf,
+  }: {
+    sessionOk?: boolean;
+    topSuspect?: any;
+    topFinding?: any;
+    heroCulpritLabel?: string;
+    strongestEvidence?: any;
+    analysisBusy?: boolean;
+    primaryRec?: MergedRec | null;
+    mergedRecommendations?: MergedRec[];
+    aiApplyBusy?: boolean;
+    applyingHintId?: string | null;
+    disablingModId?: string | null;
+    fixingIdx?: number | null;
+    aiAnalysis?: any;
+    logDisplayText?: string;
+    isHsErr?: boolean;
+    hsErrKind?: string | null;
+    memoryHint?: string | null;
+    worldCoords?: WorldCoords | null | undefined;
+    cascadingFinding?: any;
+    mixinFinding?: any;
+    sideMismatchFinding?: any;
+    suspected?: any[];
+    onFixDisableMod?: (modId: string) => void;
+    onApplyTopSuspectUpdate?: () => void;
+    onApplyAiPlan?: () => void;
+    onJumpToFirstError?: () => void;
+    onApplyBisectDisableHalf?: () => void;
+  } = $props();
 
   function severityChip(sev: string): string {
     if (sev === "critical") return "Fix this first";
@@ -118,7 +138,7 @@
         <button
           class="primary"
           type="button"
-          on:click={primaryRec.apply}
+          onclick={primaryRec.apply}
           disabled={aiApplyBusy || applyingHintId !== null}
         >
           <Wrench size={15} />
@@ -128,22 +148,22 @@
           <span class="dx-cta-more">{mergedRecommendations.length - 1} more below</span>
         {/if}
       {:else if !sessionOk && topSuspect?.knownInManifest}
-        <button class="primary" on:click={() => dispatch("fixDisableMod", topSuspect.id)} disabled={disablingModId === topSuspect.id}>
+        <button class="primary" onclick={() => onFixDisableMod?.(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
           {disablingModId === topSuspect.id ? "Disabling…" : `Disable ${topSuspect.name}`}
         </button>
-        <button class="ghost" on:click={() => dispatch("applyTopSuspectUpdate")} disabled={fixingIdx === -1}>Update</button>
+        <button class="ghost" onclick={() => onApplyTopSuspectUpdate?.()} disabled={fixingIdx === -1}>Update</button>
       {/if}
       {#if !sessionOk && aiAnalysis && aiPlanActions(aiAnalysis).length > 1}
         <button
           class="secondary"
-          on:click={() => dispatch("applyAiPlan")}
+          onclick={() => onApplyAiPlan?.()}
           disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
         >
           {aiApplyBusy ? "Applying…" : "Review & apply AI plan"}
         </button>
       {/if}
       {#if !sessionOk}
-        <button class="ghost" type="button" on:click={() => dispatch("jumpToFirstError")} disabled={!logDisplayText}>
+        <button class="ghost" type="button" onclick={() => onJumpToFirstError?.()} disabled={!logDisplayText}>
           <ArrowDownToLine size={15} /> Jump to error
         </button>
       {/if}
@@ -161,30 +181,30 @@
             ? "JVM ran out of memory (native/heap). Raise -Xmx carefully and check for leaks."
             : "JVM fatal error — check Problematic frame and GPU/Java version."}
         </p>
-        <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("setup")}>Open Setup</button>
+        <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("setup")}>Open Setup</button>
       </div>
     {/if}
     {#if memoryHint && !isHsErr}
       <div class="dx-class-card">
         <strong>Out of memory</strong>
         <p>{memoryHint}</p>
-        <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("setup")}>JVM / Setup</button>
+        <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("setup")}>JVM / Setup</button>
       </div>
     {/if}
     {#if cascadingFinding}
       <div class="dx-class-card warn">
         <strong>Cascading error</strong>
         <p>{cascadingFinding.description}</p>
-        <button type="button" class="ghost mini" on:click={() => dispatch("jumpToFirstError")}>Jump to early error</button>
+        <button type="button" class="ghost mini" onclick={() => onJumpToFirstError?.()}>Jump to early error</button>
       </div>
     {/if}
     {#if mixinFinding}
       <div class="dx-class-card">
         <strong>Mixin conflict</strong>
         <p>{mixinFinding.description}</p>
-        <button type="button" class="ghost mini" on:click={() => dispatch("jumpToFirstError")}>Open log at mixin</button>
+        <button type="button" class="ghost mini" onclick={() => onJumpToFirstError?.()}>Open log at mixin</button>
         {#if suspected.length >= 2}
-          <button type="button" class="ghost mini" on:click={() => dispatch("applyBisectDisableHalf")}>Try disable half (bisect)</button>
+          <button type="button" class="ghost mini" onclick={() => onApplyBisectDisableHalf?.()}>Try disable half (bisect)</button>
         {/if}
       </div>
     {/if}
@@ -192,7 +212,7 @@
       <div class="dx-class-card">
         <strong>Client-only / wrong side</strong>
         <p>{sideMismatchFinding.description}</p>
-        <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("export")}>Server pack checklist</button>
+        <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("export")}>Server pack checklist</button>
       </div>
     {/if}
     {#if worldCoords}
@@ -216,7 +236,7 @@
             <strong>{rec.label}</strong>
             {#if rec.detail}<span>{rec.detail}</span>{/if}
           </div>
-          <button class="secondary small" type="button" on:click={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
+          <button class="secondary small" type="button" onclick={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
             Do it
           </button>
         </li>

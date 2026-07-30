@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from "lucide-svelte";
+  import { Check } from "@lucide/svelte";
   import {
     THEMES,
     type ThemeId,
@@ -8,12 +8,16 @@
     commitTheme,
   } from "../lib/themes";
 
-  export let value: ThemeId = "tuffbox";
-  export let onChange: (id: ThemeId) => void = () => {};
+  let {
+    value = "tuffbox",
+    onChange = () => {},
+  }: {
+    value?: ThemeId;
+    onChange?: (id: ThemeId) => void;
+  } = $props();
 
   function select(id: ThemeId) {
     commitTheme(id);
-    value = id;
     onChange(id);
   }
 </script>
@@ -25,11 +29,11 @@
       class="theme-swatch"
       class:active={value === theme.id}
       style="background: {theme.shades[0]}"
-      on:click={() => select(theme.id)}
-      on:mouseenter={() => previewTheme(theme.id)}
-      on:mouseleave={() => restoreCommittedTheme()}
-      on:focus={() => previewTheme(theme.id)}
-      on:blur={() => restoreCommittedTheme()}
+      onclick={() => select(theme.id)}
+      onmouseenter={() => previewTheme(theme.id)}
+      onmouseleave={() => restoreCommittedTheme()}
+      onfocus={() => previewTheme(theme.id)}
+      onblur={() => restoreCommittedTheme()}
     >
       <div class="mini-ui" aria-hidden="true">
         <div class="bar" style="background: {theme.shades[1]}"></div>

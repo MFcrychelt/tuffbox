@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "lucide-svelte";
+  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "@lucide/svelte";
   import { projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
@@ -10,18 +10,18 @@
     overrideCount: number;
   };
 
-  let targetPath = "";
-  let serverTargetPath = "";
-  let prismTargetPath = "";
-  let curseforgeTargetPath = "";
-  let projectDir = "";
-  let exporting = false;
-  let result: ExportResult | null = null;
-  let error: string | null = null;
-  let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
-  let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
+  let targetPath = $state("");
+  let serverTargetPath = $state("");
+  let prismTargetPath = $state("");
+  let curseforgeTargetPath = $state("");
+  let projectDir = $state("");
+  let exporting = $state(false);
+  let result = $state<ExportResult | null>(null);
+  let error = $state<string | null>(null);
+  let issues = $state<{ severity: "error" | "warning"; code: string; message: string; target?: string | null }[]>([]);
+  let exportMode = $state<"mrpack" | "server" | "prism" | "curseforge">("mrpack");
 
-  let lastPathForDefaults = "";
+  let lastPathForDefaults = $state("");
 
   async function loadDefaultPaths(path: string) {
     projectDir = await invoke("get_project_dir", { path });
@@ -78,7 +78,9 @@
     }
   }
 
-  $: onProjectPathChange($projectPath);
+  $effect(() => {
+    onProjectPathChange($projectPath);
+  });
 </script>
 
 <div class="export-builder">

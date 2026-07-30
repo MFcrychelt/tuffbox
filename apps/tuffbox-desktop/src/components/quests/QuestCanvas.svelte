@@ -1,71 +1,79 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { Maximize2, Plus } from "lucide-svelte";
+  import { Maximize2, Plus } from "@lucide/svelte";
   import type { QuestData, QuestValidationIssue, QuestProgressStatus } from "../../lib/api";
   import { projectPath } from "../../lib/store";
   import QuestItemIcon from "./QuestItemIcon.svelte";
   import { preloadItemIcons } from "./iconCache";
 
-  export let quests: QuestData[];
-  export let selectedId: string | null = null;
-  export let issues: QuestValidationIssue[] = [];
-  /** questId → progress status when overlay is on */
-  export let progressStatuses: Record<string, QuestProgressStatus> = {};
-  export let progressOverlay = false;
-  /** Shown when quests array is empty (filter miss vs true empty chapter). */
-  export let emptyHint = "Double-click to add a quest";
-  export let onSelect: (q: QuestData | null) => void;
-  export let onMove: (q: QuestData, x: number, y: number) => void;
-  export let onAddAt: (x: number, y: number) => void;
-  export let onLink: (fromId: string, toDepId: string) => void;
-  /** Bump to force fitView (e.g. chapter change). */
-  export let fitToken = 0;
+  let {
+    quests,
+    selectedId = null,
+    issues,
+    progressStatuses = {},
+    progressOverlay = false,
+    emptyHint = "Double-click to add a quest",
+    onSelect,
+    onMove,
+    onAddAt,
+    onLink,
+    fitToken = 0,
+  }: {
+    quests: QuestData[];
+    selectedId?: string | null;
+    issues: QuestValidationIssue[];
+    progressStatuses?: Record<string, QuestProgressStatus>;
+    progressOverlay?: boolean;
+    emptyHint?: string;
+    onSelect: (q: QuestData | null) => void;
+    onMove: (q: QuestData, x: number, y: number) => void;
+    onAddAt: (x: number, y: number) => void;
+    onLink: (fromId: string, toDepId: string) => void;
+    fitToken?: number;
+  } = $props();
 
   const BASE = 24;
   const MIN_ZOOM = 0.25;
   const MAX_ZOOM = 4;
 
-  let viewport: HTMLDivElement;
-  let zoom = 1;
-  let panX = 0;
-  let panY = 0;
+  let viewport = $state<HTMLDivElement | undefined>(undefined);
+  let zoom = $state(1);
+  let panX = $state(0);
+  let panY = $state(0);
 
-  let mode: "idle" | "pan" | "drag" | "link" = "idle";
-  let panLast: { x: number; y: number } | null = null;
-  let dragQuest: QuestData | null = null;
-  let dragMoved = false;
-  /** World-space offset from quest origin to pointer at grab time (avoids jump-to-center). */
-  let dragOffset = { x: 0, y: 0 };
-  /** Bumps on each drag move so Svelte re-renders without parent chapter copy. */
-  let dragTick = 0;
-  let linkFrom: QuestData | null = null;
-  let linkCursor: { x: number; y: number } | null = null;
-  let spaceDown = false;
-  let lastFitToken = -1;
-  let iconRevision = 0;
+  let mode = $state<"idle" | "pan" | "drag" | "link">("idle");
+  let panLast = $state<{ x: number; y: number } | null>(null);
+  let dragQuest = $state<QuestData | null>(null);
+  let dragMoved = $state(false);
+  let dragOffset = $state({ x: 0, y: 0 });
+  let dragTick = $state(0);
+  let linkFrom = $state<QuestData | null>(null);
+  let linkCursor = $state<{ x: number; y: number } | null>(null);
+  let spaceDown = $state(false);
+  let lastFitToken = $state(-1);
+  let iconRevision = $state(0);
 
-  $: unit = BASE * zoom;
-  $: issueIds = new Set(issues.map((i) => i.questId));
-  $: if (fitToken !== lastFitToken && quests) {
-    lastFitToken = fitToken;
-    void refit();
-  }
-  $: if (quests && $projectPath) {
-    void preloadChapterIcons(quests);
-  }
+  let unit = $derived(BASE * zoom);
+  let issueIds = $derived(new Set(issues.map((i) => i.questId)));
+
+  $effect(() => {
+    if (fitToken !== lastFitToken && quests) {
+      lastFitToken = fitToken;
+      void refit();
+    }
+  });
+
+  $effect(() => {
+    if (quests && $projectPath) {
+      void preloadChapterIcons(quests);
+    }
+  });
 
   async function preloadChapterIcons(list: QuestData[]) {
     const ids = list.map((q) => q.icon).filter(Boolean) as string[];
     if (!ids.length || !$projectPath) return;
     await preloadItemIcons(ids, $projectPath);
     iconRevision += 1;
-  }
-
-  $: unit = BASE * zoom;
-  $: issueIds = new Set(issues.map((i) => i.questId));
-  $: if (fitToken !== lastFitToken && quests) {
-    lastFitToken = fitToken;
-    void refit();
   }
 
   onMount(() => {
@@ -110,6 +118,7 @@
   }
 
   function clientToWorld(clientX: number, clientY: number) {
+    if (!viewport) return { x: 0, y: 0 };
     const rect = viewport.getBoundingClientRect();
     return {
       x: (clientX - rect.left - panX) / unit,
@@ -148,6 +157,7 @@
   }
 
   function questAt(clientX: number, clientY: number): QuestData | null {
+    if (!viewport) return null;
     const rect = viewport.getBoundingClientRect();
     const sx = clientX - rect.left;
     const sy = clientY - rect.top;
@@ -240,13 +250,14 @@
     linkFrom = null;
     linkCursor = null;
     try {
-      viewport.releasePointerCapture(e.pointerId);
+      viewport?.releasePointerCapture(e.pointerId);
     } catch {
       /* ignore */
     }
   }
 
   function onWheel(e: WheelEvent) {
+    if (!viewport) return;
     e.preventDefault();
     const rect = viewport.getBoundingClientRect();
     const sx = e.clientX - rect.left;
@@ -305,12 +316,12 @@
 
 <div class="canvas-wrap ftbq-canvas">
   <div class="canvas-toolbar">
-    <button type="button" class="tb" title="Fit view" on:click={fitView}><Maximize2 size={14} /> Fit</button>
+    <button type="button" class="tb" title="Fit view" onclick={fitView}><Maximize2 size={14} /> Fit</button>
     <button
       type="button"
       class="tb"
       title="Add quest at center"
-      on:click={() => {
+      onclick={() => {
         const rect = viewport?.getBoundingClientRect();
         if (!rect) {
           onAddAt(0, 0);
@@ -330,12 +341,12 @@
     class:panning={mode === "pan" || spaceDown}
     class:linking={mode === "link"}
     bind:this={viewport}
-    on:pointerdown={onPointerDown}
-    on:pointermove={onPointerMove}
-    on:pointerup={onPointerUp}
-    on:pointercancel={onPointerUp}
-    on:wheel={onWheel}
-    on:dblclick={onDblClick}
+    onpointerdown={onPointerDown}
+    onpointermove={onPointerMove}
+    onpointerup={onPointerUp}
+    onpointercancel={onPointerUp}
+    onwheel={onWheel}
+    ondblclick={onDblClick}
     role="application"
     aria-label="Quest canvas"
   >

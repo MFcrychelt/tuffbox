@@ -1,24 +1,29 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { Network } from "lucide-svelte";
+  import { Network } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ enable: void; skip: void }>();
+  let {
+    onenable,
+    onskip,
+  }: {
+    onenable?: () => void;
+    onskip?: () => void;
+  } = $props();
 </script>
 
 <div
   class="sw-backdrop"
   role="button"
   tabindex="-1"
-  on:click={(e) => e.target === e.currentTarget && dispatch("skip")}
-  on:keydown={() => {}}
+  onclick={(e) => e.target === e.currentTarget && onskip?.()}
+  onkeydown={() => {}}
 >
   <div
     class="sw-dialog"
     role="dialog"
     aria-modal="true"
     aria-labelledby="swarm-onboard-title"
-    use:trapFocus={{ onEscape: () => dispatch("skip") }}
+    use:trapFocus={{ onEscape: () => onskip?.() }}
   >
     <div class="sw-icon"><Network size={28} /></div>
     <h3 id="swarm-onboard-title">Use TuffSwarm network?</h3>
@@ -27,8 +32,8 @@
       (modpack trends). Without the network, those modes stay unavailable. You can change this anytime in Settings.
     </p>
     <div class="sw-actions">
-      <button class="ghost" type="button" on:click={() => dispatch("skip")}>Not now</button>
-      <button type="button" on:click={() => dispatch("enable")}>Use network</button>
+      <button class="ghost" type="button" onclick={() => onskip?.()}>Not now</button>
+      <button type="button" onclick={() => onenable?.()}>Use network</button>
     </div>
   </div>
 </div>

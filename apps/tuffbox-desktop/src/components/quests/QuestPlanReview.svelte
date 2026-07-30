@@ -1,22 +1,28 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { Sparkles, Check, X } from "lucide-svelte";
+  import { Sparkles, Check, X } from "@lucide/svelte";
   import type { QuestPlan, QuestPlanMergeResult } from "../../lib/api";
 
-  export let merge: QuestPlanMergeResult;
-  export let needsReviewAck = false;
+  let {
+    merge,
+    needsReviewAck = false,
+    onapply,
+    ondiscard,
+  }: {
+    merge: QuestPlanMergeResult;
+    needsReviewAck?: boolean;
+    onapply?: (detail: { chapterKeys: string[]; questKeys: string[] }) => void;
+    ondiscard?: () => void;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{
-    apply: { chapterKeys: string[]; questKeys: string[] };
-    discard: void;
-  }>();
+  let chapterOn = $state<Record<string, boolean>>({});
+  let questOn = $state<Record<string, boolean>>({});
+  let reviewAck = $state(false);
 
-  let chapterOn: Record<string, boolean> = {};
-  let questOn: Record<string, boolean> = {};
-  let reviewAck = false;
+  let plan = $derived(merge?.plan as QuestPlan | undefined);
 
-  $: plan = merge?.plan as QuestPlan | undefined;
-  $: initSelection(plan);
+  $effect(() => {
+    initSelection(plan);
+  });
 
   function chKey(ch: { id?: string | null; title: string }, i: number) {
     return ch.id || ch.title || `ch-${i}`;
@@ -52,14 +58,15 @@
 
   function applyAll() {
     if (needsReviewAck && !reviewAck) return;
-    dispatch("apply", {
+    onapply?.({
       chapterKeys: selectedChapterKeys(),
       questKeys: selectedQuestKeys(),
     });
   }
 
-  $: questCount =
-    plan?.chapters.reduce((n, ch) => n + (ch.quests?.length ?? 0), 0) ?? 0;
+  let questCount = $derived(
+    plan?.chapters.reduce((n, ch) => n + (ch.quests?.length ?? 0), 0) ?? 0,
+  );
 </script>
 
 {#if plan}
@@ -117,11 +124,11 @@
       <button
         type="button"
         disabled={!merge.validation?.valid || ((needsReviewAck || plan.needsUserReview) && !reviewAck)}
-        on:click={applyAll}
+        onclick={applyAll}
       >
         <Check size={14} /> Apply selected
       </button>
-      <button type="button" class="ghost" on:click={() => dispatch("discard")}>
+      <button type="button" class="ghost" onclick={() => ondiscard?.()}>
         <X size={14} /> Discard
       </button>
     </div>

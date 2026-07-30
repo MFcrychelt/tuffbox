@@ -41,7 +41,7 @@
     ExternalLink,
     Users,
     FilePlus,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
@@ -126,35 +126,35 @@ import { trapFocus } from "../lib/focusTrap";
     batchComplete?: boolean;
   };
 
-  let mods: ModRow[] = [];
-  let loading = false;
-  let mutating = false;
-  let steamBridgeInstalling = false;
-  let filter = "";
-  let sideFilter = "all";
-  let contentFilter = "mod"; // mod, resourcepack, datapack, shader, favorites, list:<name>
-  let error: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let brokenIcons: string[] = [];
-  let savedMods: SearchResult[] = [];
-  let savedModsLoading = false;
-  let renameTarget = "";
-  let showRenamePrompt = false;
-  let deleteTarget = "";
-  let showDeleteConfirm = false;
+  let mods = $state<ModRow[]>([]);
+  let loading = $state(false);
+  let mutating = $state(false);
+  let steamBridgeInstalling = $state(false);
+  let filter = $state("");
+  let sideFilter = $state("all");
+  let contentFilter = $state("mod"); // mod, resourcepack, datapack, shader, favorites, list:<name>
+  let error = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let brokenIcons = $state<string[]>([]);
+  let savedMods = $state<SearchResult[]>([]);
+  let savedModsLoading = $state(false);
+  let renameTarget = $state("");
+  let showRenamePrompt = $state(false);
+  let deleteTarget = $state("");
+  let showDeleteConfirm = $state(false);
 
   // Download progress overlay
-  let downloadOpen = false;
-  let downloadTitle = "Downloading content";
-  let downloadItems: DownloadItem[] = [];
-  let downloadDone = false;
+  let downloadOpen = $state(false);
+  let downloadTitle = $state("Downloading content");
+  let downloadItems = $state<DownloadItem[]>([]);
+  let downloadDone = $state(false);
   let unlistenProgress: UnlistenFn | null = null;
   let unlistenBatch: UnlistenFn | null = null;
   let unlistenUpdateProgress: UnlistenFn | null = null;
   let downloadScopeModIds: Set<string> | null = null;
-  let downloadStageMessage = "Preparing downloads…";
-  let downloadStagePercent = 0;
-  let downloadError: string | null = null;
+  let downloadStageMessage = $state("Preparing downloads…");
+  let downloadStagePercent = $state(0);
+  let downloadError = $state<string | null>(null);
 
   function formatBytes(n: number): string {
     if (!n || n <= 0) return "0 B";
@@ -163,12 +163,12 @@ import { trapFocus } from "../lib/focusTrap";
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  $: downloadActiveCount = downloadItems.filter((i) => i.status === "downloading" || i.status === "queued").length;
-  $: downloadDoneCount = downloadItems.filter((i) => i.status === "done" || i.status === "skipped").length;
-  $: downloadFailedCount = downloadItems.filter((i) => i.status === "failed").length;
-  $: downloadOverallPercent = downloadItems.length === 0
+  const downloadActiveCount = $derived(downloadItems.filter((i) => i.status === "downloading" || i.status === "queued").length);
+  const downloadDoneCount = $derived(downloadItems.filter((i) => i.status === "done" || i.status === "skipped").length);
+  const downloadFailedCount = $derived(downloadItems.filter((i) => i.status === "failed").length);
+  const downloadOverallPercent = $derived(downloadItems.length === 0
     ? 0
-    : Math.round(downloadItems.reduce((sum, i) => sum + (i.percent || 0), 0) / downloadItems.length);
+    : Math.round(downloadItems.reduce((sum, i) => sum + (i.percent || 0), 0) / downloadItems.length));
 
   function upsertDownloadItem(payload: Partial<DownloadItem> & { id: string }) {
     const idx = downloadItems.findIndex((i) => i.id === payload.id);
@@ -390,19 +390,19 @@ import { trapFocus } from "../lib/focusTrap";
     listResizeObserver?.disconnect();
   });
 
-  let addOpen = false;
+  let addOpen = $state(false);
   /** In-launcher catalog page (GDLauncher-style) opened from a search card. */
   let catalogViewResult: SearchResult | null = null;
   let catalogProvider: "modrinth" | "curseforge" | "both" = "modrinth";
   let searchQuery = "";
   let searchResults: SearchResult[] = [];
-  let searchTotal = 0;
-  let searchLoading = false;
-  let loadingMore = false;
+  let searchTotal = $state(0);
+  let searchLoading = $state(false);
+  let loadingMore = $state(false);
   let browserResultsEl: HTMLElement | null = null;
   let infiniteSentinel: HTMLElement | null = null;
   let infiniteObserver: IntersectionObserver | null = null;
-  let searchRequestId = 0;
+  let searchRequestId = $state(0);
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedSide = "auto";
   let filterGameVersion = "";
@@ -411,7 +411,7 @@ import { trapFocus } from "../lib/focusTrap";
   let filterEnvironment = "";
   let filterLicense = "";
   let sortBy = "relevance";
-  let cfSortField = 2;
+  let cfSortField = $state(2);
   let previewLoadingId = "";
 
   // --- Add-mods browser chrome ---
@@ -440,12 +440,12 @@ import { trapFocus } from "../lib/focusTrap";
   }
   const addViewPref = readAddViewPref();
   let versionSearch = "";
-  let loaderExpanded = false;
-  let filtersCollapsed = addViewPref.filtersCollapsed;
+  let loaderExpanded = $state(false);
+  let filtersCollapsed = $state(addViewPref.filtersCollapsed);
   let viewMode: "grid" | "list" | "infinite" = addViewPref.viewMode;
   let cardSize: CardSize = addViewPref.cardSize;
-  let page = 1;
-  let pageSize = addViewPref.pageSize;
+  let page = $state(1);
+  let pageSize = $state(addViewPref.pageSize);
   let addSearchInput: HTMLInputElement | null = null;
   let brokenCatalogIcons: string[] = [];
   let accordionOpen: Record<string, boolean> = {
@@ -644,20 +644,14 @@ import { trapFocus } from "../lib/focusTrap";
     return badges.slice(0, 3);
   }
 
-  $: filteredVersions = gameVersions.filter((v) =>
-    v.toLowerCase().includes(versionSearch.trim().toLowerCase())
-  );
-
-  $: shownLoaders = loaderExpanded
-    ? loaders
-    : loaders.slice(0, 3);
-
-  $: totalPages = Math.max(1, Math.ceil(searchTotal / pageSize));
+  const totalPages = $derived(Math.max(1, Math.ceil(searchTotal / pageSize)));
   // Catalog search is server-paginated; searchResults is the current page (or
   // accumulated pages in infinite mode). Do not client-slice again.
-  $: pagedResults = searchResults;
-  $: displayedResults = searchResults;
-  $: if (page > totalPages) page = totalPages;
+  const pagedResults = $derived(searchResults);
+  const displayedResults = $derived(searchResults);
+  $effect(() => {
+    if (page > totalPages) page = totalPages;
+  });
 
   function setupInfiniteObserver() {
     infiniteObserver?.disconnect();
@@ -680,12 +674,14 @@ import { trapFocus } from "../lib/focusTrap";
     infiniteObserver.observe(infiniteSentinel);
   }
 
-  $: if (addOpen && viewMode === "infinite" && infiniteSentinel && browserResultsEl) {
-    setupInfiniteObserver();
-  } else if (viewMode !== "infinite") {
-    infiniteObserver?.disconnect();
-    infiniteObserver = null;
-  }
+  $effect(() => {
+    if (addOpen && viewMode === "infinite" && infiniteSentinel && browserResultsEl) {
+        setupInfiniteObserver();
+      } else if (viewMode !== "infinite") {
+        infiniteObserver?.disconnect();
+        infiniteObserver = null;
+      }
+  });
 
   function goToPage(p: number) {
     const target = Math.min(totalPages, Math.max(1, p));
@@ -713,16 +709,16 @@ import { trapFocus } from "../lib/focusTrap";
   };
   let versionPickerMod: ModRow | null = null;
   let availableVersions: ModVersion[] = [];
-  let versionPickerLoading = false;
+  let versionPickerLoading = $state(false);
   let versionPickerError: string | null = null;
-  let versionPickerChanging = false;
+  let versionPickerChanging = $state(false);
   let versionPickerQuery = "";
-  let hideIncompatible = true;
+  let hideIncompatible = $state(true);
   let selectedVersion: ModVersion | null = null;
   let versionPickerMc = "";
   let versionPickerLoader = "";
 
-  $: versionPickerFiltered = availableVersions.filter((v) => {
+  const versionPickerFiltered = $derived(availableVersions.filter((v) => {
     if (hideIncompatible && v.compatible === false && v.versionNumber !== versionPickerMod?.version) {
       return false;
     }
@@ -735,9 +731,9 @@ import { trapFocus } from "../lib/focusTrap";
       v.loaders.some((l) => l.toLowerCase().includes(q)) ||
       (v.versionType ?? "").toLowerCase().includes(q)
     );
-  });
+  }));
 
-  $: compatibleVersionCount = availableVersions.filter((v) => v.compatible !== false).length;
+  const compatibleVersionCount = $derived(availableVersions.filter((v) => v.compatible !== false).length);
 
   async function openVersionPicker(mod: ModRow) {
     if (!$projectPath) return;
@@ -805,11 +801,11 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // --- Post-bulk-install dependency resolution ---
-  let dependencyDialogOpen = false;
-  let dependencyMissingCount = 0;
-  let dependencyResolving = false;
+  let dependencyDialogOpen = $state(false);
+  let dependencyMissingCount = $state(0);
+  let dependencyResolving = $state(false);
 
-  let confirmOpen = false;
+  let confirmOpen = $state(false);
   let confirmMod: ModRow | null = null;
 
   function showRemoveConfirm(mod: ModRow) { confirmMod = mod; confirmOpen = true; }
@@ -837,10 +833,10 @@ import { trapFocus } from "../lib/focusTrap";
 
   // Mod recommendations
   let recommendations: any[] = [];
-  let recsLoading = false;
+  let recsLoading = $state(false);
   let recsError: string | null = null;
 
-  $: hasSteamBridge = mods.some((m) => {
+  const hasSteamBridge = $derived(mods.some((m) => {
     const id = (m.id ?? "").toLowerCase();
     const file = (m.fileName ?? "").toLowerCase();
     return (
@@ -849,7 +845,7 @@ import { trapFocus } from "../lib/focusTrap";
       id === "steam_bridge" ||
       file.startsWith("steambridge")
     );
-  });
+  }));
 
   async function installSteamBridge() {
     if (!$projectPath || steamBridgeInstalling || hasSteamBridge) return;
@@ -932,11 +928,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // Multi-select (right-click enters selection mode; then LMB/RMB toggle)
-  let selectionMode = false;
+  let selectionMode = $state(false);
   let selectedModIds: Record<string, boolean> = {};
-
-  $: selectedMods = filtered.filter((m) => selectedModIds[m.id]);
-  $: selectedCount = selectedMods.length;
 
   function clearSelection() {
     selectionMode = false;
@@ -1087,8 +1080,8 @@ import { trapFocus } from "../lib/focusTrap";
 
   // Batch update state (no separate update panel — badges + toolbar only)
   let updateList: any[] = [];
-  let updateCheckLoading = false;
-  let updateApplying = false;
+  let updateCheckLoading = $state(false);
+  let updateApplying = $state(false);
 
   async function checkForUpdates() {
     if (!$projectPath) return;
@@ -1191,11 +1184,11 @@ import { trapFocus } from "../lib/focusTrap";
     iconUrl?: string | null;
     compatibleVersion?: string | null;
   };
-  let ideasOpen = false;
+  let ideasOpen = $state(false);
   let ideasSeedLabel = "";
   let ideasOffers: IdeaOffer[] = [];
-  let ideasBusy = false;
-  let ideasPendingDepsCheck = false;
+  let ideasBusy = $state(false);
+  let ideasPendingDepsCheck = $state(false);
   const IDEAS_BLOCKLIST_KEY = "tuffbox.mods.ideas-blocklist";
 
   function loadIdeasBlocklist(): Set<string> {
@@ -1401,13 +1394,13 @@ import { trapFocus } from "../lib/focusTrap";
   };
   let wrongLoaderHits: WrongLoaderHit[] = [];
   let wrongLoaderFixing: string | null = null;
-  let importingLocal = false;
+  let importingLocal = $state(false);
 
   const INSTALLED_ROW_HEIGHT = 86;
   const VIRTUAL_OVERSCAN = 5;
   let listScrollEl: HTMLDivElement | null = null;
-  let listScrollTop = 0;
-  let listViewportHeight = 480;
+  let listScrollTop = $state(0);
+  let listViewportHeight = $state(480);
   let listResizeObserver: ResizeObserver | null = null;
   let lastListFilterKey = "";
 
@@ -1428,16 +1421,20 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  $: attachListViewportObserver(listScrollEl);
+  $effect(() => {
+    attachListViewportObserver(listScrollEl);
+  });
 
-  $: {
-    const key = `${contentFilter}|${sideFilter}|${filter}`;
-    if (key !== lastListFilterKey) {
-      lastListFilterKey = key;
-      listScrollTop = 0;
-      if (listScrollEl) listScrollEl.scrollTop = 0;
-    }
-  }
+  $effect(() => {
+    {
+        const key = `${contentFilter}|${sideFilter}|${filter}`;
+        if (key !== lastListFilterKey) {
+          lastListFilterKey = key;
+          listScrollTop = 0;
+          if (listScrollEl) listScrollEl.scrollTop = 0;
+        }
+      }
+  });
 
   let lastSyncSummary: string | null = null;
 
@@ -1808,9 +1805,9 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   // Change plan preview before install
-  let planPreviewOpen = false;
+  let planPreviewOpen = $state(false);
   let planPreviewMod: SearchResult | null = null;
-  let planPreviewLoading = false;
+  let planPreviewLoading = $state(false);
   let planPreviewDeps: InstallPreview | null = null;
 
   async function showPlanPreview(result: SearchResult) {
@@ -1819,8 +1816,8 @@ import { trapFocus } from "../lib/focusTrap";
     planPreviewLoading = true;
     try {
       planPreviewDeps = isCurseForgeResult(result)
-        ? await api.mods.previewCurseforgeInstall(result.id, $projectPath)
-        : await api.mods.previewInstall(result.id, $projectPath);
+        ? await api.mods.previewCurseforgeInstall(result.id, $projectPath ?? undefined)
+        : await api.mods.previewInstall(result.id, $projectPath ?? undefined);
     } catch {
       planPreviewDeps = null;
     } finally {
@@ -1863,8 +1860,16 @@ import { trapFocus } from "../lib/focusTrap";
   // Populated from the real Mojang version manifest via get_minecraft_versions
   // instead of a hand-maintained list, so it never goes stale as new
   // Minecraft versions ship.
-  let gameVersions: string[] = [];
+  let gameVersions = $state<string[]>([]);
   const loaders = ["Fabric", "Forge", "NeoForge", "Quilt"];
+
+  const filteredVersions = $derived(gameVersions.filter((v) =>
+    v.toLowerCase().includes(versionSearch.trim().toLowerCase())
+  ));
+
+  const shownLoaders = $derived(loaderExpanded
+    ? loaders
+    : loaders.slice(0, 3));
   const categories = [
     "Adventure", "Cursed", "Decoration", "Economy", "Equipment", "Food", "Game Mechanics", "Library",
     "Magic", "Management", "Minigame", "Mobs", "Optimization", "Social", "Storage", "Technology",
@@ -2457,11 +2462,11 @@ import { trapFocus } from "../lib/focusTrap";
     return haystacks.some((value) => (value ?? "").toLowerCase().includes(q));
   }
 
-  $: contentScopedMods = isSavedViewFilter(contentFilter)
+  const contentScopedMods = $derived(isSavedViewFilter(contentFilter)
     ? []
-    : mods.filter((m) => (m.contentType ?? "mod") === contentFilter);
+    : mods.filter((m) => (m.contentType ?? "mod") === contentFilter));
 
-  $: filtered = isSavedViewFilter(contentFilter)
+  const filtered = $derived(isSavedViewFilter(contentFilter)
     ? []
     : contentScopedMods.filter((m) => {
         const q = filter.trim().toLowerCase();
@@ -2469,27 +2474,32 @@ import { trapFocus } from "../lib/focusTrap";
         const matchesSide =
           contentFilter !== "mod" || sideFilter === "all" || m.side === sideFilter;
         return matchesText && matchesSide;
-      });
+      }));
 
-  $: virtualStart = Math.max(0, Math.floor(listScrollTop / INSTALLED_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
-  $: virtualEnd = Math.min(
+  const selectedMods = $derived(filtered.filter((m) => selectedModIds[m.id]));
+  const selectedCount = $derived(selectedMods.length);
+
+  const virtualStart = $derived(Math.max(0, Math.floor(listScrollTop / INSTALLED_ROW_HEIGHT) - VIRTUAL_OVERSCAN));
+  const virtualEnd = $derived(Math.min(
     filtered.length,
     Math.ceil((listScrollTop + listViewportHeight) / INSTALLED_ROW_HEIGHT) + VIRTUAL_OVERSCAN
-  );
-  $: visibleMods = filtered.slice(virtualStart, virtualEnd);
-  $: virtualPaddingTop = virtualStart * INSTALLED_ROW_HEIGHT;
-  $: virtualPaddingBottom = Math.max(0, (filtered.length - virtualEnd) * INSTALLED_ROW_HEIGHT);
+  ));
+  const visibleMods = $derived(filtered.slice(virtualStart, virtualEnd));
+  const virtualPaddingTop = $derived(virtualStart * INSTALLED_ROW_HEIGHT);
+  const virtualPaddingBottom = $derived(Math.max(0, (filtered.length - virtualEnd) * INSTALLED_ROW_HEIGHT));
 
-  $: listTabNames = Object.keys(userState.lists).sort((a, b) => a.localeCompare(b));
+  const listTabNames = $derived(Object.keys(userState.lists).sort((a, b) => a.localeCompare(b)));
 
-  $: savedViewKey = isSavedViewFilter(contentFilter)
+  const savedViewKey = $derived(isSavedViewFilter(contentFilter)
     ? `${contentFilter}:${Object.keys(userState.favorites).length}:${JSON.stringify(userState.lists)}`
-    : "";
-  $: if (savedViewKey) {
-    void loadSavedModsView();
-  }
+    : "");
+  $effect(() => {
+    if (savedViewKey) {
+        void loadSavedModsView();
+      }
+  });
 
-  $: filteredSavedMods = savedMods.filter((result) => {
+  const filteredSavedMods = $derived(savedMods.filter((result) => {
     const q = filter.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -2498,45 +2508,44 @@ import { trapFocus } from "../lib/focusTrap";
       result.id.toLowerCase().includes(q) ||
       (result.description ?? "").toLowerCase().includes(q)
     );
-  });
+  }));
 
-  $: searchPlaceholder = isSavedViewFilter(contentFilter)
+  const searchPlaceholder = $derived(isSavedViewFilter(contentFilter)
     ? `Filter ${savedViewLabel(contentFilter).toLowerCase()}...`
-    : `Search ${contentFilter}s...`;
+    : `Search ${contentFilter}s...`);
 
-  $: selectedResults = searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result));
+  const selectedResults = $derived(searchResults.filter((result) => selectedResultIds[result.id] && !isInstalled(result)));
 
-  $: counts = {
+  const counts = $derived({
     all: contentScopedMods.length,
     client: contentScopedMods.filter((m) => m.side === "client").length,
     server: contentScopedMods.filter((m) => m.side === "server").length,
     both: contentScopedMods.filter((m) => m.side === "both").length,
-  };
+  });
 
-  $: contentNoun =
-    contentFilter === "resourcepack"
+  const contentNoun = $derived(contentFilter === "resourcepack"
       ? "resource packs"
       : contentFilter === "datapack"
         ? "datapacks"
         : contentFilter === "shader"
           ? "shaders"
-          : "mods";
+          : "mods");
 
-  $: tabCounts = {
+  const tabCounts = $derived({
     mod: mods.filter((m) => (m.contentType ?? "mod") === "mod").length,
     resourcepack: mods.filter((m) => m.contentType === "resourcepack").length,
     datapack: mods.filter((m) => m.contentType === "datapack").length,
     shader: mods.filter((m) => m.contentType === "shader").length,
-  };
+  });
 
 </script>
 
-<svelte:window on:keydown={onAddModalKeydown} />
+<svelte:window onkeydown={onAddModalKeydown} />
 
 <div class="mods fade-slide-in">
   <div class="mods-chrome">
   <header class="content-hero" class:collapsed={!heroExpanded}>
-    <button type="button" class="content-hero-toggle" on:click={toggleHeroExpanded} aria-expanded={heroExpanded}>
+    <button type="button" class="content-hero-toggle" onclick={toggleHeroExpanded} aria-expanded={heroExpanded}>
       <div class="content-hero-copy">
         <div class="content-kicker"><Package size={14} /> Content library</div>
         <h1>Your pack, sharpened</h1>
@@ -2592,7 +2601,7 @@ import { trapFocus } from "../lib/focusTrap";
             <button
               class="secondary small"
               disabled={duplicateJarFixing !== null}
-              on:click={() => keepOneDuplicateJar(group.modId, group.keepCandidate)}
+              onclick={() => keepOneDuplicateJar(group.modId, group.keepCandidate)}
             >
               Keep newest
             </button>
@@ -2606,7 +2615,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <button
                   class="ghost mini"
                   disabled={duplicateJarFixing !== null}
-                  on:click={() => keepOneDuplicateJar(group.modId, jar.fileName)}
+                  onclick={() => keepOneDuplicateJar(group.modId, jar.fileName)}
                 >
                   {duplicateJarFixing === group.modId + "::" + jar.fileName ? "…" : "Keep this"}
                 </button>
@@ -2635,14 +2644,14 @@ import { trapFocus } from "../lib/focusTrap";
               <button
                 class="secondary small"
                 disabled={wrongLoaderFixing !== null}
-                on:click={() => disableWrongLoaderJar(hit.fileName)}
+                onclick={() => disableWrongLoaderJar(hit.fileName)}
               >
                 {wrongLoaderFixing === hit.fileName ? "…" : "Disable"}
               </button>
               <button
                 class="ghost mini danger"
                 disabled={wrongLoaderFixing !== null}
-                on:click={() => removeWrongLoaderJar(hit.fileName)}
+                onclick={() => removeWrongLoaderJar(hit.fileName)}
               >
                 Remove
               </button>
@@ -2655,15 +2664,15 @@ import { trapFocus } from "../lib/focusTrap";
 
   <div class="toolbar">
     <div class="tabs content-tabs">
-      <button class={contentFilter === "mod" ? "primary" : "secondary"} on:click={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
-      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span></button>
-      <button class={contentFilter === "datapack" ? "primary" : "secondary"} on:click={() => switchContentFilter("datapack")}>Datapacks <span class="tab-count">{tabCounts.datapack}</span></button>
-      <button class={contentFilter === "shader" ? "primary" : "secondary"} on:click={() => switchContentFilter("shader")}>Shaders <span class="tab-count">{tabCounts.shader}</span></button>
-      <button class={contentFilter === "favorites" ? "primary" : "secondary"} on:click={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
+      <button class={contentFilter === "mod" ? "primary" : "secondary"} onclick={() => switchContentFilter("mod")}>Mods <span class="tab-count">{tabCounts.mod}</span></button>
+      <button class={contentFilter === "resourcepack" ? "primary" : "secondary"} onclick={() => switchContentFilter("resourcepack")}>Resourcepacks <span class="tab-count">{tabCounts.resourcepack}</span></button>
+      <button class={contentFilter === "datapack" ? "primary" : "secondary"} onclick={() => switchContentFilter("datapack")}>Datapacks <span class="tab-count">{tabCounts.datapack}</span></button>
+      <button class={contentFilter === "shader" ? "primary" : "secondary"} onclick={() => switchContentFilter("shader")}>Shaders <span class="tab-count">{tabCounts.shader}</span></button>
+      <button class={contentFilter === "favorites" ? "primary" : "secondary"} onclick={() => switchContentFilter("favorites")} title="Favorite Modrinth projects">
         <Heart size={14} /> Favorites
       </button>
       {#each listTabNames as listName (listName)}
-        <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} on:click={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
+        <button class={contentFilter === `list:${listName}` ? "primary" : "secondary"} onclick={() => switchContentFilter(`list:${listName}`)} title="Saved build list">
           <Bookmark size={14} /> {listName}
           <span class="tab-count">{userState.lists[listName]?.length ?? 0}</span>
         </button>
@@ -2672,7 +2681,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="toolbar-actions-row">
       <button
         class="ghost mini quiet-action"
-        on:click={importLocalFiles}
+        onclick={importLocalFiles}
         disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
         title="Copy local jars/zips into the pack and register them in the manifest"
       >
@@ -2681,7 +2690,7 @@ import { trapFocus } from "../lib/focusTrap";
       </button>
       <button
         class="ghost mini quiet-action"
-        on:click={syncModsFolderFromUi}
+        onclick={syncModsFolderFromUi}
         disabled={!$projectPath || loading}
         title="Rescan content folders and register new files"
       >
@@ -2690,7 +2699,7 @@ import { trapFocus } from "../lib/focusTrap";
       <button
         class="ghost mini quiet-action"
         class:has-updates={updateList.length > 0}
-        on:click={applyAllUpdates}
+        onclick={applyAllUpdates}
         disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
         title="Update all mods to the latest build for this Minecraft version"
       >
@@ -2707,7 +2716,7 @@ import { trapFocus } from "../lib/focusTrap";
       </button>
       <button
         class="ghost mini quiet-action"
-        on:click={loadRecommendations}
+        onclick={loadRecommendations}
         disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
         title="Suggest optimization mods for this loader, Minecraft version, and pack"
       >
@@ -2722,14 +2731,14 @@ import { trapFocus } from "../lib/focusTrap";
         <input
           type="checkbox"
           checked={ideasEnabled}
-          on:change={(e) => setIdeasEnabled(e.currentTarget.checked)}
+          onchange={(e) => setIdeasEnabled(e.currentTarget.checked)}
         />
         <Sparkles size={12} />
         Often together
       </label>
       <button
         class="ghost mini quiet-action"
-        on:click={installSteamBridge}
+        onclick={installSteamBridge}
         disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
         title={hasSteamBridge
           ? "Steam Bridge is already installed"
@@ -2752,10 +2761,10 @@ import { trapFocus } from "../lib/focusTrap";
   <div class="filters-search-row">
     <div class="quick-filters" aria-label="Side filters">
       {#if contentFilter === "mod"}
-      <button class:active={sideFilter === "all"} on:click={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
-      <button class:active={sideFilter === "both"} on:click={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
-      <button class:active={sideFilter === "client"} on:click={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
-      <button class:active={sideFilter === "server"} on:click={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+      <button class:active={sideFilter === "all"} onclick={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
+      <button class:active={sideFilter === "both"} onclick={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
+      <button class:active={sideFilter === "client"} onclick={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
+      <button class:active={sideFilter === "server"} onclick={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
       {/if}
     </div>
     <div class="toolbar-search-cluster">
@@ -2763,7 +2772,7 @@ import { trapFocus } from "../lib/focusTrap";
         <span class="search-glyph"><Search size={16} /></span>
         <input bind:value={filter} placeholder={searchPlaceholder} />
       </div>
-      <button class="primary-action" on:click={openAddModal} disabled={!$projectPath || mutating}>
+      <button class="primary-action" onclick={openAddModal} disabled={!$projectPath || mutating}>
         <Plus size={16} />
         Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
       </button>
@@ -2774,19 +2783,19 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="selection-bar">
       <span class="selection-count">{selectedCount} selected</span>
       <div class="selection-actions">
-        <button class="secondary mini" on:click={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
+        <button class="secondary mini" onclick={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
           <RotateCw size={14} /> Update
         </button>
-        <button class="secondary mini" on:click={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
+        <button class="secondary mini" onclick={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
           <PowerOff size={14} /> Disable
         </button>
-        <button class="secondary mini" on:click={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
+        <button class="secondary mini" onclick={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
           <Power size={14} /> Enable
         </button>
-        <button class="secondary mini danger" on:click={bulkDeleteSelected} disabled={mutating}>
+        <button class="secondary mini danger" onclick={bulkDeleteSelected} disabled={mutating}>
           <Trash2 size={14} /> Delete
         </button>
-        <button class="ghost mini" on:click={clearSelection}>Cancel</button>
+        <button class="ghost mini" onclick={clearSelection}>Cancel</button>
       </div>
     </div>
   {/if}
@@ -2795,7 +2804,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="recs-panel">
       <div class="recs-header">
         <h3><Lightbulb size={16} /> Suggestions ({recommendations.length})</h3>
-        <button class="ghost mini" on:click={() => (recommendations = [])}><X size={14} /></button>
+        <button class="ghost mini" onclick={() => (recommendations = [])}><X size={14} /></button>
       </div>
       <div class="recs-list">
         {#each recommendations as rec (rec.slug)}
@@ -2809,7 +2818,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <span class="recs-meta">{[rec.loader, rec.minecraftVersion, rec.compatibleVersion].filter(Boolean).join(" · ")}</span>
               {/if}
             </div>
-            <button class="secondary mini" on:click={() => installRecommendation(rec)} disabled={mutating}>
+            <button class="secondary mini" onclick={() => installRecommendation(rec)} disabled={mutating}>
               <Plus size={12} /> Install
             </button>
           </div>
@@ -2828,11 +2837,11 @@ import { trapFocus } from "../lib/focusTrap";
   {/if}
   </div>
 
-  <div class="mods-list" bind:this={listScrollEl} on:scroll={onListScroll}>
+  <div class="mods-list" bind:this={listScrollEl} onscroll={onListScroll}>
   {#if loading}
     <div class="loading">Loading {contentNoun}...</div>
   {:else if !$projectPath}
-    <EmptyState icon={Package} title="No project selected" description="Open a project to manage content." actionLabel="Open project" on:action={openProjectFolder} />
+    <EmptyState icon={Package} title="No project selected" description="Open a project to manage content." actionLabel="Open project" onaction={openProjectFolder} />
   {:else if isSavedViewFilter(contentFilter)}
     {#if savedModsLoading}
       <div class="loading">Loading {savedViewLabel(contentFilter).toLowerCase()}...</div>
@@ -2843,7 +2852,7 @@ import { trapFocus } from "../lib/focusTrap";
         {:else}
           List <strong>{savedViewLabel(contentFilter)}</strong> is empty. Bookmark projects from the Add browser.
         {/if}
-        <button class="secondary" style="margin-top: 12px" on:click={openAddModal} disabled={!$projectPath}>
+        <button class="secondary" style="margin-top: 12px" onclick={openAddModal} disabled={!$projectPath}>
           <Plus size={16} /> Browse catalog
         </button>
       </div>
@@ -2854,13 +2863,13 @@ import { trapFocus } from "../lib/focusTrap";
         <span class="saved-count">{filteredSavedMods.length} of {savedMods.length} saved</span>
         {#if contentFilter.startsWith("list:")}
           {@const listName = contentFilter.slice(5)}
-          <button on:click={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
+          <button onclick={() => installList(listName)} disabled={!$projectPath || installingFromList === listName || mutating}>
             <ArrowDown size={16} /> {installingFromList === listName ? "Installing..." : `Install all from "${listName}"`}
           </button>
-          <button class="secondary" on:click={() => { renameTarget = listName; showRenamePrompt = true; }}>Rename</button>
-          <button class="secondary danger" on:click={() => { deleteTarget = listName; showDeleteConfirm = true; }}>Delete list</button>
+          <button class="secondary" onclick={() => { renameTarget = listName; showRenamePrompt = true; }}>Rename</button>
+          <button class="secondary danger" onclick={() => { deleteTarget = listName; showDeleteConfirm = true; }}>Delete list</button>
         {/if}
-        <button class="secondary" on:click={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse catalog</button>
+        <button class="secondary" onclick={openAddModal} disabled={!$projectPath}><Plus size={16} /> Browse catalog</button>
       </div>
       <div class="results list saved-results tb-stagger">
         {#each filteredSavedMods as result, i (result.id)}
@@ -2871,39 +2880,39 @@ import { trapFocus } from "../lib/focusTrap";
             class:list={true}
             role="button"
             tabindex="0"
-            on:click={() => openCatalogInApp(result)}
-            on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+            onclick={() => openCatalogInApp(result)}
+            onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
           >
             <div class="result-icon">
               {#if catalogIconOk(result)}
-                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
+                <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" onerror={() => markCatalogIconBroken(result.id)} />
               {:else}
                 <span class="tb-cover-media">{iconFallback(result.name)}</span>
               {/if}
             </div>
             <div class="result-main">
               <div class="result-title">
-                <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
+                <button type="button" class="result-name linkish" title="Open in launcher" onclick={(e) => { e.stopPropagation(); openCatalogInApp(result); } }>{result.name}</button>
                 {#if result.author}<span class="result-author">by {result.author}</span>{/if}
                 {#if isInstalled(result)}<span class="installed-pill">Installed</span>{/if}
               </div>
               <p class="result-desc">{result.description}</p>
             </div>
             <div class="result-actions">
-              <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+              <button class="download-btn" onclick={(e) => { e.stopPropagation(); startInstallPlan(result); } } disabled={mutating || isInstalled(result)}>
                 <Download size={16} /> {isInstalled(result) ? "Installed" : "Install"}
               </button>
               <div class="quick-actions">
-                <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" onclick={(e) => { e.stopPropagation(); toggleFavorite(result.id); } }>
                   <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
                 </button>
                 {#if contentFilter.startsWith("list:")}
-                  <button class="qa danger" title="Remove from list" on:click|stopPropagation={() => removeFromList(contentFilter.slice(5), result.id)}><X size={15} /></button>
+                  <button class="qa danger" title="Remove from list" onclick={(e) => { e.stopPropagation(); removeFromList(contentFilter.slice(5), result.id); } }><X size={15} /></button>
                 {/if}
-                <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
+                <button class="qa" title="Open on site" onclick={(e) => { e.stopPropagation(); openProjectPage(result); } }>
                   <ExternalLink size={15} />
                 </button>
-                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} onclick={(e) => { e.stopPropagation(); copyProjectLink(result); } }>
                   {#if copiedLinkId === result.id}
                     <Check size={15} />
                   {:else}
@@ -2921,7 +2930,7 @@ import { trapFocus } from "../lib/focusTrap";
       </div>
     {/if}
   {:else if filtered.length === 0}
-    <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} on:action={openAddModal} />
+    <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} onaction={openAddModal} />
   {:else}
     <div
       class="installed-list-virtual"
@@ -2941,9 +2950,9 @@ import { trapFocus } from "../lib/focusTrap";
           style="--i: {virtualStart + i}"
           role={selectionMode ? "button" : undefined}
           tabindex={selectionMode ? 0 : undefined}
-          on:contextmenu={(e) => onCardContextMenu(e, mod)}
-          on:click={(e) => onCardClick(e, mod)}
-          on:keydown={(e) => {
+          oncontextmenu={(e) => onCardContextMenu(e, mod)}
+          onclick={(e) => onCardClick(e, mod)}
+          onkeydown={(e) => {
             if (!selectionMode) return;
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
@@ -2961,7 +2970,7 @@ import { trapFocus } from "../lib/focusTrap";
               <span class="update-dot" title="Update available"></span>
             {/if}
             {#if mod.iconUrl && !brokenIcons.includes(mod.id)}
-              <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" on:error={() => handleIconError(mod)} />
+              <img class="tb-cover-media" src={mod.iconUrl} alt="" loading="lazy" onerror={() => handleIconError(mod)} />
             {:else}
               <span class="tb-cover-media">{iconFallback(mod.name)}</span>
             {/if}
@@ -2969,7 +2978,7 @@ import { trapFocus } from "../lib/focusTrap";
           <div class="installed-main">
             <div class="installed-title">
               {#if installedModPageUrl(mod)}
-                <button type="button" class="installed-name linkish" title="Open catalog page" on:click|stopPropagation={() => openInstalledModPage(mod)}>{mod.name}</button>
+                <button type="button" class="installed-name linkish" title="Open catalog page" onclick={(e) => { e.stopPropagation(); openInstalledModPage(mod); } }>{mod.name}</button>
               {:else}
                 <strong>{mod.name}</strong>
               {/if}
@@ -2997,7 +3006,7 @@ import { trapFocus } from "../lib/focusTrap";
             {#if installedModPageUrl(mod)}
               <button
                 class="icon-btn"
-                on:click|stopPropagation={() => openInstalledModPage(mod)}
+                onclick={(e) => { e.stopPropagation(); openInstalledModPage(mod); } }
                 title="Open on {(mod.source || '').toLowerCase() === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
               >
                 <ExternalLink size={16} />
@@ -3008,7 +3017,7 @@ import { trapFocus } from "../lib/focusTrap";
             <button
               class="icon-btn"
               class:warn={mod.disabled}
-              on:click|stopPropagation={() => toggleDisabled(mod)}
+              onclick={(e) => { e.stopPropagation(); toggleDisabled(mod); } }
               disabled={mutating}
               title={mod.disabled ? "Enable (remove .disabled)" : "Disable (rename to *.disabled)"}
             >
@@ -3018,17 +3027,17 @@ import { trapFocus } from "../lib/focusTrap";
                 <PowerOff size={16} />
               {/if}
             </button>
-            <button class="icon-btn" on:click|stopPropagation={() => openVersionPicker(mod)} disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
+            <button class="icon-btn" onclick={(e) => { e.stopPropagation(); openVersionPicker(mod); } } disabled={mutating || !canChangeVersion(mod) || selectionMode} title="Change version">
               <ArrowUpDown size={16} />
             </button>
             <span class="update-action-slot">
               {#if mod.updateAvailable}
-                <button class="icon-btn update-btn hot" on:click|stopPropagation={() => updateMod(mod)} disabled={mutating || selectionMode} title="Update to latest from Modrinth">
+                <button class="icon-btn update-btn hot" onclick={(e) => { e.stopPropagation(); updateMod(mod); } } disabled={mutating || selectionMode} title="Update to latest from Modrinth">
                   <RotateCw size={16} />
                 </button>
               {/if}
             </span>
-            <button class="icon-btn danger" on:click|stopPropagation={() => showRemoveConfirm(mod)} disabled={mutating || selectionMode} title="Remove with snapshot">
+            <button class="icon-btn danger" onclick={(e) => { e.stopPropagation(); showRemoveConfirm(mod); } } disabled={mutating || selectionMode} title="Remove with snapshot">
               <Trash2 size={16} />
             </button>
           </div>
@@ -3046,8 +3055,8 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Confirm remove mod"
-    on:click|self={() => { confirmOpen = false; confirmMod = null; }}
-    on:keydown={() => {}}
+    onclick={(e) => { if (e.target === e.currentTarget) { () => { confirmOpen = false; confirmMod = null;(e); } } }}
+    onkeydown={() => {}}
   >
     <div class="modal confirm-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { confirmOpen = false; confirmMod = null; } }}>
       <div class="modal-header">
@@ -3055,11 +3064,11 @@ import { trapFocus } from "../lib/focusTrap";
           <h2>Remove {confirmMod.name}?</h2>
           <p>Deletes the file from disk and removes the manifest entry. A snapshot is taken first.</p>
         </div>
-        <button class="icon-btn" on:click={() => { confirmOpen = false; confirmMod = null; }}><X size={18} /></button>
+        <button class="icon-btn" onclick={() => { confirmOpen = false; confirmMod = null; }}><X size={18} /></button>
       </div>
       <div class="plan-actions">
-        <button class="ghost" on:click={() => { confirmOpen = false; confirmMod = null; }}>Cancel</button>
-        <button class="danger" on:click={doRemove} disabled={mutating}>
+        <button class="ghost" onclick={() => { confirmOpen = false; confirmMod = null; }}>Cancel</button>
+        <button class="danger" onclick={doRemove} disabled={mutating}>
           <Trash2 size={16} /> Remove
         </button>
       </div>
@@ -3090,7 +3099,7 @@ import { trapFocus } from "../lib/focusTrap";
           </p>
         </div>
         {#if downloadDone}
-          <button class="icon-btn" on:click={closeDownloadOverlay} title="Close"><X size={18} /></button>
+          <button class="icon-btn" onclick={closeDownloadOverlay} title="Close"><X size={18} /></button>
         {:else}
           <span class="spin-wrap"><Loader2 size={22} /></span>
         {/if}
@@ -3141,7 +3150,7 @@ import { trapFocus } from "../lib/focusTrap";
                   <span>Waiting…</span>
                 {:else if item.status === "failed"}
                   <span class="download-item-error">{item.error ?? "Download failed"}</span>
-                  <button class="mini ghost retry-one" on:click={() => retrySingleDownload(item.id)} disabled={!downloadDone}>Retry</button>
+                  <button class="mini ghost retry-one" onclick={() => retrySingleDownload(item.id)} disabled={!downloadDone}>Retry</button>
                 {:else}
                   <span>{formatBytes(item.downloaded)}</span>
                 {/if}
@@ -3154,11 +3163,11 @@ import { trapFocus } from "../lib/focusTrap";
       {#if downloadDone}
         <div class="download-modal-actions">
           {#if downloadFailedCount > 0}
-            <button class="secondary" on:click={retryFailedDownloads}>
+            <button class="secondary" onclick={retryFailedDownloads}>
               <RotateCw size={16} /> Retry failed ({downloadFailedCount})
             </button>
           {/if}
-          <button on:click={closeDownloadOverlay}>Done</button>
+          <button onclick={closeDownloadOverlay}>Done</button>
         </div>
       {/if}
     </div>
@@ -3171,8 +3180,8 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Close add mod dialog"
-    on:click|self={() => { catalogViewResult = null; addOpen = false; }}
-    on:keydown={() => {}}
+    onclick={(e) => { if (e.target === e.currentTarget) { () => { catalogViewResult = null; addOpen = false;(e); } } }}
+    onkeydown={() => {}}
   >
     <div class="modal add-mods-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>
       {#if catalogViewResult}
@@ -3183,9 +3192,9 @@ import { trapFocus } from "../lib/focusTrap";
             loaderKind={$projectInfo?.loaderKind ?? null}
             installed={isInstalled(catalogViewResult)}
             installing={mutating && pendingInstall?.id === catalogViewResult.id}
-            on:back={closeCatalogInApp}
-            on:install={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
-            on:openExternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
+            onback={closeCatalogInApp}
+            oninstall={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
+            onopenexternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
           />
         </div>
       {:else}
@@ -3201,33 +3210,33 @@ import { trapFocus } from "../lib/focusTrap";
             <button
               type="button"
               class:active={catalogProvider === "modrinth"}
-              on:click={() => setCatalogProvider("modrinth")}
+              onclick={() => setCatalogProvider("modrinth")}
             >Modrinth</button>
             <button
               type="button"
               class:active={catalogProvider === "curseforge"}
-              on:click={() => setCatalogProvider("curseforge")}
+              onclick={() => setCatalogProvider("curseforge")}
             >CurseForge</button>
             <button
               type="button"
               class:active={catalogProvider === "both"}
-              on:click={() => setCatalogProvider("both")}
+              onclick={() => setCatalogProvider("both")}
               title="Search both catalogs at once"
             >Both</button>
           </div>
         </div>
-        <button class="icon-btn" on:click={() => (addOpen = false)}><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (addOpen = false)}><X size={18} /></button>
       </div>
 
       <div class="modal-tabs-row">
         <div class="modal-tabs">
-          <button class:active={contentFilter === "mod"} on:click={() => switchContentFilter("mod")}>Mods</button>
-          <button class:active={contentFilter === "resourcepack"} on:click={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
-          <button class:active={contentFilter === "datapack"} on:click={() => switchContentFilter("datapack")}>Datapacks</button>
-          <button class:active={contentFilter === "shader"} on:click={() => switchContentFilter("shader")}>Shaders</button>
-          <button class:active={contentFilter === "favorites"} on:click={() => switchContentFilter("favorites")}>Favorites</button>
+          <button class:active={contentFilter === "mod"} onclick={() => switchContentFilter("mod")}>Mods</button>
+          <button class:active={contentFilter === "resourcepack"} onclick={() => switchContentFilter("resourcepack")}>Resourcepacks</button>
+          <button class:active={contentFilter === "datapack"} onclick={() => switchContentFilter("datapack")}>Datapacks</button>
+          <button class:active={contentFilter === "shader"} onclick={() => switchContentFilter("shader")}>Shaders</button>
+          <button class:active={contentFilter === "favorites"} onclick={() => switchContentFilter("favorites")}>Favorites</button>
           {#each listTabNames as listName (listName)}
-            <button class:active={contentFilter === `list:${listName}`} on:click={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
+            <button class:active={contentFilter === `list:${listName}`} onclick={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
           {/each}
         </div>
       </div>
@@ -3238,8 +3247,8 @@ import { trapFocus } from "../lib/focusTrap";
             bind:this={addSearchInput}
             bind:value={searchQuery}
             placeholder={searchPlaceholder}
-            on:input={onSearchQueryInput}
-            on:keydown={(e) => e.key === "Enter" && searchMods(1)}
+            oninput={onSearchQueryInput}
+            onkeydown={(e) => e.key === "Enter" && searchMods(1)}
           />
           {#if searchLoading}
             <span class="search-spinner"><Loader2 size={16} class="spin" /></span>
@@ -3247,12 +3256,12 @@ import { trapFocus } from "../lib/focusTrap";
         </div>
         <div class="topbar-controls">
           <label class="sort-select">Sort by:
-            <select bind:value={sortBy} on:change={() => searchMods(1)}>
+            <select bind:value={sortBy} onchange={() => searchMods(1)}>
               {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
             </select>
           </label>
           <label class="sort-select">{viewMode === "infinite" ? "Batch size:" : "Page size:"}
-            <select bind:value={pageSize} on:change={onPageSizeChange}>
+            <select bind:value={pageSize} onchange={onPageSizeChange}>
               <option value={20}>20</option>
               <option value={40}>40</option>
               <option value={60}>60</option>
@@ -3260,13 +3269,13 @@ import { trapFocus } from "../lib/focusTrap";
           </label>
           <span class="size-select" role="group" aria-label="Card size">
             Size:
-            <button type="button" class="size-toggle" class:active={cardSize === "S"} on:click={() => setCardSize("S")} title="Compact cards">S</button>
-            <button type="button" class="size-toggle" class:active={cardSize === "M"} on:click={() => setCardSize("M")} title="Default cards">M</button>
-            <button type="button" class="size-toggle" class:active={cardSize === "L"} on:click={() => setCardSize("L")} title="Large cards">L</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "S"} onclick={() => setCardSize("S")} title="Compact cards">S</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "M"} onclick={() => setCardSize("M")} title="Default cards">M</button>
+            <button type="button" class="size-toggle" class:active={cardSize === "L"} onclick={() => setCardSize("L")} title="Large cards">L</button>
           </span>
-          <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
-          <button class="view-toggle" class:active={viewMode === "list"} on:click={() => setViewMode("list")} title="List view"><List size={16} /></button>
-          <button class="view-toggle" class:active={viewMode === "infinite"} on:click={() => setViewMode("infinite")} title="Infinite scroll"><InfinityIcon size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "grid"} onclick={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "list"} onclick={() => setViewMode("list")} title="List view"><List size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "infinite"} onclick={() => setViewMode("infinite")} title="Infinite scroll"><InfinityIcon size={16} /></button>
         </div>
       </div>
 
@@ -3275,7 +3284,7 @@ import { trapFocus } from "../lib/focusTrap";
           <button
             type="button"
             class="filter-collapse-toggle"
-            on:click={toggleFiltersCollapsed}
+            onclick={toggleFiltersCollapsed}
             title={filtersCollapsed ? "Expand filters" : "Collapse filters"}
             aria-label={filtersCollapsed ? "Expand filters" : "Collapse filters"}
           >
@@ -3287,7 +3296,7 @@ import { trapFocus } from "../lib/focusTrap";
           </button>
           {#if !filtersCollapsed}
           <section class="filter-block" class:closed={!accordionOpen.gameVersion}>
-            <button class="filter-head" on:click={() => toggleAccordion("gameVersion")}>
+            <button class="filter-head" onclick={() => toggleAccordion("gameVersion")}>
               <span>Game version</span>
               <ChevronDown size={16} class={!accordionOpen.gameVersion ? "rot" : ""} />
             </button>
@@ -3299,18 +3308,18 @@ import { trapFocus } from "../lib/focusTrap";
                 </div>
                 <div class="filter-list">
                   {#each filteredVersions as version (version)}
-                    <button class:active={filterGameVersion === version} on:click={() => { filterGameVersion = version; searchMods(1); }}>{version}</button>
+                    <button class:active={filterGameVersion === version} onclick={() => { filterGameVersion = version; searchMods(1); }}>{version}</button>
                   {/each}
                 </div>
                 <label class="check-row">
-                  <input type="checkbox" checked={filterGameVersion === ""} on:change={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
+                  <input type="checkbox" checked={filterGameVersion === ""} onchange={() => { filterGameVersion = ""; searchMods(1); }} /> Show all versions
                 </label>
               </div>
             {/if}
           </section>
 
           <section class="filter-block" class:closed={!accordionOpen.loader} hidden={contentFilter !== "mod"}>
-            <button class="filter-head" on:click={() => toggleAccordion("loader")}>
+            <button class="filter-head" onclick={() => toggleAccordion("loader")}>
               <span>Loader</span>
               <ChevronDown size={16} class={!accordionOpen.loader ? "rot" : ""} />
             </button>
@@ -3318,7 +3327,7 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="filter-body">
                 <div class="filter-list loader-list">
                   {#each shownLoaders as loaderName (loaderName)}
-                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} on:click={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}>
+                    <button class="loader-row" class:active={filterLoader === loaderName.toLowerCase()} onclick={() => { filterLoader = loaderName.toLowerCase(); searchMods(1); }}>
                       <span class="loader-ic">
                         {#if loaderName === "Fabric"}<Scroll size={16} />{:else if loaderName === "Forge"}<Hammer size={16} />{:else}<Anvil size={16} />{/if}
                       </span>
@@ -3327,7 +3336,7 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 </div>
                 {#if loaders.length > 3}
-                  <button class="show-more" on:click={() => (loaderExpanded = !loaderExpanded)}>
+                  <button class="show-more" onclick={() => (loaderExpanded = !loaderExpanded)}>
                     {loaderExpanded ? "Show less" : "Show more"} <ChevronDown size={14} class={loaderExpanded ? "rot" : ""} />
                   </button>
                 {/if}
@@ -3336,16 +3345,16 @@ import { trapFocus } from "../lib/focusTrap";
           </section>
 
           <section class="filter-block" class:closed={!accordionOpen.category} hidden={catalogProvider === "curseforge"}>
-            <button class="filter-head" on:click={() => toggleAccordion("category")}>
+            <button class="filter-head" onclick={() => toggleAccordion("category")}>
               <span>Category</span>
               <ChevronDown size={16} class={!accordionOpen.category ? "rot" : ""} />
             </button>
             {#if accordionOpen.category}
               <div class="filter-body">
                 <div class="filter-list">
-                  <button class:active={!filterCategory} on:click={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
+                  <button class:active={!filterCategory} onclick={() => { filterCategory = ""; searchMods(1); }}>All categories</button>
                   {#each categories as category (category)}
-                    <button class="cat-row" class:active={filterCategory === category} on:click={() => { filterCategory = category; searchMods(1); }}>
+                    <button class="cat-row" class:active={filterCategory === category} onclick={() => { filterCategory = category; searchMods(1); }}>
                       <Tag size={14} />
                       <span>{humanize(category)}</span>
                     </button>
@@ -3356,7 +3365,7 @@ import { trapFocus } from "../lib/focusTrap";
           </section>
 
           <section class="filter-block" class:closed={!accordionOpen.cfSort} hidden={catalogProvider !== "curseforge"}>
-            <button class="filter-head" on:click={() => toggleAccordion("cfSort")}>
+            <button class="filter-head" onclick={() => toggleAccordion("cfSort")}>
               <span>Sort (CurseForge)</span>
               <ChevronDown size={16} class={!accordionOpen.cfSort ? "rot" : ""} />
             </button>
@@ -3364,7 +3373,7 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="filter-body">
                 <div class="filter-list">
                   {#each [{ id: 1, label: "Featured" }, { id: 2, label: "Popularity" }, { id: 3, label: "Last Updated" }, { id: 4, label: "Name" }, { id: 5, label: "Total Downloads" }, { id: 6, label: "Views" }] as opt (opt.id)}
-                    <button class:active={cfSortField === opt.id} on:click={() => { cfSortField = opt.id; searchMods(1); }}>{opt.label}</button>
+                    <button class:active={cfSortField === opt.id} onclick={() => { cfSortField = opt.id; searchMods(1); }}>{opt.label}</button>
                   {/each}
                 </div>
               </div>
@@ -3376,12 +3385,12 @@ import { trapFocus } from "../lib/focusTrap";
         <section class="browser-results" bind:this={browserResultsEl}>
           {#if viewMode !== "infinite"}
           <div class="pagination">
-            <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
+            <button class="page-btn" disabled={page <= 1} onclick={() => goToPage(page - 1)}>‹</button>
             {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
-              <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+              <button class="page-btn" class:active={p === page} onclick={() => goToPage(p)}>{p}</button>
             {/each}
-            {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
-            <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
+            {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+            <button class="page-btn" disabled={page >= totalPages} onclick={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
           </div>
           {/if}
 
@@ -3391,9 +3400,9 @@ import { trapFocus } from "../lib/focusTrap";
               <span>selected for bulk install</span>
             </div>
             <div class="bulk-actions">
-              <button class="ghost" on:click={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
-              <button class="ghost" on:click={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
-              <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
+              <button class="ghost" onclick={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
+              <button class="ghost" onclick={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
+              <button onclick={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
             </div>
           </div>
 
@@ -3418,19 +3427,19 @@ import { trapFocus } from "../lib/focusTrap";
                     class:list={viewMode === "list"}
                     role="button"
                     tabindex="0"
-                    on:click={() => openCatalogInApp(result)}
-                    on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+                    onclick={() => openCatalogInApp(result)}
+                    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
                   >
                     <div class="result-icon">
                       {#if catalogIconOk(result)}
-                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
+                        <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" onerror={() => markCatalogIconBroken(result.id)} />
                       {:else}
                         <span class="tb-cover-media">{iconFallback(result.name)}</span>
                       {/if}
                     </div>
                     <div class="result-main">
                       <div class="result-title">
-                        <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
+                        <button type="button" class="result-name linkish" title="Open in launcher" onclick={(e) => { e.stopPropagation(); openCatalogInApp(result); } }>{result.name}</button>
                         {#if catalogProvider === "both"}
                           <span
                             class="provider-badge"
@@ -3445,37 +3454,37 @@ import { trapFocus } from "../lib/focusTrap";
                       <p class="result-desc">{result.description}</p>
                     </div>
                     <div class="result-actions">
-                      <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                      <button class="download-btn" onclick={(e) => { e.stopPropagation(); startInstallPlan(result); } } disabled={mutating || isInstalled(result)}>
                         <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                       </button>
                       <div class="quick-actions">
-                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                        <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" onclick={(e) => { e.stopPropagation(); toggleFavorite(result.id); } }>
                           <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
                         </button>
                         <div class="save-wrapper">
-                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}>
+                          <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" onclick={(e) => { e.stopPropagation(); (saveDropdownFor = saveDropdownFor === result.id ? null : result.id); } }>
                             <Bookmark size={15} fill={modInAnyList(result.id) ? "currentColor" : "none"} />
                           </button>
                           {#if saveDropdownFor === result.id}
-                            <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                            <div class="save-dropdown" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                               <div class="save-dropdown-header">Add to list</div>
                               {#each listTabNames as listName (listName)}
-                                <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
+                                <button class="save-dropdown-item" onclick={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
                                   <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
                                   <span>{listName}</span>
                                 </button>
                               {/each}
                               <div class="save-dropdown-new">
-                                <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
-                                <button on:click={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
+                                <input type="text" placeholder="New list name..." bind:value={newListName} onkeydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
+                                <button onclick={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
                               </div>
                             </div>
                           {/if}
                         </div>
-                        <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
+                        <button class="qa" title="Open on site" onclick={(e) => { e.stopPropagation(); openProjectPage(result); } }>
                           <ExternalLink size={15} />
                         </button>
-                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                        <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} onclick={(e) => { e.stopPropagation(); copyProjectLink(result); } }>
                           {#if copiedLinkId === result.id}
                             <Check size={15} />
                           {:else}
@@ -3508,22 +3517,22 @@ import { trapFocus } from "../lib/focusTrap";
               class:list={viewMode === "list"}
               role="button"
               tabindex="0"
-              on:click={() => openCatalogInApp(result)}
-              on:keydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
+              onclick={() => openCatalogInApp(result)}
+              onkeydown={(e) => (e.key === "Enter" || e.key === " ") && openCatalogInApp(result)}
             >
-              <label class="select-result" title="Select for bulk install" on:click|stopPropagation>
-                <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} on:change={() => toggleResultSelection(result)} />
+              <label class="select-result" title="Select for bulk install" onclick={(e) => e.stopPropagation()}>
+                <input type="checkbox" checked={!!selectedResultIds[result.id]} disabled={isInstalled(result)} onchange={() => toggleResultSelection(result)} />
               </label>
               <div class="result-icon">
                 {#if catalogIconOk(result)}
-                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" on:error={() => markCatalogIconBroken(result.id)} />
+                  <img class="tb-cover-media" src={result.iconUrl} alt="" loading="lazy" onerror={() => markCatalogIconBroken(result.id)} />
                 {:else}
                   <span class="tb-cover-media">{iconFallback(result.name)}</span>
                 {/if}
               </div>
               <div class="result-main">
                 <div class="result-title">
-                  <button type="button" class="result-name linkish" title="Open in launcher" on:click|stopPropagation={() => openCatalogInApp(result)}>{result.name}</button>
+                  <button type="button" class="result-name linkish" title="Open in launcher" onclick={(e) => { e.stopPropagation(); openCatalogInApp(result); } }>{result.name}</button>
                   {#if catalogProvider === "both"}
                     <span
                       class="provider-badge"
@@ -3552,37 +3561,37 @@ import { trapFocus } from "../lib/focusTrap";
                 </div>
               </div>
               <div class="result-actions">
-                <button class="download-btn" on:click|stopPropagation={() => startInstallPlan(result)} disabled={mutating || isInstalled(result)}>
+                <button class="download-btn" onclick={(e) => { e.stopPropagation(); startInstallPlan(result); } } disabled={mutating || isInstalled(result)}>
                   <Download size={16} /> {isInstalled(result) ? "Installed" : "Download"}
                 </button>
                 <div class="quick-actions">
-                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" on:click|stopPropagation={() => toggleFavorite(result.id)}>
+                  <button class="qa" class:active={userState.favorites[result.id]} title="Favorite" onclick={(e) => { e.stopPropagation(); toggleFavorite(result.id); } }>
                     <Heart size={15} fill={userState.favorites[result.id] ? "currentColor" : "none"} />
                   </button>
                   <div class="save-wrapper">
-                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" on:click|stopPropagation={() => (saveDropdownFor = saveDropdownFor === result.id ? null : result.id)}>
+                    <button class="qa" class:active={modInAnyList(result.id)} title="Add to list" onclick={(e) => { e.stopPropagation(); (saveDropdownFor = saveDropdownFor === result.id ? null : result.id); } }>
                       <Bookmark size={15} fill={modInAnyList(result.id) ? "currentColor" : "none"} />
                     </button>
                     {#if saveDropdownFor === result.id}
-                      <div class="save-dropdown" role="menu" tabindex="-1" on:click|stopPropagation on:keydown|stopPropagation>
+                      <div class="save-dropdown" role="menu" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()}>
                         <div class="save-dropdown-header">Add to list</div>
                         {#each Object.keys(userState.lists) as listName (listName)}
-                          <button class="save-dropdown-item" on:click={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
+                          <button class="save-dropdown-item" onclick={() => { if (modInList(result.id, listName)) removeFromList(listName, result.id); else addToList(listName, result.id); saveDropdownFor = null; }}>
                             <span class="save-check">{modInList(result.id, listName) ? '✓' : '+'}</span>
                             <span>{listName}</span>
                           </button>
                         {/each}
                         <div class="save-dropdown-new">
-                          <input type="text" placeholder="New list name..." bind:value={newListName} on:keydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
-                          <button on:click={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
+                          <input type="text" placeholder="New list name..." bind:value={newListName} onkeydown={(e) => { if (e.key === 'Enter') { void createListAndAdd(newListName, result.id); }}} />
+                          <button onclick={() => createListAndAdd(newListName, result.id)} disabled={!newListName.trim()}>+ Create & add</button>
                         </div>
                       </div>
                     {/if}
                   </div>
-                  <button class="qa" title="Open on site" on:click|stopPropagation={() => openProjectPage(result)}>
+                  <button class="qa" title="Open on site" onclick={(e) => { e.stopPropagation(); openProjectPage(result); } }>
                     <ExternalLink size={15} />
                   </button>
-                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} on:click|stopPropagation={() => copyProjectLink(result)}>
+                  <button class="qa" title={copiedLinkId === result.id ? "Copied!" : "Copy link"} onclick={(e) => { e.stopPropagation(); copyProjectLink(result); } }>
                     {#if copiedLinkId === result.id}
                       <Check size={15} />
                     {:else}
@@ -3610,13 +3619,13 @@ import { trapFocus } from "../lib/focusTrap";
           {/if}
           {#if viewMode !== "infinite" && totalPages > 1 && !isSavedViewFilter(contentFilter)}
             <div class="pagination bottom">
-              <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹ Prev</button>
+              <button class="page-btn" disabled={page <= 1} onclick={() => goToPage(page - 1)}>‹ Prev</button>
               {#each Array.from({ length: Math.min(totalPages, 7) }, (_, i) => i + 1) as p (p)}
-                <button class="page-btn" class:active={p === page} on:click={() => goToPage(p)}>{p}</button>
+                <button class="page-btn" class:active={p === page} onclick={() => goToPage(p)}>{p}</button>
               {/each}
-              {#if totalPages > 7}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
+              {#if totalPages > 7}<span class="page-ellipsis">…</span><button class="page-btn" onclick={() => goToPage(totalPages)}>{totalPages}</button>{/if}
               <span class="page-info">{page} / {totalPages}</span>
-              <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}>Next ›</button>
+              <button class="page-btn" disabled={page >= totalPages} onclick={() => goToPage(page + 1)}>Next ›</button>
             </div>
           {/if}
         </section>
@@ -3627,7 +3636,7 @@ import { trapFocus } from "../lib/focusTrap";
           <div>
             <span class="plan-eyebrow">Install plan</span>
             <h3>
-              <button type="button" class="plan-title-link" title="Open catalog page" on:click={() => openProjectPage(pendingInstall)}>
+              <button type="button" class="plan-title-link" title="Open catalog page" onclick={() => pendingInstall && openProjectPage(pendingInstall)}>
                 {pendingInstall.name}
                 <ExternalLink size={14} />
               </button>
@@ -3688,9 +3697,9 @@ import { trapFocus } from "../lib/focusTrap";
             {/if}
           </div>
           <div class="plan-actions">
-            <button class="ghost" on:click={() => (pendingInstall = null)}>Cancel</button>
+            <button class="ghost" onclick={() => (pendingInstall = null)}>Cancel</button>
             <button
-              on:click={() => confirmInstall()}
+              onclick={() => confirmInstall()}
               disabled={mutating}
             >
               <Download size={16} />
@@ -3706,7 +3715,7 @@ import { trapFocus } from "../lib/focusTrap";
 
 <!-- Version picker modal — Modrinth-style: search, filter compatible, channel + confirm -->
 {#if versionPickerMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (versionPickerMod = null)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (versionPickerMod = null)} onkeydown={() => {}}>
     <div class="modal version-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (versionPickerMod = null) }}>
       <div class="modal-header">
         <div>
@@ -3718,7 +3727,7 @@ import { trapFocus } from "../lib/focusTrap";
             · {compatibleVersionCount} compatible
           </p>
         </div>
-        <button class="icon-btn" on:click={() => (versionPickerMod = null)} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (versionPickerMod = null)} aria-label="Close"><X size={18} /></button>
       </div>
       {#if versionPickerError}<div class="error compact">{versionPickerError}</div>{/if}
       {#if versionPickerLoading}
@@ -3734,7 +3743,7 @@ import { trapFocus } from "../lib/focusTrap";
           <button
             class="secondary mini"
             class:active={!hideIncompatible}
-            on:click={() => (hideIncompatible = !hideIncompatible)}
+            onclick={() => (hideIncompatible = !hideIncompatible)}
             title="Show versions for other Minecraft versions / loaders"
           >
             {hideIncompatible ? "Show all" : "Hide incompatible"}
@@ -3750,7 +3759,7 @@ import { trapFocus } from "../lib/focusTrap";
                 class:incompatible={v.compatible === false}
                 role="option"
                 aria-selected={selectedVersion?.id === v.id}
-                on:click={() => (selectedVersion = v)}
+                onclick={() => (selectedVersion = v)}
                 disabled={versionPickerChanging}
               >
                 <div class="version-main">
@@ -3781,7 +3790,7 @@ import { trapFocus } from "../lib/focusTrap";
               <div class="version-switch-footer">
                 <button
                   class="primary block"
-                  on:click={() => selectedVersion && changeVersion(selectedVersion.id)}
+                  onclick={() => selectedVersion && changeVersion(selectedVersion.id)}
                   disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
                 >
                   {#if versionPickerChanging}
@@ -3819,7 +3828,7 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
               <div class="version-detail-actions">
                 <button
-                  on:click={() => selectedVersion && changeVersion(selectedVersion.id)}
+                  onclick={() => selectedVersion && changeVersion(selectedVersion.id)}
                   disabled={versionPickerChanging || selectedVersion.versionNumber === versionPickerMod?.version}
                 >
                   {#if versionPickerChanging}
@@ -3847,8 +3856,8 @@ import { trapFocus } from "../lib/focusTrap";
     class="modal-backdrop"
     role="button"
     tabindex="-1"
-    on:click={(e) => e.target === e.currentTarget && dismissIdeas()}
-    on:keydown={() => {}}
+    onclick={(e) => e.target === e.currentTarget && dismissIdeas()}
+    onkeydown={() => {}}
   >
     <div
       class="modal ideas-dialog"
@@ -3861,7 +3870,7 @@ import { trapFocus } from "../lib/focusTrap";
           <h2><Sparkles size={18} /> Often installed together</h2>
           <p>People who added <strong>{ideasSeedLabel}</strong> often install these too. Uncheck any you do not want.</p>
         </div>
-        <button class="icon-btn" on:click={dismissIdeas} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={dismissIdeas} aria-label="Close"><X size={18} /></button>
       </div>
       <div class="ideas-list">
         {#each ideasOffers as offer (offer.slug)}
@@ -3882,9 +3891,9 @@ import { trapFocus } from "../lib/focusTrap";
         {/each}
       </div>
       <div class="dep-dialog-footer ideas-footer">
-        <button class="ghost" on:click={dismissIdeas} disabled={ideasBusy}>No thanks</button>
+        <button class="ghost" onclick={dismissIdeas} disabled={ideasBusy}>No thanks</button>
         <button
-          on:click={installSelectedIdeas}
+          onclick={installSelectedIdeas}
           disabled={ideasBusy || !ideasOffers.some((o) => o.selected)}
         >
           {ideasBusy
@@ -3898,28 +3907,28 @@ import { trapFocus } from "../lib/focusTrap";
 
 <!-- Post-bulk dependency resolution dialog -->
 {#if dependencyDialogOpen}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (dependencyDialogOpen = false)} onkeydown={() => {}}>
     <div class="modal dep-dialog" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (dependencyDialogOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Missing dependencies</h2>
           <p>{dependencyMissingCount} required mod(s) are still missing. How would you like to handle this?</p>
         </div>
-        <button class="icon-btn" on:click={() => (dependencyDialogOpen = false)} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (dependencyDialogOpen = false)} aria-label="Close"><X size={18} /></button>
       </div>
       <div class="dep-dialog-actions">
-        <button class="secondary" on:click={resolveDepsViaGraph}>
+        <button class="secondary" onclick={resolveDepsViaGraph}>
           <GitGraph size={18} /> Open in Resolve
           <span>See which mods need which dependencies and install them one by one.</span>
         </button>
-        <button on:click={autoResolveDeps} disabled={dependencyResolving}>
+        <button onclick={autoResolveDeps} disabled={dependencyResolving}>
           <Zap size={18} />
           {dependencyResolving ? "Installing..." : "Auto-download all"}
           <span>Let TuffBox find and install every missing dependency automatically.</span>
         </button>
       </div>
       <div class="dep-dialog-footer">
-        <button class="ghost" on:click={() => (dependencyDialogOpen = false)}>Skip for now</button>
+        <button class="ghost" onclick={() => (dependencyDialogOpen = false)}>Skip for now</button>
       </div>
     </div>
   </div>
@@ -3927,14 +3936,14 @@ import { trapFocus } from "../lib/focusTrap";
 
 <!-- Change plan preview modal -->
 {#if planPreviewOpen && planPreviewMod}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (planPreviewOpen = false)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (planPreviewOpen = false)} onkeydown={() => {}}>
     <div class="modal plan-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (planPreviewOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Install plan: {planPreviewMod.name}</h2>
           <p>Auto-snapshot will be created before applying changes.</p>
         </div>
-        <button class="icon-btn" on:click={() => (planPreviewOpen = false)} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (planPreviewOpen = false)} aria-label="Close"><X size={18} /></button>
       </div>
 
       {#if planPreviewLoading}
@@ -4020,11 +4029,11 @@ import { trapFocus } from "../lib/focusTrap";
       {/if}
 
       <div class="plan-modal-actions">
-        <button class="ghost" on:click={() => { planPreviewOpen = false; if (planPreviewMod) startInstallPlan(planPreviewMod); }}>See raw details</button>
-        <button class="secondary" on:click={() => confirmFromPlan(false)} disabled={mutating}>
+        <button class="ghost" onclick={() => { planPreviewOpen = false; if (planPreviewMod) startInstallPlan(planPreviewMod); }}>See raw details</button>
+        <button class="secondary" onclick={() => confirmFromPlan(false)} disabled={mutating}>
           <Download size={16} /> Install mod only
         </button>
-        <button on:click={() => confirmFromPlan(true)} disabled={mutating}>
+        <button onclick={() => confirmFromPlan(true)} disabled={mutating}>
           <Zap size={16} /> Install with dependencies
         </button>
       </div>
@@ -4039,8 +4048,8 @@ import { trapFocus } from "../lib/focusTrap";
     mode="text"
     defaultValue={renameTarget}
     confirmLabel="Rename"
-    on:confirm={(e) => { if (e.detail.trim() && renameTarget) { renameList(renameTarget, e.detail.trim()); } showRenamePrompt = false; }}
-    on:cancel={() => (showRenamePrompt = false)}
+    onconfirm={(v) => { if (v.trim() && renameTarget) { renameList(renameTarget, v.trim()); } showRenamePrompt = false; }}
+    oncancel={() => (showRenamePrompt = false)}
   />
 {/if}
 
@@ -4050,8 +4059,8 @@ import { trapFocus } from "../lib/focusTrap";
     message={`Delete list "${deleteTarget}"? This cannot be undone.`}
     danger
     confirmLabel="Delete"
-    on:confirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
-    on:cancel={() => (showDeleteConfirm = false)}
+    onconfirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
+    oncancel={() => (showDeleteConfirm = false)}
   />
 {/if}
 

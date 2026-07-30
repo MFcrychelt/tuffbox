@@ -1,22 +1,33 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  export let title = "Select";
-  export let message = "";
-  export let options: string[] = [];
-  export let defaultValue = "";
-  export let confirmLabel = "OK";
-  export let cancelLabel = "Cancel";
-  export let mode: "text" | "select" = "text";
+  let {
+    title = "Select",
+    message = "",
+    options = [],
+    defaultValue = "",
+    confirmLabel = "OK",
+    cancelLabel = "Cancel",
+    mode = "text",
+    onconfirm,
+    oncancel,
+  }: {
+    title?: string;
+    message?: string;
+    options?: string[];
+    defaultValue?: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    mode?: "text" | "select";
+    onconfirm?: (value: string) => void;
+    oncancel?: () => void;
+  } = $props();
 
-  let value = defaultValue;
-
-  const dispatch = createEventDispatcher<{ confirm: string; cancel: void }>();
+  let value = $state(defaultValue);
 </script>
 
-<div class="prompt-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("cancel")} on:keydown={() => {}}>
-  <div class="prompt-dialog" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("cancel") }}>
+<div class="prompt-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && oncancel?.()} onkeydown={() => {}}>
+  <div class="prompt-dialog" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => oncancel?.() }}>
     <h3>{title}</h3>
     {#if message}
       <p>{message}</p>
@@ -27,7 +38,7 @@
         class="prompt-input"
         type="text"
         bind:value
-        on:keydown={(e) => e.key === "Enter" && value.trim() && dispatch("confirm", value)}
+        onkeydown={(e) => e.key === "Enter" && value.trim() && onconfirm?.(value)}
       />
     {:else}
       <div class="prompt-options">
@@ -35,7 +46,7 @@
           <button
             class="prompt-option"
             class:selected={option === value}
-            on:click={() => (value = option)}
+            onclick={() => (value = option)}
           >
             <span class="prompt-option-name">{option}</span>
             {#if option === value}
@@ -47,8 +58,8 @@
     {/if}
 
     <div class="prompt-actions">
-      <button class="ghost" on:click={() => dispatch("cancel")}>{cancelLabel}</button>
-      <button disabled={!value.trim()} on:click={() => dispatch("confirm", value)}>{confirmLabel}</button>
+      <button class="ghost" onclick={() => oncancel?.()}>{cancelLabel}</button>
+      <button disabled={!value.trim()} onclick={() => onconfirm?.(value)}>{confirmLabel}</button>
     </div>
   </div>
 </div>

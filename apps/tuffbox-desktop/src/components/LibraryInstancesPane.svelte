@@ -22,7 +22,7 @@
     Package,
     Wrench,
     Minus,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
   import { open as openShell } from "@tauri-apps/plugin-shell";
@@ -57,63 +57,46 @@
   import PromptDialog from "./PromptDialog.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
-  export let currentView:
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "diagnostics"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me"
-    | "world";
+  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
   const LONG_PRESS_MS = 420;
   const MOVE_CANCEL_PX = 10;
 
-  let selectedPath: string | null = $projectPath;
-  let launching: string | null = null;
-  let actionBusy = false;
-  let exportMenuOpen = false;
-  let addMenuOpen = false;
-  let foldersMenuOpen = false;
-  let groupMap: GroupMap = loadGroupMap();
-  let collapsed = loadCollapsedGroups();
-  let projectStats: Record<string, { playtime: number }> = {};
-  let refreshing = false;
+  let selectedPath = $state<string | null>($projectPath);
+  let launching = $state<string | null>(null);
+  let actionBusy = $state(false);
+  let exportMenuOpen = $state(false);
+  let addMenuOpen = $state(false);
+  let foldersMenuOpen = $state(false);
+  let groupMap = $state<GroupMap>(loadGroupMap());
+  let collapsed = $state(loadCollapsedGroups());
+  let projectStats = $state<Record<string, { playtime: number }>>({});
+  let refreshing = $state(false);
 
-  let showClonePrompt = false;
-  let cloneTarget: RecentProject | null = null;
-  let clonePromptName = "";
+  let showClonePrompt = $state(false);
+  let cloneTarget = $state<RecentProject | null>(null);
+  let clonePromptName = $state("");
 
-  let showGroupPrompt = false;
-  let groupTarget: RecentProject | null = null;
-  let groupPromptName = DEFAULT_GROUP;
+  let showGroupPrompt = $state(false);
+  let groupTarget = $state<RecentProject | null>(null);
+  let groupPromptName = $state(DEFAULT_GROUP);
 
-  let ctxMenu: { x: number; y: number; project: RecentProject } | null = null;
+  let ctxMenu = $state<{ x: number; y: number; project: RecentProject } | null>(null);
 
   /** Android-style long-press → drag onto another tile to make a folder. */
-  let dragSource: RecentProject | null = null;
-  let dropTargetPath: string | null = null;
-  let dropTargetGroup: string | null = null;
-  let dragGhost: { x: number; y: number; letter: string; colorA: string; colorB: string } | null =
-    null;
-  let suppressNextClick = false;
-  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
-  let pressOrigin: { x: number; y: number; project: RecentProject } | null = null;
-  let dragging = false;
+  let dragSource = $state<RecentProject | null>(null);
+  let dropTargetPath = $state<string | null>(null);
+  let dropTargetGroup = $state<string | null>(null);
+  let dragGhost = $state<{ x: number; y: number; letter: string; colorA: string; colorB: string } | null>(null);
+  let suppressNextClick = $state(false);
+  let longPressTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+  let pressOrigin = $state<{ x: number; y: number; project: RecentProject } | null>(null);
+  let dragging = $state(false);
   /** Path that just received a folder merge — brief celebrate pulse. */
-  let celebratePath: string | null = null;
-  let celebrateGroup: string | null = null;
-  let celebrateTimer: ReturnType<typeof setTimeout> | null = null;
-  let holdingPath: string | null = null;
+  let celebratePath = $state<string | null>(null);
+  let celebrateGroup = $state<string | null>(null);
+  let celebrateTimer = $state<ReturnType<typeof setTimeout> | null>(null);
+  let holdingPath = $state<string | null>(null);
 
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
@@ -154,18 +137,22 @@
     }, 900);
   }
 
-  $: selected = $recentProjects.find((p) => p.path === selectedPath) ?? null;
-  $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
-  $: if (selectedPath && !$recentProjects.some((p) => p.path === selectedPath)) {
-    selectedPath = $recentProjects[0]?.path ?? null;
-  }
-  $: if (!selectedPath && $recentProjects.length) {
-    selectedPath = $projectPath && $recentProjects.some((p) => p.path === $projectPath)
-      ? $projectPath
-      : $recentProjects[0].path;
-  }
+  const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
+  const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  $effect(() => {
+    if (selectedPath && !$recentProjects.some((p) => p.path === selectedPath)) {
+      selectedPath = $recentProjects[0]?.path ?? null;
+    }
+  });
+  $effect(() => {
+    if (!selectedPath && $recentProjects.length) {
+      selectedPath = $projectPath && $recentProjects.some((p) => p.path === $projectPath)
+        ? $projectPath
+        : $recentProjects[0].path;
+    }
+  });
 
-  $: grouped = (() => {
+  const grouped = $derived((() => {
     const byGroup = new Map<string, RecentProject[]>();
     for (const p of $recentProjects) {
       const g = getGroup(groupMap, p.path);
@@ -182,12 +169,12 @@
       projects: byGroup.get(name) ?? [],
       collapsed: collapsed.has(name),
     }));
-  })();
+  })());
 
-  $: existingGroups = listGroupNames(
+  const existingGroups = $derived(listGroupNames(
     groupMap,
     $recentProjects.map((p) => p.path),
-  );
+  ));
 
   function gradientFrom(name: string) {
     const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
@@ -214,7 +201,9 @@
     }
   }
 
-  $: ensureStats($recentProjects.map((p) => p.path));
+  $effect(() => {
+    ensureStats($recentProjects.map((p) => p.path));
+  });
 
   function selectInstance(project: RecentProject) {
     selectedPath = project.path;
@@ -789,7 +778,7 @@
           type="button"
           class="tb-btn primary"
           title="Add instance"
-          on:click|stopPropagation={() => (addMenuOpen = !addMenuOpen)}
+          onclick={(e) => { e.stopPropagation(); (addMenuOpen = !addMenuOpen);  }}
         >
           <Plus size={16} />
           <span>Add Instance</span>
@@ -797,13 +786,13 @@
         </button>
         {#if addMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" on:click={() => { addMenuOpen = false; newProjectOpen.set(true); }}>
+            <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; newProjectOpen.set(true); }}>
               <Plus size={14} /> Create new…
             </button>
-            <button type="button" role="menuitem" on:click={importPackFile} disabled={actionBusy}>
+            <button type="button" role="menuitem" onclick={importPackFile} disabled={actionBusy}>
               <FolderOpen size={14} /> Import file (.mrpack / .zip)
             </button>
-            <button type="button" role="menuitem" on:click={importInstanceFolder} disabled={actionBusy}>
+            <button type="button" role="menuitem" onclick={importInstanceFolder} disabled={actionBusy}>
               <Folder size={14} /> Import instance folder
             </button>
           </div>
@@ -815,18 +804,18 @@
           type="button"
           class="tb-btn"
           title="Folders"
-          on:click|stopPropagation={() => (foldersMenuOpen = !foldersMenuOpen)}
+          onclick={(e) => { e.stopPropagation(); (foldersMenuOpen = !foldersMenuOpen);  }}
         >
           <Folder size={16} />
           <span>Folders</span>
         </button>
         {#if foldersMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" on:click={openInstancesFolder}>
+            <button type="button" role="menuitem" onclick={openInstancesFolder}>
               <FolderOpen size={14} /> Instances folder
             </button>
             {#if selected}
-              <button type="button" role="menuitem" on:click={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
+              <button type="button" role="menuitem" onclick={() => { foldersMenuOpen = false; void openSelectedFolder(selected); }}>
                 <Folder size={14} /> Selected instance
               </button>
             {/if}
@@ -834,7 +823,7 @@
         {/if}
       </div>
 
-      <button type="button" class="tb-btn" title="Settings" on:click={() => (currentView = "settings")}>
+      <button type="button" class="tb-btn" title="Settings" onclick={() => (currentView = "settings")}>
         <Settings size={16} />
         <span>Settings</span>
       </button>
@@ -842,7 +831,7 @@
         type="button"
         class="tb-btn"
         title="Help"
-        on:click={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
+        onclick={() => window.dispatchEvent(new CustomEvent("tuffbox:show-shortcuts"))}
       >
         <HelpCircle size={16} />
         <span>Help</span>
@@ -852,7 +841,7 @@
         class="tb-btn"
         title="Refresh"
         disabled={refreshing}
-        on:click={() => void refreshAll()}
+        onclick={() => void refreshAll()}
       >
         <span class:spinning={refreshing}><RefreshCw size={16} /></span>
         <span>Update</span>
@@ -865,7 +854,7 @@
           type="button"
           class="tb-account"
           title="Account"
-          on:click={() => (currentView = "me")}
+          onclick={() => (currentView = "me")}
         >
           <HeadAvatar skinSrc={$skinPath} size={28} alt={$authState.profile.name} />
           <span class="tb-account-name">{$authState.profile.name}</span>
@@ -877,7 +866,7 @@
           </span>
         </button>
       {:else}
-        <button type="button" class="tb-btn" on:click={() => (currentView = "me")}>
+        <button type="button" class="tb-btn" onclick={() => (currentView = "me")}>
           Account
         </button>
       {/if}
@@ -890,7 +879,7 @@
         <div class="empty-state">
           <h3>No instances yet</h3>
           <p>Create or import a pack to build your library.</p>
-          <button type="button" class="empty-cta" on:click={() => newProjectOpen.set(true)}>
+          <button type="button" class="empty-cta" onclick={() => newProjectOpen.set(true)}>
             <Plus size={16} /> Add Instance
           </button>
         </div>
@@ -909,7 +898,7 @@
               class="group-header"
               class:drop-target={dragging && dropTargetGroup === group.name}
               data-group={group.name}
-              on:click={() => toggleGroup(group.name)}
+              onclick={() => toggleGroup(group.name)}
               aria-expanded={!group.collapsed}
             >
               {#if group.collapsed}
@@ -938,14 +927,14 @@
                     tabindex="0"
                     title="Hold and drag onto another instance to create a folder"
                     in:tileIntro={{ i: pi }}
-                    on:click={() => onTileClick(project)}
-                    on:dblclick={() => !dragging && void launchInstance(project)}
-                    on:keydown={(e) => e.key === "Enter" && selectInstance(project)}
-                    on:contextmenu={(e) => openCtxMenu(e, project)}
-                    on:pointerdown={(e) => onTilePointerDown(e, project)}
-                    on:pointermove={onTilePointerMove}
-                    on:pointerup={onTilePointerUp}
-                    on:pointercancel={onTilePointerCancel}
+                    onclick={() => onTileClick(project)}
+                    ondblclick={() => !dragging && void launchInstance(project)}
+                    onkeydown={(e) => e.key === "Enter" && selectInstance(project)}
+                    oncontextmenu={(e) => openCtxMenu(e, project)}
+                    onpointerdown={(e) => onTilePointerDown(e, project)}
+                    onpointermove={onTilePointerMove}
+                    onpointerup={onTilePointerUp}
+                    onpointercancel={onTilePointerCancel}
                   >
                     <div class="hold-ring" aria-hidden="true"></div>
                     <div
@@ -994,7 +983,7 @@
                 type="button"
                 class="side-btn launch"
                 disabled={actionBusy || launching === selected.path || selectedRunning}
-                on:click={() => void runAction("launch", selected)}
+                onclick={() => void runAction("launch", selected)}
               >
                 {#if launching === selected.path}
                   <span class="mini-spinner"></span> Launching…
@@ -1006,18 +995,18 @@
                 type="button"
                 class="side-btn"
                 disabled={!selectedRunning || actionBusy}
-                on:click={() => void runAction("stop", selected)}
+                onclick={() => void runAction("stop", selected)}
               >
                 <Square size={14} /> Stop
               </button>
-              <button type="button" class="side-btn" disabled={actionBusy} on:click={() => runAction("edit", selected)}>
+              <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("edit", selected)}>
                 <Pencil size={14} /> Edit
               </button>
               <button
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("change-group", selected)}
+                onclick={() => void runAction("change-group", selected)}
               >
                 <Tags size={14} /> Change Group
               </button>
@@ -1025,7 +1014,7 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("folder", selected)}
+                onclick={() => void runAction("folder", selected)}
               >
                 <Folder size={14} /> Folder
               </button>
@@ -1035,16 +1024,16 @@
                   type="button"
                   class="side-btn"
                   disabled={actionBusy}
-                  on:click|stopPropagation={() => (exportMenuOpen = !exportMenuOpen)}
+                  onclick={(e) => { e.stopPropagation(); (exportMenuOpen = !exportMenuOpen);  }}
                 >
                   <Share2 size={14} /> Export <ChevronDown size={12} />
                 </button>
                 {#if exportMenuOpen}
                   <div class="tb-menu side-menu" role="menu" transition:fade={{ duration: prefersReducedMotion() ? 0 : 120 }}>
-                    <button type="button" role="menuitem" on:click={() => void runAction("export-mrpack", selected)}>
+                    <button type="button" role="menuitem" onclick={() => void runAction("export-mrpack", selected)}>
                       Export .mrpack
                     </button>
-                    <button type="button" role="menuitem" on:click={() => void runAction("export-prism", selected)}>
+                    <button type="button" role="menuitem" onclick={() => void runAction("export-prism", selected)}>
                       Export Prism zip
                     </button>
                   </div>
@@ -1055,7 +1044,7 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("copy", selected)}
+                onclick={() => void runAction("copy", selected)}
               >
                 <Copy size={14} /> Copy
               </button>
@@ -1063,7 +1052,7 @@
                 type="button"
                 class="side-btn danger"
                 disabled={actionBusy}
-                on:click={() => void runAction("delete", selected)}
+                onclick={() => void runAction("delete", selected)}
               >
                 <Trash2 size={14} /> Delete
               </button>
@@ -1071,7 +1060,7 @@
                 type="button"
                 class="side-btn"
                 disabled={actionBusy}
-                on:click={() => void runAction("shortcut", selected)}
+                onclick={() => void runAction("shortcut", selected)}
               >
                 <Link2 size={14} /> Create Shortcut
               </button>
@@ -1116,43 +1105,43 @@
 {#if ctxMenu}
   {@const menuProject = ctxMenu.project}
   <div class="pack-ctx-menu" style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`} role="menu">
-    <button type="button" role="menuitem" on:click={() => void runAction("launch", menuProject)} disabled={actionBusy}>
+    <button type="button" role="menuitem" onclick={() => void runAction("launch", menuProject)} disabled={actionBusy}>
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
       {:else}
         <Play size={14} /> Launch
       {/if}
     </button>
-    <button type="button" role="menuitem" on:click={() => runAction("edit", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => runAction("edit", menuProject)}>
       <Pencil size={14} /> Edit
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("change-group", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("change-group", menuProject)}>
       <Tags size={14} /> Change Group
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("folder", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("folder", menuProject)}>
       <Folder size={14} /> Folder
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("copy", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("copy", menuProject)}>
       <Copy size={14} /> Copy
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("shortcut", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("shortcut", menuProject)}>
       <Link2 size={14} /> Create Shortcut
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" on:click={() => runAction("open-ide", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => runAction("open-ide", menuProject)}>
       <Package size={14} /> Open in IDE → Mods
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("copy-path", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("copy-path", menuProject)}>
       <Copy size={14} /> Copy path
     </button>
-    <button type="button" role="menuitem" on:click={() => void runAction("repair", menuProject)} disabled={actionBusy}>
+    <button type="button" role="menuitem" onclick={() => void runAction("repair", menuProject)} disabled={actionBusy}>
       <Wrench size={14} /> Repair
     </button>
     <div class="menu-sep"></div>
-    <button type="button" role="menuitem" on:click={() => void runAction("remove", menuProject)}>
+    <button type="button" role="menuitem" onclick={() => void runAction("remove", menuProject)}>
       <Minus size={14} /> Remove from library
     </button>
-    <button type="button" role="menuitem" class="danger" on:click={() => void runAction("delete", menuProject)}>
+    <button type="button" role="menuitem" class="danger" onclick={() => void runAction("delete", menuProject)}>
       <Trash2 size={14} /> Delete from disk
     </button>
   </div>
@@ -1165,8 +1154,8 @@
     mode="text"
     defaultValue={clonePromptName}
     confirmLabel="Copy"
-    on:confirm={(e) => confirmClone(e.detail)}
-    on:cancel={() => {
+    onconfirm={(v) => confirmClone(v)}
+    oncancel={() => {
       showClonePrompt = false;
       cloneTarget = null;
     }}
@@ -1174,34 +1163,34 @@
 {/if}
 
 {#if showGroupPrompt && groupTarget}
-  <div class="group-dialog-backdrop" role="presentation" on:click={() => { showGroupPrompt = false; groupTarget = null; }}>
+  <div class="group-dialog-backdrop" role="presentation" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>
     <div
       class="group-dialog"
       role="dialog"
       aria-labelledby="group-dlg-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3 id="group-dlg-title">Change Group</h3>
       <p>Move “{groupTarget.info.name}” into a group.</p>
       <div class="group-chips">
         {#each existingGroups as g (g)}
-          <button type="button" class="chip" class:active={groupPromptName === g} on:click={() => applyExistingGroup(g)}>
+          <button type="button" class="chip" class:active={groupPromptName === g} onclick={() => applyExistingGroup(g)}>
             {g}
           </button>
         {/each}
       </div>
       <label class="group-new-label" for="group-new-input">Or type a new name</label>
-      <input id="group-new-input" bind:value={groupPromptName} on:keydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
+      <input id="group-new-input" bind:value={groupPromptName} onkeydown={(e) => e.key === "Enter" && confirmGroup(groupPromptName)} />
       <div class="group-dlg-actions">
-        <button type="button" class="ghost" on:click={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
-        <button type="button" class="accent" on:click={() => confirmGroup(groupPromptName)}>Apply</button>
+        <button type="button" class="ghost" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>Cancel</button>
+        <button type="button" class="accent" onclick={() => confirmGroup(groupPromptName)}>Apply</button>
       </div>
     </div>
   </div>
 {/if}
 
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
+<svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
 <style>
   .prism-lib {

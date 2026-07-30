@@ -3,7 +3,7 @@
   import {
     FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch,
     ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { EditorView } from "@codemirror/view";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -145,8 +145,7 @@
   let searchLoading = false;
   let searchError: string | null = null;
 
-  let expandedDirs = new Set<string>();
-  let flatTree: FlatNode[] = [];
+  let expandedDirs = $state(new Set<string>());
 
   let confirmOpen = false;
   let pendingFile: ConfigFile | null = null;
@@ -266,19 +265,23 @@
   }
 
   function toggleDir(fullPath: string) {
-    if (expandedDirs.has(fullPath)) expandedDirs.delete(fullPath);
-    else expandedDirs.add(fullPath);
-    flatTree = buildFlatTree(files, filter, rootFilter);
+    const next = new Set(expandedDirs);
+    if (next.has(fullPath)) next.delete(fullPath);
+    else next.add(fullPath);
+    expandedDirs = next;
   }
 
   function setRootChip(root: string | null) {
     rootFilter = rootFilter === root ? null : root;
-    if (rootFilter) expandedDirs.add(rootFilter);
-    flatTree = buildFlatTree(files, filter, rootFilter);
+    if (rootFilter) {
+      const next = new Set(expandedDirs);
+      next.add(rootFilter);
+      expandedDirs = next;
+    }
   }
 
-  $: flatTree = buildFlatTree(files, filter, rootFilter);
-  $: presentRoots = ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/")));
+  const flatTree = $derived(buildFlatTree(files, filter, rootFilter));
+  const presentRoots = $derived(ROOT_CHIPS.filter((r) => files.some((f) => f.path === r || f.path.startsWith(r + "/"))));
 
   function langForFile(file: ConfigFile | null) {
     if (!file) return undefined;
@@ -325,13 +328,15 @@
     return ext || "text";
   }
 
-  $: currentLang = langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined);
-  $: dirty = content !== originalContent;
-  $: tuneDirty.set(dirty);
-  $: canFormat = ["json", "toml"].includes(selected?.extension?.toLowerCase() ?? "");
-  $: isKubejsFile = !!selected?.path.startsWith("kubejs/");
-  $: lintErrorCount = lintIssues.filter((i) => i.severity === "error").length;
-  $: lintWarnCount = lintIssues.filter((i) => i.severity !== "error").length;
+  const currentLang = $derived(langForFile(selected) ?? (looksLikeProps(content) ? propsLang() : undefined));
+  const dirty = $derived(content !== originalContent);
+  $effect(() => {
+    tuneDirty.set(dirty);
+  });
+  const canFormat = $derived(["json", "toml"].includes(selected?.extension?.toLowerCase() ?? ""));
+  const isKubejsFile = $derived(!!selected?.path.startsWith("kubejs/"));
+  const lintErrorCount = $derived(lintIssues.filter((i) => i.severity === "error").length);
+  const lintWarnCount = $derived(lintIssues.filter((i) => i.severity !== "error").length);
 
   onDestroy(() => {
     tuneDirty.set(false);
@@ -397,8 +402,8 @@
     }
   }
 
-  function onCmReady(e: CustomEvent<EditorView>) {
-    cmView = e.detail;
+  function onCmReady(view: EditorView) {
+    cmView = view;
     if (pendingJumpLine != null) {
       jumpToLine(pendingJumpLine);
     }
@@ -566,7 +571,9 @@
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  $: if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) loadFiles(true);
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key === "s") {
@@ -575,12 +582,12 @@
     }
   }
 
-  function handleCmChange(e: CustomEvent<string>) {
-    content = e.detail;
+  function handleCmChange(value: string) {
+    content = value;
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="config-editor">
   <div class="toolbar">
@@ -589,7 +596,7 @@
       <span>Tune · configs</span>
     </div>
     <div class="toolbar-actions">
-      <button class="ghost" on:click={() => loadFiles(true)} disabled={!$projectPath || loading}>
+      <button class="ghost" onclick={() => loadFiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         Refresh
       </button>
@@ -597,7 +604,7 @@
         class="secondary"
         class:lint-bad={lintErrorCount > 0}
         class:lint-warn={lintErrorCount === 0 && lintWarnCount > 0}
-        on:click={lintFile}
+        onclick={lintFile}
         disabled={!selected || lintLoading}
         title={lintIssues.length ? `${lintIssues.length} issue(s)` : "Lint config"}
       >
@@ -611,27 +618,27 @@
         {/if}
       </button>
       <div class="snippet-wrap">
-        <button class="secondary" on:click={() => (showSnippets = !showSnippets)} disabled={!selected} title="Insert snippet">
+        <button class="secondary" onclick={() => (showSnippets = !showSnippets)} disabled={!selected} title="Insert snippet">
           <Code2 size={16} /> Snippets
         </button>
         {#if showSnippets}
           <div class="snippet-menu">
             {#each SNIPPETS as sn (sn.id)}
-              <button type="button" on:click={() => insertSnippet(sn)}>{sn.label}</button>
+              <button type="button" onclick={() => insertSnippet(sn)}>{sn.label}</button>
             {/each}
             {#if isKubejsFile}
-              <button type="button" class="gen" on:click={insertFromRecipeGenerator}>Insert from recipe generator</button>
+              <button type="button" class="gen" onclick={insertFromRecipeGenerator}>Insert from recipe generator</button>
             {/if}
           </div>
         {/if}
       </div>
-      <button class="secondary" on:click={formatFile} disabled={!canFormat || saving || formatting} title={canFormat ? "Pretty-print JSON/TOML" : "Format: .json or .toml"}>
+      <button class="secondary" onclick={formatFile} disabled={!canFormat || saving || formatting} title={canFormat ? "Pretty-print JSON/TOML" : "Format: .json or .toml"}>
         <FileCode2 size={16} /> {formatting ? "…" : "Format"}
       </button>
-      <button class="secondary" on:click={resetFile} disabled={!dirty || saving}>
+      <button class="secondary" onclick={resetFile} disabled={!dirty || saving}>
         <RotateCcw size={16} /> Reset
       </button>
-      <button on:click={saveFile} disabled={!dirty || saving || !selected}>
+      <button onclick={saveFile} disabled={!dirty || saving || !selected}>
         <Save size={16} />
         {saving ? "Saving…" : "Save"}
       </button>
@@ -645,8 +652,8 @@
     <div class="notice success">
       <span>{message}</span>
       <div class="trail-actions">
-        <button class="ghost mini" on:click={openHistory}><History size={12} /> History</button>
-        <button class="ghost mini" on:click={openSnapshots}><Camera size={12} /> Snapshots</button>
+        <button class="ghost mini" onclick={openHistory}><History size={12} /> History</button>
+        <button class="ghost mini" onclick={openSnapshots}><Camera size={12} /> Snapshots</button>
       </div>
     </div>
   {/if}
@@ -657,9 +664,9 @@
     <div class="layout">
       <aside class="file-panel">
         <div class="root-chips">
-          <button class="chip" class:active={rootFilter === null} on:click={() => setRootChip(null)}>All</button>
+          <button class="chip" class:active={rootFilter === null} onclick={() => setRootChip(null)}>All</button>
           {#each presentRoots as root (root)}
-            <button class="chip" class:active={rootFilter === root} on:click={() => setRootChip(root)}>{root}</button>
+            <button class="chip" class:active={rootFilter === root} onclick={() => setRootChip(root)}>{root}</button>
           {/each}
         </div>
 
@@ -672,8 +679,8 @@
 
         <div class="search-across">
           <div class="search-across-row">
-            <input bind:value={searchQuery} placeholder="Search in contents…" on:keydown={(e) => e.key === "Enter" && doSearch()} />
-            <button class="mini-btn" on:click={doSearch} disabled={searchLoading || !searchQuery.trim()}>
+            <input bind:value={searchQuery} placeholder="Search in contents…" onkeydown={(e) => e.key === "Enter" && doSearch()} />
+            <button class="mini-btn" onclick={doSearch} disabled={searchLoading || !searchQuery.trim()}>
               <FileSearch size={14} />
             </button>
           </div>
@@ -683,7 +690,7 @@
           {#if searchResults.length > 0}
             <div class="search-results">
               {#each searchResults.slice(0, 40) as hit (hit.path + ':' + hit.line + hit.text)}
-                <button class="search-hit" on:click={() => openSearchHit(hit)}>
+                <button class="search-hit" onclick={() => openSearchHit(hit)}>
                   <span class="hit-path">{hit.path}:{hit.line}</span>
                   <span class="hit-text">{hit.text}</span>
                 </button>
@@ -711,7 +718,7 @@
                   class="tree-dir"
                   class:root={node.isRoot}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => toggleDir(node.fullPath)}
+                  onclick={() => toggleDir(node.fullPath)}
                 >
                   {#if node.expanded}
                     <ChevronDown size={14} />
@@ -727,7 +734,7 @@
                   class="tree-file"
                   class:selected={selected?.path === node.file.path}
                   style:padding-left="{12 + node.depth * 16}px"
-                  on:click={() => { if (node.file) tryOpenFile(node.file); }}
+                  onclick={() => { if (node.file) tryOpenFile(node.file); }}
                   title={node.file.path}
                 >
                   <File size={14} />
@@ -760,8 +767,8 @@
                 value={content}
                 lang={currentLang}
                 theme={oneDark}
-                on:change={handleCmChange}
-                on:ready={onCmReady}
+                onchange={handleCmChange}
+                onready={onCmReady}
               />
             {/key}
           </div>
@@ -769,7 +776,7 @@
           {#if lintIssues.length > 0}
             <div class="lint-panel">
               {#each lintIssues as issue, i (issue.code + '-' + i + '-' + (issue.line ?? 0))}
-                <button type="button" class="lint-item {issue.severity}" on:click={() => openLintIssue(issue)}>
+                <button type="button" class="lint-item {issue.severity}" onclick={() => openLintIssue(issue)}>
                   <span class="lint-sev">{issue.severity}</span>
                   <code>{issue.code}</code>
                   <span>{issue.message}</span>
@@ -788,7 +795,7 @@
 
 {#if confirmOpen}
   <ConfirmDialog title="Discard changes?" message="You have unsaved changes. Discard them?" danger={false}
-    confirmLabel="Discard" on:confirm={() => {
+    confirmLabel="Discard" onconfirm={() => {
       confirmOpen = false;
       if (pendingFile) {
         const line = pendingJumpLine;
@@ -796,7 +803,7 @@
         pendingFile = null;
       }
     }}
-    on:cancel={() => { confirmOpen = false; pendingFile = null; pendingJumpLine = null; }} />
+    oncancel={() => { confirmOpen = false; pendingFile = null; pendingJumpLine = null; }} />
 {/if}
 
 <style>

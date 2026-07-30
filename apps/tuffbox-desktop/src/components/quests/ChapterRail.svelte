@@ -1,32 +1,49 @@
 <script lang="ts">
-  import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "lucide-svelte";
+  import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "@lucide/svelte";
   import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
   import { projectPath } from "../../lib/store";
   import QuestItemIcon from "./QuestItemIcon.svelte";
   import { preloadItemIcons } from "./iconCache";
 
-  export let chapters: QuestChapter[];
-  export let chapterGroups: QuestChapterGroup[] = [];
-  export let selectedChapter: string;
-  export let dirtyIds: Set<string>;
-  export let saving = false;
-  export let onSelect: (id: string) => void;
-  export let onCreate: () => void;
-  export let onSave: (id: string) => void;
-  export let onDirty: (id: string) => void;
-  export let onDelete: ((id: string) => void) | null = null;
-  export let onMove: ((id: string, dir: -1 | 1) => void) | null = null;
+  let {
+    chapters,
+    chapterGroups = [],
+    selectedChapter,
+    dirtyIds,
+    saving = false,
+    onSelect,
+    onCreate,
+    onSave,
+    onDirty,
+    onDelete = null,
+    onMove = null,
+  }: {
+    chapters: QuestChapter[];
+    chapterGroups?: QuestChapterGroup[];
+    selectedChapter: string;
+    dirtyIds: Set<string>;
+    saving?: boolean;
+    onSelect: (id: string) => void;
+    onCreate: () => void;
+    onSave: (id: string) => void;
+    onDirty: (id: string) => void;
+    onDelete?: ((id: string) => void) | null;
+    onMove?: ((id: string, dir: -1 | 1) => void) | null;
+  } = $props();
 
-  let collapsed = new Set<string>();
-  let editingId: string | null = null;
-  let menuId: string | null = null;
-  let iconRevision = 0;
+  let collapsed = $state<Set<string>>(new Set());
+  let editingId = $state<string | null>(null);
+  let menuId = $state<string | null>(null);
+  let iconRevision = $state(0);
 
-  $: groupTitle = new Map(chapterGroups.map((g) => [g.id, g.title]));
-  $: groups = buildGroups(chapters, groupTitle);
-  $: if (chapters && $projectPath) {
-    void preloadRailIcons(chapters);
-  }
+  let groupTitle = $derived(new Map(chapterGroups.map((g) => [g.id, g.title])));
+  let groups = $derived(buildGroups(chapters, groupTitle));
+
+  $effect(() => {
+    if (chapters && $projectPath) {
+      void preloadRailIcons(chapters);
+    }
+  });
 
   async function preloadRailIcons(list: QuestChapter[]) {
     const ids = list.map((c) => c.icon).filter(Boolean) as string[];
@@ -38,7 +55,6 @@
   function buildGroups(list: QuestChapter[], titles: Map<string, string>) {
     const order: string[] = [];
     const map = new Map<string, QuestChapter[]>();
-    // Prefer declared group order from chapter_groups.snbt
     for (const g of chapterGroups) {
       if (!map.has(g.id)) {
         map.set(g.id, []);
@@ -53,7 +69,6 @@
       }
       map.get(g)!.push(ch);
     }
-    // Drop empty declared groups with no chapters
     return order
       .filter((key) => (map.get(key)?.length ?? 0) > 0)
       .map((key) => ({
@@ -64,9 +79,10 @@
   }
 
   function toggleGroup(key: string) {
-    if (collapsed.has(key)) collapsed.delete(key);
-    else collapsed.add(key);
-    collapsed = collapsed;
+    const next = new Set(collapsed);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsed = next;
   }
 
   function glyph(ch: QuestChapter): string {
@@ -83,7 +99,6 @@
     if (next && next !== ch.title) {
       ch.title = next;
       onDirty(ch.id);
-      chapters = chapters;
     }
     editingId = null;
   }
@@ -100,7 +115,7 @@
 <aside class="rail ftbq-rail">
   <div class="rail-h">
     <h3>Chapters</h3>
-    <button type="button" class="ico" title="Add chapter" on:click={onCreate}>
+    <button type="button" class="ico" title="Add chapter" onclick={onCreate}>
       <Plus size={14} />
     </button>
   </div>
@@ -108,7 +123,7 @@
   <div class="rail-list">
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
-        <button type="button" class="group-h" on:click={() => toggleGroup(g.key)}>
+        <button type="button" class="group-h" onclick={() => toggleGroup(g.key)}>
           {#if collapsed.has(g.key)}<ChevronRight size={12} />{:else}<ChevronDown size={12} />{/if}
           <span>{g.label}</span>
         </button>
@@ -123,12 +138,12 @@
             <button
               type="button"
               class="ch-row"
-              on:click={() => {
+              onclick={() => {
                 onSelect(ch.id);
                 menuId = null;
               }}
-              on:dblclick={() => (editingId = ch.id)}
-              on:keydown={(e) => {
+              ondblclick={() => (editingId = ch.id)}
+              onkeydown={(e) => {
                 if (e.key === "Delete" && onDelete) {
                   e.preventDefault();
                   onDelete(ch.id);
@@ -149,12 +164,12 @@
                     class="title-edit"
                     value={ch.title}
                     autofocus
-                    on:click|stopPropagation
-                    on:keydown={(e) => {
+                    onclick={(e) => e.stopPropagation()}
+                    onkeydown={(e) => {
                       if (e.key === "Enter") commitTitle(ch, inputVal(e));
                       if (e.key === "Escape") editingId = null;
                     }}
-                    on:blur={(e) => commitTitle(ch, inputVal(e))}
+                    onblur={(e) => commitTitle(ch, inputVal(e))}
                   />
                 {:else}
                   <strong>{stripMc(ch.title)}</strong>
@@ -169,18 +184,21 @@
                   type="button"
                   class="ico tiny"
                   title="Chapter actions"
-                  on:click|stopPropagation={() => (menuId = menuId === ch.id ? null : ch.id)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    menuId = menuId === ch.id ? null : ch.id;
+                  }}
                 >
                   <MoreVertical size={12} />
                 </button>
                 {#if menuId === ch.id}
                   <div class="ch-menu">
                     {#if onMove}
-                      <button type="button" on:click={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
-                      <button type="button" on:click={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
+                      <button type="button" onclick={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
+                      <button type="button" onclick={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
                     {/if}
                     {#if onDelete}
-                      <button type="button" class="danger" on:click={() => { onDelete?.(ch.id); menuId = null; }}
+                      <button type="button" class="danger" onclick={() => { onDelete?.(ch.id); menuId = null; }}
                         >Delete…</button
                       >
                     {/if}
@@ -195,7 +213,7 @@
   </div>
 
   {#if selectedChapter && dirtyIds.has(selectedChapter)}
-    <button type="button" class="save-ch" disabled={saving} on:click={() => onSave(selectedChapter)}>
+    <button type="button" class="save-ch" disabled={saving} onclick={() => onSave(selectedChapter)}>
       <Save size={14} /> Save chapter
     </button>
   {/if}

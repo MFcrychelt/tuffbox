@@ -1,18 +1,24 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
-  import { User } from "lucide-svelte";
+  import { User } from "@lucide/svelte";
 
   /** Local filesystem path to a skin PNG, or a remote/data URL. */
-  export let skinSrc: string | null = null;
-  /** When true, treat skinSrc as a local path and convert via convertFileSrc. */
-  export let isLocalPath: boolean = true;
-  export let size: number = 32;
-  export let alt: string = "";
+  let {
+    skinSrc = null,
+    isLocalPath = true,
+    size = 32,
+    alt = "",
+  }: {
+    skinSrc?: string | null;
+    isLocalPath?: boolean;
+    size?: number;
+    alt?: string;
+  } = $props();
 
-  let canvas: HTMLCanvasElement;
-  let ready = false;
-  let gen = 0;
+  let canvas = $state<HTMLCanvasElement | undefined>();
+  let ready = $state(false);
+  let gen = $state(0);
 
   async function drawHead() {
     const myGen = ++gen;
@@ -52,11 +58,11 @@
     ready = true;
   }
 
-  $: if (skinSrc !== undefined) {
-    void drawHead();
-  }
-
-  onMount(() => {
+  $effect(() => {
+    skinSrc;
+    isLocalPath;
+    size;
+    canvas;
     void drawHead();
   });
 

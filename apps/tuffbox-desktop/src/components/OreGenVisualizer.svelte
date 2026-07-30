@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Mountain, RefreshCw, Database, Map as MapIcon } from "lucide-svelte";
+  import { Mountain, RefreshCw, Database, Map as MapIcon } from "@lucide/svelte";
   import { projectPath, ideStageRequest } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
@@ -17,11 +17,11 @@
     knownMod?: string | null;
   };
 
-  let ores: OreEntry[] = [];
-  let loading = false;
-  let error: string | null = null;
-  let selectedOre: string | null = null;
-  let lastOreScanPath: string | null = null;
+  let ores = $state<OreEntry[]>([]);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+  let selectedOre = $state<string | null>(null);
+  let lastOreScanPath = $state<string | null>(null);
 
   // Y-level constants: world goes from -64 to 320
   const WORLD_MIN = -64;
@@ -54,7 +54,7 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  $: oreBars = ores.map((ore) => {
+  const oreBars = $derived(ores.map((ore) => {
     const minH = parseHeight(ore.minHeight);
     const maxH = parseHeight(ore.maxHeight);
     return {
@@ -68,7 +68,7 @@
       spawnsPerChunk: ore.spawnsPerChunk?.[1] ?? "?",
       enabled: ore.enabledValue === "true" || ore.enabledValue === "1",
     };
-  });
+  }));
 
   const oreColors: Record<string, string> = {
     coal: "#2d2d2d",
@@ -111,10 +111,10 @@
   <div class="toolbar">
     <div class="title"><Mountain size={18} /> Ore generation</div>
     <div class="toolbar-actions">
-      <button class="ghost" type="button" on:click={openWorldMap} title="Open MCA chunk map">
+      <button class="ghost" type="button" onclick={openWorldMap} title="Open MCA chunk map">
         <MapIcon size={16} /> World map
       </button>
-      <button class="ghost" on:click={scan} disabled={!$projectPath || loading}>
+      <button class="ghost" onclick={scan} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         {loading ? "Scanning..." : "Refresh"}
       </button>
@@ -125,7 +125,7 @@
 
   <p class="hint">
     Height / vein chart from configs. Chunk select, delete, and export live in
-    <button type="button" class="linkish" on:click={openWorldMap}>World map</button>
+    <button type="button" class="linkish" onclick={openWorldMap}>World map</button>
     (IDE) or sidebar World (Ctrl+8).
   </p>
 
@@ -167,8 +167,8 @@
       <div class="ore-list">
         <h3>Detected ores ({oreBars.length})</h3>
         {#each oreBars as ore}
-          <button class="ore-row" class:selected={selectedOre === ore.resource} on:click={() => (selectedOre = selectedOre === ore.resource ? null : ore.resource)}>
-            <span class="ore-dot" style="background:{colorFor(ore.resource)}" />
+          <button class="ore-row" class:selected={selectedOre === ore.resource} onclick={() => (selectedOre = selectedOre === ore.resource ? null : ore.resource)}>
+            <span class="ore-dot" style="background:{colorFor(ore.resource)}"></span>
             <div class="ore-detail">
               <strong>{ore.resource}</strong>
               <span>Y{ore.minY} – Y{ore.maxY} · vein {ore.veinSize} · {ore.spawnsPerChunk}/chunk</span>

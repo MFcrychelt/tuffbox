@@ -1,27 +1,36 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { AlertTriangle, X } from "lucide-svelte";
+  import { AlertTriangle } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ confirm: void; cancel: void }>();
-
-  export let title = "Confirm";
-  export let message = "Are you sure?";
-  export let danger = false;
-  export let confirmLabel = "Confirm";
-  export let cancelLabel = "Cancel";
+  let {
+    title = "Confirm",
+    message = "Are you sure?",
+    danger = false,
+    confirmLabel = "Confirm",
+    cancelLabel = "Cancel",
+    onconfirm,
+    oncancel,
+  }: {
+    title?: string;
+    message?: string;
+    danger?: boolean;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    onconfirm?: () => void;
+    oncancel?: () => void;
+  } = $props();
 </script>
 
-<div class="cd-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("cancel")} on:keydown={() => {}}>
-  <div class="cd-dialog" role="alertdialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("cancel") }}>
+<div class="cd-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && oncancel?.()} onkeydown={() => {}}>
+  <div class="cd-dialog" role="alertdialog" aria-modal="true" use:trapFocus={{ onEscape: () => oncancel?.() }}>
     <div class="cd-icon">
       <AlertTriangle size={28} color={danger ? "#f87171" : "#fbbf24"} />
     </div>
     <h3>{title}</h3>
     <p>{message}</p>
     <div class="cd-actions">
-      <button class="ghost" on:click={() => dispatch("cancel")}>{cancelLabel}</button>
-      <button class={danger ? "danger" : ""} on:click={() => dispatch("confirm")}>{confirmLabel}</button>
+      <button class="ghost" onclick={() => oncancel?.()}>{cancelLabel}</button>
+      <button class={danger ? "danger" : ""} onclick={() => onconfirm?.()}>{confirmLabel}</button>
     </div>
   </div>
 </div>

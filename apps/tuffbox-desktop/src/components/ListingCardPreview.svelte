@@ -8,27 +8,41 @@
     Gamepad2,
     Monitor,
     Tag,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
 
-  export let style: "modrinth" | "curseforge" = "modrinth";
-  export let name = "Untitled pack";
-  export let summary = "";
-  export let categories: string[] = [];
-  export let iconUrl: string | null = null;
-  export let minecraftVersion: string | null = null;
-  export let loaderKind: string | null = null;
-  export let version: string | null = null;
-  /** Optional gallery hero for page-style preview */
-  export let galleryUrl: string | null = null;
-  export let bodyHtml: string | null = null;
-  export let variant: "card" | "page" = "card";
-  export let author: string | null = null;
+  let {
+    style = "modrinth",
+    name = "Untitled pack",
+    summary = "",
+    categories = [],
+    iconUrl = null,
+    minecraftVersion = null,
+    loaderKind = null,
+    version = null,
+    galleryUrl = null,
+    bodyHtml = null,
+    variant = "card",
+    author = null,
+  }: {
+    style?: "modrinth" | "curseforge";
+    name?: string;
+    summary?: string;
+    categories?: string[];
+    iconUrl?: string | null;
+    minecraftVersion?: string | null;
+    loaderKind?: string | null;
+    version?: string | null;
+    galleryUrl?: string | null;
+    bodyHtml?: string | null;
+    variant?: "card" | "page";
+    author?: string | null;
+  } = $props();
 
-  $: catChips = categories.filter(Boolean).slice(0, 8);
-  $: loaderLabel = (loaderKind || "").replace(/_/g, " ");
-  $: authorLabel = author || name || "Author";
-  $: cfExtraCats = Math.max(0, catChips.length - 1);
-  $: cfGameMeta = [minecraftVersion, loaderLabel].filter(Boolean).join(" ");
+  const catChips = $derived(categories.filter(Boolean).slice(0, 8));
+  const loaderLabel = $derived((loaderKind || "").replace(/_/g, " "));
+  const authorLabel = $derived(author || name || "Author");
+  const cfExtraCats = $derived(Math.max(0, catChips.length - 1));
+  const cfGameMeta = $derived([minecraftVersion, loaderLabel].filter(Boolean).join(" "));
 
   function prettyCat(c: string) {
     return c

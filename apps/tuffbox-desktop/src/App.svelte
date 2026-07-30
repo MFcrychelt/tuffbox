@@ -92,9 +92,9 @@
     me: () => import("./components/Me.svelte"),
   };
 
-  let loadedViews: Partial<Record<LazyView, LazyComponent>> = {};
+  let loadedViews = $state<Partial<Record<LazyView, LazyComponent>>>({});
   const viewsLoading = new Set<LazyView>();
-  let viewLoadError: string | null = null;
+  let viewLoadError = $state<string | null>(null);
 
   async function ensureViewLoaded(view: View) {
     if (view === "dashboard") return;
@@ -113,21 +113,23 @@
     }
   }
 
-  let currentView: View = "dashboard";
-  $: void ensureViewLoaded(currentView);
+  let currentView = $state<View>("dashboard");
+  $effect(() => {
+    void ensureViewLoaded(currentView);
+  });
 
-  let showShortcuts = false;
-  let showCommandPalette = false;
-  let contentEl: HTMLElement;
-  let showSwarmOnboarding = false;
-  let shareCapsuleOpen = false;
-  let shareCapsulePath = "";
-  let shareCapsuleExplanation = "";
-  let shareResolutionId: string | null = null;
-  let shareBusy = false;
+  let showShortcuts = $state(false);
+  let showCommandPalette = $state(false);
+  let contentEl = $state<HTMLElement | undefined>(undefined);
+  let showSwarmOnboarding = $state(false);
+  let shareCapsuleOpen = $state(false);
+  let shareCapsulePath = $state("");
+  let shareCapsuleExplanation = $state("");
+  let shareResolutionId = $state<string | null>(null);
+  let shareBusy = $state(false);
   /** 1 = deeper in nav (slide from right), -1 = back (from left). */
-  let viewDir = 1;
-  let prevViewForDir: View = currentView;
+  let viewDir = $state(1);
+  let prevViewForDir = $state<View>("dashboard");
 
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
@@ -146,18 +148,22 @@
     });
   }
 
-  $: if (currentView !== prevViewForDir) {
-    const a = VIEW_ORDER.indexOf(prevViewForDir);
-    const b = VIEW_ORDER.indexOf(currentView);
-    viewDir = a >= 0 && b >= 0 && a !== b ? (b > a ? 1 : -1) : 1;
-    prevViewForDir = currentView;
-  }
+  $effect(() => {
+    if (currentView !== prevViewForDir) {
+      const a = VIEW_ORDER.indexOf(prevViewForDir);
+      const b = VIEW_ORDER.indexOf(currentView);
+      viewDir = a >= 0 && b >= 0 && a !== b ? (b > a ? 1 : -1) : 1;
+      prevViewForDir = currentView;
+    }
+  });
 
-  $: if (currentView) {
-    tick().then(() => {
-      document.querySelector(".content")?.scrollTo({ top: 0 });
-    });
-  }
+  $effect(() => {
+    if (currentView) {
+      tick().then(() => {
+        document.querySelector(".content")?.scrollTo({ top: 0 });
+      });
+    }
+  });
 
   /**
    * One-time (per install) weak-hardware check. Runs after launcher settings
@@ -332,13 +338,11 @@
     }
   }
 
-  async function shareCapsule(
-    e: CustomEvent<{
-      humanExplanation: string;
-      actions: Record<string, unknown>[];
-      fingerprintKey: string | null;
-    }>,
-  ) {
+  async function shareCapsule(payload: {
+    humanExplanation: string;
+    actions: Record<string, unknown>[];
+    fingerprintKey: string | null;
+  }) {
     if (!shareCapsulePath) {
       shareCapsuleOpen = false;
       return;
@@ -347,9 +351,9 @@
     try {
       const result: any = await invoke("publish_experience_capsule", {
         path: shareCapsulePath,
-        fingerprintKey: e.detail.fingerprintKey,
-        humanExplanation: e.detail.humanExplanation || shareCapsuleExplanation || null,
-        actions: e.detail.actions ?? null,
+        fingerprintKey: payload.fingerprintKey,
+        humanExplanation: payload.humanExplanation || shareCapsuleExplanation || null,
+        actions: payload.actions ?? null,
       });
       if (result?.published) {
         toasts.success("Fix shared with the swarm hub — other clients can reuse it");
@@ -388,8 +392,7 @@
     chats: true, me: true,
   };
 
-  function handleCommandPaletteNavigate(e: CustomEvent<string>) {
-    const id = e.detail;
+  function handleCommandPaletteNavigate(id: string) {
     if (id === "new-instance") {
       import("./lib/store").then(({ newProjectOpen }) => {
         currentView = "dashboard";
@@ -418,37 +421,37 @@
           {#if currentView === "dashboard"}
             <Dashboard bind:currentView />
           {:else if currentView === "ide"}
-            {#if loadedViews.ide}<svelte:component this={loadedViews.ide} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.ide}{@const IdeView = loadedViews.ide}<IdeView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "mods"}
-            {#if loadedViews.mods}<svelte:component this={loadedViews.mods} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.mods}{@const ModsView = loadedViews.mods}<ModsView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "graph"}
-            {#if loadedViews.graph}<svelte:component this={loadedViews.graph} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.graph}{@const GraphView = loadedViews.graph}<GraphView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "diagnostics"}
-            {#if loadedViews.diagnostics}<svelte:component this={loadedViews.diagnostics} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.diagnostics}{@const DiagnosticsView = loadedViews.diagnostics}<DiagnosticsView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "crash-votes"}
-            {#if loadedViews["crash-votes"]}<svelte:component this={loadedViews["crash-votes"]} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews["crash-votes"]}{@const CrashVotesView = loadedViews["crash-votes"]}<CrashVotesView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "snapshots"}
-            {#if loadedViews.snapshots}<svelte:component this={loadedViews.snapshots} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.snapshots}{@const SnapshotsView = loadedViews.snapshots}<SnapshotsView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "configs"}
-            {#if loadedViews.configs}<svelte:component this={loadedViews.configs} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.configs}{@const ConfigsView = loadedViews.configs}<ConfigsView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "settings"}
-            {#if loadedViews.settings}<svelte:component this={loadedViews.settings} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.settings}{@const SettingsView = loadedViews.settings}<SettingsView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "project-settings"}
-            {#if loadedViews["project-settings"]}<svelte:component this={loadedViews["project-settings"]} onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews["project-settings"]}{@const ProjectSettingsView = loadedViews["project-settings"]}<ProjectSettingsView onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "ore-gen"}
-            {#if loadedViews["ore-gen"]}<svelte:component this={loadedViews["ore-gen"]} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews["ore-gen"]}{@const OreGenView = loadedViews["ore-gen"]}<OreGenView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "recipes"}
-            {#if loadedViews.recipes}<svelte:component this={loadedViews.recipes} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.recipes}{@const RecipesView = loadedViews.recipes}<RecipesView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "quests"}
-            {#if loadedViews.quests}<svelte:component this={loadedViews.quests} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.quests}{@const QuestsView = loadedViews.quests}<QuestsView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "world"}
-            {#if loadedViews.world}<svelte:component this={loadedViews.world} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.world}{@const WorldView = loadedViews.world}<WorldView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "library"}
-            {#if loadedViews.library}<svelte:component this={loadedViews.library} bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.library}{@const LibraryView = loadedViews.library}<LibraryView bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "chats"}
-            {#if loadedViews.chats}<svelte:component this={loadedViews.chats} bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.chats}{@const ChatsView = loadedViews.chats}<ChatsView bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "me"}
-            {#if loadedViews.me}<svelte:component this={loadedViews.me} onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.me}{@const MeView = loadedViews.me}<MeView onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {/if}
         </div>
       {/key}
@@ -462,19 +465,19 @@
 <ToastContainer />
 <TaskProgressPanel />
 {#if showShortcuts}
-  <KeyboardHelp on:close={() => (showShortcuts = false)} />
+  <KeyboardHelp onclose={() => (showShortcuts = false)} />
 {/if}
 {#if showCommandPalette}
   <CommandPalette
-    on:close={() => (showCommandPalette = false)}
-    on:navigate={handleCommandPaletteNavigate}
+    onclose={() => (showCommandPalette = false)}
+    onnavigate={handleCommandPaletteNavigate}
   />
 {/if}
 
 {#if showSwarmOnboarding}
   <SwarmOnboarding
-    on:enable={() => finishSwarmOnboarding(true)}
-    on:skip={() => finishSwarmOnboarding(false)}
+    onenable={() => finishSwarmOnboarding(true)}
+    onskip={() => finishSwarmOnboarding(false)}
   />
 {/if}
 
@@ -483,13 +486,13 @@
     path={shareCapsulePath}
     resolutionId={shareResolutionId}
     seedExplanation={shareCapsuleExplanation}
-    on:confirm={shareCapsule}
-    on:dismiss={dismissShareCapsule}
+    onconfirm={shareCapsule}
+    ondismiss={dismissShareCapsule}
   />
 {/if}
 
 {#if $launchLogPath}
-  <LaunchLogModal projectPath={$launchLogPath} title={$launchLogTitle} on:close={closeLaunchLog} />
+  <LaunchLogModal projectPath={$launchLogPath} title={$launchLogTitle} onclose={closeLaunchLog} />
 {/if}
 
 {#if $youtubePlayerSession}
@@ -499,13 +502,13 @@
       title={$youtubePlayerSession.title}
       originRect={$youtubePlayerSession.originRect}
       startMini={$youtubePlayerSession.startMini}
-      on:close={closeYoutubePlayer}
+      onclose={closeYoutubePlayer}
     />
   {/key}
 {/if}
 
 <svelte:window
-  on:keydown={(e) => {
+  onkeydown={(e) => {
     if (e.ctrlKey || e.metaKey) {
       switch (e.key) {
         case '1': currentView = 'dashboard'; e.preventDefault(); break;

@@ -1,17 +1,23 @@
 <script lang="ts">
-  import { X, Search, Loader2, FolderOpen, Check } from "lucide-svelte";
-  import { createEventDispatcher, onMount } from "svelte";
+  import { X, Search, Loader2, FolderOpen, Check } from "@lucide/svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ close: void; selected: string }>();
+  let {
+    current,
+    onclose,
+    onselected,
+  }: {
+    current: string;
+    onclose?: () => void;
+    onselected?: (path: string) => void;
+  } = $props();
 
-  export let current: string;
-
-  let runtimes: { path: string; version: string; major: number }[] = [];
-  let loading = true;
-  let error = "";
+  let runtimes = $state<{ path: string; version: string; major: number }[]>([]);
+  let loading = $state(true);
+  let error = $state("");
 
   onMount(async () => {
     try {
@@ -31,23 +37,23 @@
       filters: [{ name: "Java executable", extensions: ["exe"] }],
     });
     if (selected && typeof selected === "string") {
-      dispatch("selected", selected);
+      onselected?.(selected);
     }
   }
 
   function select(path: string) {
-    dispatch("selected", path);
+    onselected?.(path);
   }
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={() => {}}>
-  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="modal-backdrop" onclick={(e) => e.target === e.currentTarget && onclose?.()} role="button" tabindex="-1" aria-label="Close" onkeydown={() => {}}>
+  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-header">
       <h2>
         <Search size={18} />
         Select Java Runtime
       </h2>
-      <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
+      <button class="icon-btn" onclick={() => onclose?.()} aria-label="Close">
         <X size={18} />
       </button>
     </div>
@@ -58,7 +64,7 @@
       {/if}
 
       <div class="actions-row">
-        <button class="ghost" on:click={browse}>
+        <button class="ghost" onclick={browse}>
           <FolderOpen size={16} />
           Browse manually
         </button>
@@ -77,7 +83,7 @@
             <button
               class="runtime"
               class:active={runtime.path === current}
-              on:click={() => select(runtime.path)}
+              onclick={() => select(runtime.path)}
             >
               <div class="runtime-info">
                 <span class="runtime-version">Java {runtime.major}</span>
@@ -93,7 +99,7 @@
     </div>
 
     <div class="modal-footer">
-      <button class="ghost" on:click={() => dispatch("close")}>Cancel</button>
+      <button class="ghost" onclick={() => onclose?.()}>Cancel</button>
     </div>
   </div>
 </div>

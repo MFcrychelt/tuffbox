@@ -1,9 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { X } from "lucide-svelte";
+  import { X } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ close: void }>();
+  let { onclose }: { onclose?: () => void } = $props();
 
   const shortcuts = [
     { keys: ["Ctrl", "K"], label: "Quick navigate" },
@@ -18,8 +17,8 @@
   ];
 </script>
 
-<div class="kh-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("close")} on:keydown={() => {}}>
-  <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="kh-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && onclose?.()} onkeydown={() => {}}>
+  <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <h3>Keyboard Shortcuts</h3>
     <div class="kh-list">
       {#each shortcuts as s}
@@ -32,7 +31,7 @@
       {/each}
     </div>
     <p class="kh-hint">Press <kbd>?</kbd> anywhere to toggle this panel</p>
-    <button class="kh-close" on:click={() => dispatch("close")} aria-label="Close shortcuts">
+    <button class="kh-close" onclick={() => onclose?.()} aria-label="Close shortcuts">
       <X size={16} />
     </button>
   </div>

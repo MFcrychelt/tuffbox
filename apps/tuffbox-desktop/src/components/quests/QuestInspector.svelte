@@ -1,29 +1,43 @@
 <script lang="ts">
-  import { Trash2, Link2, AlertTriangle } from "lucide-svelte";
+  import { Trash2, Link2, AlertTriangle } from "@lucide/svelte";
   import type { QuestData, QuestValidationIssue } from "../../lib/api";
   import TaskRewardEditor from "./TaskRewardEditor.svelte";
 
-  export let quest: QuestData;
-  export let chapterQuests: QuestData[];
-  export let issues: QuestValidationIssue[] = [];
-  export let rewardTableIds: string[] = [];
-  export let onDirty: () => void;
-  export let onRemove: () => void;
-  export let onAddDep: (depId: string) => void;
-  export let onRemoveDep: (depId: string) => void;
+  let {
+    quest,
+    chapterQuests,
+    issues = [],
+    rewardTableIds = [],
+    onDirty,
+    onRemove,
+    onAddDep,
+    onRemoveDep,
+  }: {
+    quest: QuestData;
+    chapterQuests: QuestData[];
+    issues?: QuestValidationIssue[];
+    rewardTableIds?: string[];
+    onDirty: () => void;
+    onRemove: () => void;
+    onAddDep: (depId: string) => void;
+    onRemoveDep: (depId: string) => void;
+  } = $props();
 
   const SHAPES = ["", "circle", "square", "rsquare", "diamond", "hexagon", "pentagon", "gear", "none"];
   const DEP_REQ = ["", "all_completed", "one_completed", "all_started", "one_started"];
 
-  let depPick = "";
-  let descText = "";
-  let extraKey = "";
-  let extraVal = "";
-  let showAdvanced = false;
+  let depPick = $state("");
+  let descText = $state("");
+  let extraKey = $state("");
+  let extraVal = $state("");
+  let showAdvanced = $state(false);
 
-  $: depOptions = buildDepOptions(chapterQuests, quest);
-  $: myIssues = issues.filter((i) => i.questId === quest.id);
-  $: descText = (quest.description ?? []).join("\n");
+  let depOptions = $derived(buildDepOptions(chapterQuests, quest));
+  let myIssues = $derived(issues.filter((i) => i.questId === quest.id));
+
+  $effect(() => {
+    descText = (quest.description ?? []).join("\n");
+  });
 
   function buildDepOptions(list: QuestData[], current: QuestData) {
     const opts: { id: string; label: string }[] = [];
@@ -89,7 +103,7 @@
 
   function tri(field: keyof QuestData, e: Event) {
     const s = (e.target as HTMLSelectElement).value;
-    (quest as Record<string, unknown>)[field as string] =
+    (quest as unknown as Record<string, unknown>)[field as string] =
       s === "true" ? true : s === "false" ? false : null;
     onDirty();
   }
@@ -140,7 +154,7 @@
 <aside class="insp ftbq-view">
   <div class="insp-h">
     <h3 title={quest.id}>{quest.title}</h3>
-    <button type="button" class="ico danger" title="Delete quest" on:click={onRemove}>
+    <button type="button" class="ico danger" title="Delete quest" onclick={onRemove}>
       <Trash2 size={14} />
     </button>
   </div>
@@ -155,38 +169,38 @@
   {/if}
 
   <div class="fields">
-    <label>Title<input bind:value={quest.title} on:input={onDirty} /></label>
+    <label>Title<input bind:value={quest.title} oninput={onDirty} /></label>
     <label
-      >Subtitle<input bind:value={quest.subtitle} on:input={onDirty} placeholder="Optional" /></label
+      >Subtitle<input bind:value={quest.subtitle} oninput={onDirty} placeholder="Optional" /></label
     >
     <label
       >Description
       <div class="fmt-bar">
-        <button type="button" class="ghost" on:click={() => wrapFmt("&l")}>Bold</button>
-        <button type="button" class="ghost" on:click={() => wrapFmt("&a")}>Green</button>
-        <button type="button" class="ghost" on:click={() => wrapFmt("&7")}>Gray</button>
-        <button type="button" class="ghost" on:click={() => wrapFmt("&e")}>Gold</button>
-        <button type="button" class="ghost" on:click={() => insertTemplate("objective")}>Objective</button>
-        <button type="button" class="ghost" on:click={() => insertTemplate("story")}>Story</button>
+        <button type="button" class="ghost" onclick={() => wrapFmt("&l")}>Bold</button>
+        <button type="button" class="ghost" onclick={() => wrapFmt("&a")}>Green</button>
+        <button type="button" class="ghost" onclick={() => wrapFmt("&7")}>Gray</button>
+        <button type="button" class="ghost" onclick={() => wrapFmt("&e")}>Gold</button>
+        <button type="button" class="ghost" onclick={() => insertTemplate("objective")}>Objective</button>
+        <button type="button" class="ghost" onclick={() => insertTemplate("story")}>Story</button>
       </div>
       <textarea
         rows="4"
         value={descText}
-        on:input={(e) => (descText = textareaVal(e))}
-        on:change={commitDescription}
+        oninput={(e) => (descText = textareaVal(e))}
+        onchange={commitDescription}
         placeholder="One line per paragraph · & codes · JSON text lines ok"
       ></textarea>
       <small class="fmt-hint">Lines starting with {"{"} or [ are treated as raw JSON text by FTB Quests.</small>
     </label>
     <label class="checkbox">
-      <input type="checkbox" bind:checked={quest.optional} on:change={onDirty} />
+      <input type="checkbox" bind:checked={quest.optional} onchange={onDirty} />
       Optional quest
     </label>
     <label
       >Shape
       <select
         value={quest.shape ?? ""}
-        on:change={(e) => {
+        onchange={(e) => {
           quest.shape = selectVal(e) || null;
           onDirty();
         }}
@@ -202,27 +216,27 @@
         step="0.25"
         min="0.25"
         bind:value={quest.size}
-        on:input={onDirty}
+        oninput={onDirty}
         placeholder="1"
       /></label
     >
     <label
       >Position (quest space)
       <div class="xy">
-        <input type="number" step="0.5" bind:value={quest.x} on:input={onDirty} />
-        <input type="number" step="0.5" bind:value={quest.y} on:input={onDirty} />
+        <input type="number" step="0.5" bind:value={quest.x} oninput={onDirty} />
+        <input type="number" step="0.5" bind:value={quest.y} oninput={onDirty} />
       </div>
     </label>
   </div>
 
-  <button type="button" class="adv-tog" on:click={() => (showAdvanced = !showAdvanced)}>
+  <button type="button" class="adv-tog" onclick={() => (showAdvanced = !showAdvanced)}>
     {showAdvanced ? "▾" : "▸"} FTB flags
   </button>
   {#if showAdvanced}
     <div class="fields flags">
       <label
         >Hide dependency lines
-        <select value={triVal(quest.hideDependencyLines)} on:change={(e) => tri("hideDependencyLines", e)}>
+        <select value={triVal(quest.hideDependencyLines)} onchange={(e) => tri("hideDependencyLines", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -230,7 +244,7 @@
       </label>
       <label
         >Hide dependent lines
-        <select value={triVal(quest.hideDependentLines)} on:change={(e) => tri("hideDependentLines", e)}>
+        <select value={triVal(quest.hideDependentLines)} onchange={(e) => tri("hideDependentLines", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -238,7 +252,7 @@
       </label>
       <label
         >Can repeat
-        <select value={triVal(quest.canRepeat)} on:change={(e) => tri("canRepeat", e)}>
+        <select value={triVal(quest.canRepeat)} onchange={(e) => tri("canRepeat", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -246,7 +260,7 @@
       </label>
       <label
         >Invisible
-        <select value={triVal(quest.invisible)} on:change={(e) => tri("invisible", e)}>
+        <select value={triVal(quest.invisible)} onchange={(e) => tri("invisible", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -254,7 +268,7 @@
       </label>
       <label
         >Disable toast
-        <select value={triVal(quest.disableToast)} on:change={(e) => tri("disableToast", e)}>
+        <select value={triVal(quest.disableToast)} onchange={(e) => tri("disableToast", e)}>
           <option value="">unset</option>
           <option value="true">true</option>
           <option value="false">false</option>
@@ -265,7 +279,7 @@
           type="number"
           min="0"
           value={quest.minRequiredDependencies ?? ""}
-          on:input={(e) => {
+          oninput={(e) => {
             const v = inputVal(e);
             quest.minRequiredDependencies = v === "" ? null : Number(v);
             onDirty();
@@ -276,7 +290,7 @@
         >Dependency requirement
         <select
           value={quest.dependencyRequirement ?? ""}
-          on:change={(e) => {
+          onchange={(e) => {
             quest.dependencyRequirement = selectVal(e) || null;
             onDirty();
           }}
@@ -292,13 +306,13 @@
         <div class="extra-row">
           <code>{k}</code>
           <span>{typeof v === "string" ? v : JSON.stringify(v)}</span>
-          <button type="button" on:click={() => removeExtra(k)}>×</button>
+          <button type="button" onclick={() => removeExtra(k)}>×</button>
         </div>
       {/each}
       <div class="extra-add">
         <input placeholder="key" bind:value={extraKey} />
         <input placeholder="value / JSON" bind:value={extraVal} />
-        <button type="button" on:click={addExtra}>Add</button>
+        <button type="button" onclick={addExtra}>Add</button>
       </div>
     </div>
   {/if}
@@ -311,7 +325,7 @@
     {#each quest.dependencies as dep}
       <span class="dep-tag" title={dep}>
         {titleOf(dep)}
-        <button type="button" class="dep-rm" on:click={() => onRemoveDep(dep)}>×</button>
+        <button type="button" class="dep-rm" onclick={() => onRemoveDep(dep)}>×</button>
       </span>
     {/each}
   </div>
@@ -322,7 +336,7 @@
         <option value={o.id}>{o.label}</option>
       {/each}
     </select>
-    <button type="button" class="add-btn" disabled={!depPick} on:click={applyDep}>Add</button>
+    <button type="button" class="add-btn" disabled={!depPick} onclick={applyDep}>Add</button>
   </div>
 </aside>
 

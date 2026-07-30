@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Youtube, ChevronDown, PictureInPicture2 } from "lucide-svelte";
+  import { Youtube, ChevronDown, PictureInPicture2 } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { api } from "../lib/api";
   import { openYoutubePlayer } from "../lib/store";
@@ -18,7 +18,7 @@
   };
 
   /** `row` = horizontal home strip; `rail` = vertical under-skin column. */
-  export let variant: "row" | "rail" = "row";
+  let { variant = "row" }: { variant?: "row" | "rail" } = $props();
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
   const FEED_LIMIT = 20;
@@ -28,11 +28,11 @@
   /** Share of tracked-creator videos in the final strip. */
   const CHANNEL_SHARE = 0.4;
 
-  let videos: FeedVideo[] = [];
-  let loading = true;
-  let loadError = "";
-  let expanded = true;
-  let inlinePlayer = true;
+  let videos = $state<FeedVideo[]>([]);
+  let loading = $state(true);
+  let loadError = $state("");
+  let expanded = $state(true);
+  let inlinePlayer = $state(true);
 
   function onCardClick(video: FeedVideo, event: MouseEvent) {
     if (inlinePlayer) {
@@ -279,7 +279,7 @@
 
 {#if loading || videos.length > 0 || loadError !== "" || (!loading && videos.length === 0)}
   <section class="youtube-feed" class:rail={variant === "rail"} aria-busy={loading}>
-    <button type="button" class="section-header" on:click={toggleExpanded} disabled={loading}>
+    <button type="button" class="section-header" onclick={toggleExpanded} disabled={loading}>
       <Youtube size={18} />
       <h2>Minecraft on YouTube</h2>
       <span class="chevron" class:rotated={expanded} aria-hidden="true">
@@ -301,12 +301,12 @@
         <div class="feed-status">
           <p>Couldn’t load YouTube feed.</p>
           <span class="feed-status-detail">{loadError}</span>
-          <button type="button" class="retry-btn" on:click={() => loadFeed()}>Retry</button>
+          <button type="button" class="retry-btn" onclick={() => loadFeed()}>Retry</button>
         </div>
       {:else if videos.length === 0}
         <div class="feed-status">
           <p>No videos yet. The feed fills every few hours.</p>
-          <button type="button" class="retry-btn" on:click={() => loadFeed()}>Refresh</button>
+          <button type="button" class="retry-btn" onclick={() => loadFeed()}>Refresh</button>
         </div>
       {:else}
         <div class="feed-row tb-anim-fade-in">
@@ -315,7 +315,7 @@
               <button
                 type="button"
                 class="video-card"
-                on:click={(e) => onCardClick(video, e)}
+                onclick={(e) => onCardClick(video, e)}
               >
                 <div class="thumb">
                   {#if video.thumbnail_url}
@@ -333,7 +333,7 @@
                   class="pip-btn"
                   title="Play in mini window"
                   aria-label="Play in mini window"
-                  on:click={(e) => onCardMini(video, e)}
+                  onclick={(e) => onCardMini(video, e)}
                 >
                   <PictureInPicture2 size={14} />
                 </button>

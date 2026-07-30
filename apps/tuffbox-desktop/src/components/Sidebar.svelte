@@ -18,8 +18,8 @@
     FolderCog,
     CookingPot,
     ScrollText,
-  } from "lucide-svelte";
-  import { afterUpdate, onDestroy, tick } from "svelte";
+  } from "@lucide/svelte";
+  import { onDestroy, tick } from "svelte";
   import {
     newProjectOpen,
     sidebarMode,
@@ -28,7 +28,7 @@
   } from "../lib/store";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
-  export let currentView: View;
+  let { currentView = $bindable() }: { currentView: View } = $props();
 
   const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string; needsProject?: boolean }[] = [
     { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
@@ -47,22 +47,22 @@
     { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
   ];
 
-  $: hasProject = !!$projectPath;
-  let navEl: HTMLElement | null = null;
-  let bottomEl: HTMLElement | null = null;
-  let indicatorY = 0;
-  let indicatorH = 42;
-  let indicatorReady = false;
-  let indicatorInBottom = false;
+  const hasProject = $derived(!!$projectPath);
+  let navEl: HTMLElement | null = $state(null);
+  let bottomEl: HTMLElement | null = $state(null);
+  let indicatorY = $state(0);
+  let indicatorH = $state(42);
+  let indicatorReady = $state(false);
+  let indicatorInBottom = $state(false);
 
-  let railRevealed = false;
+  let railRevealed = $state(false);
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
   /** Grace before hide — enough to move from hotzone onto the panel. */
   const RAIL_HIDE_MS = 280;
 
-  $: autoHide = $sidebarMode === "autoHide";
-  $: iconsMode = $sidebarMode === "icons";
-  $: iconsCollapsed = iconsMode && $sidebarIconsCollapsed;
+  const autoHide = $derived($sidebarMode === "autoHide");
+  const iconsMode = $derived($sidebarMode === "icons");
+  const iconsCollapsed = $derived(iconsMode && $sidebarIconsCollapsed);
 
   function openNewProject() {
     // Dashboard owns the modal, so make sure we're on that view before
@@ -108,10 +108,12 @@
     scheduleHideRail(320);
   }
 
-  $: if (!autoHide) {
-    railRevealed = false;
-    clearRailHideTimer();
-  }
+  $effect(() => {
+    if (!autoHide) {
+      railRevealed = false;
+      clearRailHideTimer();
+    }
+  });
 
   onDestroy(() => clearRailHideTimer());
 
@@ -131,8 +133,11 @@
     indicatorReady = true;
   }
 
-  $: currentView, iconsCollapsed, railRevealed, $sidebarMode, void syncIndicator();
-  afterUpdate(() => {
+  $effect(() => {
+    currentView;
+    iconsCollapsed;
+    railRevealed;
+    $sidebarMode;
     void syncIndicator();
   });
 </script>
@@ -147,8 +152,8 @@
     <div
       class="sidebar-hotzone"
       aria-hidden="true"
-      on:mouseenter={revealRail}
-      on:mouseleave={() => scheduleHideRail()}
+      onmouseenter={revealRail}
+      onmouseleave={() => scheduleHideRail()}
     ></div>
   {/if}
 
@@ -157,10 +162,10 @@
     class:compact={iconsCollapsed}
     class:auto-hide-panel={autoHide}
     class:revealed={railRevealed || !autoHide}
-    on:mouseenter={revealRail}
-    on:mouseleave={() => scheduleHideRail()}
-    on:focusin={revealRail}
-    on:focusout={onRailFocusOut}
+    onmouseenter={revealRail}
+    onmouseleave={() => scheduleHideRail()}
+    onfocusin={revealRail}
+    onfocusout={onRailFocusOut}
   >
     <div class="brand">
       <div class="logo">T</div>
@@ -173,7 +178,7 @@
           class="collapse-btn tb-icon-hover"
           title={iconsCollapsed ? "Expand sidebar" : "Collapse to icons"}
           aria-expanded={!iconsCollapsed}
-          on:click={() => sidebarIconsCollapsed.toggle()}
+          onclick={() => sidebarIconsCollapsed.toggle()}
         >
           {#if iconsCollapsed}
             <PanelLeftOpen size={16} />
@@ -192,12 +197,13 @@
         aria-hidden="true"
       ></div>
       {#each items as item (item.id)}
+        {@const NavIcon = item.icon}
         <button
           class="nav-item tb-icon-hover"
           class:active={currentView === item.id}
           class:featured={item.featured}
           disabled={item.needsProject && !hasProject}
-          on:click={(e) => {
+          onclick={(e) => {
             if (item.needsProject && !hasProject) return;
             selectNav(item.id, e.currentTarget);
           }}
@@ -207,7 +213,7 @@
               ? `${item.label} (${item.shortcut})`
               : item.label}
         >
-          <svelte:component this={item.icon} size={20} />
+          <NavIcon size={20} />
           {#if !iconsCollapsed}
             <span class="nav-label">{item.label}</span>
             {#if item.shortcut}
@@ -220,7 +226,7 @@
       <button
         class="nav-item add tb-icon-hover"
         title="New instance"
-        on:click={(e) => {
+        onclick={(e) => {
           openNewProject();
           if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
           scheduleHideRail(320);
@@ -243,7 +249,7 @@
       <button
         class="nav-item tb-icon-hover"
         class:active={currentView === "settings"}
-        on:click={(e) => selectNav("settings", e.currentTarget)}
+        onclick={(e) => selectNav("settings", e.currentTarget)}
         title="Settings"
       >
         <Settings size={20} />

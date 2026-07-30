@@ -5,7 +5,7 @@
     CalendarRange, CheckSquare, XSquare, Copy, Scissors, Clipboard, Circle,
     ZoomIn, ZoomOut, Minimize2, Eraser, ArrowLeftRight, Filter, FolderOutput, FolderInput,
     FileDown, FileUp, Wrench, Pencil, Crosshair, List, Globe2,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { open, save } from "@tauri-apps/plugin-dialog";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -32,132 +32,130 @@
   type ColorMode = "status" | "date" | "inhabited" | "biome" | "height";
   type Tool = "pan" | "click" | "box" | "radius" | "region" | "poly";
 
-  export let worldName: string = "";
-  /** "top" = horizontal toolbar (OreGen embed); "dock" = MCA Selector–style chrome */
-  export let layout: "top" | "dock" = "top";
+  let { worldName = "", layout = "top" }: { worldName?: string; layout?: "top" | "dock" } = $props();
 
-  let map: WorldMapData | null = null;
-  let filtersOpen = false;
-  let toolsDrawerOpen = false;
-  let regionRailOpen = false;
-  let loading = false;
-  let error: string | null = null;
+  let map = $state<WorldMapData | null>(null);
+  let filtersOpen = $state(false);
+  let toolsDrawerOpen = $state(false);
+  let regionRailOpen = $state(false);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
 
-  let dimensions: string[] = ["overworld"];
-  let dimension = "overworld";
+  let dimensions = $state<string[]>(["overworld"]);
+  let dimension = $state("overworld");
 
-  let showRegions = true;
-  let showChunkGrid = true;
-  let showSpawn = true;
-  let spawnChunk: { cx: number; cz: number } | null = null;
-  let colorMode: ColorMode = "biome";
-  let tool: Tool = "box";
-  let selection = new Set<string>();
-  let statusFilter: "all" | "empty" | "partial" | "full" = "all";
-  let polyPoints: { x: number; y: number }[] = [];
-  let polyAdd = true;
+  let showRegions = $state(true);
+  let showChunkGrid = $state(true);
+  let showSpawn = $state(true);
+  let spawnChunk = $state<{ cx: number; cz: number } | null>(null);
+  let colorMode = $state<ColorMode>("biome");
+  let tool = $state<Tool>("box");
+  let selection = $state(new Set<string>());
+  let statusFilter = $state<"all" | "empty" | "partial" | "full">("all");
+  let polyPoints = $state<{ x: number; y: number }[]>([]);
+  let polyAdd = $state(true);
 
   /** Height range filter (MCA-style Y slider); chunks outside are dimmed. */
-  let heightMin = -64;
-  let heightMax = 319;
+  let heightMin = $state(-64);
+  let heightMax = $state(319);
 
-  let gotoOpen = false;
-  let gotoMode: "block" | "chunk" = "block";
-  let gotoX = "0";
-  let gotoZ = "0";
-  let gotoXInput: HTMLInputElement | null = null;
+  let gotoOpen = $state(false);
+  let gotoMode = $state<"block" | "chunk">("block");
+  let gotoX = $state("0");
+  let gotoZ = $state("0");
+  let gotoXInput = $state<HTMLInputElement | null>(null);
 
-  let hover: {
+  let hover = $state<{
     rx: number; rz: number; cx: number; cz: number;
     blockX: number; blockZ: number;
     status: string; modified: number;
     inhabitedTime: number; dataVersion: number;
     biomeId?: number; surfaceY?: number;
     entityCount?: number; structureCount?: number;
-  } | null = null;
-  let tipX = 0;
-  let tipY = 0;
-  let visibleRegionCount = 0;
+  } | null>(null);
+  let tipX = $state(0);
+  let tipY = $state(0);
+  let visibleRegionCount = $state(0);
 
-  let pasteOffsetX = 0;
-  let pasteOffsetZ = 0;
+  let pasteOffsetX = $state(0);
+  let pasteOffsetZ = $state(0);
 
-  let fromWorldOpen = false;
-  let fromWorldLoading = false;
-  let fromWorldList: WorldListItem[] = [];
-  let fromWorldName = "";
-  let fromWorldDim = "overworld";
-  let fromWorldDims: string[] = ["overworld"];
-  let fromWorldBannerDismissed = false;
-  let busyLabel: string | null = null;
+  let fromWorldOpen = $state(false);
+  let fromWorldLoading = $state(false);
+  let fromWorldList = $state<WorldListItem[]>([]);
+  let fromWorldName = $state("");
+  let fromWorldDim = $state("overworld");
+  let fromWorldDims = $state<string[]>(["overworld"]);
+  let fromWorldBannerDismissed = $state(false);
+  let busyLabel = $state<string | null>(null);
 
-  let filterFrom = "";
-  let filterTo = "";
-  let filterActive = false;
-  let radiusChunks = 8;
+  let filterFrom = $state("");
+  let filterTo = $state("");
+  let filterActive = $state(false);
+  let radiusChunks = $state(8);
 
-  let inhabitedMin = "";
-  let inhabitedMax = "";
-  let dataVersionMin = "";
-  let dataVersionMax = "";
-  let xposMin = "";
-  let xposMax = "";
-  let zposMin = "";
-  let zposMax = "";
-  let borderEmpty = "";
-  let entityCountMin = "";
-  let structureCountMin = "";
-  let filtEntityNames = "";
-  let filtStructureNames = "";
-  let filtPaletteNames = "";
-  let filterQuery = "";
-  let importOverwrite = true;
-  let importIntoSelection = false;
-  let importYOffset = 0;
-  let importSections = "";
+  let inhabitedMin = $state("");
+  let inhabitedMax = $state("");
+  let dataVersionMin = $state("");
+  let dataVersionMax = $state("");
+  let xposMin = $state("");
+  let xposMax = $state("");
+  let zposMin = $state("");
+  let zposMax = $state("");
+  let borderEmpty = $state("");
+  let entityCountMin = $state("");
+  let structureCountMin = $state("");
+  let filtEntityNames = $state("");
+  let filtStructureNames = $state("");
+  let filtPaletteNames = $state("");
+  let filterQuery = $state("");
+  let importOverwrite = $state(true);
+  let importIntoSelection = $state(false);
+  let importYOffset = $state(0);
+  let importSections = $state("");
 
-  let chgInhabited = "";
-  let chgStatus = "";
-  let chgDataVersion = "";
-  let chgLightPopulated = "";
-  let chgBiome = "";
-  let chgDeleteSections = "";
-  let chgReplaceBlocks = "";
-  let chgDeleteStructureRefs = "";
-  let chgPreventRetrogen = false;
-  let chgForceBlend = false;
-  let chgDeleteEntities = false;
-  let chgFixStatus = false;
-  let chgForce = false;
-  let nbtPanelOpen = true;
+  let chgInhabited = $state("");
+  let chgStatus = $state("");
+  let chgDataVersion = $state("");
+  let chgLightPopulated = $state("");
+  let chgBiome = $state("");
+  let chgDeleteSections = $state("");
+  let chgReplaceBlocks = $state("");
+  let chgDeleteStructureRefs = $state("");
+  let chgPreventRetrogen = $state(false);
+  let chgForceBlend = $state(false);
+  let chgDeleteEntities = $state(false);
+  let chgFixStatus = $state(false);
+  let chgForce = $state(false);
+  let nbtPanelOpen = $state(true);
 
-  let editorOpen = false;
-  let editorRx = 0;
-  let editorRz = 0;
-  let editorIdx = 0;
+  let editorOpen = $state(false);
+  let editorRx = $state(0);
+  let editorRz = $state(0);
+  let editorIdx = $state(0);
 
-  let csvInput: HTMLInputElement;
+  let csvInput = $state<HTMLInputElement | undefined>(undefined);
 
   const CELL = 8;
   const GRID = 32;
-  let canvas: HTMLCanvasElement;
-  let viewport: HTMLDivElement;
+  let canvas = $state<HTMLCanvasElement | undefined>(undefined);
+  let viewport = $state<HTMLDivElement | undefined>(undefined);
 
   // View transform (screen = world * zoom + pan)
-  let zoom = 1;
-  let panX = 0;
-  let panY = 0;
-  let panning = false;
-  let panLast: { x: number; y: number } | null = null;
+  let zoom = $state(1);
+  let panX = $state(0);
+  let panY = $state(0);
+  let panning = $state(false);
+  let panLast = $state<{ x: number; y: number } | null>(null);
 
-  let dragStart: { x: number; y: number } | null = null;
-  let dragCurrent: { x: number; y: number } | null = null;
-  let dragAdd = true;
+  let dragStart = $state<{ x: number; y: number } | null>(null);
+  let dragCurrent = $state<{ x: number; y: number } | null>(null);
+  let dragAdd = $state(true);
 
-  let flashMsg: string | null = null;
-  let flashTimer: ReturnType<typeof setTimeout>;
-  let drawScheduled = false;
-  let lastDrawAt = 0;
+  let flashMsg = $state<string | null>(null);
+  let flashTimer = $state<ReturnType<typeof setTimeout> | undefined>(undefined);
+  let drawScheduled = $state(false);
+  let lastDrawAt = $state(0);
   const POTATO_DRAW_MIN_MS = 100;
 
   function isPotatoPc() {
@@ -212,26 +210,32 @@
     flash(msg, 4500);
   }
 
-  $: crossWorldClip =
+  const crossWorldClip = $derived(
     $worldMapClipboard != null &&
     $worldMapClipboard.sourceWorld !== worldName &&
-    ($worldMapClipboard.clipboard.chunks?.length ?? 0) > 0;
+    ($worldMapClipboard.clipboard.chunks?.length ?? 0) > 0,
+  );
 
-  $: showClipBanner =
+  const showClipBanner = $derived(
     layout === "dock" &&
     crossWorldClip &&
     !fromWorldBannerDismissed &&
     !fromWorldOpen &&
-    !gotoOpen;
+    !gotoOpen,
+  );
 
-  let lastClipAt = 0;
-  $: if ($worldMapClipboard?.copiedAt && $worldMapClipboard.copiedAt !== lastClipAt) {
-    lastClipAt = $worldMapClipboard.copiedAt;
-    fromWorldBannerDismissed = false;
-  }
-  $: if (!$worldMapClipboard) {
-    lastClipAt = 0;
-  }
+  let lastClipAt = $state(0);
+  $effect(() => {
+    if ($worldMapClipboard?.copiedAt && $worldMapClipboard.copiedAt !== lastClipAt) {
+      lastClipAt = $worldMapClipboard.copiedAt;
+      fromWorldBannerDismissed = false;
+    }
+  });
+  $effect(() => {
+    if (!$worldMapClipboard) {
+      lastClipAt = 0;
+    }
+  });
 
   function parseOptNum(s: string): number | null {
     if (s === "" || s == null) return null;
@@ -1828,7 +1832,7 @@
     flash(`Went to chunk ${cx}, ${cz}`);
   }
 
-  $: regionList = map
+  const regionList = $derived(map
     ? [...map.regions]
         .map((r) => ({
           rx: r.regionX,
@@ -1837,13 +1841,15 @@
           label: `r.${r.regionX}.${r.regionZ}`,
         }))
         .sort((a, b) => a.rx - b.rx || a.rz - b.rz)
-    : [];
+    : []);
 
-  $: if (heightMin > heightMax) {
-    const t = heightMin;
-    heightMin = heightMax;
-    heightMax = t;
-  }
+  $effect(() => {
+    if (heightMin > heightMax) {
+      const t = heightMin;
+      heightMin = heightMax;
+      heightMax = t;
+    }
+  });
 
   function onLeave(evt: MouseEvent) {
     hover = null;
@@ -1884,10 +1890,16 @@
     clearTimeout(flashTimer);
   });
 
-  $: if (worldName && $projectPath) load();
-  $: if (map) scheduleDraw();
-  $: canvasCursor = tool === "pan" ? "grab" : (tool === "click" || tool === "region" || tool === "poly") ? "pointer" : "crosshair";
-  $: if (heightMin !== undefined && heightMax !== undefined) scheduleDraw();
+  $effect(() => {
+    if (worldName && $projectPath) load();
+  });
+  $effect(() => {
+    if (map) scheduleDraw();
+  });
+  const canvasCursor = $derived(tool === "pan" ? "grab" : (tool === "click" || tool === "region" || tool === "poly") ? "pointer" : "crosshair");
+  $effect(() => {
+    if (heightMin !== undefined && heightMax !== undefined) scheduleDraw();
+  });
 </script>
 
 <div
@@ -1898,22 +1910,22 @@
 >
   {#if layout === "dock"}
     <div class="mca-topbar">
-      <select class="ghost select slim dim-select" bind:value={dimension} on:change={load} title="Dimension">
+      <select class="ghost select slim dim-select" bind:value={dimension} onchange={load} title="Dimension">
         {#each dimensions as d (d)}
           <option value={d}>{dimLabel(d)}</option>
         {/each}
       </select>
       <span class="mca-sep" aria-hidden="true"></span>
       <div class="tool-group compact tool-segment" role="toolbar" aria-label="Selection tools">
-        <button type="button" class="ghost tool-ico" class:active={tool === "pan"} on:click={() => (tool = "pan")} title="Pan"><Minimize2 size={14} /></button>
-        <button type="button" class="ghost tool-ico" class:active={tool === "click"} on:click={() => (tool = "click")} title="Click"><MousePointer2 size={14} /></button>
-        <button type="button" class="ghost tool-ico" class:active={tool === "box"} on:click={() => (tool = "box")} title="Box"><Square size={14} /></button>
-        <button type="button" class="ghost tool-ico" class:active={tool === "radius"} on:click={() => (tool = "radius")} title="Radius"><Circle size={14} /></button>
-        <button type="button" class="ghost tool-ico" class:active={tool === "poly"} on:click={() => { tool = "poly"; polyPoints = []; draw(); }} title="Poly"><Pencil size={14} /></button>
-        <button type="button" class="ghost tool-ico" class:active={tool === "region"} on:click={() => (tool = "region")} title="Region"><Layers size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "pan"} onclick={() => (tool = "pan")} title="Pan"><Minimize2 size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "click"} onclick={() => (tool = "click")} title="Click"><MousePointer2 size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "box"} onclick={() => (tool = "box")} title="Box"><Square size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "radius"} onclick={() => (tool = "radius")} title="Radius"><Circle size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "poly"} onclick={() => { tool = "poly"; polyPoints = []; draw(); }} title="Poly"><Pencil size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "region"} onclick={() => (tool = "region")} title="Region"><Layers size={14} /></button>
       </div>
       <span class="mca-sep" aria-hidden="true"></span>
-      <select class="ghost select slim" bind:value={colorMode} on:change={draw} title="Color mode (N)">
+      <select class="ghost select slim" bind:value={colorMode} onchange={draw} title="Color mode (N)">
         <option value="biome">biome</option>
         <option value="height">height</option>
         <option value="status">status</option>
@@ -1922,32 +1934,32 @@
       </select>
       <div class="height-range" title="Height range filter (surfaceY)">
         <span class="hr-label">Y</span>
-        <input type="range" min="-64" max="319" bind:value={heightMin} on:input={draw} />
+        <input type="range" min="-64" max="319" bind:value={heightMin} oninput={draw} />
         <code>{heightMin}</code>
         <span class="hr-dots">…</span>
-        <input type="range" min="-64" max="319" bind:value={heightMax} on:input={draw} />
+        <input type="range" min="-64" max="319" bind:value={heightMax} oninput={draw} />
         <code>{heightMax}</code>
         {#if heightMin !== -64 || heightMax !== 319}
-          <button type="button" class="y-reset" on:click={resetHeightRange} title="Reset Y to −64…319">↺</button>
+          <button type="button" class="y-reset" onclick={resetHeightRange} title="Reset Y to −64…319">↺</button>
         {/if}
       </div>
       <span class="mca-sep" aria-hidden="true"></span>
       <div class="tool-group compact tool-segment">
-        <button type="button" class="ghost tool-ico" on:click={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
-        <button type="button" class="ghost tool-ico" on:click={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
-        <button type="button" class="ghost tool-lbl" on:click={() => { fitView(); draw(); }} title="Fit (0)">Fit</button>
-        <button type="button" class="ghost tool-lbl" on:click={openGoto} title="Go to… (G)"><Crosshair size={14} /><span>Go</span></button>
-        <button type="button" class="ghost tool-lbl" class:pulse={crossWorldClip} on:click={openFromWorld} title="From another world (F)"><Globe2 size={14} /><span>World</span></button>
+        <button type="button" class="ghost tool-ico" onclick={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
+        <button type="button" class="ghost tool-ico" onclick={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
+        <button type="button" class="ghost tool-lbl" onclick={() => { fitView(); draw(); }} title="Fit (0)">Fit</button>
+        <button type="button" class="ghost tool-lbl" onclick={openGoto} title="Go to… (G)"><Crosshair size={14} /><span>Go</span></button>
+        <button type="button" class="ghost tool-lbl" class:pulse={crossWorldClip} onclick={openFromWorld} title="From another world (F)"><Globe2 size={14} /><span>World</span></button>
       </div>
       <div class="tool-group compact grow-end view-toggles">
-        <label class="toggle tight" title="Region borders"><input type="checkbox" bind:checked={showRegions} on:change={draw} /><span>Regions</span></label>
-        <label class="toggle tight" title="Chunk grid"><input type="checkbox" bind:checked={showChunkGrid} on:change={draw} /><span>Grid</span></label>
-        <label class="toggle tight" title="Spawn"><input type="checkbox" bind:checked={showSpawn} on:change={draw} /><span>Spawn</span></label>
-        <button type="button" class="ghost tool-ico" class:active={regionRailOpen} on:click={() => (regionRailOpen = !regionRailOpen)} title="Region files"><List size={14} /></button>
-        <button type="button" class="ghost tool-lbl accent-btn" class:active={toolsDrawerOpen} on:click={() => { toolsDrawerOpen = !toolsDrawerOpen; if (toolsDrawerOpen) filtersOpen = true; }} title="Tools (T)">
+        <label class="toggle tight" title="Region borders"><input type="checkbox" bind:checked={showRegions} onchange={draw} /><span>Regions</span></label>
+        <label class="toggle tight" title="Chunk grid"><input type="checkbox" bind:checked={showChunkGrid} onchange={draw} /><span>Grid</span></label>
+        <label class="toggle tight" title="Spawn"><input type="checkbox" bind:checked={showSpawn} onchange={draw} /><span>Spawn</span></label>
+        <button type="button" class="ghost tool-ico" class:active={regionRailOpen} onclick={() => (regionRailOpen = !regionRailOpen)} title="Region files"><List size={14} /></button>
+        <button type="button" class="ghost tool-lbl accent-btn" class:active={toolsDrawerOpen} onclick={() => { toolsDrawerOpen = !toolsDrawerOpen; if (toolsDrawerOpen) filtersOpen = true; }} title="Tools (T)">
           <Wrench size={14} /><span>Tools</span>
         </button>
-        <button type="button" class="ghost tool-ico" on:click={load} disabled={loading} title="Reload"><RefreshCw size={14} class={loading ? "spin" : ""} /></button>
+        <button type="button" class="ghost tool-ico" onclick={load} disabled={loading} title="Reload"><RefreshCw size={14} class={loading ? "spin" : ""} /></button>
       </div>
     </div>
   {/if}
@@ -1962,7 +1974,7 @@
               type="button"
               class="region-item"
               title="Jump to {r.label}"
-              on:click={() => panToRegion(r.rx, r.rz)}
+              onclick={() => panToRegion(r.rx, r.rz)}
             >
               <span class="r-name">{r.label}</span>
               <span class="r-count">{r.present}</span>
@@ -1977,20 +1989,20 @@
   <aside class="tools-panel" class:drawer={layout === "dock"}>
     <div class="title"><MapIcon size={16} /> MCA map · chunk select/delete/export{#if layout === "top"} · {worldName}{/if}</div>
     <div class="tools">
-      <select class="ghost select" bind:value={dimension} on:change={load} title="Dimension">
+      <select class="ghost select" bind:value={dimension} onchange={load} title="Dimension">
         {#each dimensions as d (d)}
           <option value={d}>{dimLabel(d)}</option>
         {/each}
       </select>
       <label class="toggle" title="Overlay region boundaries">
         <Layers size={14} /> Regions
-        <input type="checkbox" bind:checked={showRegions} on:change={draw} />
+        <input type="checkbox" bind:checked={showRegions} onchange={draw} />
       </label>
       <label class="toggle" title="Show world spawn from level.dat">
         <MapIcon size={14} /> Spawn
-        <input type="checkbox" bind:checked={showSpawn} on:change={draw} />
+        <input type="checkbox" bind:checked={showSpawn} onchange={draw} />
       </label>
-      <select class="ghost select" bind:value={colorMode} on:change={draw} title="Color mode (N to cycle)">
+      <select class="ghost select" bind:value={colorMode} onchange={draw} title="Color mode (N to cycle)">
         <option value="status">by status</option>
         <option value="date">by date</option>
         <option value="inhabited">by inhabited</option>
@@ -1998,105 +2010,105 @@
         <option value="height">by height</option>
       </select>
       <div class="tool-group">
-        <button class="ghost" class:active={tool === "pan"} on:click={() => (tool = "pan")} title="Pan (or Alt+drag / middle mouse)">
+        <button class="ghost" class:active={tool === "pan"} onclick={() => (tool = "pan")} title="Pan (or Alt+drag / middle mouse)">
           <Minimize2 size={14} /> Pan
         </button>
-        <button class="ghost" class:active={tool === "click"} on:click={() => (tool = "click")} title="Click chunks to toggle">
+        <button class="ghost" class:active={tool === "click"} onclick={() => (tool = "click")} title="Click chunks to toggle">
           <MousePointer2 size={14} /> Click
         </button>
-        <button class="ghost" class:active={tool === "box"} on:click={() => (tool = "box")} title="Drag rectangle (Shift = subtract)">
+        <button class="ghost" class:active={tool === "box"} onclick={() => (tool = "box")} title="Drag rectangle (Shift = subtract)">
           <Square size={14} /> Box
         </button>
-        <button class="ghost" class:active={tool === "radius"} on:click={() => (tool = "radius")} title="Drag radius (or click with default radius)">
+        <button class="ghost" class:active={tool === "radius"} onclick={() => (tool = "radius")} title="Drag radius (or click with default radius)">
           <Circle size={14} /> Radius
         </button>
         <button
           class="ghost"
           class:active={tool === "poly"}
-          on:click={() => { tool = "poly"; polyPoints = []; draw(); }}
+          onclick={() => { tool = "poly"; polyPoints = []; draw(); }}
           title="Polygon: click vertices, Enter or double-click to apply (Shift = subtract)"
         >
           <Pencil size={14} /> Poly
         </button>
-        <button class="ghost" class:active={tool === "region"} on:click={() => (tool = "region")} title="Select whole region (Shift = deselect)">
+        <button class="ghost" class:active={tool === "region"} onclick={() => (tool = "region")} title="Select whole region (Shift = deselect)">
           <Layers size={14} /> Region
         </button>
       </div>
       <div class="tool-group">
-        <button class="ghost" on:click={selectAll} disabled={!map} title="Select all present chunks (Ctrl+A)">
+        <button class="ghost" onclick={selectAll} disabled={!map} title="Select all present chunks (Ctrl+A)">
           <CheckSquare size={14} /> All
         </button>
-        <button class="ghost" on:click={invertSelection} disabled={!map} title="Invert selection">
+        <button class="ghost" onclick={invertSelection} disabled={!map} title="Invert selection">
           <CheckSquare size={14} /> Invert
         </button>
-        <button class="ghost" on:click={clearSelection} disabled={selection.size === 0} title="Clear selection (Esc)">
+        <button class="ghost" onclick={clearSelection} disabled={selection.size === 0} title="Clear selection (Esc)">
           <XSquare size={14} /> Clear
         </button>
       </div>
       <div class="tool-group">
-        <button class="ghost" on:click={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
-        <button class="ghost" on:click={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
-        <button class="ghost" on:click={() => { fitView(); draw(); }} title="Fit map">Fit</button>
+        <button class="ghost" onclick={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
+        <button class="ghost" onclick={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
+        <button class="ghost" onclick={() => { fitView(); draw(); }} title="Fit map">Fit</button>
       </div>
       <div class="tool-group">
-        <button class="ghost" on:click={copySelected} disabled={selection.size === 0} title="Copy (Ctrl+C)">
+        <button class="ghost" onclick={copySelected} disabled={selection.size === 0} title="Copy (Ctrl+C)">
           <Copy size={14} /> Copy
         </button>
-        <button class="ghost" on:click={cutSelected} disabled={selection.size === 0} title="Cut (Ctrl+X)">
+        <button class="ghost" onclick={cutSelected} disabled={selection.size === 0} title="Cut (Ctrl+X)">
           <Scissors size={14} /> Cut
         </button>
-        <button class="ghost" on:click={pasteFromClipboard} disabled={!$worldMapClipboard} title="Paste (Ctrl+V) — works across worlds">
+        <button class="ghost" onclick={pasteFromClipboard} disabled={!$worldMapClipboard} title="Paste (Ctrl+V) — works across worlds">
           <Clipboard size={14} /> Paste {$worldMapClipboard ? `(${$worldMapClipboard.clipboard.chunks.length})` : ""}
         </button>
-        <button class="ghost" on:click={openFromWorld} disabled={!map} title="Copy or replace chunks from another world">
+        <button class="ghost" onclick={openFromWorld} disabled={!map} title="Copy or replace chunks from another world">
           <Globe2 size={14} /> From world…
         </button>
-        <button class="ghost danger" on:click={deleteSelected} disabled={selection.size === 0} title="Delete selected (Del)">
+        <button class="ghost danger" onclick={deleteSelected} disabled={selection.size === 0} title="Delete selected (Del)">
           <Trash2 size={14} /> Delete {selection.size || ""}
         </button>
       </div>
       <div class="tool-group">
-        <button class="ghost" on:click={swapTwoSelected} disabled={selection.size !== 2} title="Swap two selected chunks">
+        <button class="ghost" onclick={swapTwoSelected} disabled={selection.size !== 2} title="Swap two selected chunks">
           <ArrowLeftRight size={14} /> Swap
         </button>
-        <button class="ghost" on:click={openChunkEditor} disabled={selection.size !== 1} title="Edit NBT of selected chunk">
+        <button class="ghost" onclick={openChunkEditor} disabled={selection.size !== 1} title="Edit NBT of selected chunk">
           <Pencil size={14} /> Edit NBT
         </button>
-        <button class="ghost" on:click={exportSelectedFolder} disabled={selection.size === 0} title="Export selected chunks to folder">
+        <button class="ghost" onclick={exportSelectedFolder} disabled={selection.size === 0} title="Export selected chunks to folder">
           <FolderOutput size={14} /> Folder
         </button>
-        <button class="ghost" on:click={importFromFolder} disabled={!map} title="Import chunks from another world/export folder (uses paste ΔX/ΔZ)">
+        <button class="ghost" onclick={importFromFolder} disabled={!map} title="Import chunks from another world/export folder (uses paste ΔX/ΔZ)">
           <FolderInput size={14} /> Import
         </button>
-        <button class="ghost" on:click={exportSelectionCsv} disabled={selection.size === 0} title="Export selection CSV">
+        <button class="ghost" onclick={exportSelectionCsv} disabled={selection.size === 0} title="Export selection CSV">
           <FileDown size={14} /> CSV↓
         </button>
-        <button class="ghost" on:click={triggerCsvImport} disabled={!map} title="Import selection CSV">
+        <button class="ghost" onclick={triggerCsvImport} disabled={!map} title="Import selection CSV">
           <FileUp size={14} /> CSV↑
         </button>
-        <button class="ghost" on:click={exportPng} title="Export viewport PNG"><Download size={14} /> PNG</button>
-        <button class="ghost" on:click={exportFullMapPng} disabled={!map} title="Save full dimension/selection map PNG (current color mode)">
+        <button class="ghost" onclick={exportPng} title="Export viewport PNG"><Download size={14} /> PNG</button>
+        <button class="ghost" onclick={exportFullMapPng} disabled={!map} title="Save full dimension/selection map PNG (current color mode)">
           <Download size={14} /> Map PNG
         </button>
       </div>
       <div class="tool-group">
-        <button class="ghost" on:click={purgeRegions} title="Compact region files after deletes">
+        <button class="ghost" onclick={purgeRegions} title="Compact region files after deletes">
           <Eraser size={14} /> Purge
         </button>
-        <button class="ghost" on:click={warmMapCache} disabled={!map} title="Warm region metadata cache">
+        <button class="ghost" onclick={warmMapCache} disabled={!map} title="Warm region metadata cache">
           Cache
         </button>
-        <button class="ghost" on:click={clearMapCache} disabled={!map} title="Clear region metadata cache for this dimension">
+        <button class="ghost" onclick={clearMapCache} disabled={!map} title="Clear region metadata cache for this dimension">
           Clear cache
         </button>
-        <button class="ghost" on:click={load} disabled={loading} title="Reload">
+        <button class="ghost" onclick={load} disabled={loading} title="Reload">
           <RefreshCw size={14} class={loading ? "spin" : ""} />
         </button>
       </div>
     </div>
 
     {#if layout === "dock"}
-      <button class="filters-toggle" type="button" on:click={() => (filtersOpen = !filtersOpen)}>
+      <button class="filters-toggle" type="button" onclick={() => (filtersOpen = !filtersOpen)}>
         <Filter size={12} /> Filters &amp; NBT {filtersOpen ? "▾" : "▸"}
       </button>
     {:else if layout === "top"}
@@ -2110,7 +2122,7 @@
         <input type="date" bind:value={filterFrom} />
         <span>to</span>
         <input type="date" bind:value={filterTo} />
-        <button class="mini" on:click={selectByDate} disabled={!map || (!filterFrom && !filterTo)}>Select by date</button>
+        <button class="mini" onclick={selectByDate} disabled={!map || (!filterFrom && !filterTo)}>Select by date</button>
         <span class="sep" />
         <span>status</span>
         <select class="mini-select" bind:value={statusFilter} title="Only select chunks with this status">
@@ -2144,10 +2156,10 @@
         <input class="num wide" type="text" bind:value={filtStructureNames} placeholder="village,…" title="Structure names (comma-separated)" />
         <span>palette</span>
         <input class="num wide" type="text" bind:value={filtPaletteNames} placeholder="stone,…" title="Block palette names (comma-separated)" />
-        <button class="mini" on:click={applyChunkFilter} disabled={!map} title="Select chunks matching all filters">
+        <button class="mini" onclick={applyChunkFilter} disabled={!map} title="Select chunks matching all filters">
           <Filter size={12} /> Select by filter
         </button>
-        <button class="mini" on:click={applyContentFilter} disabled={!map || !$projectPath} title="Scan MCA for entity/structure/palette content (empty selection = whole dimension)">
+        <button class="mini" onclick={applyContentFilter} disabled={!map || !$projectPath} title="Scan MCA for entity/structure/palette content (empty selection = whole dimension)">
           <Filter size={12} /> Content filter
         </button>
         <span class="sep" />
@@ -2177,19 +2189,19 @@
           placeholder="InhabitedTime < 100 AND Status = full"
           title="MCA-style map filter query"
         />
-        <button class="mini" on:click={applyQuerySelect} disabled={!map || !$projectPath} title="Select by filter query">
+        <button class="mini" onclick={applyQuerySelect} disabled={!map || !$projectPath} title="Select by filter query">
           <Filter size={12} /> Query
         </button>
         <span class="sep" />
-        <button class="mini" on:click={selectAll} disabled={!map}><CheckSquare size={12} /> All</button>
-        <button class="mini" on:click={invertSelection} disabled={!map}><CheckSquare size={12} /> Invert</button>
-        <button class="mini" on:click={invertSelectedRegions} disabled={!map || selection.size === 0} title="Invert only regions that have selection">
+        <button class="mini" onclick={selectAll} disabled={!map}><CheckSquare size={12} /> All</button>
+        <button class="mini" onclick={invertSelection} disabled={!map}><CheckSquare size={12} /> Invert</button>
+        <button class="mini" onclick={invertSelectedRegions} disabled={!map || selection.size === 0} title="Invert only regions that have selection">
           <CheckSquare size={12} /> Invert regions
         </button>
-        <button class="mini" on:click={clearSelection} disabled={selection.size === 0}><XSquare size={12} /> Clear</button>
+        <button class="mini" onclick={clearSelection} disabled={selection.size === 0}><XSquare size={12} /> Clear</button>
         <button
           class="mini"
-          on:click={expandSelection}
+          onclick={expandSelection}
           disabled={!map || selection.size === 0}
           title="Expand selection by Chebyshev ±r chunks (present cells only; uses r above)"
         >
@@ -2199,7 +2211,7 @@
       </div>
 
       <div class="nbt-bar">
-        <button class="mini" on:click={() => (nbtPanelOpen = !nbtPanelOpen)} title="Toggle NBT changer">
+        <button class="mini" onclick={() => (nbtPanelOpen = !nbtPanelOpen)} title="Toggle NBT changer">
           <Wrench size={12} /> NBT Changer
         </button>
         {#if nbtPanelOpen}
@@ -2234,7 +2246,7 @@
           <label class="chk" title="Force write even if unchanged">
             <input type="checkbox" bind:checked={chgForce} /> force
           </label>
-          <button class="mini" on:click={applyNbtChange} disabled={selection.size === 0} title="Apply NBT change to selection">
+          <button class="mini" onclick={applyNbtChange} disabled={selection.size === 0} title="Apply NBT change to selection">
             <Wrench size={12} /> NBT Change
           </button>
         {/if}
@@ -2247,7 +2259,7 @@
     type="file"
     accept=".csv,text/csv,text/plain"
     style="display:none"
-    on:change={onCsvImport}
+    onchange={onCsvImport}
   />
 
   <div class="viewport-col">
@@ -2280,14 +2292,14 @@
         <canvas
           bind:this={canvas}
           style="cursor: {canvasCursor}"
-          on:mousemove={onMove}
-          on:click={onClick}
-          on:dblclick={onDblClick}
-          on:mousedown={onDown}
-          on:mouseup={onUp}
-          on:mouseleave={onLeave}
-          on:wheel|preventDefault={onWheel}
-          on:contextmenu|preventDefault
+          onmousemove={onMove}
+          onclick={onClick}
+          ondblclick={onDblClick}
+          onmousedown={onDown}
+          onmouseup={onUp}
+          onmouseleave={onLeave}
+          onwheel={(e) => { e.preventDefault(); onWheel(e); }}
+          oncontextmenu={(e) => e.preventDefault()}
         ></canvas>
         {#if hover && layout === "top"}
           <div class="hover-tip" style="left: {tipX}px; top: {tipY}px">
@@ -2315,11 +2327,11 @@
               <label>ΔZ <input type="number" bind:value={pasteOffsetZ} /></label>
             </div>
             <div class="clip-banner-actions">
-              <button type="button" class="primary" disabled={!!busyLabel} on:click={pasteFromClipboard}>
+              <button type="button" class="primary" disabled={!!busyLabel} onclick={pasteFromClipboard}>
                 Paste here
               </button>
-              <button type="button" class="ghost" on:click={() => (fromWorldBannerDismissed = true)}>Later</button>
-              <button type="button" class="ghost" on:click={clearClipboard} title="Clear clipboard">Clear</button>
+              <button type="button" class="ghost" onclick={() => (fromWorldBannerDismissed = true)}>Later</button>
+              <button type="button" class="ghost" onclick={clearClipboard} title="Clear clipboard">Clear</button>
             </div>
           </div>
         {/if}
@@ -2358,7 +2370,7 @@
             class="clip-status"
             class:cross={crossWorldClip}
             title={crossWorldClip ? "Click to paste from another world" : "Shared clipboard"}
-            on:click={() => {
+            onclick={() => {
               if (crossWorldClip) pasteFromClipboard();
               else openFromWorld();
             }}
@@ -2393,39 +2405,39 @@
 </div>
 
 {#if gotoOpen}
-  <div class="goto-backdrop" role="presentation" on:click={() => (gotoOpen = false)}>
+  <div class="goto-backdrop" role="presentation" onclick={() => (gotoOpen = false)}>
     <div
       class="goto-dialog"
       role="dialog"
       aria-labelledby="goto-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3 id="goto-title">Go to</h3>
       <div class="goto-mode">
-        <button type="button" class:active={gotoMode === "block"} on:click={() => (gotoMode = "block")}>Block</button>
-        <button type="button" class:active={gotoMode === "chunk"} on:click={() => (gotoMode = "chunk")}>Chunk</button>
+        <button type="button" class:active={gotoMode === "block"} onclick={() => (gotoMode = "block")}>Block</button>
+        <button type="button" class:active={gotoMode === "chunk"} onclick={() => (gotoMode = "chunk")}>Chunk</button>
       </div>
       <div class="goto-fields">
-        <label>X <input bind:this={gotoXInput} bind:value={gotoX} on:keydown={(e) => e.key === "Enter" && applyGoto()} /></label>
-        <label>Z <input bind:value={gotoZ} on:keydown={(e) => e.key === "Enter" && applyGoto()} /></label>
+        <label>X <input bind:this={gotoXInput} bind:value={gotoX} onkeydown={(e) => e.key === "Enter" && applyGoto()} /></label>
+        <label>Z <input bind:value={gotoZ} onkeydown={(e) => e.key === "Enter" && applyGoto()} /></label>
       </div>
       <div class="goto-actions">
-        <button type="button" class="ghost" on:click={() => (gotoOpen = false)}>Cancel</button>
-        <button type="button" class="primary" on:click={applyGoto}>Go</button>
+        <button type="button" class="ghost" onclick={() => (gotoOpen = false)}>Cancel</button>
+        <button type="button" class="primary" onclick={applyGoto}>Go</button>
       </div>
     </div>
   </div>
 {/if}
 
 {#if fromWorldOpen}
-  <div class="goto-backdrop" role="presentation" on:click={() => !fromWorldLoading && (fromWorldOpen = false)}>
+  <div class="goto-backdrop" role="presentation" onclick={() => !fromWorldLoading && (fromWorldOpen = false)}>
     <div
       class="goto-dialog from-world-dialog"
       role="dialog"
       aria-labelledby="from-world-title"
-      on:click|stopPropagation
-      on:keydown|stopPropagation
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.stopPropagation()}
     >
       <h3 id="from-world-title">From world</h3>
       {#if fromWorldLoading && fromWorldList.length === 0}
@@ -2433,7 +2445,7 @@
       {:else if fromWorldList.length === 0}
         <p class="from-world-hint">No other worlds in this pack. Create or copy a world into <code>saves/</code> first.</p>
         <div class="goto-actions">
-          <button type="button" class="ghost" on:click={() => (fromWorldOpen = false)}>Close</button>
+          <button type="button" class="ghost" onclick={() => (fromWorldOpen = false)}>Close</button>
         </div>
       {:else}
         <div class="from-world-fields">
@@ -2442,7 +2454,7 @@
             <select
               class="select"
               bind:value={fromWorldName}
-              on:change={loadFromWorldDims}
+              onchange={loadFromWorldDims}
               disabled={fromWorldLoading}
             >
               {#each fromWorldList as w (w.name)}
@@ -2492,7 +2504,7 @@
             type="button"
             class="fw-card primary"
             disabled={fromWorldLoading || !fromWorldName || selection.size === 0 || !worldName}
-            on:click={fromWorldReplaceSelection}
+            onclick={fromWorldReplaceSelection}
           >
             <strong>Replace selection</strong>
             <span>Copy source at selected coords → paste here</span>
@@ -2501,7 +2513,7 @@
             type="button"
             class="fw-card"
             disabled={fromWorldLoading || !fromWorldName || selection.size === 0}
-            on:click={fromWorldCopyOnly}
+            onclick={fromWorldCopyOnly}
           >
             <strong>Copy only</strong>
             <span>Fill clipboard, paste later (Ctrl+V)</span>
@@ -2511,7 +2523,7 @@
             class="fw-card"
             class:recommended={!!$worldMapClipboard && selection.size === 0}
             disabled={fromWorldLoading || !$worldMapClipboard || !worldName}
-            on:click={async () => {
+            onclick={async () => {
               await pasteFromClipboard();
               fromWorldOpen = false;
             }}
@@ -2523,7 +2535,7 @@
             type="button"
             class="fw-card dangerish"
             disabled={fromWorldLoading || !fromWorldName || !worldName}
-            on:click={fromWorldImportFolder}
+            onclick={fromWorldImportFolder}
           >
             <strong>Import dimension</strong>
             <span>All present chunks from source (confirm)</span>
@@ -2531,7 +2543,7 @@
         </div>
 
         <div class="goto-actions">
-          <button type="button" class="ghost" disabled={fromWorldLoading} on:click={() => (fromWorldOpen = false)}>Cancel</button>
+          <button type="button" class="ghost" disabled={fromWorldLoading} onclick={() => (fromWorldOpen = false)}>Cancel</button>
           {#if fromWorldLoading}
             <span class="from-world-busy"><RefreshCw size={14} class="spin" /> Working…</span>
           {/if}

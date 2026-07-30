@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { onMount } from "svelte";
   import {
     Sparkles,
     Plus,
@@ -7,7 +7,7 @@
     Send,
     Loader2,
     PanelRightClose,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import {
     api,
     type QuestChatSession,
@@ -17,28 +17,30 @@
   import QuestPlanReview from "./QuestPlanReview.svelte";
   import { invoke } from "@tauri-apps/api/core";
 
-  export let open = true;
+  let {
+    open = true,
+    onclose,
+    onapply,
+  }: {
+    open?: boolean;
+    onclose?: () => void;
+    onapply?: (result: QuestPlanMergeResult) => void;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{
-    close: void;
-    apply: QuestPlanMergeResult;
-  }>();
-
-  let sessions: QuestChatSession[] = [];
-  let activeId: string | null = null;
-  let session: QuestChatSession | null = null;
-  let input = "";
-  let showJson = false;
-  let rawJson = "";
-  /** Default true so Generate uses LLM; uncheck to allow offline heuristic. */
-  let forceAi = true;
-  let allowOfflineHeuristic = false;
-  let busy = false;
-  let error = "";
-  let aiReadyHint = "";
-  let merge: QuestPlanMergeResult | null = null;
-  let progressLog: string[] = [];
-  let loreWarning = "";
+  let sessions = $state<QuestChatSession[]>([]);
+  let activeId = $state<string | null>(null);
+  let session = $state<QuestChatSession | null>(null);
+  let input = $state("");
+  let showJson = $state(false);
+  let rawJson = $state("");
+  let forceAi = $state(true);
+  let allowOfflineHeuristic = $state(false);
+  let busy = $state(false);
+  let error = $state("");
+  let aiReadyHint = $state("");
+  let merge = $state<QuestPlanMergeResult | null>(null);
+  let progressLog = $state<string[]>([]);
+  let loreWarning = $state("");
   const EXAMPLE_CHIPS = [
     {
       label: "24-quest line",
@@ -176,18 +178,18 @@
     }
   }
 
-  function onApplyReview(e: CustomEvent<{ chapterKeys: string[]; questKeys: string[] }>) {
+  function onApplyReview(detail: { chapterKeys: string[]; questKeys: string[] }) {
     if (!merge?.plan || !$projectPath) return;
     void (async () => {
       busy = true;
       try {
         const filtered = await api.quests.filterAndMergePlan(
           merge!.plan,
-          e.detail.chapterKeys,
-          e.detail.questKeys,
+          detail.chapterKeys,
+          detail.questKeys,
           $projectPath!,
         );
-        dispatch("apply", filtered);
+        onapply?.(filtered);
         merge = null;
       } catch (err) {
         error = String(err);
@@ -201,35 +203,39 @@
     void refreshList();
   });
 
-  $: if ($projectPath) void refreshList();
+  $effect(() => {
+    if ($projectPath) void refreshList();
+  });
 
-  $: if ($questChatFocusId && $projectPath && open) {
-    const id = $questChatFocusId;
-    questChatFocusId.set(null);
-    void selectSession(id);
-  }
+  $effect(() => {
+    if ($questChatFocusId && $projectPath && open) {
+      const id = $questChatFocusId;
+      questChatFocusId.set(null);
+      void selectSession(id);
+    }
+  });
 </script>
 
 <aside class="qai" class:open>
   <div class="qai-h">
     <Sparkles size={16} />
     <strong>Quest AI</strong>
-    <button type="button" class="ghost ico" title="Close" on:click={() => dispatch("close")}>
+    <button type="button" class="ghost ico" title="Close" onclick={() => onclose?.()}>
       <PanelRightClose size={16} />
     </button>
   </div>
 
   <div class="sessions">
-    <button type="button" class="ghost" on:click={newSession} disabled={!$projectPath}>
+    <button type="button" class="ghost" onclick={newSession} disabled={!$projectPath}>
       <Plus size={14} /> New
     </button>
     <div class="sess-list">
       {#each sessions as s (s.id)}
         <div class="sess" class:active={activeId === s.id}>
-          <button type="button" class="sess-open" on:click={() => selectSession(s.id)}>
+          <button type="button" class="sess-open" onclick={() => selectSession(s.id)}>
             {s.title}
           </button>
-          <button type="button" class="ghost ico" on:click={() => removeSession(s.id)}>
+          <button type="button" class="ghost ico" onclick={() => removeSession(s.id)}>
             <Trash2 size={12} />
           </button>
         </div>
@@ -245,7 +251,7 @@
       </p>
       <div class="chips">
         {#each EXAMPLE_CHIPS as chip (chip.label)}
-          <button type="button" class="chip" on:click={() => useChip(chip.text)}>{chip.label}</button>
+          <button type="button" class="chip" onclick={() => useChip(chip.text)}>{chip.label}</button>
         {/each}
       </div>
     {:else}
@@ -276,8 +282,8 @@
     <QuestPlanReview
       {merge}
       needsReviewAck={!!merge.plan?.needsUserReview}
-      on:apply={onApplyReview}
-      on:discard={() => (merge = null)}
+      onapply={onApplyReview}
+      ondiscard={() => (merge = null)}
     />
   {/if}
 
@@ -289,13 +295,13 @@
         rows="3"
         placeholder="Describe the quest line…"
         bind:value={input}
-        on:keydown={(e) => {
+        onkeydown={(e) => {
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void send("generate");
         }}
       ></textarea>
     {/if}
     <div class="composer-actions">
-      <button type="button" disabled={busy || !$projectPath} on:click={() => send("generate")}>
+      <button type="button" disabled={busy || !$projectPath} onclick={() => send("generate")}>
         {#if busy}<Loader2 size={14} class="spin" />{:else}<Send size={14} />{/if}
         Generate
       </button>
@@ -312,13 +318,13 @@
           type="button"
           class="ghost"
           disabled={busy || !session?.pendingPlan}
-          on:click={() => send("lore")}>Lore only</button
+          onclick={() => send("lore")}>Lore only</button
         >
         <button
           type="button"
           class="ghost"
           disabled={busy || !$projectPath}
-          on:click={() => send("extend")}>Extend</button
+          onclick={() => send("extend")}>Extend</button
         >
       </div>
     </details>

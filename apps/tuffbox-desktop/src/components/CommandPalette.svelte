@@ -1,16 +1,21 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, tick } from "svelte";
-  import { Search, ArrowRight, CornerDownLeft } from "lucide-svelte";
+  import { onMount, tick } from "svelte";
+  import { Search, ArrowRight, CornerDownLeft } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
-  import { recentProjects } from "../lib/store";
 
-  const dispatch = createEventDispatcher<{ close: void; navigate: string }>();
+  let {
+    onclose,
+    onnavigate,
+  }: {
+    onclose?: () => void;
+    onnavigate?: (id: string) => void;
+  } = $props();
 
   type Item = { id: string; label: string; category: string; shortcut?: string };
-  
-  let query = "";
-  let inputEl: HTMLInputElement;
-  let selectedIndex = 0;
+
+  let query = $state("");
+  let inputEl = $state<HTMLInputElement | undefined>(undefined);
+  let selectedIndex = $state(0);
 
   const allItems: Item[] = [
     { id: "dashboard", label: "Launcher", category: "Views", shortcut: "Ctrl+1" },
@@ -34,18 +39,6 @@
     { id: "shortcuts", label: "Keyboard Shortcuts", category: "Actions" },
   ];
 
-  $: filtered = query.trim()
-    ? allItems.filter(
-        (item) =>
-          item.label.toLowerCase().includes(query.toLowerCase()) ||
-          item.category.toLowerCase().includes(query.toLowerCase())
-      )
-    : allItems;
-
-  $: grouped = groupItems(filtered);
-  $: flatList = filtered;
-  $: if (selectedIndex >= flatList.length) selectedIndex = Math.max(0, flatList.length - 1);
-
   function groupItems(items: Item[]) {
     const groups: Record<string, Item[]> = {};
     for (const item of items) {
@@ -53,6 +46,25 @@
     }
     return groups;
   }
+
+  const filtered = $derived(
+    query.trim()
+      ? allItems.filter(
+          (item) =>
+            item.label.toLowerCase().includes(query.toLowerCase()) ||
+            item.category.toLowerCase().includes(query.toLowerCase()),
+        )
+      : allItems,
+  );
+
+  const grouped = $derived(groupItems(filtered));
+  const flatList = $derived(filtered);
+
+  $effect(() => {
+    if (selectedIndex >= flatList.length) {
+      selectedIndex = Math.max(0, flatList.length - 1);
+    }
+  });
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "ArrowDown") {
@@ -68,8 +80,8 @@
   }
 
   function selectItem(item: Item) {
-    dispatch("navigate", item.id);
-    dispatch("close");
+    onnavigate?.(item.id);
+    onclose?.();
   }
 
   function scrollToSelected() {
@@ -77,15 +89,19 @@
     el?.scrollIntoView({ block: "nearest" });
   }
 
-  $: if (selectedIndex >= 0) tick().then(scrollToSelected);
+  $effect(() => {
+    if (selectedIndex >= 0) {
+      tick().then(scrollToSelected);
+    }
+  });
 
   onMount(() => {
     inputEl?.focus();
   });
 </script>
 
-<div class="cmd-backdrop tb-modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("close")} on:keydown={() => {}}>
-  <div class="cmd-dialog tb-anim-search-enter" role="dialog" aria-modal="true" aria-label="Command palette" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="cmd-backdrop tb-modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && onclose?.()} onkeydown={() => {}}>
+  <div class="cmd-dialog tb-anim-search-enter" role="dialog" aria-modal="true" aria-label="Command palette" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="cmd-input-wrap">
       <Search size={18} class="cmd-search-icon" />
       <input
@@ -95,7 +111,7 @@
         type="text"
         placeholder="Search views, actions..."
         spellcheck="false"
-        on:keydown={handleKeydown}
+        onkeydown={handleKeydown}
       />
       <kbd class="cmd-esc">ESC</kbd>
     </div>
@@ -110,8 +126,8 @@
               class="cmd-item"
               class:selected={globalIdx === selectedIndex}
               data-index={globalIdx}
-              on:click={() => selectItem(item)}
-              on:mouseenter={() => (selectedIndex = globalIdx)}
+              onclick={() => selectItem(item)}
+              onmouseenter={() => (selectedIndex = globalIdx)}
             >
               <span class="cmd-item-label">{item.label}</span>
               <span class="cmd-item-right">

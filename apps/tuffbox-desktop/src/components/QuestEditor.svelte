@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult } from "../lib/api";
-  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map, Eye, Sparkles, X } from "lucide-svelte";
+  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map, Eye, Sparkles, X } from "@lucide/svelte";
   import { onDestroy } from "svelte";
   import { projectPath, questDirty, questChatFocusId } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -29,34 +29,34 @@
   let bookSubtitle: string | null = null;
   let bookSettings: Record<string, unknown> = {};
   let rewardTables: QuestRewardTable[] = [];
-  let rewardTablesDirty = false;
-  let bookDirty = false;
-  let groupsDirty = false;
-  let loading = false;
-  let saving = false;
+  let rewardTablesDirty = $state(false);
+  let bookDirty = $state(false);
+  let groupsDirty = $state(false);
+  let loading = $state(false);
+  let saving = $state(false);
   let error: string | null = null;
   let message: string | null = null;
   let selectedChapter = "";
   let selectedQuest: QuestData | null = null;
   let validationIssues: QuestValidationIssue[] = [];
-  let dirtyChapters = new Set<string>();
+  let dirtyChapters = $state(new Set<string>())
   let lastLoadedPath: string | null = null;
-  let fitToken = 0;
+  let fitToken = $state(0);
   let questSearch = "";
-  let showBookPanel = false;
-  let showGroupsPanel = false;
-  let showTablesPanel = false;
-  let issuesOpen = false;
-  let progressOpen = false;
+  let showBookPanel = $state(false);
+  let showGroupsPanel = $state(false);
+  let showTablesPanel = $state(false);
+  let issuesOpen = $state(false);
+  let progressOpen = $state(false);
 
   // Phase C — player progress overlay (read-only)
   let progressTeams: QuestProgressTeamRef[] = [];
   let progressKey = ""; // relativePath
-  let progressOverlay = false;
+  let progressOverlay = $state(false);
   let progressSnap: QuestProgressSnapshot | null = null;
-  let progressLoading = false;
+  let progressLoading = $state(false);
 
-  let aiSidebarOpen = readAiSidebarPref();
+  let aiSidebarOpen = $state(readAiSidebarPref())
 
   function setAiSidebar(open: boolean) {
     aiSidebarOpen = open;
@@ -143,8 +143,8 @@
     return (e.currentTarget as HTMLInputElement).value;
   }
 
-  $: progressStatuses = (progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>;
-  $: progressTeamLabel = progressTeams.find((t) => t.relativePath === progressKey);
+  const progressStatuses = $derived((progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>);
+  const progressTeamLabel = $derived(progressTeams.find((t) => t.relativePath === progressKey));
 
   async function saveChapter(chapterId: string) {
     if (!$projectPath) return;
@@ -310,10 +310,10 @@
     }
   }
 
-  $: chapterQuests = chapters.find((c) => c.id === selectedChapter)?.quests ?? [];
-  $: selectedChapterObj = chapters.find((c) => c.id === selectedChapter) ?? null;
-  $: rewardTableIds = rewardTables.map((t) => t.id);
-  $: totalQuests = chapters.reduce((n, c) => n + c.quests.length, 0);
+  const chapterQuests = $derived(chapters.find((c) => c.id === selectedChapter)?.quests ?? []);
+  const selectedChapterObj = $derived(chapters.find((c) => c.id === selectedChapter) ?? null);
+  const rewardTableIds = $derived(rewardTables.map((t) => t.id));
+  const totalQuests = $derived(chapters.reduce((n, c) => n + c.quests.length, 0));
 
   /** Strip Minecraft formatting codes for toolbar display. */
   function stripMc(s: string): string {
@@ -480,7 +480,7 @@
     }
   }
 
-  $: filteredChapterQuests = questSearch.trim()
+  const filteredChapterQuests = $derived(questSearch.trim()
     ? chapterQuests.filter((q) => {
         const s = questSearch.toLowerCase();
         return (
@@ -489,27 +489,37 @@
           (q.subtitle ?? "").toLowerCase().includes(s)
         );
       })
-    : chapterQuests;
+    : chapterQuests);
 
-  $: hasDirty = dirtyChapters.size > 0 || rewardTablesDirty || bookDirty || groupsDirty;
-  $: questDirty.set(hasDirty);
-  $: if ($projectPath && $projectPath !== lastLoadedPath) load();
-  $: if (selectedQuest) {
-    const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
-    if (fresh && fresh !== selectedQuest) selectedQuest = fresh;
-  }
-  $: if (progressKey || progressOverlay) progressOpen = true;
+  const hasDirty = $derived(dirtyChapters.size > 0 || rewardTablesDirty || bookDirty || groupsDirty);
+  $effect(() => {
+    questDirty.set(hasDirty);
+  });
+  $effect(() => {
+    if ($projectPath && $projectPath !== lastLoadedPath) load();
+  });
+  $effect(() => {
+    if (selectedQuest) {
+        const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
+        if (fresh && fresh !== selectedQuest) selectedQuest = fresh;
+      }
+  });
+  $effect(() => {
+    if (progressKey || progressOverlay) progressOpen = true;
+  });
 
-  $: if ($questChatFocusId) {
-    setAiSidebar(true);
-  }
+  $effect(() => {
+    if ($questChatFocusId) {
+        setAiSidebar(true);
+      }
+  });
 
   onDestroy(() => {
     questDirty.set(false);
   });
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="qe ftbq">
   <div class="qe-tb">
@@ -525,7 +535,7 @@
           class:active={showBookPanel}
           class:has-dirty={bookDirty}
           title="Book settings (data.snbt)"
-          on:click={() => {
+          onclick={() => {
             showBookPanel = !showBookPanel;
             showGroupsPanel = false;
             showTablesPanel = false;
@@ -537,14 +547,14 @@
           <div class="drawer">
             <div class="drawer-h">
               <strong>Book (data.snbt)</strong>
-              <button type="button" class="ghost ico" on:click={() => (showBookPanel = false)}
+              <button type="button" class="ghost ico" onclick={() => (showBookPanel = false)}
                 ><X size={14} /></button
               >
             </div>
             <label
               >Title<input
                 value={bookTitle ?? ""}
-                on:input={(e) => {
+                oninput={(e) => {
                   bookTitle = inputVal(e);
                   bookDirty = true;
                 }}
@@ -553,14 +563,14 @@
             <label
               >Subtitle<input
                 value={bookSubtitle ?? ""}
-                on:input={(e) => {
+                oninput={(e) => {
                   bookSubtitle = inputVal(e);
                   bookDirty = true;
                 }}
               /></label
             >
             <p class="drawer-hint">Included in Save all · or save here</p>
-            <button type="button" on:click={saveBookData} disabled={saving || !bookDirty}
+            <button type="button" onclick={saveBookData} disabled={saving || !bookDirty}
               >Save book</button
             >
           </div>
@@ -573,7 +583,7 @@
           class:active={showGroupsPanel}
           class:has-dirty={groupsDirty}
           title="Chapter groups"
-          on:click={() => {
+          onclick={() => {
             showGroupsPanel = !showGroupsPanel;
             showBookPanel = false;
             showTablesPanel = false;
@@ -585,22 +595,22 @@
           <div class="drawer drawer-wide">
             <div class="drawer-h">
               <strong>Chapter groups</strong>
-              <button type="button" class="ghost" on:click={addChapterGroup}>+ Group</button>
-              <button type="button" class="ghost ico" on:click={() => (showGroupsPanel = false)}
+              <button type="button" class="ghost" onclick={addChapterGroup}>+ Group</button>
+              <button type="button" class="ghost ico" onclick={() => (showGroupsPanel = false)}
                 ><X size={14} /></button
               >
             </div>
             {#each chapterGroups as g (g.id)}
               <div class="group-row">
                 <code>{g.id}</code>
-                <input bind:value={g.title} on:input={() => (groupsDirty = true)} />
-                <button type="button" class="ghost" on:click={() => removeChapterGroup(g.id)}
+                <input bind:value={g.title} oninput={() => (groupsDirty = true)} />
+                <button type="button" class="ghost" onclick={() => removeChapterGroup(g.id)}
                   >Remove</button
                 >
               </div>
             {/each}
             <p class="drawer-hint">Included in Save all</p>
-            <button type="button" on:click={saveGroups} disabled={saving || !groupsDirty}
+            <button type="button" onclick={saveGroups} disabled={saving || !groupsDirty}
               >Save groups</button
             >
           </div>
@@ -613,7 +623,7 @@
           class:active={showTablesPanel}
           class:has-dirty={rewardTablesDirty}
           title="Reward tables"
-          on:click={() => {
+          onclick={() => {
             showTablesPanel = !showTablesPanel;
             showBookPanel = false;
             showGroupsPanel = false;
@@ -625,7 +635,7 @@
           <div class="drawer drawer-tables">
             <div class="drawer-h">
               <strong>Reward tables</strong>
-              <button type="button" class="ghost ico" on:click={() => (showTablesPanel = false)}
+              <button type="button" class="ghost ico" onclick={() => (showTablesPanel = false)}
                 ><X size={14} /></button
               >
             </div>
@@ -648,7 +658,7 @@
         class="ghost"
         class:active={aiSidebarOpen}
         title="Quest AI sidebar"
-        on:click={() => setAiSidebar(!aiSidebarOpen)}
+        onclick={() => setAiSidebar(!aiSidebarOpen)}
       >
         <Sparkles size={16} /> AI
       </button>
@@ -659,14 +669,14 @@
             (bookDirty ? 1 : 0) +
             (groupsDirty ? 1 : 0)} unsaved</span
         >
-        <button type="button" class="primary" on:click={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
+        <button type="button" class="primary" onclick={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
           <Save size={16} /> {saving ? "Saving…" : "Save all"}
         </button>
       {/if}
       <button
         type="button"
         class="ghost"
-        on:click={requestReload}
+        onclick={requestReload}
         disabled={!$projectPath || loading}
         title="Reload from disk"
       >
@@ -685,14 +695,14 @@
           class="issues-btn"
           class:warn={validationIssues.length > 0}
           disabled={validationIssues.length === 0}
-          on:click={() => (issuesOpen = !issuesOpen)}
+          onclick={() => (issuesOpen = !issuesOpen)}
         >
           {validationIssues.length === 0 ? "✓ valid" : `${validationIssues.length} issues`}
         </button>
         {#if issuesOpen && validationIssues.length > 0}
           <div class="issues-pop">
             {#each validationIssues.slice(0, 40) as iss, i (`${iss.questId}-${i}`)}
-              <button type="button" class="issue-row" on:click={() => jumpToIssue(iss)}>
+              <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
                 <code>{iss.questId.slice(0, 8)}</code>
                 <span>{iss.message}</span>
               </button>
@@ -720,7 +730,7 @@
         </label>
         <select
           bind:value={progressKey}
-          on:change={loadProgress}
+          onchange={loadProgress}
           disabled={progressLoading || progressTeams.length === 0}
         >
           <option value="">
@@ -734,7 +744,7 @@
           type="button"
           class="ghost"
           disabled={progressLoading || !progressKey}
-          on:click={loadProgress}
+          onclick={loadProgress}
           title="Reload progress"
         >
           <RefreshCw size={14} class={progressLoading ? "spin" : ""} />
@@ -759,7 +769,7 @@
       <h3>No FTB Quests chapters found</h3>
       <p>Place <code>.snbt</code> files in <code>config/ftbquests/quests/chapters/</code></p>
       <p class="hint">TuffBox parses SNBT on disk — no Minecraft needed.</p>
-      <button type="button" on:click={createChapter}><span>+</span> Create first chapter</button>
+      <button type="button" onclick={createChapter}><span>+</span> Create first chapter</button>
     </div>
   {:else}
     <div class="qe-body-row">
@@ -783,7 +793,7 @@
             type="search"
             placeholder="Filter quests… (Enter = jump, Esc = clear)"
             bind:value={questSearch}
-            on:keydown={onSearchKey}
+            onkeydown={onSearchKey}
           />
           {#if questSearch}
             <span class="filt-count">{filteredChapterQuests.length}/{chapterQuests.length}</span>
@@ -833,8 +843,8 @@
     {#if aiSidebarOpen}
       <QuestAiSidebar
         open={aiSidebarOpen}
-        on:close={() => setAiSidebar(false)}
-        on:apply={(e) => applyMergeResult(e.detail)}
+        onclose={() => setAiSidebar(false)}
+        onapply={applyMergeResult}
       />
     {/if}
     </div>

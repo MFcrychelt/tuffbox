@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { onDestroy, onMount } from "svelte";
-  import { X, Loader2, CheckCircle2, AlertTriangle } from "lucide-svelte";
+  import { X, Loader2, CheckCircle2, AlertTriangle } from "@lucide/svelte";
 
   type BackgroundTask = {
     id: string;
@@ -12,7 +12,7 @@
     error?: string | null;
   };
 
-  let tasks: BackgroundTask[] = [];
+  let tasks = $state<BackgroundTask[]>([]);
   let timer: ReturnType<typeof setInterval> | null = null;
 
   async function refresh() {
@@ -43,7 +43,7 @@
     if (timer) clearInterval(timer);
   });
 
-  $: visible = tasks.filter((t) => t.status === "running" || t.status === "failed");
+  const visible = $derived(tasks.filter((t) => t.status === "running" || t.status === "failed"));
 </script>
 
 {#if visible.length}
@@ -59,7 +59,7 @@
             <CheckCircle2 size={14} />
           {/if}
           <strong>{t.title}</strong>
-          <button type="button" class="ghost" title="Dismiss" on:click={() => dismiss(t.id)}>
+          <button type="button" class="ghost" title="Dismiss" onclick={() => dismiss(t.id)}>
             <X size={14} />
           </button>
         </div>

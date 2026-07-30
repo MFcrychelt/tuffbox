@@ -7,23 +7,33 @@
     preloadItemIcons,
   } from "./iconCache";
 
-  export let itemId: string | null | undefined = null;
-  export let fallback = "?";
-  export let size = 24;
-  /** When parent bumps this after preload, re-read cache. */
-  export let revision = 0;
+  let {
+    itemId = null,
+    fallback = "?",
+    size = 24,
+    revision = 0,
+  }: {
+    itemId?: string | null;
+    fallback?: string;
+    size?: number;
+    revision?: number;
+  } = $props();
 
-  let src: string | null | undefined = undefined;
+  let src = $state<string | null | undefined>(undefined);
 
-  $: normalized = normalizeItemId(itemId);
-  $: letter = glyphFromItemId(normalized, fallback);
-  $: {
+  let normalized = $derived(normalizeItemId(itemId));
+  let letter = $derived(glyphFromItemId(normalized, fallback));
+
+  $effect(() => {
     void revision;
     src = readSrc(normalized);
-  }
-  $: if (normalized && $projectPath && src === undefined) {
-    void loadOne(normalized);
-  }
+  });
+
+  $effect(() => {
+    if (normalized && $projectPath && src === undefined) {
+      void loadOne(normalized);
+    }
+  });
 
   function readSrc(id: string | null): string | null | undefined {
     return getCachedIcon(id);

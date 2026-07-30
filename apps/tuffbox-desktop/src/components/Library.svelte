@@ -10,7 +10,7 @@
     Compass,
     LayoutGrid,
     ExternalLink,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -27,29 +27,13 @@
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
 
-  export let currentView:
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "diagnostics"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me"
-    | "world";
+  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
   type Tab = "yours" | "discover" | "create";
-  let tab: Tab = "yours";
-  let swarmEnabled = false;
-  let importing = false;
-  let importMenuOpen = false;
+  let tab = $state<Tab>("yours");
+  let swarmEnabled = $state(false);
+  let importing = $state(false);
+  let importMenuOpen = $state(false);
 
   async function loadSwarm() {
     try {
@@ -148,9 +132,8 @@
     await importFromSource(selected);
   }
 
-  async function onPackCreated(e: CustomEvent<string>) {
+  async function onPackCreated(path: string) {
     newProjectOpen.set(false);
-    const path = e.detail;
     try {
       const info = (await invoke("validate_project", { path })) as any;
       const manifestPath = info.manifestPath || path;
@@ -180,14 +163,14 @@
   type DiscoverResult = SearchResult & { provider?: "modrinth" | "curseforge" };
   type DiscoverProvider = "modrinth" | "curseforge" | "both";
 
-  let query = "";
-  let results: DiscoverResult[] = [];
-  let loadingDiscover = false;
-  let discoverError = "";
-  let adding = new Set<string>();
-  let discoverProvider: DiscoverProvider = "modrinth";
-  let downloadDir = "";
-  let defaultDownloadDir = "";
+  let query = $state("");
+  let results = $state<DiscoverResult[]>([]);
+  let loadingDiscover = $state(false);
+  let discoverError = $state("");
+  let adding = $state(new Set<string>());
+  let discoverProvider = $state<DiscoverProvider>("modrinth");
+  let downloadDir = $state("");
+  let defaultDownloadDir = $state("");
 
   async function loadDownloadDir() {
     try {
@@ -436,12 +419,13 @@
     return String(n);
   }
 
-  $: discoverPlaceholder =
+  const discoverPlaceholder = $derived(
     discoverProvider === "curseforge"
       ? "Search CurseForge modpacks…"
       : discoverProvider === "both"
         ? "Search modpacks…"
-        : "Search Modrinth modpacks…";
+        : "Search Modrinth modpacks…",
+  );
 </script>
 
 <div class="library fade-slide-in lib-page">
@@ -458,7 +442,7 @@
             class="header-btn"
             class:busy={importing}
             disabled={importing}
-            on:click|stopPropagation={() => (importMenuOpen = !importMenuOpen)}
+            onclick={(e) => { e.stopPropagation(); (importMenuOpen = !importMenuOpen);  }}
             title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
           >
             {#if importing}
@@ -469,10 +453,10 @@
           </button>
           {#if importMenuOpen}
             <div class="import-menu" role="menu">
-              <button type="button" role="menuitem" on:click={importPackFile}>
+              <button type="button" role="menuitem" onclick={importPackFile}>
                 File (.mrpack / .zip)
               </button>
-              <button type="button" role="menuitem" on:click={importInstanceFolder}>
+              <button type="button" role="menuitem" onclick={importInstanceFolder}>
                 Instance folder
               </button>
             </div>
@@ -480,15 +464,15 @@
         </div>
       {/if}
       <div class="tabs">
-        <button class:active={tab === "yours"} on:click={() => switchTab("yours")}>
+        <button class:active={tab === "yours"} onclick={() => switchTab("yours")}>
           <LayoutGrid size={15} /> Your packs
         </button>
-        <button class:active={tab === "discover"} on:click={() => switchTab("discover")}>
+        <button class:active={tab === "discover"} onclick={() => switchTab("discover")}>
           <Compass size={15} /> Discover
         </button>
         <button
           class:active={tab === "create"}
-          on:click={() => switchTab("create")}
+          onclick={() => switchTab("create")}
           title="Create a new modpack"
         >
           <Plus size={15} /> Create
@@ -505,17 +489,17 @@
         <button
           type="button"
           class:active={discoverProvider === "modrinth"}
-          on:click={() => setDiscoverProvider("modrinth")}
+          onclick={() => setDiscoverProvider("modrinth")}
         >Modrinth</button>
         <button
           type="button"
           class:active={discoverProvider === "curseforge"}
-          on:click={() => setDiscoverProvider("curseforge")}
+          onclick={() => setDiscoverProvider("curseforge")}
         >CurseForge</button>
         <button
           type="button"
           class:active={discoverProvider === "both"}
-          on:click={() => setDiscoverProvider("both")}
+          onclick={() => setDiscoverProvider("both")}
           title="Search both catalogs at once"
         >Both</button>
       </div>
@@ -525,10 +509,10 @@
           aria-label="Search modpacks"
           bind:value={query}
           placeholder={discoverPlaceholder}
-          on:keydown={(e) => e.key === "Enter" && search()}
+          onkeydown={(e) => e.key === "Enter" && search()}
         />
       </div>
-      <button class="search-btn" on:click={() => search()} disabled={loadingDiscover}>
+      <button class="search-btn" onclick={() => search()} disabled={loadingDiscover}>
         {loadingDiscover ? "Searching…" : "Search"}
       </button>
     </div>
@@ -541,10 +525,10 @@
           bind:value={downloadDir}
           placeholder={defaultDownloadDir || "Choose a folder for modpacks"}
         />
-        <button type="button" class="path-btn" on:click={browseDownloadDir} title="Browse">
+        <button type="button" class="path-btn" onclick={browseDownloadDir} title="Browse">
           <FolderOpen size={15} />
         </button>
-        <button type="button" class="path-btn save" on:click={applyDownloadDir}>Save</button>
+        <button type="button" class="path-btn save" onclick={applyDownloadDir}>Save</button>
       </div>
     </div>
 
@@ -582,7 +566,7 @@
                   type="button"
                   class="pack-name linkish"
                   title="Open on {result.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
-                  on:click={() => openModpackPage(result)}
+                  onclick={() => openModpackPage(result)}
                 >{result.name}</button>
                 {#if discoverProvider === "both"}
                   <span
@@ -604,14 +588,14 @@
                   type="button"
                   class="pack-page"
                   title="Open catalog page"
-                  on:click={() => openModpackPage(result)}
+                  onclick={() => openModpackPage(result)}
                 >
                   <ExternalLink size={14} /> Page
                 </button>
                 <button
                   class="pack-add"
                   disabled={adding.has(resultKey(result))}
-                  on:click={() => addModpack(result)}
+                  onclick={() => addModpack(result)}
                 >
                   {#if adding.has(resultKey(result))}
                     <span class="mini-spinner"></span> Adding…
@@ -632,7 +616,7 @@
         <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
       </header>
       <div class="create-actions">
-        <button type="button" class="create-plus" on:click={openNewPack}>
+        <button type="button" class="create-plus" onclick={openNewPack}>
           <span class="plus-ring"><Plus size={28} strokeWidth={2.25} /></span>
           <div class="create-copy">
             <strong>Create modpack</strong>
@@ -642,7 +626,7 @@
         <button
           type="button"
           class="create-plus import"
-          on:click={() => (importMenuOpen = true)}
+          onclick={() => (importMenuOpen = true)}
           disabled={importing}
         >
           <span class="plus-ring"><Download size={26} strokeWidth={2.25} /></span>
@@ -661,12 +645,12 @@
 
 {#if $newProjectOpen}
   <AddInstanceModal
-    on:close={() => newProjectOpen.set(false)}
-    on:created={onPackCreated}
+    onclose={() => newProjectOpen.set(false)}
+    oncreated={onPackCreated}
   />
 {/if}
 
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
+<svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
 <style>
   .library {

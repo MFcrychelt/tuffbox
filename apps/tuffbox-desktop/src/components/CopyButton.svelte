@@ -1,12 +1,18 @@
 <script lang="ts">
-  import { Copy, Check } from "lucide-svelte";
+  import { Copy, Check } from "@lucide/svelte";
   import { fly } from "svelte/transition";
 
-  export let text: string;
-  export let label = "";
-  export let size: "sm" | "md" = "sm";
+  let {
+    text,
+    label = "",
+    size = "sm",
+  }: {
+    text: string;
+    label?: string;
+    size?: "sm" | "md";
+  } = $props();
 
-  let copied = false;
+  let copied = $state(false);
   let timeout: ReturnType<typeof setTimeout>;
 
   async function copy() {
@@ -31,7 +37,7 @@
 <button
   class="copy-btn"
   class:md={size === "md"}
-  on:click={copy}
+  onclick={copy}
   title={label || "Copy to clipboard"}
   aria-label={label || "Copy to clipboard"}
 >

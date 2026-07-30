@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
@@ -14,11 +14,17 @@
     Download,
     FileUp,
     Search,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
 
-  export let open = false;
-
-  const dispatch = createEventDispatcher<{ saved: void; close: void }>();
+  let {
+    open = $bindable(false),
+    onsaved,
+    onclose,
+  }: {
+    open?: boolean;
+    onsaved?: () => void;
+    onclose?: () => void;
+  } = $props();
 
   type AiProvider = "ollama" | "openai-compatible";
   type IntegrationStatus = {
@@ -110,35 +116,37 @@
     },
   ];
 
-  let preset: PresetId = "ollama";
-  let provider: AiProvider = "ollama";
-  let endpoint = "http://127.0.0.1:11434";
-  let model = "";
-  let ollamaBinaryPath = "";
-  let ollamaModelsPath = "";
-  let diagnoseMode = "server";
-  let crashKbEndpoint = "";
-  let apiKeyDraft = "";
-  let apiKeySet = false;
-  let loading = false;
-  let saving = false;
-  let testing = false;
-  let listingModels = false;
-  let detecting = false;
-  let scanningDisk = false;
-  let pulling = false;
-  let importing = false;
-  let error = "";
-  let message = "";
-  let testResult = "";
-  let ollamaModels: string[] = [];
-  let detect: OllamaDetect | null = null;
-  let pullName = "qwen2.5:7b";
-  let ggufName = "";
+  let preset = $state<PresetId>("ollama");
+  let provider = $state<AiProvider>("ollama");
+  let endpoint = $state("http://127.0.0.1:11434");
+  let model = $state("");
+  let ollamaBinaryPath = $state("");
+  let ollamaModelsPath = $state("");
+  let diagnoseMode = $state("server");
+  let crashKbEndpoint = $state("");
+  let apiKeyDraft = $state("");
+  let apiKeySet = $state(false);
+  let loading = $state(false);
+  let saving = $state(false);
+  let testing = $state(false);
+  let listingModels = $state(false);
+  let detecting = $state(false);
+  let scanningDisk = $state(false);
+  let pulling = $state(false);
+  let importing = $state(false);
+  let error = $state("");
+  let message = $state("");
+  let testResult = $state("");
+  let ollamaModels = $state<string[]>([]);
+  let detect = $state<OllamaDetect | null>(null);
+  let pullName = $state("qwen2.5:7b");
+  let ggufName = $state("");
 
-  $: if (open) {
-    void load();
-  }
+  $effect(() => {
+    if (open) {
+      void load();
+    }
+  });
 
   async function load() {
     loading = true;
@@ -264,7 +272,7 @@
         ? `Model “${result.model}” installed to ${where}`
         : `Model “${result.model}” installed and selected.`;
       await probeOllama();
-      dispatch("saved");
+      onsaved?.();
     } catch (e) {
       error = String(e);
       message = "";
@@ -308,7 +316,7 @@
       ollamaModels = result.models ?? [];
       message = `Imported “${result.model}” from local file.`;
       await probeOllama();
-      dispatch("saved");
+      onsaved?.();
     } catch (e) {
       error = String(e);
       message = "";
@@ -365,7 +373,7 @@
 
       await persistAiSettings(model || pullName || diskModels[0] || "qwen3:8b");
       await probeOllama();
-      dispatch("saved");
+      onsaved?.();
     } catch (e) {
       error = String(e);
       message = "";
@@ -458,7 +466,7 @@
       }
       message = "AI connection saved.";
       await load();
-      dispatch("saved");
+      onsaved?.();
     } catch (e) {
       error = String(e);
     } finally {
@@ -494,7 +502,7 @@
 
   function close() {
     open = false;
-    dispatch("close");
+    onclose?.();
   }
 
   function onKey(e: KeyboardEvent) {
@@ -508,7 +516,7 @@
 </script>
 
 {#if open}
-  <div class="backdrop" role="presentation" on:click|self={close}>
+  <div class="backdrop" role="presentation" onclick={(e) => e.target === e.currentTarget && close()}>
     <div class="modal" role="dialog" aria-modal="true" aria-label="AI connection">
       <header>
         <div class="title">
@@ -518,7 +526,7 @@
             <small>Ollama or OpenAI-compatible API (Hermes-style)</small>
           </div>
         </div>
-        <button class="icon" on:click={close} aria-label="Close"><X size={16} /></button>
+        <button class="icon" onclick={close} aria-label="Close"><X size={16} /></button>
       </header>
 
       {#if loading}
@@ -529,7 +537,7 @@
 
         <div class="presets">
           {#each PRESETS as p}
-            <button type="button" class="preset" class:on={preset === p.id} on:click={() => applyPreset(p.id)}>
+            <button type="button" class="preset" class:on={preset === p.id} onclick={() => applyPreset(p.id)}>
               {p.label}
             </button>
           {/each}
@@ -540,7 +548,7 @@
           Mode
           <select
             bind:value={provider}
-            on:change={() => {
+            onchange={() => {
               preset = detectPreset(provider, endpoint);
               if (provider === "ollama" && !endpoint) endpoint = "http://127.0.0.1:11434";
               if (provider === "ollama") void probeOllama();
@@ -570,13 +578,13 @@
                 placeholder="ollama.exe or install folder (empty = auto-detect)"
                 autocomplete="off"
               />
-              <button class="ghost mini" type="button" title="Pick ollama.exe" on:click={pickOllamaPath}>
+              <button class="ghost mini" type="button" title="Pick ollama.exe" onclick={pickOllamaPath}>
                 <FolderOpen size={14} />
               </button>
-              <button class="ghost mini" type="button" title="Pick install folder" on:click={pickOllamaFolder}>
+              <button class="ghost mini" type="button" title="Pick install folder" onclick={pickOllamaFolder}>
                 Folder
               </button>
-              <button class="ghost mini" type="button" title="Re-detect" on:click={probeOllama} disabled={detecting || scanningDisk}>
+              <button class="ghost mini" type="button" title="Re-detect" onclick={probeOllama} disabled={detecting || scanningDisk}>
                 <RefreshCw size={14} class={detecting ? "spin" : ""} />
               </button>
             </div>
@@ -590,14 +598,14 @@
                 placeholder={detect?.modelsPath || "%USERPROFILE%\\.ollama\\models (empty = default)"}
                 autocomplete="off"
               />
-              <button class="ghost mini" type="button" title="Pick models folder" on:click={pickOllamaModelsFolder}>
+              <button class="ghost mini" type="button" title="Pick models folder" onclick={pickOllamaModelsFolder}>
                 <FolderOpen size={14} />
               </button>
               <button
                 class="ghost mini"
                 type="button"
                 title="Scan entire C: drive for ollama.exe and models folders"
-                on:click={scanDiskForOllama}
+                onclick={scanDiskForOllama}
                 disabled={scanningDisk || detecting}
               >
                 <Search size={14} class={scanningDisk ? "spin" : ""} />
@@ -632,7 +640,7 @@
                 Model name / tag
                 <div class="model-row">
                   <input bind:value={pullName} placeholder="e.g. qwen2.5:7b" autocomplete="off" />
-                  <button type="button" on:click={installModel} disabled={pulling || importing || !pullName.trim()}>
+                  <button type="button" onclick={installModel} disabled={pulling || importing || !pullName.trim()}>
                     <Download size={14} />
                     {pulling ? "Installing…" : "Install model"}
                   </button>
@@ -646,7 +654,7 @@
                       class="chip"
                       class:on={pullName === s}
                       title={detect.suggestedModelNotes?.[s] ?? s}
-                      on:click={() => (pullName = s)}
+                      onclick={() => (pullName = s)}
                     >
                       {s}
                       {#if detect.suggestedModelNotes?.[s]}
@@ -661,7 +669,7 @@
                 Local model file (optional)
                 <div class="model-row">
                   <input bind:value={ggufName} placeholder="Name after import (optional)" autocomplete="off" />
-                  <button class="ghost" type="button" on:click={pickGgufAndImport} disabled={pulling || importing}>
+                  <button class="ghost" type="button" onclick={pickGgufAndImport} disabled={pulling || importing}>
                     <FileUp size={14} />
                     {importing ? "Importing…" : "Import .gguf"}
                   </button>
@@ -679,7 +687,7 @@
                     <option value={m}>{m}</option>
                   {/each}
                 </select>
-                <button class="ghost mini" type="button" on:click={refreshOllamaModels} disabled={listingModels}>
+                <button class="ghost mini" type="button" onclick={refreshOllamaModels} disabled={listingModels}>
                   <RefreshCw size={14} class={listingModels ? "spin" : ""} />
                 </button>
               </div>
@@ -707,18 +715,18 @@
             />
           </label>
           {#if apiKeySet}
-            <button class="ghost mini" type="button" on:click={clearKey}>Clear saved key</button>
+            <button class="ghost mini" type="button" onclick={clearKey}>Clear saved key</button>
           {/if}
         {/if}
 
         <footer>
-          <button class="ghost" type="button" on:click={test} disabled={testing || saving || pulling || importing || scanningDisk}>
+          <button class="ghost" type="button" onclick={test} disabled={testing || saving || pulling || importing || scanningDisk}>
             <Plug size={14} />
             {testing ? "Testing…" : "Test connection"}
           </button>
           <div class="spacer"></div>
-          <button class="ghost" type="button" on:click={close}>Cancel</button>
-          <button type="button" on:click={save} disabled={saving || scanningDisk || !endpoint.trim() || (provider === "openai-compatible" && !model.trim())}>
+          <button class="ghost" type="button" onclick={close}>Cancel</button>
+          <button type="button" onclick={save} disabled={saving || scanningDisk || !endpoint.trim() || (provider === "openai-compatible" && !model.trim())}>
             {saving ? "Saving…" : "Save"}
           </button>
         </footer>

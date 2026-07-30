@@ -36,7 +36,7 @@
     Pencil,
     Save,
     Eraser,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
 
   type FocusMode = "recipes" | "uses";
@@ -76,11 +76,11 @@
 
   let recipes: ScannedRecipe[] = [];
   let items: ItemEntry[] = [];
-  let itemCategorySets = new Map<string, Set<string>>();
-  let filteredCounts = new Map<string, ItemFocusCounts>();
-  let catalogReady = false;
+  let itemCategorySets = $state(new Map<string, Set<string>>())
+  let filteredCounts = $state(new Map<string, ItemFocusCounts>())
+  let catalogReady = $state(false);
   let scanMeta: Omit<RecipeScanResult, "recipes"> | null = null;
-  let loading = false;
+  let loading = $state(false);
   let error: string | null = null;
   let message: string | null = null;
   let filter = "";
@@ -88,51 +88,51 @@
   let modFilter = "all";
   let focusMode: FocusMode = "recipes";
   let selectedItem = "";
-  let recipeIndex = 0;
-  let itemPage = 0;
+  let recipeIndex = $state(0);
+  let itemPage = $state(0);
   let lastLoadedPath: string | null = null;
   let bookmarks: string[] = [];
   let historyStack: string[] = [];
-  let showBookmarks = true;
-  let showHelp = false;
-  let cycleTick = 0;
+  let showBookmarks = $state(true);
+  let showHelp = $state(false);
+  let cycleTick = $state(0);
   let cycleTimer: ReturnType<typeof setInterval> | null = null;
-  let pendingRemoves = new Set<string>();
+  let pendingRemoves = $state(new Set<string>())
   let recipeSource: "offline" | "runtime" = "offline";
   let runtimeStatus: RecipeRuntimeStatus | null = null;
   let runtimeCategories: RuntimeRecipeCategory[] = [];
   let runtimePoller: ReturnType<typeof setInterval> | null = null;
 
-  let editorOpen = false;
+  let editorOpen = $state(false);
   let editorKind: EditorKind = "crafting";
   let editGrid: (string | null)[] = Array(9).fill(null);
   let editOutput: string | null = null;
-  let editCount = 1;
-  let editShaped = true;
+  let editCount = $state(1);
+  let editShaped = $state(true);
   let editInput: string | null = null;
-  let editXp = 0;
-  let editCookTime = 200;
+  let editXp = $state(0);
+  let editCookTime = $state(200);
   let editTemplate: string | null = null;
   let editBase: string | null = null;
   let editAddition: string | null = null;
   let replaceRecipeId: string | null = null;
-  let editorSaving = false;
+  let editorSaving = $state(false);
   let paletteMode: PaletteMode = "items";
   let knownTags: string[] = [];
-  let tagsLoading = false;
+  let tagsLoading = $state(false);
   let editTagId = "";
   let tagMembers: string[] = [];
   let tagAdd: string[] = [];
   let tagRemove: string[] = [];
-  let tagRemoveAll = false;
-  let tagLoadingMembers = false;
+  let tagRemoveAll = $state(false);
+  let tagLoadingMembers = $state(false);
 
   type IconState = "loading" | "missing" | string;
   let iconCache: Record<string, IconState> = {};
   const iconInFlight = new Set<string>();
   let iconPreloadQueue: string[] = [];
   let iconPreloadTimer: ReturnType<typeof setTimeout> | null = null;
-  let iconBatchRunning = false;
+  let iconBatchRunning = $state(false);
 
   async function preloadIconsBatch(ids: string[]) {
     if (!ids.length || !$projectPath) return;
@@ -879,11 +879,11 @@
     }
   }
 
-  $: filteredTags = (() => {
+  const filteredTags = $derived((() => {
     const q = filter.trim().toLowerCase();
     if (!q) return knownTags;
     return knownTags.filter((t) => t.toLowerCase().includes(q));
-  })();
+  })());
 
   function navigateSlot(ing: IngredientDisplay | null, mode: FocusMode) {
     const r = resolveSlot(ing);
@@ -997,59 +997,79 @@
     if (recipeIndex < activeRecipes.length - 1) recipeIndex++;
   }
 
-  $: if (recipes.length && categoryFilter && modFilter) {
-    filteredCounts = buildFilteredCounts(recipes, categoryFilter, modFilter);
-  }
-  $: modNamespaces = ["all", ...new Set(items.map((i) => i.modNs).filter(Boolean))].sort();
-  $: filteredItems = catalogReady
+  $effect(() => {
+    if (recipes.length && categoryFilter && modFilter) {
+        filteredCounts = buildFilteredCounts(recipes, categoryFilter, modFilter);
+      }
+  });
+  const modNamespaces = $derived(["all", ...new Set(items.map((i) => i.modNs).filter(Boolean))].sort());
+  const filteredItems = $derived(catalogReady
     ? items.filter((i) => {
         if (modFilter !== "all" && i.modNs !== modFilter) return false;
         if (!itemInCategory(i.id, categoryFilter)) return false;
         return matchesJeiSearch(i.id, filter, i.name);
       })
-    : [];
-  $: totalItemPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
-  $: totalTagPages = Math.max(1, Math.ceil(filteredTags.length / ITEMS_PER_PAGE));
-  $: overlayPageCount = editorOpen && paletteMode === "tags" ? totalTagPages : totalItemPages;
-  $: if (itemPage >= overlayPageCount) itemPage = Math.max(0, overlayPageCount - 1);
-  $: pageItems = filteredItems.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE);
-  $: pageTags = filteredTags.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE);
-  $: activeRecipes = recipesForItem(selectedItem, focusMode);
-  $: categories = buildCategories();
-  $: if (!categories.includes(categoryFilter)) categoryFilter = "all";
-  $: if (activeRecipes.length === 0) recipeIndex = 0;
-  else if (recipeIndex >= activeRecipes.length) recipeIndex = activeRecipes.length - 1;
-  $: currentRecipe = activeRecipes[recipeIndex] ?? null;
-  $: bookmarkItems = bookmarks
+    : []);
+  const totalItemPages = $derived(Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE)));
+  const totalTagPages = $derived(Math.max(1, Math.ceil(filteredTags.length / ITEMS_PER_PAGE)));
+  const overlayPageCount = $derived(editorOpen && paletteMode === "tags" ? totalTagPages : totalItemPages);
+  $effect(() => {
+    if (itemPage >= overlayPageCount) itemPage = Math.max(0, overlayPageCount - 1);
+  });
+  const pageItems = $derived(filteredItems.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE));
+  const pageTags = $derived(filteredTags.slice(itemPage * ITEMS_PER_PAGE, (itemPage + 1) * ITEMS_PER_PAGE));
+  const activeRecipes = $derived(recipesForItem(selectedItem, focusMode));
+  const categories = $derived(buildCategories());
+  $effect(() => {
+    if (!categories.includes(categoryFilter)) categoryFilter = "all";
+  });
+  $effect(() => {
+    if (activeRecipes.length === 0) recipeIndex = 0;
+    else if (recipeIndex >= activeRecipes.length) recipeIndex = activeRecipes.length - 1;
+  });
+  const currentRecipe = $derived(activeRecipes[recipeIndex] ?? null);
+  const bookmarkItems = $derived(bookmarks
     .map((id) => items.find((i) => i.id === id) ?? { id, name: prettifyItem(id), modNs: itemNamespace(id), recipeCount: 0, useCount: 0 })
-    .filter(Boolean);
-  $: preloadIcons(pageItems.map((item) => item.id));
-  $: preloadIcons(bookmarkItems.map((item) => item.id));
-  $: if (selectedItem) ensureItemIcon(selectedItem);
-  $: if (currentRecipe) {
-    preloadIcons([
-      currentRecipe.outputId,
-      currentRecipe.layout.output?.id,
-      ...(currentRecipe.layout.output?.alts?.map((a) => a.id) ?? []),
-      ...currentRecipe.layout.grid.flatMap((slot) => [
-        resolveSlot(slot)?.id,
-        ...(slot?.alts?.map((a) => a.id) ?? []),
-      ]),
-      ...(currentRecipe.layout.slots ?? []).flatMap((slot) =>
-        slot.ingredients.flatMap((ingredient) => [
-          ingredient.id,
-          ...(ingredient.alts?.map((a) => a.id) ?? []),
-        ])
-      ),
-      ...(runtimeCategory(currentRecipe.category)?.stations ?? []).map((station) => station.id),
-    ]);
-  }
-  $: if ($projectPath && $projectPath !== lastLoadedPath) {
-    knownTags = [];
-    closeEditor();
-    loadRecipes();
-  }
-  $: if (filter) itemPage = 0;
+    .filter(Boolean));
+  $effect(() => {
+    preloadIcons(pageItems.map((item) => item.id));
+  });
+  $effect(() => {
+    preloadIcons(bookmarkItems.map((item) => item.id));
+  });
+  $effect(() => {
+    if (selectedItem) ensureItemIcon(selectedItem);
+  });
+  $effect(() => {
+    if (currentRecipe) {
+        preloadIcons([
+          currentRecipe.outputId,
+          currentRecipe.layout.output?.id,
+          ...(currentRecipe.layout.output?.alts?.map((a) => a.id) ?? []),
+          ...currentRecipe.layout.grid.flatMap((slot) => [
+            resolveSlot(slot)?.id,
+            ...(slot?.alts?.map((a) => a.id) ?? []),
+          ]),
+          ...(currentRecipe.layout.slots ?? []).flatMap((slot) =>
+            slot.ingredients.flatMap((ingredient) => [
+              ingredient.id,
+              ...(ingredient.alts?.map((a) => a.id) ?? []),
+            ])
+          ),
+          ...(runtimeCategory(currentRecipe.category)?.stations ?? []).map((station) => station.id),
+        ]);
+      }
+  });
+  $effect(() => {
+    if ($projectPath && $projectPath !== lastLoadedPath) {
+        knownTags = [];
+        closeEditor();
+        loadRecipes();
+      }
+  });
+  $effect(() => {
+    if (filter) itemPage = 0;
+  });
 </script>
 
 <div class="jei" class:busy={loading}>
@@ -1074,24 +1094,24 @@
       </div>
     </div>
     <div class="hd-actions">
-      <button class="ghost" title="Keyboard shortcuts" on:click={() => (showHelp = !showHelp)}>
+      <button class="ghost" title="Keyboard shortcuts" onclick={() => (showHelp = !showHelp)}>
         <Keyboard size={16} />
       </button>
-      <button class="ghost" class:active={showBookmarks} on:click={() => (showBookmarks = !showBookmarks)}>
+      <button class="ghost" class:active={showBookmarks} onclick={() => (showBookmarks = !showBookmarks)}>
         <Bookmark size={16} />
       </button>
       {#if runtimeStatus?.supported && !runtimeStatus.connected}
-        <button class="live-launch" on:click={launchJeiLive} disabled={!$projectPath || loading} title={runtimeStatus.message}>
+        <button class="live-launch" onclick={launchJeiLive} disabled={!$projectPath || loading} title={runtimeStatus.message}>
           <Play size={15} /> Launch JEI Live
         </button>
       {/if}
-      <button class="ghost" on:click={() => openNewRecipeEditor("crafting")} disabled={!$projectPath || loading} title="New recipe or tag edit">
+      <button class="ghost" onclick={() => openNewRecipeEditor("crafting")} disabled={!$projectPath || loading} title="New recipe or tag edit">
         <Plus size={16} /> New recipe
       </button>
-      <button class="ghost" on:click={() => openNewRecipeEditor("tags")} disabled={!$projectPath || loading} title="Edit item tags">
+      <button class="ghost" onclick={() => openNewRecipeEditor("tags")} disabled={!$projectPath || loading} title="Edit item tags">
         <Bookmark size={16} /> Edit tags
       </button>
-      <button class="primary-scan" on:click={() => loadRecipes(true, true)} disabled={!$projectPath || loading}>
+      <button class="primary-scan" onclick={() => loadRecipes(true, true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         {loading ? "Loading…" : recipeSource === "runtime" ? "Refresh live" : "Rescan"}
       </button>
@@ -1107,7 +1127,7 @@
       <span><kbd>Backspace</kbd> History back</span>
       <span>LMB = Recipes · RMB = Uses</span>
       <span>New recipe: drag items/tags onto the craft grid</span>
-      <button class="ghost tiny" on:click={() => (showHelp = false)}><X size={14} /></button>
+      <button class="ghost tiny" onclick={() => (showHelp = false)}><X size={14} /></button>
     </div>
   {/if}
 
@@ -1119,7 +1139,7 @@
       <Search size={14} />
       <input bind:value={filter} placeholder="Search: name  @mod  #tag  &id  $tooltip  -exclude" spellcheck="false" />
       {#if filter}
-        <button class="clear" on:click={() => (filter = "")}><X size={12} /></button>
+        <button class="clear" onclick={() => (filter = "")}><X size={12} /></button>
       {/if}
     </div>
     <select bind:value={modFilter} class="mod-select" title="Filter by mod namespace">
@@ -1128,7 +1148,7 @@
       {/each}
     </select>
     {#if pendingRemoves.size > 0}
-      <button class="warn-btn" on:click={flushRemoves}>
+      <button class="warn-btn" onclick={flushRemoves}>
         <FileCode size={14} /> Write {pendingRemoves.size} removes
       </button>
     {/if}
@@ -1152,8 +1172,8 @@
       <h3>No recipes found</h3>
       <p>Put mods in <code>mods/</code> or datapacks under <code>datapacks/</code>.</p>
       <div class="empty-actions">
-        <button on:click={() => loadRecipes()}>Scan now</button>
-        <button class="secondary" on:click={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
+        <button onclick={() => loadRecipes()}>Scan now</button>
+        <button class="secondary" onclick={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
       </div>
     </div>
   {:else}
@@ -1166,7 +1186,7 @@
             class="cat-tab"
             class:active={categoryFilter === cat}
             title={categoryLabel(cat)}
-            on:click={() => {
+            onclick={() => {
               categoryFilter = cat;
               recipeIndex = 0;
               itemPage = 0;
@@ -1223,7 +1243,7 @@
                     type="button"
                     class="mode-btn"
                     class:on={editorKind === k.id}
-                    on:click={() => {
+                    onclick={() => {
                       editorKind = k.id;
                       if (k.id === "tags") paletteMode = "tags";
                       else paletteMode = "items";
@@ -1235,8 +1255,8 @@
 
             {#if editorKind === "crafting"}
               <div class="editor-toggles">
-                <button type="button" class="mode-btn" class:on={editShaped} on:click={() => (editShaped = true)}>Shaped</button>
-                <button type="button" class="mode-btn" class:on={!editShaped} on:click={() => (editShaped = false)}>Shapeless</button>
+                <button type="button" class="mode-btn" class:on={editShaped} onclick={() => (editShaped = true)}>Shaped</button>
+                <button type="button" class="mode-btn" class:on={!editShaped} onclick={() => (editShaped = false)}>Shapeless</button>
               </div>
               <div class="mc-panel" data-cat="crafting">
                 <div class="panel-title">Crafting Table {#if !editShaped}<span class="badge shapeless">Shapeless</span>{/if}</div>
@@ -1251,13 +1271,13 @@
                         class:drop-target={true}
                         style="--hue: {itemHue(slotId ?? '')}"
                         title={slotId ?? "Drop ingredient"}
-                        on:dragover={onDragOverSlot}
-                        on:drop={(e) => onDropGrid(e, i)}
-                        on:contextmenu|preventDefault={() => setEditSlot(i, null)}
-                        on:click={() => setEditSlot(i, null)}
+                        ondragover={onDragOverSlot}
+                        ondrop={(e) => onDropGrid(e, i)}
+                        oncontextmenu={(e) => { e.preventDefault(); setEditSlot(i, null); } }
+                        onclick={() => setEditSlot(i, null)}
                       >
                         {#if slotId && iconSrc(slotId)}
-                          <img src={iconSrc(slotId)} alt="" class="slot-icon" on:error={() => onIconError(slotId)} />
+                          <img src={iconSrc(slotId)} alt="" class="slot-icon" onerror={() => onIconError(slotId)} />
                         {:else if slotId}
                           <span class="letter">{slotId.startsWith("#") ? "#" : prettifyItem(slotId).slice(0, 3)}</span>
                         {/if}
@@ -1272,13 +1292,13 @@
                     class:drop-target={true}
                     style="--hue: {itemHue(editOutput ?? '')}"
                     title={editOutput ? `${editOutput}\nShift+click: stack count` : "Drop output item"}
-                    on:dragover={onDragOverSlot}
-                    on:drop={onDropOutput}
-                    on:contextmenu|preventDefault={() => { editOutput = null; editCount = 1; }}
-                    on:click={onOutputClick}
+                    ondragover={onDragOverSlot}
+                    ondrop={onDropOutput}
+                    oncontextmenu={(e) => { e.preventDefault(); { editOutput = null; editCount = 1;; } }}
+                    onclick={onOutputClick}
                   >
                     {#if editOutput && iconSrc(editOutput)}
-                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" on:error={() => onIconError(editOutput)} />
+                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" onerror={() => onIconError(editOutput)} />
                     {:else if editOutput}
                       <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
                     {/if}
@@ -1302,13 +1322,13 @@
                     class:drop-target={true}
                     style="--hue: {itemHue(editInput ?? '')}"
                     title={editInput ?? "Drop input"}
-                    on:dragover={onDragOverSlot}
-                    on:drop={onDropSingleInput}
-                    on:contextmenu|preventDefault={() => (editInput = null)}
-                    on:click={() => (editInput = null)}
+                    ondragover={onDragOverSlot}
+                    ondrop={onDropSingleInput}
+                    oncontextmenu={(e) => { e.preventDefault(); (editInput = null); } }
+                    onclick={() => (editInput = null)}
                   >
                     {#if editInput && iconSrc(editInput)}
-                      <img src={iconSrc(editInput)} alt="" class="slot-icon" on:error={() => onIconError(editInput)} />
+                      <img src={iconSrc(editInput)} alt="" class="slot-icon" onerror={() => onIconError(editInput)} />
                     {:else if editInput}
                       <span class="letter">{editInput.startsWith("#") ? "#" : prettifyItem(editInput).slice(0, 3)}</span>
                     {/if}
@@ -1330,13 +1350,13 @@
                     class:drop-target={true}
                     style="--hue: {itemHue(editOutput ?? '')}"
                     title={editOutput ? `${editOutput}\nShift+click: stack` : "Drop output"}
-                    on:dragover={onDragOverSlot}
-                    on:drop={onDropOutput}
-                    on:contextmenu|preventDefault={() => { editOutput = null; editCount = 1; }}
-                    on:click={onOutputClick}
+                    ondragover={onDragOverSlot}
+                    ondrop={onDropOutput}
+                    oncontextmenu={(e) => { e.preventDefault(); { editOutput = null; editCount = 1;; } }}
+                    onclick={onOutputClick}
                   >
                     {#if editOutput && iconSrc(editOutput)}
-                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" on:error={() => onIconError(editOutput)} />
+                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" onerror={() => onIconError(editOutput)} />
                     {:else if editOutput}
                       <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
                     {/if}
@@ -1362,21 +1382,20 @@
                       class:drop-target={true}
                       style="--hue: {itemHue(slot.val ?? '')}"
                       title={slot.val ?? slot.label}
-                      on:dragover={onDragOverSlot}
-                      on:drop={(e) => onDropSmithing(e, slot.key)}
-                      on:contextmenu|preventDefault={() => {
+                      ondragover={onDragOverSlot}
+                      ondrop={(e) => onDropSmithing(e, slot.key)}
+                      oncontextmenu={(e) => { e.preventDefault(); {
                         if (slot.key === "template") editTemplate = null;
                         else if (slot.key === "base") editBase = null;
-                        else editAddition = null;
-                      }}
-                      on:click={() => {
+                        else editAddition = null;(e); } }}
+                      onclick={() => {
                         if (slot.key === "template") editTemplate = null;
                         else if (slot.key === "base") editBase = null;
                         else editAddition = null;
                       }}
                     >
                       {#if slot.val && iconSrc(slot.val)}
-                        <img src={iconSrc(slot.val)} alt="" class="slot-icon" on:error={() => onIconError(slot.val)} />
+                        <img src={iconSrc(slot.val)} alt="" class="slot-icon" onerror={() => onIconError(slot.val)} />
                       {:else if slot.val}
                         <span class="letter">{prettifyItem(slot.val).slice(0, 3)}</span>
                       {:else}
@@ -1392,13 +1411,13 @@
                     class:empty={!editOutput}
                     class:drop-target={true}
                     style="--hue: {itemHue(editOutput ?? '')}"
-                    on:dragover={onDragOverSlot}
-                    on:drop={onDropOutput}
-                    on:contextmenu|preventDefault={() => { editOutput = null; editCount = 1; }}
-                    on:click={onOutputClick}
+                    ondragover={onDragOverSlot}
+                    ondrop={onDropOutput}
+                    oncontextmenu={(e) => { e.preventDefault(); { editOutput = null; editCount = 1;; } }}
+                    onclick={onOutputClick}
                   >
                     {#if editOutput && iconSrc(editOutput)}
-                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" on:error={() => onIconError(editOutput)} />
+                      <img src={iconSrc(editOutput)} alt="" class="slot-icon" onerror={() => onIconError(editOutput)} />
                     {:else if editOutput}
                       <span class="letter">{prettifyItem(editOutput).slice(0, 3)}</span>
                     {/if}
@@ -1415,8 +1434,8 @@
                       type="text"
                       placeholder="c:apples"
                       bind:value={editTagId}
-                      on:change={() => editTagId && loadTagMembers(editTagId)}
-                      on:blur={() => editTagId && loadTagMembers(editTagId)}
+                      onchange={() => editTagId && loadTagMembers(editTagId)}
+                      onblur={() => editTagId && loadTagMembers(editTagId)}
                     />
                   </label>
                   <label class="editor-check">
@@ -1427,8 +1446,8 @@
                     class="tag-drop-zone"
                     role="region"
                     aria-label="Drop items to add to tag"
-                    on:dragover={onDragOverSlot}
-                    on:drop={onDropTagAdd}
+                    ondragover={onDragOverSlot}
+                    ondrop={onDropTagAdd}
                   >
                     Drop items/tags here to <strong>add</strong>
                     {#if tagAdd.length === 0}
@@ -1436,7 +1455,7 @@
                     {:else}
                       <div class="tag-chip-row">
                         {#each tagAdd as id}
-                          <button type="button" class="tag-chip add" title={id} on:click={() => removePendingAdd(id)}>
+                          <button type="button" class="tag-chip add" title={id} onclick={() => removePendingAdd(id)}>
                             + {id} ×
                           </button>
                         {/each}
@@ -1452,7 +1471,7 @@
                           class="tag-chip"
                           class:remove={tagRemove.includes(id)}
                           title={tagRemove.includes(id) ? "Will be removed" : "Click to remove"}
-                          on:click={() => toggleTagRemove(id)}
+                          onclick={() => toggleTagRemove(id)}
                         >
                           {tagRemove.includes(id) ? "− " : ""}{id}
                         </button>
@@ -1475,12 +1494,12 @@
             </div>
 
             <div class="recipe-actions">
-              <button class="primary-scan" disabled={!editorCanSave() || editorSaving} on:click={saveCraftRecipe}>
+              <button class="primary-scan" disabled={!editorCanSave() || editorSaving} onclick={saveCraftRecipe}>
                 <Save size={14} />
                 {editorSaving ? "Writing…" : (replaceRecipeId || editorKind === "tags") ? "Save" : "Add"}
               </button>
-              <button class="secondary" on:click={clearEditorGrid}><Eraser size={14} /> Clear</button>
-              <button class="secondary" on:click={closeEditor}><X size={14} /> Cancel</button>
+              <button class="secondary" onclick={clearEditorGrid}><Eraser size={14} /> Clear</button>
+              <button class="secondary" onclick={closeEditor}><X size={14} /> Cancel</button>
             </div>
           </div>
         {:else if !selectedItem}
@@ -1497,25 +1516,25 @@
             <h3>Select an item</h3>
             <p>Or create a new crafting recipe with KubeJS.</p>
             <p class="hint">Right-click for Uses · Press <kbd>R</kbd> / <kbd>U</kbd></p>
-            <button class="secondary" on:click={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
+            <button class="secondary" onclick={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
           </div>
         {:else}
           <div class="gui-top">
-            <button class="ghost" disabled={historyStack.length < 2} on:click={goBack} title="Back">
+            <button class="ghost" disabled={historyStack.length < 2} onclick={goBack} title="Back">
               <History size={16} />
             </button>
             <div class="focus-tabs">
               <button
                 type="button"
                 class:active={focusMode === "recipes"}
-                on:click={() => { focusMode = "recipes"; recipeIndex = 0; }}
+                onclick={() => { focusMode = "recipes"; recipeIndex = 0; }}
               >
                 Recipes <em>{recipesForItem(selectedItem, "recipes").length}</em>
               </button>
               <button
                 type="button"
                 class:active={focusMode === "uses"}
-                on:click={() => { focusMode = "uses"; recipeIndex = 0; }}
+                onclick={() => { focusMode = "uses"; recipeIndex = 0; }}
               >
                 Uses <em>{recipesForItem(selectedItem, "uses").length}</em>
               </button>
@@ -1523,7 +1542,7 @@
             <div class="focus-item">
               <span class="mc-slot mini" style="--hue: {itemHue(selectedItem)}">
                 {#if iconSrc(selectedItem)}
-                  <img src={iconSrc(selectedItem)} alt="" class="slot-icon" on:error={() => onIconError(selectedItem)} />
+                  <img src={iconSrc(selectedItem)} alt="" class="slot-icon" onerror={() => onIconError(selectedItem)} />
                 {:else}
                   <span class="letter">{prettifyItem(selectedItem).slice(0, 2)}</span>
                 {/if}
@@ -1536,7 +1555,7 @@
                 class="star"
                 class:on={bookmarks.includes(selectedItem)}
                 title="Bookmark (B)"
-                on:click={() => toggleBookmark(selectedItem)}
+                onclick={() => toggleBookmark(selectedItem)}
               >
                 <Star size={16} />
               </button>
@@ -1550,11 +1569,11 @@
           {:else if currentRecipe}
             <div class="recipe-stage">
               <div class="recipe-nav">
-                <button class="nav-btn" on:click={prevRecipe} disabled={recipeIndex === 0}>
+                <button class="nav-btn" onclick={prevRecipe} disabled={recipeIndex === 0}>
                   <ChevronLeft size={18} />
                 </button>
                 <span class="page">{recipeIndex + 1} / {activeRecipes.length}</span>
-                <button class="nav-btn" on:click={nextRecipe} disabled={recipeIndex >= activeRecipes.length - 1}>
+                <button class="nav-btn" onclick={nextRecipe} disabled={recipeIndex >= activeRecipes.length - 1}>
                   <ChevronRight size={18} />
                 </button>
               </div>
@@ -1580,12 +1599,12 @@
                         style={`left:${slot.x}px;top:${slot.y}px;width:${Math.max(18, slot.width)}px;height:${Math.max(18, slot.height)}px;--hue:${itemHue(ingredient?.id ?? "")}`}
                         title={ingredient?.tooltip?.join("\n") || ingredient?.name || ingredient?.id || slot.name || slot.role}
                         disabled={!ingredient}
-                        on:click={() => navigateSlot(ingredient, slot.role === "OUTPUT" ? "recipes" : "uses")}
-                        on:contextmenu|preventDefault={() => navigateSlot(ingredient, "recipes")}
+                        onclick={() => navigateSlot(ingredient, slot.role === "OUTPUT" ? "recipes" : "uses")}
+                        oncontextmenu={(e) => { e.preventDefault(); navigateSlot(ingredient, "recipes"); } }
                       >
                         {#if ingredient}
                           {#if iconSrc(ingredient.id, ingredient.iconUrl)}
-                            <img src={iconSrc(ingredient.id, ingredient.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(ingredient.id)} />
+                            <img src={iconSrc(ingredient.id, ingredient.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(ingredient.id)} />
                           {:else}
                             <span class="letter">{(ingredient.name || prettifyItem(ingredient.id)).slice(0, 3)}</span>
                           {/if}
@@ -1603,10 +1622,10 @@
                           class="mc-slot mini"
                           title={station.tooltip?.join("\n") || station.name || station.id}
                           style={`--hue:${itemHue(station.id)}`}
-                          on:click={() => navigateSlot(station, "recipes")}
+                          onclick={() => navigateSlot(station, "recipes")}
                         >
                           {#if iconSrc(station.id, station.iconUrl)}
-                            <img src={iconSrc(station.id, station.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(station.id)} />
+                            <img src={iconSrc(station.id, station.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(station.id)} />
                           {:else}
                             <span class="letter">{(station.name || prettifyItem(station.id)).slice(0, 2)}</span>
                           {/if}
@@ -1625,13 +1644,13 @@
                           style={slot ? `--hue: ${itemHue(resolveSlot(slot)?.id ?? "")}` : ""}
                           title={slotTitle(slot)}
                           disabled={!slot}
-                          on:click={() => navigateSlot(slot, "uses")}
-                          on:contextmenu|preventDefault={() => navigateSlot(slot, "recipes")}
+                          onclick={() => navigateSlot(slot, "uses")}
+                          oncontextmenu={(e) => { e.preventDefault(); navigateSlot(slot, "recipes"); } }
                         >
                           {#if slot}
                             {@const resolved = resolveSlot(slot)}
                             {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(resolved?.id)} />
+                              <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(resolved?.id)} />
                             {:else}
                               <span class="letter">{slotLabel(slot)}</span>
                             {/if}
@@ -1647,11 +1666,11 @@
                       class="mc-slot out"
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
                       title={currentRecipe.layout.output.id}
-                      on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
-                      on:contextmenu|preventDefault={() => navigateSlot(currentRecipe.layout.output, "uses")}
+                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      oncontextmenu={(e) => { e.preventDefault(); navigateSlot(currentRecipe.layout.output, "uses"); } }
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1667,10 +1686,10 @@
                       class="mc-slot large"
                       style="--hue: {itemHue(resolveSlot(currentRecipe.layout.grid[4])?.id ?? '')}"
                       title={slotTitle(currentRecipe.layout.grid[4])}
-                      on:click={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
+                      onclick={() => navigateSlot(currentRecipe.layout.grid[4], "uses")}
                     >
                       {#if iconSrc(input?.id, input?.iconUrl)}
-                        <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(input?.id)} />
+                        <img src={iconSrc(input?.id, input?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(input?.id)} />
                       {:else}
                         <span class="letter">{slotLabel(currentRecipe.layout.grid[4])}</span>
                       {/if}
@@ -1688,10 +1707,10 @@
                     <button
                       class="mc-slot out large"
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1710,12 +1729,12 @@
                         style={slot ? `--hue: ${itemHue(resolveSlot(slot)?.id ?? "")}` : ""}
                         title={slotTitle(slot)}
                         disabled={!slot}
-                        on:click={() => navigateSlot(slot, "uses")}
+                        onclick={() => navigateSlot(slot, "uses")}
                       >
                         {#if slot}
                           {@const resolved = resolveSlot(slot)}
                           {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(resolved?.id)} />
+                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(resolved?.id)} />
                           {:else}
                             <span class="letter">{slotLabel(slot)}</span>
                           {/if}
@@ -1727,10 +1746,10 @@
                     <button
                       class="mc-slot out large"
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1745,10 +1764,10 @@
                           class="mc-slot"
                           style="--hue: {itemHue(resolved?.id ?? '')}"
                           title={slotTitle(slot)}
-                          on:click={() => navigateSlot(slot, "uses")}
+                          onclick={() => navigateSlot(slot, "uses")}
                         >
                           {#if iconSrc(resolved?.id, resolved?.iconUrl)}
-                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(resolved?.id)} />
+                            <img src={iconSrc(resolved?.id, resolved?.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(resolved?.id)} />
                           {:else}
                             <span class="letter">{slotLabel(slot)}</span>
                           {/if}
@@ -1759,10 +1778,10 @@
                     <button
                       class="mc-slot out"
                       style="--hue: {itemHue(currentRecipe.layout.output.id)}"
-                      on:click={() => navigateSlot(currentRecipe.layout.output, "recipes")}
+                      onclick={() => navigateSlot(currentRecipe.layout.output, "recipes")}
                     >
                       {#if iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)}
-                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" on:error={() => onIconError(currentRecipe.layout.output.id)} />
+                        <img src={iconSrc(currentRecipe.layout.output.id, currentRecipe.layout.output.iconUrl)} alt="" class="slot-icon" onerror={() => onIconError(currentRecipe.layout.output.id)} />
                       {:else}
                         <span class="letter">{prettifyItem(currentRecipe.layout.output.id).slice(0, 3)}</span>
                       {/if}
@@ -1783,20 +1802,20 @@
 
               <div class="recipe-actions">
                 {#if ["crafting", "cooking", "smithing", "stonecutting"].includes(currentRecipe.layout.category)}
-                  <button class="secondary" on:click={() => openEditRecipe(currentRecipe)}>
+                  <button class="secondary" onclick={() => openEditRecipe(currentRecipe)}>
                     <Pencil size={14} /> Edit
                   </button>
                 {/if}
-                <button class="secondary" on:click={() => copyKubeJS(currentRecipe)}>
+                <button class="secondary" onclick={() => copyKubeJS(currentRecipe)}>
                   <Copy size={14} /> Copy KubeJS
                 </button>
-                <button class="secondary" on:click={() => queueRemove(currentRecipe)}>
+                <button class="secondary" onclick={() => queueRemove(currentRecipe)}>
                   <Trash2 size={14} /> Queue remove
                 </button>
                 <button
                   class="secondary"
                   class:on={bookmarks.includes(currentRecipe.outputId)}
-                  on:click={() => toggleBookmark(currentRecipe.outputId)}
+                  onclick={() => toggleBookmark(currentRecipe.outputId)}
                 >
                   <Star size={14} /> Bookmark
                 </button>
@@ -1819,12 +1838,12 @@
                   style="--hue: {itemHue(item.id)}"
                   title={item.id}
                   draggable={editorOpen ? "true" : "false"}
-                  on:dragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
-                  on:click={() => !editorOpen && selectItem(item.id, "recipes")}
-                  on:contextmenu|preventDefault={() => !editorOpen && selectItem(item.id, "uses")}
+                  ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
+                  onclick={() => !editorOpen && selectItem(item.id, "recipes")}
+                  oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); } }
                 >
                   {#if iconSrc(item.id)}
-                    <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
+                    <img src={iconSrc(item.id)} alt="" class="item-icon" onerror={() => onIconError(item.id)} />
                   {:else if iconCache[item.id] === "loading"}
                     <span class="item-letter icon-pending"></span>
                   {:else}
@@ -1843,13 +1862,13 @@
                 type="button"
                 class="mode-btn"
                 class:on={paletteMode === "items"}
-                on:click={() => { paletteMode = "items"; itemPage = 0; }}
+                onclick={() => { paletteMode = "items"; itemPage = 0; }}
               >Items</button>
               <button
                 type="button"
                 class="mode-btn"
                 class:on={paletteMode === "tags"}
-                on:click={() => { paletteMode = "tags"; itemPage = 0; ensureTagsLoaded(); }}
+                onclick={() => { paletteMode = "tags"; itemPage = 0; ensureTagsLoaded(); }}
               >Tags</button>
             </div>
             <small>{paletteMode === "tags" ? filteredTags.length : filteredItems.length}</small>
@@ -1873,8 +1892,8 @@
                   draggable="true"
                   style="--hue: 180"
                   title={tagId}
-                  on:dragstart={(e) => onDragStartItem(e, tagId)}
-                  on:click={() => {
+                  ondragstart={(e) => onDragStartItem(e, tagId)}
+                  onclick={() => {
                     if (editorKind === "tags") selectEditTag(tagId);
                   }}
                 >
@@ -1893,10 +1912,10 @@
                 style="--hue: {itemHue(item.id)}"
                 title="{item.id}\nR: {item.recipeCount} · U: {item.useCount}"
                 draggable={editorOpen ? "true" : "false"}
-                on:dragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
-                on:click={() => !editorOpen && selectItem(item.id, "recipes")}
-                on:contextmenu|preventDefault={() => !editorOpen && selectItem(item.id, "uses")}
-                on:auxclick={(e) => {
+                ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
+                onclick={() => !editorOpen && selectItem(item.id, "recipes")}
+                oncontextmenu={(e) => { e.preventDefault(); !editorOpen && selectItem(item.id, "uses"); } }
+                onauxclick={(e) => {
                   if (e.button === 1) {
                     e.preventDefault();
                     toggleBookmark(item.id);
@@ -1904,7 +1923,7 @@
                 }}
               >
                 {#if iconSrc(item.id)}
-                  <img src={iconSrc(item.id)} alt="" class="item-icon" on:error={() => onIconError(item.id)} />
+                  <img src={iconSrc(item.id)} alt="" class="item-icon" onerror={() => onIconError(item.id)} />
                 {:else if iconCache[item.id] === "loading"}
                   <span class="item-letter icon-pending"></span>
                 {:else}
@@ -1921,7 +1940,7 @@
           <button
             class="nav-btn"
             disabled={itemPage === 0}
-            on:click={() => (itemPage = Math.max(0, itemPage - 1))}
+            onclick={() => (itemPage = Math.max(0, itemPage - 1))}
           >
             <ChevronLeft size={14} />
           </button>
@@ -1931,7 +1950,7 @@
           <button
             class="nav-btn"
             disabled={itemPage >= overlayPageCount - 1}
-            on:click={() => (itemPage = Math.min(overlayPageCount - 1, itemPage + 1))}
+            onclick={() => (itemPage = Math.min(overlayPageCount - 1, itemPage + 1))}
           >
             <ChevronRight size={14} />
           </button>
@@ -1946,10 +1965,10 @@
                   class:sel={selectedItem === id}
                   style="--hue: {itemHue(id)}"
                   title={id}
-                  on:click={() => selectItem(id, focusMode, false)}
+                  onclick={() => selectItem(id, focusMode, false)}
                 >
                   {#if iconSrc(id)}
-                    <img src={iconSrc(id)} alt="" class="item-icon" on:error={() => onIconError(id)} />
+                    <img src={iconSrc(id)} alt="" class="item-icon" onerror={() => onIconError(id)} />
                   {:else if iconCache[id] === "loading"}
                     <span class="item-letter icon-pending"></span>
                   {:else}

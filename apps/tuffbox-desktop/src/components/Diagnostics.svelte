@@ -28,7 +28,7 @@
     Share2,
     ArrowDownToLine,
     MoreHorizontal,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { diagnoseFocusPaths, historyFocusEventId, ideStageRequest, projectPath } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import EmptyState from "./EmptyState.svelte";
@@ -143,28 +143,28 @@
     memoryHint?: string | null;
   };
 
-  let diagnosis: CrashDiagnosis | null = null;
-  let selectedReportId = "";
-  let preferLatestLog = true;
-  let preferLauncherLog = false;
+  let diagnosis = $state<CrashDiagnosis | null>(null);
+  let selectedReportId = $state("");
+  let preferLatestLog = $state(true);
+  let preferLauncherLog = $state(false);
   /// Sentinel: force latest.log analysis (never auto-pick a crash file).
   const LATEST_LOG_SOURCE = "__latest_log__";
   const LAUNCHER_LOG_SOURCE = "__launcher_log__";
-  let analysisBusy = false;
+  let analysisBusy = $state(false);
   /** Detail panel under the verdict: rules findings vs AI explanation. */
-  let aiSoftError: string | null = null;
-  let sharingLog = false;
-  let loading = false;
-  let planning = false;
-  let applying = false;
-  let applyingHintId: string | null = null;
-  let launching = false;
-  let fixingIdx: number | null = null;
-  let disablingModId: string | null = null;
-  let error: string | null = null;
-  let message: string | null = null;
-  let plan: any | null = null;
-  let lastLoadedPath: string | null = null;
+  let aiSoftError = $state<string | null>(null);
+  let sharingLog = $state(false);
+  let loading = $state(false);
+  let planning = $state(false);
+  let applying = $state(false);
+  let applyingHintId = $state<string | null>(null);
+  let launching = $state(false);
+  let fixingIdx = $state<number | null>(null);
+  let disablingModId = $state<string | null>(null);
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let plan = $state<any | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
 
   function onSourceChange(e: Event) {
     const el = e.currentTarget;
@@ -420,9 +420,9 @@
     recommendation: string;
     reason: string;
   };
-  let wrongLoaderJars: WrongLoaderJar[] = [];
-  let wrongLoaderLoading = false;
-  let wrongLoaderFixing: string | null = null;
+  let wrongLoaderJars = $state<WrongLoaderJar[]>([]);
+  let wrongLoaderLoading = $state(false);
+  let wrongLoaderFixing = $state<string | null>(null);
 
   type DupJar = {
     fileName: string;
@@ -432,34 +432,34 @@
     inManifest: boolean;
   };
   type DupJarGroup = { modId: string; keepCandidate: string; jars: DupJar[] };
-  let duplicateJarGroups: DupJarGroup[] = [];
-  let duplicateJarLoading = false;
-  let duplicateJarFixing: string | null = null;
+  let duplicateJarGroups = $state<DupJarGroup[]>([]);
+  let duplicateJarLoading = $state(false);
+  let duplicateJarFixing = $state<string | null>(null);
 
   // Ore generation scanner state
-  let oreFindings: any[] = [];
-  let oreLoading = false;
+  let oreFindings = $state<any[]>([]);
+  let oreLoading = $state(false);
 
   // Duplicate items / unification state
-  let duplicateFindings: any[] = [];
-  let duplicateLoading = false;
-  let unifyConfigResult: any = null;
-  let unifyLoading = false;
+  let duplicateFindings = $state<any[]>([]);
+  let duplicateLoading = $state(false);
+  let unifyConfigResult = $state<any>(null);
+  let unifyLoading = $state(false);
 
   // Crash Assistant state
-  let crashLoading = false;
-  let crashFindings: any[] = [];
-  let crashMcreator: string[] = [];
-  let crashClassFinder: any[] = [];
-  let analysisToolsOpen = false;
-  let classQuery = "";
-  let classBusy = false;
-  let classResults: { className: string; modId: string; modName: string }[] = [];
-  let dependentResults: { className: string; modId: string; modName: string }[] = [];
-  let bisectMods: string[] = [];
-  let supportBusy = false;
-  let importBusy = false;
-  let importUrl = "";
+  let crashLoading = $state(false);
+  let crashFindings = $state<any[]>([]);
+  let crashMcreator = $state<string[]>([]);
+  let crashClassFinder = $state<any[]>([]);
+  let analysisToolsOpen = $state(false);
+  let classQuery = $state("");
+  let classBusy = $state(false);
+  let classResults = $state<{ className: string; modId: string; modName: string }[]>([]);
+  let dependentResults = $state<{ className: string; modId: string; modName: string }[]>([]);
+  let bisectMods = $state<string[]>([]);
+  let supportBusy = $state(false);
+  let importBusy = $state(false);
+  let importUrl = $state("");
 
   async function runClassFinder(q: string) {
     if (!$projectPath || !q.trim()) return;
@@ -698,23 +698,23 @@
   }
 
   // AI context state
-  let aiLoading = false;
-  let aiContext: any = null;
-  let aiPrompt: string = "";
-  let aiShowPrompt = false;
-  let aiAnalysis: any = null;
-  let aiFeedbackBusy = false;
-  let aiFeedbackMsg: string | null = null;
-  let aiModalOpen = false;
-  let aiApplyBusy = false;
-  let pendingPlan: any = null;
-  let pendingBusy = false;
-  let swarmEnabled = false;
+  let aiLoading = $state(false);
+  let aiContext = $state<any>(null);
+  let aiPrompt = $state("");
+  let aiShowPrompt = $state(false);
+  let aiAnalysis = $state<any>(null);
+  let aiFeedbackBusy = $state(false);
+  let aiFeedbackMsg = $state<string | null>(null);
+  let aiModalOpen = $state(false);
+  let aiApplyBusy = $state(false);
+  let pendingPlan = $state<any>(null);
+  let pendingBusy = $state(false);
+  let swarmEnabled = $state(false);
 
   /** ActionPlan review modal (replaces window.confirm). */
-  let planReviewOpen = false;
-  let planReviewSource: "ai" | "network" = "ai";
-  let planReviewRows: {
+  let planReviewOpen = $state(false);
+  let planReviewSource = $state<"ai" | "network">("ai");
+  let planReviewRows = $state<{
     key: string;
     selected: boolean;
     op: string;
@@ -726,37 +726,38 @@
     diffKind?: "add" | "remove" | "change" | "other";
     destructive?: boolean;
     raw: any;
-  }[] = [];
-  let planReviewAcknowledged = false;
-  let planReviewNeedsAck = false;
-  let planReviewExplanation = "";
-  let showApplyTrail = false;
-  $: planReviewSelectedCount = planReviewRows.filter((r) => r.selected).length;
-  $: planReviewCanApply =
-    planReviewSelectedCount > 0 && (!planReviewNeedsAck || planReviewAcknowledged);
+  }[]>([]);
+  let planReviewAcknowledged = $state(false);
+  let planReviewNeedsAck = $state(false);
+  let planReviewExplanation = $state("");
+  let showApplyTrail = $state(false);
+  const planReviewSelectedCount = $derived(planReviewRows.filter((r) => r.selected).length);
+  const planReviewCanApply = $derived(
+    planReviewSelectedCount > 0 && (!planReviewNeedsAck || planReviewAcknowledged),
+  );
 
   // Author KB case form (pack author — crash + resolution)
-  let authorOpen = false;
-  let authorBusy = false;
-  let authorMsg: string | null = null;
-  let authorId = "";
-  let authorSolution = "";
-  let authorSymptoms = "";
-  let authorSuspected = "";
-  let authorNotes = "";
-  let authorActionsJson = "[]";
-  let authorFingerprint: any = null;
-  let authorCases: any[] = [];
-  let authorExportPreview = "";
+  let authorOpen = $state(false);
+  let authorBusy = $state(false);
+  let authorMsg = $state<string | null>(null);
+  let authorId = $state("");
+  let authorSolution = $state("");
+  let authorSymptoms = $state("");
+  let authorSuspected = $state("");
+  let authorNotes = $state("");
+  let authorActionsJson = $state("[]");
+  let authorFingerprint = $state<any>(null);
+  let authorCases = $state<any[]>([]);
+  let authorExportPreview = $state("");
 
-  let recentPackEvents: {
+  let recentPackEvents = $state<{
     id: string;
     ts: string;
     actor: string;
     op: string;
     summary: string;
     paths?: string[];
-  }[] = [];
+  }[]>([]);
 
   async function loadRecentPackEvents() {
     if (!$projectPath) return;
@@ -775,16 +776,20 @@
     ideStageRequest.set("history");
   }
 
-  let lastRecentPackPath: string | null = null;
-  $: if ($projectPath && $projectPath !== lastRecentPackPath) {
-    lastRecentPackPath = $projectPath;
-    void loadRecentPackEvents();
-  }
-  $: if ($diagnoseFocusPaths?.length) {
-    const paths = $diagnoseFocusPaths;
-    diagnoseFocusPaths.set(null);
-    void applyHistoryFocus(paths);
-  }
+  let lastRecentPackPath = $state<string | null>(null);
+  $effect(() => {
+    if ($projectPath && $projectPath !== lastRecentPackPath) {
+      lastRecentPackPath = $projectPath;
+      void loadRecentPackEvents();
+    }
+  });
+  $effect(() => {
+    if ($diagnoseFocusPaths?.length) {
+      const paths = $diagnoseFocusPaths;
+      diagnoseFocusPaths.set(null);
+      void applyHistoryFocus(paths);
+    }
+  });
 
   async function applyHistoryFocus(paths: string[]) {
     message = `Focus from History: ${paths.join(", ")}`;
@@ -954,9 +959,9 @@
     apply: () => void;
   };
 
-  $: mergedRecommendations = buildMergedRecommendations(crashFindings, aiAnalysis);
-  $: primaryRec = mergedRecommendations[0] ?? null;
-  $: sessionOk = !!(diagnosis?.sessionHealthy && preferLatestLog);
+  const mergedRecommendations = $derived(buildMergedRecommendations(crashFindings, aiAnalysis));
+  const primaryRec = $derived(mergedRecommendations[0] ?? null);
+  const sessionOk = $derived(!!(diagnosis?.sessionHealthy && preferLatestLog));
 
   function buildMergedRecommendations(findings: any[], analysis: any): MergedRec[] {
     const out: MergedRec[] = [];
@@ -1062,8 +1067,8 @@
     };
   }
 
-  $: networkTrust = pendingPlan ? parseNetworkTrust(pendingPlan) : null;
-  $: planReviewHasDestructive = planReviewRows.some((r: any) => r.destructive);
+  const networkTrust = $derived(pendingPlan ? parseNetworkTrust(pendingPlan) : null);
+  const planReviewHasDestructive = $derived(planReviewRows.some((r: any) => r.destructive));
 
   function openAiPlanReview() {
     if (!$projectPath || !aiAnalysis) return;
@@ -1539,12 +1544,13 @@
     return "Review this signal group and compare it with recent snapshots.";
   }
 
-  $: topFinding =
+  const topFinding = $derived(
     [...(crashFindings ?? [])].sort((a, b) => {
       const rank = (s: string) =>
         s === "critical" ? 4 : s === "error" ? 3 : s === "warning" ? 2 : 1;
       return rank(String(b.severity ?? "")) - rank(String(a.severity ?? ""));
-    })[0] ?? null;
+    })[0] ?? null,
+  );
 
   function severityChip(sev: string): string {
     if (sev === "critical") return "Fix this first";
@@ -1553,18 +1559,19 @@
     return "FYI";
   }
 
-  $: selectedReport = diagnosis?.selectedReport ?? null;
-  $: suspected = diagnosis?.suspectedMods ?? [];
-  $: primarySuspects = suspected.filter((m) => m.blameRole === "primary");
-  $: topSuspect = primarySuspects[0] ?? suspected[0] ?? null;
-  $: heroCulpritLabel =
+  const selectedReport = $derived(diagnosis?.selectedReport ?? null);
+  const suspected = $derived(diagnosis?.suspectedMods ?? []);
+  const primarySuspects = $derived(suspected.filter((m) => m.blameRole === "primary"));
+  const topSuspect = $derived(primarySuspects[0] ?? suspected[0] ?? null);
+  const heroCulpritLabel = $derived(
     primarySuspects.length > 1
       ? primarySuspects.map((m) => m.name).join(" + ")
-      : topSuspect?.name ?? "";
-  $: strongestEvidence = topSuspect?.evidence?.[0] ?? null;
-  $: providedByEvidence = topSuspect?.evidence?.find((item) =>
-    item.text.toLowerCase().includes("provided by"),
-  ) ?? null;
+      : topSuspect?.name ?? "",
+  );
+  const strongestEvidence = $derived(topSuspect?.evidence?.[0] ?? null);
+  const providedByEvidence = $derived(
+    topSuspect?.evidence?.find((item) => item.text.toLowerCase().includes("provided by")) ?? null,
+  );
 
   /// Actually applies the crash-diagnosis fix plan on the backend (snapshot
   /// + update/disable suspected mod / install missing dependency) and
@@ -1683,18 +1690,18 @@
     }
   }
 
-  $: allHints = [
+  const allHints = $derived([
     ...(diagnosis?.hints ?? []),
     ...(diagnosis?.latestLog?.hints ?? []),
     ...(diagnosis?.launcherLog?.hints ?? []),
-  ];
-  $: dedupedHints = Array.from(
-    new Map(allHints.filter((h) => h && h.id).map((h) => [h.id, h])).values()
+  ]);
+  const dedupedHints = $derived(
+    Array.from(new Map(allHints.filter((h) => h && h.id).map((h) => [h.id, h])).values()),
   );
 
   // Per-line detection highlights for the open crash report: lineNumber -> kind.
   // Drives the inline signal marker so crashes are visible at a glance.
-  $: signalLineMap = (() => {
+  const signalLineMap = $derived.by(() => {
     const m = new Map<number, string>();
     const signals = preferLatestLog
       ? (diagnosis?.latestLog?.signals ?? [])
@@ -1706,20 +1713,25 @@
       }
     }
     return m;
-  })();
+  });
 
   // --- Log source text (viewer itself lives in DiagnoseLogViewer.svelte) ---
-  let logViewerRef: { scrollToLine: (line: number) => void } | null = null;
+  let logViewerRef = $state<{ scrollToLine: (line: number) => void } | null>(null);
 
-  $: currentLogText = preferLatestLog
-    ? (diagnosis?.latestLog?.tail ?? "")
-    : preferLauncherLog
-      ? (diagnosis?.launcherLog?.tail ?? "")
-      : (selectedReport?.content ?? "");
-  $: logDisplayText =
-    currentLogText.length > 160_000 ? currentLogText.slice(currentLogText.length - 160_000) : currentLogText;
-  $: logSourceKey = preferLatestLog ? LATEST_LOG_SOURCE : preferLauncherLog ? LAUNCHER_LOG_SOURCE : selectedReportId;
-  $: logSourceLabel = preferLatestLog ? "latest.log" : (selectedReport?.summary?.name ?? "log");
+  const currentLogText = $derived(
+    preferLatestLog
+      ? (diagnosis?.latestLog?.tail ?? "")
+      : preferLauncherLog
+        ? (diagnosis?.launcherLog?.tail ?? "")
+        : (selectedReport?.content ?? ""),
+  );
+  const logDisplayText = $derived(
+    currentLogText.length > 160_000 ? currentLogText.slice(currentLogText.length - 160_000) : currentLogText,
+  );
+  const logSourceKey = $derived(
+    preferLatestLog ? LATEST_LOG_SOURCE : preferLauncherLog ? LAUNCHER_LOG_SOURCE : selectedReportId,
+  );
+  const logSourceLabel = $derived(preferLatestLog ? "latest.log" : (selectedReport?.summary?.name ?? "log"));
 
   /** Delegates to the log viewer child, which owns the scroll container and
    *  its own truncation window (see DiagnoseLogViewer.scrollToLine). Called
@@ -1729,11 +1741,13 @@
   }
 
   const LOG_ERROR_RE = /\b(FATAL|ERROR|SEVERE)\b|Exception|Caused by:|Crash Report/i;
-  let activeErrorHit = -1;
+  let activeErrorHit = $state(-1);
 
-  $: errorHits = (logDisplayText ? logDisplayText.split("\n") : [])
-    .map((l, i) => (LOG_ERROR_RE.test(l) ? i : -1))
-    .filter((i) => i >= 0);
+  const errorHits = $derived(
+    (logDisplayText ? logDisplayText.split("\n") : [])
+      .map((l, i) => (LOG_ERROR_RE.test(l) ? i : -1))
+      .filter((i) => i >= 0),
+  );
 
   /** Cycle through every ERROR/FATAL/Exception line (wraps). */
   function jumpToNextError() {
@@ -1795,7 +1809,7 @@
     source: string;
   };
 
-  $: problems = buildProblems(diagnosis);
+  const problems = $derived(buildProblems(diagnosis));
   function buildProblems(d: CrashDiagnosis | null): ProblemRow[] {
     if (!d) return [];
     const rows: ProblemRow[] = [];
@@ -1822,43 +1836,49 @@
     return rows;
   }
 
-  $: graphDiagnostics = diagnosis?.graphDiagnostics ?? [];
-  $: allSignals = diagnosis?.sessionHealthy && preferLatestLog
-    ? []
-    : [
-        ...(diagnosis?.selectedReport?.signals ?? []),
-        ...(diagnosis?.latestLog?.signals ?? []),
-        ...(diagnosis?.launcherLog?.signals ?? []),
-      ];
-  $: signalGroups = [
-    { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", items: allSignals.filter((s) => s.kind === "Entrypoint") },
-    { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", items: allSignals.filter((s) => s.kind === "LoaderMismatch" || s.kind === "WrongLoader") },
-    { title: "Mixin", hint: "Mixin apply / inject conflicts", items: allSignals.filter((s) => s.kind === "Mixin") },
-    { title: "OutOfMemory", hint: "Java heap / native OOM", items: allSignals.filter((s) => s.kind === "OutOfMemory") },
-    { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", items: allSignals.filter((s) => s.kind === "OpenGl") },
-    { title: "Ticking / world", hint: "Ticking entity or world corruption signals", items: allSignals.filter((s) => s.kind === "TickingEntity") },
-    { title: "Performance", hint: "Tick stalls and overload", items: allSignals.filter((s) => s.kind === "Performance") },
-  ].filter((group) => group.items.length > 0);
+  const graphDiagnostics = $derived(diagnosis?.graphDiagnostics ?? []);
+  const allSignals = $derived(
+    diagnosis?.sessionHealthy && preferLatestLog
+      ? []
+      : [
+          ...(diagnosis?.selectedReport?.signals ?? []),
+          ...(diagnosis?.latestLog?.signals ?? []),
+          ...(diagnosis?.launcherLog?.signals ?? []),
+        ],
+  );
+  const signalGroups = $derived(
+    [
+      { title: "Entrypoint", hint: "Fabric/Quilt entrypoint failures", items: allSignals.filter((s) => s.kind === "Entrypoint") },
+      { title: "Loader mismatch", hint: "Wrong loader/API/version bridge", items: allSignals.filter((s) => s.kind === "LoaderMismatch" || s.kind === "WrongLoader") },
+      { title: "Mixin", hint: "Mixin apply / inject conflicts", items: allSignals.filter((s) => s.kind === "Mixin") },
+      { title: "OutOfMemory", hint: "Java heap / native OOM", items: allSignals.filter((s) => s.kind === "OutOfMemory") },
+      { title: "Render/OpenGL", hint: "Renderer, shader or GPU pipeline", items: allSignals.filter((s) => s.kind === "OpenGl") },
+      { title: "Ticking / world", hint: "Ticking entity or world corruption signals", items: allSignals.filter((s) => s.kind === "TickingEntity") },
+      { title: "Performance", hint: "Tick stalls and overload", items: allSignals.filter((s) => s.kind === "Performance") },
+    ].filter((group) => group.items.length > 0),
+  );
 
-  $: cascadingFinding = crashFindings.find(
-    (f: any) => String(f.code ?? "").toUpperCase() === "CASCADING_CONFIG_ERROR",
+  const cascadingFinding = $derived(
+    crashFindings.find((f: any) => String(f.code ?? "").toUpperCase() === "CASCADING_CONFIG_ERROR"),
   );
-  $: mixinFinding = crashFindings.find(
-    (f: any) => /mixin/i.test(String(f.code ?? "") + String(f.title ?? "")),
+  const mixinFinding = $derived(
+    crashFindings.find((f: any) => /mixin/i.test(String(f.code ?? "") + String(f.title ?? ""))),
   );
-  $: sideMismatchFinding = crashFindings.find(
-    (f: any) => /client.?only|side.?mismatch|SERVER/i.test(String(f.code ?? "") + String(f.title ?? "")),
+  const sideMismatchFinding = $derived(
+    crashFindings.find((f: any) => /client.?only|side.?mismatch|SERVER/i.test(String(f.code ?? "") + String(f.title ?? ""))),
   );
-  $: isHsErr =
-    diagnosis?.analysisSource === "hs_err" ||
-    (selectedReportId?.startsWith("hs_err/") ?? false);
-  $: hsErrKind =
-    diagnosis?.hsErrLogs?.find((h) => h.id === selectedReportId)?.kind ??
-    (isHsErr ? "native" : null);
+  const isHsErr = $derived(
+    diagnosis?.analysisSource === "hs_err" || (selectedReportId?.startsWith("hs_err/") ?? false),
+  );
+  const hsErrKind = $derived(
+    diagnosis?.hsErrLogs?.find((h) => h.id === selectedReportId)?.kind ?? (isHsErr ? "native" : null),
+  );
 
-  $: errorCount = graphDiagnostics.filter((d) => d.severity === "Error").length;
-  $: warningCount = graphDiagnostics.filter((d) => d.severity === "Warning").length;
-  $: onProjectPathChange($projectPath);
+  const errorCount = $derived(graphDiagnostics.filter((d) => d.severity === "Error").length);
+  const warningCount = $derived(graphDiagnostics.filter((d) => d.severity === "Warning").length);
+  $effect(() => {
+    onProjectPathChange($projectPath);
+  });
 
   onMount(() => {
     // Refresh whenever the Diagnose tab is (re)opened so the user always sees

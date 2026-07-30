@@ -1,33 +1,35 @@
 <script lang="ts">
   import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
 
-  export let chapter: QuestChapter;
-  export let chapterGroups: QuestChapterGroup[] = [];
-  export let onDirty: () => void;
+  let {
+    chapter,
+    chapterGroups = [],
+    onDirty,
+  }: {
+    chapter: QuestChapter;
+    chapterGroups?: QuestChapterGroup[];
+    onDirty: () => void;
+  } = $props();
 
   const SHAPES = ["", "circle", "square", "rsquare", "diamond", "hexagon", "pentagon", "gear", "none"];
 
-  function boolTri(
-    val: boolean | null | undefined,
-    on: (v: boolean | null) => void,
-  ): { value: string; set: (s: string) => void } {
-    return {
-      value: val === true ? "true" : val === false ? "false" : "",
-      set: (s: string) => {
-        if (s === "true") on(true);
-        else if (s === "false") on(false);
-        else on(null);
-      },
-    };
+  let hideDefValue = $derived(
+    chapter.defaultHideDependencyLines === true
+      ? "true"
+      : chapter.defaultHideDependencyLines === false
+        ? "false"
+        : "",
+  );
+
+  function setHideDef(s: string) {
+    if (s === "true") chapter.defaultHideDependencyLines = true;
+    else if (s === "false") chapter.defaultHideDependencyLines = false;
+    else chapter.defaultHideDependencyLines = null;
+    onDirty();
   }
 
-  $: hideDef = boolTri(chapter.defaultHideDependencyLines, (v) => {
-    chapter.defaultHideDependencyLines = v;
-    onDirty();
-  });
-
-  let extraKey = "";
-  let extraVal = "";
+  let extraKey = $state("");
+  let extraVal = $state("");
 
   function ensureExtras() {
     if (!chapter.extras) chapter.extras = {};
@@ -67,13 +69,13 @@
 
 <div class="ch-set ftbq-panel">
   <h4>Chapter settings</h4>
-  <label>Title<input bind:value={chapter.title} on:input={onDirty} /></label>
-  <label>Icon<input bind:value={chapter.icon} on:input={onDirty} placeholder="mod:item" /></label>
+  <label>Title<input bind:value={chapter.title} oninput={onDirty} /></label>
+  <label>Icon<input bind:value={chapter.icon} oninput={onDirty} placeholder="mod:item" /></label>
   <label
     >Group
     <select
       value={chapter.group ?? ""}
-      on:change={(e) => {
+      onchange={(e) => {
         chapter.group = selectVal(e) || null;
         onDirty();
       }}
@@ -88,19 +90,19 @@
     >Order index<input
       type="number"
       value={chapter.orderIndex ?? ""}
-      on:input={(e) => {
+      oninput={(e) => {
         const v = inputVal(e);
         chapter.orderIndex = v === "" ? null : Number(v);
         onDirty();
       }}
     /></label
   >
-  <label>Filename<input bind:value={chapter.filename} on:input={onDirty} placeholder="my_chapter" /></label>
+  <label>Filename<input bind:value={chapter.filename} oninput={onDirty} placeholder="my_chapter" /></label>
   <label
     >Default quest shape
     <select
       value={chapter.defaultQuestShape ?? ""}
-      on:change={(e) => {
+      onchange={(e) => {
         chapter.defaultQuestShape = selectVal(e) || null;
         onDirty();
       }}
@@ -113,8 +115,8 @@
   <label
     >Default hide dependency lines
     <select
-      value={hideDef.value}
-      on:change={(e) => hideDef.set(selectVal(e))}
+      value={hideDefValue}
+      onchange={(e) => setHideDef(selectVal(e))}
     >
       <option value="">unset</option>
       <option value="true">true</option>
@@ -127,13 +129,13 @@
     <div class="extra-row">
       <code>{k}</code>
       <span>{typeof v === "string" ? v : JSON.stringify(v)}</span>
-      <button type="button" on:click={() => removeExtra(k)}>×</button>
+      <button type="button" onclick={() => removeExtra(k)}>×</button>
     </div>
   {/each}
   <div class="extra-add">
     <input placeholder="key" bind:value={extraKey} />
     <input placeholder='value or JSON' bind:value={extraVal} />
-    <button type="button" on:click={addExtra}>Add</button>
+    <button type="button" onclick={addExtra}>Add</button>
   </div>
 </div>
 

@@ -1,22 +1,34 @@
 <script lang="ts">
-  import { Plus, Save, Trash2 } from "lucide-svelte";
+  import { Plus, Save, Trash2 } from "@lucide/svelte";
   import type { QuestRewardTable } from "../../lib/api";
 
-  export let tables: QuestRewardTable[];
-  export let dirty = false;
-  export let saving = false;
-  export let onChange: () => void;
-  export let onSave: (table: QuestRewardTable) => void;
-  export let onCreate: () => void;
+  let {
+    tables,
+    dirty = false,
+    saving = false,
+    onChange,
+    onSave,
+    onCreate,
+  }: {
+    tables: QuestRewardTable[];
+    dirty?: boolean;
+    saving?: boolean;
+    onChange: () => void;
+    onSave: (table: QuestRewardTable) => void;
+    onCreate: () => void;
+  } = $props();
 
-  let selectedId = "";
+  let selectedId = $state("");
 
-  $: if (tables.length === 0) {
-    selectedId = "";
-  } else if (!tables.some((t) => t.id === selectedId)) {
-    selectedId = tables[0].id;
-  }
-  $: selected = tables.find((t) => t.id === selectedId) ?? null;
+  $effect(() => {
+    if (tables.length === 0) {
+      selectedId = "";
+    } else if (!tables.some((t) => t.id === selectedId)) {
+      selectedId = tables[0].id;
+    }
+  });
+
+  let selected = $derived(tables.find((t) => t.id === selectedId) ?? null);
 
   function addEntry() {
     if (!selected) return;
@@ -39,33 +51,33 @@
         <button
           type="button"
           class:sel={selected?.id === t.id}
-          on:click={() => (selectedId = t.id)}>{t.title || t.id}</button
+          onclick={() => (selectedId = t.id)}>{t.title || t.id}</button
         >
       {/each}
-      <button type="button" class="add" on:click={onCreate}><Plus size={12} /> New table</button>
+      <button type="button" class="add" onclick={onCreate}><Plus size={12} /> New table</button>
     </div>
     {#if selected}
       <div class="rt-edit">
-        <label>Id<input bind:value={selected.id} on:input={onChange} /></label>
-        <label>Title<input bind:value={selected.title} on:input={onChange} placeholder="Optional" /></label>
+        <label>Id<input bind:value={selected.id} oninput={onChange} /></label>
+        <label>Title<input bind:value={selected.title} oninput={onChange} placeholder="Optional" /></label>
         <label
           >Empty weight<input
             type="number"
             step="0.1"
             min="0"
             bind:value={selected.emptyWeight}
-            on:input={onChange}
+            oninput={onChange}
           /></label
         >
         <div class="entries-h">
           <strong>Weighted entries</strong>
-          <button type="button" class="mini" on:click={addEntry}><Plus size={12} /></button>
+          <button type="button" class="mini" onclick={addEntry}><Plus size={12} /></button>
         </div>
         {#each selected.entries as entry, i (i)}
           <div class="entry">
             <input
               bind:value={entry.rewardId}
-              on:input={onChange}
+              oninput={onChange}
               placeholder="reward id"
             />
             <input
@@ -73,17 +85,17 @@
               step="0.1"
               min="0"
               bind:value={entry.weight}
-              on:input={onChange}
+              oninput={onChange}
               title="Weight (0 = always)"
             />
-            <button type="button" class="ico" on:click={() => removeEntry(i)}><Trash2 size={12} /></button>
+            <button type="button" class="ico" onclick={() => removeEntry(i)}><Trash2 size={12} /></button>
           </div>
         {/each}
         <button
           type="button"
           class="save"
           disabled={saving || !dirty}
-          on:click={() => onSave(selected)}
+          onclick={() => onSave(selected!)}
         >
           <Save size={12} /> Save table
         </button>

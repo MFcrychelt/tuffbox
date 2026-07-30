@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { X, Folder, Loader2, Download, Search, Package } from "lucide-svelte";
-  import { createEventDispatcher, onMount, onDestroy } from "svelte";
+  import { X, Folder, Loader2, Download, Search, Package } from "@lucide/svelte";
+  import { onMount, onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -8,54 +8,60 @@
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
 
-  const dispatch = createEventDispatcher<{ close: void; created: string }>();
+  let {
+    onclose,
+    oncreated,
+  }: {
+    onclose?: () => void;
+    oncreated?: (path: string) => void;
+  } = $props();
 
   // Each "input type" on the home screen is an isolated, self-validating
   // page (PrismLauncher-style: page-per-type) instead of one shared
   // form whose fields leak across modes.
   type CreateMode = "blank" | "import" | "curseforge";
-  let mode: CreateMode = "blank";
+  let mode: CreateMode = $state("blank");
 
   // --- Blank instance (explicit, typed inputs) ---
-  let name = "New Instance";
-  let minecraftVersion = "1.20.1";
-  let loader: "vanilla" | "fabric" | "forge" | "neoforge" | "quilt" = "fabric";
-  let loaderVersion = "";
-  let mcVersions: { id: string; popular: boolean }[] = [];
-  let loaderVersions: { id: string; stable: boolean }[] = [];
-  let loadingMc = true;
-  let loadingLoader = false;
-  let memoryMode: "auto" | "manual" = "auto";
-  let recommendedMemoryMb = 8192;
-  let memoryMb = 8192;
-  let memoryMaxMb = 16384;
-  let jvmArgs = "-XX:+UseG1GC";
+  let name = $state("New Instance");
+  let minecraftVersion = $state("1.20.1");
+  let loader: "vanilla" | "fabric" | "forge" | "neoforge" | "quilt" = $state("fabric");
+  let loaderVersion = $state("");
+  let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
+  let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
+  let loadingMc = $state(true);
+  let loadingLoader = $state(false);
+  let memoryMode: "auto" | "manual" = $state("auto");
+  let recommendedMemoryMb = $state(8192);
+  let memoryMb = $state(8192);
+  let memoryMaxMb = $state(16384);
+  let jvmArgs = $state("-XX:+UseG1GC");
 
   // --- Templates (blank helper) ---
-  let templates: any[] = [];
-  let templatesLoaded = false;
-  let useTemplate = false;
+  let templates = $state<any[]>([]);
+  let templatesLoaded = $state(false);
+  let useTemplate = $state(false);
 
   // --- Import pack (.mrpack / zip) ---
-  let importName = "New Instance";
-  let importPath = "";
+  let importName = $state("New Instance");
+  let importPath = $state("");
 
   // --- CurseForge browse ---
-  let cfName = "New Instance";
-  let cfQuery = "";
-  let cfHits: any[] = [];
-  let cfLoading = false;
-  let cfSelected: any = null;
-  let cfFiles: any[] = [];
-  let cfFilesLoading = false;
-  let cfFileId: number | null = null;
+  let cfName = $state("New Instance");
+  let cfQuery = $state("");
+  let cfHits = $state<any[]>([]);
+  let cfLoading = $state(false);
+  let cfSelected = $state<any>(null);
+  let cfFiles = $state<any[]>([]);
+  let cfFilesLoading = $state(false);
+  let cfFileId = $state<number | null>(null);
 
   // --- Shared ---
-  let location = "";
-  let loading = false;
-  let error = "";
-  let installMessage = "";
-  let packPhase = "";
+  let location = $state("");
+  let loading = $state(false);
+  let error = $state("");
+  let installMessage = $state("");
+  let packPhase = $state("");
 
   let unlistenPack: UnlistenFn | null = null;
 
@@ -133,7 +139,7 @@
     return `${home}/${slugify(activeName())}`;
   }
 
-  let defaultHome = "";
+  let defaultHome = $state("");
   async function loadDefaultHome() {
     try {
       const info = await invoke<{ current: string; default: string }>("get_instances_path_info");
@@ -221,10 +227,10 @@
   }
 
   // Page-per-type validation: each mode validates only its own inputs.
-  $: blankValid = !!minecraftVersion && (loader === "vanilla" || !!loaderVersion);
-  $: importValid = !!importPath;
-  $: cfValid = !!cfSelected && cfFileId !== null;
-  $: canCreate = mode === "blank" ? blankValid : mode === "import" ? importValid : cfValid;
+  const blankValid = $derived(!!minecraftVersion && (loader === "vanilla" || !!loaderVersion));
+  const importValid = $derived(!!importPath);
+  const cfValid = $derived(!!cfSelected && cfFileId !== null);
+  const canCreate = $derived(mode === "blank" ? blankValid : mode === "import" ? importValid : cfValid);
 
   async function create() {
     if (!blankValid) {
@@ -249,8 +255,8 @@
         memoryMb: mem,
         jvmArgs: args.length ? args : ["-XX:+UseG1GC"],
       });
-      dispatch("created", path as string);
-      dispatch("close");
+      oncreated?.(path as string);
+      onclose?.();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -282,8 +288,8 @@
       if (failed > 0) {
         error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
       }
-      dispatch("created", result.path as string);
-      dispatch("close");
+      oncreated?.(result.path as string);
+      onclose?.();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -358,8 +364,8 @@
       if (failed > 0) {
         error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
       }
-      dispatch("created", result.path as string);
-      dispatch("close");
+      oncreated?.(result.path as string);
+      onclose?.();
     } catch (e) {
       error = `${e}`;
     } finally {
@@ -369,27 +375,29 @@
     }
   }
 
-  $: if (mode === "blank" && (minecraftVersion || loader)) {
-    if (!loadingMc) loadLoaderVersions();
-  }
+  $effect(() => {
+    if (mode === "blank" && (minecraftVersion || loader)) {
+      if (!loadingMc) loadLoaderVersions();
+    }
+  });
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={(e) => e.key === 'Enter' && dispatch('close')}>
-  <div class="modal" class:wide={mode !== "blank"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="modal-backdrop" onclick={(e) => e.target === e.currentTarget && onclose?.()} role="button" tabindex="-1" aria-label="Close" onkeydown={(e) => e.key === 'Enter' && onclose?.()}>
+  <div class="modal" class:wide={mode !== "blank"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-hero">
       <div class="hero-copy">
         <h2 id="add-instance-title">Create modpack</h2>
         <p>Name it, pick loader + Minecraft, set memory — then build in IDE.</p>
       </div>
-      <button class="icon-btn hero-close" on:click={() => dispatch("close")} aria-label="Close add instance dialog">
+      <button class="icon-btn hero-close" onclick={() => onclose?.()} aria-label="Close add instance dialog">
         <X size={18} />
       </button>
     </div>
 
     <div class="tabs">
-      <button class:active={mode === "blank"} on:click={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
-      <button class:active={mode === "import"} on:click={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
-      <button class:active={mode === "curseforge"} on:click={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
+      <button class:active={mode === "blank"} onclick={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
+      <button class:active={mode === "import"} onclick={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
+      <button class:active={mode === "curseforge"} onclick={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
     </div>
 
     <div class="modal-body">
@@ -401,14 +409,14 @@
       {/if}
 
       {#if mode === "blank"}
-        <button class="ghost template-btn" on:click={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
+        <button class="ghost template-btn" onclick={() => { useTemplate = !useTemplate; if (useTemplate && !templatesLoaded) loadTemplates(); }}>
           {useTemplate ? "Create from scratch" : "Use template"}
         </button>
 
         {#if useTemplate && templates.length > 0}
           <div class="template-list">
             {#each templates.slice(0, 5) as tpl, i (tpl.name || i)}
-              <button class="template-row" on:click={() => {
+              <button class="template-row" onclick={() => {
                 name = tpl.name || "New Instance";
                 if (tpl.manifest?.minecraft?.version) minecraftVersion = tpl.manifest.minecraft.version;
                 if (tpl.manifest?.loader?.kind) {
@@ -431,7 +439,7 @@
           <div class="pack-icon" aria-hidden="true">{(name.trim()[0] || "?").toUpperCase()}</div>
           <div class="field grow">
             <label for="inst-name">Profile name</label>
-            <input id="inst-name" bind:value={name} placeholder="Enter pack name" on:input={() => (location = guessLocation())} />
+            <input id="inst-name" bind:value={name} placeholder="Enter pack name" oninput={() => (location = guessLocation())} />
           </div>
         </div>
 
@@ -445,7 +453,7 @@
                 class:active={loader === l.id}
                 role="radio"
                 aria-checked={loader === l.id}
-                on:click={() => pickLoader(l.id)}
+                onclick={() => pickLoader(l.id)}
               >{l.label}</button>
             {/each}
           </div>
@@ -489,7 +497,7 @@
               class:active={memoryMode === "auto"}
               role="radio"
               aria-checked={memoryMode === "auto"}
-              on:click={() => {
+              onclick={() => {
                 memoryMode = "auto";
                 memoryMb = recommendedMemoryMb;
               }}
@@ -500,7 +508,7 @@
               class:active={memoryMode === "manual"}
               role="radio"
               aria-checked={memoryMode === "manual"}
-              on:click={() => (memoryMode = "manual")}
+              onclick={() => (memoryMode = "manual")}
             >Custom</button>
           </div>
           {#if memoryMode === "manual"}
@@ -533,12 +541,12 @@
            <label for="inst-pack-file">Pack file</label>
            <div class="input-row">
              <input id="inst-pack-file" bind:value={importPath} placeholder="path/to/pack.mrpack or .zip" />
-             <button class="secondary" on:click={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
+             <button class="secondary" onclick={pickImportFile} aria-label="Choose modpack file"><Folder size={16} /></button>
            </div>
          </div>
          <div class="field">
            <label for="inst-name-imp">Instance name</label>
-           <input id="inst-name-imp" bind:value={importName} on:input={() => (location = guessLocation())} />
+           <input id="inst-name-imp" bind:value={importName} oninput={() => (location = guessLocation())} />
          </div>
        {:else}
          <!-- Page 3: CurseForge browse — name + file selection isolated -->
@@ -546,9 +554,9 @@
          <div class="search-row">
            <div class="search">
              <Search size={16} />
-             <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" on:keydown={(e) => e.key === "Enter" && searchCurseForge()} />
+             <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" onkeydown={(e) => e.key === "Enter" && searchCurseForge()} />
            </div>
-           <button class="secondary" on:click={searchCurseForge} disabled={cfLoading}>
+           <button class="secondary" onclick={searchCurseForge} disabled={cfLoading}>
              {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
              Search
            </button>
@@ -556,7 +564,7 @@
          <div class="cf-layout">
            <div class="cf-list">
              {#each cfHits as hit (hit.id)}
-               <button class="cf-row" class:active={cfSelected?.id === hit.id} on:click={() => selectCfPack(hit)}>
+               <button class="cf-row" class:active={cfSelected?.id === hit.id} onclick={() => selectCfPack(hit)}>
                  {#if hit.iconUrl}
                    <img src={hit.iconUrl} alt="" />
                  {:else}
@@ -578,14 +586,14 @@
                  <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
                {:else}
                  <label for="cf-file">Pack version</label>
-                 <select id="cf-file" value={cfFileId ?? ""} on:change={onCfFileChange}>
+                 <select id="cf-file" value={cfFileId ?? ""} onchange={onCfFileChange}>
                    {#each cfFiles as f (f.id)}
                      <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
                    {/each}
                  </select>
                  <div class="field" style="margin-top:12px">
                    <label for="inst-name-cf">Instance name</label>
-                   <input id="inst-name-cf" bind:value={cfName} on:input={() => (location = guessLocation())} />
+                   <input id="inst-name-cf" bind:value={cfName} oninput={() => (location = guessLocation())} />
                  </div>
                {/if}
              {:else}
@@ -599,7 +607,7 @@
          <label for="inst-location">{mode === "blank" ? "Instance folder" : "Download folder"}</label>
          <div class="input-row">
            <input id="inst-location" bind:value={location} placeholder={mode === "blank" ? "Folder for this instance" : "Parent folder for the modpack"} />
-           <button class="secondary" on:click={selectLocation} aria-label="Choose location"><Folder size={16} /></button>
+           <button class="secondary" onclick={selectLocation} aria-label="Choose location"><Folder size={16} /></button>
          </div>
          {#if mode !== "blank"}
            <span class="path-hint">The modpack will be installed as a new folder inside this path.</span>
@@ -608,17 +616,17 @@
      </div>
 
       <div class="modal-footer">
-        <button class="ghost" on:click={() => dispatch("close")} disabled={loading}>Cancel</button>
+        <button class="ghost" onclick={() => onclose?.()} disabled={loading}>Cancel</button>
         {#if mode === "blank"}
-          <LoadingButton {loading} disabled={!blankValid} on:click={create}>
+          <LoadingButton {loading} disabled={!blankValid} onclick={create}>
             Create
           </LoadingButton>
         {:else if mode === "import"}
-          <LoadingButton {loading} disabled={!importValid} on:click={installFromFile}>
+          <LoadingButton {loading} disabled={!importValid} onclick={installFromFile}>
             <Download size={16} /> Install pack
           </LoadingButton>
         {:else}
-          <LoadingButton {loading} disabled={!cfValid} on:click={installFromCurseForge}>
+          <LoadingButton {loading} disabled={!cfValid} onclick={installFromCurseForge}>
             <Download size={16} /> Install from CurseForge
           </LoadingButton>
         {/if}

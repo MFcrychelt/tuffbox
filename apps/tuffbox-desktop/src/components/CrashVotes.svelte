@@ -19,7 +19,7 @@
     LogIn,
     LogOut,
     UserPlus,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { toasts } from "../lib/toast";
   import {
@@ -73,28 +73,28 @@
     failCount?: number;
   };
 
-  let swarmEnabled = false;
-  let loading = false;
-  let votingHash: string | null = null;
-  let proposingHash: string | null = null;
-  let error = "";
-  let capsules: CommunityCapsule[] = [];
-  let statusFilter: StatusFilter = "all";
-  let expandedId: string | null = null;
+  let swarmEnabled = $state(false);
+  let loading = $state(false);
+  let votingHash = $state<string | null>(null);
+  let proposingHash = $state<string | null>(null);
+  let error = $state("");
+  let capsules = $state<CommunityCapsule[]>([]);
+  let statusFilter = $state<StatusFilter>("all");
+  let expandedId = $state<string | null>(null);
 
-  let authUser: User | null = null;
-  let accessToken = "";
-  let authMode: "signin" | "signup" = "signin";
-  let authEmail = "";
-  let authPassword = "";
-  let authBusy = false;
-  let authError = "";
-  let authNote = "";
+  let authUser = $state<User | null>(null);
+  let accessToken = $state("");
+  let authMode = $state<"signin" | "signup">("signin");
+  let authEmail = $state("");
+  let authPassword = $state("");
+  let authBusy = $state(false);
+  let authError = $state("");
+  let authNote = $state("");
 
   let unsubAuth: (() => void) | null = null;
 
-  $: expanded = capsules.find((c) => c.id === expandedId || c.contentHash === expandedId) ?? null;
-  $: canVote = swarmEnabled && !!accessToken && !!authUser;
+  const expanded = $derived(capsules.find((c) => c.id === expandedId || c.contentHash === expandedId) ?? null);
+  const canVote = $derived(swarmEnabled && !!accessToken && !!authUser);
 
   onMount(() => {
     void init();

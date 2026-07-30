@@ -1,13 +1,8 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
-  import { Share2, Pencil, Check, X } from "lucide-svelte";
+  import { onMount } from "svelte";
+  import { Share2, Pencil, Check, X } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
   import { invoke } from "@tauri-apps/api/core";
-
-  export let path = "";
-  export let resolutionId: string | null = null;
-  /** Optional seed explanation while distill loads */
-  export let seedExplanation = "";
 
   type DistillAction = {
     op: string;
@@ -29,19 +24,32 @@
     beta?: boolean;
   };
 
-  const dispatch = createEventDispatcher<{
-    confirm: { humanExplanation: string; actions: DistillAction[]; fingerprintKey: string | null };
-    dismiss: void;
-  }>();
+  let {
+    path = "",
+    resolutionId = null,
+    seedExplanation = "",
+    onconfirm,
+    ondismiss,
+  }: {
+    path?: string;
+    resolutionId?: string | null;
+    seedExplanation?: string;
+    onconfirm?: (detail: {
+      humanExplanation: string;
+      actions: DistillAction[];
+      fingerprintKey: string | null;
+    }) => void;
+    ondismiss?: () => void;
+  } = $props();
 
-  let loading = true;
-  let error: string | null = null;
-  let plan: DistillPlan | null = null;
-  let editing = false;
-  let editExplanation = "";
-  let editActionsJson = "";
-  let editError: string | null = null;
-  let confirmBusy = false;
+  let loading = $state(true);
+  let error = $state<string | null>(null);
+  let plan = $state<DistillPlan | null>(null);
+  let editing = $state(false);
+  let editExplanation = $state("");
+  let editActionsJson = $state("");
+  let editError = $state<string | null>(null);
+  let confirmBusy = $state(false);
 
   onMount(() => {
     void runDistill();
@@ -115,7 +123,7 @@
     if (!plan || confirmBusy) return;
     confirmBusy = true;
     try {
-      dispatch("confirm", {
+      onconfirm?.({
         humanExplanation: plan.humanExplanation ?? "",
         actions: plan.actions ?? [],
         fingerprintKey: plan.fingerprintKey ?? null,
@@ -130,15 +138,15 @@
   class="sc-backdrop"
   role="button"
   tabindex="-1"
-  on:click={(e) => e.target === e.currentTarget && dispatch("dismiss")}
-  on:keydown={() => {}}
+  onclick={(e) => e.target === e.currentTarget && ondismiss?.()}
+  onkeydown={() => {}}
 >
   <div
     class="sc-dialog"
     role="dialog"
     aria-modal="true"
     aria-labelledby="share-capsule-title"
-    use:trapFocus={{ onEscape: () => dispatch("dismiss") }}
+    use:trapFocus={{ onEscape: () => ondismiss?.() }}
   >
     <div class="sc-icon"><Share2 size={28} /></div>
     <h3 id="share-capsule-title">Share efficient fix with TuffSwarm?</h3>
@@ -170,8 +178,8 @@
           <p class="sc-error">{editError}</p>
         {/if}
         <div class="sc-actions">
-          <button class="ghost" type="button" on:click={() => (editing = false)}>Cancel edit</button>
-          <button type="button" on:click={applyEdit}><Check size={14} /> Apply edits</button>
+          <button class="ghost" type="button" onclick={() => (editing = false)}>Cancel edit</button>
+          <button type="button" onclick={applyEdit}><Check size={14} /> Apply edits</button>
         </div>
       {:else}
         <div class="sc-excerpt">{plan?.humanExplanation || seedExplanation}</div>
@@ -190,13 +198,13 @@
           <p class="sc-muted">No structured actions — explanation only will be shared.</p>
         {/if}
         <div class="sc-actions">
-          <button class="ghost" type="button" on:click={() => dispatch("dismiss")}>
+          <button class="ghost" type="button" onclick={() => ondismiss?.()}>
             <X size={14} /> Not now
           </button>
-          <button class="ghost" type="button" on:click={startEdit}>
+          <button class="ghost" type="button" onclick={startEdit}>
             <Pencil size={14} /> Edit
           </button>
-          <button type="button" disabled={confirmBusy} on:click={onConfirm}>
+          <button type="button" disabled={confirmBusy} onclick={onConfirm}>
             <Check size={14} /> {confirmBusy ? "Sharing…" : "Confirm & share"}
           </button>
         </div>
@@ -205,7 +213,7 @@
 
     {#if loading}
       <div class="sc-actions">
-        <button class="ghost" type="button" on:click={() => dispatch("dismiss")}>Not now</button>
+        <button class="ghost" type="button" onclick={() => ondismiss?.()}>Not now</button>
       </div>
     {/if}
   </div>

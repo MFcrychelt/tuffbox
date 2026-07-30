@@ -17,7 +17,7 @@
     ScrollText,
     Circle,
     Map as MapIcon,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath, ideStageRequest, autoHideWorkflowRail, tuneDirty, briefDirty, questDirty } from "../lib/store";
   import { onDestroy, onMount } from "svelte";
   import ProjectSettings from "./ProjectSettings.svelte";
@@ -186,10 +186,10 @@
     },
   ];
 
-  let activeStage: StageId = "brief";
-  let leaveConfirmOpen = false;
-  let pendingStage: StageId | null = null;
-  let leaveKind: "tune" | "brief" | "quests" = "tune";
+  let activeStage = $state<StageId>("brief");
+  let leaveConfirmOpen = $state(false);
+  let pendingStage = $state<StageId | null>(null);
+  let leaveKind = $state<"tune" | "brief" | "quests">("tune");
 
   function goToStage(id: StageId) {
     if (id === activeStage) return;
@@ -230,13 +230,15 @@
     pendingStage = null;
   }
 
-  $: if ($ideStageRequest) {
-    const req = $ideStageRequest;
-    ideStageRequest.set(null);
-    if (stages.some((s) => s.id === req)) {
-      goToStage(req as StageId);
-    }
-  }
+  $effect(() => {
+    if ($ideStageRequest) {
+        const req = $ideStageRequest;
+        ideStageRequest.set(null);
+        if (stages.some((s) => s.id === req)) {
+          goToStage(req as StageId);
+        }
+      }
+  });
 
   let focusedScanTimer: ReturnType<typeof setInterval> | null = null;
   /** Background delta scan is useful on History/Diagnose; skip on other stages to save CPU. */
@@ -268,11 +270,13 @@
     }
   }
 
-  $: if ($projectPath && FOCUSED_SCAN_STAGES.includes(activeStage)) {
-    void refreshFocusedScanLoop();
-  } else {
-    stopFocusedScanLoop();
-  }
+  $effect(() => {
+    if ($projectPath && FOCUSED_SCAN_STAGES.includes(activeStage)) {
+        void refreshFocusedScanLoop();
+      } else {
+        stopFocusedScanLoop();
+      }
+  });
 
   onMount(() => {
     const onVis = () => {
@@ -288,7 +292,7 @@
     };
   });
 
-  let railRevealed = false;
+  let railRevealed = $state(false);
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
   /** Grace before hide — enough to move from hotzone onto the rail. */
   const RAIL_HIDE_MS = 280;
@@ -324,10 +328,12 @@
     scheduleHideRail();
   }
 
-  $: if (!$autoHideWorkflowRail) {
-    railRevealed = false;
-    clearRailHideTimer();
-  }
+  $effect(() => {
+    if (!$autoHideWorkflowRail) {
+        railRevealed = false;
+        clearRailHideTimer();
+      }
+  });
 
   onDestroy(() => {
     stopFocusedScanLoop();
@@ -395,24 +401,25 @@
     <div
       class="rail-hotzone"
       aria-hidden="true"
-      on:mouseenter={revealRail}
-      on:mouseleave={() => scheduleHideRail()}
+      onmouseenter={revealRail}
+      onmouseleave={() => scheduleHideRail()}
     ></div>
   {/if}
   <nav
     class="workflow-rail"
     class:revealed={railRevealed || !$autoHideWorkflowRail}
     aria-label="Modpack production workflow"
-    on:mouseenter={revealRail}
-    on:mouseleave={() => scheduleHideRail()}
-    on:focusin={revealRail}
-    on:focusout={onRailFocusOut}
+    onmouseenter={revealRail}
+    onmouseleave={() => scheduleHideRail()}
+    onfocusin={revealRail}
+    onfocusout={onRailFocusOut}
   >
     {#each stages as stage (stage.id)}
+      {@const StageIcon = stage.icon}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
-        on:click={(e) => {
+        onclick={(e) => {
           goToStage(stage.id);
           if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
           scheduleHideRail(320);
@@ -423,7 +430,7 @@
         <span class="stage-status" aria-hidden="true">
           <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
         </span>
-        <svelte:component this={stage.icon} size={20} />
+        <StageIcon size={20} />
         <span class="stage-text">
           <strong>{stage.label}</strong>
           <small>{stage.short}</small>
@@ -447,8 +454,8 @@
         : "You have unsaved quest edits. Leave Quests and discard them?"}
     danger={false}
     confirmLabel="Discard & leave"
-    on:confirm={confirmLeaveStage}
-    on:cancel={cancelLeaveStage}
+    onconfirm={confirmLeaveStage}
+    oncancel={cancelLeaveStage}
   />
 {/if}
 

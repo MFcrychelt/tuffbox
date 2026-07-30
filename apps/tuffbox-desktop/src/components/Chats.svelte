@@ -17,12 +17,12 @@
     Shuffle,
     Search,
     X,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, questChatFocusId } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api, type SearchResult, type QuestChatSession } from "../lib/api";
 
-  export let currentView: string;
+  let { currentView = $bindable() }: { currentView: string } = $props();
 
   type ChatMessage = { role: string; content: string; createdAt?: string | null };
   type PackDraftMod = {
@@ -67,40 +67,40 @@
     draft?: PackDraft | null;
   };
 
-  let sessions: UnifiedSession[] = [];
-  let activeId: string | null = null;
-  let activeKind: "create" | "quest" = "create";
-  let messages: ChatMessage[] = [];
-  let brief: PackBrief | null = null;
-  let draft: PackDraft | null = null;
-  let candidates: CandidateAddon[] = [];
-  let input = "";
-  let targetCount = 80;
-  let busy = false;
-  let phase = "";
-  let progressDone = 0;
-  let progressTotal = 0;
-  let progressCurrent = "";
-  let unlisten: UnlistenFn | null = null;
-  let lastPath = "";
-  let draftConfirmOpen = false;
-  let draftSelected: Record<string, boolean> = {};
-  let postInstallTrail = false;
-  let lastInstallCount = 0;
-  let questPendingPlan = false;
+  let sessions = $state<UnifiedSession[]>([]);
+  let activeId = $state<string | null>(null);
+  let activeKind = $state<"create" | "quest">("create");
+  let messages = $state<ChatMessage[]>([]);
+  let brief = $state<PackBrief | null>(null);
+  let draft = $state<PackDraft | null>(null);
+  let candidates = $state<CandidateAddon[]>([]);
+  let input = $state("");
+  let targetCount = $state(80);
+  let busy = $state(false);
+  let phase = $state("");
+  let progressDone = $state(0);
+  let progressTotal = $state(0);
+  let progressCurrent = $state("");
+  let unlisten = $state<UnlistenFn | null>(null);
+  let lastPath = $state("");
+  let draftConfirmOpen = $state(false);
+  let draftSelected = $state<Record<string, boolean>>({});
+  let postInstallTrail = $state(false);
+  let lastInstallCount = $state(0);
+  let questPendingPlan = $state(false);
 
   // Alternatives popover (per-mod swap suggestions).
-  let altForKey: string | null = null;
-  let altLoading = false;
+  let altForKey = $state<string | null>(null);
+  let altLoading = $state(false);
   type AltOption = { slug: string; name: string; summary: string; source: string };
-  let altOptions: AltOption[] = [];
+  let altOptions = $state<AltOption[]>([]);
 
   // Inline "add a specific mod" search.
-  let addModOpen = false;
-  let addModQuery = "";
-  let addModResults: SearchResult[] = [];
-  let addModLoading = false;
-  let addModTimer: ReturnType<typeof setTimeout> | null = null;
+  let addModOpen = $state(false);
+  let addModQuery = $state("");
+  let addModResults = $state<SearchResult[]>([]);
+  let addModLoading = $state(false);
+  let addModTimer = $state<ReturnType<typeof setTimeout> | null>(null);
 
   // Editable brief helpers.
   const LOCKED_REASON = "Locked by user";
@@ -116,15 +116,15 @@
     "equipment",
     "library",
   ];
-  let newMustHaveQuery = "";
-  let newExcludeText = "";
-  let newCategoryId = "";
+  let newMustHaveQuery = $state("");
+  let newExcludeText = $state("");
+  let newCategoryId = $state("");
 
-  $: active = sessions.find((s) => s.id === activeId && s.kind === activeKind) ?? null;
-  $: mcLabel = $projectInfo?.minecraftVersion ?? "?";
-  $: loaderLabel = $projectInfo?.loaderKind ?? "?";
-  $: draftConfirmCount = draft?.mods?.filter((m) => draftSelected[m.projectId || m.slug] !== false).length ?? 0;
-  $: isQuestChat = activeKind === "quest";
+  const active = $derived(sessions.find((s) => s.id === activeId && s.kind === activeKind) ?? null);
+  const mcLabel = $derived($projectInfo?.minecraftVersion ?? "?");
+  const loaderLabel = $derived($projectInfo?.loaderKind ?? "?");
+  const draftConfirmCount = $derived(draft?.mods?.filter((m) => draftSelected[m.projectId || m.slug] !== false).length ?? 0);
+  const isQuestChat = $derived(activeKind === "quest");
 
   function sortKey(updatedAt: string): number {
     const n = Number(updatedAt);
@@ -884,7 +884,7 @@
     unlisten?.();
   });
 
-  $: {
+  $effect(() => {
     const p = $projectPath ?? "";
     if (p !== lastPath) {
       lastPath = p;
@@ -901,7 +901,7 @@
         sessions = [];
       }
     }
-  }
+  });
 </script>
 
 {#if !$projectPath}
@@ -915,7 +915,7 @@
     <aside class="sessions">
       <div class="sessions-head">
         <span>Chats</span>
-        <button type="button" class="icon-btn" title="New chat" on:click={newChat}>
+        <button type="button" class="icon-btn" title="New chat" onclick={newChat}>
           <Plus size={16} />
         </button>
       </div>
@@ -926,7 +926,7 @@
             class:active={s.id === activeId && s.kind === activeKind}
             class:quest={s.kind === "quest"}
           >
-            <button type="button" class="session-main" on:click={() => selectSession(s.id, s.kind)}>
+            <button type="button" class="session-main" onclick={() => selectSession(s.id, s.kind)}>
               <span class="session-title-row">
                 {#if s.kind === "quest"}
                   <span class="kind-badge quest">Quests</span>
@@ -944,7 +944,7 @@
               type="button"
               class="icon-btn danger"
               title="Delete"
-              on:click={() => deleteChat(s.id, s.kind)}
+              onclick={() => deleteChat(s.id, s.kind)}
             >
               <Trash2 size={14} />
             </button>
@@ -961,7 +961,7 @@
         {#if isQuestChat}
           <span>Quest AI · FTB Quests</span>
           {#if activeId}
-              <button type="button" class="btn ghost mini quest-open" on:click={() => activeId && openQuestChatInEditor(activeId)}>
+              <button type="button" class="btn ghost mini quest-open" onclick={() => activeId && openQuestChatInEditor(activeId)}>
               Open in Quests
             </button>
           {/if}
@@ -1023,7 +1023,7 @@
               type="button"
               class="btn accent quest-cta"
               disabled={!activeId}
-              on:click={() => activeId && openQuestChatInEditor(activeId)}
+              onclick={() => activeId && openQuestChatInEditor(activeId)}
             >
               <Sparkles size={14} /> Continue in Quests
             </button>
@@ -1036,7 +1036,7 @@
           placeholder="Pack brief..."
           bind:value={input}
           disabled={busy}
-          on:keydown={(e) => {
+          onkeydown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               void sendMessage(false);
@@ -1044,31 +1044,31 @@
           }}
         ></textarea>
         <div class="actions">
-          <button type="button" class="btn primary" disabled={busy || !input.trim()} on:click={() => sendMessage(false)}>
+          <button type="button" class="btn primary" disabled={busy || !input.trim()} onclick={() => sendMessage(false)}>
             <Send size={14} /> Plan
           </button>
-          <button type="button" class="btn" disabled={busy || !input.trim()} on:click={() => void quickAssemble()}>
+          <button type="button" class="btn" disabled={busy || !input.trim()} onclick={() => void quickAssemble()}>
             Quick assemble
           </button>
-          <button type="button" class="btn" disabled={busy || !brief || !input.trim()} on:click={() => sendMessage(true)}>
+          <button type="button" class="btn" disabled={busy || !brief || !input.trim()} onclick={() => sendMessage(true)}>
             Refine
           </button>
-          <button type="button" class="btn" disabled={busy || !brief} on:click={buildDraft}>
+          <button type="button" class="btn" disabled={busy || !brief} onclick={buildDraft}>
             <Package size={14} /> Build draft
           </button>
-          <button type="button" class="btn" disabled={busy || !draft?.mods?.length} on:click={previewDraft}>
+          <button type="button" class="btn" disabled={busy || !draft?.mods?.length} onclick={previewDraft}>
             Preview
           </button>
-          <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} on:click={confirmInstall}>
+          <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={confirmInstall}>
             <CheckCircle2 size={14} /> Confirm install
           </button>
-          <button type="button" class="btn ghost" on:click={openMods}>Open in Content</button>
+          <button type="button" class="btn ghost" onclick={openMods}>Open in Content</button>
         </div>
         {#if postInstallTrail}
           <div class="post-trail">
             Installed {lastInstallCount} mods.
-            <button type="button" class="btn ghost mini" on:click={openMods}><Package size={12} /> Content</button>
-            <button type="button" class="btn ghost mini" on:click={openResolve}><GitGraph size={12} /> Resolve</button>
+            <button type="button" class="btn ghost mini" onclick={openMods}><Package size={12} /> Content</button>
+            <button type="button" class="btn ghost mini" onclick={openResolve}><GitGraph size={12} /> Resolve</button>
           </div>
         {/if}
       </div>
@@ -1089,7 +1089,7 @@
             type="button"
             class="btn accent quest-cta"
             disabled={!activeId}
-            on:click={() => activeId && openQuestChatInEditor(activeId)}
+            onclick={() => activeId && openQuestChatInEditor(activeId)}
           >
             Open Quest editor
           </button>
@@ -1107,9 +1107,9 @@
             type="text"
             placeholder="Add a specific mod…"
             bind:value={addModQuery}
-            on:input={scheduleAddModSearch}
-            on:focus={() => (addModOpen = true)}
-            on:blur={() => setTimeout(() => (addModOpen = false), 150)}
+            oninput={scheduleAddModSearch}
+            onfocus={() => (addModOpen = true)}
+            onblur={() => setTimeout(() => (addModOpen = false), 150)}
           />
           {#if addModLoading}<span class="spin"><Loader2 size={13} /></span>{/if}
         </div>
@@ -1119,7 +1119,7 @@
               <div class="muted pad small">No results</div>
             {/if}
             {#each addModResults as r (r.id)}
-              <button type="button" class="add-mod-row" on:mousedown|preventDefault={() => addModDirectly(r)}>
+              <button type="button" class="add-mod-row" onmousedown={(e) => { e.preventDefault(); (() => addModDirectly(r))(e); }}>
                 <span class="mod-name">{r.name}</span>
                 <code>{r.slug}</code>
               </button>
@@ -1140,7 +1140,7 @@
               <input
                 type="text"
                 value={brief.title}
-                on:change={(e) => updateBriefTitle(e.currentTarget.value)}
+                onchange={(e) => updateBriefTitle(e.currentTarget.value)}
               />
             </label>
 
@@ -1151,7 +1151,7 @@
                   <span class="chip" class:locked={mh.reason === LOCKED_REASON}>
                     {#if mh.reason === LOCKED_REASON}<Lock size={10} />{/if}
                     {mh.query}
-                    <button type="button" on:click={() => removeMustHave(i)} aria-label="Remove">
+                    <button type="button" onclick={() => removeMustHave(i)} aria-label="Remove">
                       <X size={10} />
                     </button>
                   </span>
@@ -1164,9 +1164,9 @@
                   type="text"
                   placeholder="Add must-have mod…"
                   bind:value={newMustHaveQuery}
-                  on:keydown={(e) => e.key === "Enter" && addMustHave()}
+                  onkeydown={(e) => e.key === "Enter" && addMustHave()}
                 />
-                <button type="button" class="btn ghost mini" on:click={addMustHave}
+                <button type="button" class="btn ghost mini" onclick={addMustHave}
                   ><Plus size={12} /></button
                 >
               </div>
@@ -1182,20 +1182,20 @@
                       class="cat-id"
                       list="chats-known-category-ids"
                       value={cat.id}
-                      on:change={(e) => updateCategoryField(i, "id", e.currentTarget.value)}
+                      onchange={(e) => updateCategoryField(i, "id", e.currentTarget.value)}
                     />
                     <input
                       type="text"
                       class="cat-query"
                       value={cat.query}
-                      on:change={(e) => updateCategoryField(i, "query", e.currentTarget.value)}
+                      onchange={(e) => updateCategoryField(i, "query", e.currentTarget.value)}
                     />
                     <div class="cat-count">
-                      <button type="button" class="stepper" on:click={() => bumpCategoryCount(i, -5)}
+                      <button type="button" class="stepper" onclick={() => bumpCategoryCount(i, -5)}
                         >−</button
                       >
                       <span>{cat.count}</span>
-                      <button type="button" class="stepper" on:click={() => bumpCategoryCount(i, 5)}
+                      <button type="button" class="stepper" onclick={() => bumpCategoryCount(i, 5)}
                         >+</button
                       >
                     </div>
@@ -1203,7 +1203,7 @@
                       type="button"
                       class="icon-btn danger"
                       title="Remove category"
-                      on:click={() => removeCategoryRow(i)}
+                      onclick={() => removeCategoryRow(i)}
                     >
                       <X size={12} />
                     </button>
@@ -1211,16 +1211,16 @@
                 {/each}
               </div>
               <datalist id="chats-known-category-ids">
-                {#each KNOWN_CATEGORY_IDS as id (id)}<option value={id} />{/each}
+                {#each KNOWN_CATEGORY_IDS as id (id)}<option value={id}></option>{/each}
               </datalist>
               <div class="chip-add">
                 <input
                   type="text"
                   placeholder="New category id…"
                   bind:value={newCategoryId}
-                  on:keydown={(e) => e.key === "Enter" && addCategoryRow()}
+                  onkeydown={(e) => e.key === "Enter" && addCategoryRow()}
                 />
-                <button type="button" class="btn ghost mini" on:click={addCategoryRow}
+                <button type="button" class="btn ghost mini" onclick={addCategoryRow}
                   ><Plus size={12} /></button
                 >
               </div>
@@ -1231,7 +1231,7 @@
               <div class="chip-list">
                 {#each brief.exclude as ex, i (i)}
                   <span class="chip"
-                    >{ex}<button type="button" on:click={() => removeExcludeEntry(i)} aria-label="Remove"
+                    >{ex}<button type="button" onclick={() => removeExcludeEntry(i)} aria-label="Remove"
                       ><X size={10} /></button
                     ></span
                   >
@@ -1244,15 +1244,15 @@
                   type="text"
                   placeholder="Exclude slug/name…"
                   bind:value={newExcludeText}
-                  on:keydown={(e) => e.key === "Enter" && addExcludeEntry()}
+                  onkeydown={(e) => e.key === "Enter" && addExcludeEntry()}
                 />
-                <button type="button" class="btn ghost mini" on:click={addExcludeEntry}
+                <button type="button" class="btn ghost mini" onclick={addExcludeEntry}
                   ><Plus size={12} /></button
                 >
               </div>
             </div>
 
-            <button type="button" class="btn primary full" disabled={busy} on:click={buildDraft}>
+            <button type="button" class="btn primary full" disabled={busy} onclick={buildDraft}>
               <Package size={13} /> Rebuild draft
             </button>
           </div>
@@ -1288,7 +1288,7 @@
                     type="button"
                     class="icon-btn"
                     title={isLocked(m) ? "Unlock" : "Lock (keep on rebuild)"}
-                    on:click={() => toggleLock(m)}
+                    onclick={() => toggleLock(m)}
                   >
                     {#if isLocked(m)}<Lock size={12} />{:else}<Unlock size={12} />{/if}
                   </button>
@@ -1296,7 +1296,7 @@
                     type="button"
                     class="icon-btn"
                     title="Find alternative"
-                    on:click={() => void openAlternatives(m)}
+                    onclick={() => void openAlternatives(m)}
                   >
                     <Shuffle size={12} />
                   </button>
@@ -1304,7 +1304,7 @@
                     type="button"
                     class="icon-btn danger"
                     title="Remove from draft"
-                    on:click={() => removeModFromDraft(m)}
+                    onclick={() => removeModFromDraft(m)}
                   >
                     <X size={12} />
                   </button>
@@ -1326,7 +1326,7 @@
                       <button
                         type="button"
                         class="alt-row"
-                        on:click={() => void applyAlternative(m, opt)}
+                        onclick={() => void applyAlternative(m, opt)}
                       >
                         <span class="mod-name">{opt.name}</span>
                         <code>{opt.slug}</code>
@@ -1355,8 +1355,8 @@
     class="modal-backdrop"
     role="button"
     tabindex="-1"
-    on:click|self={() => (draftConfirmOpen = false)}
-    on:keydown={() => {}}
+    onclick={() => (draftConfirmOpen = false)}
+    onkeydown={() => {}}
   >
     <div class="modal draft-confirm" role="dialog" aria-modal="true">
       <div class="draft-confirm-head">
@@ -1372,7 +1372,7 @@
             <input
               type="checkbox"
               checked={draftSelected[m.projectId || m.slug] !== false}
-              on:change={(e) => {
+              onchange={(e) => {
                 draftSelected[m.projectId || m.slug] = e.currentTarget.checked;
                 draftSelected = { ...draftSelected };
               }}
@@ -1389,12 +1389,12 @@
         <p class="warn">Unresolved must-haves: {draft.unresolved.join(", ")}</p>
       {/if}
       <div class="draft-confirm-actions">
-        <button type="button" class="btn ghost" on:click={() => (draftConfirmOpen = false)}>Cancel</button>
+        <button type="button" class="btn ghost" onclick={() => (draftConfirmOpen = false)}>Cancel</button>
         <button
           type="button"
           class="btn accent"
           disabled={busy || draftConfirmCount === 0}
-          on:click={executeDraftInstall}
+          onclick={executeDraftInstall}
         >
           Install {draftConfirmCount} mod{draftConfirmCount === 1 ? "" : "s"} (snapshot first)
         </button>

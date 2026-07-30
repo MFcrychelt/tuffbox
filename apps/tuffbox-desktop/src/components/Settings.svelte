@@ -7,7 +7,7 @@
     Palette, Info, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2,
     Bot, Network, Coffee, Terminal, HardDrive, Settings2,
     MessageCircle, ExternalLink,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api } from "../lib/api";
   import type { PresenceSettings, LauncherSettings, SidebarMode } from "../lib/store";
   import {
@@ -26,7 +26,7 @@
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
   type SettingsTab = "general" | "appearance" | "java" | "commands" | "runtime" | "integrations" | "about";
-  let tab: SettingsTab = "appearance";
+  let tab = $state<SettingsTab>("appearance");
 
   type AiSettings = {
     provider: string;
@@ -66,66 +66,66 @@
     checkedAt?: string;
   };
 
-  let theme: ThemeId = readStoredTheme();
-  let reducedMotion = localStorage.getItem("tuffbox-reduced-motion") === "1";
-  let shortcuts: any[] = [];
-  let shortcutsOpen = false;
-  let appVersion = "";
-  let updateCheck: UpdateCheck | null = null;
-  let updateError = "";
-  let updateLoading = false;
+  let theme = $state<ThemeId>(readStoredTheme());
+  let reducedMotion = $state(localStorage.getItem("tuffbox-reduced-motion") === "1");
+  let shortcuts = $state<any[]>([]);
+  let shortcutsOpen = $state(false);
+  let appVersion = $state("");
+  let updateCheck = $state<UpdateCheck | null>(null);
+  let updateError = $state("");
+  let updateLoading = $state(false);
 
-  let integrationsLoading = false;
-  let integrationsError = "";
-  let integrationsMessage = "";
-  let githubRepository = "";
-  let aiProvider: "ollama" | "openai-compatible" = "ollama";
-  let aiEndpoint = "";
-  let aiModel = "";
-  let ollamaBinaryPath = "";
-  let ollamaModelsPath = "";
-  let diagnoseMode: "server" | "local" | "kb_only" = "server";
-  let crashKbEndpoint = "";
-  let githubTokenSet = false;
-  let modrinthTokenSet = false;
-  let curseforgeTokenSet = false;
-  let aiApiKeySet = false;
-  let crashKbTokenSet = false;
+  let integrationsLoading = $state(false);
+  let integrationsError = $state("");
+  let integrationsMessage = $state("");
+  let githubRepository = $state("");
+  let aiProvider = $state<"ollama" | "openai-compatible">("ollama");
+  let aiEndpoint = $state("");
+  let aiModel = $state("");
+  let ollamaBinaryPath = $state("");
+  let ollamaModelsPath = $state("");
+  let diagnoseMode = $state<"server" | "local" | "kb_only">("server");
+  let crashKbEndpoint = $state("");
+  let githubTokenSet = $state(false);
+  let modrinthTokenSet = $state(false);
+  let curseforgeTokenSet = $state(false);
+  let aiApiKeySet = $state(false);
+  let crashKbTokenSet = $state(false);
 
-  let githubTokenDraft = "";
-  let modrinthTokenDraft = "";
-  let curseforgeTokenDraft = "";
-  let aiApiKeyDraft = "";
-  let crashKbTokenDraft = "";
-  let swarmEnabled = false;
-  let swarmSharePrompts = true;
-  let swarmSupabaseUrl = "";
-  let swarmSupabaseAnonDraft = "";
-  let swarmSupabaseAnonSet = false;
-  let swarmSupabaseUsingBuiltin = true;
-  let swarmSupabaseConfigured = false;
-  let swarmSupabaseAdvanced = false;
-  let swarmHubUrl = "";
-  let swarmP2pEnabled = false;
-  let swarmP2pControlUrl = "http://127.0.0.1:8790";
-  let swarmP2pStatus = "";
-  let swarmSaving = false;
+  let githubTokenDraft = $state("");
+  let modrinthTokenDraft = $state("");
+  let curseforgeTokenDraft = $state("");
+  let aiApiKeyDraft = $state("");
+  let crashKbTokenDraft = $state("");
+  let swarmEnabled = $state(false);
+  let swarmSharePrompts = $state(true);
+  let swarmSupabaseUrl = $state("");
+  let swarmSupabaseAnonDraft = $state("");
+  let swarmSupabaseAnonSet = $state(false);
+  let swarmSupabaseUsingBuiltin = $state(true);
+  let swarmSupabaseConfigured = $state(false);
+  let swarmSupabaseAdvanced = $state(false);
+  let swarmHubUrl = $state("");
+  let swarmP2pEnabled = $state(false);
+  let swarmP2pControlUrl = $state("http://127.0.0.1:8790");
+  let swarmP2pStatus = $state("");
+  let swarmSaving = $state(false);
 
-  let savingSettings = false;
-  let savingSecret: string | null = null;
-  let clearingSecret: string | null = null;
-  let testingProvider: string | null = null;
-  let testResults: Record<string, string> = {};
+  let savingSettings = $state(false);
+  let savingSecret = $state<string | null>(null);
+  let clearingSecret = $state<string | null>(null);
+  let testingProvider = $state<string | null>(null);
+  let testResults = $state<Record<string, string>>({});
 
-  let discordRpcEnabled = false;
-  let discordClientId = "";
-  let discordSaving = false;
-  let discordMessage = "";
-  let discordError = "";
-  let aiModalOpen = false;
+  let discordRpcEnabled = $state(false);
+  let discordClientId = $state("");
+  let discordSaving = $state(false);
+  let discordMessage = $state("");
+  let discordError = $state("");
+  let aiModalOpen = $state(false);
 
   // Launcher settings
-  let launcher: LauncherSettings = {
+  let launcher = $state<LauncherSettings>({
     theme: "tuffbox",
     potatoPc: false,
     perfAutoDetected: false,
@@ -144,24 +144,26 @@
     sidebarMode: "full",
     uiScalePercent: 100,
     roundedCorners: true,
-  };
-  let launcherSaving = false;
-  let launcherMsg = "";
-  let launcherErr = "";
-  let defaultRuntimePath = "";
-  let runtimeDraft = "";
-  let defaultInstancesPath = "";
-  let instancesDraft = "";
-  let showJavaPicker = false;
-  let resMode: "default" | "854x480" | "1280x720" | "1920x1080" | "custom" = "default";
-  let customW = 1280;
-  let customH = 720;
-  let discordDirty = false;
+  });
+  let launcherSaving = $state(false);
+  let launcherMsg = $state("");
+  let launcherErr = $state("");
+  let defaultRuntimePath = $state("");
+  let runtimeDraft = $state("");
+  let defaultInstancesPath = $state("");
+  let instancesDraft = $state("");
+  let showJavaPicker = $state(false);
+  let resMode = $state<"default" | "854x480" | "1280x720" | "1920x1080" | "custom">("default");
+  let customW = $state(1280);
+  let customH = $state(720);
+  let discordDirty = $state(false);
 
   const concurrentOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
-  $: concurrentSelectOptions = concurrentOptions.includes(launcher.concurrentDownloads)
-    ? concurrentOptions
-    : [...concurrentOptions, launcher.concurrentDownloads].sort((a, b) => a - b);
+  const concurrentSelectOptions = $derived(
+    concurrentOptions.includes(launcher.concurrentDownloads)
+      ? concurrentOptions
+      : [...concurrentOptions, launcher.concurrentDownloads].sort((a, b) => a - b),
+  );
 
   const tabs: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
     { id: "appearance", label: "Appearance", icon: Palette },

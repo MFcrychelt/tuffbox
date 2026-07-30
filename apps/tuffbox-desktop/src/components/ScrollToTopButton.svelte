@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { ArrowUp } from "lucide-svelte";
+  import { ArrowUp } from "@lucide/svelte";
   import { fly } from "svelte/transition";
 
-  export let container: HTMLElement | null = null;
+  let { container = null }: { container?: HTMLElement | null } = $props();
 
-  let visible = false;
+  let visible = $state(false);
 
   function check() {
     if (!container) return;
@@ -15,15 +15,20 @@
     container?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  $: if (container) {
+  $effect(() => {
+    if (!container) return;
     container.addEventListener("scroll", check, { passive: true });
-  }
+    check();
+    return () => {
+      container.removeEventListener("scroll", check);
+    };
+  });
 </script>
 
 {#if visible}
   <button
     class="scroll-top"
-    on:click={scrollToTop}
+    onclick={scrollToTop}
     aria-label="Scroll to top"
     in:fly={{ y: 10, duration: 150 }}
     out:fly={{ y: 10, duration: 100 }}

@@ -12,14 +12,20 @@
     FolderOpen,
     ExternalLink,
     Play,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api, type WorldListItem } from "../lib/api";
   import { toasts } from "../lib/toast";
   import { launchWithFeedback } from "../lib/launch";
 
-  export let projectPath: string;
-  export let onOpenMods: () => void = () => {};
-  export let onOpenWorld: () => void = () => {};
+  let {
+    projectPath,
+    onOpenMods = () => {},
+    onOpenWorld = () => {},
+  }: {
+    projectPath: string;
+    onOpenMods?: () => void;
+    onOpenWorld?: () => void;
+  } = $props();
 
   type Tab = "mods" | "resourcepacks" | "shaderpacks" | "worlds" | "servers";
   type PackEntry = {
@@ -43,17 +49,17 @@
     error: string | null;
   };
 
-  let tab: Tab = "resourcepacks";
-  let loading = false;
-  let packs: PackEntry[] = [];
-  let worlds: WorldListItem[] = [];
-  let servers: ServerEntry[] = [];
-  let pings: Record<string, PingResult> = {};
-  let modCount: number | null = null;
-  let busyKey: string | null = null;
+  let tab = $state<Tab>("resourcepacks");
+  let loading = $state(false);
+  let packs = $state<PackEntry[]>([]);
+  let worlds = $state<WorldListItem[]>([]);
+  let servers = $state<ServerEntry[]>([]);
+  let pings = $state<Record<string, PingResult>>({});
+  let modCount = $state<number | null>(null);
+  let busyKey = $state<string | null>(null);
 
-  let newServerName = "";
-  let newServerAddress = "";
+  let newServerName = $state("");
+  let newServerAddress = $state("");
 
   async function load() {
     if (!projectPath) return;
@@ -80,9 +86,11 @@
     }
   }
 
-  $: if (projectPath && tab) {
-    void load();
-  }
+  $effect(() => {
+    if (projectPath && tab) {
+      void load();
+    }
+  });
 
   async function togglePack(pack: PackEntry) {
     busyKey = pack.fileName;
@@ -180,26 +188,26 @@
 
 <section class="instance-home">
   <div class="tabs">
-    <button class:active={tab === "mods"} on:click={() => (tab = "mods")}>
+    <button class:active={tab === "mods"} onclick={() => (tab = "mods")}>
       <Package size={14} /> Mods
     </button>
-    <button class:active={tab === "resourcepacks"} on:click={() => (tab = "resourcepacks")}>
+    <button class:active={tab === "resourcepacks"} onclick={() => (tab = "resourcepacks")}>
       <Image size={14} /> Resource packs
     </button>
-    <button class:active={tab === "shaderpacks"} on:click={() => (tab = "shaderpacks")}>
+    <button class:active={tab === "shaderpacks"} onclick={() => (tab = "shaderpacks")}>
       <Sparkles size={14} /> Shaders
     </button>
-    <button class:active={tab === "worlds"} on:click={() => (tab = "worlds")}>
+    <button class:active={tab === "worlds"} onclick={() => (tab = "worlds")}>
       <Globe size={14} /> Worlds
     </button>
-    <button class:active={tab === "servers"} on:click={() => (tab = "servers")}>
+    <button class:active={tab === "servers"} onclick={() => (tab = "servers")}>
       <Server size={14} /> Servers
     </button>
     <div class="tabs-spacer"></div>
-    <button class="icon-btn" on:click={load} title="Refresh" disabled={loading}>
+    <button class="icon-btn" onclick={load} title="Refresh" disabled={loading}>
       <RefreshCw size={14} class={loading ? "spin" : ""} />
     </button>
-    <button class="icon-btn" on:click={openFolder} title="Open instance folder">
+    <button class="icon-btn" onclick={openFolder} title="Open instance folder">
       <FolderOpen size={14} />
     </button>
   </div>
@@ -227,7 +235,7 @@
           {/if}
           <span>mods in this instance</span>
         </div>
-        <button class="accent" on:click={onOpenMods}>
+        <button class="accent" onclick={onOpenMods}>
           <ExternalLink size={14} /> Open Mods
         </button>
       </div>
@@ -249,7 +257,7 @@
                 class="toggle"
                 class:on={pack.enabled}
                 disabled={busyKey === pack.fileName}
-                on:click={() => togglePack(pack)}
+                onclick={() => togglePack(pack)}
                 title={pack.enabled ? "Disable" : "Enable"}
               >
                 <Power size={14} />
@@ -273,17 +281,17 @@
               <button
                 class="accent"
                 disabled={busyKey === `play:${world.name}`}
-                on:click={() => playWorld(world.name)}
+                onclick={() => playWorld(world.name)}
               >
                 <Play size={14} /> Play
               </button>
-              <button class="ghost" on:click={onOpenWorld}>Open World tools</button>
+              <button class="ghost" onclick={onOpenWorld}>Open World tools</button>
             </div>
           {/each}
         </div>
       {/if}
     {:else if tab === "servers"}
-      <form class="add-server" on:submit|preventDefault={addServer}>
+      <form class="add-server" onsubmit={(e) => { e.preventDefault(); addServer(); }}>
         <input bind:value={newServerName} placeholder="Name" maxlength={64} />
         <input bind:value={newServerAddress} placeholder="Address (host:port)" maxlength={128} />
         <button type="submit" class="accent" disabled={busyKey === "add-server" || !newServerName.trim() || !newServerAddress.trim()}>
@@ -312,12 +320,12 @@
               <button
                 class="accent"
                 disabled={busyKey === `join:${srv.address}`}
-                on:click={() => joinServer(srv.address)}
+                onclick={() => joinServer(srv.address)}
               >
                 <Play size={14} /> Join
               </button>
-              <button class="ghost" disabled={busyKey === `ping:${srv.address}`} on:click={() => pingServer(srv.address)}>Ping</button>
-              <button class="danger" disabled={busyKey === srv.address} on:click={() => removeServer(srv.address)}>
+              <button class="ghost" disabled={busyKey === `ping:${srv.address}`} onclick={() => pingServer(srv.address)}>Ping</button>
+              <button class="danger" disabled={busyKey === srv.address} onclick={() => removeServer(srv.address)}>
                 <Trash2 size={14} />
               </button>
             </div>

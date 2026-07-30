@@ -2,7 +2,7 @@
   // Shown briefly while a lazily-loaded view chunk (see App.svelte's
   // VIEW_LOADERS) is being fetched/parsed. Reuses the existing skeleton
   // utility classes so it looks native to whichever theme is active.
-  export let error: string | null = null;
+  let { error = null }: { error?: string | null } = $props();
 </script>
 
 {#if error}

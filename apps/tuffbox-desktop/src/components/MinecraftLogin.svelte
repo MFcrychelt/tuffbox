@@ -1,35 +1,35 @@
 <script lang="ts">
-  import { createEventDispatcher, onDestroy } from "svelte";
+  import { onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Loader2, Copy, Check, LogIn, X, User, Monitor, Globe, Shield } from "lucide-svelte";
+  import { Loader2, Copy, Check, LogIn, X, User, Monitor, Globe, Shield } from "@lucide/svelte";
   import { api } from "../lib/api";
   import { authState, skinPath, loginTypeLabel, type SkinSource, type YggdrasilPreset } from "../lib/store";
   import { toasts } from "../lib/toast";
 
-  const dispatch = createEventDispatcher();
+  let { onclose }: { onclose?: () => void } = $props();
 
-  let mode: "select" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form" = "select";
-  let deviceCode: { userCode: string; verificationUri: string } | null = null;
-  let polling = false;
-  let errorMsg = "";
-  let copied = false;
+  let mode = $state<"select" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form">("select");
+  let deviceCode = $state<{ userCode: string; verificationUri: string } | null>(null);
+  let polling = $state(false);
+  let errorMsg = $state("");
+  let copied = $state(false);
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
-  let authUrlPaste = "";
-  let msAuthorizeUrl = "";
+  let authUrlPaste = $state("");
+  let msAuthorizeUrl = $state("");
 
   // Offline form
-  let offlineUsername = "";
-  let skinSource: SkinSource = "mojang";
-  let loggingIn = false;
+  let offlineUsername = $state("");
+  let skinSource = $state<SkinSource>("mojang");
+  let loggingIn = $state(false);
 
   // Yggdrasil form
-  let yggPresets: YggdrasilPreset[] = [];
-  let yggPresetId = "elyby";
-  let yggAuthority = "";
-  let yggUsername = "";
-  let yggPassword = "";
+  let yggPresets = $state<YggdrasilPreset[]>([]);
+  let yggPresetId = $state("elyby");
+  let yggAuthority = $state("");
+  let yggUsername = $state("");
+  let yggPassword = $state("");
 
-  $: existingAccounts = $authState.accounts ?? [];
+  const existingAccounts = $derived($authState.accounts ?? []);
 
   async function switchExisting(uuid: string) {
     loggingIn = true;
@@ -45,7 +45,7 @@
         }
       }
       toasts.success(`Switched to ${state.profile?.name ?? "account"}`);
-      setTimeout(() => dispatch("close"), 400);
+      setTimeout(() => onclose?.(), 400);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -116,7 +116,7 @@
       toasts.success(`Logged in as ${result.profile.name}`);
       mode = "select";
       authUrlPaste = "";
-      setTimeout(() => dispatch("close"), 600);
+      setTimeout(() => onclose?.(), 600);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -124,8 +124,8 @@
     }
   }
 
-  let pollInFlight = false;
-  let pollIntervalMs = 3500;
+  let pollInFlight = $state(false);
+  let pollIntervalMs = $state(3500);
 
   function scheduleNextPoll() {
     if (pollTimer) clearTimeout(pollTimer);
@@ -151,7 +151,7 @@
         }
         toasts.success(`Logged in as ${result.profile.name}`);
         mode = "select";
-        setTimeout(() => dispatch("close"), 800);
+        setTimeout(() => onclose?.(), 800);
       } catch (e) {
         const msg = String(e);
         if (msg.includes("slow_down")) {
@@ -211,7 +211,7 @@
       }
       toasts.success(`Playing as ${result.profile.name}`);
       mode = "select";
-      setTimeout(() => dispatch("close"), 600);
+      setTimeout(() => onclose?.(), 600);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -271,7 +271,7 @@
       toasts.success(`Logged in as ${result.profile.name}`);
       mode = "select";
       yggPassword = "";
-      setTimeout(() => dispatch("close"), 600);
+      setTimeout(() => onclose?.(), 600);
     } catch (e) {
       errorMsg = String(e);
     } finally {
@@ -296,7 +296,7 @@
   function close() {
     clearPollTimer();
     polling = false;
-    dispatch("close");
+    onclose?.();
   }
 
   onDestroy(() => {
@@ -306,7 +306,7 @@
 
 <!-- svelte-ignore a11y-click-events-have-key-events -->
 <!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="overlay" on:click|self={close}>
+<div class="overlay" onclick={(e) => e.target === e.currentTarget && close()}>
   <div class="modal">
     <div class="modal-header">
       <div class="modal-title">
@@ -319,7 +319,7 @@
           {:else}Sign In{/if}
         </h3>
       </div>
-      <button class="close-btn" on:click={close} aria-label="Close">
+      <button class="close-btn" onclick={close} aria-label="Close">
         <X size={18} />
       </button>
     </div>
@@ -334,7 +334,7 @@
                 class="account-row"
                 class:active={account.uuid === $authState.activeAccountUuid}
                 disabled={loggingIn}
-                on:click={() => switchExisting(account.uuid)}
+                onclick={() => switchExisting(account.uuid)}
               >
                 <div class="account-ico" class:ms={account.loginType === "microsoft"} class:ygg={account.loginType === "yggdrasil"}>
                   {#if account.loginType === "microsoft"}
@@ -366,7 +366,7 @@
         {/if}
 
         <div class="login-options">
-          <button class="login-option" on:click={startMicrosoftLogin}>
+          <button class="login-option" onclick={startMicrosoftLogin}>
             <div class="option-icon ms">
               <Globe size={20} />
             </div>
@@ -377,7 +377,7 @@
             <Check size={16} class="option-arrow" />
           </button>
 
-          <button class="login-option" on:click={openMicrosoftUrlLogin}>
+          <button class="login-option" onclick={openMicrosoftUrlLogin}>
             <div class="option-icon ms-url">
               <Globe size={20} />
             </div>
@@ -388,7 +388,7 @@
             <Check size={16} class="option-arrow" />
           </button>
 
-          <button class="login-option" on:click={() => (mode = "offline-form")}>
+          <button class="login-option" onclick={() => (mode = "offline-form")}>
             <div class="option-icon offline">
               <User size={20} />
             </div>
@@ -399,7 +399,7 @@
             <Check size={16} class="option-arrow" />
           </button>
 
-          <button class="login-option" on:click={openYggdrasilForm}>
+          <button class="login-option" onclick={openYggdrasilForm}>
             <div class="option-icon ygg">
               <Shield size={20} />
             </div>
@@ -421,19 +421,19 @@
         <div class="code-content">
           <div class="code-display">
             <span class="code">{deviceCode.userCode}</span>
-            <button class="copy-btn" on:click={copyCode} title="Copy code">
+            <button class="copy-btn" onclick={copyCode} title="Copy code">
               {#if copied}<Check size={16} />{:else}<Copy size={16} />{/if}
             </button>
           </div>
           <p class="instruction">
-            Go to <a href={deviceCode?.verificationUri ?? "#"} on:click|preventDefault={() => deviceCode && open(deviceCode.verificationUri)}>{deviceCode?.verificationUri}</a>
+            Go to <a href={deviceCode?.verificationUri ?? "#"} onclick={(e) => { e.preventDefault(); deviceCode && open(deviceCode.verificationUri); }}>{deviceCode?.verificationUri}</a>
             <br />and enter the code above.
           </p>
           <div class="polling-indicator">
             <Loader2 size={16} class="spin" />
             <span>Waiting for authentication...</span>
           </div>
-          <button class="link-btn" type="button" on:click={openMicrosoftUrlLogin}>
+          <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>
             Prefer paste URL instead?
           </button>
           {#if errorMsg}
@@ -442,13 +442,13 @@
         </div>
 
       {:else if mode === "microsoft-url"}
-        <form class="offline-form" on:submit|preventDefault={submitMicrosoftUrlLogin}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); submitMicrosoftUrlLogin(); }}>
           <p class="instruction url-steps">
             1. Sign in in the browser window<br />
             2. When you land on a blank / “nativeclient” page, copy the full address from the address bar<br />
             3. Paste it below
           </p>
-          <button class="secondary-btn" type="button" on:click={reopenMicrosoftAuthorize} disabled={loggingIn}>
+          <button class="secondary-btn" type="button" onclick={reopenMicrosoftAuthorize} disabled={loggingIn}>
             <Globe size={14} /> Open Microsoft login again
           </button>
           <label class="field">
@@ -472,13 +472,13 @@
               <LogIn size={16} /> Complete login
             {/if}
           </button>
-          <button class="link-btn" type="button" disabled={loggingIn} on:click={() => { mode = "select"; errorMsg = ""; }}>
+          <button class="link-btn" type="button" disabled={loggingIn} onclick={() => { mode = "select"; errorMsg = ""; }}>
             Back
           </button>
         </form>
 
       {:else if mode === "offline-form"}
-        <form class="offline-form" on:submit|preventDefault={handleOfflineLogin}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); handleOfflineLogin(); }}>
           <label class="field">
             <span>Username</span>
             <input
@@ -496,7 +496,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "mojang"}
-                on:click={() => (skinSource = "mojang")}
+                onclick={() => (skinSource = "mojang")}
               >
                 <Monitor size={14} />
                 Mojang
@@ -505,7 +505,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "elyby"}
-                on:click={() => (skinSource = "elyby")}
+                onclick={() => (skinSource = "elyby")}
               >
                 <Globe size={14} />
                 Ely.by
@@ -514,7 +514,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "tlauncher"}
-                on:click={() => (skinSource = "tlauncher")}
+                onclick={() => (skinSource = "tlauncher")}
               >
                 <Globe size={14} />
                 TLauncher
@@ -523,7 +523,7 @@
                 type="button"
                 class="source-option"
                 class:active={skinSource === "offline"}
-                on:click={() => (skinSource = "offline")}
+                onclick={() => (skinSource = "offline")}
               >
                 <User size={14} />
                 None
@@ -545,14 +545,14 @@
         </form>
 
       {:else if mode === "yggdrasil-form"}
-        <form class="offline-form" on:submit|preventDefault={handleYggdrasilLogin}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); handleYggdrasilLogin(); }}>
           <div class="skin-source-grid ygg-presets">
             {#each yggPresets as preset (preset.id)}
               <button
                 type="button"
                 class="source-option"
                 class:active={yggPresetId === preset.id}
-                on:click={() => selectYggPreset(preset.id)}
+                onclick={() => selectYggPreset(preset.id)}
                 disabled={loggingIn}
               >
                 {preset.label}

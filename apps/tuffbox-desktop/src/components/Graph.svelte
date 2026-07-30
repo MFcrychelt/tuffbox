@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { trapFocus } from "../lib/focusTrap";
@@ -45,43 +45,43 @@
     alreadyPresent?: string[];
   };
 
-  let graph: GraphModel | null = null;
-  let loading = false;
-  let error: string | null = null;
-  let selectedId: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let resolving = false;
-  let message: string | null = null;
-  let changePlan: any | null = null;
+  let graph = $state<GraphModel | null>(null);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+  let selectedId = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let resolving = $state(false);
+  let message = $state<string | null>(null);
+  let changePlan = $state<any | null>(null);
   /** Monotonic token so stale loadChangePlan / refresh results never overwrite a newer load. */
-  let changePlanGen = 0;
-  let changePlanLoading = false;
-  let graphSource = "local";
-  let graphGeneratedAt: string | null = null;
-  let graphRefreshing = false;
-  let refreshError: string | null = null;
+  let changePlanGen = $state(0);
+  let changePlanLoading = $state(false);
+  let graphSource = $state("local");
+  let graphGeneratedAt = $state<string | null>(null);
+  let graphRefreshing = $state(false);
+  let refreshError = $state<string | null>(null);
 
   // Dependency preview dialog
-  let depPreviewOpen = false;
-  let depPreviewLoading = false;
-  let depPreviewSlug = "";
-  let depPreviewName = "";
-  let depPreviewRequired: { target: string; reason?: string | null }[] = [];
-  let depPreviewOptional: { target: string; reason?: string | null }[] = [];
-  let depPreviewInstallWithOptional = true;
-  let depInstallStatus: "idle" | "downloading" | "done" | "failed" = "idle";
-  let depInstallMessage = "";
-  let depInstallError: string | null = null;
-  let depInstallFailedIds: string[] = [];
-  let depInstallBatchSeen = false;
+  let depPreviewOpen = $state(false);
+  let depPreviewLoading = $state(false);
+  let depPreviewSlug = $state("");
+  let depPreviewName = $state("");
+  let depPreviewRequired = $state<{ target: string; reason?: string | null }[]>([]);
+  let depPreviewOptional = $state<{ target: string; reason?: string | null }[]>([]);
+  let depPreviewInstallWithOptional = $state(true);
+  let depInstallStatus = $state<"idle" | "downloading" | "done" | "failed">("idle");
+  let depInstallMessage = $state("");
+  let depInstallError = $state<string | null>(null);
+  let depInstallFailedIds = $state<string[]>([]);
+  let depInstallBatchSeen = $state(false);
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadBatch: UnlistenFn | null = null;
-  let graphCanvasEl: HTMLElement;
-  let fullscreenElement: Element | null = null;
-  $: graphFullscreen = fullscreenElement === graphCanvasEl;
+  let graphCanvasEl = $state<HTMLElement | undefined>(undefined);
+  let fullscreenElement = $state<Element | null>(null);
+  const graphFullscreen = $derived(fullscreenElement === graphCanvasEl);
 
-  let showNodeList = true;
-  let changePlanExpanded = false;
+  let showNodeList = $state(true);
+  let changePlanExpanded = $state(false);
   let changePlanSeenKey = "";
   let canvasResizeObserver: ResizeObserver | null = null;
 
@@ -93,13 +93,15 @@
     simulation?.stop();
   }
 
-  $: if (changePlan) {
-    const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
-    if (key !== changePlanSeenKey) {
-      changePlanSeenKey = key;
-      changePlanExpanded = !!(changePlan.actions?.length);
-    }
-  }
+  $effect(() => {
+    if (changePlan) {
+        const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
+        if (key !== changePlanSeenKey) {
+          changePlanSeenKey = key;
+          changePlanExpanded = !!(changePlan.actions?.length);
+        }
+      }
+  });
 
   /** Right-click = same install path as left-click (hint: "click or right-click to install"). */
   async function onNodeContextInstall(event: MouseEvent, node: GraphNode & { ghost?: boolean }) {
@@ -275,7 +277,7 @@
   }
 
   // Track which nodes have a broken icon so we can fall back to a letter avatar
-  let brokenIcons = new Set<string>();
+  let brokenIcons = $state(new Set<string>())
   /// Modrinth/CurseForge metadata for missing (ghost) dependency nodes.
   let ghostMeta: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
 
@@ -650,7 +652,46 @@
   /// Installed mods that other mods require/optionally depend on.
   /// These are "downloaded dependencies" and get the third (amber) tone.
   /// Mods with no incoming dep edges are "main" and keep their side color.
-  $: depNodeIds = new Set(
+
+  // Transitive reduction over the Requires graph: if A requires B and B
+  // requires C, drop the direct A->C link so the centre isn't overloaded with
+  // redundant edges (modrinth-extras / hub-and-spoke readability). Non-Requires
+  // edges (conflicts, optional, loader links) are left untouched.
+  function reduceTransitiveRequires(allEdges: GraphEdge[]): GraphEdge[] {
+    const req = allEdges.filter((e) => e.kind === "Requires");
+    const adj = new Map<string, string[]>();
+    for (const e of req) {
+      if (!adj.has(e.from)) adj.set(e.from, []);
+      adj.get(e.from)!.push(e.to);
+    }
+    const reachable = (start: string, excludeDirect: string): boolean => {
+      const seen = new Set<string>([start]);
+      const stack = [...(adj.get(start) ?? [])];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        if (cur === excludeDirect) return true;
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        for (const next of adj.get(cur) ?? []) {
+          if (next !== excludeDirect) stack.push(next);
+        }
+      }
+      return false;
+    };
+    const keep = req.filter((e) => !reachable(e.from, e.to));
+    const others = allEdges.filter((e) => e.kind !== "Requires");
+    return [...keep, ...others];
+  }
+
+  const nodes = $derived(graph?.nodes ?? []);
+  const edges = $derived(graph?.edges ?? []);
+  const displayEdges = $derived(reduceTransitiveRequires(
+    edges.filter((e) =>
+      ["Requires", "Optional", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
+    )
+  ));
+
+  const depNodeIds = $derived(new Set(
     nodes
       .filter((node) => node.kind === "Mod")
       .filter((node) => {
@@ -660,18 +701,16 @@
         return incoming.length > 0;
       })
       .map((node) => node.id)
-  );
+  ));
 
-  $: nodes = graph?.nodes ?? [];
-  $: edges = graph?.edges ?? [];
-  $: selected = selectedId ? nodeById(selectedId) : null;
-  $: selectedEdges = selectedId
+  const selected = $derived(selectedId ? nodeById(selectedId) : null);
+  const selectedEdges = $derived(selectedId
     ? displayEdges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
-    : [];
-  $: missingEdges = displayEdges.filter(
+    : []);
+  const missingEdges = $derived(displayEdges.filter(
     (edge) => edge.kind === "Requires" && (!nodeById(edge.to) || nodeById(edge.to)?.kind === "Missing")
-  );
-  $: missingDepsByMod = (() => {
+  ));
+  const missingDepsByMod = $derived((() => {
     const map = new Map<string, GraphEdge[]>();
     for (const edge of missingEdges) {
       const list = map.get(edge.from) ?? [];
@@ -679,8 +718,8 @@
       map.set(edge.from, list);
     }
     return map;
-  })();
-  $: selectedMissingDeps = selectedId ? (missingDepsByMod.get(selectedId) ?? []) : [];
+  })());
+  const selectedMissingDeps = $derived(selectedId ? (missingDepsByMod.get(selectedId) ?? []) : []);
 
   async function installSelectedMissingDeps() {
     for (const edge of selectedMissingDeps) {
@@ -688,14 +727,14 @@
     }
   }
 
-  $: conflictEdges = displayEdges.filter(
+  const conflictEdges = $derived(displayEdges.filter(
     (edge) => ["Conflicts", "BreaksWith"].includes(edge.kind)
       && nodeById(edge.from)?.kind !== "Missing"
       && nodeById(edge.to)?.kind !== "Missing"
-  );
+  ));
 
   /** Deduped conflict pairs with a recommended removal target. */
-  $: conflictInsights = (() => {
+  const conflictInsights = $derived((() => {
     type Insight = {
       key: string;
       edge: GraphEdge;
@@ -765,336 +804,14 @@
       if (x.known !== y.known) return x.known ? -1 : 1;
       return x.leftLabel.localeCompare(y.leftLabel);
     });
-  })();
+  })());
 
-  $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
+  const byKind = $derived(nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
     return acc;
-  }, {});
-  $: modNodes = nodes.filter((node) => node.kind === "Mod");
-  /// Side-panel grouping: mods bucketed by the same human categories used for
-  /// the graph clusters, so the list reads top-to-bottom like the canvas.
-  $: groupedMods = (() => {
-    const buckets = new Map<string, { label: string; color: string; nodes: GraphNode[] }>();
-    for (const node of modNodes) {
-      const g = categorizeMod(node);
-      const bucket = buckets.get(g.key) ?? { label: g.label, color: g.color, nodes: [] };
-      bucket.nodes.push(node);
-      buckets.set(g.key, bucket);
-    }
-    const order = MOD_GROUPS.map((g) => g.key);
-    return [...buckets.entries()]
-      .sort((a, b) => {
-        const ia = order.indexOf(a[0]);
-        const ib = order.indexOf(b[0]);
-        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a[1].label.localeCompare(b[1].label);
-      })
-      .map(([, bucket]) => ({
-        ...bucket,
-        nodes: bucket.nodes.slice().sort((x, y) => x.label.localeCompare(y.label)),
-      }));
-  })();
-  $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing");
-  $: profileNodes = nodes.filter((node) => node.kind === "Profile");
-
-  // Synthesize ghost nodes for any edge endpoint that has no real node. This
-  // is the single most important fix: the Rust builder intentionally emits
-  // edges to *missing* dependencies, but d3's forceLink throws
-  // "missing: <id>" when a link references a node that isn't in the array,
-  // which aborted the whole simulation and left the canvas blank. Ghost
-  // nodes keep every link resolvable while still being visually distinct
-  // (and the missing-dependency panel operates on the real graph).
-  const nodeIdSet = (id: string) => nodes.some((n) => n.id === id);
-  $: ghostNodes = (() => {
-    const out: GraphNode[] = nodes
-      .filter((node) => node.kind === "Missing")
-      .map((node) => ({
-        ...node,
-        label: ghostMeta[node.id]?.name ?? node.label,
-        metadata: {
-          ...(node.metadata ?? {}),
-          ...(ghostMeta[node.id]?.iconUrl ? { icon_url: ghostMeta[node.id].iconUrl! } : {}),
-          ...(ghostMeta[node.id]?.projectId ? { project_id: ghostMeta[node.id].projectId! } : {}),
-          source: "modrinth",
-        },
-      }));
-    const seen = new Set(out.map((node) => node.id));
-    // Only required missing targets become installable ghosts — optional
-    // integrations must not appear in "Missing dependencies".
-    for (const e of edges) {
-      if (e.kind !== "Requires") continue;
-      const end = e.to;
-      if (!nodeIdSet(end) && !seen.has(end)) {
-        seen.add(end);
-        const slug = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
-        const cached = ghostMeta[end];
-        out.push({
-          id: end,
-          kind: "Missing",
-          label: cached?.name ?? slug,
-          version: null,
-          side: "unknown",
-          metadata: {
-            ...(cached?.iconUrl ? { icon_url: cached.iconUrl } : {}),
-            ...(cached?.projectId ? { project_id: cached.projectId } : {}),
-            ...(cached?.description ? { description: cached.description } : {}),
-            source: cached?.source ?? "modrinth",
-          },
-        });
-      }
-    }
-    return out;
-  })();
-  $: displayNodes = [
-    ...nodes.filter((n) => n.kind === "Mod"),
-    ...platformNodes,
-    ...ghostNodes,
-  ];
-  // Transitive reduction over the Requires graph: if A requires B and B
-  // requires C, drop the direct A->C link so the centre isn't overloaded with
-  // redundant edges (modrinth-extras / hub-and-spoke readability). Non-Requires
-  // edges (conflicts, optional, loader links) are left untouched.
-  function reduceTransitiveRequires(allEdges: GraphEdge[]): GraphEdge[] {
-    const req = allEdges.filter((e) => e.kind === "Requires");
-    const adj = new Map<string, string[]>();
-    for (const e of req) {
-      if (!adj.has(e.from)) adj.set(e.from, []);
-      adj.get(e.from)!.push(e.to);
-    }
-    const reachable = (start: string, excludeDirect: string): boolean => {
-      const seen = new Set<string>([start]);
-      const stack = [...(adj.get(start) ?? [])];
-      while (stack.length) {
-        const cur = stack.pop()!;
-        if (cur === excludeDirect) return true;
-        if (seen.has(cur)) continue;
-        seen.add(cur);
-        for (const next of adj.get(cur) ?? []) {
-          if (next !== excludeDirect) stack.push(next);
-        }
-      }
-      return false;
-    };
-    const keep = req.filter((e) => !reachable(e.from, e.to));
-    const others = allEdges.filter((e) => e.kind !== "Requires");
-    return [...keep, ...others];
-  }
-
-  // Mod-to-mod relations plus loader/runtime links (fabric-api, lithium,
-  // ferrite-core etc. only depend on the loader, so without these edges they
-  // look orphaned). Optional edges are now shown as semantic (yellow/green)
-  // integration links; transitive Requires edges are collapsed away.
-  $: displayEdges = reduceTransitiveRequires(
-    edges.filter((e) =>
-      ["Requires", "Optional", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
-    )
-  );
-
-  // --- Canvas edge curation ---
-  // The full edge list drives the side panel, missing-dep detection and the
-  // layout sim, but drawing every runtime link turns the canvas into spaghetti
-  // (on a real 160-mod pack: ~320 loader/minecraft/java links converging on the
-  // centre). The canvas therefore hides ONLY those pure-runtime links by
-  // default. Every real mod-to-mod relation — hard deps (grey), optional
-  // integrations (green) and conflicts (red) — stays visible, so the graph
-  // reads as a connected web instead of just the red conflict edges. Hub
-  // fan-ins (e.g. everything → fabric-api) are still drawn but faded so they
-  // don't dominate. The "All edges" toggle also reveals the runtime links.
-  let showAllEdges = false;
-  const RUNTIME_EDGE_KINDS = ["RequiresLoader", "RequiresMinecraft", "RequiresJava"];
-  const HUB_FAN_IN_THRESHOLD = 8;
-  $: hubTargetIds = new Set(
-    [
-      ...displayEdges
-        .filter((e) => e.kind === "Requires")
-        .reduce((acc, e) => acc.set(e.to, (acc.get(e.to) ?? 0) + 1), new Map<string, number>())
-        .entries(),
-    ]
-      .filter(([, count]) => count >= HUB_FAN_IN_THRESHOLD)
-      .map(([id]) => id),
-  );
-  $: renderedEdges = showAllEdges
-    ? displayEdges
-    : displayEdges.filter((e) => {
-        // Pure runtime links (loader/minecraft/java) — only for the selected node.
-        if (RUNTIME_EDGE_KINDS.includes(e.kind)) {
-          return !!selectedId && (e.from === selectedId || e.to === selectedId);
-        }
-        // Hub fan-in (everything → fabric-api etc.) — hide unless selected.
-        if (e.kind === "Requires" && hubTargetIds.has(e.to)) {
-          return !!selectedId && (e.from === selectedId || e.to === selectedId);
-        }
-        // Optional integrations across the whole pack drown the canvas; keep
-        // them only when a node is selected or when the user opts into "All edges".
-        if (e.kind === "Optional") {
-          return !!selectedId && (e.from === selectedId || e.to === selectedId);
-        }
-        return true;
-      });
-
-  async function hydrateGhostNodes() {
-    if (!$projectPath || !graph) return;
-    const missing = ghostNodes.filter((n) => !ghostMeta[n.id]);
-    if (missing.length === 0) return;
-    const updates: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
-    await Promise.all(
-      missing.map(async (node) => {
-        const key = modIdFromNode(node.id);
-        // Try Modrinth first (slug or project id).
-        try {
-          const project: any = await invoke("get_modrinth_project", { projectId: key });
-          if (project) {
-            updates[node.id] = {
-              name: project.name ?? key,
-              iconUrl: project.iconUrl ?? null,
-              projectId: project.id ?? key,
-              description: project.description ?? undefined,
-              source: "modrinth",
-            };
-            return;
-          }
-        } catch {
-          // fall through to CurseForge
-        }
-        // CurseForge fallback: search by slug, take the top hit.
-        try {
-          const page: any = await invoke("search_curseforge_mods", {
-            path: $projectPath,
-            query: key,
-            gameVersion: null,
-            loader: null,
-            contentType: "mod",
-            page: 1,
-            pageSize: 5,
-          });
-          const hit = page?.results?.[0];
-          if (hit) {
-            updates[node.id] = {
-              name: hit.name ?? key,
-              iconUrl: hit.iconUrl ?? null,
-              projectId: hit.id ?? key,
-              description: hit.description ?? undefined,
-              source: "curseforge",
-            };
-          }
-        } catch {
-          // keep slug label
-        }
-      })
-    );
-    if (Object.keys(updates).length > 0) {
-      ghostMeta = { ...ghostMeta, ...updates };
-    }
-  }
-
-  /// Group mods by which profile includes them (via IncludedInProfile edges)
-  $: modsByProfile = (() => {
-    const map = new Map<string, GraphNode[]>();
-    const orphaned: GraphNode[] = [];
-    for (const mod of modNodes) {
-      const profiles = edges
-        .filter((e) => e.kind === "IncludedInProfile" && e.to === mod.id)
-        .map((e) => nodeById(e.from)?.label ?? e.from);
-      if (profiles.length === 0) {
-        orphaned.push(mod);
-      } else {
-        for (const prof of profiles) {
-          const list = map.get(prof) ?? [];
-          list.push(mod);
-          map.set(prof, list);
-        }
-      }
-    }
-    return { map, orphaned };
-  })();
-  type LayoutNode = PositionedNode & {
-    depth: number;
-    isHub: boolean;
-    component: number;
-    hubId: string;
-    hubX: number;
-    hubY: number;
-    vx?: number;
-    vy?: number;
-    fx?: number | null;
-    fy?: number | null;
-    index?: number;
-    groupKey?: string;
-  };
-
-  type GroupMeta = { key: string; label: string; color: string; x: number; y: number; r: number };
-  let groupMeta: GroupMeta[] = [];
-
-  /// Cluster currently hovered in the legend / on a halo; used to spotlight that
-  /// group's nodes and edges and dim the rest.
-  let hoveredGroup: string | null = null;
-
-  /** Spotlight conflicts or missing deps (toolbar toggle). */
-  let highlightMode: null | "conflicts" | "missing" = null;
-
-  const LEGEND_STORAGE_KEY = "tuffbox.graph.legend-expanded";
-  let legendExpanded =
-    typeof localStorage === "undefined"
-      ? true
-      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false";
-
-  function toggleLegend() {
-    legendExpanded = !legendExpanded;
-    try {
-      localStorage.setItem(LEGEND_STORAGE_KEY, String(legendExpanded));
-    } catch {
-      /* ignore */
-    }
-  }
-
-  function toggleHighlight(mode: "conflicts" | "missing") {
-    highlightMode = highlightMode === mode ? null : mode;
-  }
-
-  function nodeGroupKey(id: string): string | null {
-    return positionById.get(id)?.groupKey ?? null;
-  }
-  /// True when an edge belongs to the hovered cluster (both endpoints in it, or
-  /// one endpoint is a core/runtime hub that the cluster radiates from).
-  function edgeInHoveredGroup(from: string, to: string): boolean {
-    if (!hoveredGroup) return true;
-    const gf = nodeGroupKey(from);
-    const gt = nodeGroupKey(to);
-    const core = (g: string | null) => g === "core" || g === "runtime" || g === null;
-    if (core(gf) || core(gt)) return true;
-    return gf === hoveredGroup || gt === hoveredGroup;
-  }
-
-  function nodeInHighlight(nodeId: string, kind?: string): boolean {
-    if (!highlightMode) return true;
-    if (highlightMode === "conflicts") {
-      return conflictEdges.some((e) => e.from === nodeId || e.to === nodeId);
-    }
-    if (kind === "Missing") return true;
-    return missingEdges.some((e) => e.from === nodeId || e.to === nodeId);
-  }
-
-  function edgeInHighlight(from: string, to: string, kind: string, danger: boolean): boolean {
-    if (!highlightMode) return true;
-    if (highlightMode === "conflicts") {
-      return danger || ["Conflicts", "BreaksWith"].includes(kind);
-    }
-    return missingEdges.some((e) => e.from === from && e.to === to);
-  }
-
-  let canvasWidth = 1600;
-  let canvasHeight = 900;
-  let positioned: PositionedNode[] = [];
-  let simulation: any = null;
-  let simulationLayoutKey = "";
-  let simNodes: LayoutNode[] = [];
-  const nodeEls = new Map<string, SVGGElement>();
-  const edgeEls = new Map<string, SVGPathElement>();
-  let resetViewOnNextLayout = true;
+  }, {}));
 
   /// Human-friendly mod categories so the graph reads as labelled clusters
-  /// ("Rendering", "Create / Automation", …) instead of one undifferentiated
-  /// tangle where every mod is shoved into a corner by depth-from-hub rings.
   type ModGroup = {
     key: string;
     label: string;
@@ -1102,10 +819,6 @@
     matches: (id: string, label: string) => boolean;
   };
 
-  // Functional clusters (Hub & Spoke). Every mod is routed into exactly one
-  // cluster by keyword match; unmatched mods fall back to Quality of Life so no
-  // node is orphaned. Adding a group here automatically adds a ring anchor, a
-  // colour-coded halo and a side-panel section.
   const MOD_GROUPS: ModGroup[] = [
     {
       key: "library",
@@ -1198,6 +911,288 @@
         ),
     },
   ];
+
+  const modNodes = $derived(nodes.filter((node) => node.kind === "Mod"));
+  /// Side-panel grouping: mods bucketed by the same human categories used for
+  /// the graph clusters, so the list reads top-to-bottom like the canvas.
+  const groupedMods = $derived((() => {
+    const buckets = new Map<string, { label: string; color: string; nodes: GraphNode[] }>();
+    for (const node of modNodes) {
+      const g = categorizeMod(node);
+      const bucket = buckets.get(g.key) ?? { label: g.label, color: g.color, nodes: [] };
+      bucket.nodes.push(node);
+      buckets.set(g.key, bucket);
+    }
+    const order = MOD_GROUPS.map((g) => g.key);
+    return [...buckets.entries()]
+      .sort((a, b) => {
+        const ia = order.indexOf(a[0]);
+        const ib = order.indexOf(b[0]);
+        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a[1].label.localeCompare(b[1].label);
+      })
+      .map(([, bucket]) => ({
+        ...bucket,
+        nodes: bucket.nodes.slice().sort((x, y) => x.label.localeCompare(y.label)),
+      }));
+  })());
+  const platformNodes = $derived(nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing"));
+  const profileNodes = $derived(nodes.filter((node) => node.kind === "Profile"));
+
+  // Synthesize ghost nodes for any edge endpoint that has no real node. This
+  // is the single most important fix: the Rust builder intentionally emits
+  // edges to *missing* dependencies, but d3's forceLink throws
+  // "missing: <id>" when a link references a node that isn't in the array,
+  // which aborted the whole simulation and left the canvas blank. Ghost
+  // nodes keep every link resolvable while still being visually distinct
+  // (and the missing-dependency panel operates on the real graph).
+  const nodeIdSet = (id: string) => nodes.some((n) => n.id === id);
+  const ghostNodes = $derived((() => {
+    const out: GraphNode[] = nodes
+      .filter((node) => node.kind === "Missing")
+      .map((node) => ({
+        ...node,
+        label: ghostMeta[node.id]?.name ?? node.label,
+        metadata: {
+          ...(node.metadata ?? {}),
+          ...(ghostMeta[node.id]?.iconUrl ? { icon_url: ghostMeta[node.id].iconUrl! } : {}),
+          ...(ghostMeta[node.id]?.projectId ? { project_id: ghostMeta[node.id].projectId! } : {}),
+          source: "modrinth",
+        },
+      }));
+    const seen = new Set(out.map((node) => node.id));
+    // Only required missing targets become installable ghosts — optional
+    // integrations must not appear in "Missing dependencies".
+    for (const e of edges) {
+      if (e.kind !== "Requires") continue;
+      const end = e.to;
+      if (!nodeIdSet(end) && !seen.has(end)) {
+        seen.add(end);
+        const slug = end.replace(/^mod:/, "").replace(/^__ghost__/, "");
+        const cached = ghostMeta[end];
+        out.push({
+          id: end,
+          kind: "Missing",
+          label: cached?.name ?? slug,
+          version: null,
+          side: "unknown",
+          metadata: {
+            ...(cached?.iconUrl ? { icon_url: cached.iconUrl } : {}),
+            ...(cached?.projectId ? { project_id: cached.projectId } : {}),
+            ...(cached?.description ? { description: cached.description } : {}),
+            source: cached?.source ?? "modrinth",
+          },
+        });
+      }
+    }
+    return out;
+  })());
+  const displayNodes = $derived([
+    ...nodes.filter((n) => n.kind === "Mod"),
+    ...platformNodes,
+    ...ghostNodes,
+  ]);
+
+  // --- Canvas edge curation ---
+  // The full edge list drives the side panel, missing-dep detection and the
+  // layout sim, but drawing every runtime link turns the canvas into spaghetti
+  // (on a real 160-mod pack: ~320 loader/minecraft/java links converging on the
+  // centre). The canvas therefore hides ONLY those pure-runtime links by
+  // default. Every real mod-to-mod relation — hard deps (grey), optional
+  // integrations (green) and conflicts (red) — stays visible, so the graph
+  // reads as a connected web instead of just the red conflict edges. Hub
+  // fan-ins (e.g. everything → fabric-api) are still drawn but faded so they
+  // don't dominate. The "All edges" toggle also reveals the runtime links.
+  let showAllEdges = $state(false);
+  const RUNTIME_EDGE_KINDS = ["RequiresLoader", "RequiresMinecraft", "RequiresJava"];
+  const HUB_FAN_IN_THRESHOLD = 8;
+  const hubTargetIds = $derived(new Set(
+    [
+      ...displayEdges
+        .filter((e) => e.kind === "Requires")
+        .reduce((acc, e) => acc.set(e.to, (acc.get(e.to) ?? 0) + 1), new Map<string, number>())
+        .entries(),
+    ]
+      .filter(([, count]) => count >= HUB_FAN_IN_THRESHOLD)
+      .map(([id]) => id),
+  ));
+  const renderedEdges = $derived(showAllEdges
+    ? displayEdges
+    : displayEdges.filter((e) => {
+        // Pure runtime links (loader/minecraft/java) — only for the selected node.
+        if (RUNTIME_EDGE_KINDS.includes(e.kind)) {
+          return !!selectedId && (e.from === selectedId || e.to === selectedId);
+        }
+        // Hub fan-in (everything → fabric-api etc.) — hide unless selected.
+        if (e.kind === "Requires" && hubTargetIds.has(e.to)) {
+          return !!selectedId && (e.from === selectedId || e.to === selectedId);
+        }
+        // Optional integrations across the whole pack drown the canvas; keep
+        // them only when a node is selected or when the user opts into "All edges".
+        if (e.kind === "Optional") {
+          return !!selectedId && (e.from === selectedId || e.to === selectedId);
+        }
+        return true;
+      }));
+
+  async function hydrateGhostNodes() {
+    if (!$projectPath || !graph) return;
+    const missing = ghostNodes.filter((n) => !ghostMeta[n.id]);
+    if (missing.length === 0) return;
+    const updates: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
+    await Promise.all(
+      missing.map(async (node) => {
+        const key = modIdFromNode(node.id);
+        // Try Modrinth first (slug or project id).
+        try {
+          const project: any = await invoke("get_modrinth_project", { projectId: key });
+          if (project) {
+            updates[node.id] = {
+              name: project.name ?? key,
+              iconUrl: project.iconUrl ?? null,
+              projectId: project.id ?? key,
+              description: project.description ?? undefined,
+              source: "modrinth",
+            };
+            return;
+          }
+        } catch {
+          // fall through to CurseForge
+        }
+        // CurseForge fallback: search by slug, take the top hit.
+        try {
+          const page: any = await invoke("search_curseforge_mods", {
+            path: $projectPath,
+            query: key,
+            gameVersion: null,
+            loader: null,
+            contentType: "mod",
+            page: 1,
+            pageSize: 5,
+          });
+          const hit = page?.results?.[0];
+          if (hit) {
+            updates[node.id] = {
+              name: hit.name ?? key,
+              iconUrl: hit.iconUrl ?? null,
+              projectId: hit.id ?? key,
+              description: hit.description ?? undefined,
+              source: "curseforge",
+            };
+          }
+        } catch {
+          // keep slug label
+        }
+      })
+    );
+    if (Object.keys(updates).length > 0) {
+      ghostMeta = { ...ghostMeta, ...updates };
+    }
+  }
+
+  /// Group mods by which profile includes them (via IncludedInProfile edges)
+  const modsByProfile = $derived((() => {
+    const map = new Map<string, GraphNode[]>();
+    const orphaned: GraphNode[] = [];
+    for (const mod of modNodes) {
+      const profiles = edges
+        .filter((e) => e.kind === "IncludedInProfile" && e.to === mod.id)
+        .map((e) => nodeById(e.from)?.label ?? e.from);
+      if (profiles.length === 0) {
+        orphaned.push(mod);
+      } else {
+        for (const prof of profiles) {
+          const list = map.get(prof) ?? [];
+          list.push(mod);
+          map.set(prof, list);
+        }
+      }
+    }
+    return { map, orphaned };
+  })());
+  type LayoutNode = PositionedNode & {
+    depth: number;
+    isHub: boolean;
+    component: number;
+    hubId: string;
+    hubX: number;
+    hubY: number;
+    vx?: number;
+    vy?: number;
+    fx?: number | null;
+    fy?: number | null;
+    index?: number;
+    groupKey?: string;
+  };
+
+  type GroupMeta = { key: string; label: string; color: string; x: number; y: number; r: number };
+  let groupMeta: GroupMeta[] = [];
+
+  /// Cluster currently hovered in the legend / on a halo; used to spotlight that
+  /// group's nodes and edges and dim the rest.
+  let hoveredGroup: string | null = null;
+
+  /** Spotlight conflicts or missing deps (toolbar toggle). */
+  let highlightMode: null | "conflicts" | "missing" = null;
+
+  const LEGEND_STORAGE_KEY = "tuffbox.graph.legend-expanded";
+  let legendExpanded =
+    typeof localStorage === "undefined"
+      ? true
+      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false";
+
+  function toggleLegend() {
+    legendExpanded = !legendExpanded;
+    try {
+      localStorage.setItem(LEGEND_STORAGE_KEY, String(legendExpanded));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleHighlight(mode: "conflicts" | "missing") {
+    highlightMode = highlightMode === mode ? null : mode;
+  }
+
+  function nodeGroupKey(id: string): string | null {
+    return positionById.get(id)?.groupKey ?? null;
+  }
+  /// True when an edge belongs to the hovered cluster (both endpoints in it, or
+  /// one endpoint is a core/runtime hub that the cluster radiates from).
+  function edgeInHoveredGroup(from: string, to: string): boolean {
+    if (!hoveredGroup) return true;
+    const gf = nodeGroupKey(from);
+    const gt = nodeGroupKey(to);
+    const core = (g: string | null) => g === "core" || g === "runtime" || g === null;
+    if (core(gf) || core(gt)) return true;
+    return gf === hoveredGroup || gt === hoveredGroup;
+  }
+
+  function nodeInHighlight(nodeId: string, kind?: string): boolean {
+    if (!highlightMode) return true;
+    if (highlightMode === "conflicts") {
+      return conflictEdges.some((e) => e.from === nodeId || e.to === nodeId);
+    }
+    if (kind === "Missing") return true;
+    return missingEdges.some((e) => e.from === nodeId || e.to === nodeId);
+  }
+
+  function edgeInHighlight(from: string, to: string, kind: string, danger: boolean): boolean {
+    if (!highlightMode) return true;
+    if (highlightMode === "conflicts") {
+      return danger || ["Conflicts", "BreaksWith"].includes(kind);
+    }
+    return missingEdges.some((e) => e.from === from && e.to === to);
+  }
+
+  let canvasWidth = $state(1600);
+  let canvasHeight = $state(900);
+  let positioned: PositionedNode[] = [];
+  let simulation: any = null;
+  let simulationLayoutKey = "";
+  let simNodes: LayoutNode[] = [];
+  const nodeEls = new Map<string, SVGGElement>();
+  const edgeEls = new Map<string, SVGPathElement>();
+  let resetViewOnNextLayout = $state(true);
 
   /// Modrinth's official category taxonomy → our cluster key. This is the
   /// authoritative distribution: a mod tagged `optimization` on the site lands
@@ -1309,12 +1304,12 @@
   // Bump when layout algorithm parameters change so cached graphs re-seed.
   const LAYOUT_VERSION = "v4-modrinth-cats";
 
-  $: layoutKey = [
+  const layoutKey = $derived([
     LAYOUT_VERSION,
     ...displayNodes.map((n) => n.id).sort(),
     ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
     groupMeta.map((g) => g.key).join(","),
-  ].join("|");
+  ].join("|"));
 
   // Edge kinds that link every mod to the core runtime. They carry no layout
   // information (every mod has both), but as d3 links they dominate the physics
@@ -1580,24 +1575,28 @@
     }
   }
 
-  $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
-    simulationLayoutKey = layoutKey;
-    startSimulation();
-  }
+  $effect(() => {
+    if (displayNodes.length && layoutKey !== simulationLayoutKey) {
+        simulationLayoutKey = layoutKey;
+        startSimulation();
+      }
+  });
 
   // Refresh labels when Modrinth metadata arrives without restarting layout.
-  $: if (positioned.length && Object.keys(ghostMeta).length > 0) {
-    positioned = positioned.map((node) => ({
-      ...node,
-      label: displayLabel(node),
-    }));
-  }
+  $effect(() => {
+    if (positioned.length && Object.keys(ghostMeta).length > 0) {
+        positioned = positioned.map((node) => ({
+          ...node,
+          label: displayLabel(node),
+        }));
+      }
+  });
 
-  $: positionById = new Map(positioned.map((node) => [node.id, node]));
+  const positionById = $derived(new Map(positioned.map((node) => [node.id, node])));
 
   // Reactive edge paths: recomputed whenever `positioned` (and thus
   // `positionById`) changes, so arrows track nodes live during the sim.
-  $: edgePaths = renderedEdges.map((edge) => ({
+  const edgePaths = $derived(renderedEdges.map((edge) => ({
     key: `${edge.from}:${edge.to}:${edge.kind}`,
     edge,
     kind: edge.kind,
@@ -1608,7 +1607,7 @@
     // Fan-in into a heavily-shared library (fabric-api, cloth-config, …): still
     // drawn so the hub reads as a star, but faded so it doesn't drown the graph.
     hub: edge.kind === "Requires" && hubTargetIds.has(edge.to),
-  }));
+  })));
 
   function edgeKey(edge: GraphEdge): string {
     return `${edge.from}:${edge.to}:${edge.kind}`;
@@ -1644,19 +1643,19 @@
   // graph view: scroll to zoom (toward the cursor), drag empty space to
   // pan, double-click / button to reset.
   let viewportEl: SVGSVGElement;
-  let viewX = 0;
-  let viewY = 0;
-  let viewScale = 1;
-  let isPanning = false;
-  let isNodeDragging = false;
+  let viewX = $state(0);
+  let viewY = $state(0);
+  let viewScale = $state(1);
+  let isPanning = $state(false);
+  let isNodeDragging = $state(false);
   let panStart = { x: 0, y: 0, viewX: 0, viewY: 0 };
   let panPointerId: number | null = null;
   let nodeDragPointerId: number | null = null;
   let endNodeDrag: (() => void) | null = null;
-  $: viewBoxHeight = canvasHeight / viewScale;
-  $: viewBoxWidth = canvasWidth / viewScale;
-  $: viewBoxString = `${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`;
-  $: denseGraph = renderedEdges.length > 70;
+  const viewBoxHeight = $derived(canvasHeight / viewScale);
+  const viewBoxWidth = $derived(canvasWidth / viewScale);
+  const viewBoxString = $derived(`${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`);
+  const denseGraph = $derived(renderedEdges.length > 70);
 
   function clientToSvgPoint(clientX: number, clientY: number) {
     // Prefer screen CTM so letterboxed SVG (preserveAspectRatio meet) maps correctly.
@@ -1709,7 +1708,7 @@
     viewScale = nextScale;
   }
 
-  let panMoved = false;
+  let panMoved = $state(false);
 
   function endBackgroundPan(event?: PointerEvent) {
     if (!isPanning) return;
@@ -1888,14 +1887,18 @@
     simulation?.stop();
   });
 
-  $: if (graphCanvasEl && typeof ResizeObserver !== "undefined" && !canvasResizeObserver) {
-    canvasResizeObserver = new ResizeObserver(() => {
-      // SVG fills the flex canvas via width/height 100%; observer keeps layout in sync on stage resize.
-    });
-    canvasResizeObserver.observe(graphCanvasEl);
-  }
+  $effect(() => {
+    if (graphCanvasEl && typeof ResizeObserver !== "undefined" && !canvasResizeObserver) {
+        canvasResizeObserver = new ResizeObserver(() => {
+          // SVG fills the flex canvas via width/height 100%; observer keeps layout in sync on stage resize.
+        });
+        canvasResizeObserver.observe(graphCanvasEl);
+      }
+  });
 
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  });
   function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
     event.stopPropagation();
     if (event.button !== 0) return;
@@ -1989,11 +1992,11 @@
       <span>Dependency graph</span>
     </div>
     <div class="toolbar-actions">
-      <button class="secondary" on:click={installMissingDependencies} disabled={!$projectPath || resolving || missingEdges.length === 0}>
+      <button class="secondary" onclick={installMissingDependencies} disabled={!$projectPath || resolving || missingEdges.length === 0}>
         <Workflow size={16} />
         {resolving ? "Resolving..." : "Auto-install dependencies"}
       </button>
-      <button class="ghost" on:click={() => refreshGraph(true)} title="Refresh dependency metadata" disabled={!$projectPath || loading || graphRefreshing}>
+      <button class="ghost" onclick={() => refreshGraph(true)} title="Refresh dependency metadata" disabled={!$projectPath || loading || graphRefreshing}>
         <RefreshCw size={16} class={graphRefreshing ? "spin" : ""} />
       </button>
     </div>
@@ -2051,7 +2054,7 @@
         <button
           type="button"
           class="change-plan-toggle"
-          on:click={() => (changePlanExpanded = !changePlanExpanded)}
+          onclick={() => (changePlanExpanded = !changePlanExpanded)}
           aria-expanded={changePlanExpanded}
         >
           <div class="change-plan-head">
@@ -2067,12 +2070,12 @@
           <div class="change-plan-actions">
             {#if changePlan.actions?.length}
               {#each changePlan.actions as action, index (index)}
-                <button class="chip" on:click={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
+                <button class="chip" onclick={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
                   {formatChangeAction(action)}
                 </button>
               {/each}
             {/if}
-            <button class="primary mini" on:click={applyChangePlan} disabled={resolving}>
+            <button class="primary mini" onclick={applyChangePlan} disabled={resolving}>
               {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
             </button>
           </div>
@@ -2090,13 +2093,13 @@
       aria-label="Dependency graph canvas"
     >
       <div class="canvas-controls">
-        <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
-        <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
-        <button class="ghost mini" on:click={resetView} title="Fit graph to view">⤢</button>
+        <button class="ghost mini" onclick={() => zoomBy(1.25)} title="Zoom in">+</button>
+        <button class="ghost mini" onclick={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
+        <button class="ghost mini" onclick={resetView} title="Fit graph to view">⤢</button>
         <button
           class="ghost mini edge-toggle"
           class:active={showAllEdges}
-          on:click={() => (showAllEdges = !showAllEdges)}
+          onclick={() => (showAllEdges = !showAllEdges)}
           title={showAllEdges
             ? "Hide optional / hub / runtime edges"
             : "Show optional, hub fan-in and runtime edges"}
@@ -2107,7 +2110,7 @@
           class="ghost mini edge-toggle hl-btn conflicts"
           class:active={highlightMode === "conflicts"}
           disabled={conflictEdges.length === 0}
-          on:click={() => toggleHighlight("conflicts")}
+          onclick={() => toggleHighlight("conflicts")}
           title="Spotlight conflict edges (high contrast)"
         >
           <ShieldAlert size={14} /> Conflicts
@@ -2116,18 +2119,18 @@
           class="ghost mini edge-toggle hl-btn missing"
           class:active={highlightMode === "missing"}
           disabled={missingEdges.length === 0}
-          on:click={() => toggleHighlight("missing")}
+          onclick={() => toggleHighlight("missing")}
           title="Spotlight missing dependencies (high contrast)"
         >
           <AlertTriangle size={14} /> Missing
         </button>
-        <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
+        <button class="ghost mini" onclick={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
           {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
         </button>
         <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
       </div>
       <div class="graph-legend" class:collapsed={!legendExpanded}>
-        <button type="button" class="legend-toggle" on:click={toggleLegend} aria-expanded={legendExpanded}>
+        <button type="button" class="legend-toggle" onclick={toggleLegend} aria-expanded={legendExpanded}>
           <span>Legend</span>
           <ChevronDown size={14} class={legendExpanded ? "rot" : ""} />
         </button>
@@ -2155,9 +2158,9 @@
                   class="legend-chip"
                   class:on={hoveredGroup === group.key}
                   style={`--chip:${group.color}`}
-                  on:mouseenter={() => (hoveredGroup = group.key)}
-                  on:mouseleave={() => (hoveredGroup = null)}
-                  on:click|stopPropagation={() => (hoveredGroup = hoveredGroup === group.key ? null : group.key)}
+                  onmouseenter={() => (hoveredGroup = group.key)}
+                  onmouseleave={() => (hoveredGroup = null)}
+                  onclick={(e) => { e.stopPropagation(); (hoveredGroup = hoveredGroup === group.key ? null : group.key); } }
                 >{group.label}</button>
               {/each}
             </div>
@@ -2172,15 +2175,15 @@
         aria-label="Dependency graph"
         class:panning={isPanning}
         class:dragging={isNodeDragging}
-        on:wheel={handleWheel}
-        on:pointerdown={handleBackgroundPointerDown}
-        on:click={() => {
+        onwheel={handleWheel}
+        onpointerdown={handleBackgroundPointerDown}
+        onclick={() => {
           // Click on empty canvas (not a node — those stopPropagation) clears
           // the current selection, but only if the user wasn't panning.
           if (!panMoved && !isNodeDragging) selectedId = null;
         }}
-        on:dblclick={resetView}
-        on:keydown={() => {}}
+        ondblclick={resetView}
+        onkeydown={() => {}}
       >
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
@@ -2224,8 +2227,8 @@
             style={`color:${group.color}`}
             role="group"
             aria-label={group.label}
-            on:mouseenter={() => (hoveredGroup = group.key)}
-            on:mouseleave={() => (hoveredGroup = null)}
+            onmouseenter={() => (hoveredGroup = group.key)}
+            onmouseleave={() => (hoveredGroup = null)}
           >
             <circle class="group-halo" cx={group.x} cy={group.y} r={group.r} />
             <text class="group-label" x={group.x} y={group.y - group.r - 18} text-anchor="middle">{group.label}</text>
@@ -2280,10 +2283,10 @@
             class:spotlight-missing={inHl && highlightMode === "missing"}
             role="button"
             tabindex="0"
-            on:pointerdown={(e) => handleNodeMouseDown(e, node)}
-            on:click|stopPropagation={() => handleNodeClick(node)}
-            on:contextmenu|stopPropagation={(e) => onNodeContextInstall(e, node)}
-            on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
+            onpointerdown={(e) => handleNodeMouseDown(e, node)}
+            onclick={(e) => { e.stopPropagation(); handleNodeClick(node); } }
+            oncontextmenu={(e) => { e.stopPropagation(); void onNodeContextInstall(e, node); } }
+            onkeydown={(e) => e.key === "Enter" && handleNodeClick(node)}
             aria-label={node.label}
           >
             {#if inHl}
@@ -2299,8 +2302,8 @@
                 class="dep-icon-hit"
                 role="button"
                 tabindex="0"
-                on:click|stopPropagation={() => handleDepIconClick(node)}
-                on:keydown={(e) => e.key === "Enter" && handleDepIconClick(node)}
+                onclick={(e) => { e.stopPropagation(); handleDepIconClick(node); } }
+                onkeydown={(e) => e.key === "Enter" && handleDepIconClick(node)}
                 aria-label={isGhost ? `Install ${node.label}` : `Re-download ${node.label}`}
               >
                 <rect x={-half} y={-half} width={size} height={size} rx="8" ry="8" />
@@ -2316,7 +2319,7 @@
                     height={size - 4}
                     clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                     preserveAspectRatio="xMidYMid slice"
-                    on:error={() => handleIconError(node)}
+                    onerror={() => handleIconError(node)}
                   />
                 {:else}
                   <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
@@ -2336,7 +2339,7 @@
                   height={size - 4}
                   clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                   preserveAspectRatio="xMidYMid slice"
-                  on:error={() => handleIconError(node)}
+                  onerror={() => handleIconError(node)}
                 />
               {:else}
                 <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
@@ -2346,7 +2349,7 @@
               <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
             {:else}
               <text class="node-label-text" y={half + 14} text-anchor="middle">{node.label.length > 18 ? node.label.slice(0, 17) + "…" : node.label}</text>
-              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" on:pointerdown|stopPropagation={() => {}} on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") removeConflictNode(node.id); } }>
                 <circle cx={half - 2} cy={-half + 2} r="8" />
                 <text x={half - 2} y={-half + 6} text-anchor="middle" class="remove-x">×</text>
               </g>
@@ -2368,29 +2371,29 @@
 
           <div class="details-actions">
             {#if selected.kind === "Missing"}
-              <button class="install-btn" on:click={() => installGhostNode(selected.id)} disabled={resolving}>
+              <button class="install-btn" onclick={() => installGhostNode(selected.id)} disabled={resolving}>
                 <Download size={16} />
                 {resolving ? "Installing..." : "Install from Modrinth"}
               </button>
             {:else if selected.kind === "Mod"}
               {#if depNodeIds.has(selected.id)}
-                <button class="secondary mini details-action-btn" on:click={downloadMissingFiles} disabled={resolving}>
+                <button class="secondary mini details-action-btn" onclick={downloadMissingFiles} disabled={resolving}>
                   <Download size={14} />
                   Re-download files
                 </button>
               {/if}
               {#if selectedMissingDeps.length > 0}
-                <button class="install-btn" on:click={installSelectedMissingDeps} disabled={resolving}>
+                <button class="install-btn" onclick={installSelectedMissingDeps} disabled={resolving}>
                   <Download size={16} />
                   {resolving ? "Installing..." : `Install ${selectedMissingDeps.length} missing`}
                 </button>
               {/if}
-              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+              <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
                 <X size={16} />
                 Remove mod
               </button>
             {:else}
-              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+              <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
                 <X size={16} />
                 Remove mod
               </button>
@@ -2429,7 +2432,7 @@
                   </span>
                   {#if edge.reason}<small>{edge.reason}</small>{/if}
                   {#if isMissingDep}
-                    <button class="secondary mini" on:click={() => installGhostNode(otherId)} disabled={resolving}>
+                    <button class="secondary mini" onclick={() => installGhostNode(otherId)} disabled={resolving}>
                       <Download size={12} /> Install
                     </button>
                   {/if}
@@ -2446,7 +2449,7 @@
       </aside>
 
     <div class="list-toggle-row">
-      <button type="button" class="ghost mini list-toggle-btn" on:click={() => (showNodeList = !showNodeList)}>
+      <button type="button" class="ghost mini list-toggle-btn" onclick={() => (showNodeList = !showNodeList)}>
         <List size={14} />
         {showNodeList ? "Hide list" : "Show list"}
         {#if !showNodeList}
@@ -2477,27 +2480,27 @@
                   class:is-dep={isClickableDep}
                   role="button"
                   tabindex="0"
-                  on:click={() => (selectedId = node.id)}
-                  on:contextmenu={(e) => onNodeContextInstall(e, node)}
-                  on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
+                  onclick={() => (selectedId = node.id)}
+                  oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                  onkeydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
                 >
                   {#if icon}
                     {#if isClickableDep}
                       <button
                         class="card-icon-btn"
                         title="Click to re-download this dependency"
-                        on:click|stopPropagation={downloadMissingFiles}
+                        onclick={(e) => { e.stopPropagation(); downloadMissingFiles; } }
                       >
-                        <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                        <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                       </button>
                     {:else}
-                      <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                      <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                     {/if}
                   {:else if isClickableDep}
                     <button
                       class="card-icon-btn"
                       title="Click to re-download this dependency"
-                      on:click|stopPropagation={downloadMissingFiles}
+                      onclick={(e) => { e.stopPropagation(); downloadMissingFiles; } }
                     >
                       <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                     </button>
@@ -2513,10 +2516,9 @@
                       class="card-install-btn"
                       type="button"
                       title="Install {missingDeps.length} missing dependencies"
-                      on:click|stopPropagation={async () => {
+                      onclick={(e) => { e.stopPropagation(); async () => {
                         for (const edge of missingDeps) {
-                          await installSingleMissingDep(edge);
-                        }
+                          await installSingleMissingDep(edge);(e); } }
                       }}
                       disabled={resolving}
                     >
@@ -2524,7 +2526,7 @@
                       <span>Install</span>
                     </button>
                   {/if}
-                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); (e) => e.key === "Enter" && removeConflictNode(node.id)(e); } }>
                     <X size={14} />
                   </span>
                 </div>
@@ -2546,12 +2548,12 @@
                 role="button"
                 tabindex="0"
                 title="Install {node.label}"
-                on:click={() => installGhostNode(node.id)}
-                on:contextmenu={(e) => onNodeContextInstall(e, node)}
-                on:keydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
+                onclick={() => installGhostNode(node.id)}
+                oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
               >
                 {#if icon}
-                  <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                  <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                 {:else}
                   <span class="card-icon-fallback missing-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}
@@ -2563,7 +2565,7 @@
                   class="card-install-btn"
                   type="button"
                   title="Install {node.label}"
-                  on:click|stopPropagation={() => installGhostNode(node.id)}
+                  onclick={(e) => { e.stopPropagation(); installGhostNode(node.id); } }
                   disabled={resolving}
                 >
                   <Download size={14} strokeWidth={2.25} />
@@ -2606,7 +2608,7 @@
                   type="button"
                   disabled={resolving}
                   title="Recommended: fewer dependents"
-                  on:click={() => removeConflictNode(c.recommendRemoveId)}
+                  onclick={() => removeConflictNode(c.recommendRemoveId)}
                 >
                   <Ban size={13} />
                   Remove {c.recommendRemoveLabel}
@@ -2615,11 +2617,11 @@
                   class="ghost small"
                   type="button"
                   disabled={resolving}
-                  on:click={() => removeConflictNode(c.keepId)}
+                  onclick={() => removeConflictNode(c.keepId)}
                 >
                   Remove {c.keepLabel} instead
                 </button>
-                <button class="ghost small" type="button" on:click={() => (selectedId = c.leftId)}>Focus</button>
+                <button class="ghost small" type="button" onclick={() => (selectedId = c.leftId)}>Focus</button>
               </div>
             </article>
           {/each}
@@ -2634,14 +2636,14 @@
 </div>
 
 {#if depPreviewOpen}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} onkeydown={() => {}}>
     <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (depPreviewOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Install dependency: {depPreviewName}</h2>
           <p>This mod has dependencies on Modrinth. Choose what to install.</p>
         </div>
-        <button class="icon-btn" on:click={() => (depPreviewOpen = false)}><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (depPreviewOpen = false)}><X size={18} /></button>
       </div>
       <div class="modal-body">
         {#if depPreviewLoading}
@@ -2697,15 +2699,15 @@
           </div>
         {/if}
         <div class="modal-footer-actions">
-          <button class="secondary" on:click={() => (depPreviewOpen = false)} disabled={depInstallStatus === "downloading"}>
+          <button class="secondary" onclick={() => (depPreviewOpen = false)} disabled={depInstallStatus === "downloading"}>
             {depInstallStatus === "done" ? "Close" : "Cancel"}
           </button>
           {#if depInstallStatus === "failed"}
-            <button on:click={retryDepInstall} disabled={resolving}>
+            <button onclick={retryDepInstall} disabled={resolving}>
               <RotateCw size={16} /> Retry
             </button>
           {:else if depInstallStatus !== "done"}
-            <button on:click={confirmDepInstall} disabled={depPreviewLoading || depInstallStatus === "downloading"}>
+            <button onclick={confirmDepInstall} disabled={depPreviewLoading || depInstallStatus === "downloading"}>
               <Download size={16} /> {depInstallStatus === "downloading" ? "Downloading…" : "Install"}
             </button>
           {/if}

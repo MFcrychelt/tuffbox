@@ -19,7 +19,7 @@
     Clock,
     Users,
     ShieldAlert,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
@@ -56,7 +56,7 @@
   import YoutubeFeed from "./YoutubeFeed.svelte";
   import DashboardInstancesSection from "./DashboardInstancesSection.svelte";
 
-  export let currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world";
+  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world" } = $props();
 
   /** Home layout: 1 classic | 2 yt main + instances under skin | 3 yt under skin | 4 hide yt */
   type HomeLayout = "classic" | "yt-main" | "yt-under-skin" | "yt-hidden";
@@ -78,8 +78,8 @@
     return "classic";
   }
 
-  let homeLayout: HomeLayout = loadHomeLayout();
-  let authReady = false;
+  let homeLayout = $state<HomeLayout>(loadHomeLayout());
+  let authReady = $state(false);
 
   function setHomeLayout(next: HomeLayout) {
     homeLayout = next;
@@ -98,7 +98,7 @@
   }
 
   type ProjectStatBrief = { playtime: number; lastLaunch: string | null };
-  let projectStats: Record<string, ProjectStatBrief> = {};
+  let projectStats = $state<Record<string, ProjectStatBrief>>({});
 
   async function loadProjectStats(path: string) {
     try {
@@ -121,33 +121,35 @@
     }
   }
 
-  $: ensureStats($recentProjects.map((p) => p.path));
+  $effect(() => {
+    ensureStats($recentProjects.map((p) => p.path));
+  });
 
   /** Last launched first; unknown lastLaunch keeps relative store order. */
-  $: sortedProjects = [...$recentProjects].sort((a, b) => {
+  const sortedProjects = $derived([...$recentProjects].sort((a, b) => {
     const la = projectStats[a.path]?.lastLaunch;
     const lb = projectStats[b.path]?.lastLaunch;
     if (la && lb) return lb.localeCompare(la);
     if (la && !lb) return -1;
     if (!la && lb) return 1;
     return 0;
-  });
+  }));
 
-  let selectedPath: string | null = $projectPath;
-  let activeMenuPath: string | null = null;
-  let menuAnchor: HTMLElement | null = null;
-  let showLoginModal = false;
-  let showAccountManager = false;
-  let showWorldPrompt = false;
-  let worldPromptOptions: string[] = [];
-  let worldPromptTarget: RecentProject | null = null;
-  let showClonePrompt = false;
-  let clonePromptName = "";
-  let cloneTarget: RecentProject | null = null;
-  let capeCatalog: CapeCatalog | null = null;
-  let capeBusy = false;
-  let mojangCapeMenuOpen = false;
-  let potatoPc = false;
+  let selectedPath = $state<string | null>($projectPath);
+  let activeMenuPath = $state<string | null>(null);
+  let menuAnchor = $state<HTMLElement | null>(null);
+  let showLoginModal = $state(false);
+  let showAccountManager = $state(false);
+  let showWorldPrompt = $state(false);
+  let worldPromptOptions = $state<string[]>([]);
+  let worldPromptTarget = $state<RecentProject | null>(null);
+  let showClonePrompt = $state(false);
+  let clonePromptName = $state("");
+  let cloneTarget = $state<RecentProject | null>(null);
+  let capeCatalog = $state<CapeCatalog | null>(null);
+  let capeBusy = $state(false);
+  let mojangCapeMenuOpen = $state(false);
+  let potatoPc = $state(false);
   const capeProviderOptions: { id: CapeProvider; label: string }[] = [
     { id: "mojang", label: "Mojang" },
     { id: "optifine", label: "OptiFine" },
@@ -155,16 +157,17 @@
     { id: "none", label: "None" },
   ];
 
-  $: selectedProject = $recentProjects.find((p) => p.path === selectedPath);
-  $: selectedRunning = isProjectRunning(selectedPath, $runningInstances);
-  $: hasInstanceHome = !!(selectedPath && selectedProject);
-  $: skinUrl = $authState.profile?.skinUrl ?? null;
-  $: capeUrl = $authState.profile?.capeUrl ?? null;
-  $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
-  $: mojangCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang");
-  $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
-  $: canChangeMojangCape =
-    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
+  const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
+  const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
+  const skinUrl = $derived($authState.profile?.skinUrl ?? null);
+  const capeUrl = $derived($authState.profile?.capeUrl ?? null);
+  const accountKey = $derived($authState.activeAccountUuid ?? $authState.profile?.uuid ?? "");
+  const mojangCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang"));
+  const otherCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang"));
+  const canChangeMojangCape = $derived(
+    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate),
+  );
 
   type CrashFixBanner = {
     snapshotId: string;
@@ -179,8 +182,8 @@
     softVerifyStartedUnix?: number | null;
     minPlaytimeSecs: number;
   };
-  let crashFixBanner: CrashFixBanner | null = null;
-  let crashFixBusy = false;
+  let crashFixBanner = $state<CrashFixBanner | null>(null);
+  let crashFixBusy = $state(false);
 
   async function refreshCrashFixBanner(path: string | null) {
     if (!path) {
@@ -190,7 +193,9 @@
     crashFixBanner = await fetchCrashFixBanner(path);
   }
 
-  $: void refreshCrashFixBanner(selectedPath);
+  $effect(() => {
+    void refreshCrashFixBanner(selectedPath);
+  });
 
   async function onRollbackCrashFix() {
     if (!selectedPath || crashFixBusy) return;
@@ -263,14 +268,18 @@
     }
   }
 
-  let lastCapeRefreshKey = "";
-  $: capeRefreshKey = $authState.loggedIn
-    ? `${$authState.activeAccountUuid ?? ""}:${$authState.capeProvider ?? "mojang"}`
-    : "";
-  $: if (capeRefreshKey && capeRefreshKey !== lastCapeRefreshKey) {
-    lastCapeRefreshKey = capeRefreshKey;
-    void refreshCapes();
-  }
+  let lastCapeRefreshKey = $state("");
+  const capeRefreshKey = $derived(
+    $authState.loggedIn
+      ? `${$authState.activeAccountUuid ?? ""}:${$authState.capeProvider ?? "mojang"}`
+      : "",
+  );
+  $effect(() => {
+    if (capeRefreshKey && capeRefreshKey !== lastCapeRefreshKey) {
+      lastCapeRefreshKey = capeRefreshKey;
+      void refreshCapes();
+    }
+  });
 
   onMount(async () => {
     potatoPc = document.documentElement.classList.contains("potato-pc");
@@ -368,8 +377,8 @@
     activeMenuPath = null;
   }
 
-  let pinnedPaths: Record<string, boolean> = {};
-  let actionBusy = false;
+  let pinnedPaths = $state<Record<string, boolean>>({});
+  let actionBusy = $state(false);
 
   async function togglePin(event: MouseEvent, projectPath: string) {
     event.stopPropagation();
@@ -395,8 +404,8 @@
     if (changed) pinnedPaths = { ...pinnedPaths };
   }
 
-  let instanceSizes: Record<string, string> = {};
-  let loadingSizes: Record<string, boolean> = {};
+  let instanceSizes = $state<Record<string, string>>({});
+  let loadingSizes = $state<Record<string, boolean>>({});
 
   async function loadSize(projectPath: string) {
     if (instanceSizes[projectPath] || loadingSizes[projectPath]) return;
@@ -415,8 +424,12 @@
     for (const path of paths) loadSize(path);
   }
 
-  $: ensurePins($recentProjects.map((p) => p.path));
-  $: ensureSizes($recentProjects.map((p) => p.path));
+  $effect(() => {
+    ensurePins($recentProjects.map((p) => p.path));
+  });
+  $effect(() => {
+    ensureSizes($recentProjects.map((p) => p.path));
+  });
 
   async function handleAction(action: string, project: RecentProject) {
     activeMenuPath = null;
@@ -593,34 +606,34 @@
   }
 </script>
 
-<svelte:window on:click={closeMenu} />
+<svelte:window onclick={closeMenu} />
 
 <div class="home fade-slide-in">
   <!-- Top bar: Quick actions left, Avatar right -->
   <div class="top-bar">
     <div class="quick-nav">
-      <button class="quick-action" on:click={() => (currentView = "mods")} title="Mods">
+      <button class="quick-action" onclick={() => (currentView = "mods")} title="Mods">
         <Package size={18} />
         <span>Mods</span>
       </button>
-      <button class="quick-action" on:click={() => (currentView = "graph")} title="Dependency Graph">
+      <button class="quick-action" onclick={() => (currentView = "graph")} title="Dependency Graph">
         <GitGraph size={18} />
         <span>Graph</span>
       </button>
-      <button class="quick-action" on:click={() => (currentView = "diagnostics")} title="Diagnostics">
+      <button class="quick-action" onclick={() => (currentView = "diagnostics")} title="Diagnostics">
         <Stethoscope size={18} />
         <span>Diagnostics</span>
       </button>
-      <button class="quick-action" on:click={() => (currentView = "snapshots")} title="Snapshots">
+      <button class="quick-action" onclick={() => (currentView = "snapshots")} title="Snapshots">
         <History size={18} />
         <span>Snapshots</span>
       </button>
       {#if selectedProject}
-        <button class="quick-action" on:click={() => (currentView = "recipes")} title="Recipes">
+        <button class="quick-action" onclick={() => (currentView = "recipes")} title="Recipes">
           <Puzzle size={18} />
           <span>Recipes</span>
         </button>
-        <button class="quick-action" on:click={() => (currentView = "quests")} title="Quests">
+        <button class="quick-action" onclick={() => (currentView = "quests")} title="Quests">
           <Sparkles size={18} />
           <span>Quests</span>
         </button>
@@ -630,7 +643,7 @@
     <!-- Account avatar in top-right (sign-in lives in the skin panel) -->
     <div class="account-avatar-section">
       {#if $authState.loggedIn && $authState.profile}
-        <button class="account-avatar-btn" on:click={() => (currentView = "me")} title="Me — account & playtime">
+        <button class="account-avatar-btn" onclick={() => (currentView = "me")} title="Me — account & playtime">
           <HeadAvatar skinSrc={$skinPath} size={32} alt={$authState.profile.name} />
           <span class="avatar-name">{$authState.profile.name}</span>
           <span
@@ -657,7 +670,7 @@
           <button
             class="play-btn"
             class:stop={selectedRunning && !$isLaunching}
-            on:click={selectedRunning && !$isLaunching ? stopGame : launch}
+            onclick={selectedRunning && !$isLaunching ? stopGame : launch}
             disabled={!selectedPath || $isLaunching}
           >
             {#if $isLaunching}
@@ -687,20 +700,20 @@
 
             <div class="hero-actions">
               {#if selectedProject}
-                <button class="action-btn primary" on:click={() => (currentView = "ide")}>
+                <button class="action-btn primary" onclick={() => (currentView = "ide")}>
                   <Workflow size={15} />
                   IDE
                 </button>
-                <button class="action-btn" on:click={openSettings}>
+                <button class="action-btn" onclick={openSettings}>
                   <Settings size={15} />
                   Settings
                 </button>
-                <button class="action-btn" on:click={() => invoke("open_project_folder", { path: selectedProject.path })}>
+                <button class="action-btn" onclick={() => invoke("open_project_folder", { path: selectedProject.path })}>
                   <FolderOpen size={15} />
                   Folder
                 </button>
               {/if}
-              <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
+              <button class="action-btn accent" onclick={() => (newProjectOpen.set(true))}>
                 <Plus size={15} />
                 New
               </button>
@@ -726,14 +739,14 @@
                   class="action-btn"
                   type="button"
                   disabled={crashFixBusy}
-                  on:click={onRollbackCrashFix}
+                  onclick={onRollbackCrashFix}
                 >
                   Restore snapshot
                 </button>
                 <button
                   class="action-btn"
                   type="button"
-                  on:click={() => (currentView = "diagnostics")}
+                  onclick={() => (currentView = "diagnostics")}
                 >
                   <Stethoscope size={14} /> Diagnostics
                 </button>
@@ -847,7 +860,7 @@
                 )}
               </span>
             </div>
-            <button class="change-skin-btn" on:click={() => (showAccountManager = true)}>
+            <button class="change-skin-btn" onclick={() => (showAccountManager = true)}>
               <Users size={14} />
               {$authState.accounts.length > 1
                 ? `${$authState.accounts.length} accounts`
@@ -867,7 +880,7 @@
                   class="cape-provider-btn"
                   class:active={($authState.capeProvider ?? "mojang") === opt.id}
                   disabled={capeBusy}
-                  on:click={() => selectCapeProvider(opt.id)}
+                  onclick={() => selectCapeProvider(opt.id)}
                 >
                   {opt.label}
                 </button>
@@ -880,7 +893,7 @@
                   type="button"
                   class="cape-activate"
                   disabled={capeBusy}
-                  on:click={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
+                  onclick={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
                 >
                   {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
                 </button>
@@ -900,7 +913,7 @@
                     <button
                       class="cape-activate"
                       disabled={capeBusy || offer.active}
-                      on:click={() => activateMojangCape(offer.id)}
+                      onclick={() => activateMojangCape(offer.id)}
                     >
                       {offer.active ? "Active" : "Equip"}
                     </button>
@@ -924,7 +937,7 @@
                       <button
                         class="cape-activate"
                         disabled={capeBusy}
-                        on:click={() => selectCapeProvider("mojang")}
+                        onclick={() => selectCapeProvider("mojang")}
                       >
                         Show
                       </button>
@@ -951,7 +964,7 @@
                       <button
                         class="cape-activate"
                         disabled={capeBusy}
-                        on:click={() => selectCapeProvider(offer.provider)}
+                        onclick={() => selectCapeProvider(offer.provider)}
                       >
                         Show
                       </button>
@@ -967,7 +980,7 @@
           <div class="skin-panel-empty">
             <User size={48} />
             <p>Sign in to see your skin</p>
-            <button class="action-btn accent" on:click={() => (showLoginModal = true)}>
+            <button class="action-btn accent" onclick={() => (showLoginModal = true)}>
               <LogIn size={16} />
               Sign In
             </button>
@@ -1005,17 +1018,17 @@
 </div>
 
 {#if showLoginModal}
-  <MinecraftLogin on:close={() => (showLoginModal = false)} />
+  <MinecraftLogin onclose={() => (showLoginModal = false)} />
 {/if}
 
 {#if showAccountManager}
-  <AccountManager on:close={() => (showAccountManager = false)} />
+  <AccountManager onclose={() => (showAccountManager = false)} />
 {/if}
 
 {#if $newProjectOpen}
   <AddInstanceModal
-    on:close={() => (newProjectOpen.set(false))}
-    on:created={(e) => loadProject(e.detail)}
+    onclose={() => (newProjectOpen.set(false))}
+    oncreated={(path) => loadProject(path)}
   />
 {/if}
 
@@ -1027,8 +1040,8 @@
     options={worldPromptOptions}
     defaultValue={worldPromptOptions[0]}
     confirmLabel="Backup"
-    on:confirm={(e) => confirmBackupWorld(e.detail)}
-    on:cancel={() => (showWorldPrompt = false)}
+    onconfirm={(v) => confirmBackupWorld(v)}
+    oncancel={() => (showWorldPrompt = false)}
   />
 {/if}
 
@@ -1039,8 +1052,8 @@
     mode="text"
     defaultValue={clonePromptName}
     confirmLabel="Clone"
-    on:confirm={(e) => confirmClone(e.detail)}
-    on:cancel={() => (showClonePrompt = false)}
+    onconfirm={(v) => confirmClone(v)}
+    oncancel={() => (showClonePrompt = false)}
   />
 {/if}
 

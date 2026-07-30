@@ -1,29 +1,38 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { Search, X } from "lucide-svelte";
+  import { Search, X } from "@lucide/svelte";
   import { api } from "../../lib/api";
   import { projectPath } from "../../lib/store";
 
-  export let open = false;
-  export let onPick: (itemId: string) => void;
-  export let onClose: () => void;
+  let {
+    open = false,
+    onPick,
+    onClose,
+  }: {
+    open?: boolean;
+    onPick: (itemId: string) => void;
+    onClose: () => void;
+  } = $props();
 
-  let query = "";
-  let loading = false;
-  let error = "";
-  let catalog: string[] = [];
-  let icons: Record<string, string | null> = {};
-  let loaded = false;
+  let query = $state("");
+  let loading = $state(false);
+  let error = $state("");
+  let catalog = $state<string[]>([]);
+  let icons = $state<Record<string, string | null>>({});
+  let loaded = $state(false);
 
-  $: filtered = filterCatalog(catalog, query).slice(0, 120);
+  let filtered = $derived(filterCatalog(catalog, query).slice(0, 120));
 
-  onMount(() => {
-    // noop — load when opened
+  $effect(() => {
+    if (open && !loaded && $projectPath) {
+      void loadCatalog();
+    }
   });
 
-  $: if (open && !loaded && $projectPath) {
-    void loadCatalog();
-  }
+  $effect(() => {
+    if (open && filtered.length) {
+      void preloadIcons(filtered.slice(0, 48));
+    }
+  });
 
   async function loadCatalog() {
     loading = true;
@@ -33,7 +42,6 @@
       loaded = true;
     } catch (e) {
       error = String(e);
-      // Fallback: recipe scan client-side
       try {
         const scan = await api.recipes.scan($projectPath!);
         const set = new Set<string>();
@@ -54,14 +62,10 @@
     }
   }
 
-  $: if (open && filtered.length) {
-    void preloadIcons(filtered.slice(0, 48));
-  }
-
   async function preloadIcons(ids: string[]) {
     const need = ids.filter((id) => icons[id] === undefined);
     if (!need.length || !$projectPath) return;
-    for (const id of need) icons[id] = null; // mark in-flight
+    for (const id of need) icons[id] = null;
     icons = icons;
     try {
       const batch = await api.recipes.itemIconsBatch(need, $projectPath);
@@ -95,12 +99,12 @@
 </script>
 
 {#if open}
-  <div class="overlay" role="dialog" aria-modal="true" on:keydown={onKey}>
-    <button type="button" class="backdrop" aria-label="Close" on:click={onClose}></button>
+  <div class="overlay" role="dialog" aria-modal="true" onkeydown={onKey}>
+    <button type="button" class="backdrop" aria-label="Close" onclick={onClose}></button>
     <div class="panel">
       <div class="panel-h">
         <strong>Pick item</strong>
-        <button type="button" class="ico" on:click={onClose}><X size={14} /></button>
+        <button type="button" class="ico" onclick={onClose}><X size={14} /></button>
       </div>
       <div class="search">
         <Search size={14} />
@@ -113,7 +117,7 @@
       {:else}
         <div class="grid">
           {#each filtered as id (id)}
-            <button type="button" class="cell" title={id} on:click={() => pick(id)}>
+            <button type="button" class="cell" title={id} onclick={() => pick(id)}>
               {#if icons[id]}
                 <img src={icons[id]} alt="" />
               {:else}

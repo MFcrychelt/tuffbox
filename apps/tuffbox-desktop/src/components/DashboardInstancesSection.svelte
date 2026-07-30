@@ -19,7 +19,7 @@
     Clock,
     LayoutGrid,
     Package,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import {
     formatPlaytime,
     newProjectOpen,
@@ -28,23 +28,41 @@
 
   type HomeLayout = "classic" | "yt-main" | "yt-under-skin" | "yt-hidden";
 
-  export let homeLayout: HomeLayout;
-  export let sortedProjects: RecentProject[];
-  export let selectedPath: string | null;
-  export let instanceSizes: Record<string, string>;
-  export let loadingSizes: Record<string, boolean>;
-  export let projectStats: Record<string, { playtime: number; lastLaunch: string | null }>;
-  export let pinnedPaths: Record<string, boolean>;
-  export let activeMenuPath: string | null;
-  export let homeLayoutOptions: { id: HomeLayout; label: string }[];
-  export let sideColumn = false;
-
-  export let onHomeLayoutChange: (e: Event) => void;
-  export let selectProject: (path: string) => void;
-  export let toggleMenu: (event: MouseEvent, path: string) => void;
-  export let togglePin: (event: MouseEvent, projectPath: string) => void;
-  export let handleAction: (action: string, project: RecentProject) => void;
-  export let gradientFrom: (name: string) => string;
+  let {
+    homeLayout,
+    sortedProjects,
+    selectedPath,
+    instanceSizes,
+    loadingSizes,
+    projectStats,
+    pinnedPaths,
+    activeMenuPath,
+    homeLayoutOptions,
+    sideColumn = false,
+    onHomeLayoutChange,
+    selectProject,
+    toggleMenu,
+    togglePin,
+    handleAction,
+    gradientFrom,
+  }: {
+    homeLayout: HomeLayout;
+    sortedProjects: RecentProject[];
+    selectedPath: string | null;
+    instanceSizes: Record<string, string>;
+    loadingSizes: Record<string, boolean>;
+    projectStats: Record<string, { playtime: number; lastLaunch: string | null }>;
+    pinnedPaths: Record<string, boolean>;
+    activeMenuPath: string | null;
+    homeLayoutOptions: { id: HomeLayout; label: string }[];
+    sideColumn?: boolean;
+    onHomeLayoutChange: (e: Event) => void;
+    selectProject: (path: string) => void;
+    toggleMenu: (event: MouseEvent, path: string) => void;
+    togglePin: (event: MouseEvent, projectPath: string) => void;
+    handleAction: (action: string, project: RecentProject) => void;
+    gradientFrom: (name: string) => string;
+  } = $props();
 </script>
 
 <section class="projects-section" class:side-instances={sideColumn}>
@@ -53,7 +71,7 @@
     <span class="instance-count">{sortedProjects.length}</span>
     <label class="layout-picker" title="Home layout">
       <LayoutGrid size={14} />
-      <select value={homeLayout} on:change={onHomeLayoutChange}>
+      <select value={homeLayout} onchange={onHomeLayoutChange}>
         {#each homeLayoutOptions as opt (opt.id)}
           <option value={opt.id}>{opt.label}</option>
         {/each}
@@ -68,7 +86,7 @@
       </div>
       <h3>No instances yet</h3>
       <p>Create your first modpack instance to get started.</p>
-      <button class="action-btn accent" on:click={() => (newProjectOpen.set(true))}>
+      <button class="action-btn accent" onclick={() => (newProjectOpen.set(true))}>
         <Plus size={16} />
         Create instance
       </button>
@@ -82,9 +100,9 @@
           class:active={selectedPath === project.path}
           role="button"
           tabindex="0"
-          on:click={() => selectProject(project.path)}
-          on:keydown={(e) => e.key === "Enter" && selectProject(project.path)}
-          on:contextmenu|preventDefault={(e) => toggleMenu(e, project.path)}
+          onclick={() => selectProject(project.path)}
+          onkeydown={(e) => e.key === "Enter" && selectProject(project.path)}
+          oncontextmenu={(e) => { e.preventDefault(); toggleMenu(e, project.path); }}
         >
           <div
             class="tile-icon tb-cover-media"
@@ -116,7 +134,7 @@
           <button
             class="tile-pin"
             class:pinned={pinnedPaths[project.path]}
-            on:click={(e) => togglePin(e, project.path)}
+            onclick={(e) => togglePin(e, project.path)}
             title={pinnedPaths[project.path] ? "Unpin" : "Pin"}
           >
             <Pin size={14} />
@@ -124,60 +142,60 @@
           <button
             class="tile-menu"
             class:active={activeMenuPath === project.path}
-            on:click={(e) => toggleMenu(e, project.path)}
+            onclick={(e) => toggleMenu(e, project.path)}
             aria-label="Actions"
           >
             <MoreVertical size={18} />
           </button>
 
           {#if activeMenuPath === project.path}
-            <div class="actions-menu" role="menu" tabindex="-1" on:keydown={() => {}}>
+            <div class="actions-menu" role="menu" tabindex="-1" onkeydown={() => {}}>
               <div class="menu-group">
-                <button on:click={() => handleAction("change-version", project)}>
+                <button onclick={() => handleAction("change-version", project)}>
                   <ShieldAlert size={14} /> Change Version
                 </button>
-                <button on:click={() => handleAction("open-folder", project)}>
+                <button onclick={() => handleAction("open-folder", project)}>
                   <Folder size={14} /> Open Folder
                 </button>
-                <button on:click={() => handleAction("server-pack", project)}>
+                <button onclick={() => handleAction("server-pack", project)}>
                   <Download size={14} /> Server Pack
                 </button>
-                <button on:click={() => handleAction("links", project)}>
+                <button onclick={() => handleAction("links", project)}>
                   <Link2 size={14} /> Links
                 </button>
-                <button on:click={() => handleAction("worlds", project)}>
+                <button onclick={() => handleAction("worlds", project)}>
                   <Globe size={14} /> Worlds
                 </button>
-                <button on:click={() => handleAction("backup-world", project)}>
+                <button onclick={() => handleAction("backup-world", project)}>
                   <Download size={14} /> Backup World
                 </button>
-                <button on:click={() => handleAction("logs-zip", project)}>
+                <button onclick={() => handleAction("logs-zip", project)}>
                   <FileArchive size={14} /> Logs ZIP
                 </button>
-                <button on:click={() => handleAction("copy-link", project)}>
+                <button onclick={() => handleAction("copy-link", project)}>
                   <Copy size={14} /> Copy Path
                 </button>
-                <button on:click={() => handleAction("clone", project)}>
+                <button onclick={() => handleAction("clone", project)}>
                   <GitBranch size={14} /> Clone
                 </button>
-                <button on:click={() => handleAction("share", project)}>
+                <button onclick={() => handleAction("share", project)}>
                   <Share2 size={14} /> Export
                 </button>
-                <button on:click={() => handleAction("cleanup", project)}>
+                <button onclick={() => handleAction("cleanup", project)}>
                   <Eraser size={14} /> Cleanup
                 </button>
-                <button on:click={() => handleAction("repair", project)}>
+                <button onclick={() => handleAction("repair", project)}>
                   <Wrench size={14} /> Repair
                 </button>
               </div>
               <div class="menu-separator"></div>
               <div class="menu-group">
-                <button on:click={() => handleAction("remove", project)}>
+                <button onclick={() => handleAction("remove", project)}>
                   <Minus size={14} /> Remove
                 </button>
               </div>
               <div class="menu-group danger">
-                <button on:click={() => handleAction("delete", project)}>
+                <button onclick={() => handleAction("delete", project)}>
                   <Trash2 size={14} /> Delete
                 </button>
               </div>
@@ -186,7 +204,7 @@
         </div>
       {/each}
 
-      <button class="project-tile add-tile" on:click={() => (newProjectOpen.set(true))}>
+      <button class="project-tile add-tile" onclick={() => (newProjectOpen.set(true))}>
         <div class="tile-icon add-icon">
           <Plus size={24} />
         </div>

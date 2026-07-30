@@ -2,24 +2,32 @@
   import { onMount, onDestroy } from "svelte";
   import { api } from "../lib/api";
 
-  export let skinUrl: string | null = null;
-  export let capeUrl: string | null = null;
-  /** Forces a full reload when the active account changes. */
-  export let accountKey: string = "";
-  export let playerName: string = "";
-  /** When false, hide the Minecraft nick under the canvas (parent shows it). */
-  export let showName: boolean = true;
-  export let width: number = 300;
-  export let height: number = 400;
+  let {
+    skinUrl = null,
+    capeUrl = null,
+    accountKey = "",
+    playerName = "",
+    showName = true,
+    width = 300,
+    height = 400,
+  }: {
+    skinUrl?: string | null;
+    capeUrl?: string | null;
+    accountKey?: string;
+    playerName?: string;
+    showName?: boolean;
+    width?: number;
+    height?: number;
+  } = $props();
 
-  let canvas: HTMLCanvasElement;
+  let canvas = $state<HTMLCanvasElement | undefined>(undefined);
   let viewer: any = null;
-  let loading = false;
-  let lastSkin = "";
-  let lastCape = "";
-  let lastAccount = "";
-  let capeFrames: HTMLCanvasElement[] = [];
-  let capeFrameIdx = 0;
+  let loading = $state(false);
+  let lastSkin = $state("");
+  let lastCape = $state("");
+  let lastAccount = $state("");
+  let capeFrames = $state<HTMLCanvasElement[]>([]);
+  let capeFrameIdx = $state(0);
   let capeAnimTimer: ReturnType<typeof setInterval> | null = null;
 
   function stopCapeAnim() {
@@ -344,24 +352,26 @@
     }
   }
 
-  $: if (
-    viewer &&
-    (skinUrl !== lastSkin || capeKey(capeUrl) !== lastCape || accountKey !== lastAccount)
-  ) {
-    if (accountKey !== lastAccount) {
-      lastAccount = accountKey;
-      lastSkin = "";
-      // Force cape clear branch even when previous account also had no cape.
-      lastCape = lastCape || "__pending_clear__";
-      stopCapeAnim();
-      try {
-        viewer.loadCape(null);
-      } catch {
-        /* ignore */
+  $effect(() => {
+    if (
+      viewer &&
+      (skinUrl !== lastSkin || capeKey(capeUrl) !== lastCape || accountKey !== lastAccount)
+    ) {
+      if (accountKey !== lastAccount) {
+        lastAccount = accountKey;
+        lastSkin = "";
+        // Force cape clear branch even when previous account also had no cape.
+        lastCape = lastCape || "__pending_clear__";
+        stopCapeAnim();
+        try {
+          viewer.loadCape(null);
+        } catch {
+          /* ignore */
+        }
       }
+      void applyTextures();
     }
-    void applyTextures();
-  }
+  });
 
   onMount(() => {
     initViewer();
@@ -381,7 +391,7 @@
   <div
     class="skin-3d-container"
     style="width: {width}px; height: {height}px;"
-    on:wheel|stopPropagation
+    onwheel={(e) => e.stopPropagation()}
   >
     <div class="skin-bg" aria-hidden="true"></div>
     <canvas bind:this={canvas} width={width} height={height}></canvas>

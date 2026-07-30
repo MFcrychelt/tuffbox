@@ -20,50 +20,52 @@
     Rocket,
     X,
     Plus,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api, type ListingGalleryItem, type PackBrief, type ProjectListing } from "../lib/api";
   import { projectPath, projectInfo, ideStageRequest, briefDirty } from "../lib/store";
   import ListingCardPreview from "./ListingCardPreview.svelte";
 
   const SUMMARY_LIMIT = 256;
 
-  let name = "";
-  let summary = "";
-  let bodyMarkdown = "";
-  let categories: string[] = [];
-  let iconPath: string | null = null;
-  let gallery: ListingGalleryItem[] = [];
-  let iconUrl: string | null = null;
-  let galleryUrls: Record<string, string> = {};
+  let name = $state("");
+  let summary = $state("");
+  let bodyMarkdown = $state("");
+  let categories = $state<string[]>([]);
+  let iconPath = $state<string | null>(null);
+  let gallery = $state<ListingGalleryItem[]>([]);
+  let iconUrl = $state<string | null>(null);
+  let galleryUrls = $state<Record<string, string>>({});
 
-  let briefGoal = "";
-  let briefAudience = "";
-  let briefPillars = "";
-  let briefConstraints = "";
-  let briefReleaseTargets = "";
-  let briefNotes = "";
+  let briefGoal = $state("");
+  let briefAudience = $state("");
+  let briefPillars = $state("");
+  let briefConstraints = $state("");
+  let briefReleaseTargets = $state("");
+  let briefNotes = $state("");
 
-  let cardStyle: "modrinth" | "curseforge" = "modrinth";
-  let message = "";
-  let error = "";
-  let loading = false;
-  let saving = false;
-  let lastPath: string | null = null;
-  let dirty = false;
-  let mdView: "split" | "edit" | "preview" = "split";
-  let renderedHtml = "";
+  let cardStyle = $state<"modrinth" | "curseforge">("modrinth");
+  let message = $state("");
+  let error = $state("");
+  let loading = $state(false);
+  let saving = $state(false);
+  let lastPath = $state<string | null>(null);
+  let dirty = $state(false);
+  let mdView = $state<"split" | "edit" | "preview">("split");
+  let renderedHtml = $state("");
   let mdDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   const MD_DEBOUNCE_MS = 200;
 
-  let modrinthCategories: Array<{ name: string; header: string; icon: string }> = [];
-  let categoriesLoading = false;
-  let categoriesError = "";
+  let modrinthCategories = $state<Array<{ name: string; header: string; icon: string }>>([]);
+  let categoriesLoading = $state(false);
+  let categoriesError = $state("");
 
-  $: briefDirty.set(dirty);
-  $: summaryLen = summary.length;
-  $: summaryWarn = summaryLen > 200;
-  $: summaryOver = summaryLen > SUMMARY_LIMIT;
-  $: nameEmpty = !name.trim();
+  $effect(() => {
+    briefDirty.set(dirty);
+  });
+  const summaryLen = $derived(summary.length);
+  const summaryWarn = $derived(summaryLen > 200);
+  const summaryOver = $derived(summaryLen > SUMMARY_LIMIT);
+  const nameEmpty = $derived(!name.trim());
 
   function scheduleMarkdownRender(src: string, assets: Record<string, string>) {
     if (mdDebounceTimer) clearTimeout(mdDebounceTimer);
@@ -72,7 +74,9 @@
     }, MD_DEBOUNCE_MS);
   }
 
-  $: scheduleMarkdownRender(bodyMarkdown, galleryUrls);
+  $effect(() => {
+    scheduleMarkdownRender(bodyMarkdown, galleryUrls);
+  });
 
   function lines(value: string) {
     return value
@@ -510,11 +514,15 @@
     }
   }
 
-  $: if ($projectPath) void loadAll();
-  $: if (!$projectPath) {
-    lastPath = null;
-    dirty = false;
-  }
+  $effect(() => {
+    if ($projectPath) void loadAll();
+  });
+  $effect(() => {
+    if (!$projectPath) {
+      lastPath = null;
+      dirty = false;
+    }
+  });
 
   onDestroy(() => {
     briefDirty.set(false);

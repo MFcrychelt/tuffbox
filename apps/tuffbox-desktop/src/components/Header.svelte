@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Play, Square, FolderOpen, ChevronRight, Terminal } from "lucide-svelte";
+  import { Play, Square, FolderOpen, ChevronRight, Terminal } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
@@ -8,13 +8,13 @@
   import { projectPath, projectInfo, isLaunching, openLaunchLog, runningInstances, isProjectRunning } from "../lib/store";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
 
-  export let currentView: string;
+  let { currentView }: { currentView: string } = $props();
 
-  let onlineCount = 0;
-  let onlineOk = false;
+  let onlineCount = $state(0);
+  let onlineOk = $state(false);
   let onlineTimer: ReturnType<typeof setInterval> | null = null;
 
-  $: projectRunning = isProjectRunning($projectPath, $runningInstances);
+  const projectRunning = $derived(isProjectRunning($projectPath, $runningInstances));
 
   async function refreshOnline() {
     try {
@@ -122,7 +122,7 @@
       </div>
     {/if}
 
-    <button class="secondary" on:click={selectProject}>
+    <button class="secondary" onclick={selectProject}>
       <FolderOpen size={16} />
       {$projectPath ? "Switch" : "Open"}
     </button>
@@ -131,7 +131,7 @@
       class="secondary"
       disabled={!$projectPath}
       title="Live logs of the running build"
-      on:click={() => $projectPath && openLaunchLog($projectPath)}
+      onclick={() => $projectPath && openLaunchLog($projectPath)}
     >
       <Terminal size={16} />
       Logs
@@ -146,13 +146,13 @@
       <button
         class="launch-btn stop"
         disabled={!$projectPath}
-        on:click={() => $projectPath && killWithFeedback($projectPath)}
+        onclick={() => $projectPath && killWithFeedback($projectPath)}
       >
         <Square size={16} fill="currentColor" />
         <span>Stop</span>
       </button>
     {:else}
-      <button class="launch-btn" on:click={launch} disabled={!$projectPath}>
+      <button class="launch-btn" onclick={launch} disabled={!$projectPath}>
         <Play size={16} fill="currentColor" />
         <span>Launch</span>
       </button>

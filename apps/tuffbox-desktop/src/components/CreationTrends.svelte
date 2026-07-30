@@ -2,11 +2,11 @@
   import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
-  import { Sparkles, RefreshCw, Download, AlertTriangle, ExternalLink } from "lucide-svelte";
+  import { Sparkles, RefreshCw, Download, AlertTriangle, ExternalLink } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { toasts } from "../lib/toast";
 
-  export let swarmEnabled = false;
+  let { swarmEnabled = false }: { swarmEnabled?: boolean } = $props();
 
   type Pair = { modA: string; modB: string; count: number };
   type Group = { mods: string[]; score: number };
@@ -49,23 +49,23 @@
     kind: "modpack" | "mod" | string;
   };
 
-  let pairs: Pair[] = [];
-  let groups: Group[] = [];
-  let suggestions: string[] = [];
-  let popularPacks: MpiHit[] = [];
-  let popularMods: MrHit[] = [];
-  let packCategories: MpiCategory[] = [];
-  let selectedPackCategoryId: number | null = null;
-  let packQuery = "";
+  let pairs = $state<Pair[]>([]);
+  let groups = $state<Group[]>([]);
+  let suggestions = $state<string[]>([]);
+  let popularPacks = $state<MpiHit[]>([]);
+  let popularMods = $state<MrHit[]>([]);
+  let packCategories = $state<MpiCategory[]>([]);
+  let selectedPackCategoryId = $state<number | null>(null);
+  let packQuery = $state("");
   let packSearchTimer: ReturnType<typeof setTimeout> | null = null;
-  let loading = false;
-  let error = "";
-  let previewBusy: string | null = null;
-  let installBusy: string | null = null;
-  let previews: Record<string, Preview | null> = {};
-  let lastKey = "";
+  let loading = $state(false);
+  let error = $state("");
+  let previewBusy = $state<string | null>(null);
+  let installBusy = $state<string | null>(null);
+  let previews = $state<Record<string, Preview | null>>({});
+  let lastKey = $state("");
 
-  $: packThemeCategories = packCategories.filter((c) => c.kind === "modpack");
+  const packThemeCategories = $derived(packCategories.filter((c) => c.kind === "modpack"));
 
   function formatCount(n?: number | null): string {
     if (n == null) return "—";
@@ -167,13 +167,12 @@
     void loadPacks();
   }
 
-  $: {
+  $effect(() => {
     const key = `${swarmEnabled}:${$projectPath ?? ""}`;
-    if (key !== lastKey) {
-      lastKey = key;
-      void refresh();
-    }
-  }
+    if (key === lastKey) return;
+    lastKey = key;
+    void refresh();
+  });
 
   onMount(() => {
     void loadCategories();
@@ -257,7 +256,7 @@
         {#if swarmEnabled} TuffSwarm stats enabled.{/if}
       </p>
     </div>
-    <button class="ghost" disabled={loading} on:click={refresh}>
+    <button class="ghost" disabled={loading} onclick={refresh}>
       <span class:spin={loading} style="display:inline-flex"><RefreshCw size={14} /></span> Refresh
     </button>
   </div>
@@ -273,7 +272,7 @@
             type="button"
             class="tag-chip"
             class:active={selectedPackCategoryId === cat.id}
-            on:click={() => togglePackCategory(cat.id)}
+            onclick={() => togglePackCategory(cat.id)}
           >
             {cat.name}
           </button>
@@ -286,8 +285,8 @@
         bind:value={packQuery}
         placeholder="Search modpacks…"
         aria-label="Search modpacks"
-        on:input={schedulePackSearch}
-        on:keydown={onPackQueryKeydown}
+        oninput={schedulePackSearch}
+        onkeydown={onPackQueryKeydown}
       />
     </div>
     {#if loading && popularPacks.length === 0}
@@ -301,7 +300,7 @@
     {:else}
       <div class="hit-grid">
         {#each popularPacks as hit (hit.id)}
-          <button type="button" class="hit-card" on:click={() => openPack(hit)}>
+          <button type="button" class="hit-card" onclick={() => openPack(hit)}>
             {#if hit.iconUrl}
               <img src={hit.iconUrl} alt="" />
             {:else}
@@ -333,7 +332,7 @@
     {:else}
       <div class="hit-grid mods">
         {#each popularMods as hit (hit.id)}
-          <button type="button" class="hit-card compact" on:click={() => openMr(hit)}>
+          <button type="button" class="hit-card compact" onclick={() => openMr(hit)}>
             {#if hit.iconUrl}
               <img src={hit.iconUrl} alt="" />
             {:else}
@@ -402,10 +401,10 @@
                 <small>{previews[slug]?.name} · {previews[slug]?.version}</small>
               {/if}
               <div class="row">
-                <button class="ghost mini" disabled={previewBusy === slug} on:click={() => previewSlug(slug)}>
+                <button class="ghost mini" disabled={previewBusy === slug} onclick={() => previewSlug(slug)}>
                   {previewBusy === slug ? "…" : "Preview"}
                 </button>
-                <button class="mini" disabled={installBusy === slug} on:click={() => installSlug(slug)}>
+                <button class="mini" disabled={installBusy === slug} onclick={() => installSlug(slug)}>
                   <Download size={12} />
                   {installBusy === slug ? "…" : "Install"}
                 </button>

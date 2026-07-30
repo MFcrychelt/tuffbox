@@ -3,7 +3,7 @@
   import {
     History, RefreshCw, Search, FileText, Maximize2, Save, X, RotateCcw,
     ChevronDown, ChevronRight, ScanSearch, Stethoscope, Sparkles, AlertTriangle,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import {
     diagnoseFocusPaths,
@@ -33,25 +33,25 @@
     op?: string;
   };
 
-  let entries: ChangeEntry[] = [];
-  let selectedId = "";
-  let filter = "";
-  let categoryFilter = "All";
-  let actorFilter = "All";
-  let loading = false;
-  let scanning = false;
-  let error: string | null = null;
-  let message: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let explainText: string | null = null;
+  let entries = $state<ChangeEntry[]>([]);
+  let selectedId = $state("");
+  let filter = $state("");
+  let categoryFilter = $state("All");
+  let actorFilter = $state("All");
+  let loading = $state(false);
+  let scanning = $state(false);
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let explainText = $state<string | null>(null);
 
-  let editorOpen = false;
-  let editorPath = "";
-  let editorContent = "";
-  let editorOriginal = "";
-  let saving = false;
-  let expanded: Record<string, boolean> = {};
-  let tracked: Record<string, boolean> = {
+  let editorOpen = $state(false);
+  let editorPath = $state("");
+  let editorContent = $state("");
+  let editorOriginal = $state("");
+  let saving = $state(false);
+  let expanded = $state<Record<string, boolean>>({});
+  let tracked = $state<Record<string, boolean>>({
     Mods: true,
     Configs: true,
     Shaders: true,
@@ -59,9 +59,9 @@
     Resolutions: true,
     "World/Data": false,
     Other: true,
-  };
-  let focusedScan = false;
-  let settingsLoadedPath: string | null = null;
+  });
+  let focusedScan = $state(false);
+  let settingsLoadedPath = $state<string | null>(null);
 
   const rootsByCategory: Record<string, string[]> = {
     Mods: ["mods"],
@@ -73,11 +73,11 @@
     Other: [],
   };
 
-  let confirmOpen = false;
-  let confirmEntry: ChangeEntry | null = null;
-  let visibleLimit = 40;
+  let confirmOpen = $state(false);
+  let confirmEntry = $state<ChangeEntry | null>(null);
+  let visibleLimit = $state(40);
   const VISIBLE_STEP = 40;
-  let prevFilterKey = "";
+  let prevFilterKey = $state("");
 
   function actorLabel(actor?: string) {
     switch ((actor ?? "").toLowerCase()) {
@@ -300,9 +300,9 @@
     return entry.kind === "file_changed" && !!entry.snapshotId;
   }
 
-  $: categories = ["All", ...Array.from(new Set(entries.map((e) => e.category)))];
-  $: actors = ["All", "launcher", "scan", "ai", "user"];
-  $: visible = entries.filter((entry) => {
+  const categories = $derived(["All", ...Array.from(new Set(entries.map((e) => e.category)))]);
+  const actors = $derived(["All", "launcher", "scan", "ai", "user"]);
+  const visible = $derived(entries.filter((entry) => {
     const q = filter.toLowerCase();
     const matchesText =
       !q ||
@@ -314,25 +314,29 @@
     const matchesTracked = tracked[entry.category] ?? true;
     const matchesActor = actorFilter === "All" || (entry.actor || "launcher") === actorFilter;
     return matchesText && matchesCategory && matchesTracked && matchesActor;
-  });
-  $: byDay = visible.reduce<Record<string, ChangeEntry[]>>((acc, entry) => {
+  }));
+  const byDay = $derived(visible.reduce<Record<string, ChangeEntry[]>>((acc, entry) => {
     const key = dayKey(entry.createdAt);
     acc[key] = acc[key] ?? [];
     acc[key].push(entry);
     return acc;
-  }, {});
-  $: dayKeys = Object.keys(byDay).sort((a, b) => b.localeCompare(a));
-  $: visibleSlice = visible.slice(0, visibleLimit);
-  $: filterKey = `${filter}|${categoryFilter}|${actorFilter}`;
-  $: if (filterKey !== prevFilterKey) {
-    prevFilterKey = filterKey;
-    visibleLimit = VISIBLE_STEP;
-  }
-  $: hasMoreVisible = visible.length > visibleLimit;
-  $: editorDirty = editorContent !== editorOriginal;
-  $: if ($projectPath && lastLoadedPath !== $projectPath) {
-    load(true).then(() => scanNow(true));
-  }
+  }, {}));
+  const dayKeys = $derived(Object.keys(byDay).sort((a, b) => b.localeCompare(a)));
+  const visibleSlice = $derived(visible.slice(0, visibleLimit));
+  const filterKey = $derived(`${filter}|${categoryFilter}|${actorFilter}`);
+  $effect(() => {
+    if (filterKey !== prevFilterKey) {
+      prevFilterKey = filterKey;
+      visibleLimit = VISIBLE_STEP;
+    }
+  });
+  const hasMoreVisible = $derived(visible.length > visibleLimit);
+  const editorDirty = $derived(editorContent !== editorOriginal);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) {
+      load(true).then(() => scanNow(true));
+    }
+  });
 </script>
 
 <div class="change-history">

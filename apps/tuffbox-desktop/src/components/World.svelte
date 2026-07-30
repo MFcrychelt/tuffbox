@@ -12,7 +12,7 @@
     PanelLeftClose,
     PanelLeftOpen,
     Clipboard,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { api } from "../lib/api";
   import type { WorldListItem, WorldDetail } from "../lib/api";
@@ -20,14 +20,14 @@
   import EmptyState from "./EmptyState.svelte";
   import { worldMapClipboard, clearWorldMapClipboard } from "../lib/worldMapClipboard";
 
-  let worlds: WorldListItem[] = [];
-  let loading = false;
-  let error: string | null = null;
-  let selectedWorld: string | null = null;
-  let worldDetail: WorldDetail | null = null;
-  let detailLoading = false;
-  let backupMsg: string | null = null;
-  let railOpen = true;
+  let worlds = $state<WorldListItem[]>([]);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+  let selectedWorld = $state<string | null>(null);
+  let worldDetail = $state<WorldDetail | null>(null);
+  let detailLoading = $state(false);
+  let backupMsg = $state<string | null>(null);
+  let railOpen = $state(true);
 
   async function loadWorlds() {
     const p = $projectPath;
@@ -107,9 +107,11 @@
     return `${mins}m`;
   }
 
-  $: if ($projectPath) {
-    loadWorlds();
-  }
+  $effect(() => {
+    if ($projectPath) {
+        loadWorlds();
+      }
+  });
 </script>
 
 <div class="worlds-view" class:rail-collapsed={!railOpen}>
@@ -118,7 +120,7 @@
       <Globe size={16} />
       {#if railOpen}
         <span>Worlds</span>
-        <button class="icon-btn" type="button" on:click={loadWorlds} disabled={loading} title="Refresh">
+        <button class="icon-btn" type="button" onclick={loadWorlds} disabled={loading} title="Refresh">
           <RefreshCw size={13} class={loading ? "spin" : ""} />
         </button>
       {/if}
@@ -126,7 +128,7 @@
         class="icon-btn rail-toggle"
         type="button"
         title={railOpen ? "Collapse world list" : "Expand world list"}
-        on:click={() => (railOpen = !railOpen)}
+        onclick={() => (railOpen = !railOpen)}
       >
         {#if railOpen}
           <PanelLeftClose size={14} />
@@ -150,7 +152,7 @@
               class="world-item"
               class:active={selectedWorld === w.name}
               type="button"
-              on:click={() => selectWorld(w.name)}
+              onclick={() => selectWorld(w.name)}
             >
               <div class="world-icon"><Database size={14} /></div>
               <div class="world-info">
@@ -203,12 +205,12 @@
                 type="button"
                 class="clip-clear"
                 title="Clear clipboard"
-                on:click={clearWorldMapClipboard}
+                onclick={clearWorldMapClipboard}
               >×</button>
             </span>
           {/if}
           {#if backupMsg}<span class="backup-msg">{backupMsg}</span>{/if}
-          <button class="ghost" type="button" on:click={backupWorld} title="Backup this world">
+          <button class="ghost" type="button" onclick={backupWorld} title="Backup this world">
             <Download size={13} /> Backup
           </button>
         </div>
