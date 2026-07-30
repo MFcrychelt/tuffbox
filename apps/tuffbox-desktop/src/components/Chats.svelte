@@ -12,9 +12,15 @@
     CheckCircle2,
     Trash2,
     GitGraph,
+    Lock,
+    Unlock,
+    Shuffle,
+    Search,
+    X,
   } from "lucide-svelte";
-  import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest, questChatFocusId } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import { api, type SearchResult, type QuestChatSession } from "../lib/api";
 
   export let currentView: string;
 
@@ -45,16 +51,25 @@
     score: number;
     source: string;
   };
-  type ChatSession = {
+  type CreateChatSession = {
     id: string;
     title: string;
     messages: ChatMessage[];
     draft?: PackDraft | null;
     updatedAt: string;
   };
+  type UnifiedSession = {
+    kind: "create" | "quest";
+    id: string;
+    title: string;
+    messages: ChatMessage[];
+    updatedAt: string;
+    draft?: PackDraft | null;
+  };
 
-  let sessions: ChatSession[] = [];
+  let sessions: UnifiedSession[] = [];
   let activeId: string | null = null;
+  let activeKind: "create" | "quest" = "create";
   let messages: ChatMessage[] = [];
   let brief: PackBrief | null = null;
   let draft: PackDraft | null = null;
@@ -72,11 +87,51 @@
   let draftSelected: Record<string, boolean> = {};
   let postInstallTrail = false;
   let lastInstallCount = 0;
+  let questPendingPlan = false;
 
-  $: active = sessions.find((s) => s.id === activeId) ?? null;
+  // Alternatives popover (per-mod swap suggestions).
+  let altForKey: string | null = null;
+  let altLoading = false;
+  type AltOption = { slug: string; name: string; summary: string; source: string };
+  let altOptions: AltOption[] = [];
+
+  // Inline "add a specific mod" search.
+  let addModOpen = false;
+  let addModQuery = "";
+  let addModResults: SearchResult[] = [];
+  let addModLoading = false;
+  let addModTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Editable brief helpers.
+  const LOCKED_REASON = "Locked by user";
+  const KNOWN_CATEGORY_IDS = [
+    "technology",
+    "magic",
+    "decoration",
+    "utility",
+    "adventure",
+    "worldgen",
+    "storage",
+    "food",
+    "equipment",
+    "library",
+  ];
+  let newMustHaveQuery = "";
+  let newExcludeText = "";
+  let newCategoryId = "";
+
+  $: active = sessions.find((s) => s.id === activeId && s.kind === activeKind) ?? null;
   $: mcLabel = $projectInfo?.minecraftVersion ?? "?";
   $: loaderLabel = $projectInfo?.loaderKind ?? "?";
   $: draftConfirmCount = draft?.mods?.filter((m) => draftSelected[m.projectId || m.slug] !== false).length ?? 0;
+  $: isQuestChat = activeKind === "quest";
+
+  function sortKey(updatedAt: string): number {
+    const n = Number(updatedAt);
+    if (!Number.isNaN(n) && n > 0) return n;
+    const t = Date.parse(updatedAt);
+    return Number.isNaN(t) ? 0 : t / 1000;
+  }
 
   async function refreshSessions() {
     if (!$projectPath) {
@@ -84,20 +139,73 @@
       return;
     }
     try {
-      sessions = await invoke<ChatSession[]>("list_create_chats", { path: $projectPath });
-      if (activeId && !sessions.some((s) => s.id === activeId)) {
-        activeId = sessions[0]?.id ?? null;
+      const [createList, questList] = await Promise.all([
+        invoke<CreateChatSession[]>("list_create_chats", { path: $projectPath }),
+        api.quests.listChats($projectPath).catch(() => [] as QuestChatSession[]),
+      ]);
+      const unified: UnifiedSession[] = [
+        ...createList.map((s) => ({
+          kind: "create" as const,
+          id: s.id,
+          title: s.title,
+          messages: s.messages ?? [],
+          updatedAt: s.updatedAt,
+          draft: s.draft ?? null,
+        })),
+        ...questList.map((s) => ({
+          kind: "quest" as const,
+          id: s.id,
+          title: s.title || "Quest line",
+          messages: (s.messages ?? []).map((m) => ({
+            role: m.role,
+            content: m.content,
+            createdAt: m.createdAt,
+          })),
+          updatedAt: s.updatedAt,
+        })),
+      ];
+      unified.sort((a, b) => sortKey(b.updatedAt) - sortKey(a.updatedAt));
+      sessions = unified;
+      if (
+        activeId &&
+        !sessions.some((s) => s.id === activeId && s.kind === activeKind)
+      ) {
+        const first = sessions[0];
+        activeId = first?.id ?? null;
+        activeKind = first?.kind ?? "create";
       }
     } catch {
       sessions = [];
     }
   }
 
-  async function selectSession(id: string) {
+  async function selectSession(id: string, kind: "create" | "quest" = "create") {
     if (!$projectPath) return;
     activeId = id;
+    activeKind = kind;
+    questPendingPlan = false;
+    if (kind === "quest") {
+      try {
+        const s = await api.quests.loadChat(id, $projectPath);
+        messages = (s.messages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt,
+        }));
+        draft = null;
+        brief = null;
+        candidates = [];
+        questPendingPlan = !!s.pendingPlan;
+        if (!sessions.some((x) => x.id === id && x.kind === "quest")) {
+          await refreshSessions();
+        }
+      } catch (e) {
+        toasts.error(String(e));
+      }
+      return;
+    }
     try {
-      const s = await invoke<ChatSession>("load_create_chat", {
+      const s = await invoke<CreateChatSession>("load_create_chat", {
         path: $projectPath,
         chatId: id,
       });
@@ -105,7 +213,7 @@
       draft = s.draft ?? null;
       brief = s.draft?.brief ?? brief;
       candidates = [];
-      if (!sessions.some((x) => x.id === id)) {
+      if (!sessions.some((x) => x.id === id && x.kind === "create")) {
         await refreshSessions();
       }
     } catch (e) {
@@ -113,36 +221,49 @@
     }
   }
 
+  function openQuestChatInEditor(id: string) {
+    questChatFocusId.set(id);
+    currentView = "quests";
+  }
+
   async function newChat() {
     if (!$projectPath) return;
     try {
-      const s = await invoke<ChatSession>("new_create_chat", {
+      const s = await invoke<CreateChatSession>("new_create_chat", {
         path: $projectPath,
         title: "New chat",
       });
       await refreshSessions();
       activeId = s.id;
+      activeKind = "create";
       messages = [];
       draft = null;
       brief = null;
       candidates = [];
+      questPendingPlan = false;
       input = "";
     } catch (e) {
       toasts.error(String(e));
     }
   }
 
-  async function deleteChat(id: string) {
+  async function deleteChat(id: string, kind: "create" | "quest" = "create") {
     if (!$projectPath) return;
-    if (!confirm("Delete this chat?")) return;
+    if (!confirm(kind === "quest" ? "Delete this Quest AI chat?" : "Delete this chat?")) return;
     try {
-      await invoke("delete_create_chat", { path: $projectPath, chatId: id });
-      if (activeId === id) {
+      if (kind === "quest") {
+        await api.quests.deleteChat(id, $projectPath);
+      } else {
+        await invoke("delete_create_chat", { path: $projectPath, chatId: id });
+      }
+      if (activeId === id && activeKind === kind) {
         activeId = null;
+        activeKind = "create";
         messages = [];
         draft = null;
         brief = null;
         candidates = [];
+        questPendingPlan = false;
       }
       await refreshSessions();
     } catch (e) {
@@ -151,8 +272,8 @@
   }
 
   async function persistDraft() {
-    if (!$projectPath || !activeId) return;
-    const session: ChatSession = {
+    if (!$projectPath || !activeId || activeKind !== "create") return;
+    const session: CreateChatSession = {
       id: activeId,
       title: brief?.title || active?.title || "Create Mode",
       messages,
@@ -167,6 +288,340 @@
     }
   }
 
+  function pushSystemNote(content: string) {
+    messages = [...messages, { role: "system", content }];
+  }
+
+  function modKey(m: { projectId?: string; slug: string }): string {
+    return m.projectId || m.slug;
+  }
+
+  function ensureBrief(): PackBrief {
+    if (!brief) {
+      brief = {
+        title: "Custom pack",
+        mcVersion: $projectInfo?.minecraftVersion ?? "",
+        loader: $projectInfo?.loaderKind ?? "",
+        targetCount,
+        mustHave: [],
+        categories: [],
+        exclude: [],
+      };
+    }
+    return brief;
+  }
+
+  function syncDraftBrief() {
+    if (draft && brief) draft = { ...draft, brief };
+  }
+
+  // ── Per-mod row actions: Remove / Lock / Alternatives ──────────────
+
+  function excludeKeysFor(m: PackDraftMod): string[] {
+    return [m.slug, m.projectId, m.name]
+      .filter((s): s is string => !!s && s.trim().length > 0)
+      .map((s) => s.trim().toLowerCase());
+  }
+
+  function removeModFromDraft(m: PackDraftMod) {
+    if (!draft) return;
+    const key = modKey(m);
+    draft = { ...draft, mods: draft.mods.filter((x) => modKey(x) !== key) };
+    const b = ensureBrief();
+    const exclude = new Set((b.exclude ?? []).map((s) => s.toLowerCase()));
+    excludeKeysFor(m).forEach((k) => exclude.add(k));
+    brief = { ...b, exclude: [...exclude] };
+    syncDraftBrief();
+    pushSystemNote(`Removed "${m.name}" from the draft.`);
+    void persistDraft();
+  }
+
+  function isLocked(m: PackDraftMod): boolean {
+    if (!brief) return false;
+    const key = modKey(m).toLowerCase();
+    return brief.mustHave.some(
+      (mh) => mh.reason === LOCKED_REASON && (mh.slugHint ?? "").toLowerCase() === key,
+    );
+  }
+
+  function toggleLock(m: PackDraftMod) {
+    const b = ensureBrief();
+    const key = modKey(m);
+    const keyL = key.toLowerCase();
+    const already = b.mustHave.some(
+      (mh) => mh.reason === LOCKED_REASON && (mh.slugHint ?? "").toLowerCase() === keyL,
+    );
+    if (already) {
+      brief = {
+        ...b,
+        mustHave: b.mustHave.filter(
+          (mh) => !(mh.reason === LOCKED_REASON && (mh.slugHint ?? "").toLowerCase() === keyL),
+        ),
+      };
+      pushSystemNote(`Unlocked "${m.name}".`);
+    } else {
+      brief = {
+        ...b,
+        mustHave: [...b.mustHave, { query: m.name, slugHint: key, reason: LOCKED_REASON }],
+      };
+      pushSystemNote(`Locked "${m.name}" — it will stay in future rebuilds.`);
+    }
+    syncDraftBrief();
+    void persistDraft();
+  }
+
+  async function openAlternatives(m: PackDraftMod) {
+    const key = modKey(m);
+    if (altForKey === key) {
+      altForKey = null;
+      altOptions = [];
+      return;
+    }
+    altForKey = key;
+    altLoading = true;
+    altOptions = [];
+    try {
+      const existingKeys = new Set((draft?.mods ?? []).map((x) => modKey(x).toLowerCase()));
+      const seedId = m.projectId || m.slug;
+      let options: AltOption[] = [];
+      try {
+        const partners = await invoke<
+          { slug: string; name?: string; count?: number }[]
+        >("suggest_partners_for_mod", { path: $projectPath, modId: seedId, limit: 8 });
+        options = (partners ?? [])
+          .filter((p) => p.slug && !existingKeys.has(p.slug.toLowerCase()))
+          .map((p) => ({
+            slug: p.slug,
+            name: p.name || p.slug,
+            summary: "",
+            source: "often installed together",
+          }));
+      } catch {
+        options = [];
+      }
+      if (options.length === 0) {
+        const facet =
+          m.category && m.category !== "mustHave" && m.category !== "fill" ? m.category : undefined;
+        const res = await api.mods.search(m.category || m.name, {
+          gameVersion: $projectInfo?.minecraftVersion ?? undefined,
+          loader: $projectInfo?.loaderKind ?? undefined,
+          category: facet,
+          pageSize: 10,
+        });
+        options = (res.results ?? [])
+          .filter((r) => {
+            const k = (r.slug || r.id).toLowerCase();
+            return k !== m.slug.toLowerCase() && !existingKeys.has(k);
+          })
+          .map((r) => ({
+            slug: r.slug || r.id,
+            name: r.name,
+            summary: r.description ?? "",
+            source: "catalog search",
+          }));
+      }
+      altOptions = options.slice(0, 6);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      altLoading = false;
+    }
+  }
+
+  async function applyAlternative(m: PackDraftMod, choice: AltOption) {
+    const currentDraft = draft;
+    if (!currentDraft) return;
+    altLoading = true;
+    try {
+      const proj = await api.mods.getProject(choice.slug);
+      const key = modKey(m);
+      const newMod: PackDraftMod = {
+        slug: proj.slug || choice.slug,
+        projectId: proj.id || choice.slug,
+        name: proj.name || choice.name,
+        reason: `Swapped for "${m.name}"`,
+        category: m.category,
+        downloads: proj.downloads ?? 0,
+        provider: "modrinth",
+      };
+      draft = {
+        ...currentDraft,
+        mods: currentDraft.mods.map((x) => (modKey(x) === key ? newMod : x)),
+      };
+      const b = ensureBrief();
+      const exclude = new Set((b.exclude ?? []).map((s) => s.toLowerCase()));
+      excludeKeysFor(m).forEach((k) => exclude.add(k));
+      const newKeyL = modKey(newMod).toLowerCase();
+      const mustHave = b.mustHave.filter((mh) => (mh.slugHint ?? "").toLowerCase() !== key.toLowerCase());
+      if (!mustHave.some((mh) => (mh.slugHint ?? "").toLowerCase() === newKeyL)) {
+        mustHave.push({ query: newMod.name, slugHint: modKey(newMod), reason: LOCKED_REASON });
+      }
+      brief = { ...b, exclude: [...exclude], mustHave };
+      syncDraftBrief();
+      pushSystemNote(`Swapped "${m.name}" → "${newMod.name}".`);
+      await persistDraft();
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      altLoading = false;
+      altForKey = null;
+      altOptions = [];
+    }
+  }
+
+  // ── Inline "add a specific mod" search ──────────────────────────────
+
+  function scheduleAddModSearch() {
+    if (addModTimer) clearTimeout(addModTimer);
+    const q = addModQuery.trim();
+    if (q.length < 2) {
+      addModResults = [];
+      return;
+    }
+    addModTimer = setTimeout(() => void runAddModSearch(q), 300);
+  }
+
+  async function runAddModSearch(q: string) {
+    addModLoading = true;
+    try {
+      const res = await api.mods.search(q, {
+        gameVersion: $projectInfo?.minecraftVersion ?? undefined,
+        loader: $projectInfo?.loaderKind ?? undefined,
+        pageSize: 8,
+      });
+      addModResults = res.results ?? [];
+    } catch {
+      addModResults = [];
+    } finally {
+      addModLoading = false;
+    }
+  }
+
+  function addModDirectly(r: SearchResult) {
+    const key = (r.id || r.slug || "").toLowerCase();
+    if (!key) return;
+    if (draft?.mods.some((x) => modKey(x).toLowerCase() === key)) {
+      toasts.error(`"${r.name}" is already in the draft.`);
+      return;
+    }
+    const newMod: PackDraftMod = {
+      slug: r.slug || r.id,
+      projectId: r.id,
+      name: r.name,
+      reason: "Added manually",
+      category: "mustHave",
+      downloads: r.downloads ?? 0,
+      provider: "modrinth",
+    };
+    const b = ensureBrief();
+    if (!draft) draft = { brief: b, mods: [], unresolved: [] };
+    draft = { ...draft, mods: [...draft.mods, newMod] };
+    brief = {
+      ...b,
+      mustHave: [...b.mustHave, { query: newMod.name, slugHint: modKey(newMod), reason: LOCKED_REASON }],
+    };
+    syncDraftBrief();
+    pushSystemNote(`Added "${newMod.name}" to the draft.`);
+    addModQuery = "";
+    addModResults = [];
+    addModOpen = false;
+    void persistDraft();
+  }
+
+  // ── Editable brief: must-have / categories / exclude ────────────────
+
+  function updateBriefTitle(value: string) {
+    const b = ensureBrief();
+    brief = { ...b, title: value };
+    syncDraftBrief();
+  }
+
+  function addMustHave() {
+    const q = newMustHaveQuery.trim();
+    if (!q) return;
+    const b = ensureBrief();
+    brief = { ...b, mustHave: [...b.mustHave, { query: q, reason: "Added by user" }] };
+    newMustHaveQuery = "";
+    syncDraftBrief();
+  }
+
+  function removeMustHave(idx: number) {
+    if (!brief) return;
+    brief = { ...brief, mustHave: brief.mustHave.filter((_, i) => i !== idx) };
+    syncDraftBrief();
+  }
+
+  function addExcludeEntry() {
+    const v = newExcludeText.trim().toLowerCase();
+    if (!v) return;
+    const b = ensureBrief();
+    if (!(b.exclude ?? []).includes(v)) {
+      brief = { ...b, exclude: [...(b.exclude ?? []), v] };
+    }
+    newExcludeText = "";
+    syncDraftBrief();
+  }
+
+  function removeExcludeEntry(idx: number) {
+    if (!brief) return;
+    brief = { ...brief, exclude: brief.exclude.filter((_, i) => i !== idx) };
+    syncDraftBrief();
+  }
+
+  function addCategoryRow() {
+    const id = newCategoryId.trim().toLowerCase() || "custom";
+    const b = ensureBrief();
+    brief = {
+      ...b,
+      categories: [...b.categories, { id, query: id, count: 10, reason: "Added by user" }],
+    };
+    newCategoryId = "";
+    syncDraftBrief();
+  }
+
+  function removeCategoryRow(idx: number) {
+    if (!brief) return;
+    brief = { ...brief, categories: brief.categories.filter((_, i) => i !== idx) };
+    syncDraftBrief();
+  }
+
+  function bumpCategoryCount(idx: number, delta: number) {
+    if (!brief) return;
+    const cats = brief.categories.slice();
+    const next = Math.max(0, (cats[idx].count || 0) + delta);
+    cats[idx] = { ...cats[idx], count: next };
+    brief = { ...brief, categories: cats };
+    syncDraftBrief();
+  }
+
+  function updateCategoryField(idx: number, field: "id" | "query", value: string) {
+    if (!brief) return;
+    const cats = brief.categories.slice();
+    cats[idx] = { ...cats[idx], [field]: value };
+    brief = { ...brief, categories: cats };
+    syncDraftBrief();
+  }
+
+  // ── Session list helpers ─────────────────────────────────────────────
+
+  function timeAgo(updatedAt?: string): string {
+    const secs = Number(updatedAt);
+    if (!secs || Number.isNaN(secs)) return "";
+    const now = Date.now() / 1000;
+    const diff = Math.max(0, now - secs);
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
+
+  function lastMessagePreview(s: UnifiedSession): string {
+    const last = s.messages?.[s.messages.length - 1];
+    if (!last) return "";
+    const text = last.content.replace(/\s+/g, " ").trim();
+    return text.length > 64 ? `${text.slice(0, 64)}…` : text;
+  }
+
   async function sendMessage(refine = false) {
     if (!$projectPath || !input.trim() || busy) return;
     const text = input.trim();
@@ -178,7 +633,7 @@
         reply: string;
         brief?: PackBrief | null;
         candidates?: CandidateAddon[];
-        session?: ChatSession;
+        session?: CreateChatSession;
       }>("create_mode_chat", {
         path: $projectPath,
         chatId: activeId,
@@ -190,6 +645,7 @@
         existingBrief: brief,
       });
       activeId = res.chatId;
+      activeKind = "create";
       if (res.brief) brief = res.brief;
       candidates = res.candidates ?? [];
       input = "";
@@ -222,7 +678,7 @@
         reply?: string;
         brief: PackBrief;
         candidates?: CandidateAddon[];
-        session?: ChatSession;
+        session?: CreateChatSession;
       }>("create_mode_quick_brief", {
         path: $projectPath,
         chatId: activeId,
@@ -230,6 +686,7 @@
         targetCount,
       });
       activeId = res.chatId;
+      activeKind = "create";
       brief = res.brief;
       candidates = res.candidates ?? [];
       if (res.session) {
@@ -438,7 +895,7 @@
       candidates = [];
       if (p) {
         void refreshSessions().then(() => {
-          if (sessions[0]) void selectSession(sessions[0].id);
+          if (sessions[0]) void selectSession(sessions[0].id, sessions[0].kind);
         });
       } else {
         sessions = [];
@@ -463,16 +920,31 @@
         </button>
       </div>
       <div class="session-list">
-        {#each sessions as s (s.id)}
-          <div class="session-row" class:active={s.id === activeId}>
-            <button type="button" class="session-main" on:click={() => selectSession(s.id)}>
-              <span class="session-title">{s.title || "Untitled"}</span>
+        {#each sessions as s (`${s.kind}-${s.id}`)}
+          <div
+            class="session-row"
+            class:active={s.id === activeId && s.kind === activeKind}
+            class:quest={s.kind === "quest"}
+          >
+            <button type="button" class="session-main" on:click={() => selectSession(s.id, s.kind)}>
+              <span class="session-title-row">
+                {#if s.kind === "quest"}
+                  <span class="kind-badge quest">Quests</span>
+                {:else}
+                  <span class="kind-badge create">Create</span>
+                {/if}
+                <span class="session-title">{s.title || "Untitled"}</span>
+              </span>
+              <span class="session-meta">
+                {#if timeAgo(s.updatedAt)}<span class="session-time">{timeAgo(s.updatedAt)}</span>{/if}
+                {#if lastMessagePreview(s)}<span class="session-preview">{lastMessagePreview(s)}</span>{/if}
+              </span>
             </button>
             <button
               type="button"
               class="icon-btn danger"
               title="Delete"
-              on:click={() => deleteChat(s.id)}
+              on:click={() => deleteChat(s.id, s.kind)}
             >
               <Trash2 size={14} />
             </button>
@@ -483,30 +955,50 @@
       </div>
     </aside>
 
-    <section class="thread">
-      <div class="thread-meta">
+    <section class="thread" class:quest-thread={isQuestChat}>
+      <div class="thread-meta" class:quest={isQuestChat}>
         <Sparkles size={16} />
-        <span>Create Mode ? {mcLabel} / {loaderLabel}</span>
-        <label class="target">
-          Target
-          <input type="range" min="40" max="120" step="5" bind:value={targetCount} disabled={busy} />
-          <strong>{targetCount}</strong>
-        </label>
+        {#if isQuestChat}
+          <span>Quest AI · FTB Quests</span>
+          {#if activeId}
+            <button type="button" class="btn ghost mini quest-open" on:click={() => openQuestChatInEditor(activeId!)}>
+              Open in Quests
+            </button>
+          {/if}
+          {#if questPendingPlan}
+            <span class="pending-dot" title="Pending plan — Apply in Quest editor">plan ready</span>
+          {/if}
+        {:else}
+          <span>Create Mode · {mcLabel} / {loaderLabel}</span>
+          <label class="target">
+            Target
+            <input type="range" min="40" max="120" step="5" bind:value={targetCount} disabled={busy} />
+            <strong>{targetCount}</strong>
+          </label>
+        {/if}
       </div>
 
       <div class="messages">
         {#if messages.length === 0}
           <div class="welcome">
-            <h3>Describe the pack you want</h3>
-            <p>
-              Example: "Tech + airplanes for NeoForge 1.21.1, ~80 mods, Create required."
-              Plan builds a PackBrief (search JSON + must-haves from hub co-occurrence).
-              Quick assemble builds a Modrinth draft in one step. Install only after you confirm.
-            </p>
+            {#if isQuestChat}
+              <h3>Quest AI chat</h3>
+              <p>
+                This session was created in the Quests editor. Continue generating lore and quest lines there —
+                Apply updates the editor, Save writes SNBT.
+              </p>
+            {:else}
+              <h3>Describe the pack you want</h3>
+              <p>
+                Example: "Tech + airplanes for NeoForge 1.21.1, ~80 mods, Create required."
+                Plan builds a PackBrief (search JSON + must-haves from hub co-occurrence).
+                Quick assemble builds a Modrinth draft in one step. Install only after you confirm.
+              </p>
+            {/if}
           </div>
         {/if}
         {#each messages as m, i (m.createdAt ?? `${m.role}-${i}-${m.content.slice(0, 48)}`)}
-          <div class="bubble" class:user={m.role === "user"} class:assistant={m.role === "assistant"} class:system={m.role === "system"}>
+          <div class="bubble" class:user={m.role === "user"} class:assistant={m.role === "assistant"} class:system={m.role === "system"} class:quest={isQuestChat}>
             {m.content}
           </div>
         {/each}
@@ -521,6 +1013,23 @@
         {/if}
       </div>
 
+      {#if isQuestChat}
+        <div class="composer quest-composer">
+          <p class="quest-hint">
+            Quest AI editing lives in the Quests tab (Apply → Save). Open the session there to continue.
+          </p>
+          <div class="actions">
+            <button
+              type="button"
+              class="btn accent quest-cta"
+              disabled={!activeId}
+              on:click={() => activeId && openQuestChatInEditor(activeId)}
+            >
+              <Sparkles size={14} /> Continue in Quests
+            </button>
+          </div>
+        </div>
+      {:else}
       <div class="composer">
         <textarea
           rows="2"
@@ -563,25 +1072,191 @@
           </div>
         {/if}
       </div>
+      {/if}
     </section>
 
-    <aside class="draft">
+    <aside class="draft" class:quest-hidden={isQuestChat}>
+      {#if isQuestChat}
+        <div class="draft-head quest">
+          <span>Quest AI</span>
+          <strong>FTB</strong>
+        </div>
+        <div class="quest-side">
+          <p>
+            Transcript is read-only here. Open the Quests editor to Apply plans and Save SNBT.
+          </p>
+          <button
+            type="button"
+            class="btn accent quest-cta"
+            disabled={!activeId}
+            on:click={() => activeId && openQuestChatInEditor(activeId)}
+          >
+            Open Quest editor
+          </button>
+        </div>
+      {:else}
       <div class="draft-head">
         <span>Pack draft</span>
         <strong>{draft?.mods?.length ?? 0}</strong>
       </div>
-      {#if brief}
-        <div class="brief-card">
-          <div class="brief-title">{brief.title}</div>
-          <div class="muted">{brief.mcVersion} ? {brief.loader} ? target {brief.targetCount}</div>
-          {#if brief.categories?.length}
-            <div class="cats">
-              {#each brief.categories as c (c.id)}
-                <span>{c.id}:{c.count}</span>
-              {/each}
-            </div>
-          {/if}
+
+      <div class="add-mod-search">
+        <div class="add-mod-input">
+          <Search size={13} />
+          <input
+            type="text"
+            placeholder="Add a specific mod…"
+            bind:value={addModQuery}
+            on:input={scheduleAddModSearch}
+            on:focus={() => (addModOpen = true)}
+            on:blur={() => setTimeout(() => (addModOpen = false), 150)}
+          />
+          {#if addModLoading}<span class="spin"><Loader2 size={13} /></span>{/if}
         </div>
+        {#if addModOpen && addModQuery.trim().length >= 2}
+          <div class="add-mod-results">
+            {#if !addModLoading && addModResults.length === 0}
+              <div class="muted pad small">No results</div>
+            {/if}
+            {#each addModResults as r (r.id)}
+              <button type="button" class="add-mod-row" on:mousedown|preventDefault={() => addModDirectly(r)}>
+                <span class="mod-name">{r.name}</span>
+                <code>{r.slug}</code>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      {#if brief}
+        <details class="brief-edit" open>
+          <summary>
+            <span>Brief</span>
+            <span class="muted">{brief.mcVersion} · {brief.loader} · target {brief.targetCount}</span>
+          </summary>
+          <div class="brief-edit-body">
+            <label class="field">
+              Title
+              <input
+                type="text"
+                value={brief.title}
+                on:change={(e) => updateBriefTitle(e.currentTarget.value)}
+              />
+            </label>
+
+            <div class="field-block">
+              <div class="field-label">Must-have</div>
+              <div class="chip-list">
+                {#each brief.mustHave as mh, i (i)}
+                  <span class="chip" class:locked={mh.reason === LOCKED_REASON}>
+                    {#if mh.reason === LOCKED_REASON}<Lock size={10} />{/if}
+                    {mh.query}
+                    <button type="button" on:click={() => removeMustHave(i)} aria-label="Remove">
+                      <X size={10} />
+                    </button>
+                  </span>
+                {:else}
+                  <span class="muted small">None yet</span>
+                {/each}
+              </div>
+              <div class="chip-add">
+                <input
+                  type="text"
+                  placeholder="Add must-have mod…"
+                  bind:value={newMustHaveQuery}
+                  on:keydown={(e) => e.key === "Enter" && addMustHave()}
+                />
+                <button type="button" class="btn ghost mini" on:click={addMustHave}
+                  ><Plus size={12} /></button
+                >
+              </div>
+            </div>
+
+            <div class="field-block">
+              <div class="field-label">Categories</div>
+              <div class="cat-rows">
+                {#each brief.categories as cat, i (i)}
+                  <div class="cat-row">
+                    <input
+                      type="text"
+                      class="cat-id"
+                      list="chats-known-category-ids"
+                      value={cat.id}
+                      on:change={(e) => updateCategoryField(i, "id", e.currentTarget.value)}
+                    />
+                    <input
+                      type="text"
+                      class="cat-query"
+                      value={cat.query}
+                      on:change={(e) => updateCategoryField(i, "query", e.currentTarget.value)}
+                    />
+                    <div class="cat-count">
+                      <button type="button" class="stepper" on:click={() => bumpCategoryCount(i, -5)}
+                        >−</button
+                      >
+                      <span>{cat.count}</span>
+                      <button type="button" class="stepper" on:click={() => bumpCategoryCount(i, 5)}
+                        >+</button
+                      >
+                    </div>
+                    <button
+                      type="button"
+                      class="icon-btn danger"
+                      title="Remove category"
+                      on:click={() => removeCategoryRow(i)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+              <datalist id="chats-known-category-ids">
+                {#each KNOWN_CATEGORY_IDS as id (id)}<option value={id} />{/each}
+              </datalist>
+              <div class="chip-add">
+                <input
+                  type="text"
+                  placeholder="New category id…"
+                  bind:value={newCategoryId}
+                  on:keydown={(e) => e.key === "Enter" && addCategoryRow()}
+                />
+                <button type="button" class="btn ghost mini" on:click={addCategoryRow}
+                  ><Plus size={12} /></button
+                >
+              </div>
+            </div>
+
+            <div class="field-block">
+              <div class="field-label">Exclude</div>
+              <div class="chip-list">
+                {#each brief.exclude as ex, i (i)}
+                  <span class="chip"
+                    >{ex}<button type="button" on:click={() => removeExcludeEntry(i)} aria-label="Remove"
+                      ><X size={10} /></button
+                    ></span
+                  >
+                {:else}
+                  <span class="muted small">None</span>
+                {/each}
+              </div>
+              <div class="chip-add">
+                <input
+                  type="text"
+                  placeholder="Exclude slug/name…"
+                  bind:value={newExcludeText}
+                  on:keydown={(e) => e.key === "Enter" && addExcludeEntry()}
+                />
+                <button type="button" class="btn ghost mini" on:click={addExcludeEntry}
+                  ><Plus size={12} /></button
+                >
+              </div>
+            </div>
+
+            <button type="button" class="btn primary full" disabled={busy} on:click={buildDraft}>
+              <Package size={13} /> Rebuild draft
+            </button>
+          </div>
+        </details>
       {:else}
         <p class="muted pad">Plan a brief first, then Build draft.</p>
       {/if}
@@ -602,13 +1277,65 @@
       <div class="mod-table">
         {#if draft?.mods?.length}
           {#each draft.mods as m (m.projectId || m.slug)}
-            <div class="mod-row">
-              <div class="mod-name">{m.name}</div>
+            <div class="mod-row" class:locked={isLocked(m)}>
+              <div class="mod-row-head">
+                <div class="mod-name">
+                  {#if isLocked(m)}<span class="lock-icon"><Lock size={10} /></span>{/if}
+                  {m.name}
+                </div>
+                <div class="mod-row-actions">
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    title={isLocked(m) ? "Unlock" : "Lock (keep on rebuild)"}
+                    on:click={() => toggleLock(m)}
+                  >
+                    {#if isLocked(m)}<Lock size={12} />{:else}<Unlock size={12} />{/if}
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    title="Find alternative"
+                    on:click={() => void openAlternatives(m)}
+                  >
+                    <Shuffle size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-btn danger"
+                    title="Remove from draft"
+                    on:click={() => removeModFromDraft(m)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
               <div class="mod-meta">
                 <code>{m.slug}</code>
                 <span class="muted">{m.category}</span>
               </div>
               <div class="mod-reason muted">{m.reason}</div>
+              {#if altForKey === (m.projectId || m.slug)}
+                <div class="alt-popover">
+                  {#if altLoading}
+                    <div class="muted pad small"><Loader2 size={12} class="spin" /> Searching…</div>
+                  {:else if altOptions.length === 0}
+                    <div class="muted pad small">No alternatives found.</div>
+                  {:else}
+                    {#each altOptions as opt (opt.slug)}
+                      <button
+                        type="button"
+                        class="alt-row"
+                        on:click={() => void applyAlternative(m, opt)}
+                      >
+                        <span class="mod-name">{opt.name}</span>
+                        <code>{opt.slug}</code>
+                        <span class="muted alt-source">{opt.source}</span>
+                      </button>
+                    {/each}
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/each}
         {/if}
@@ -617,6 +1344,7 @@
         <div class="unresolved">
           Must-have unresolved: {draft.unresolved.join(", ")}
         </div>
+      {/if}
       {/if}
     </aside>
   </div>
@@ -726,8 +1454,57 @@
   .draft-head {
     justify-content: space-between;
   }
+  .thread-meta.quest {
+    color: var(--ftbq-title-gold, #f2c94c);
+    border-bottom-color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .pending-dot {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--ftbq-accent-teal, #3db8a8);
+    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    border-radius: 2px;
+    padding: 2px 6px;
+  }
+  .bubble.quest.assistant {
+    border-left: 2px solid var(--ftbq-accent-teal, #3db8a8);
+  }
+  .quest-composer,
+  .quest-side {
+    padding: 12px 14px;
+    border-top: 1px solid var(--border-color, #2a2f3a);
+  }
+  .quest-side {
+    border-top: none;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    color: var(--text-secondary, #9aa3b5);
+    font-size: 13px;
+  }
+  .quest-hint {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .btn.quest-cta,
+  .btn.accent.quest-cta {
+    background: rgba(61, 184, 168, 0.2);
+    border-color: var(--ftbq-accent-teal, #3db8a8);
+    color: var(--ftbq-title-gold, #f2c94c);
+  }
+  .draft-head.quest {
+    color: var(--ftbq-title-gold, #f2c94c);
+  }
+  .draft-head.quest strong {
+    color: var(--ftbq-accent-teal, #3db8a8);
+  }
   .draft-head strong {
     color: var(--text-primary, #e8ecf4);
+  }
+  .quest-open {
+    margin-left: 8px;
   }
   .session-list,
   .mod-table,
@@ -745,6 +1522,37 @@
   .session-row.active {
     background: var(--bg-tertiary);
   }
+  .session-row.quest {
+    border-left: 3px solid var(--ftbq-accent-teal, #3db8a8);
+  }
+  .session-row.quest.active {
+    background: rgba(61, 184, 168, 0.12);
+  }
+  .session-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .kind-badge {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+  .kind-badge.create {
+    color: var(--accent-primary, #1bd96a);
+    background: rgba(27, 217, 106, 0.12);
+    border: 1px solid rgba(27, 217, 106, 0.25);
+  }
+  .kind-badge.quest {
+    color: var(--ftbq-title-gold, #f2c94c);
+    background: rgba(61, 184, 168, 0.15);
+    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+  }
   .session-main {
     flex: 1;
     text-align: left;
@@ -757,6 +1565,24 @@
   }
   .session-title {
     display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .session-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-top: 2px;
+  }
+  .session-time {
+    font-size: 10px;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .session-preview {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary, #9aa3b5);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -900,35 +1726,236 @@
   .btn.ghost {
     background: transparent;
   }
-  .brief-card {
-    padding: 12px 14px;
+  .add-mod-search {
+    position: relative;
+    padding: 10px 14px;
     border-bottom: 1px solid var(--border-color, #2a2f3a);
   }
-  .brief-title {
+  .add-mod-input {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    padding: 6px 8px;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .add-mod-input input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--text-primary, #e8ecf4);
+    font: inherit;
+    outline: none;
+  }
+  .add-mod-results {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    top: 100%;
+    z-index: 20;
+    background: var(--bg-secondary, #151922);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    max-height: 220px;
+    overflow: auto;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  }
+  .add-mod-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-color, #2a2f3a);
+    padding: 8px 10px;
+    cursor: pointer;
+    color: var(--text-primary, #e8ecf4);
+  }
+  .add-mod-row:hover {
+    background: var(--bg-hover);
+  }
+  .brief-edit {
+    border-bottom: 1px solid var(--border-color, #2a2f3a);
+  }
+  .brief-edit summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary, #e8ecf4);
-    margin-bottom: 4px;
+    list-style: none;
   }
-  .cats {
+  .brief-edit summary::-webkit-details-marker {
+    display: none;
+  }
+  .brief-edit-body {
+    padding: 0 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .field input[type="text"] {
+    background: var(--bg-primary);
+    color: var(--text-primary, #e8ecf4);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 13px;
+  }
+  .field-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .chip-list {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 8px;
+    gap: 6px;
   }
-  .cats span {
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 11px;
     background: var(--bg-tertiary);
-    padding: 2px 6px;
-    border-radius: 4px;
     color: var(--text-secondary, #9aa3b5);
+    padding: 3px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color, #2a2f3a);
+  }
+  .chip.locked {
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.35);
+  }
+  .chip button {
+    display: inline-flex;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+  }
+  .chip-add {
+    display: flex;
+    gap: 4px;
+  }
+  .chip-add input {
+    flex: 1;
+    background: var(--bg-primary);
+    color: var(--text-primary, #e8ecf4);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    padding: 5px 8px;
+    font-size: 12px;
+    font: inherit;
+  }
+  .cat-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .cat-row {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr) auto auto;
+    gap: 4px;
+    align-items: center;
+  }
+  .cat-row input {
+    background: var(--bg-primary);
+    color: var(--text-primary, #e8ecf4);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    padding: 4px 6px;
+    font-size: 11px;
+    font: inherit;
+    min-width: 0;
+  }
+  .cat-count {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-primary, #e8ecf4);
+  }
+  .stepper {
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: 4px;
+    color: var(--text-primary, #e8ecf4);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .btn.full {
+    width: 100%;
+    justify-content: center;
   }
   .mod-row {
     padding: 8px 12px;
     border-bottom: 1px solid var(--border-color, #2a2f3a);
+    position: relative;
+  }
+  .mod-row.locked {
+    background: rgba(52, 211, 153, 0.05);
+  }
+  .mod-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .mod-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .mod-row-actions .icon-btn {
+    padding: 4px;
   }
   .mod-name {
     font-size: 13px;
     color: var(--text-primary, #e8ecf4);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .lock-icon {
+    display: inline-flex;
+    align-items: center;
+    color: #34d399;
+    flex-shrink: 0;
   }
   .mod-meta {
     display: flex;
@@ -943,6 +1970,41 @@
   .mod-reason {
     font-size: 11px;
     margin-top: 2px;
+  }
+  .alt-popover {
+    margin-top: 6px;
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-primary);
+    overflow: hidden;
+  }
+  .alt-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-color, #2a2f3a);
+    padding: 6px 8px;
+    cursor: pointer;
+    color: var(--text-primary, #e8ecf4);
+    font-size: 12px;
+  }
+  .alt-row:last-child {
+    border-bottom: none;
+  }
+  .alt-row:hover {
+    background: var(--bg-hover);
+  }
+  .alt-source {
+    margin-left: auto;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .small {
+    font-size: 11px;
   }
   .unresolved {
     padding: 10px 12px;

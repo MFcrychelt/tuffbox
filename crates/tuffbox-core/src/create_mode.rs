@@ -42,6 +42,9 @@ Rules:
 - mustHave is for named must-include mods (query by name; optional slugHint if known).
 - exclude lists slugs/names to skip.
 - If refining an existing brief, update fields and keep prior intent unless asked to change it.
+- Entries in mustHave with reason "Locked by user" and every entry already in exclude were set
+  manually by the player in the draft UI. They MUST be preserved verbatim (same slugHint/text)
+  across refinements unless the user explicitly asks to unlock/remove/re-include them.
 "#;
 
 pub const CREATE_MODE_REFINE_PROMPT: &str = r#"You are refining a Create Mode PackBrief for the TuffBox launcher.
@@ -71,6 +74,9 @@ Rules:
 - mustHave should cover base + matching addons (typically 2–8 entries).
 - Keep categories budgets summing near targetCount.
 - Never invent jar filenames or crash ActionPlan ops.
+- Entries in mustHave with reason "Locked by user" and every entry already in exclude were set
+  manually by the player in the draft UI. They MUST be preserved verbatim (same slugHint/text)
+  across refinements unless the user explicitly asks to unlock/remove/re-include them.
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1379,6 +1385,23 @@ mod tests {
         assert!(
             CREATE_MODE_SYSTEM_PROMPT.contains("same language as the user's latest message"),
             "Create Mode must pin reply language to the user message"
+        );
+    }
+
+    #[test]
+    fn prompts_preserve_locked_and_excluded_entries() {
+        assert!(
+            CREATE_MODE_SYSTEM_PROMPT.contains("Locked by user"),
+            "system prompt must instruct the model to preserve user-locked mustHave entries"
+        );
+        assert!(
+            CREATE_MODE_REFINE_PROMPT.contains("Locked by user"),
+            "refine prompt must instruct the model to preserve user-locked mustHave entries"
+        );
+        assert!(
+            CREATE_MODE_SYSTEM_PROMPT.contains("preserved verbatim")
+                && CREATE_MODE_REFINE_PROMPT.contains("preserved verbatim"),
+            "both prompts must require verbatim preservation of manual lock/exclude choices"
         );
     }
 

@@ -294,20 +294,29 @@ export function removeRunning(id: string) {
 
 /** Opens the live launch-log modal for the given project manifest path. */
 export const launchLogPath = writable<string | null>(null);
+export const launchLogTitle = writable<string | null>(null);
 
-export function openLaunchLog(path: string) {
+export function openLaunchLog(path: string, title?: string | null) {
+  launchLogTitle.set(title ?? null);
   launchLogPath.set(path);
 }
 
 export function closeLaunchLog() {
   launchLogPath.set(null);
+  launchLogTitle.set(null);
 }
 
 /** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
 export const ideStageRequest = writable<string | null>(null);
 
-/** Focus a History event id after navigating to History stage. */
+/** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */
+export const questChatFocusId = writable<string | null>(null);
+
+/** Focus a History event id after navigating to History stage. Cleared by ChangeHistory. */
 export const historyFocusEventId = writable<string | null>(null);
+
+/** Focus History entries linked to this snapshot id (cleared by ChangeHistory). */
+export const historyFocusSnapshotId = writable<string | null>(null);
 
 /** Optional paths to highlight when opening Diagnose from History. */
 export const diagnoseFocusPaths = writable<string[] | null>(null);
@@ -361,3 +370,21 @@ function createSidebarIconsCollapsed() {
   };
 }
 export const sidebarIconsCollapsed = createSidebarIconsCollapsed();
+
+/** Global YouTube player session — survives view switches so mini player stays on any page. */
+export type YoutubePlayerSession = {
+  videoId: string;
+  title: string;
+  originRect: DOMRect | null;
+  startMini: boolean;
+};
+
+export const youtubePlayerSession = writable<YoutubePlayerSession | null>(null);
+
+export function openYoutubePlayer(session: YoutubePlayerSession) {
+  youtubePlayerSession.set(session);
+}
+
+export function closeYoutubePlayer() {
+  youtubePlayerSession.set(null);
+}

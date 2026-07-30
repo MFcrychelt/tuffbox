@@ -14,7 +14,8 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners, detectWeakHardware, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners, detectWeakHardware, youtubePlayerSession, closeYoutubePlayer, type LauncherSettings } from "./lib/store";
+  import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -232,6 +233,11 @@
     };
     window.addEventListener("tuffbox:open-me", onOpenMe);
 
+    const onShowShortcuts = () => {
+      showShortcuts = true;
+    };
+    window.addEventListener("tuffbox:show-shortcuts", onShowShortcuts);
+
     const onShareCapsule = (ev: Event) => {
       const detail = (ev as CustomEvent).detail as {
         path?: string;
@@ -292,6 +298,7 @@
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
       window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
+      window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
       unlistenDistill?.();
       unlistenSoftVerify();
@@ -482,7 +489,19 @@
 {/if}
 
 {#if $launchLogPath}
-  <LaunchLogModal projectPath={$launchLogPath} on:close={closeLaunchLog} />
+  <LaunchLogModal projectPath={$launchLogPath} title={$launchLogTitle} on:close={closeLaunchLog} />
+{/if}
+
+{#if $youtubePlayerSession}
+  {#key $youtubePlayerSession.videoId + String($youtubePlayerSession.startMini)}
+    <YoutubePlayer
+      videoId={$youtubePlayerSession.videoId}
+      title={$youtubePlayerSession.title}
+      originRect={$youtubePlayerSession.originRect}
+      startMini={$youtubePlayerSession.startMini}
+      on:close={closeYoutubePlayer}
+    />
+  {/key}
 {/if}
 
 <svelte:window

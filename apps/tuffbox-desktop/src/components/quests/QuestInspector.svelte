@@ -333,7 +333,9 @@
     padding: 0;
     max-height: 100%;
     overflow: auto;
+    overflow-x: hidden;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
   }
@@ -533,6 +535,16 @@
   .fmt-bar button {
     font-size: 10px;
     padding: 2px 6px;
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--ftbq-text, #e8e8e8);
+    border-radius: 2px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: none;
+  }
+  .fmt-bar button:hover {
+    border-color: var(--ftbq-accent-green, #55c95a);
   }
   .fmt-hint {
     color: var(--ftbq-text-muted, #9a9aa0);

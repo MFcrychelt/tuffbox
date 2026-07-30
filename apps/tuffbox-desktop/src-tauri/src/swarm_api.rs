@@ -220,6 +220,13 @@ fn load_crash_fix_marker(project_dir: &Path) -> Result<Option<LastCrashFixMarker
     Ok(Some(marker))
 }
 
+/// Public read of the last crash-fix marker (for snapshot detail synthesis).
+pub fn peek_last_crash_fix_marker(
+    project_dir: &Path,
+) -> Result<Option<LastCrashFixMarker>, String> {
+    load_crash_fix_marker(project_dir)
+}
+
 fn save_crash_fix_marker(project_dir: &Path, marker: &LastCrashFixMarker) -> Result<(), String> {
     let path = last_crash_fix_path(project_dir);
     if let Some(parent) = path.parent() {
@@ -383,6 +390,9 @@ pub fn maybe_confirm_crash_resolution(
         report_id: None,
         plan_source: rec.plan_source.clone().or_else(|| Some(verified_by.into())),
         matched_case_ids: rec.matched_case_ids.clone(),
+        operation: "crash_resolved".into(),
+        actions_summary: rec.actions_summary.clone(),
+        actor: Some("ai".into()),
     };
     let store = SnapshotStore::new(project_dir);
     let _ = store.create_with_meta(
@@ -780,6 +790,13 @@ pub fn record_user_fix_attempt(
         report_id: None,
         plan_source: Some(source.to_string()),
         matched_case_ids: Vec::new(),
+        operation: "crash_fix".into(),
+        actions_summary: plan
+            .actions
+            .iter()
+            .map(format_launcher_action_summary)
+            .collect(),
+        actor: Some("ai".into()),
     };
     write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)
 }
@@ -838,12 +855,24 @@ pub fn auto_snapshot_crash_fix(
         "Auto snapshot before crash fix ({})",
         plan.source.as_deref().unwrap_or("manual")
     );
+    let actions_summary: Vec<String> = plan
+        .actions
+        .iter()
+        .map(format_launcher_action_summary)
+        .collect();
+    let mut actions_summary = actions_summary;
+    if actions_summary.is_empty() && !plan.human_explanation.trim().is_empty() {
+        actions_summary.push(plan.human_explanation.clone());
+    }
     let meta = SnapshotMeta {
         tags: vec!["crash_fix".into()],
         crash_fingerprint_key: fingerprint_key.map(|s| s.to_string()),
         report_id: None,
         plan_source: plan.source.clone().or_else(|| Some("manual".into())),
         matched_case_ids: plan.matched_case_ids.clone(),
+        operation: "crash_fix".into(),
+        actions_summary: actions_summary.clone(),
+        actor: Some("ai".into()),
     };
     let store = SnapshotStore::new(project_dir);
     let snapshot = store
@@ -856,6 +885,14 @@ pub fn auto_snapshot_crash_fix(
             meta,
         )
         .map_err(|e| e.to_string())?;
+    write_snapshot_plan_json(&store, &snapshot.id, plan)?;
+    let _ = crate::pack_events::append_from_snapshot(
+        project_dir,
+        "crash_fix",
+        &snapshot.id,
+        &[] as &[std::path::PathBuf],
+        &reason,
+    );
     let _ = write_last_crash_fix_marker(project_dir, &snapshot, plan, fp);
     Ok(snapshot)
 }
@@ -881,12 +918,23 @@ pub fn auto_snapshot_crash_fix_heuristic(
     let fp_prefix: String = fp.chars().take(24).collect();
     let name = format!("auto-before-crash-fix-{fp_prefix}");
     let reason = format!("Auto snapshot before crash fix (manual): {summary}");
+    let actions_summary: Vec<String> = actions
+        .iter()
+        .map(format_launcher_action_summary)
+        .collect();
+    let mut actions_summary = actions_summary;
+    if actions_summary.is_empty() {
+        actions_summary.push(summary.to_string());
+    }
     let meta = SnapshotMeta {
         tags: vec!["crash_fix".into()],
         crash_fingerprint_key: fingerprint_key.map(|s| s.to_string()),
         report_id: report_id.map(|s| s.to_string()),
         plan_source: Some("manual".into()),
         matched_case_ids: Vec::new(),
+        operation: "crash_fix".into(),
+        actions_summary: actions_summary.clone(),
+        actor: Some("ai".into()),
     };
     let store = SnapshotStore::new(project_dir);
     let snapshot = store
@@ -910,8 +958,39 @@ pub fn auto_snapshot_crash_fix_heuristic(
         actions,
         additional_context: None,
     };
+    write_snapshot_plan_json(&store, &snapshot.id, &plan)?;
+    let _ = crate::pack_events::append_from_snapshot(
+        project_dir,
+        "crash_fix",
+        &snapshot.id,
+        &[] as &[std::path::PathBuf],
+        &reason,
+    );
     let _ = write_last_crash_fix_marker(project_dir, &snapshot, &plan, fp);
     Ok(snapshot)
+}
+
+fn write_snapshot_plan_json(
+    store: &SnapshotStore,
+    snapshot_id: &str,
+    plan: &ActionPlan,
+) -> Result<(), String> {
+    let path = store.snapshot_dir(snapshot_id).join("plan.json");
+    let json = serde_json::to_vec_pretty(plan).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+pub fn load_snapshot_plan(
+    project_dir: &Path,
+    snapshot_id: &str,
+) -> Option<ActionPlan> {
+    let path = project_dir
+        .join(".tuffbox")
+        .join("snapshots")
+        .join(snapshot_id)
+        .join("plan.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// Map ChangePlan actions into LauncherAction rows for resolution history.

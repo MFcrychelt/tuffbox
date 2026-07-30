@@ -1,6 +1,9 @@
 <script lang="ts">
   import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "lucide-svelte";
   import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
+  import { projectPath } from "../../lib/store";
+  import QuestItemIcon from "./QuestItemIcon.svelte";
+  import { preloadItemIcons } from "./iconCache";
 
   export let chapters: QuestChapter[];
   export let chapterGroups: QuestChapterGroup[] = [];
@@ -17,9 +20,20 @@
   let collapsed = new Set<string>();
   let editingId: string | null = null;
   let menuId: string | null = null;
+  let iconRevision = 0;
 
   $: groupTitle = new Map(chapterGroups.map((g) => [g.id, g.title]));
   $: groups = buildGroups(chapters, groupTitle);
+  $: if (chapters && $projectPath) {
+    void preloadRailIcons(chapters);
+  }
+
+  async function preloadRailIcons(list: QuestChapter[]) {
+    const ids = list.map((c) => c.icon).filter(Boolean) as string[];
+    if (!ids.length || !$projectPath) return;
+    await preloadItemIcons(ids, $projectPath);
+    iconRevision += 1;
+  }
 
   function buildGroups(list: QuestChapter[], titles: Map<string, string>) {
     const order: string[] = [];
@@ -121,7 +135,14 @@
                 }
               }}
             >
-              <span class="glyph" title={ch.icon || ""}>{glyph(ch)}</span>
+              <span class="glyph" title={ch.icon || ""}>
+                <QuestItemIcon
+                  itemId={ch.icon}
+                  fallback={glyph(ch)}
+                  size={16}
+                  revision={iconRevision}
+                />
+              </span>
               <span class="ch-text">
                 {#if editingId === ch.id}
                   <input
@@ -259,31 +280,34 @@
     border-left: 3px solid transparent;
   }
   .ch-row-wrap.sel {
-    background: linear-gradient(
-      90deg,
-      rgba(61, 184, 168, 0.18) 0%,
-      rgba(85, 201, 90, 0.08) 60%,
-      transparent 100%
-    );
-    border-left-color: var(--ftbq-accent-teal, #3db8a8);
-    box-shadow: inset 3px 0 0 var(--ftbq-accent-green, #55c95a);
-  }
-  .ch-row-wrap.sel::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: linear-gradient(
-      180deg,
-      var(--ftbq-accent-teal, #3db8a8),
-      var(--ftbq-accent-green, #55c95a)
-    );
-    pointer-events: none;
+    background: rgba(85, 201, 90, 0.12);
+    border-left-color: var(--ftbq-accent-green, #55c95a);
   }
   .ch-row-wrap.dirty:not(.sel) {
     border-left-color: rgba(242, 201, 76, 0.4);
+  }
+  .ch-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: var(--ftbq-text, #e8e8e8);
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    box-shadow: none;
+  }
+  .ch-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .ch-row-wrap.sel .ch-row {
+    color: var(--ftbq-text, #e8e8e8);
   }
   .ch-menu-wrap {
     position: relative;
@@ -327,12 +351,6 @@
     height: 18px;
     font-size: 11px;
     padding: 0;
-  }
-  .ch-row:hover {
-    background: rgba(255, 255, 255, 0.04);
-  }
-  .ch-row-wrap.sel .ch-row {
-    color: var(--ftbq-text, #e8e8e8);
   }
   .glyph {
     width: 24px;

@@ -5290,15 +5290,17 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
-  /* Add content browser: large but leaves backdrop visible around edges. */
+  /* Add content browser: near-fullscreen so the dimmed backdrop is a thin frame. */
   .modal.add-mods-modal {
-    width: min(1840px, calc(100vw - 28px));
-    height: min(980px, calc(100vh - 28px));
-    max-height: calc(100vh - 28px);
+    width: calc(100vw - 12px);
+    height: calc(100vh - 12px);
+    max-width: none;
+    max-height: calc(100vh - 12px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    padding: 18px 20px 16px;
+    padding: 16px 18px 14px;
+    border-radius: 14px;
   }
 
   .modal.add-mods-modal .modal-header {

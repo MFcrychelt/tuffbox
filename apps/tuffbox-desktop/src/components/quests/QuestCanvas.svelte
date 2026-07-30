@@ -2,6 +2,9 @@
   import { onMount, tick } from "svelte";
   import { Maximize2, Plus } from "lucide-svelte";
   import type { QuestData, QuestValidationIssue, QuestProgressStatus } from "../../lib/api";
+  import { projectPath } from "../../lib/store";
+  import QuestItemIcon from "./QuestItemIcon.svelte";
+  import { preloadItemIcons } from "./iconCache";
 
   export let quests: QuestData[];
   export let selectedId: string | null = null;
@@ -31,10 +34,32 @@
   let panLast: { x: number; y: number } | null = null;
   let dragQuest: QuestData | null = null;
   let dragMoved = false;
+  /** World-space offset from quest origin to pointer at grab time (avoids jump-to-center). */
+  let dragOffset = { x: 0, y: 0 };
+  /** Bumps on each drag move so Svelte re-renders without parent chapter copy. */
+  let dragTick = 0;
   let linkFrom: QuestData | null = null;
   let linkCursor: { x: number; y: number } | null = null;
   let spaceDown = false;
   let lastFitToken = -1;
+  let iconRevision = 0;
+
+  $: unit = BASE * zoom;
+  $: issueIds = new Set(issues.map((i) => i.questId));
+  $: if (fitToken !== lastFitToken && quests) {
+    lastFitToken = fitToken;
+    void refit();
+  }
+  $: if (quests && $projectPath) {
+    void preloadChapterIcons(quests);
+  }
+
+  async function preloadChapterIcons(list: QuestData[]) {
+    const ids = list.map((q) => q.icon).filter(Boolean) as string[];
+    if (!ids.length || !$projectPath) return;
+    await preloadItemIcons(ids, $projectPath);
+    iconRevision += 1;
+  }
 
   $: unit = BASE * zoom;
   $: issueIds = new Set(issues.map((i) => i.questId));
@@ -126,12 +151,11 @@
     const rect = viewport.getBoundingClientRect();
     const sx = clientX - rect.left;
     const sy = clientY - rect.top;
-    // Top-most hit (reverse paint order) — icon + label area
+    // Top-most hit (reverse paint order) — icon only (label is not a grab target)
     for (let i = quests.length - 1; i >= 0; i--) {
       const q = quests[i];
       const p = screenPos(q);
-      const labelH = Math.max(14, p.size * 0.35);
-      if (sx >= p.left && sx <= p.left + p.size && sy >= p.top && sy <= p.top + p.size + labelH + 4) {
+      if (sx >= p.left && sx <= p.left + p.size && sy >= p.top && sy <= p.top + p.size) {
         return q;
       }
     }
@@ -165,6 +189,10 @@
       mode = "drag";
       dragQuest = hit;
       dragMoved = false;
+      {
+        const w = clientToWorld(e.clientX, e.clientY);
+        dragOffset = { x: w.x - hit.x, y: w.y - hit.y };
+      }
       onSelect(hit);
       viewport.setPointerCapture(e.pointerId);
       e.preventDefault();
@@ -181,7 +209,10 @@
     if (mode === "drag" && dragQuest) {
       const w = clientToWorld(e.clientX, e.clientY);
       dragMoved = true;
-      onMove(dragQuest, w.x, w.y);
+      // Mutate locally + snap during drag (FTB half-grid); commit dirty once on pointerup.
+      dragQuest.x = snap(w.x - dragOffset.x);
+      dragQuest.y = snap(w.y - dragOffset.y);
+      dragTick += 1;
       return;
     }
     if (mode === "link" && linkFrom) {
@@ -205,6 +236,7 @@
     panLast = null;
     dragQuest = null;
     dragMoved = false;
+    dragOffset = { x: 0, y: 0 };
     linkFrom = null;
     linkCursor = null;
     try {
@@ -309,6 +341,7 @@
   >
     <svg class="edges" width="100%" height="100%">
       {#each quests as q (q.id)}
+        {@const _e = dragTick}
         {#each q.dependencies as depId}
           {@const target = depTarget(depId)}
           {@const from = centerOf(q)}
@@ -348,8 +381,11 @@
     </svg>
 
     {#each quests as q (q.id)}
+      {@const _drag = dragTick}
       {@const p = screenPos(q)}
       {@const prog = progressOf(q)}
+      {@const shape = nodeShape(q)}
+      {@const clipped = shape === "diamond" || shape === "hexagon" || shape === "pentagon" || shape === "gear"}
       <div
         class="node-wrap"
         class:sel={selectedId === q.id}
@@ -359,6 +395,7 @@
       >
         <div
           class="node-icon {shapeClass(q)}"
+          class:clipped
           class:optional={q.optional}
           class:prog-completed={prog === "completed"}
           class:prog-started={prog === "started"}
@@ -366,7 +403,14 @@
           class:prog-locked={prog === "locked"}
           style={`width:${p.size}px; height:${p.size}px;`}
         >
-          <span class="node-glyph">{glyph(q)}</span>
+          <div class="node-face {shapeClass(q)}">
+            <QuestItemIcon
+              itemId={q.icon}
+              fallback={glyph(q)}
+              size={Math.max(12, Math.floor(p.size * 0.62))}
+              revision={iconRevision}
+            />
+          </div>
           {#if q.optional}<span class="opt">?</span>{/if}
           {#if prog === "completed"}<span class="check" title="Completed">✓</span>{/if}
         </div>
@@ -429,7 +473,7 @@
   .viewport {
     position: relative;
     flex: 1;
-    min-height: 360px;
+    min-height: 0;
     overflow: hidden;
     cursor: default;
     background-color: var(--ftbq-bg-canvas, #2b2b30);
@@ -494,9 +538,8 @@
     cursor: grab;
   }
   .node-wrap.sel .node-icon {
-    box-shadow:
-      0 0 0 2px rgba(61, 184, 168, 0.5),
-      0 0 12px rgba(85, 201, 90, 0.35);
+    outline: 2px solid var(--ftbq-accent-green, #55c95a);
+    outline-offset: 1px;
   }
   .node-wrap.issue .node-icon {
     border-color: var(--ftbq-quest-started, #f2c94c);
@@ -508,35 +551,51 @@
     justify-content: center;
     flex-shrink: 0;
     border: 2px solid var(--ftbq-quest-default, #ffffff);
-    background: var(--ftbq-node-fill, #18181c);
+    background: transparent;
     color: var(--ftbq-text, #e8e8e8);
-    box-shadow:
-      inset 0 2px 6px rgba(0, 0, 0, 0.5),
-      0 1px 3px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  }
+  /* Clipped shapes: border on outer box (no clip); face carries clip-path fill */
+  .node-icon.clipped {
+    border-color: transparent;
+    box-shadow: none;
+    background: transparent;
+  }
+  .node-face {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ftbq-node-fill, #18181c);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.5);
   }
   /* FTB quest shapes */
-  .node-icon.shape-circle {
+  .node-icon.shape-circle,
+  .node-face.shape-circle {
     border-radius: 50%;
   }
-  .node-icon.shape-square {
+  .node-icon.shape-square,
+  .node-face.shape-square {
     border-radius: 0;
   }
-  .node-icon.shape-rsquare {
+  .node-icon.shape-rsquare,
+  .node-face.shape-rsquare {
     border-radius: 4px;
   }
-  .node-icon.shape-diamond {
+  .node-face.shape-diamond {
     border-radius: 0;
     clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
   }
-  .node-icon.shape-hexagon {
+  .node-face.shape-hexagon {
     clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
     border-radius: 0;
   }
-  .node-icon.shape-pentagon {
+  .node-face.shape-pentagon {
     clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);
     border-radius: 0;
   }
-  .node-icon.shape-gear {
+  .node-face.shape-gear {
     border-radius: 3px;
     clip-path: polygon(
       50% 0%,
@@ -565,16 +624,13 @@
       39% 8%
     );
   }
-  .node-icon.optional {
+  .node-icon.optional:not(.clipped) {
     border-style: dashed;
   }
-  .node-glyph {
-    font-size: clamp(10px, 45%, 20px);
-    font-weight: 800;
-    color: var(--ftbq-text, #e8e8e8);
-    line-height: 1;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-    pointer-events: none;
+  .node-face :global(.qii),
+  .node-face :global(.qii-ph) {
+    max-width: 70%;
+    max-height: 70%;
   }
   .node-label {
     font-size: clamp(8px, 10px, 11px);

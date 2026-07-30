@@ -2,7 +2,7 @@
   import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult } from "../lib/api";
   import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map, Eye, Sparkles, X } from "lucide-svelte";
   import { onDestroy } from "svelte";
-  import { projectPath, questDirty } from "../lib/store";
+  import { projectPath, questDirty, questChatFocusId } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import ChapterRail from "./quests/ChapterRail.svelte";
   import QuestCanvas from "./quests/QuestCanvas.svelte";
@@ -45,6 +45,7 @@
   let questSearch = "";
   let showBookPanel = false;
   let showGroupsPanel = false;
+  let showTablesPanel = false;
   let issuesOpen = false;
   let progressOpen = false;
 
@@ -499,6 +500,10 @@
   }
   $: if (progressKey || progressOverlay) progressOpen = true;
 
+  $: if ($questChatFocusId) {
+    setAiSidebar(true);
+  }
+
   onDestroy(() => {
     questDirty.set(false);
   });
@@ -523,6 +528,7 @@
           on:click={() => {
             showBookPanel = !showBookPanel;
             showGroupsPanel = false;
+            showTablesPanel = false;
           }}
         >
           Book{#if bookDirty}<span class="dot-mini">●</span>{/if}
@@ -570,6 +576,7 @@
           on:click={() => {
             showGroupsPanel = !showGroupsPanel;
             showBookPanel = false;
+            showTablesPanel = false;
           }}
         >
           Groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
@@ -599,6 +606,43 @@
           </div>
         {/if}
       </div>
+      <div class="tb-pop">
+        <button
+          type="button"
+          class="ghost"
+          class:active={showTablesPanel}
+          class:has-dirty={rewardTablesDirty}
+          title="Reward tables"
+          on:click={() => {
+            showTablesPanel = !showTablesPanel;
+            showBookPanel = false;
+            showGroupsPanel = false;
+          }}
+        >
+          Tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
+        </button>
+        {#if showTablesPanel && $projectPath}
+          <div class="drawer drawer-tables">
+            <div class="drawer-h">
+              <strong>Reward tables</strong>
+              <button type="button" class="ghost ico" on:click={() => (showTablesPanel = false)}
+                ><X size={14} /></button
+              >
+            </div>
+            <RewardTablesPanel
+              tables={rewardTables}
+              dirty={rewardTablesDirty}
+              {saving}
+              onChange={() => {
+                rewardTablesDirty = true;
+                rewardTables = rewardTables;
+              }}
+              onSave={saveRewardTable}
+              onCreate={createRewardTable}
+            />
+          </div>
+        {/if}
+      </div>
       <button
         type="button"
         class="ghost"
@@ -615,7 +659,7 @@
             (bookDirty ? 1 : 0) +
             (groupsDirty ? 1 : 0)} unsaved</span
         >
-        <button type="button" on:click={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
+        <button type="button" class="primary" on:click={saveAll} disabled={!$projectPath || saving} title="Ctrl+S">
           <Save size={16} /> {saving ? "Saving…" : "Save all"}
         </button>
       {/if}
@@ -794,17 +838,6 @@
       />
     {/if}
     </div>
-    <RewardTablesPanel
-      tables={rewardTables}
-      dirty={rewardTablesDirty}
-      {saving}
-      onChange={() => {
-        rewardTablesDirty = true;
-        rewardTables = rewardTables;
-      }}
-      onSave={saveRewardTable}
-      onCreate={createRewardTable}
-    />
     <div class="qe-footer">
       <p class="hint">
         Edits save as SNBT to <code>config/ftbquests/quests/chapters/</code>. Auto-snapshot on save. AI merge is memory-only until Save.
@@ -842,6 +875,48 @@
     background: var(--ftbq-bg, #1a1a1e);
     color: var(--ftbq-text, #e8e8e8);
   }
+  /* Isolate from global TuffBox green primary buttons */
+  .qe.ftbq :global(button) {
+    border-radius: 2px;
+    font-weight: 600;
+    box-shadow: none;
+  }
+  .qe.ftbq :global(button.ghost),
+  .qe.ftbq :global(button.ico) {
+    padding: 4px 10px;
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--ftbq-text, #e8e8e8);
+  }
+  .qe.ftbq :global(button.ghost:hover:not(:disabled)),
+  .qe.ftbq :global(button.ico:hover:not(:disabled)) {
+    border-color: var(--ftbq-accent-green, #55c95a);
+    background: rgba(85, 201, 90, 0.1);
+    color: var(--ftbq-text, #e8e8e8);
+  }
+  .qe.ftbq :global(button.primary),
+  .qe.ftbq :global(.qe-actions > button:not(.ghost)) {
+    padding: 6px 12px;
+    border: 1px solid var(--ftbq-accent-green, #55c95a);
+    background: rgba(85, 201, 90, 0.18);
+    color: var(--ftbq-quest-completed, #55c95a);
+  }
+  .qe.ftbq :global(button.primary:hover:not(:disabled)),
+  .qe.ftbq :global(.qe-actions > button:not(.ghost):hover:not(:disabled)) {
+    background: rgba(85, 201, 90, 0.28);
+  }
+  .qe.ftbq :global(button:disabled) {
+    opacity: 0.5;
+  }
+  .qe.ftbq :global(input),
+  .qe.ftbq :global(select),
+  .qe.ftbq :global(textarea) {
+    border-radius: 2px;
+    border-color: var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg, #1a1a1e);
+    color: var(--ftbq-text, #e8e8e8);
+    min-width: 0;
+  }
   .qe-tb,
   .qe-title,
   .qe-actions {
@@ -876,6 +951,11 @@
   }
   .drawer-wide {
     width: 360px;
+  }
+  .drawer-tables {
+    width: min(520px, 90vw);
+    max-height: min(70vh, 560px);
+    overflow: auto;
   }
   .drawer-h {
     display: flex;
@@ -1034,7 +1114,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: var(--text-secondary);
+    color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
   }
   .prog-bar select {
@@ -1044,7 +1124,7 @@
   }
   .prog-path {
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--ftbq-text-muted, #9a9aa0);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1096,7 +1176,7 @@
   }
   .qe-lay {
     flex: 1;
-    min-height: 560px;
+    min-height: 0;
     display: grid;
     grid-template-columns: 200px 1fr;
     gap: 0;
@@ -1112,15 +1192,18 @@
     min-height: 0;
     gap: 0;
     align-items: stretch;
+    overflow: hidden;
   }
   .qe-body-row .qe-lay {
     flex: 1;
+    min-height: 0;
   }
   .canvas-wrap {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    overflow: hidden;
   }
   .canvas-tools {
     display: flex;
@@ -1152,10 +1235,11 @@
   }
   .qe-footer .hint {
     margin: 0;
-    color: var(--text-muted);
+    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .qe-actions .active {
-    color: var(--accent, #93c5fd);
+    color: var(--ftbq-title-gold, #f2c94c);
+    border-color: var(--ftbq-accent-green, #55c95a);
   }
   :global(.spin) {
     animation: spin 0.8s linear infinite;
@@ -1165,11 +1249,13 @@
       transform: rotate(360deg);
     }
   }
-  @media (max-width: 1100px) {
+  @media (max-width: 900px) {
     .qe-lay,
     .qe-lay.with-insp {
-      grid-template-columns: 1fr;
-      grid-auto-rows: minmax(180px, auto);
+      grid-template-columns: 160px 1fr;
+    }
+    .qe-lay.with-insp {
+      grid-template-columns: 160px 1fr minmax(220px, 260px);
     }
   }
 </style>

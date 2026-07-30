@@ -1,4 +1,4 @@
-<!-- Litube-inspired lite player: large modal + draggable mini window. -->
+<!-- Litube-inspired lite player: large modal + draggable/resizable mini window. -->
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount, tick } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
@@ -14,7 +14,10 @@
 
   const dispatch = createEventDispatcher<{ close: void }>();
   const MINI_POS_KEY = "tuffbox-youtube-mini-pos";
-  const MINI_W = 440;
+  const MINI_SIZE_KEY = "tuffbox-youtube-mini-size";
+  const MINI_W_DEFAULT = 440;
+  const MINI_W_MIN = 280;
+  const MINI_HEADER_H = 44;
 
   let embedAlive = true;
   let shellEl: HTMLDivElement | null = null;
@@ -28,11 +31,20 @@
 
   let miniX = 24;
   let miniY = 24;
+  let miniW = MINI_W_DEFAULT;
   let dragging = false;
+  let resizing = false;
   let dragDx = 0;
   let dragDy = 0;
+  let resizeStartX = 0;
+  let resizeStartW = MINI_W_DEFAULT;
+  let resizeStartMiniX = 0;
+  let resizeStartMiniY = 0;
+  let resizeFromLeft = false;
+  let resizeFromTop = false;
 
   $: embedSrc = `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`;
+  $: miniVideoH = Math.round((miniW * 9) / 16);
 
   function bodyPortal(node: HTMLElement) {
     document.body.appendChild(node);
@@ -56,7 +68,42 @@
     }
   }
 
-  function loadMiniPos() {
+  function miniWMax(): number {
+    return Math.max(MINI_W_MIN, Math.min(960, window.innerWidth - 16));
+  }
+
+  function clampMiniW(w: number): number {
+    return Math.min(miniWMax(), Math.max(MINI_W_MIN, Math.round(w)));
+  }
+
+  function loadMiniSize() {
+    try {
+      const raw = localStorage.getItem(MINI_SIZE_KEY);
+      if (!raw) {
+        miniW = MINI_W_DEFAULT;
+        return;
+      }
+      const parsed = JSON.parse(raw) as { w?: number };
+      if (typeof parsed.w === "number" && Number.isFinite(parsed.w)) {
+        miniW = clampMiniW(parsed.w);
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+    miniW = MINI_W_DEFAULT;
+  }
+
+  function saveMiniSize() {
+    try {
+      localStorage.setItem(MINI_SIZE_KEY, JSON.stringify({ w: miniW }));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function loadMiniGeometry() {
+    loadMiniSize();
     try {
       const raw = localStorage.getItem(MINI_POS_KEY);
       if (!raw) {
@@ -78,13 +125,14 @@
 
   function placeMiniDefault() {
     const pad = 20;
-    miniX = Math.max(pad, window.innerWidth - MINI_W - pad);
-    miniY = Math.max(pad, window.innerHeight - Math.round((MINI_W * 9) / 16) - 72 - pad);
+    const h = Math.round((miniW * 9) / 16) + MINI_HEADER_H;
+    miniX = Math.max(pad, window.innerWidth - miniW - pad);
+    miniY = Math.max(pad, window.innerHeight - h - pad);
   }
 
   function clampMiniPos() {
-    const w = MINI_W;
-    const h = Math.round((MINI_W * 9) / 16) + 48;
+    const w = miniW;
+    const h = Math.round((miniW * 9) / 16) + MINI_HEADER_H;
     const maxX = Math.max(8, window.innerWidth - w - 8);
     const maxY = Math.max(8, window.innerHeight - h - 8);
     miniX = Math.min(maxX, Math.max(8, miniX));
@@ -101,7 +149,7 @@
 
   async function playOpenAnimation() {
     if (mode === "mini") {
-      loadMiniPos();
+      loadMiniGeometry();
       return;
     }
     await tick();
@@ -144,7 +192,7 @@
     mode = "mini";
     backdropIn = false;
     dialogIn = true;
-    loadMiniPos();
+    loadMiniGeometry();
   }
 
   function toModal() {
@@ -201,9 +249,9 @@
   }
 
   function onDragStart(e: PointerEvent) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || resizing) return;
     const target = e.target as HTMLElement | null;
-    if (target?.closest("button")) return;
+    if (target?.closest("button") || target?.closest(".yp-resize")) return;
     dragging = true;
     dragDx = e.clientX - miniX;
     dragDy = e.clientY - miniY;
@@ -228,8 +276,54 @@
     saveMiniPos();
   }
 
+  function onResizeStart(e: PointerEvent, fromLeft: boolean, fromTop: boolean) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragging = false;
+    resizing = true;
+    resizeFromLeft = fromLeft;
+    resizeFromTop = fromTop;
+    resizeStartX = e.clientX;
+    resizeStartW = miniW;
+    resizeStartMiniX = miniX;
+    resizeStartMiniY = miniY;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  }
+
+  function onResizeMove(e: PointerEvent) {
+    if (!resizing) return;
+    const dx = e.clientX - resizeStartX;
+    const nextW = clampMiniW(resizeFromLeft ? resizeStartW - dx : resizeStartW + dx);
+    if (resizeFromLeft) {
+      miniX = resizeStartMiniX + (resizeStartW - nextW);
+    }
+    if (resizeFromTop) {
+      const prevH = Math.round((resizeStartW * 9) / 16) + MINI_HEADER_H;
+      const nextH = Math.round((nextW * 9) / 16) + MINI_HEADER_H;
+      miniY = resizeStartMiniY + (prevH - nextH);
+    }
+    miniW = nextW;
+    clampMiniPos();
+  }
+
+  function onResizeEnd(e: PointerEvent) {
+    if (!resizing) return;
+    resizing = false;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    saveMiniSize();
+    saveMiniPos();
+  }
+
   function onWinResize() {
-    if (mode === "mini") clampMiniPos();
+    if (mode === "mini") {
+      miniW = clampMiniW(miniW);
+      clampMiniPos();
+    }
   }
 
   onMount(() => {
@@ -248,9 +342,10 @@
   class:yp-in={backdropIn || mode === "mini"}
   class:yp-out={backdropOut}
   class:dragging
+  class:resizing
   role={mode === "modal" ? "presentation" : "dialog"}
   aria-label={mode === "mini" ? title || "YouTube mini player" : undefined}
-  style={mode === "mini" ? `left: ${miniX}px; top: ${miniY}px; width: ${MINI_W}px;` : undefined}
+  style={mode === "mini" ? `left: ${miniX}px; top: ${miniY}px; width: ${miniW}px;` : undefined}
   use:bodyPortal
   on:click={(e) => mode === "modal" && e.target === e.currentTarget && close()}
   on:keydown={() => {}}
@@ -302,7 +397,7 @@
         </button>
       </div>
     </div>
-    <div class="yp-frame-wrap">
+    <div class="yp-frame-wrap" style={mode === "mini" ? `height: ${miniVideoH}px;` : undefined}>
       {#if embedAlive}
         <iframe
           src={embedSrc}
@@ -312,6 +407,49 @@
         ></iframe>
       {/if}
     </div>
+
+    {#if mode === "mini"}
+      <button
+        type="button"
+        class="yp-resize se"
+        aria-label="Resize mini player"
+        title="Drag to resize"
+        on:pointerdown={(e) => onResizeStart(e, false, false)}
+        on:pointermove={onResizeMove}
+        on:pointerup={onResizeEnd}
+        on:pointercancel={onResizeEnd}
+      ></button>
+      <button
+        type="button"
+        class="yp-resize sw"
+        aria-label="Resize mini player from bottom-left"
+        title="Drag to resize"
+        on:pointerdown={(e) => onResizeStart(e, true, false)}
+        on:pointermove={onResizeMove}
+        on:pointerup={onResizeEnd}
+        on:pointercancel={onResizeEnd}
+      ></button>
+      <button
+        type="button"
+        class="yp-resize ne"
+        aria-label="Resize mini player from top-right"
+        title="Drag to resize"
+        on:pointerdown={(e) => onResizeStart(e, false, true)}
+        on:pointermove={onResizeMove}
+        on:pointerup={onResizeEnd}
+        on:pointercancel={onResizeEnd}
+      ></button>
+      <button
+        type="button"
+        class="yp-resize nw"
+        aria-label="Resize mini player from top-left"
+        title="Drag to resize"
+        on:pointerdown={(e) => onResizeStart(e, true, true)}
+        on:pointermove={onResizeMove}
+        on:pointerup={onResizeEnd}
+        on:pointercancel={onResizeEnd}
+      ></button>
+    {/if}
   </div>
 </div>
 
@@ -370,6 +508,7 @@
 
   .yp-shell.is-mini .yp-dialog {
     pointer-events: auto;
+    position: relative;
     width: 100%;
     max-height: none;
     margin: 0;
@@ -413,6 +552,7 @@
 
   .yp-dialog.mini {
     border-radius: var(--border-radius-lg, 14px);
+    overflow: visible;
   }
 
   .yp-header {
@@ -423,6 +563,9 @@
     border-bottom: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-elevated, var(--bg-tertiary)) 80%, var(--bg-secondary));
     flex-shrink: 0;
+    border-radius: inherit;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
   }
 
   .yp-header.draggable {
@@ -514,11 +657,17 @@
     max-height: calc(100vh - 96px);
     background: #000;
     flex: 1 1 auto;
+    overflow: hidden;
+    border-radius: inherit;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
   }
 
   .yp-dialog.mini .yp-frame-wrap {
     max-height: none;
     flex: 0 0 auto;
+    aspect-ratio: auto;
+    border-radius: 0 0 var(--border-radius-lg, 14px) var(--border-radius-lg, 14px);
   }
 
   .yp-frame-wrap iframe {
@@ -527,6 +676,58 @@
     width: 100%;
     height: 100%;
     border: 0;
+  }
+
+  .yp-resize {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    z-index: 2;
+    touch-action: none;
+  }
+
+  .yp-resize.se {
+    right: -4px;
+    bottom: -4px;
+    cursor: nwse-resize;
+  }
+
+  .yp-resize.sw {
+    left: -4px;
+    bottom: -4px;
+    cursor: nesw-resize;
+  }
+
+  .yp-resize.ne {
+    right: -4px;
+    top: -4px;
+    cursor: nesw-resize;
+  }
+
+  .yp-resize.nw {
+    left: -4px;
+    top: -4px;
+    cursor: nwse-resize;
+  }
+
+  .yp-resize.se::after {
+    content: "";
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    width: 8px;
+    height: 8px;
+    border-right: 2px solid color-mix(in srgb, var(--accent-primary) 70%, var(--text-muted));
+    border-bottom: 2px solid color-mix(in srgb, var(--accent-primary) 70%, var(--text-muted));
+    border-radius: 0 0 2px 0;
+    opacity: 0.85;
+  }
+
+  .yp-shell.resizing {
+    user-select: none;
   }
 
   :global(.potato-pc) .yp-shell,

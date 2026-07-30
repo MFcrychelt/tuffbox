@@ -1,13 +1,14 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { open as openShell } from "@tauri-apps/plugin-shell";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import {
     PlayCircle, RefreshCw, Terminal, TimerReset, XCircle,
     Shield, Server, Square, Cpu, HardDrive, Activity, Stethoscope, Zap,
-    Camera,
+    Camera, FolderOpen,
   } from "lucide-svelte";
   import { onDestroy, onMount, tick } from "svelte";
-  import { ideStageRequest, projectPath } from "../lib/store";
+  import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
@@ -64,7 +65,7 @@
     "A fatal error has been detected",
   ];
 
-  const LOW_END_MEMORY_MB = 2048;
+  const CLIENT_4G_MEMORY_MB = 4096;
   const DEFAULT_TIMEOUT_S = 180;
   const LOG_TAIL_LINES = 500;
 
@@ -110,6 +111,8 @@
   let matrixStopOnFail = true;
   let matrixSummary: MatrixRow[] = [];
   let matrixAbort = false;
+  let serverDir = "";
+  let activeLogRoot: string | null = null;
 
   let runs: TestRunRecord[] = [];
   let capturedRunIds: Record<string, boolean> = {};
@@ -134,9 +137,6 @@
           ok: false,
           label: `${(validationReport.graphErrors ?? 0) + (validationReport.jsonErrors?.length ?? 0)} errors`,
         };
-  $: lowEndProfile = profiles.find((p) =>
-    /low[\s_-]?end|lowend|potato|lite/i.test(`${p.id} ${p.name}`),
-  );
   $: filteredRuns = runs.filter((r) => {
     if (historyFilter === "all") return true;
     const s = normalizeStatus(r.status);
@@ -283,6 +283,7 @@
       }
       if (Object.keys(matrixIds).length === 0) matrixIds = defaults;
       lastLoadedPath = $projectPath;
+      if (!serverDir.trim()) serverDir = defaultServerDir();
       await refreshLog();
       await loadRuns();
       await loadStats();
@@ -321,6 +322,31 @@
     return $projectPath.replace(/[/\\][^/\\]+$/, "");
   }
 
+  function defaultServerDir(): string {
+    const dir = projectDir();
+    const name = ($projectInfo?.id || $projectInfo?.name || "modpack")
+      .toString()
+      .replace(/[<>:"/\\|?*]+/g, "-")
+      .trim() || "modpack";
+    return dir ? `${dir}\\${name}-server` : `${name}-server`;
+  }
+
+  async function ensureServerDir(): Promise<string | null> {
+    if (!$projectPath) return null;
+    if (!serverDir.trim()) serverDir = defaultServerDir();
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      title: "Choose folder for the server instance",
+      defaultPath: serverDir.trim() || projectDir() || undefined,
+    });
+    if (picked == null) return null;
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    if (!path) return null;
+    serverDir = path;
+    return path;
+  }
+
   async function maybeSnapshot(label: string) {
     if (!autoSnapshot || !$projectPath) return;
     const dir = projectDir();
@@ -352,6 +378,8 @@
     quickPlayType?: string | null;
     quickPlayValue?: string | null;
     prepareServer?: boolean;
+    serverDir?: string | null;
+    openServerConsole?: boolean;
   }): Promise<boolean> {
     if (!canLaunch()) return false;
     running = true;
@@ -365,33 +393,50 @@
     verdictReason = null;
     startupSeconds = null;
     activeRunId = null;
+    activeLogRoot = opts.serverDir
+      ? `${opts.serverDir.replace(/[/\\]+$/, "")}\\tuffbox.project.json`
+      : $projectPath;
     try {
       await maybeSnapshot(opts.label);
-      if (opts.prepareServer) {
+      if (opts.prepareServer && opts.serverDir) {
         await invoke("generate_server_properties", {
           path: $projectPath,
           levelSeed: levelSeed.trim() || null,
           onlineMode: onlineModeOff ? false : true,
+          targetDir: opts.serverDir,
         });
       }
       await invoke("record_launch", { path: $projectPath });
-      const res = await launchWithFeedback({
-        path: $projectPath!,
-        profile: opts.profile,
-        memoryMbOverride: opts.memoryMbOverride ?? null,
-        quickPlayType: opts.quickPlayType ?? null,
-        quickPlayValue: opts.quickPlayValue ?? null,
-      });
+      const res = await launchWithFeedback(
+        {
+          path: $projectPath!,
+          profile: opts.profile,
+          memoryMbOverride: opts.memoryMbOverride ?? null,
+          quickPlayType: opts.quickPlayType ?? null,
+          quickPlayValue: opts.quickPlayValue ?? null,
+          serverDir: opts.serverDir ?? null,
+          levelSeed: levelSeed.trim() || null,
+          onlineMode: onlineModeOff ? false : true,
+        },
+        {
+          openLog: true,
+          logPath: activeLogRoot,
+          logTitle: opts.openServerConsole ? "Server console" : null,
+        },
+      );
       if (!res) {
         running = false;
         livePhase = "idle";
+        activeLogRoot = null;
         return false;
       }
       await loadStats();
       await loadRuns();
       activeRunId = runs[0]?.id ?? null;
       livePhase = "bootstrapping";
-      message = `${opts.label} started — watching latest.log.`;
+      message = opts.serverDir
+        ? `${opts.label} started — server folder: ${opts.serverDir}`
+        : `${opts.label} started — watching latest.log.`;
       startPolling();
       return true;
     } catch (e) {
@@ -399,36 +444,44 @@
       running = false;
       livePhase = "fail";
       verdictReason = String(e);
+      activeLogRoot = null;
       return false;
     }
   }
 
   async function smokeClient() {
-    await beginRun({ profile: selectedProfile, label: "Smoke client" });
+    activeLogRoot = $projectPath;
+    await beginRun({ profile: selectedProfile, label: "Smoke client", openServerConsole: false });
   }
 
-  async function serverDryRun() {
+  async function runServer() {
+    const dir = await ensureServerDir();
+    if (!dir) {
+      message = "Server folder selection cancelled.";
+      return;
+    }
     await beginRun({
       profile: "server",
-      label: "Server dry run",
+      label: "Run server",
       prepareServer: true,
+      serverDir: dir,
+      openServerConsole: true,
     });
   }
 
-  async function lowEndSmoke() {
-    if (lowEndProfile) {
-      await beginRun({ profile: lowEndProfile.id, label: "Low-end smoke" });
-      return;
-    }
-    const client = profiles.find((p) => p.id === "client") ?? profiles.find((p) => String(p.side).toLowerCase() !== "server");
+  async function runClient4Ram() {
+    const client = profiles.find((p) => p.id === "client")
+      ?? profiles.find((p) => String(p.side).toLowerCase() !== "server")
+      ?? profiles.find((p) => p.id === selectedProfile);
     if (!client) {
-      error = "No client profile found. Create a low-end profile (≈2048 MB) in Setup.";
+      error = "No client profile found.";
       return;
     }
     await beginRun({
       profile: client.id,
-      label: "Low-end smoke",
-      memoryMbOverride: LOW_END_MEMORY_MB,
+      label: "Run client 4 RAM",
+      memoryMbOverride: CLIENT_4G_MEMORY_MB,
+      openServerConsole: false,
     });
   }
 
@@ -543,7 +596,7 @@
   async function refreshLog() {
     if (!$projectPath) return;
     try {
-      log = await invoke("get_launch_log", { path: $projectPath });
+      log = await invoke("get_launch_log", { path: activeLogRoot || $projectPath });
       if (autoScroll && logEl) {
         await tick();
         logEl.scrollTop = logEl.scrollHeight;
@@ -602,8 +655,8 @@
 
   async function reRun(run: TestRunRecord) {
     selectedProfile = run.profile;
-    if (run.profile === "server") await serverDryRun();
-    else await beginRun({ profile: run.profile, label: `Re-run · ${run.profile}` });
+    if (run.profile === "server") await runServer();
+    else await beginRun({ profile: run.profile, label: `Re-run · ${run.profile}`, openServerConsole: false });
   }
 
   async function killInstance() {
@@ -659,14 +712,18 @@
       const profile = queue[i];
       matrixSummary[i] = { ...matrixSummary[i], verdict: "running" };
       const isServer = profile.id === "server" || String(profile.side).toLowerCase() === "server";
+      let stagedServerDir: string | null = null;
+      if (isServer) {
+        stagedServerDir = serverDir.trim() || defaultServerDir();
+        serverDir = stagedServerDir;
+      }
       const ok = await beginRun({
         profile: profile.id,
         label: `Matrix · ${profile.name}`,
         prepareServer: isServer,
-        memoryMbOverride:
-          /low[\s_-]?end|lowend/i.test(`${profile.id} ${profile.name}`)
-            ? null
-            : null,
+        serverDir: stagedServerDir,
+        openServerConsole: isServer,
+        memoryMbOverride: null,
       });
       if (!ok) {
         matrixSummary[i] = {
@@ -713,6 +770,15 @@
 
   function stopMatrix() {
     matrixAbort = true;
+  }
+
+  function onSecondaryToggle(e: Event) {
+    const el = e.currentTarget as HTMLDetailsElement;
+    if (!el?.open) return;
+    // Expand downward into scroll space instead of compressing the log above.
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    });
   }
 
   function startPolling() {
@@ -811,11 +877,11 @@
           <button class="preset primary" on:click={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
             <PlayCircle size={16} /> Smoke client
           </button>
-          <button class="preset" on:click={serverDryRun} disabled={running || matrixRunning}>
-            <Server size={16} /> Server dry run
+          <button class="preset" on:click={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
+            <Server size={16} /> Run server
           </button>
-          <button class="preset" on:click={lowEndSmoke} disabled={running || matrixRunning} title={lowEndProfile ? `Profile: ${lowEndProfile.id}` : `Override ${LOW_END_MEMORY_MB} MB`}>
-            <Zap size={16} /> Low-end smoke
+          <button class="preset" on:click={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
+            <Zap size={16} /> Run client 4 RAM
           </button>
         </div>
         <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
@@ -830,6 +896,12 @@
             <input type="checkbox" bind:checked={autoScroll} /> Auto-scroll
           </label>
           <div class="log-tools-right">
+            {#if activeLogRoot && activeLogRoot !== $projectPath}
+              <span class="log-trunc-hint">Server console</span>
+              <button class="ghost mini" on:click={() => openLaunchLog(activeLogRoot!, "Server console")}>
+                <Terminal size={12} /> Open server console
+              </button>
+            {/if}
             {#if logTruncated}
               <span class="log-trunc-hint">Showing last {LOG_TAIL_LINES} of {logLineCount} lines</span>
             {/if}
@@ -852,7 +924,7 @@
         {/if}
       </div>
 
-      <details class="secondary-panel">
+      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
         <summary>Preflight &amp; options</summary>
         <div class="secondary-body">
           <div class="preflight">
@@ -895,6 +967,18 @@
           </div>
           <div class="opts-row">
             <label>
+              Server folder
+              <input type="text" placeholder="Where the server instance will be staged" bind:value={serverDir} />
+            </label>
+            <button class="secondary" on:click={async () => { await ensureServerDir(); }} disabled={!$projectPath}>
+              <FolderOpen size={14} /> Browse…
+            </button>
+            <button class="ghost" on:click={() => (serverDir = defaultServerDir())} disabled={!$projectPath}>
+              Default
+            </button>
+          </div>
+          <div class="opts-row">
+            <label>
               level-seed
               <input type="text" placeholder="optional" bind:value={levelSeed} />
             </label>
@@ -903,12 +987,14 @@
             </label>
             <button class="ghost" on:click={async () => {
               try {
+                const dir = serverDir.trim() || defaultServerDir();
                 await invoke("generate_server_properties", {
                   path: $projectPath,
                   levelSeed: levelSeed.trim() || null,
                   onlineMode: onlineModeOff ? false : true,
+                  targetDir: dir,
                 });
-                message = "server.properties written.";
+                message = `server.properties written to ${dir}`;
               } catch (e) { error = String(e); }
             }}>Write server.properties</button>
           </div>
@@ -935,7 +1021,7 @@
         </div>
       </details>
 
-      <details class="secondary-panel">
+      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
         <summary>Live stats</summary>
         <div class="secondary-body">
           <div class="meters">
@@ -969,7 +1055,7 @@
         </div>
       </details>
 
-      <details class="secondary-panel" bind:open={matrixDetailsOpen}>
+      <details class="secondary-panel" bind:open={matrixDetailsOpen} on:toggle={onSecondaryToggle}>
         <summary>Profile matrix</summary>
         <div class="secondary-body">
           <div class="matrix-panel">
@@ -1007,7 +1093,7 @@
         </div>
       </details>
 
-      <details class="secondary-panel">
+      <details class="secondary-panel" on:toggle={onSecondaryToggle}>
         <summary>Profiles &amp; run history</summary>
         <div class="secondary-body profiles-panel">
           {#if profiles.length === 0}
@@ -1100,7 +1186,8 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     gap: 8px;
   }
   .launch-bar {
@@ -1124,8 +1211,9 @@
   .preset { display: inline-flex; align-items: center; gap: 8px; }
   .preset.primary { background: rgba(27, 217, 106, 0.18); border-color: rgba(27, 217, 106, 0.45); color: var(--accent-primary); font-weight: 700; }
   .log-panel {
-    flex: 1;
-    min-height: 0;
+    /* Fill free space when collapsibles are closed; never shrink when they open below. */
+    flex: 1 0 min(70vh, 640px);
+    min-height: min(70vh, 640px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1134,7 +1222,7 @@
     border-radius: var(--border-radius-lg);
   }
   .secondary-panel {
-    flex-shrink: 0;
+    flex: 0 0 auto;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);

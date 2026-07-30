@@ -2,6 +2,7 @@
   import { Trash2, Package } from "lucide-svelte";
   import type { QuestData, QuestReward, QuestTask } from "../../lib/api";
   import ItemPicker from "./ItemPicker.svelte";
+  import QuestItemIcon from "./QuestItemIcon.svelte";
 
   export let quest: QuestData;
   export let onDirty: () => void;
@@ -573,6 +574,7 @@
     <label
       >Quest icon
       <div class="item-row">
+        <QuestItemIcon itemId={quest.icon} fallback="?" size={28} />
         <input bind:value={quest.icon} on:input={onDirty} placeholder="modid:item" />
         <button type="button" class="pick" on:click={() => openPicker("icon", 0)}
           ><Package size={12} /></button
@@ -666,6 +668,7 @@
   .item-row {
     display: flex;
     gap: 4px;
+    align-items: center;
   }
   .item-row input {
     flex: 1;

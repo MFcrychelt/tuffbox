@@ -478,6 +478,14 @@ export interface Snapshot {
   manifestPath: string;
   lockfilePath: string | null;
   changedFiles: string[];
+  tags?: string[];
+  crashFingerprintKey?: string | null;
+  reportId?: string | null;
+  planSource?: string | null;
+  matchedCaseIds?: string[];
+  operation?: string;
+  actionsSummary?: string[];
+  actor?: string | null;
 }
 
 export interface SnapshotDiff {
@@ -491,6 +499,46 @@ export interface SnapshotFileDiff {
   fromExists: boolean;
   toExists: boolean;
   text: string;
+}
+
+export interface SnapshotChangedFile {
+  path: string;
+  category: string;
+}
+
+export interface SnapshotPlanAction {
+  op: string;
+  modId?: string | null;
+  provider?: string | null;
+  projectId?: string | null;
+  version?: string | null;
+  path?: string | null;
+  patchType?: string | null;
+  patch?: unknown;
+  reason?: string | null;
+  risk?: string;
+}
+
+export interface SnapshotDetail {
+  snapshot: Snapshot;
+  actionsSummary: string[];
+  relatedEvents: PackEvent[];
+  planActions: SnapshotPlanAction[];
+  humanExplanation?: string | null;
+  changedFiles: SnapshotChangedFile[];
+  manifestOnly: boolean;
+}
+
+export interface ManifestSnapshotDiff {
+  mcVersionChanged?: boolean;
+  fromMcVersion?: string;
+  toMcVersion?: string;
+  loaderVersionChanged?: boolean;
+  fromLoaderVersion?: string;
+  toLoaderVersion?: string;
+  addedMods?: string[];
+  removedMods?: string[];
+  diffText?: string;
 }
 
 export interface TestRunRecord {
@@ -1241,7 +1289,18 @@ export const api = {
         memoryMbOverride: memoryMbOverride ?? null,
       });
     },
-    server(p?: string) { return cmd<LaunchResult>("launch_server", pathArg(p)); },
+    server(
+      serverDir: string,
+      p?: string,
+      opts?: { levelSeed?: string | null; onlineMode?: boolean | null },
+    ) {
+      return cmd<LaunchResult>("launch_server", {
+        ...pathArg(p),
+        serverDir,
+        levelSeed: opts?.levelSeed ?? null,
+        onlineMode: opts?.onlineMode ?? null,
+      });
+    },
     quickPlay(
       profile: string,
       quickPlayType?: string | null,
@@ -1264,12 +1323,17 @@ export const api = {
     },
     generateServerProperties(
       p?: string,
-      opts?: { levelSeed?: string | null; onlineMode?: boolean | null },
+      opts?: {
+        levelSeed?: string | null;
+        onlineMode?: boolean | null;
+        targetDir?: string | null;
+      },
     ) {
       return cmd<string>("generate_server_properties", {
         ...pathArg(p),
         levelSeed: opts?.levelSeed ?? null,
         onlineMode: opts?.onlineMode ?? null,
+        targetDir: opts?.targetDir ?? null,
       });
     },
   },
@@ -1302,7 +1366,9 @@ export const api = {
     create(name: string, reason: string, projectDir?: string) { return cmd<Snapshot>("create_snapshot", { projectDir: projectDir ?? get(projectPath) ?? "", name, reason }); },
     diff(from: string, to: string, projectDir?: string) { return cmd<SnapshotDiff>("diff_snapshots", { projectDir: projectDir ?? get(projectPath) ?? "", from, to }); },
     rollback(id: string, projectDir?: string) { return cmd<Snapshot>("rollback_snapshot", { projectDir: projectDir ?? get(projectPath) ?? "", id }); },
-    diffManifest(fromId: string, toId: string, projectDir?: string) { return cmd<Record<string, unknown>>("diff_manifest_snapshots", { projectDir: projectDir ?? get(projectPath) ?? "", fromId, toId }); },
+    delete(id: string, projectDir?: string) { return cmd<void>("delete_snapshot", { projectDir: projectDir ?? get(projectPath) ?? "", id }); },
+    detail(id: string, projectDir?: string) { return cmd<SnapshotDetail>("get_snapshot_detail", { projectDir: projectDir ?? get(projectPath) ?? "", id }); },
+    diffManifest(fromId: string, toId: string, projectDir?: string) { return cmd<ManifestSnapshotDiff>("diff_manifest_snapshots", { projectDir: projectDir ?? get(projectPath) ?? "", fromId, toId }); },
     fileDiff(from: string, to: string, relativePath: string, projectDir?: string) { return cmd<SnapshotFileDiff>("get_snapshot_file_diff", { projectDir: projectDir ?? get(projectPath) ?? "", from, to, relativePath }); },
   },
 
@@ -1928,6 +1994,9 @@ export const api = {
     openFolder(p?: string) { return cmd<void>("open_project_folder", pathArg(p)); },
     deleteProject(p?: string) { return cmd<void>("delete_project", pathArg(p)); },
     cloneProject(newName: string, p?: string) { return cmd<string>("clone_project", { ...pathArg(p), newName }); },
+    createDesktopShortcut(p?: string) {
+      return cmd<string>("create_project_desktop_shortcut", pathArg(p));
+    },
   },
 
   // ── Localization ──────────────────────────────────────────────────

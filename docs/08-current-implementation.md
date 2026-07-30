@@ -112,7 +112,7 @@ apps/tuffbox-desktop/
 - Config Editor: добавлена вкладка для просмотра и редактирования файлов `config/`, `defaultconfigs/`, `kubejs/` и `scripts/` с whitelist расширений, ограничением размера и auto snapshot перед сохранением.
 - Change History: новая IDE-вкладка показывает историю изменений timeline-деревом по категориям Mods/Configs/Shaders/Resource Packs/World/Data/Other, поддерживает сворачиваемые preview, persistent tracked-folder чекбоксы, регистрацию выбранных папок snapshot'ом и rollback отдельного tracked file.
 - Schema migrations: core умеет нормализовать manifest/lockfile schema `0.1`/`0.1.0` к текущей `0.1.0`, а desktop backend получил команды статуса и миграции manifest.
-- Snapshots: UI получил rollback, compare panel и inline text diff для tracked changed files; diff теперь сравнивает содержимое файлов, а не только списки путей.
+- Snapshots: UI получил rollback, compare panel и inline text diff для tracked changed files; diff теперь сравнивает содержимое файлов, а не только списки путей. Master–detail layout показывает `actionsSummary` (человекочитаемые действия), tags/`planSource`, changed files, related pack events; `get_snapshot_detail` синтезирует legacy-описания из `plan.json` / resolutions / crash marker / events. Auto-snapshot пишет `operation` + `actionsSummary` + `actor` в `snapshot.json`; crash_fix также сохраняет `plan.json` в каталоге снапшота. Delete snapshot, фильтры Auto/Manual/Crash, Jump to History.
 - Diagnose 2.0: Diagnostics page расширена до crash parser workspace — список crash reports, открытие выбранного отчёта, tail `latest.log` и `launcher.log`, grouped parser signals (Entrypoint/Loader mismatch/Render/Performance), crash report sections (`-- Head --`, `-- Mods --`, `-- System Details --`) с preview и parsed Mods section, suspected mods panel, последние snapshots/изменения рядом и кнопка **Create fix plan**.
 - Diagnostics/Settings: переоформлены в едином стиле.
 - Поддержка импорта:
@@ -144,7 +144,7 @@ apps/tuffbox-desktop/
   - `get_graph` — граф зависимостей;
   - `get_diagnostics` — диагностики;
   - `get_crash_diagnosis` / `create_crash_fix_plan` — Diagnose 2.0: crash reports, latest.log, suspected mods, recent snapshots и план исправления;
-  - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `get_snapshot_file_diff` / `rollback_snapshot` — управление snapshots, rollback и inline сравнение tracked changed files;
+  - `list_snapshots` / `create_snapshot` / `diff_snapshots` / `get_snapshot_file_diff` / `get_snapshot_detail` / `delete_snapshot` / `rollback_snapshot` — управление snapshots, detail с actionsSummary, rollback и inline сравнение tracked changed files;
   - `validate_modrinth_export` / `generate_release_changelog` / `update_project_version` / `create_release_snapshot` / `list_release_artifacts` / `create_release_draft` — release workflow, artifact registry и draft metadata;
   - `export_modrinth_pack` — базовый экспорт `.mrpack` с remote mod downloads и overrides;
   - `export_server_pack` — базовый server pack zip: server-safe mods, configs/scripts, download manifest, README и start scripts;

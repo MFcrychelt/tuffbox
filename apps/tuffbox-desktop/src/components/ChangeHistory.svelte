@@ -8,6 +8,7 @@
   import {
     diagnoseFocusPaths,
     historyFocusEventId,
+    historyFocusSnapshotId,
     ideStageRequest,
     projectPath,
   } from "../lib/store";
@@ -176,6 +177,16 @@
         setTimeout(() => {
           document.getElementById("change-" + selectedId)?.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
+      } else if ($historyFocusSnapshotId) {
+        const snapId = $historyFocusSnapshotId;
+        historyFocusSnapshotId.set(null);
+        const match = entries.find((e) => e.snapshotId === snapId);
+        if (match) {
+          selectedId = match.id;
+          setTimeout(() => {
+            document.getElementById("change-" + selectedId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 50);
+        }
       }
     } catch (e) {
       error = String(e);

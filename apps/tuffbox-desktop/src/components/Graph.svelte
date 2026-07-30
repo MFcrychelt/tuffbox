@@ -80,7 +80,7 @@
   let fullscreenElement: Element | null = null;
   $: graphFullscreen = fullscreenElement === graphCanvasEl;
 
-  let showNodeList = false;
+  let showNodeList = true;
   let changePlanExpanded = false;
   let changePlanSeenKey = "";
   let canvasResizeObserver: ResizeObserver | null = null;
@@ -2081,7 +2081,6 @@
     {/if}
 
     <div class="graph-body">
-    <div class="graph-main">
     <section
       bind:this={graphCanvasEl}
       class="graph-canvas"
@@ -2357,7 +2356,7 @@
       </svg>
     </section>
 
-      <aside class="details">
+    <aside class="details">
         {#if selected}
           <div class="details-header">
             <div>
@@ -2445,7 +2444,6 @@
           </div>
         {/if}
       </aside>
-    </div>
 
     <div class="list-toggle-row">
       <button type="button" class="ghost mini list-toggle-btn" on:click={() => (showNodeList = !showNodeList)}>
@@ -2534,10 +2532,9 @@
             </div>
           {/each}
         {/if}
-      </section>
 
       {#if ghostNodes.length > 0}
-        <section class="node-column missing-column">
+        <div class="missing-column">
           <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
           <p class="column-hint">Click or right-click a row to install from Modrinth.</p>
           <div class="mod-grid">
@@ -2575,8 +2572,9 @@
               </div>
             {/each}
           </div>
-        </section>
+        </div>
       {/if}
+      </section>
     </div>
     {/if}
 
@@ -2737,14 +2735,6 @@
     gap: 8px;
   }
 
-  .graph-main {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    gap: 12px;
-    overflow: hidden;
-  }
-
   .toolbar,
   .toolbar-actions,
   .notice {
@@ -2880,8 +2870,10 @@
 
   .graph-canvas {
     position: relative;
-    flex: 1;
-    min-height: 0;
+    flex: 0 0 auto;
+    width: 100%;
+    height: min(28vh, 240px);
+    min-height: 160px;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -2914,6 +2906,8 @@
     border: 0;
     border-radius: 0;
     background: #09090b;
+    height: 100%;
+    min-height: 100%;
   }
 
   .graph-canvas:fullscreen svg {
@@ -3433,12 +3427,11 @@
 
   .graph-layout,
   .graph-list {
-    display: grid;
-    grid-template-columns: minmax(320px, 1fr);
+    display: flex;
+    flex-direction: column;
     gap: 12px;
-    align-items: start;
-    flex-shrink: 0;
-    max-height: min(42vh, 360px);
+    flex: 1;
+    min-height: 0;
     overflow: auto;
   }
 
@@ -3467,11 +3460,17 @@
   }
 
   .details {
-    flex: 0 0 320px;
-    width: 320px;
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: min(22vh, 180px);
     min-height: 0;
     overflow: auto;
     position: static;
+  }
+
+  .details:not(:has(.details-header)) {
+    max-height: none;
+    padding: 10px 14px;
   }
 
   .details-action-btn {
@@ -3481,7 +3480,7 @@
   }
 
   .mods-column {
-    min-height: 0;
+    min-height: auto;
   }
 
   .missing-column {
@@ -4161,19 +4160,13 @@
   .muted { color: var(--text-muted); font-size: 13px; }
 
   @media (max-width: 1180px) {
-    .graph-main {
-      flex-direction: column;
-    }
-
     .details {
-      flex: 0 0 auto;
-      width: 100%;
-      max-height: min(36vh, 280px);
+      max-height: min(28vh, 220px);
     }
 
     .graph-layout,
     .graph-list {
-      grid-template-columns: 1fr;
+      flex-direction: column;
     }
   }
 </style>

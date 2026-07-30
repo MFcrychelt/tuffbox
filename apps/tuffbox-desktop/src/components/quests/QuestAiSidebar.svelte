@@ -13,8 +13,9 @@
     type QuestChatSession,
     type QuestPlanMergeResult,
   } from "../../lib/api";
-  import { projectPath } from "../../lib/store";
+  import { projectPath, questChatFocusId } from "../../lib/store";
   import QuestPlanReview from "./QuestPlanReview.svelte";
+  import { invoke } from "@tauri-apps/api/core";
 
   export let open = true;
 
@@ -29,11 +30,15 @@
   let input = "";
   let showJson = false;
   let rawJson = "";
-  let forceAi = false;
+  /** Default true so Generate uses LLM; uncheck to allow offline heuristic. */
+  let forceAi = true;
+  let allowOfflineHeuristic = false;
   let busy = false;
   let error = "";
+  let aiReadyHint = "";
   let merge: QuestPlanMergeResult | null = null;
   let progressLog: string[] = [];
+  let loreWarning = "";
   const EXAMPLE_CHIPS = [
     {
       label: "24-quest line",
@@ -58,8 +63,9 @@
     if (!$projectPath) return;
     try {
       sessions = await api.quests.listChats($projectPath);
-    } catch {
+    } catch (e) {
       sessions = [];
+      error = String(e);
     }
   }
 
@@ -103,12 +109,25 @@
     }
   }
 
+  async function preflightAi(): Promise<boolean> {
+    aiReadyHint = "";
+    try {
+      const result = await invoke<string>("test_integration", { provider: "ai" });
+      aiReadyHint = result;
+      return true;
+    } catch (e) {
+      error = `AI not ready: ${String(e)}. Open Settings → Integrations and configure Ollama / OpenAI-compatible.`;
+      return false;
+    }
+  }
+
   async function send(intent: string | null = "generate") {
     if (!$projectPath || busy) return;
     const text = showJson && rawJson.trim() ? rawJson.trim() : input.trim();
     if (!text && intent === "generate") return;
     busy = true;
     error = "";
+    loreWarning = "";
     progressLog = ["Starting…"];
     try {
       if (showJson && rawJson.trim()) {
@@ -116,6 +135,12 @@
         progressLog = ["Parsed pasted QuestPlan JSON"];
         input = "";
       } else {
+        const useForceAi = forceAi || !allowOfflineHeuristic;
+        if (useForceAi && intent !== "lore") {
+          progressLog = ["Checking AI…"];
+          const ok = await preflightAi();
+          if (!ok) return;
+        }
         const msg =
           intent === "lore"
             ? input.trim() || "Regenerate lore for pending plan"
@@ -124,19 +149,28 @@
               : text;
         const result = await api.quests.chatTurn(
           msg,
-          { chatId: activeId, forceAi, intent },
+          { chatId: activeId, forceAi: useForceAi, intent },
           $projectPath,
         );
         session = result.session;
         activeId = result.session.id;
         merge = result.merge;
         progressLog = result.progressLog ?? [];
+        const logJoined = progressLog.join("\n");
+        if (/offline heuristic/i.test(logJoined)) {
+          loreWarning = "Used offline heuristic (no LLM). Enable Force AI for full generation.";
+        }
+        if (/Lore AI unavailable|Lore fail|template fill/i.test(logJoined)) {
+          loreWarning =
+            (loreWarning ? loreWarning + " " : "") +
+            "Lore used templates — AI lore pass failed or was skipped.";
+        }
         input = "";
         await refreshList();
       }
     } catch (e) {
       error = String(e);
-      progressLog = [];
+      progressLog = [...progressLog, `Error: ${String(e)}`];
     } finally {
       busy = false;
     }
@@ -168,6 +202,12 @@
   });
 
   $: if ($projectPath) void refreshList();
+
+  $: if ($questChatFocusId && $projectPath && open) {
+    const id = $questChatFocusId;
+    questChatFocusId.set(null);
+    void selectSession(id);
+  }
 </script>
 
 <aside class="qai" class:open>
@@ -198,7 +238,7 @@
   </div>
 
   <div class="transcript">
-    {#if !activeSession?.messages?.length}
+    {#if !session?.messages?.length}
       <p class="hint">
         Describe a quest line. <strong>Apply</strong> updates the editor; <strong>Save</strong> writes
         SNBT.
@@ -209,7 +249,7 @@
         {/each}
       </div>
     {:else}
-      {#each activeSession.messages as m, i (`${m.role}-${i}`)}
+      {#each session.messages as m, i (`${m.role}-${i}`)}
         <div class="msg" class:user={m.role === "user"} class:assistant={m.role === "assistant"}>
           <strong>{m.role === "user" ? "You" : "AI"}</strong>
           <p>{m.content}</p>
@@ -229,6 +269,8 @@
   {/if}
 
   {#if error}<div class="err">{error}</div>{/if}
+  {#if loreWarning}<div class="warn">{loreWarning}</div>{/if}
+  {#if aiReadyHint && busy}<div class="live-prog">{aiReadyHint}</div>{/if}
 
   {#if merge}
     <QuestPlanReview
@@ -260,7 +302,10 @@
     </div>
     <details class="adv">
       <summary>Advanced</summary>
-      <label class="opt"><input type="checkbox" bind:checked={forceAi} /> Force AI</label>
+      <label class="opt"><input type="checkbox" bind:checked={forceAi} /> Force AI (skip offline heuristic)</label>
+      <label class="opt"
+        ><input type="checkbox" bind:checked={allowOfflineHeuristic} /> Allow offline heuristic</label
+      >
       <label class="opt"><input type="checkbox" bind:checked={showJson} /> Paste JSON</label>
       <div class="composer-actions">
         <button
@@ -321,7 +366,7 @@
     gap: 4px;
   }
   .sess.active .sess-open {
-    color: var(--accent-primary, #1bd96a);
+    color: var(--ftbq-accent-green, #55c95a);
   }
   .sess-open {
     flex: 1;
@@ -396,7 +441,8 @@
     padding: 4px 0;
   }
   .live-prog,
-  .err {
+  .err,
+  .warn {
     padding: 6px 10px;
     font-size: 12px;
     display: flex;
@@ -405,6 +451,10 @@
   }
   .err {
     color: #f87171;
+  }
+  .warn {
+    color: var(--ftbq-quest-started, #f2c94c);
+    background: rgba(242, 201, 76, 0.08);
   }
   .composer {
     padding: 10px;

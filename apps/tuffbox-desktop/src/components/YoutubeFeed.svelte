@@ -4,7 +4,7 @@
   import { Youtube, ChevronDown, PictureInPicture2 } from "lucide-svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { api } from "../lib/api";
-  import YoutubePlayer from "./YoutubePlayer.svelte";
+  import { openYoutubePlayer } from "../lib/store";
 
   type FeedVideo = {
     video_id: string;
@@ -33,16 +33,16 @@
   let loadError = "";
   let expanded = true;
   let inlinePlayer = true;
-  let activeVideo: FeedVideo | null = null;
-  let activeOrigin: DOMRect | null = null;
-  let openAsMini = false;
 
   function onCardClick(video: FeedVideo, event: MouseEvent) {
     if (inlinePlayer) {
       const el = event.currentTarget as HTMLElement | null;
-      activeOrigin = el?.getBoundingClientRect?.() ?? null;
-      openAsMini = false;
-      activeVideo = video;
+      openYoutubePlayer({
+        videoId: video.video_id,
+        title: video.title,
+        originRect: el?.getBoundingClientRect?.() ?? null,
+        startMini: false,
+      });
     } else {
       void openVideo(video.video_id);
     }
@@ -54,9 +54,12 @@
       void openVideo(video.video_id);
       return;
     }
-    openAsMini = true;
-    activeOrigin = null;
-    activeVideo = video;
+    openYoutubePlayer({
+      videoId: video.video_id,
+      title: video.title,
+      originRect: null,
+      startMini: true,
+    });
   }
 
   /** User UI language primary tag (ru-RU → ru). Recommendations: native OR en. */
@@ -341,20 +344,6 @@
       {/if}
     {/if}
   </section>
-{/if}
-
-{#if activeVideo}
-  <YoutubePlayer
-    videoId={activeVideo.video_id}
-    title={activeVideo.title}
-    originRect={activeOrigin}
-    startMini={openAsMini}
-    on:close={() => {
-      activeVideo = null;
-      activeOrigin = null;
-      openAsMini = false;
-    }}
-  />
 {/if}
 
 <style>

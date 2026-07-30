@@ -191,6 +191,27 @@ struct SnapshotFileDiff {
     text: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotChangedFile {
+    path: String,
+    category: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotDetail {
+    snapshot: tuffbox_core::Snapshot,
+    /// Resolved human-readable action lines (meta or synthesized).
+    actions_summary: Vec<String>,
+    related_events: Vec<pack_events::PackEvent>,
+    plan_actions: Vec<tuffbox_core::action_plan::LauncherAction>,
+    human_explanation: Option<String>,
+    changed_files: Vec<SnapshotChangedFile>,
+    /// True when rollback only restores manifest/lockfile (empty changed_files).
+    manifest_only: bool,
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_project_schema_status(path: String) -> Result<SchemaStatus, String> {
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
@@ -1824,7 +1845,9 @@ async fn add_modrinth_mod(
 ) -> Result<(), String> {
     let path_for_stats = path.clone();
     tokio::task::spawn_blocking(move || {
-        auto_snapshot(&PathBuf::from(&path), "add-mod").map_err(|e| e.to_string())?;
+        let summary = vec![format!("Install {mod_id}")];
+        auto_snapshot_detailed(&PathBuf::from(&path), "add-mod", &[], &summary)
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
         save_manifest(&PathBuf::from(&path), &manifest).map_err(|e| e.to_string())?;
@@ -1847,7 +1870,9 @@ async fn add_modrinth_mod_with_dependencies(
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "add-mod-with-dependencies").map_err(|e| e.to_string())?;
+        let summary = vec![format!("Install {mod_id} (+ dependencies)")];
+        auto_snapshot_detailed(&manifest_path, "add-mod-with-dependencies", &[], &summary)
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
@@ -1870,8 +1895,27 @@ async fn add_modrinth_mods_with_dependencies(
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "bulk-add-mods-with-dependencies")
-            .map_err(|e| e.to_string())?;
+        let summary: Vec<String> = if mod_ids.is_empty() {
+            vec!["Bulk install mods (+ dependencies)".into()]
+        } else {
+            mod_ids
+                .iter()
+                .take(20)
+                .map(|id| format!("Install {id}"))
+                .chain(
+                    (mod_ids.len() > 20)
+                        .then(|| format!("…and {} more", mod_ids.len() - 20))
+                        .into_iter(),
+                )
+                .collect()
+        };
+        auto_snapshot_detailed(
+            &manifest_path,
+            "bulk-add-mods-with-dependencies",
+            &[],
+            &summary,
+        )
+        .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
@@ -1888,7 +1932,9 @@ async fn add_modrinth_mods_with_dependencies(
 async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "remove-mod").map_err(|e| e.to_string())?;
+        let summary = vec![format!("Remove {mod_id}")];
+        auto_snapshot_detailed(&manifest_path, "remove-mod", &[], &summary)
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let removed_idx = manifest
             .mods
@@ -1973,7 +2019,9 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
 async fn disable_project_mod(path: String, mod_id: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "disable-mod").map_err(|e| e.to_string())?;
+        let summary = vec![format!("Disable {mod_id}")];
+        auto_snapshot_detailed(&manifest_path, "disable-mod", &[], &summary)
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let idx = manifest
             .mods
@@ -2123,7 +2171,12 @@ async fn update_project_mod(
             Some(&mod_id),
         );
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "update-mod").map_err(|e| e.to_string())?;
+        let summary = vec![match &version_id {
+            Some(v) => format!("Update {mod_id} → {v}"),
+            None => format!("Update {mod_id}"),
+        }];
+        auto_snapshot_detailed(&manifest_path, "update-mod", &[], &summary)
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let old_mod = manifest
             .mods
@@ -3171,10 +3224,11 @@ fn write_config_file(
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let target = safe_project_file(&project_dir, &relative_path)?;
-    let snap = auto_snapshot_with_changed_files(
+    let snap = auto_snapshot_detailed(
         &manifest_path,
         "edit-config",
         &[PathBuf::from(&relative_path)],
+        &[format!("Edited config {relative_path}")],
     )
     .map_err(|e| e.to_string())?;
     std::fs::write(target, content).map_err(|e| e.to_string())?;
@@ -3710,31 +3764,52 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
 
         emit_mod_update_progress(
             &app,
-            "preparing",
-            "Creating a safety snapshot…",
+            "checking",
+            "Checking Modrinth for compatible updates…",
             0,
             0,
-            5,
+            8,
             None,
         );
         let manifest_path = PathBuf::from(&path);
-        auto_snapshot(&manifest_path, "batch-update-all").map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let mut updated = Vec::new();
         let mut skipped_errors: Vec<String> = Vec::new();
 
-        emit_mod_update_progress(
-            &app,
-            "checking",
-            "Checking Modrinth for compatible updates…",
-            0,
-            manifest.mods.len(),
-            12,
-            None,
-        );
         let provider = tuffbox_core::ModrinthProvider::new();
         let (loader_slug, pending) =
             resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
+
+        emit_mod_update_progress(
+            &app,
+            "preparing",
+            "Creating a safety snapshot…",
+            0,
+            pending.len(),
+            12,
+            None,
+        );
+        let summary: Vec<String> = if pending.is_empty() {
+            vec!["Batch update all mods (nothing pending)".into()]
+        } else {
+            pending
+                .iter()
+                .take(20)
+                .map(|(idx, latest)| {
+                    format!(
+                        "Update {} → {}",
+                        manifest.mods[*idx].name, latest.version_number
+                    )
+                })
+                .chain(
+                    (pending.len() > 20)
+                        .then(|| format!("…and {} more", pending.len() - 20))
+                        .into_iter(),
+                )
+                .collect()
+        };
+        auto_snapshot_detailed(&manifest_path, "batch-update-all", &[], &summary)
+            .map_err(|e| e.to_string())?;
 
         let scope_mod_ids: Vec<String> = pending
             .iter()
@@ -6406,17 +6481,86 @@ fn get_problematic_mods_config(path: String) -> Result<Vec<serde_json::Value>, S
 
 /// ── Server launch ────────────────────────────────────────────────
 
-/// Launches the server profile and captures the log. Prepares the instance
-/// with server-safe mods, generates server.properties, and starts the JVM.
+/// Prepares a server working directory (both+server mods only), writes
+/// `server.properties` / `eula.txt`, then launches the server profile with a
+/// visible console window. `server_dir` is where the staged instance lives.
 #[tauri::command(rename_all = "camelCase")]
 async fn launch_server(
     app: tauri::AppHandle,
     path: String,
+    server_dir: String,
+    level_seed: Option<String>,
+    online_mode: Option<bool>,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
     record_launch(path.clone()).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
     })?;
-    launch_profile(app, path, "server".into(), None).await
+
+    let server_dir_buf = PathBuf::from(server_dir.trim());
+    if server_dir_buf.as_os_str().is_empty() {
+        return Err(LaunchErrorInfo::new(
+            LaunchErrorKind::Install,
+            "server directory is required",
+        ));
+    }
+
+    let path_for_prep = path.clone();
+    let server_dir_for_prep = server_dir_buf.clone();
+    let seed = level_seed.clone();
+    let online = online_mode;
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = resolve_manifest_path(&path_for_prep).map_err(|e| {
+            LaunchErrorInfo::new(LaunchErrorKind::Install, e)
+        })?;
+        let project_dir = manifest_path.parent().ok_or_else(|| {
+            LaunchErrorInfo::new(
+                LaunchErrorKind::Unknown,
+                "manifest has no parent directory",
+            )
+        })?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| {
+            LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string())
+        })?;
+
+        tuffbox_core::TestLauncher::prepare_server_instance(
+            &manifest,
+            project_dir,
+            &server_dir_for_prep,
+            &manifest_path,
+        )
+        .map_err(|e| {
+            LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string())
+        })?;
+
+        write_server_properties_file(
+            &server_dir_for_prep,
+            &manifest,
+            seed.as_deref(),
+            online,
+        )
+        .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Install, e))?;
+        Ok::<(), LaunchErrorInfo>(())
+    })
+    .await
+    .map_err(|e| {
+        LaunchErrorInfo::new(
+            LaunchErrorKind::Unknown,
+            format!("server prepare task panicked: {e}"),
+        )
+    })??;
+
+    launch_profile_impl(
+        app,
+        path,
+        "server".into(),
+        None,
+        None,
+        None,
+        Some(server_dir_buf),
+        true,
+        true,
+    )
+    .await
 }
 
 /// Generates a default server.properties file for the project.
@@ -6425,8 +6569,25 @@ fn generate_server_properties(
     path: String,
     level_seed: Option<String>,
     online_mode: Option<bool>,
+    target_dir: Option<String>,
 ) -> Result<String, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_parent(&path)?;
+    let out_dir = target_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(project_dir);
+    write_server_properties_file(&out_dir, &manifest, level_seed.as_deref(), online_mode)
+}
+
+fn write_server_properties_file(
+    out_dir: &Path,
+    manifest: &ProjectManifest,
+    level_seed: Option<&str>,
+    online_mode: Option<bool>,
+) -> Result<String, String> {
     let profile = manifest
         .profiles
         .iter()
@@ -6449,11 +6610,7 @@ fn generate_server_properties(
     props.push_str("spawn-protection=16\n");
     props.push_str("max-tick-time=60000\n");
     props.push_str("level-name=world\n");
-    if let Some(seed) = level_seed
-        .as_ref()
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(seed) = level_seed.map(str::trim).filter(|s| !s.is_empty()) {
         props.push_str(&format!("level-seed={seed}\n"));
     }
     props.push_str(&format!(
@@ -6467,8 +6624,8 @@ fn generate_server_properties(
         }
     }
 
-    let project_dir = manifest_parent(&path)?;
-    let target = project_dir.join("server.properties");
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    let target = out_dir.join("server.properties");
     std::fs::write(&target, &props).map_err(|e| e.to_string())?;
     Ok(props)
 }
@@ -8910,12 +9067,22 @@ fn create_snapshot(
         None
     };
     store
-        .create(
+        .create_with_meta(
             &name,
             &reason,
             &manifest_path,
             lockfile_path.as_ref(),
             &[] as &[&Path],
+            tuffbox_core::SnapshotMeta {
+                operation: "manual".into(),
+                actions_summary: vec![if reason.trim().is_empty() {
+                    "Manual snapshot".into()
+                } else {
+                    reason.clone()
+                }],
+                actor: Some("user".into()),
+                ..Default::default()
+            },
         )
         .map_err(|e| e.to_string())
 }
@@ -8940,6 +9107,134 @@ fn rollback_snapshot(
     let snapshot = store.rollback(id.clone()).map_err(|e| e.to_string())?;
     let _ = swarm_api::note_snapshot_rollback(&app, Path::new(&project_dir), &id);
     Ok(snapshot)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn delete_snapshot(project_dir: String, id: String) -> Result<(), String> {
+    let store = SnapshotStore::new(&project_dir);
+    store.delete(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_snapshot_detail(project_dir: String, id: String) -> Result<SnapshotDetail, String> {
+    let store = SnapshotStore::new(&project_dir);
+    let snapshot = store
+        .get(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("snapshot {id} not found"))?;
+
+    let related_events: Vec<_> = pack_events::list_pack_events(Path::new(&project_dir), Some(500))
+        .into_iter()
+        .filter(|ev| ev.snapshot_id.as_deref() == Some(id.as_str()))
+        .collect();
+
+    let mut plan_actions = Vec::new();
+    let mut human_explanation = None;
+    let mut actions_summary = snapshot.actions_summary.clone();
+
+    // 1) plan.json on the snapshot directory
+    if let Some(plan) = swarm_api::load_snapshot_plan(Path::new(&project_dir), &id) {
+        if actions_summary.is_empty() {
+            actions_summary = plan
+                .actions
+                .iter()
+                .map(swarm_api::format_launcher_action_summary)
+                .collect();
+            if actions_summary.is_empty() && !plan.human_explanation.trim().is_empty() {
+                actions_summary.push(plan.human_explanation.clone());
+            }
+        }
+        human_explanation = Some(plan.human_explanation.clone());
+        plan_actions = plan.actions;
+    }
+
+    // 2) resolutions.jsonl by snapshotId
+    if actions_summary.is_empty() {
+        if let Ok(resolutions) = swarm_api::list_crash_resolutions(Path::new(&project_dir)) {
+            if let Some(rec) = resolutions.iter().find(|r| r.snapshot_id == id) {
+                actions_summary = rec.actions_summary.clone();
+                if actions_summary.is_empty() && !rec.human_explanation.trim().is_empty() {
+                    actions_summary.push(rec.human_explanation.clone());
+                }
+                if human_explanation.is_none() {
+                    human_explanation = Some(rec.human_explanation.clone());
+                }
+            }
+        }
+    }
+
+    // 3) last_crash_fix marker only if snapshot_id matches
+    if actions_summary.is_empty() {
+        if let Ok(Some(marker)) = swarm_api::peek_last_crash_fix_marker(Path::new(&project_dir))
+        {
+            if marker.snapshot_id == id {
+                actions_summary = marker
+                    .actions
+                    .iter()
+                    .map(swarm_api::format_launcher_action_summary)
+                    .collect();
+                if actions_summary.is_empty() && !marker.human_explanation.trim().is_empty() {
+                    actions_summary.push(marker.human_explanation.clone());
+                }
+                if human_explanation.is_none() {
+                    human_explanation = Some(marker.human_explanation.clone());
+                }
+                if plan_actions.is_empty() {
+                    plan_actions = marker.actions;
+                }
+            }
+        }
+    }
+
+    // 4) pack events
+    if actions_summary.is_empty() {
+        for ev in &related_events {
+            if !ev.summary.trim().is_empty() {
+                actions_summary.push(ev.summary.clone());
+            }
+        }
+    }
+
+    // 5) parse auto-before-{op} / reason fallback
+    if actions_summary.is_empty() {
+        let op = if !snapshot.operation.is_empty() {
+            snapshot.operation.clone()
+        } else if let Some(rest) = snapshot.name.strip_prefix("auto-before-") {
+            rest.to_string()
+        } else {
+            String::new()
+        };
+        if !op.is_empty() {
+            actions_summary.push(format!("Safety point before {op}"));
+        } else if !snapshot.reason.trim().is_empty() {
+            actions_summary.push(snapshot.reason.clone());
+        } else {
+            actions_summary.push("Manual snapshot".into());
+        }
+    }
+
+    let changed_files: Vec<SnapshotChangedFile> = snapshot
+        .changed_files
+        .iter()
+        .map(|p| {
+            let path = p.to_string_lossy().replace('\\', "/");
+            SnapshotChangedFile {
+                category: pack_events::category_for_path(&path).to_string(),
+                path,
+            }
+        })
+        .collect();
+    let manifest_only = changed_files.is_empty();
+
+    Ok(SnapshotDetail {
+        snapshot,
+        actions_summary,
+        related_events,
+        plan_actions,
+        human_explanation,
+        changed_files,
+        manifest_only,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -9484,6 +9779,9 @@ async fn launch_with_quick_play(
         quick_play_type,
         quick_play_value,
         memory_mb_override,
+        None,
+        false,
+        false,
     )
     .await
 }
@@ -9495,7 +9793,18 @@ async fn launch_profile(
     profile: String,
     memory_mb_override: Option<u32>,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
-    launch_profile_impl(app, path, profile, None, None, memory_mb_override).await
+    launch_profile_impl(
+        app,
+        path,
+        profile,
+        None,
+        None,
+        memory_mb_override,
+        None,
+        false,
+        false,
+    )
+    .await
 }
 
 async fn launch_profile_impl(
@@ -9505,6 +9814,9 @@ async fn launch_profile_impl(
     quick_play_type: Option<String>,
     quick_play_value: Option<String>,
     memory_mb_override: Option<u32>,
+    game_dir_override: Option<PathBuf>,
+    show_console: bool,
+    skip_client_bridges: bool,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
     let path = resolve_manifest_path(&path).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e)
@@ -9521,7 +9833,10 @@ async fn launch_profile_impl(
                 "manifest has no parent directory",
             )
         })?;
-    let logs_dir = project_dir.join("logs");
+    let game_dir = game_dir_override
+        .clone()
+        .unwrap_or_else(|| project_dir.clone());
+    let logs_dir = game_dir.join("logs");
     // Minecraft (log4j) owns `latest.log`. We must NOT truncate it — that wiped
     // real crash evidence and raced the game writer. Console capture goes to a
     // separate TuffBox file; diagnose still reads `logs/latest.log`.
@@ -9540,6 +9855,9 @@ async fn launch_profile_impl(
             .open(&console_log)
             .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
         writeln!(console, "# TuffBox launching profile {profile}").ok();
+        if game_dir_override.is_some() {
+            writeln!(console, "# Game directory override: {}", game_dir.display()).ok();
+        }
         if let Some(mb) = memory_mb_override {
             writeln!(console, "# Memory override: {mb} MB").ok();
         }
@@ -9561,6 +9879,7 @@ async fn launch_profile_impl(
 
     let console_log_clone = console_log.clone();
     let latest_log_clone = latest_log.clone();
+    let game_dir_clone = game_dir_override.clone();
     // Run the (blocking) install + spawn on a blocking thread, then await the
     // result so install/prepare failures surface to the UI as a structured,
     // categorized error instead of being swallowed into the log file.
@@ -9574,6 +9893,9 @@ async fn launch_profile_impl(
             quick_play_type,
             quick_play_value,
             memory_mb_override,
+            game_dir_clone,
+            show_console,
+            skip_client_bridges,
         )
     })
     .await
@@ -9603,6 +9925,9 @@ fn build_and_spawn(
     quick_play_type: Option<String>,
     quick_play_value: Option<String>,
     memory_mb_override: Option<u32>,
+    game_dir_override: Option<PathBuf>,
+    show_console: bool,
+    skip_client_bridges: bool,
 ) -> Result<(), LaunchErrorInfo> {
     use tuffbox_core::{LaunchOptions, TestLauncher};
 
@@ -9681,14 +10006,15 @@ fn build_and_spawn(
         ));
     }
 
-    // game_dir = папка сборки (где mods, config, saves)
-    let game_dir = PathBuf::from(&path)
+    // game_dir = instance folder (project pack or staged server dir)
+    let project_dir = PathBuf::from(&path)
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| {
             LaunchErrorInfo::new(LaunchErrorKind::Unknown, "manifest has no parent directory")
                 .with_log(&console_log)
         })?;
+    let game_dir = game_dir_override.unwrap_or_else(|| project_dir.clone());
 
     // launcher_dir = shared game data (versions, libraries, assets)
     let launcher_dir = launcher_settings::resolve_runtime_path();
@@ -9713,8 +10039,10 @@ fn build_and_spawn(
     // the manifest was hand-edited/imported without a download step.
     // Without this, TuffBox would happily launch vanilla Minecraft while the
     // UI still shows a full mod list.
+    // For server runs, verify against the author project (source of jars);
+    // the staged server dir already has a filtered copy.
     progress.log("# Verifying mod files...");
-    let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &game_dir);
+    let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &project_dir);
     if !sync_report.downloaded.is_empty() {
         progress.log(&format!(
             "# Downloaded {} missing mod file(s): {}",
@@ -9748,24 +10076,26 @@ fn build_and_spawn(
 
     progress.log("# Installing Minecraft (this may take a while)...");
 
-    let bridge = match tuffbox_core::prepare_recipe_bridge(&manifest, &game_dir) {
-        Ok(bridge) => bridge,
-        Err(error) => {
-            progress.log(&format!("# WARNING: JEI live recipe bridge unavailable: {error}"));
-            None
-        }
-    };
     let mut launch_jvm_args = project_profile.jvm_args.clone();
     launch_jvm_args.extend(launcher_settings::split_custom_jvm_args(
         launch_settings.java_custom_args.as_deref(),
     ));
-    let mut cleanup_paths = if let Some(bridge) = bridge {
-        progress.log("# JEI live recipe bridge enabled.");
-        launch_jvm_args.extend(bridge.jvm_args);
-        bridge.cleanup_paths
-    } else {
-        Vec::new()
-    };
+    let mut cleanup_paths = Vec::new();
+
+    if !skip_client_bridges {
+        let bridge = match tuffbox_core::prepare_recipe_bridge(&manifest, &game_dir) {
+            Ok(bridge) => bridge,
+            Err(error) => {
+                progress.log(&format!("# WARNING: JEI live recipe bridge unavailable: {error}"));
+                None
+            }
+        };
+        if let Some(bridge) = bridge {
+            progress.log("# JEI live recipe bridge enabled.");
+            launch_jvm_args.extend(bridge.jvm_args);
+            cleanup_paths.extend(bridge.cleanup_paths);
+        }
+    }
 
     // Try to load real MC access token / identity from stored auth
     let identity = auth::load_active_launch_identity();
@@ -9780,7 +10110,7 @@ fn build_and_spawn(
     };
 
     // Cosmetics stack (CSL + tuffbox-cosmetics) — after identity so we know username
-    {
+    if !skip_client_bridges {
         let uname = auth_name.unwrap_or("Player");
         let uid = auth_uuid.unwrap_or("offline");
         let extras = cosmetics_local::merge_gui_extras(
@@ -9898,6 +10228,7 @@ fn build_and_spawn(
         &console_log,
         cleanup_paths,
         on_exit,
+        show_console,
     )
     .map_err(|e| {
         let msg = e.to_string();
@@ -12571,13 +12902,22 @@ fn infer_project_side(project: Option<&tuffbox_core::ProjectInfo>) -> Side {
 }
 
 pub(crate) fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
-    auto_snapshot_with_changed_files(manifest_path, operation, &[])
+    auto_snapshot_detailed(manifest_path, operation, &[], &[])
 }
 
 fn auto_snapshot_with_changed_files(
     manifest_path: &Path,
     operation: &str,
     changed_files: &[PathBuf],
+) -> anyhow::Result<Snapshot> {
+    auto_snapshot_detailed(manifest_path, operation, changed_files, &[])
+}
+
+fn auto_snapshot_detailed(
+    manifest_path: &Path,
+    operation: &str,
+    changed_files: &[PathBuf],
+    actions_summary: &[String],
 ) -> anyhow::Result<Snapshot> {
     let project_dir = manifest_path.parent().ok_or_else(|| {
         anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display())
@@ -12591,12 +12931,25 @@ fn auto_snapshot_with_changed_files(
     let store = SnapshotStore::new(project_dir);
     let name = format!("auto-before-{operation}");
     let reason = format!("Auto snapshot before {operation}");
-    let snapshot = store.create(
+    let summary: Vec<String> = if actions_summary.is_empty() {
+        vec![format!("Safety point before {operation}")]
+    } else {
+        actions_summary.to_vec()
+    };
+    let actor = pack_events::actor_for_operation(operation).to_string();
+    let meta = tuffbox_core::SnapshotMeta {
+        operation: operation.to_string(),
+        actions_summary: summary,
+        actor: Some(actor),
+        ..Default::default()
+    };
+    let snapshot = store.create_with_meta(
         &name,
         &reason,
         manifest_path,
         lockfile_path.as_ref(),
         changed_files,
+        meta,
     )?;
     let _ = pack_events::append_from_snapshot(
         project_dir,
@@ -13518,6 +13871,8 @@ pub fn run() {
             create_snapshot,
             diff_snapshots,
             rollback_snapshot,
+            delete_snapshot,
+            get_snapshot_detail,
             diff_manifest_snapshots,
             get_snapshot_file_diff,
             validate_modrinth_export,

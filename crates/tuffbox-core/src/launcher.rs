@@ -1,5 +1,5 @@
 use crate::jre::JavaRuntime;
-use crate::manifest::{ProfileSpec, ProjectManifest};
+use crate::manifest::{ContentType, ProfileSpec, ProjectManifest, Side};
 use crate::mc_install::{install_game, InstallProgress};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
@@ -110,6 +110,89 @@ impl TestLauncher {
         crate::jre::find_runtime_for(&runtimes, required).ok_or(LauncherError::JavaNotFound)
     }
 
+    /// Stage a dedicated server working directory: only `both` + `server`
+    /// side mods (client-only jars stay out), plus config/kubejs/scripts.
+    /// Writes `eula.txt` and a copy of the project manifest so log tools can
+    /// resolve this folder like a normal instance.
+    pub fn prepare_server_instance(
+        manifest: &ProjectManifest,
+        project_dir: impl AsRef<Path>,
+        server_dir: impl AsRef<Path>,
+        manifest_path: impl AsRef<Path>,
+    ) -> Result<PreparedInstance, LauncherError> {
+        let project_dir = project_dir.as_ref();
+        let server_dir = server_dir.as_ref();
+        let mods_dir = server_dir.join("mods");
+        let config_dir = server_dir.join("config");
+        let log_dir = server_dir.join("logs");
+
+        fs::create_dir_all(&mods_dir)?;
+        fs::create_dir_all(&config_dir)?;
+        fs::create_dir_all(&log_dir)?;
+
+        for module in &manifest.mods {
+            if !matches!(module.side, Side::Both | Side::Server) {
+                continue;
+            }
+            // Resource/shader packs are client cosmetics — skip on server.
+            if matches!(
+                module.content_type,
+                ContentType::Resourcepack | ContentType::Shaderpack
+            ) {
+                continue;
+            }
+            let Some(file_name) = &module.file_name else {
+                continue;
+            };
+            let folder = module.content_type.folder_name();
+            let src = project_dir.join(folder).join(file_name);
+            if !src.is_file() {
+                continue;
+            }
+            let dst_dir = server_dir.join(folder);
+            fs::create_dir_all(&dst_dir)?;
+            let dst = dst_dir.join(file_name);
+            if !is_same_file(&src, &dst) {
+                fs::copy(&src, &dst)?;
+            }
+        }
+
+        for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
+            let src = project_dir.join(root);
+            if src.is_dir() {
+                copy_dir_incremental(&src, server_dir.join(root))?;
+            }
+        }
+
+        if let Some(overrides) = &manifest.overrides {
+            if let Some(config_override) = &overrides.config {
+                let src = project_dir.join(config_override);
+                if src.is_dir() {
+                    copy_dir_incremental(&src, &config_dir)?;
+                }
+            }
+        }
+
+        // Accept EULA for local test runs (author machine).
+        let eula = server_dir.join("eula.txt");
+        if !eula.is_file() {
+            fs::write(&eula, "eula=true\n")?;
+        }
+
+        // Manifest copy so get_launch_log / LaunchLogModal resolve this dir.
+        let dest_manifest = server_dir.join("tuffbox.project.json");
+        if !is_same_file(manifest_path.as_ref(), &dest_manifest) {
+            fs::copy(manifest_path.as_ref(), &dest_manifest)?;
+        }
+
+        Ok(PreparedInstance {
+            instance_dir: server_dir.to_path_buf(),
+            mods_dir,
+            config_dir,
+            log_dir,
+        })
+    }
+
     // Utility for launching into a dedicated instance folder (Prism-style),
     // where mods/config are copied out of the shared project dir. Currently
     // TuffBox launches directly inside the project dir, so this isn't on the
@@ -119,8 +202,10 @@ impl TestLauncher {
     pub fn prepare_instance(
         manifest: &ProjectManifest,
         profile: &ProfileSpec,
+        project_dir: impl AsRef<Path>,
         base_instance_dir: impl AsRef<Path>,
     ) -> Result<PreparedInstance, LauncherError> {
+        let project_dir = project_dir.as_ref();
         let instance_dir = base_instance_dir.as_ref().join(&profile.id);
         let mods_dir = instance_dir.join("mods");
         let config_dir = instance_dir.join("config");
@@ -136,8 +221,11 @@ impl TestLauncher {
                 continue;
             }
             if let Some(file_name) = &module.file_name {
-                let src = PathBuf::from("mods").join(file_name);
-                let dst = mods_dir.join(file_name);
+                let folder = module.content_type.folder_name();
+                let src = project_dir.join(folder).join(file_name);
+                let dst_dir = instance_dir.join(folder);
+                fs::create_dir_all(&dst_dir)?;
+                let dst = dst_dir.join(file_name);
                 if src.is_file() {
                     // Incremental copy: skip if the destination already exists
                     // and is byte-identical (same size). Avoids re-copying
@@ -153,7 +241,7 @@ impl TestLauncher {
         // Copy overrides/config if configured.
         if let Some(overrides) = &manifest.overrides {
             if let Some(config_override) = &overrides.config {
-                let src = PathBuf::from(config_override);
+                let src = project_dir.join(config_override);
                 if src.is_dir() {
                     copy_dir_incremental(&src, &config_dir)?;
                 }

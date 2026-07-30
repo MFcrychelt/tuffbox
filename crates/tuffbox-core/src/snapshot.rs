@@ -44,6 +44,15 @@ pub struct SnapshotMeta {
     pub plan_source: Option<String>,
     #[serde(default)]
     pub matched_case_ids: Vec<String>,
+    /// Operation slug that this snapshot protects against (e.g. `add-mod`).
+    #[serde(default)]
+    pub operation: String,
+    /// Human-readable one-liners describing planned/applied actions.
+    #[serde(default)]
+    pub actions_summary: Vec<String>,
+    /// `launcher` | `ai` | `user` | `scan`
+    #[serde(default)]
+    pub actor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +75,12 @@ pub struct Snapshot {
     pub plan_source: Option<String>,
     #[serde(default)]
     pub matched_case_ids: Vec<String>,
+    #[serde(default)]
+    pub operation: String,
+    #[serde(default)]
+    pub actions_summary: Vec<String>,
+    #[serde(default)]
+    pub actor: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -169,6 +184,9 @@ impl SnapshotStore {
             report_id: meta.report_id,
             plan_source: meta.plan_source,
             matched_case_ids: meta.matched_case_ids,
+            operation: meta.operation,
+            actions_summary: meta.actions_summary,
+            actor: meta.actor,
         };
 
         let meta_path = snapshot_dir.join("snapshot.json");
@@ -177,6 +195,32 @@ impl SnapshotStore {
         fs::write(&meta_path, meta_json).map_err(SnapshotError::ReadMetadata)?;
 
         Ok(snapshot)
+    }
+
+    /// Absolute path to a snapshot's on-disk directory.
+    pub fn snapshot_dir(&self, id: impl AsRef<str>) -> PathBuf {
+        self.snapshots_dir.join(id.as_ref())
+    }
+
+    /// Persist updated metadata fields back to `snapshot.json` (e.g. after
+    /// learning the full action list for a bulk install).
+    pub fn update_meta(&self, snapshot: &Snapshot) -> Result<(), SnapshotError> {
+        let meta_path = self.snapshots_dir.join(&snapshot.id).join("snapshot.json");
+        let meta_json =
+            serde_json::to_string_pretty(snapshot).expect("snapshot metadata should serialize");
+        fs::write(&meta_path, meta_json).map_err(SnapshotError::ReadMetadata)?;
+        Ok(())
+    }
+
+    /// Delete a snapshot directory entirely.
+    pub fn delete(&self, id: impl AsRef<str>) -> Result<(), SnapshotError> {
+        let id = id.as_ref();
+        let dir = self.snapshots_dir.join(id);
+        if !dir.exists() {
+            return Err(SnapshotError::SnapshotNotFound { id: id.to_string() });
+        }
+        fs::remove_dir_all(&dir).map_err(SnapshotError::ReadMetadata)?;
+        Ok(())
     }
 
     pub fn list(&self) -> Result<Vec<Snapshot>, SnapshotError> {
@@ -418,5 +462,36 @@ mod tests {
             "timestamp looks hardcoded: {now}"
         );
         assert!(now.ends_with('Z'));
+    }
+
+    #[test]
+    fn stores_actions_summary_and_deletes() {
+        let (_dir, project_dir) = temp_project();
+        let store = SnapshotStore::new(&project_dir);
+        let manifest_path = project_dir.join("project.tuffbox.json");
+
+        let snapshot = store
+            .create_with_meta(
+                "before-bulk",
+                "test",
+                &manifest_path,
+                None::<&Path>,
+                &[] as &[&Path],
+                SnapshotMeta {
+                    operation: "bulk-add".into(),
+                    actions_summary: vec!["Install sodium".into(), "Install lithium".into()],
+                    actor: Some("launcher".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let loaded = store.get(&snapshot.id).unwrap().unwrap();
+        assert_eq!(loaded.operation, "bulk-add");
+        assert_eq!(loaded.actions_summary.len(), 2);
+        assert_eq!(loaded.actor.as_deref(), Some("launcher"));
+
+        store.delete(&snapshot.id).unwrap();
+        assert!(store.get(&snapshot.id).unwrap().is_none());
     }
 }

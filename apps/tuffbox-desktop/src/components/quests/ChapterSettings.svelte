@@ -141,13 +141,15 @@
   .ch-set {
     display: grid;
     gap: 8px;
-    padding: 0;
+    padding: 0 0 16px;
     font-size: 12px;
     background: var(--ftbq-bg-panel, #212126);
     border-left: 1px solid var(--ftbq-border, #3a3a42);
     max-height: 100%;
     overflow: auto;
+    overflow-x: hidden;
     min-height: 0;
+    min-width: 0;
   }
   .ch-set h4 {
     margin: 0;

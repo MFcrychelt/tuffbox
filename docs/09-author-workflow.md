@@ -188,8 +188,8 @@ Live preview справа: переключатель Modrinth | CurseForge card
 Действия:
 
 - **Smoke client** — выбранный client-профиль + preflight;
-- **Server dry run** — `server.properties` (seed / online-mode) → server launch;
-- **Low-end smoke** — low-end профиль или override ~2048 MB;
+- **Run server** — выбор папки → stage only `both`/`server` mods → `server.properties` → launch + Server console;
+- **Run client 4 RAM** — client с override 4096 MB;
 - Quick Play в мир из `saves/`;
 - sequential **matrix** профилей (stop-on-fail);
 - tail `logs/latest.log` + CPU/RAM meters;

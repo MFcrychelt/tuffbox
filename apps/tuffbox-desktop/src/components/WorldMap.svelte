@@ -4,7 +4,7 @@
     Map as MapIcon, RefreshCw, Trash2, MousePointer2, Square, Layers, Download,
     CalendarRange, CheckSquare, XSquare, Copy, Scissors, Clipboard, Circle,
     ZoomIn, ZoomOut, Minimize2, Eraser, ArrowLeftRight, Filter, FolderOutput, FolderInput,
-    FileDown, FileUp, Wrench, Pencil,
+    FileDown, FileUp, Wrench, Pencil, Crosshair, List, Globe2,
   } from "lucide-svelte";
   import { open, save } from "@tauri-apps/plugin-dialog";
   import { projectPath } from "../lib/store";
@@ -14,10 +14,16 @@
   import type {
     WorldMap as WorldMapData,
     ChunkCell,
-    ChunkClipboard,
     NbtChangeRequest,
     AdvancedChunkFilter,
+    WorldListItem,
   } from "../lib/api";
+  import { biomeCss, heightShade } from "../lib/biomePalette";
+  import {
+    worldMapClipboard,
+    setWorldMapClipboard,
+    clearWorldMapClipboard,
+  } from "../lib/worldMapClipboard";
 
   const STATUS_EMPTY = 1;
   const STATUS_PARTIAL = 2;
@@ -27,11 +33,13 @@
   type Tool = "pan" | "click" | "box" | "radius" | "region" | "poly";
 
   export let worldName: string = "";
-  /** "top" = horizontal toolbar (OreGen embed); "dock" = left tools panel + large map */
+  /** "top" = horizontal toolbar (OreGen embed); "dock" = MCA Selector–style chrome */
   export let layout: "top" | "dock" = "top";
 
   let map: WorldMapData | null = null;
   let filtersOpen = false;
+  let toolsDrawerOpen = false;
+  let regionRailOpen = false;
   let loading = false;
   let error: string | null = null;
 
@@ -39,17 +47,29 @@
   let dimension = "overworld";
 
   let showRegions = true;
+  let showChunkGrid = true;
   let showSpawn = true;
   let spawnChunk: { cx: number; cz: number } | null = null;
-  let colorMode: ColorMode = "status";
+  let colorMode: ColorMode = "biome";
   let tool: Tool = "box";
   let selection = new Set<string>();
   let statusFilter: "all" | "empty" | "partial" | "full" = "all";
   let polyPoints: { x: number; y: number }[] = [];
   let polyAdd = true;
 
+  /** Height range filter (MCA-style Y slider); chunks outside are dimmed. */
+  let heightMin = -64;
+  let heightMax = 319;
+
+  let gotoOpen = false;
+  let gotoMode: "block" | "chunk" = "block";
+  let gotoX = "0";
+  let gotoZ = "0";
+  let gotoXInput: HTMLInputElement | null = null;
+
   let hover: {
     rx: number; rz: number; cx: number; cz: number;
+    blockX: number; blockZ: number;
     status: string; modified: number;
     inhabitedTime: number; dataVersion: number;
     biomeId?: number; surfaceY?: number;
@@ -57,10 +77,19 @@
   } | null = null;
   let tipX = 0;
   let tipY = 0;
+  let visibleRegionCount = 0;
 
-  let clipboard: ChunkClipboard | null = null;
   let pasteOffsetX = 0;
   let pasteOffsetZ = 0;
+
+  let fromWorldOpen = false;
+  let fromWorldLoading = false;
+  let fromWorldList: WorldListItem[] = [];
+  let fromWorldName = "";
+  let fromWorldDim = "overworld";
+  let fromWorldDims: string[] = ["overworld"];
+  let fromWorldBannerDismissed = false;
+  let busyLabel: string | null = null;
 
   let filterFrom = "";
   let filterTo = "";
@@ -109,7 +138,7 @@
 
   let csvInput: HTMLInputElement;
 
-  const CELL = 4;
+  const CELL = 8;
   const GRID = 32;
   let canvas: HTMLCanvasElement;
   let viewport: HTMLDivElement;
@@ -172,10 +201,36 @@
     return "Overworld";
   }
 
-  function flash(msg: string) {
+  function flash(msg: string, ms = 2800) {
     flashMsg = msg;
     clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => (flashMsg = null), 2500);
+    flashTimer = setTimeout(() => (flashMsg = null), ms);
+  }
+
+  function flashError(msg: string) {
+    error = msg;
+    flash(msg, 4500);
+  }
+
+  $: crossWorldClip =
+    $worldMapClipboard != null &&
+    $worldMapClipboard.sourceWorld !== worldName &&
+    ($worldMapClipboard.clipboard.chunks?.length ?? 0) > 0;
+
+  $: showClipBanner =
+    layout === "dock" &&
+    crossWorldClip &&
+    !fromWorldBannerDismissed &&
+    !fromWorldOpen &&
+    !gotoOpen;
+
+  let lastClipAt = 0;
+  $: if ($worldMapClipboard?.copiedAt && $worldMapClipboard.copiedAt !== lastClipAt) {
+    lastClipAt = $worldMapClipboard.copiedAt;
+    fromWorldBannerDismissed = false;
+  }
+  $: if (!$worldMapClipboard) {
+    lastClipAt = 0;
   }
 
   function parseOptNum(s: string): number | null {
@@ -309,9 +364,10 @@
     return `rgb(${r},${g},${b})`;
   }
 
-  function biomeHue(id: number): number {
-    let h = Math.imul(id ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
-    return h % 360;
+  function inHeightRange(cell: ChunkCell): boolean {
+    const y = cell.surfaceY;
+    if (y == null || y === -9999) return true;
+    return y >= heightMin && y <= heightMax;
   }
 
   function chunkColor(
@@ -325,6 +381,7 @@
     maxSurf: number,
   ): string {
     if (!cell.present) return "#15171c";
+    const shade = heightShade(cell.surfaceY, minSurf, maxSurf);
     if (mode === "date") {
       const span = Math.max(1, maxMod - minMod);
       const t = Math.max(0, Math.min(1, (cell.lastModified - minMod) / span));
@@ -339,7 +396,7 @@
     if (mode === "biome") {
       const id = cell.biomeId ?? -1;
       if (id < 0) return "#1a1c22";
-      return `hsl(${biomeHue(id)}, 55%, 42%)`;
+      return biomeCss(id, shade);
     }
     if (mode === "height") {
       const y = cell.surfaceY ?? -9999;
@@ -354,9 +411,12 @@
       case STATUS_FULL: {
         const span = Math.max(1, maxMod - minMod);
         const t = Math.max(0, Math.min(1, (cell.lastModified - minMod) / span));
-        const r = Math.round(27 + t * 12);
-        const g = Math.round(120 + t * 60);
-        const b = Math.round(70 + t * 60);
+        let r = Math.round(27 + t * 12);
+        let g = Math.round(120 + t * 60);
+        let b = Math.round(70 + t * 60);
+        r = Math.max(0, Math.min(255, Math.round(r * shade)));
+        g = Math.max(0, Math.min(255, Math.round(g * shade)));
+        b = Math.max(0, Math.min(255, Math.round(b * shade)));
         return `rgb(${r},${g},${b})`;
       }
       default: return "#4a8c5a";
@@ -368,6 +428,21 @@
     const regionW = map.maxRegionX - map.minRegionX + 1;
     const regionH = map.maxRegionZ - map.minRegionZ + 1;
     return { W: regionW * GRID * CELL, H: regionH * GRID * CELL };
+  }
+
+  function regionInViewport(
+    ox: number,
+    oy: number,
+    cssW: number,
+    cssH: number,
+  ): boolean {
+    const rw = GRID * CELL;
+    const rh = GRID * CELL;
+    const left = ox * zoom + panX;
+    const top = oy * zoom + panY;
+    const right = left + rw * zoom;
+    const bottom = top + rh * zoom;
+    return right >= -8 && bottom >= -8 && left <= cssW + 8 && top <= cssH + 8;
   }
 
   function draw() {
@@ -387,7 +462,7 @@
     const cssW = viewport?.clientWidth || W;
     const cssH = viewport?.clientHeight || H;
     ctx.clearRect(0, 0, cssW, cssH);
-    ctx.fillStyle = "#0e0f13";
+    ctx.fillStyle = "#0a0b0e";
     ctx.fillRect(0, 0, cssW, cssH);
 
     ctx.save();
@@ -398,27 +473,81 @@
     const [minInh, maxInh] = globalInhabitedMinMax();
     const [minSurf, maxSurf] = globalSurfaceMinMax();
 
+    let visible = 0;
+    const drawChunkGrid = showChunkGrid && zoom >= 0.55;
+    const lw = 1 / zoom;
+
     for (const r of map.regions) {
       const ox = (r.regionX - map.minRegionX) * GRID * CELL;
       const oy = (r.regionZ - map.minRegionZ) * GRID * CELL;
+      if (!regionInViewport(ox, oy, cssW, cssH)) continue;
+      visible++;
+
       for (let i = 0; i < r.chunks.length; i++) {
         const cell = r.chunks[i];
         const lx = i % GRID;
         const lz = Math.floor(i / GRID);
         const key = `${r.regionX}:${r.regionZ}:${i}`;
+        const x = ox + lx * CELL;
+        const y = oy + lz * CELL;
+        if (!cell.present) {
+          ctx.fillStyle = "#12141a";
+          ctx.fillRect(x, y, CELL, CELL);
+          continue;
+        }
+        const inRange = inHeightRange(cell);
+        ctx.globalAlpha = inRange ? 1 : 0.18;
         ctx.fillStyle = chunkColor(cell, colorMode, minMod, maxMod, minInh, maxInh, minSurf, maxSurf);
-        ctx.fillRect(ox + lx * CELL, oy + lz * CELL, CELL - 0.5, CELL - 0.5);
+        ctx.fillRect(x, y, CELL, CELL);
+        ctx.globalAlpha = 1;
         if (selection.has(key)) {
-          ctx.fillStyle = "rgba(255, 90, 95, 0.45)";
-          ctx.fillRect(ox + lx * CELL, oy + lz * CELL, CELL, CELL);
+          ctx.fillStyle = "rgba(255, 90, 95, 0.42)";
+          ctx.fillRect(x, y, CELL, CELL);
+        }
+        if (zoom >= 2.2 && (cell.entityCount || cell.structureCount)) {
+          if ((cell.entityCount ?? 0) > 0) {
+            ctx.fillStyle = "rgba(255, 220, 80, 0.85)";
+            ctx.fillRect(x + CELL * 0.15, y + CELL * 0.15, CELL * 0.22, CELL * 0.22);
+          }
+          if ((cell.structureCount ?? 0) > 0) {
+            ctx.fillStyle = "rgba(120, 200, 255, 0.9)";
+            ctx.fillRect(x + CELL * 0.6, y + CELL * 0.6, CELL * 0.22, CELL * 0.22);
+          }
         }
       }
+
+      if (drawChunkGrid) {
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+        ctx.lineWidth = lw;
+        for (let g = 0; g <= GRID; g++) {
+          const gx = ox + g * CELL;
+          const gy = oy + g * CELL;
+          ctx.beginPath();
+          ctx.moveTo(gx + 0.5 * lw, oy);
+          ctx.lineTo(gx + 0.5 * lw, oy + GRID * CELL);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(ox, gy + 0.5 * lw);
+          ctx.lineTo(ox + GRID * CELL, gy + 0.5 * lw);
+          ctx.stroke();
+        }
+      }
+
       if (showRegions) {
-        ctx.strokeStyle = "rgba(120, 200, 255, 0.35)";
-        ctx.lineWidth = 1 / zoom;
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+        ctx.lineWidth = Math.max(1.5 / zoom, 1 / zoom);
         ctx.strokeRect(ox + 0.5, oy + 0.5, GRID * CELL - 1, GRID * CELL - 1);
+        ctx.strokeStyle = "rgba(220, 220, 230, 0.35)";
+        ctx.lineWidth = 0.75 / zoom;
+        ctx.strokeRect(ox + 1, oy + 1, GRID * CELL - 2, GRID * CELL - 2);
+        if (zoom < 0.85) {
+          ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+          ctx.font = `${Math.max(9 / zoom, 8)}px ui-monospace, monospace`;
+          ctx.fillText(`r.${r.regionX}.${r.regionZ}`, ox + 3 / zoom, oy + 12 / zoom);
+        }
       }
     }
+    visibleRegionCount = visible;
 
     if (tool === "box" && dragStart && dragCurrent) {
       const x = Math.min(dragStart.x, dragCurrent.x);
@@ -545,12 +674,20 @@
   function onMove(evt: MouseEvent) {
     tipX = evt.clientX + 12;
     tipY = evt.clientY + 12;
-    const hit = cellAt(evt);
-    if (!hit) hover = null;
+    const w = screenToWorld(evt.clientX, evt.clientY);
+    const hit = w ? cellAtWorld(w.x, w.y) : null;
+    if (!hit || !w) hover = null;
     else {
+      const cx = worldChunkX(hit.rx, hit.lx);
+      const cz = worldChunkZ(hit.rz, hit.lz);
+      const fracX = w.x / CELL - Math.floor(w.x / CELL);
+      const fracZ = w.y / CELL - Math.floor(w.y / CELL);
+      const blockX = cx * 16 + Math.min(15, Math.max(0, Math.floor(fracX * 16)));
+      const blockZ = cz * 16 + Math.min(15, Math.max(0, Math.floor(fracZ * 16)));
       hover = {
         rx: hit.rx, rz: hit.rz,
-        cx: worldChunkX(hit.rx, hit.lx), cz: worldChunkZ(hit.rz, hit.lz),
+        cx, cz,
+        blockX, blockZ,
         status: statusLabel(hit.cell.status),
         modified: hit.cell.lastModified,
         inhabitedTime: hit.cell.inhabitedTime ?? 0,
@@ -1284,12 +1421,13 @@
     if (!map || selection.size === 0 || !$projectPath || !worldName) return;
     error = null;
     try {
-      clipboard = await api.worlds.copyChunks(worldName, selectionPayload(), dimension, $projectPath);
+      const clip = await api.worlds.copyChunks(worldName, selectionPayload(), dimension, $projectPath);
+      setWorldMapClipboard(clip, worldName, dimension);
       pasteOffsetX = 0;
       pasteOffsetZ = 0;
-      const ents = clipboard.entities?.length ?? 0;
-      const pois = clipboard.poi?.length ?? 0;
-      let msg = `Copied ${clipboard.chunks.length} chunks`;
+      const ents = clip.entities?.length ?? 0;
+      const pois = clip.poi?.length ?? 0;
+      let msg = `Copied ${clip.chunks.length} chunks`;
       if (ents || pois) {
         const parts: string[] = [];
         if (ents) parts.push(`${ents} entities`);
@@ -1304,8 +1442,7 @@
 
   async function cutSelected() {
     await copySelected();
-    if (clipboard && $projectPath && worldName) {
-      // cut: delete without second confirm (already confirmed by copy success)
+    if ($worldMapClipboard && $projectPath && worldName) {
       if (!confirm(`Cut: also delete ${selection.size} chunks from the world?`)) return;
       try {
         await api.worlds.deleteChunks(worldName, selectionPayload(), dimension, $projectPath);
@@ -1319,26 +1456,178 @@
   }
 
   async function pasteFromClipboard() {
-    if (!clipboard || !$projectPath || !worldName) return;
+    if (!$worldMapClipboard || !$projectPath || !worldName) return;
     error = null;
+    busyLabel = "Pasting…";
     try {
       const pasted = await api.worlds.pasteChunks(
         worldName,
-        clipboard,
+        $worldMapClipboard.clipboard,
         Number(pasteOffsetX) || 0,
         Number(pasteOffsetZ) || 0,
         dimension,
         $projectPath,
       );
       await load();
-      flash(`Pasted ${pasted} chunks (offset ${pasteOffsetX}, ${pasteOffsetZ})`);
+      const from =
+        $worldMapClipboard.sourceWorld !== worldName
+          ? ` from ${$worldMapClipboard.sourceWorld}`
+          : "";
+      flash(`Pasted ${pasted} chunks${from} (offset ${pasteOffsetX}, ${pasteOffsetZ})`);
+      fromWorldBannerDismissed = true;
     } catch (e) {
-      error = String(e);
+      flashError(String(e));
+    } finally {
+      busyLabel = null;
     }
   }
 
   function clearClipboard() {
-    clipboard = null;
+    clearWorldMapClipboard();
+    fromWorldBannerDismissed = false;
+  }
+
+  async function openFromWorld() {
+    if (!$projectPath) return;
+    fromWorldLoading = true;
+    fromWorldOpen = true;
+    error = null;
+    try {
+      fromWorldList = (await api.worlds.list($projectPath)).filter((w) => w.name !== worldName);
+      if (!fromWorldName || !fromWorldList.some((w) => w.name === fromWorldName)) {
+        fromWorldName = fromWorldList[0]?.name ?? "";
+      }
+      await loadFromWorldDims();
+    } catch (e) {
+      flashError(String(e));
+      fromWorldOpen = false;
+    } finally {
+      fromWorldLoading = false;
+    }
+  }
+
+  async function loadFromWorldDims() {
+    if (!$projectPath || !fromWorldName) {
+      fromWorldDims = ["overworld"];
+      fromWorldDim = "overworld";
+      return;
+    }
+    try {
+      fromWorldDims = await api.worlds.dimensions(fromWorldName, $projectPath);
+      if (!fromWorldDims.includes(fromWorldDim)) {
+        fromWorldDim = fromWorldDims[0] || "overworld";
+      }
+    } catch {
+      fromWorldDims = ["overworld"];
+      fromWorldDim = "overworld";
+    }
+  }
+
+  async function fromWorldCopyOnly() {
+    if (!map || selection.size === 0 || !$projectPath || !fromWorldName) {
+      flash("Select chunks on the map first");
+      return;
+    }
+    fromWorldLoading = true;
+    busyLabel = "Copying…";
+    error = null;
+    try {
+      const clip = await api.worlds.copyChunks(
+        fromWorldName,
+        selectionPayload(),
+        fromWorldDim,
+        $projectPath,
+      );
+      setWorldMapClipboard(clip, fromWorldName, fromWorldDim);
+      pasteOffsetX = 0;
+      pasteOffsetZ = 0;
+      flash(`Copied ${clip.chunks.length} from ${fromWorldName} — Paste (Ctrl+V) anytime`);
+      fromWorldOpen = false;
+    } catch (e) {
+      flashError(String(e));
+    } finally {
+      fromWorldLoading = false;
+      busyLabel = null;
+    }
+  }
+
+  async function fromWorldReplaceSelection() {
+    if (!map || selection.size === 0 || !$projectPath || !worldName || !fromWorldName) {
+      flash("Select target chunks first");
+      return;
+    }
+    fromWorldLoading = true;
+    busyLabel = "Replacing…";
+    error = null;
+    try {
+      const clip = await api.worlds.copyChunks(
+        fromWorldName,
+        selectionPayload(),
+        fromWorldDim,
+        $projectPath,
+      );
+      setWorldMapClipboard(clip, fromWorldName, fromWorldDim);
+      const pasted = await api.worlds.pasteChunks(
+        worldName,
+        clip,
+        Number(pasteOffsetX) || 0,
+        Number(pasteOffsetZ) || 0,
+        dimension,
+        $projectPath,
+      );
+      await load();
+      fromWorldOpen = false;
+      flash(`Replaced ${pasted} chunk(s) from ${fromWorldName}`);
+    } catch (e) {
+      flashError(String(e));
+    } finally {
+      fromWorldLoading = false;
+      busyLabel = null;
+    }
+  }
+
+  function sourceWorldDir(name: string): string {
+    const root = $projectPath ?? "";
+    const sep = root.includes("\\") ? "\\" : "/";
+    return `${root.replace(/[/\\]$/, "")}${sep}saves${sep}${name}`;
+  }
+
+  /** Import entire source dimension (or into current selection) via folder import. */
+  async function fromWorldImportFolder() {
+    if (!map || !$projectPath || !worldName || !fromWorldName) return;
+    const intoSel = importIntoSelection && selection.size > 0;
+    const msg = intoSel
+      ? `Import present chunks from "${fromWorldName}" (${fromWorldDim}) into the current selection (${selection.size})?\nUses paste ΔX/ΔZ and overwrite settings.`
+      : `Import ALL present chunks from "${fromWorldName}" (${fromWorldDim}) into "${worldName}" (${dimension})?\nThis can be large. Uses paste ΔX/ΔZ and overwrite settings.`;
+    if (!confirm(msg)) return;
+    fromWorldLoading = true;
+    busyLabel = "Importing…";
+    error = null;
+    try {
+      const n = await api.worlds.importChunks(
+        worldName,
+        sourceWorldDir(fromWorldName),
+        {
+          offsetX: Number(pasteOffsetX) || 0,
+          offsetZ: Number(pasteOffsetZ) || 0,
+          overwrite: importOverwrite,
+          yOffset: Number(importYOffset) || 0,
+          sections: importSections.trim() || undefined,
+          targetSelections: intoSel ? selectionPayload() : undefined,
+          dimension,
+          sourceDimension: fromWorldDim,
+        },
+        $projectPath,
+      );
+      await load();
+      fromWorldOpen = false;
+      flash(`Imported ${n} chunk entries from ${fromWorldName}`);
+    } catch (e) {
+      flashError(String(e));
+    } finally {
+      fromWorldLoading = false;
+      busyLabel = null;
+    }
   }
 
   function openChunkEditor() {
@@ -1462,6 +1751,9 @@
     else if (ctrl && e.key === "a") { e.preventDefault(); selectAll(); }
     else if (e.key === "Enter" && tool === "poly") { e.preventDefault(); applyPolySelection(); }
     else if (e.key === "Escape") {
+      if (gotoOpen) { gotoOpen = false; return; }
+      if (fromWorldOpen) { fromWorldOpen = false; return; }
+      if (toolsDrawerOpen) { toolsDrawerOpen = false; return; }
       if (polyPoints.length > 0) { polyPoints = []; draw(); return; }
       clearClipboard(); clearSelection();
     }
@@ -1470,6 +1762,87 @@
     else if (e.key === "-") zoomBy(1 / 1.15);
     else if (e.key === "0") { fitView(); draw(); }
     else if (e.key === "n" || e.key === "N") { e.preventDefault(); cycleColorMode(); }
+    else if (e.key === "g" || e.key === "G") { e.preventDefault(); openGoto(); }
+    else if (e.key === "f" || e.key === "F") {
+      e.preventDefault();
+      openFromWorld();
+    }
+    else if (e.key === "t" || e.key === "T") {
+      if (layout === "dock") {
+        e.preventDefault();
+        toolsDrawerOpen = !toolsDrawerOpen;
+        if (toolsDrawerOpen) filtersOpen = true;
+      }
+    }
+  }
+
+  function panToChunk(cx: number, cz: number, zoomTarget?: number) {
+    if (!map || !viewport) return;
+    if (zoomTarget != null) zoom = zoomTarget;
+    const wx = (cx - map.minRegionX * GRID) * CELL + CELL / 2;
+    const wy = (cz - map.minRegionZ * GRID) * CELL + CELL / 2;
+    panX = viewport.clientWidth / 2 - wx * zoom;
+    panY = viewport.clientHeight / 2 - wy * zoom;
+    draw();
+  }
+
+  function panToRegion(rx: number, rz: number) {
+    const cx = rx * GRID + GRID / 2;
+    const cz = rz * GRID + GRID / 2;
+    panToChunk(cx, cz, Math.max(zoom, 0.6));
+  }
+
+  async function openGoto() {
+    if (hover) {
+      if (gotoMode === "block") {
+        gotoX = String(hover.blockX);
+        gotoZ = String(hover.blockZ);
+      } else {
+        gotoX = String(hover.cx);
+        gotoZ = String(hover.cz);
+      }
+    }
+    gotoOpen = true;
+    await tick();
+    gotoXInput?.focus();
+    gotoXInput?.select();
+  }
+
+  function resetHeightRange() {
+    heightMin = -64;
+    heightMax = 319;
+    draw();
+  }
+
+  function applyGoto() {
+    const x = Number(gotoX);
+    const z = Number(gotoZ);
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      flash("Invalid coordinates");
+      return;
+    }
+    const cx = gotoMode === "block" ? Math.floor(x / 16) : Math.trunc(x);
+    const cz = gotoMode === "block" ? Math.floor(z / 16) : Math.trunc(z);
+    panToChunk(cx, cz, Math.max(zoom, 1.2));
+    gotoOpen = false;
+    flash(`Went to chunk ${cx}, ${cz}`);
+  }
+
+  $: regionList = map
+    ? [...map.regions]
+        .map((r) => ({
+          rx: r.regionX,
+          rz: r.regionZ,
+          present: r.present,
+          label: `r.${r.regionX}.${r.regionZ}`,
+        }))
+        .sort((a, b) => a.rx - b.rx || a.rz - b.rz)
+    : [];
+
+  $: if (heightMin > heightMax) {
+    const t = heightMin;
+    heightMin = heightMax;
+    heightMax = t;
   }
 
   function onLeave(evt: MouseEvent) {
@@ -1514,10 +1887,94 @@
   $: if (worldName && $projectPath) load();
   $: if (map) scheduleDraw();
   $: canvasCursor = tool === "pan" ? "grab" : (tool === "click" || tool === "region" || tool === "poly") ? "pointer" : "crosshair";
+  $: if (heightMin !== undefined && heightMax !== undefined) scheduleDraw();
 </script>
 
-<div class="world-map" class:layout-dock={layout === "dock"} class:layout-top={layout === "top"}>
-  <aside class="tools-panel">
+<div
+  class="world-map"
+  class:layout-dock={layout === "dock"}
+  class:layout-top={layout === "top"}
+  class:tools-open={layout === "dock" && toolsDrawerOpen}
+>
+  {#if layout === "dock"}
+    <div class="mca-topbar">
+      <select class="ghost select slim dim-select" bind:value={dimension} on:change={load} title="Dimension">
+        {#each dimensions as d (d)}
+          <option value={d}>{dimLabel(d)}</option>
+        {/each}
+      </select>
+      <span class="mca-sep" aria-hidden="true"></span>
+      <div class="tool-group compact tool-segment" role="toolbar" aria-label="Selection tools">
+        <button type="button" class="ghost tool-ico" class:active={tool === "pan"} on:click={() => (tool = "pan")} title="Pan"><Minimize2 size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "click"} on:click={() => (tool = "click")} title="Click"><MousePointer2 size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "box"} on:click={() => (tool = "box")} title="Box"><Square size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "radius"} on:click={() => (tool = "radius")} title="Radius"><Circle size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "poly"} on:click={() => { tool = "poly"; polyPoints = []; draw(); }} title="Poly"><Pencil size={14} /></button>
+        <button type="button" class="ghost tool-ico" class:active={tool === "region"} on:click={() => (tool = "region")} title="Region"><Layers size={14} /></button>
+      </div>
+      <span class="mca-sep" aria-hidden="true"></span>
+      <select class="ghost select slim" bind:value={colorMode} on:change={draw} title="Color mode (N)">
+        <option value="biome">biome</option>
+        <option value="height">height</option>
+        <option value="status">status</option>
+        <option value="date">date</option>
+        <option value="inhabited">inhabited</option>
+      </select>
+      <div class="height-range" title="Height range filter (surfaceY)">
+        <span class="hr-label">Y</span>
+        <input type="range" min="-64" max="319" bind:value={heightMin} on:input={draw} />
+        <code>{heightMin}</code>
+        <span class="hr-dots">…</span>
+        <input type="range" min="-64" max="319" bind:value={heightMax} on:input={draw} />
+        <code>{heightMax}</code>
+        {#if heightMin !== -64 || heightMax !== 319}
+          <button type="button" class="y-reset" on:click={resetHeightRange} title="Reset Y to −64…319">↺</button>
+        {/if}
+      </div>
+      <span class="mca-sep" aria-hidden="true"></span>
+      <div class="tool-group compact tool-segment">
+        <button type="button" class="ghost tool-ico" on:click={() => zoomBy(1.2)} title="Zoom in"><ZoomIn size={14} /></button>
+        <button type="button" class="ghost tool-ico" on:click={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
+        <button type="button" class="ghost tool-lbl" on:click={() => { fitView(); draw(); }} title="Fit (0)">Fit</button>
+        <button type="button" class="ghost tool-lbl" on:click={openGoto} title="Go to… (G)"><Crosshair size={14} /><span>Go</span></button>
+        <button type="button" class="ghost tool-lbl" class:pulse={crossWorldClip} on:click={openFromWorld} title="From another world (F)"><Globe2 size={14} /><span>World</span></button>
+      </div>
+      <div class="tool-group compact grow-end view-toggles">
+        <label class="toggle tight" title="Region borders"><input type="checkbox" bind:checked={showRegions} on:change={draw} /><span>Regions</span></label>
+        <label class="toggle tight" title="Chunk grid"><input type="checkbox" bind:checked={showChunkGrid} on:change={draw} /><span>Grid</span></label>
+        <label class="toggle tight" title="Spawn"><input type="checkbox" bind:checked={showSpawn} on:change={draw} /><span>Spawn</span></label>
+        <button type="button" class="ghost tool-ico" class:active={regionRailOpen} on:click={() => (regionRailOpen = !regionRailOpen)} title="Region files"><List size={14} /></button>
+        <button type="button" class="ghost tool-lbl accent-btn" class:active={toolsDrawerOpen} on:click={() => { toolsDrawerOpen = !toolsDrawerOpen; if (toolsDrawerOpen) filtersOpen = true; }} title="Tools (T)">
+          <Wrench size={14} /><span>Tools</span>
+        </button>
+        <button type="button" class="ghost tool-ico" on:click={load} disabled={loading} title="Reload"><RefreshCw size={14} class={loading ? "spin" : ""} /></button>
+      </div>
+    </div>
+  {/if}
+
+  <div class="mca-body" class:has-rail={layout === "dock" && regionRailOpen}>
+    {#if layout === "dock" && regionRailOpen}
+      <aside class="region-rail" aria-label="Region files">
+        <div class="region-rail-title">Regions</div>
+        <div class="region-rail-list">
+          {#each regionList as r (r.label)}
+            <button
+              type="button"
+              class="region-item"
+              title="Jump to {r.label}"
+              on:click={() => panToRegion(r.rx, r.rz)}
+            >
+              <span class="r-name">{r.label}</span>
+              <span class="r-count">{r.present}</span>
+            </button>
+          {:else}
+            <div class="region-empty">No regions</div>
+          {/each}
+        </div>
+      </aside>
+    {/if}
+
+  <aside class="tools-panel" class:drawer={layout === "dock"}>
     <div class="title"><MapIcon size={16} /> MCA map · chunk select/delete/export{#if layout === "top"} · {worldName}{/if}</div>
     <div class="tools">
       <select class="ghost select" bind:value={dimension} on:change={load} title="Dimension">
@@ -1588,8 +2045,11 @@
         <button class="ghost" on:click={cutSelected} disabled={selection.size === 0} title="Cut (Ctrl+X)">
           <Scissors size={14} /> Cut
         </button>
-        <button class="ghost" on:click={pasteFromClipboard} disabled={!clipboard} title="Paste (Ctrl+V)">
-          <Clipboard size={14} /> Paste {clipboard ? `(${clipboard.chunks.length})` : ""}
+        <button class="ghost" on:click={pasteFromClipboard} disabled={!$worldMapClipboard} title="Paste (Ctrl+V) — works across worlds">
+          <Clipboard size={14} /> Paste {$worldMapClipboard ? `(${$worldMapClipboard.clipboard.chunks.length})` : ""}
+        </button>
+        <button class="ghost" on:click={openFromWorld} disabled={!map} title="Copy or replace chunks from another world">
+          <Globe2 size={14} /> From world…
         </button>
         <button class="ghost danger" on:click={deleteSelected} disabled={selection.size === 0} title="Delete selected (Del)">
           <Trash2 size={14} /> Delete {selection.size || ""}
@@ -1636,9 +2096,11 @@
     </div>
 
     {#if layout === "dock"}
-      <button class="filters-toggle" on:click={() => (filtersOpen = !filtersOpen)}>
+      <button class="filters-toggle" type="button" on:click={() => (filtersOpen = !filtersOpen)}>
         <Filter size={12} /> Filters &amp; NBT {filtersOpen ? "▾" : "▸"}
       </button>
+    {:else if layout === "top"}
+      <!-- filters always below on top layout -->
     {/if}
 
     {#if layout === "top" || filtersOpen}
@@ -1789,27 +2251,29 @@
   />
 
   <div class="viewport-col">
-    <div class="stats">
-      {#if map}
-        <span>{dimLabel(dimension)}</span>
-        <span>{map.regionCount} regions</span>
-        <span>{map.totalPresent.toLocaleString()} chunks</span>
-        <span>RX {map.minRegionX}…{map.maxRegionX}</span>
-        <span>RZ {map.minRegionZ}…{map.maxRegionZ}</span>
-        <span>zoom {(zoom * 100).toFixed(0)}%</span>
-        <span class="sel">selected: {selection.size}</span>
-        {#if clipboard}
-          <span class="clip">clipboard: {clipboard.chunks.length}</span>
+    {#if layout === "top"}
+      <div class="stats">
+        {#if map}
+          <span>{dimLabel(dimension)}</span>
+          <span>{map.regionCount} regions</span>
+          <span>{map.totalPresent.toLocaleString()} chunks</span>
+          <span>RX {map.minRegionX}…{map.maxRegionX}</span>
+          <span>RZ {map.minRegionZ}…{map.maxRegionZ}</span>
+          <span>zoom {(zoom * 100).toFixed(0)}%</span>
+          <span class="sel">selected: {selection.size}</span>
+          {#if $worldMapClipboard}
+            <span class="clip">clipboard: {$worldMapClipboard.clipboard.chunks.length} from {$worldMapClipboard.sourceWorld}</span>
+          {/if}
+          {#if flashMsg}<span class="ok">{flashMsg}</span>{/if}
+        {:else if error}
+          <span class="err">{error}</span>
+        {:else if loading}
+          <span>loading…</span>
+        {:else}
+          <span>no world map</span>
         {/if}
-        {#if flashMsg}<span class="ok">{flashMsg}</span>{/if}
-      {:else if error}
-        <span class="err">{error}</span>
-      {:else if loading}
-        <span>loading…</span>
-      {:else}
-        <span>no world map</span>
-      {/if}
-    </div>
+      </div>
+    {/if}
 
     <div class="map-scroll" bind:this={viewport}>
       {#if map}
@@ -1825,7 +2289,7 @@
           on:wheel|preventDefault={onWheel}
           on:contextmenu|preventDefault
         ></canvas>
-        {#if hover}
+        {#if hover && layout === "top"}
           <div class="hover-tip" style="left: {tipX}px; top: {tipY}px">
             chunk <code>{hover.cx}, {hover.cz}</code> · region {hover.rx},{hover.rz}<br />
             {hover.status}{#if hover.modified} · {new Date(hover.modified * 1000).toLocaleDateString()}{/if}<br />
@@ -1836,6 +2300,43 @@
             {#if hover.structureCount != null}<br />structures {hover.structureCount}{/if}
           </div>
         {/if}
+        {#if showClipBanner && $worldMapClipboard}
+          <div class="clip-banner" role="status">
+            <div class="clip-banner-text">
+              <Clipboard size={14} />
+              <span>
+                <strong>{$worldMapClipboard.clipboard.chunks.length}</strong> chunks from
+                <strong>{$worldMapClipboard.sourceWorld}</strong>
+                ready to paste
+              </span>
+            </div>
+            <div class="clip-banner-offsets" title="Paste offset (chunks)">
+              <label>ΔX <input type="number" bind:value={pasteOffsetX} /></label>
+              <label>ΔZ <input type="number" bind:value={pasteOffsetZ} /></label>
+            </div>
+            <div class="clip-banner-actions">
+              <button type="button" class="primary" disabled={!!busyLabel} on:click={pasteFromClipboard}>
+                Paste here
+              </button>
+              <button type="button" class="ghost" on:click={() => (fromWorldBannerDismissed = true)}>Later</button>
+              <button type="button" class="ghost" on:click={clearClipboard} title="Clear clipboard">Clear</button>
+            </div>
+          </div>
+        {/if}
+        {#if flashMsg && layout === "dock"}
+          <div class="flash-toast" class:err={error && flashMsg === error}>{flashMsg}</div>
+        {/if}
+        {#if loading || busyLabel}
+          <div class="map-busy" aria-live="polite">
+            <RefreshCw size={16} class="spin" />
+            {busyLabel || "Loading map…"}
+          </div>
+        {/if}
+      {:else if loading}
+        <div class="map-busy center" aria-live="polite">
+          <RefreshCw size={18} class="spin" />
+          Loading map…
+        </div>
       {:else if error}
         <EmptyState icon={MapIcon} title="No map yet" description="Generate the world by running the pack, then refresh. Switch dimension if you explored Nether/End." />
       {:else if !loading}
@@ -1843,16 +2344,202 @@
       {/if}
     </div>
 
-    <div class="legend">
-      <span><i style="background:#15171c"></i> absent</span>
-      <span><i style="background:#3b4252"></i> empty</span>
-      <span><i style="background:#b08968"></i> partial</span>
-      <span><i style="background:#2d8c8c"></i> {colorMode === "date" || colorMode === "inhabited" || colorMode === "height" ? "old→new / low→high" : colorMode === "biome" ? "biome hue" : "full (old→new)"}</span>
-      <span><i style="background:rgba(255,90,95,0.7)"></i> selected</span>
-      <span class="hint">Wheel zoom · Alt/middle pan · Shift subtract · N color · Del delete</span>
+    {#if layout === "dock"}
+      <div class="mca-status" role="status">
+        <span class="st"><span class="st-k">block</span> <strong>{hover ? `${hover.blockX}, ${hover.blockZ}` : "—"}</strong></span>
+        <span class="st"><span class="st-k">chunk</span> <strong>{hover ? `${hover.cx}, ${hover.cz}` : "—"}</strong></span>
+        <span class="st"><span class="st-k">region</span> <strong>{hover ? `${hover.rx}, ${hover.rz}` : "—"}</strong></span>
+        <span class="st"><span class="st-k">selected</span> <strong class:has-sel={selection.size > 0}>{selection.size}</strong></span>
+        <span class="st"><span class="st-k">visible</span> <strong>{visibleRegionCount}</strong></span>
+        <span class="st"><span class="st-k">total</span> <strong>{map?.regionCount ?? 0}</strong></span>
+        {#if $worldMapClipboard}
+          <button
+            type="button"
+            class="clip-status"
+            class:cross={crossWorldClip}
+            title={crossWorldClip ? "Click to paste from another world" : "Shared clipboard"}
+            on:click={() => {
+              if (crossWorldClip) pasteFromClipboard();
+              else openFromWorld();
+            }}
+          >
+            <span class="st-k">clip</span>
+            <strong>{$worldMapClipboard.clipboard.chunks.length}</strong>
+            <span class="clip-from">{$worldMapClipboard.sourceWorld}</span>
+            {#if crossWorldClip}<span class="clip-cta">Paste</span>{/if}
+          </button>
+        {/if}
+        {#if hover?.surfaceY != null && hover.surfaceY !== -9999}
+          <span class="st"><span class="st-k">Y</span> <strong>{hover.surfaceY}</strong></span>
+        {/if}
+        {#if busyLabel}<span class="busy-status">{busyLabel}</span>{/if}
+        <span class="status-zoom">{(zoom * 100).toFixed(0)}%</span>
+      </div>
+    {:else}
+      <div class="legend">
+        <span><i style="background:#15171c"></i> absent</span>
+        <span><i style="background:#3b4252"></i> empty</span>
+        <span><i style="background:#b08968"></i> partial</span>
+        <span><i style="background:#2d8c8c"></i> {colorMode === "date" || colorMode === "inhabited" || colorMode === "height" ? "old→new / low→high" : colorMode === "biome" ? "biome" : "full (old→new)"}</span>
+        <span><i style="background:rgba(255,90,95,0.7)"></i> selected</span>
+        {#if $worldMapClipboard}
+          <span class="clip">clip: {$worldMapClipboard.clipboard.chunks.length} from {$worldMapClipboard.sourceWorld}</span>
+        {/if}
+        <span class="hint">Wheel zoom · Alt/middle pan · Shift subtract · N color · G goto · Del delete</span>
+      </div>
+    {/if}
+  </div>
+  </div><!-- /.mca-body -->
+</div>
+
+{#if gotoOpen}
+  <div class="goto-backdrop" role="presentation" on:click={() => (gotoOpen = false)}>
+    <div
+      class="goto-dialog"
+      role="dialog"
+      aria-labelledby="goto-title"
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
+      <h3 id="goto-title">Go to</h3>
+      <div class="goto-mode">
+        <button type="button" class:active={gotoMode === "block"} on:click={() => (gotoMode = "block")}>Block</button>
+        <button type="button" class:active={gotoMode === "chunk"} on:click={() => (gotoMode = "chunk")}>Chunk</button>
+      </div>
+      <div class="goto-fields">
+        <label>X <input bind:this={gotoXInput} bind:value={gotoX} on:keydown={(e) => e.key === "Enter" && applyGoto()} /></label>
+        <label>Z <input bind:value={gotoZ} on:keydown={(e) => e.key === "Enter" && applyGoto()} /></label>
+      </div>
+      <div class="goto-actions">
+        <button type="button" class="ghost" on:click={() => (gotoOpen = false)}>Cancel</button>
+        <button type="button" class="primary" on:click={applyGoto}>Go</button>
+      </div>
     </div>
   </div>
-</div>
+{/if}
+
+{#if fromWorldOpen}
+  <div class="goto-backdrop" role="presentation" on:click={() => !fromWorldLoading && (fromWorldOpen = false)}>
+    <div
+      class="goto-dialog from-world-dialog"
+      role="dialog"
+      aria-labelledby="from-world-title"
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
+      <h3 id="from-world-title">From world</h3>
+      {#if fromWorldLoading && fromWorldList.length === 0}
+        <p class="from-world-hint"><RefreshCw size={14} class="spin" /> Loading worlds…</p>
+      {:else if fromWorldList.length === 0}
+        <p class="from-world-hint">No other worlds in this pack. Create or copy a world into <code>saves/</code> first.</p>
+        <div class="goto-actions">
+          <button type="button" class="ghost" on:click={() => (fromWorldOpen = false)}>Close</button>
+        </div>
+      {:else}
+        <div class="from-world-fields">
+          <label>
+            Source world
+            <select
+              class="select"
+              bind:value={fromWorldName}
+              on:change={loadFromWorldDims}
+              disabled={fromWorldLoading}
+            >
+              {#each fromWorldList as w (w.name)}
+                <option value={w.name}>{w.name} · {w.sizeFormatted}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            Source dimension
+            <select class="select" bind:value={fromWorldDim} disabled={fromWorldLoading}>
+              {#each fromWorldDims as d (d)}
+                <option value={d}>{dimLabel(d)}</option>
+              {/each}
+            </select>
+          </label>
+          <div class="from-world-offsets">
+            <label>Paste ΔX <input type="number" bind:value={pasteOffsetX} disabled={fromWorldLoading} /></label>
+            <label>Paste ΔZ <input type="number" bind:value={pasteOffsetZ} disabled={fromWorldLoading} /></label>
+          </div>
+        </div>
+
+        <div class="from-world-steps">
+          <div class="fw-step" class:ready={selection.size > 0} class:dim={selection.size === 0}>
+            <span class="fw-num">1</span>
+            <div>
+              <strong>Selection on this map</strong>
+              <p>{selection.size > 0 ? `${selection.size} chunk(s) selected` : "Select chunks to replace or copy from source at the same coordinates"}</p>
+            </div>
+          </div>
+          <div class="fw-step" class:ready={!!$worldMapClipboard} class:dim={!$worldMapClipboard}>
+            <span class="fw-num">2</span>
+            <div>
+              <strong>Shared clipboard</strong>
+              <p>
+                {#if $worldMapClipboard}
+                  {$worldMapClipboard.clipboard.chunks.length} from {$worldMapClipboard.sourceWorld}
+                {:else}
+                  Empty — Copy only, or Copy (Ctrl+C) in another world
+                {/if}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="from-world-actions-grid">
+          <button
+            type="button"
+            class="fw-card primary"
+            disabled={fromWorldLoading || !fromWorldName || selection.size === 0 || !worldName}
+            on:click={fromWorldReplaceSelection}
+          >
+            <strong>Replace selection</strong>
+            <span>Copy source at selected coords → paste here</span>
+          </button>
+          <button
+            type="button"
+            class="fw-card"
+            disabled={fromWorldLoading || !fromWorldName || selection.size === 0}
+            on:click={fromWorldCopyOnly}
+          >
+            <strong>Copy only</strong>
+            <span>Fill clipboard, paste later (Ctrl+V)</span>
+          </button>
+          <button
+            type="button"
+            class="fw-card"
+            class:recommended={!!$worldMapClipboard && selection.size === 0}
+            disabled={fromWorldLoading || !$worldMapClipboard || !worldName}
+            on:click={async () => {
+              await pasteFromClipboard();
+              fromWorldOpen = false;
+            }}
+          >
+            <strong>Paste clipboard</strong>
+            <span>Use shared clipboard with Δ offsets</span>
+          </button>
+          <button
+            type="button"
+            class="fw-card dangerish"
+            disabled={fromWorldLoading || !fromWorldName || !worldName}
+            on:click={fromWorldImportFolder}
+          >
+            <strong>Import dimension</strong>
+            <span>All present chunks from source (confirm)</span>
+          </button>
+        </div>
+
+        <div class="goto-actions">
+          <button type="button" class="ghost" disabled={fromWorldLoading} on:click={() => (fromWorldOpen = false)}>Cancel</button>
+          {#if fromWorldLoading}
+            <span class="from-world-busy"><RefreshCw size={14} class="spin" /> Working…</span>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 {#if editorOpen}
   <ChunkNbtEditor
@@ -1870,17 +2557,245 @@
   .world-map {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 0;
     height: 100%;
     min-height: 0;
     flex: 1;
     width: 100%;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .world-map.layout-top {
+    gap: 10px;
   }
 
   .world-map.layout-dock {
-    flex-direction: row;
+    flex-direction: column;
     gap: 0;
     align-items: stretch;
+    background: color-mix(in srgb, var(--bg-primary) 88%, #000 12%);
+    --mca-chrome: color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-primary) 8%);
+    --mca-chip: color-mix(in srgb, var(--bg-tertiary) 85%, var(--bg-elevated) 15%);
+    --mca-ink: var(--text-secondary);
+    --mca-ink-strong: var(--text-primary);
+    --mca-line: var(--border-color);
+  }
+
+  .mca-topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 5px 8px;
+    background: var(--mca-chrome);
+    border-bottom: 1px solid var(--mca-line);
+    flex-shrink: 0;
+    z-index: 5;
+  }
+  .mca-sep {
+    width: 1px;
+    height: 22px;
+    background: var(--mca-line);
+    flex-shrink: 0;
+    opacity: 0.9;
+  }
+  .mca-topbar .slim {
+    min-width: 0;
+    width: auto;
+    max-width: 128px;
+    padding: 4px 8px;
+    font-size: 12px;
+    height: 28px;
+  }
+  .mca-topbar .tool-group.compact {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 0;
+  }
+  .mca-topbar .tool-segment {
+    display: inline-flex;
+    align-items: stretch;
+    padding: 2px;
+    border: 1px solid var(--mca-line);
+    border-radius: 8px;
+    background: var(--mca-chip);
+  }
+  .mca-topbar .tool-segment .ghost {
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--mca-ink);
+    min-height: 26px;
+    padding: 0 8px;
+  }
+  .mca-topbar .tool-segment .tool-ico {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+  .mca-topbar .tool-segment .tool-lbl {
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .mca-topbar .tool-segment .ghost:hover {
+    background: var(--bg-hover);
+    color: var(--mca-ink-strong);
+  }
+  .mca-topbar .tool-segment .ghost.active {
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    color: var(--accent-primary);
+  }
+  .mca-topbar .grow-end {
+    margin-left: auto;
+    gap: 6px !important;
+    align-items: center;
+  }
+  .view-toggles .toggle.tight {
+    padding: 3px 7px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--mca-ink);
+  }
+  .view-toggles .toggle.tight:hover {
+    background: var(--bg-hover);
+    color: var(--mca-ink-strong);
+  }
+  .view-toggles .toggle.tight:has(input:checked) {
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--mca-line));
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+    color: var(--accent-primary);
+  }
+  .view-toggles .toggle.tight input {
+    accent-color: var(--accent-primary);
+  }
+  .height-range {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--mca-ink);
+    padding: 2px 8px;
+    border: 1px solid var(--mca-line);
+    border-radius: 8px;
+    background: var(--mca-chip);
+    height: 30px;
+  }
+  .height-range .hr-label {
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .height-range .hr-dots { opacity: 0.5; }
+  .height-range input[type="range"] {
+    width: 68px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    accent-color: var(--accent-primary);
+  }
+  .height-range code {
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--mca-ink-strong);
+    min-width: 28px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .y-reset {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .y-reset:hover { color: var(--mca-ink-strong); }
+  .ghost.pulse {
+    color: var(--accent-primary) !important;
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent) !important;
+  }
+  .toggle.tight {
+    font-size: 11px;
+    gap: 4px;
+  }
+  .accent-btn.active {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+
+  .mca-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .layout-dock .mca-body {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .layout-top .mca-body {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .region-rail {
+    width: 140px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--mca-line);
+    background: var(--mca-chrome);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .region-rail-title {
+    padding: 9px 10px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid var(--mca-line);
+  }
+  .region-rail-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+  }
+  .region-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    cursor: pointer;
+    text-align: left;
+  }
+  .region-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .r-count {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .region-empty {
+    padding: 12px 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
   }
 
   .tools-panel {
@@ -1901,18 +2816,490 @@
   .layout-top .tools-panel > .filter-bar,
   .layout-top .tools-panel > .nbt-bar { grid-column: 1 / -1; }
 
-  .layout-dock .tools-panel {
-    width: 210px;
-    max-width: 220px;
-    min-width: 200px;
-    height: 100%;
-    min-height: 0;
+  .layout-dock .tools-panel.drawer {
+    display: none;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 92vw);
+    z-index: 30;
+    height: auto;
+    max-width: 340px;
+    min-width: 260px;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 10px 8px;
-    background: var(--bg-secondary);
-    border-right: 1px solid var(--border-color);
+    padding: 12px 10px;
+    background: color-mix(in srgb, var(--bg-secondary) 94%, var(--bg-elevated) 6%);
+    border-left: 1px solid var(--border-color);
+    box-shadow: -8px 0 24px color-mix(in srgb, #000 35%, transparent);
     gap: 8px;
+    backdrop-filter: blur(8px);
+  }
+  .layout-dock.tools-open .tools-panel.drawer {
+    display: flex;
+  }
+
+  .layout-dock .tools {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .layout-dock .tool-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .layout-dock .tool-group .ghost {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .layout-dock .select {
+    width: 100%;
+  }
+
+  .mca-status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 2px;
+    align-items: center;
+    padding: 5px 10px;
+    background: color-mix(in srgb, var(--bg-secondary) 80%, #000 20%);
+    border-top: 1px solid var(--border-color);
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    letter-spacing: 0.01em;
+  }
+  .mca-status .st {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 2px 8px;
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+  }
+  .mca-status .st:last-of-type {
+    border-right: none;
+  }
+  .mca-status .st-k {
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: lowercase;
+    opacity: 0.85;
+  }
+  .mca-status strong {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .mca-status strong.has-sel {
+    color: color-mix(in srgb, var(--accent-danger) 70%, #fff 30%);
+  }
+  .status-zoom {
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .flash-toast {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 8;
+    padding: 7px 14px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-elevated) 88%, var(--accent-primary) 12%);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 600;
+    pointer-events: none;
+    max-width: min(520px, 90%);
+    text-align: center;
+    box-shadow: var(--shadow-md);
+  }
+  .flash-toast.err {
+    background: color-mix(in srgb, var(--bg-elevated) 85%, var(--accent-danger) 15%);
+    border-color: color-mix(in srgb, var(--accent-danger) 45%, var(--border-color));
+    color: color-mix(in srgb, var(--accent-danger) 70%, #fff 30%);
+  }
+
+  .clip-banner {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
+    padding: 10px 12px;
+    max-width: min(640px, calc(100% - 24px));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--bg-elevated) 92%, var(--bg-primary) 8%);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-color));
+    box-shadow: var(--shadow-lg);
+    backdrop-filter: blur(10px);
+  }
+  .clip-banner-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .clip-banner-text strong { color: var(--accent-primary); }
+  .clip-banner-offsets {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .clip-banner-offsets label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .clip-banner-offsets input {
+    width: 56px;
+    height: 28px;
+    padding: 0 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: ui-monospace, monospace;
+  }
+  .clip-banner-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+  }
+  .clip-banner-actions .primary {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 7px;
+    background: var(--accent-primary);
+    color: #04140a;
+    font-weight: 700;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .clip-banner-actions .primary:disabled { opacity: 0.5; cursor: default; }
+  .clip-banner-actions .ghost {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .map-busy {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 7;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 12px;
+    backdrop-filter: blur(6px);
+  }
+  .map-busy.center {
+    inset: 0;
+    bottom: auto;
+    left: auto;
+    justify-content: center;
+    border: none;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--bg-primary) 72%, transparent);
+  }
+
+  .goto-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: color-mix(in srgb, #000 55%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    backdrop-filter: blur(2px);
+  }
+  .goto-dialog {
+    width: min(360px, 100%);
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-lg);
+  }
+  .goto-dialog h3 {
+    margin: 0 0 14px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .goto-mode {
+    display: flex;
+    gap: 0;
+    margin-bottom: 12px;
+    padding: 2px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-tertiary);
+  }
+  .goto-mode button {
+    flex: 1;
+    padding: 7px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .goto-mode button.active {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  }
+  .goto-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .goto-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .goto-fields input {
+    height: 36px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: ui-monospace, monospace;
+    font-size: 13px;
+  }
+  .goto-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+    align-items: center;
+  }
+  .goto-actions .primary {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent-primary);
+    color: #04140a;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .goto-actions .primary:disabled,
+  .goto-actions .ghost:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .from-world-dialog {
+    width: min(500px, 100%);
+  }
+  .from-world-hint {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.45;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .from-world-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .from-world-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .from-world-fields .select {
+    width: 100%;
+    height: 36px;
+  }
+  .from-world-offsets {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .from-world-offsets input {
+    height: 32px;
+    padding: 0 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-family: ui-monospace, monospace;
+  }
+  .from-world-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .fw-step {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+  }
+  .fw-step.ready {
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-tertiary));
+  }
+  .fw-step.dim { opacity: 0.7; }
+  .fw-step strong {
+    display: block;
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+  .fw-step p {
+    margin: 2px 0 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.35;
+  }
+  .fw-num {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+  .fw-step.ready .fw-num {
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    color: var(--accent-primary);
+  }
+  .from-world-actions-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .fw-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    text-align: left;
+    padding: 11px;
+    border-radius: 9px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  .fw-card strong {
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+  .fw-card span {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.35;
+  }
+  .fw-card:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--text-primary) 18%, var(--border-color));
+  }
+  .fw-card.primary {
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-tertiary));
+  }
+  .fw-card.primary strong { color: var(--accent-primary); }
+  .fw-card.recommended {
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+  }
+  .fw-card.dangerish:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--accent-danger) 40%, var(--border-color));
+  }
+  .fw-card:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .from-world-busy {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-right: auto;
+  }
+  .mca-status .clip-status {
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    padding: 2px 8px;
+    font: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .mca-status .clip-status.cross {
+    color: var(--accent-primary);
+  }
+  .mca-status .clip-status:hover {
+    color: var(--text-primary);
+  }
+  .mca-status .clip-from {
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+  }
+  .clip-cta {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .busy-status {
+    color: var(--text-muted);
+    padding: 0 8px;
   }
 
   .title {
@@ -1932,31 +3319,11 @@
     flex-wrap: wrap;
   }
 
-  .layout-dock .tools {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-  }
-
   .tool-group {
     display: flex;
     gap: 4px;
     flex-wrap: wrap;
     align-items: center;
-  }
-
-  .layout-dock .tool-group {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .layout-dock .tool-group .ghost {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .layout-dock .select {
-    width: 100%;
   }
 
   .filters-toggle {
@@ -1991,13 +3358,14 @@
   }
 
   .layout-dock .viewport-col {
-    padding: 8px 10px 10px;
+    padding: 0;
     flex: 1;
     min-width: 0;
     min-height: 0;
     height: 100%;
     display: flex;
     flex-direction: column;
+    gap: 0;
   }
 
   .stats { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
@@ -2068,6 +3436,9 @@
     flex: 1 1 0;
     min-height: 240px;
     height: auto;
+    border: none;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--bg-primary) 90%, #000 10%);
   }
 
   canvas {

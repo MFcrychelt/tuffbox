@@ -67,7 +67,15 @@ pub fn spawn_and_track(
     cmd: Command,
     log_path: impl AsRef<Path>,
 ) -> std::io::Result<RunningProcess> {
-    spawn_and_track_with_cleanup(instance_id, profile_id, cmd, log_path, Vec::new(), None)
+    spawn_and_track_with_cleanup(
+        instance_id,
+        profile_id,
+        cmd,
+        log_path,
+        Vec::new(),
+        None,
+        false,
+    )
 }
 
 pub fn spawn_and_track_with_cleanup(
@@ -77,6 +85,7 @@ pub fn spawn_and_track_with_cleanup(
     log_path: impl AsRef<Path>,
     cleanup_paths: Vec<PathBuf>,
     on_exit: Option<OnExit>,
+    show_console: bool,
 ) -> std::io::Result<RunningProcess> {
     let log_path = log_path.as_ref().to_path_buf();
     if let Some(parent) = log_path.parent() {
@@ -89,15 +98,24 @@ pub fn spawn_and_track_with_cleanup(
         .truncate(true)
         .open(&log_path)?;
 
-    // On Windows, hide the child console window (e.g. the launched game).
+    // On Windows: hide the game window by default; for server runs open a
+    // real console so stdout/stderr (and stdin for commands) are visible.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        if show_console {
+            cmd.creation_flags(0x00000010); // CREATE_NEW_CONSOLE
+        } else {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
     }
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    if show_console {
+        // Keep stdin attached so the OS console can send server commands.
+        cmd.stdin(Stdio::inherit());
+    }
 
     let mut child = cmd.spawn()?;
     let pid = child.id();

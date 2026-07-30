@@ -66,6 +66,26 @@ fn value_to_raw(value: serde_json::Value) -> String {
     }
 }
 
+/// Outline AI call with one repair retry on invalid QuestPlan JSON.
+async fn ai_quest_plan(
+    system: &str,
+    user: &str,
+    history: &[QuestChatMessage],
+) -> Result<QuestPlan, String> {
+    let value = ai_json(system, user, history).await?;
+    match parse_quest_plan(&value_to_raw(value)) {
+        Ok(plan) => Ok(plan),
+        Err(first_err) => {
+            let repair = format!(
+                "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\nReturn ONLY one JSON object matching schemaVersion 1 (chapters with quests, tasks, rewards). No markdown fences."
+            );
+            let value2 = ai_json(system, &repair, &[]).await?;
+            parse_quest_plan(&value_to_raw(value2))
+                .map_err(|e| format!("Invalid QuestPlan JSON after retry: {e}"))
+        }
+    }
+}
+
 /// Multi-pass: outline → lore chunks → ground items → layout.
 pub async fn run_generate_quest_line(
     path: &str,
@@ -74,6 +94,7 @@ pub async fn run_generate_quest_line(
     history: &[QuestChatMessage],
     force_ai: bool,
     intent: Option<&str>,
+    pending_plan: Option<&QuestPlan>,
 ) -> Result<(QuestPlan, Vec<String>), String> {
     let mut log = Vec::new();
     let intent = intent.unwrap_or("generate");
@@ -89,20 +110,21 @@ pub async fn run_generate_quest_line(
         } else {
             log.push("Outline: AI…".into());
             let user = build_outline_user_message(prompt, &ctx, target);
-            let value = ai_json(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?;
-            parse_quest_plan(&value_to_raw(value))?
+            ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
         }
     } else if intent == "generate" || intent == "extend" {
         log.push("Outline: AI…".into());
         let user = if intent == "extend" {
+            let pending_json = pending_plan
+                .and_then(|p| serde_json::to_string_pretty(p).ok())
+                .unwrap_or_else(|| "(no pending plan yet)".into());
             format!(
-                "{prompt}\n\nExtend / append about {target} additional quests to the progression."
+                "{prompt}\n\nExtend / append about {target} additional quests to the existing pending plan below. Keep prior quests; add new ones with dependencies.\n\nPending plan JSON:\n{pending_json}"
             )
         } else {
             build_outline_user_message(prompt, &ctx, target)
         };
-        let value = ai_json(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?;
-        parse_quest_plan(&value_to_raw(value))?
+        ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
     } else {
         return Err(format!("unknown intent: {intent}"));
     };
@@ -267,6 +289,7 @@ pub async fn quest_chat_turn(
             &session.messages,
             force_ai,
             Some(intent_s.as_str()),
+            session.pending_plan.as_ref(),
         )
         .await?
     };
@@ -338,7 +361,15 @@ pub async fn generate_quest_line(
     let project_dir = project_dir(&path)?;
     let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
     let (plan, log) =
-        run_generate_quest_line(&path, &prompt, &book, &[], force_ai.unwrap_or(false), Some("generate"))
+        run_generate_quest_line(
+            &path,
+            &prompt,
+            &book,
+            &[],
+            force_ai.unwrap_or(false),
+            Some("generate"),
+            None,
+        )
             .await?;
     let mut merge = merge_quest_plan(&book, &plan)?;
     merge.notes.extend(log);

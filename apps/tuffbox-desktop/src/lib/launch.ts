@@ -25,6 +25,10 @@ export interface LaunchParams {
   quickPlayValue?: string | null;
   /** One-shot memory override for smoke/low-end runs (does not mutate manifest). */
   memoryMbOverride?: number | null;
+  /** Staged server instance directory (required for profile === "server"). */
+  serverDir?: string | null;
+  levelSeed?: string | null;
+  onlineMode?: boolean | null;
 }
 
 // Retryable error categories — mirrors `LaunchErrorKind::retryable` on the Rust
@@ -69,8 +73,17 @@ async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
       memoryMbOverride,
     });
   }
-  if (profile === "server" && memoryMbOverride == null) {
-    return invoke<LaunchResult>("launch_server", { path: params.path });
+  if (profile === "server") {
+    const serverDir = params.serverDir?.trim();
+    if (!serverDir) {
+      throw { kind: "install", message: "Pick a server folder before Run server." };
+    }
+    return invoke<LaunchResult>("launch_server", {
+      path: params.path,
+      serverDir,
+      levelSeed: params.levelSeed ?? null,
+      onlineMode: params.onlineMode ?? null,
+    });
   }
   return invoke<LaunchResult>("launch_profile", {
     path: params.path,
@@ -84,12 +97,19 @@ async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
 /// toast has been shown.
 export async function launchWithFeedback(
   params: LaunchParams,
-  opts?: { onStarted?: (r: LaunchResult) => void; showSuccess?: boolean; openLog?: boolean },
+  opts?: {
+    onStarted?: (r: LaunchResult) => void;
+    showSuccess?: boolean;
+    openLog?: boolean;
+    /** Manifest path for the log modal (e.g. staged server dir). */
+    logPath?: string | null;
+    logTitle?: string | null;
+  },
 ): Promise<LaunchResult | null> {
   lastLaunch = params;
   lastOnStarted = opts?.onStarted ?? null;
   const showLog = opts?.openLog !== false;
-  if (showLog) openLaunchLog(params.path);
+  if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
   isLaunching.set(true);
   try {
     const result = await doLaunch(params);

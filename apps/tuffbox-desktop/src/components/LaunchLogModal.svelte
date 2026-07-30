@@ -11,6 +11,7 @@
   const dispatch = createEventDispatcher<{ close: void }>();
 
   export let projectPath: string;
+  export let title: string | null = null;
 
   let log = "";
   let loading = true;
@@ -194,7 +195,7 @@
       <div class="modal-header-left">
         <h2>
           <Radio size={16} class="live-icon" />
-          Live logs
+          {title || "Live logs"}
         </h2>
         <div class="log-selector">
           <button

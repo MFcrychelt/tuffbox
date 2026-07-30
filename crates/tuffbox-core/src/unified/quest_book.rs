@@ -913,7 +913,7 @@ fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {
     Ok(Chapter {
         id: gs(m, "id").unwrap_or_else(|| "untitled".into()),
         title: gs(m, "title").unwrap_or_else(|| "Untitled".into()),
-        icon: gs(m, "icon"),
+        icon: icon_id_from_map(m),
         group: gs(m, "group"),
         order_index: m.get("order_index").and_then(|v| {
             v.as_i64()
@@ -983,7 +983,7 @@ fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
             .unwrap_or_default(),
         x: m.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0),
         y: m.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0),
-        icon: gs(m, "icon"),
+        icon: icon_id_from_map(m),
         dependencies,
         tasks: m
             .get("tasks")
@@ -1054,6 +1054,29 @@ fn parse_snbt_reward(v: &serde_json::Value) -> Result<Reward, String> {
 }
 fn gs(m: &serde_json::Map<String, serde_json::Value>, k: &str) -> Option<String> {
     m.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+/// FTB icons may be a string id or an item-stack object `{ id: "mod:item", ... }`.
+fn icon_id_from_map(m: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    match m.get("icon") {
+        None => None,
+        Some(serde_json::Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+        Some(v) => {
+            let mut out = Vec::new();
+            collect_item_ids_from_value(v, &mut out);
+            out.iter()
+                .find(|id| id.contains(':') && !id.starts_with('#'))
+                .cloned()
+                .or_else(|| out.into_iter().next())
+        }
+    }
 }
 
 fn collect_item_ids_from_value(v: &serde_json::Value, out: &mut Vec<String>) {
@@ -1520,6 +1543,27 @@ mod tests {
         assert_eq!(ch.title, ch2.title);
         assert_eq!(ch.quests.len(), ch2.quests.len());
         assert_eq!(ch.quests[0].id, ch2.quests[0].id);
+    }
+
+    #[test]
+    fn parses_object_form_icons() {
+        let snbt = r#"{
+          title: "Test"
+          id: "abc"
+          icon: { id: "minecraft:apple" Count: 1b }
+          quests: [{
+            id: "q1"
+            title: "Q1"
+            x: 0.0d
+            y: 0.0d
+            icon: { id: "minecraft:diamond" Count: 1b }
+            tasks: [{ id: "t1" type: "checkmark" }]
+            rewards: []
+          }]
+        }"#;
+        let ch = parse_snbt_chapter(snbt).unwrap();
+        assert_eq!(ch.icon.as_deref(), Some("minecraft:apple"));
+        assert_eq!(ch.quests[0].icon.as_deref(), Some("minecraft:diamond"));
     }
 
     fn q(id: &str, deps: &[&str]) -> Quest {
