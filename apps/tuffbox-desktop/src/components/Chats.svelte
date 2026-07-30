@@ -684,7 +684,7 @@
     min-height: 420px;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color, #2a2f3a);
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     overflow: hidden;
   }
   .chats.empty {
@@ -861,7 +861,7 @@
     background: var(--bg-primary);
     color: var(--text-primary, #e8ecf4);
     border: 1px solid var(--border-color, #2a2f3a);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 10px;
     font: inherit;
   }
@@ -877,7 +877,7 @@
     border: 1px solid var(--border-color, #2a2f3a);
     background: var(--bg-tertiary);
     color: var(--text-primary, #e8ecf4);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 7px 10px;
     font-size: 12px;
     cursor: pointer;
@@ -991,7 +991,7 @@
     max-height: 85vh;
     overflow: auto;
     padding: 16px 18px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color, #2a2f3a);
     background: var(--bg-secondary, #151922);
   }
@@ -1010,7 +1010,7 @@
     gap: 10px;
     align-items: flex-start;
     padding: 8px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color, #2a2f3a);
     cursor: pointer;
   }

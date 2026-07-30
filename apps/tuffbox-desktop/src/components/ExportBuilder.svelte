@@ -183,17 +183,17 @@
             {exporting ? "Exporting..." : "Export .mrpack"}
           </button>
         {:else if exportMode === "server"}
-          <button class="secondary export" on:click={exportServerPack} disabled={exporting}>
+          <button class="export" on:click={exportServerPack} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export server pack"}
           </button>
         {:else if exportMode === "prism"}
-          <button class="secondary export" on:click={exportPrismInstance} disabled={exporting}>
+          <button class="export" on:click={exportPrismInstance} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export Prism instance"}
           </button>
         {:else if exportMode === "curseforge"}
-          <button class="secondary export" on:click={exportCurseForgePack} disabled={exporting}>
+          <button class="export" on:click={exportCurseForgePack} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export CurseForge zip"}
           </button>
@@ -225,7 +225,7 @@
   .checks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .checks div { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 14px; padding: 14px; display: grid; gap: 4px; }
   .issues { display: grid; gap: 8px; }
-  .issue { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .issue { display: grid; gap: 4px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue span { color: var(--text-muted); }

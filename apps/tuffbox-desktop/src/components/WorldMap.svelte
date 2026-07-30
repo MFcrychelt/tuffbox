@@ -127,6 +127,35 @@
 
   let flashMsg: string | null = null;
   let flashTimer: ReturnType<typeof setTimeout>;
+  let drawScheduled = false;
+  let lastDrawAt = 0;
+  const POTATO_DRAW_MIN_MS = 100;
+
+  function isPotatoPc() {
+    return document.documentElement.classList.contains("potato-pc");
+  }
+
+  function scheduleDraw() {
+    if (drawScheduled) return;
+    if (isPotatoPc()) {
+      const elapsed = performance.now() - lastDrawAt;
+      if (elapsed < POTATO_DRAW_MIN_MS) {
+        drawScheduled = true;
+        setTimeout(() => {
+          drawScheduled = false;
+          lastDrawAt = performance.now();
+          draw();
+        }, POTATO_DRAW_MIN_MS - elapsed);
+        return;
+      }
+    }
+    drawScheduled = true;
+    requestAnimationFrame(() => {
+      drawScheduled = false;
+      lastDrawAt = performance.now();
+      draw();
+    });
+  }
 
   function statusLabel(code: number): string {
     return code === STATUS_EMPTY ? "empty"
@@ -1483,7 +1512,7 @@
   });
 
   $: if (worldName && $projectPath) load();
-  $: if (map) requestAnimationFrame(draw);
+  $: if (map) scheduleDraw();
   $: canvasCursor = tool === "pan" ? "grab" : (tool === "click" || tool === "region" || tool === "poly") ? "pointer" : "crosshair";
 </script>
 

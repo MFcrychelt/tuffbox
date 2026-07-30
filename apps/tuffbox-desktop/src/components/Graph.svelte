@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown } from "lucide-svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List } from "lucide-svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import { trapFocus } from "../lib/focusTrap";
@@ -79,6 +79,27 @@
   let graphCanvasEl: HTMLElement;
   let fullscreenElement: Element | null = null;
   $: graphFullscreen = fullscreenElement === graphCanvasEl;
+
+  let showNodeList = false;
+  let changePlanExpanded = false;
+  let changePlanSeenKey = "";
+  let canvasResizeObserver: ResizeObserver | null = null;
+
+  function isLowPerfMode(): boolean {
+    return document.documentElement.classList.contains("potato-pc");
+  }
+
+  function pauseSimulation() {
+    simulation?.stop();
+  }
+
+  $: if (changePlan) {
+    const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
+    if (key !== changePlanSeenKey) {
+      changePlanSeenKey = key;
+      changePlanExpanded = !!(changePlan.actions?.length);
+    }
+  }
 
   /** Right-click = same install path as left-click (hint: "click or right-click to install"). */
   async function onNodeContextInstall(event: MouseEvent, node: GraphNode & { ghost?: boolean }) {
@@ -659,6 +680,14 @@
     }
     return map;
   })();
+  $: selectedMissingDeps = selectedId ? (missingDepsByMod.get(selectedId) ?? []) : [];
+
+  async function installSelectedMissingDeps() {
+    for (const edge of selectedMissingDeps) {
+      await installSingleMissingDep(edge);
+    }
+  }
+
   $: conflictEdges = displayEdges.filter(
     (edge) => ["Conflicts", "BreaksWith"].includes(edge.kind)
       && nodeById(edge.from)?.kind !== "Missing"
@@ -1478,10 +1507,37 @@
 
     if (simulation) simulation.stop();
 
-    // Polish physics on a tidy seed: collide prevents icon/label overlap,
-    // soft springs keep mods near their cluster, weak links refine local groups.
     const collideRadius = (d: LayoutNode) => nodeSize(d) / 2 + 30;
     const margin = 100;
+
+    function finalizeLayoutAfterSim() {
+      for (const d of simNodes) {
+        d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
+        d.y = Math.max(margin, Math.min(canvasHeight - margin, d.y ?? cy));
+      }
+      groupMeta = groupMeta.map((group) => {
+        const members = simNodes.filter((n) => n.groupKey === group.key && !n.isHub);
+        if (members.length === 0) return group;
+        const gx = members.reduce((s, n) => s + (n.x ?? 0), 0) / members.length;
+        const gy = members.reduce((s, n) => s + (n.y ?? 0), 0) / members.length;
+        let maxR = 80;
+        for (const n of members) {
+          const dx = (n.x ?? 0) - gx;
+          const dy = (n.y ?? 0) - gy;
+          maxR = Math.max(maxR, Math.hypot(dx, dy) + collideRadius(n) + 12);
+        }
+        return { ...group, x: gx, y: gy, r: maxR };
+      });
+      updateGraphDom();
+      if (resetViewOnNextLayout) {
+        fitToContent();
+        resetViewOnNextLayout = false;
+      }
+    }
+
+    // Polish physics on a tidy seed: collide prevents icon/label overlap,
+    // soft springs keep mods near their cluster, weak links refine local groups.
+    const lowPerf = isLowPerfMode();
     simulation = d3
       .forceSimulation<LayoutNode>(simNodes)
       .force("charge", d3.forceManyBody<LayoutNode>().strength(-260).distanceMax(320))
@@ -1514,33 +1570,14 @@
         updateGraphDom();
       })
       .on("end", () => {
-        for (const d of simNodes) {
-          d.x = Math.max(margin, Math.min(canvasWidth - margin, d.x ?? cx));
-          d.y = Math.max(margin, Math.min(canvasHeight - margin, d.y ?? cy));
-        }
-        // Refit cluster halos to settled positions so neighbouring blobs don't
-        // sit under the wrong category label.
-        groupMeta = groupMeta.map((group) => {
-          const members = simNodes.filter((n) => n.groupKey === group.key && !n.isHub);
-          if (members.length === 0) return group;
-          const gx = members.reduce((s, n) => s + (n.x ?? 0), 0) / members.length;
-          const gy = members.reduce((s, n) => s + (n.y ?? 0), 0) / members.length;
-          let maxR = 80;
-          for (const n of members) {
-            const dx = (n.x ?? 0) - gx;
-            const dy = (n.y ?? 0) - gy;
-            maxR = Math.max(maxR, Math.hypot(dx, dy) + collideRadius(n) + 12);
-          }
-          return { ...group, x: gx, y: gy, r: maxR };
-        });
-        updateGraphDom();
-        if (resetViewOnNextLayout) {
-          fitToContent();
-          resetViewOnNextLayout = false;
-        }
+        finalizeLayoutAfterSim();
       });
     positioned = simNodes.map((n) => ({ ...n }));
     updateGraphDom();
+    if (lowPerf) {
+      simulation.stop();
+      finalizeLayoutAfterSim();
+    }
   }
 
   $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
@@ -1797,7 +1834,10 @@
   onMount(() => {
     const onBlur = () => abortGraphPointers();
     const onVis = () => {
-      if (document.hidden) abortGraphPointers();
+      if (document.hidden) {
+        abortGraphPointers();
+        pauseSimulation();
+      }
     };
     window.addEventListener("blur", onBlur);
     document.addEventListener("visibilitychange", onVis);
@@ -1843,8 +1883,17 @@
     abortGraphPointers();
     unlistenDownloadProgress?.();
     unlistenDownloadBatch?.();
+    canvasResizeObserver?.disconnect();
+    canvasResizeObserver = null;
     simulation?.stop();
   });
+
+  $: if (graphCanvasEl && typeof ResizeObserver !== "undefined" && !canvasResizeObserver) {
+    canvasResizeObserver = new ResizeObserver(() => {
+      // SVG fills the flex canvas via width/height 100%; observer keeps layout in sync on stage resize.
+    });
+    canvasResizeObserver.observe(graphCanvasEl);
+  }
 
   $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
   function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
@@ -1906,6 +1955,9 @@
         layoutNode.fy = null;
       }
       simulation?.alphaTarget(0);
+      if (isLowPerfMode()) {
+        simulation?.stop();
+      }
       if (target?.hasPointerCapture?.(pointerId)) {
         try {
           target.releasePointerCapture(pointerId);
@@ -1968,7 +2020,7 @@
   {:else if error}
     <EmptyState icon={AlertTriangle} title="Failed to load graph" description={error} />
   {:else if graph}
-    <div class="stats">
+    <div class="stats stats-compact">
       <div class="stat-card accent">
         <span class="stat-value">{modNodes.length}</span>
         <span class="stat-label">Mods</span>
@@ -1995,29 +2047,41 @@
         </div>
       </section>
     {:else if changePlan}
-      <section class="change-plan-panel">
-        <div class="change-plan-head">
-          <span class="eyebrow">Change plan</span>
-          <strong class="change-plan-summary">{changePlan.summary}</strong>
-          <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
-            {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
-          </span>
-        </div>
-        <div class="change-plan-actions">
-          {#if changePlan.actions?.length}
-            {#each changePlan.actions as action, index (index)}
-              <button class="chip" on:click={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
-                {formatChangeAction(action)}
-              </button>
-            {/each}
-          {/if}
-          <button class="primary mini" on:click={applyChangePlan} disabled={resolving}>
-            {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
-          </button>
-        </div>
+      <section class="change-plan-panel" class:expanded={changePlanExpanded}>
+        <button
+          type="button"
+          class="change-plan-toggle"
+          on:click={() => (changePlanExpanded = !changePlanExpanded)}
+          aria-expanded={changePlanExpanded}
+        >
+          <div class="change-plan-head">
+            <span class="eyebrow">Change plan</span>
+            <strong class="change-plan-summary">{changePlan.summary}</strong>
+            <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
+              {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
+            </span>
+          </div>
+          <ChevronDown size={16} class={changePlanExpanded ? "rot" : ""} />
+        </button>
+        {#if changePlanExpanded}
+          <div class="change-plan-actions">
+            {#if changePlan.actions?.length}
+              {#each changePlan.actions as action, index (index)}
+                <button class="chip" on:click={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
+                  {formatChangeAction(action)}
+                </button>
+              {/each}
+            {/if}
+            <button class="primary mini" on:click={applyChangePlan} disabled={resolving}>
+              {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
+            </button>
+          </div>
+        {/if}
       </section>
     {/if}
 
+    <div class="graph-body">
+    <div class="graph-main">
     <section
       bind:this={graphCanvasEl}
       class="graph-canvas"
@@ -2293,7 +2357,110 @@
       </svg>
     </section>
 
-    <div class="graph-layout">
+      <aside class="details">
+        {#if selected}
+          <div class="details-header">
+            <div>
+              <span class="eyebrow">Selected node</span>
+              <h2>{selected.label}</h2>
+            </div>
+            <span class="tag">{selected.kind}</span>
+          </div>
+
+          <div class="details-actions">
+            {#if selected.kind === "Missing"}
+              <button class="install-btn" on:click={() => installGhostNode(selected.id)} disabled={resolving}>
+                <Download size={16} />
+                {resolving ? "Installing..." : "Install from Modrinth"}
+              </button>
+            {:else if selected.kind === "Mod"}
+              {#if depNodeIds.has(selected.id)}
+                <button class="secondary mini details-action-btn" on:click={downloadMissingFiles} disabled={resolving}>
+                  <Download size={14} />
+                  Re-download files
+                </button>
+              {/if}
+              {#if selectedMissingDeps.length > 0}
+                <button class="install-btn" on:click={installSelectedMissingDeps} disabled={resolving}>
+                  <Download size={16} />
+                  {resolving ? "Installing..." : `Install ${selectedMissingDeps.length} missing`}
+                </button>
+              {/if}
+              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+                <X size={16} />
+                Remove mod
+              </button>
+            {:else}
+              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+                <X size={16} />
+                Remove mod
+              </button>
+            {/if}
+          </div>
+
+          <div class="details-grid">
+            <div><span>ID</span><code>{selected.id}</code></div>
+            <div><span>Version</span><code>{selected.version ?? "—"}</code></div>
+            <div><span>Side</span><code>{selected.side ?? "—"}</code></div>
+            <div><span>Relations</span><code>{selectedEdges.length}</code></div>
+          </div>
+
+          {#if selected.metadata && Object.keys(selected.metadata).length > 0}
+            <h3>Metadata</h3>
+            <div class="kv">
+              {#each Object.entries(selected.metadata) as [key, value] (key)}
+                <span>{key}</span><code>{value}</code>
+              {/each}
+            </div>
+          {/if}
+
+          <h3>Relations</h3>
+          {#if selectedEdges.length === 0}
+            <div class="muted-box">No direct relations.</div>
+          {:else}
+            <div class="relations">
+              {#each selectedEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
+                {@const otherId = edge.from === selectedId ? edge.to : edge.from}
+                {@const isMissingDep = edge.kind === "Requires" && !nodeById(otherId)}
+                <div class="relation" class:incoming={edge.to === selectedId}>
+                  <span class="relation-kind">{edge.kind}</span>
+                  <span class="relation-text">
+                    {edge.from === selectedId ? "requires" : "required by"}
+                    <strong>{resolveNodeLabel(otherId)}</strong>
+                  </span>
+                  {#if edge.reason}<small>{edge.reason}</small>{/if}
+                  {#if isMissingDep}
+                    <button class="secondary mini" on:click={() => installGhostNode(otherId)} disabled={resolving}>
+                      <Download size={12} /> Install
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {:else}
+          <div class="muted-box subtle-hint">
+            <Info size={15} />
+            <span>Pick a node on the graph to see what it requires and what requires it.</span>
+          </div>
+        {/if}
+      </aside>
+    </div>
+
+    <div class="list-toggle-row">
+      <button type="button" class="ghost mini list-toggle-btn" on:click={() => (showNodeList = !showNodeList)}>
+        <List size={14} />
+        {showNodeList ? "Hide list" : "Show list"}
+        {#if !showNodeList}
+          <span class="list-toggle-meta">
+            ({modNodes.length} mod{modNodes.length === 1 ? "" : "s"}{ghostNodes.length > 0 ? `, ${ghostNodes.length} missing` : ""})
+          </span>
+        {/if}
+      </button>
+    </div>
+
+    {#if showNodeList}
+    <div class="graph-list">
       <section class="node-column mods-column">
         <h3><Box size={16} /> Mods ({modNodes.length})</h3>
         {#if modNodes.length === 0}
@@ -2410,81 +2577,8 @@
           </div>
         </section>
       {/if}
-
-      <aside class="details">
-        {#if selected}
-          <div class="details-header">
-            <div>
-              <span class="eyebrow">Selected node</span>
-              <h2>{selected.label}</h2>
-            </div>
-            <span class="tag">{selected.kind}</span>
-          </div>
-
-          {#if selected.kind === "Missing"}
-            <div class="details-actions">
-              <button class="install-btn" on:click={() => installGhostNode(selected.id)} disabled={resolving}>
-                <Download size={16} />
-                {resolving ? "Installing..." : "Install from Modrinth"}
-              </button>
-            </div>
-          {:else}
-            <div class="details-actions">
-              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
-                <X size={16} />
-                Remove mod
-              </button>
-            </div>
-          {/if}
-
-          <div class="details-grid">
-            <div><span>ID</span><code>{selected.id}</code></div>
-            <div><span>Version</span><code>{selected.version ?? "—"}</code></div>
-            <div><span>Side</span><code>{selected.side ?? "—"}</code></div>
-            <div><span>Relations</span><code>{selectedEdges.length}</code></div>
-          </div>
-
-          {#if selected.metadata && Object.keys(selected.metadata).length > 0}
-            <h3>Metadata</h3>
-            <div class="kv">
-              {#each Object.entries(selected.metadata) as [key, value] (key)}
-                <span>{key}</span><code>{value}</code>
-              {/each}
-            </div>
-          {/if}
-
-          <h3>Relations</h3>
-          {#if selectedEdges.length === 0}
-            <div class="muted-box">No direct relations.</div>
-          {:else}
-            <div class="relations">
-              {#each selectedEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
-                {@const otherId = edge.from === selectedId ? edge.to : edge.from}
-                {@const isMissingDep = edge.kind === "Requires" && !nodeById(otherId)}
-                <div class="relation" class:incoming={edge.to === selectedId}>
-                  <span class="relation-kind">{edge.kind}</span>
-                  <span class="relation-text">
-                    {edge.from === selectedId ? "requires" : "required by"}
-                    <strong>{resolveNodeLabel(otherId)}</strong>
-                  </span>
-                  {#if edge.reason}<small>{edge.reason}</small>{/if}
-                  {#if isMissingDep}
-                    <button class="secondary mini" on:click={() => installGhostNode(otherId)} disabled={resolving}>
-                      <Download size={12} /> Install
-                    </button>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        {:else}
-          <div class="muted-box subtle-hint">
-            <Info size={15} />
-            <span>Pick a node on the graph to see what it requires and what requires it.</span>
-          </div>
-        {/if}
-      </aside>
     </div>
+    {/if}
 
     {#if conflictInsights.length > 0}
       <div class="conflict-panel">
@@ -2534,6 +2628,7 @@
         </div>
       </div>
     {/if}
+    </div>
 
   {:else}
     <EmptyState icon={GitGraph} title="No project selected" description="Open a project to view its dependency graph." />
@@ -2623,9 +2718,31 @@
 {/if}
 
 <style>
-   .graph {
+  .graph {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
     max-width: none;
     width: 100%;
+  }
+
+  .graph-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    gap: 8px;
+  }
+
+  .graph-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 12px;
+    overflow: hidden;
   }
 
   .toolbar,
@@ -2633,11 +2750,12 @@
   .notice {
     display: flex;
     align-items: center;
+    flex-shrink: 0;
   }
 
   .toolbar {
     justify-content: space-between;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
 
   .toolbar-actions { gap: 10px; }
@@ -2660,9 +2778,10 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    margin: -10px 0 14px;
+    margin: -4px 0 8px;
     color: var(--text-muted);
     font-size: 12px;
+    flex-shrink: 0;
   }
 
   .graph-status.stale { color: #fbbf24; }
@@ -2689,23 +2808,49 @@
     gap: 16px;
     margin-bottom: 20px;
     flex-wrap: wrap;
+    flex-shrink: 0;
+  }
+
+  .stats.stats-compact {
+    flex-wrap: nowrap;
+    gap: 8px;
+    margin-bottom: 8px;
   }
 
   .change-plan-panel {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px 16px;
-    margin-bottom: 16px;
-    padding: 10px 14px;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
     border: 1px solid rgba(27, 217, 106, .28);
     border-radius: var(--border-radius-lg);
     background: radial-gradient(circle at top left, rgba(27,217,106,.09), transparent 42%), var(--bg-secondary);
+    flex-shrink: 0;
   }
   .change-plan-panel.loading {
     opacity: 0.72;
     border-color: var(--border-color);
+  }
+  .change-plan-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .change-plan-toggle :global(.rot) {
+    transform: rotate(180deg);
+  }
+  .change-plan-panel:not(.expanded) .change-plan-actions {
+    display: none;
   }
   .change-plan-summary.muted {
     color: var(--text-muted);
@@ -2735,7 +2880,12 @@
 
   .graph-canvas {
     position: relative;
-    margin-bottom: 18px;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
     background:
       radial-gradient(circle at 78% 18%, rgba(27,217,106,.08), transparent 28%),
       #09090b;
@@ -2749,7 +2899,9 @@
 
   .graph-canvas svg {
     width: 100%;
-    height: 560px;
+    height: 100%;
+    flex: 1;
+    min-height: 0;
     display: block;
     cursor: grab;
     touch-action: none;
@@ -2765,7 +2917,7 @@
   }
 
   .graph-canvas:fullscreen svg {
-    height: 100vh;
+    height: 100%;
   }
 
   .graph-canvas svg.panning,
@@ -2995,7 +3147,7 @@
     max-width: calc(100% - 24px);
     padding: 8px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     background: rgba(9, 9, 11, 0.74);
     backdrop-filter: blur(6px);
     color: var(--text-secondary);
@@ -3236,6 +3388,27 @@
     gap: 4px;
   }
 
+  .stats-compact .stat-card {
+    flex: 1;
+    min-width: 0;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 10px;
+  }
+
+  .stats-compact .stat-value {
+    font-size: 18px;
+    font-weight: 800;
+  }
+
+  .stats-compact .stat-label {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+
   .stat-card.accent {
     border-color: rgba(27, 217, 106, 0.32);
     background: linear-gradient(135deg, rgba(27, 217, 106, 0.12), var(--bg-secondary));
@@ -3258,11 +3431,31 @@
     letter-spacing: 0.05em;
   }
 
-  .graph-layout {
+  .graph-layout,
+  .graph-list {
     display: grid;
-    grid-template-columns: minmax(320px, 1fr) 360px;
-    gap: 16px;
+    grid-template-columns: minmax(320px, 1fr);
+    gap: 12px;
     align-items: start;
+    flex-shrink: 0;
+    max-height: min(42vh, 360px);
+    overflow: auto;
+  }
+
+  .list-toggle-row {
+    display: flex;
+    flex-shrink: 0;
+  }
+
+  .list-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .list-toggle-meta {
+    color: var(--text-muted);
+    font-size: 11px;
   }
 
   .node-column,
@@ -3273,8 +3466,22 @@
     padding: 16px;
   }
 
+  .details {
+    flex: 0 0 320px;
+    width: 320px;
+    min-height: 0;
+    overflow: auto;
+    position: static;
+  }
+
+  .details-action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
   .mods-column {
-    min-height: 480px;
+    min-height: 0;
   }
 
   .missing-column {
@@ -3365,7 +3572,7 @@
   .card-icon {
     width: 36px;
     height: 36px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     object-fit: cover;
     flex-shrink: 0;
     background: var(--bg-elevated);
@@ -3375,7 +3582,7 @@
     border: none;
     background: transparent;
     cursor: pointer;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     line-height: 0;
     transition: transform 100ms ease, box-shadow 100ms ease;
   }
@@ -3387,7 +3594,7 @@
   .card-icon-fallback {
     width: 36px;
     height: 36px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
     display: flex;
     align-items: center;
@@ -3434,7 +3641,7 @@
     justify-content: center;
     width: 28px;
     height: 28px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid rgba(27, 217, 106, 0.35);
     background: rgba(27, 217, 106, 0.1);
     color: var(--accent-primary);
@@ -3452,7 +3659,7 @@
     flex-shrink: 0;
     height: 30px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid rgba(27, 217, 106, 0.45);
     background: rgba(27, 217, 106, 0.14);
     color: var(--accent-primary);
@@ -3478,7 +3685,10 @@
   }
 
   .conflict-panel {
-    margin-top: 18px;
+    flex-shrink: 0;
+    max-height: min(36vh, 320px);
+    overflow: auto;
+    margin-top: 0;
     padding: 16px;
     border-radius: var(--border-radius-lg);
     border: 1px solid rgba(239, 68, 68, 0.28);
@@ -3504,7 +3714,7 @@
   }
   .conflict-card {
     padding: 12px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid rgba(245, 158, 11, 0.35);
     background: rgba(24, 24, 27, 0.88);
     display: flex;
@@ -3615,11 +3825,6 @@
     box-shadow: inset 3px 0 rgba(27, 217, 106, 0.75);
   }
 
-  .details {
-    position: sticky;
-    top: 0;
-  }
-
   .details-header {
     display: flex;
     justify-content: space-between;
@@ -3634,6 +3839,7 @@
 
   .details-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 14px;
   }
@@ -3771,7 +3977,7 @@
     cursor: pointer;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     padding: 10px 12px;
     color: var(--text-secondary);
     text-align: left;
@@ -3869,7 +4075,7 @@
   .modal {
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
-    border-radius: 16px;
+    border-radius: var(--border-radius-lg);
     max-width: 520px;
     width: 90%;
     max-height: 80vh;
@@ -3934,7 +4140,7 @@
   .dep-list h4 { font-size: 13px; margin: 0 0 8px; color: var(--text-secondary); }
   .dep-entry {
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     margin-bottom: 4px;
     font-size: 13px;
     border-left: 3px solid;
@@ -3955,12 +4161,19 @@
   .muted { color: var(--text-muted); font-size: 13px; }
 
   @media (max-width: 1180px) {
-    .graph-layout {
-      grid-template-columns: 1fr;
+    .graph-main {
+      flex-direction: column;
     }
 
     .details {
-      position: static;
+      flex: 0 0 auto;
+      width: 100%;
+      max-height: min(36vh, 280px);
+    }
+
+    .graph-layout,
+    .graph-list {
+      grid-template-columns: 1fr;
     }
   }
 </style>

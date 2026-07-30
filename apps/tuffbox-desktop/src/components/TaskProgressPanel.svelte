@@ -93,7 +93,7 @@
     pointer-events: auto;
     background: var(--surface, #1a1a1e);
     border: 1px solid var(--border, #333);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 10px 12px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   }

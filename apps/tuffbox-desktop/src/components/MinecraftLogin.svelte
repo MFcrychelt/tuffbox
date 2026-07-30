@@ -620,7 +620,7 @@
 
   .close-btn {
     width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center;
-    border-radius: 8px; background: transparent; color: var(--text-muted); border: none;
+    border-radius: var(--border-radius-sm); background: transparent; color: var(--text-muted); border: none;
   }
   .close-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
@@ -638,7 +638,7 @@
   .account-row:hover { border-color: var(--accent-primary); }
   .account-row.active { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.05); }
   .account-ico {
-    width: 32px; height: 32px; border-radius: 8px;
+    width: 32px; height: 32px; border-radius: var(--border-radius-sm);
     display: flex; align-items: center; justify-content: center;
     background: var(--bg-elevated); color: var(--text-muted);
   }
@@ -705,7 +705,7 @@
   }
   .copy-btn {
     width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center;
-    border-radius: 8px; background: var(--bg-hover); color: var(--text-secondary); border: none;
+    border-radius: var(--border-radius-sm); background: var(--bg-hover); color: var(--text-secondary); border: none;
   }
   .copy-btn:hover { background: var(--accent-primary); color: #000; }
 
@@ -753,7 +753,7 @@
 
   .source-option {
     display: flex; align-items: center; justify-content: center; gap: 5px;
-    padding: 8px 6px; border-radius: 8px; background: var(--bg-primary);
+    padding: 8px 6px; border-radius: var(--border-radius-sm); background: var(--bg-primary);
     border: 1px solid var(--border-color); color: var(--text-secondary);
     font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
   }
@@ -765,7 +765,7 @@
 
   .error-msg {
     color: #f87171; font-size: 12px; background: rgba(248, 113, 113, 0.1);
-    border: 1px solid rgba(248, 113, 113, 0.2); border-radius: 8px;
+    border: 1px solid rgba(248, 113, 113, 0.2); border-radius: var(--border-radius-sm);
     padding: 8px 12px; text-align: center;
   }
 

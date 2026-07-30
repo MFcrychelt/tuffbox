@@ -78,55 +78,6 @@
   </div>
 {/if}
 
-{#if signalGroups.length > 0 || sections.length > 0}
-  <details class="panel collapsible-block" open>
-    <summary>
-      <span><Layers size={16} /> Evidence</span>
-      <span class="tools-hint">
-        {signalGroups.reduce((n, g) => n + g.items.length, 0)} signals
-        {#if sections.length} · {sections.length} sections{/if}
-        <ChevronDown size={14} />
-      </span>
-    </summary>
-    <div class="dx-ev-body">
-      {#if signalGroups.length}
-        <div class="sig-groups">
-          {#each signalGroups as g (g.title)}
-            <div class="sig-group">
-              <strong>{g.title}</strong>
-              <small>{g.hint}</small>
-              <ul>
-                {#each g.items.slice(0, 6) as item, i (g.title + i + item.lineNumber)}
-                  <li>
-                    <button
-                      type="button"
-                      class="sig-line"
-                      on:click={() => dispatch("jumpLine", item.lineNumber)}
-                      title={item.text}
-                    >
-                      L{item.lineNumber}: {item.text.slice(0, 120)}
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-            </div>
-          {/each}
-        </div>
-      {/if}
-      {#if sections.length}
-        <div class="sec-list">
-          {#each sections as sec (sec.title + sec.startLine)}
-            <button type="button" class="sec-card" on:click={() => dispatch("jumpLine", sec.startLine)}>
-              <strong>{sec.title}</strong>
-              <pre>{sec.preview.slice(0, 280)}</pre>
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  </details>
-{/if}
-
 {#if suspected.length > 0 || recentSnapshots.length > 0}
   <section class="panel dx-suspects">
     <div class="dx-suspects-grid">
@@ -186,6 +137,55 @@
       {/if}
     </div>
   </section>
+{/if}
+
+{#if signalGroups.length > 0 || sections.length > 0}
+  <details class="panel collapsible-block">
+    <summary>
+      <span><Layers size={16} /> Evidence</span>
+      <span class="tools-hint">
+        {signalGroups.reduce((n, g) => n + g.items.length, 0)} signals
+        {#if sections.length} · {sections.length} sections{/if}
+        <ChevronDown size={14} />
+      </span>
+    </summary>
+    <div class="dx-ev-body">
+      {#if signalGroups.length}
+        <div class="sig-groups">
+          {#each signalGroups as g (g.title)}
+            <div class="sig-group">
+              <strong>{g.title}</strong>
+              <small>{g.hint}</small>
+              <ul>
+                {#each g.items.slice(0, 6) as item, i (g.title + i + item.lineNumber)}
+                  <li>
+                    <button
+                      type="button"
+                      class="sig-line"
+                      on:click={() => dispatch("jumpLine", item.lineNumber)}
+                      title={item.text}
+                    >
+                      L{item.lineNumber}: {item.text.slice(0, 120)}
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      {#if sections.length}
+        <div class="sec-list">
+          {#each sections as sec (sec.title + sec.startLine)}
+            <button type="button" class="sec-card" on:click={() => dispatch("jumpLine", sec.startLine)}>
+              <strong>{sec.title}</strong>
+              <pre>{sec.preview.slice(0, 280)}</pre>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </details>
 {/if}
 
 <details class="panel collapsible-block" bind:open={toolsOpen}>
@@ -276,7 +276,7 @@
     gap: 8px;
     padding: 8px 12px;
     margin-bottom: 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     font-size: 12px;
     background: var(--bg-secondary);
@@ -305,7 +305,7 @@
     flex-direction: column;
     gap: 4px;
     padding: 8px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
   }
@@ -340,7 +340,7 @@
   .sec-card {
     text-align: left;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: inherit;
@@ -385,7 +385,7 @@
     flex-direction: column;
     gap: 4px;
     padding: 8px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
   }

@@ -275,7 +275,7 @@
     gap: 7px;
     height: 34px;
     padding: 0 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     font-size: 13px;
     font-weight: 650;
     cursor: pointer;
@@ -358,7 +358,7 @@
 
   .loading, .empty, .notice {
     padding: 20px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px dashed var(--border-color);
     color: var(--text-muted);
     display: flex;
@@ -373,7 +373,7 @@
     line-height: 1.55;
     overflow-wrap: anywhere;
   }
-  .html-body :global(img) { max-width: 100%; height: auto; border-radius: 8px; }
+  .html-body :global(img) { max-width: 100%; height: auto; border-radius: var(--border-radius-sm); }
   .html-body :global(a) { color: var(--accent-primary); }
   .html-body :global(h1),
   .html-body :global(h2),

@@ -6,6 +6,10 @@
   "scripts": {
     "dev": "vite",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "lint:tokens": "node scripts/check-border-radius.mjs",
+    "lint:lazy-views": "node scripts/check-lazy-views.mjs",
+    "lint:bundle-budget": "node scripts/check-bundle-budget.mjs",
+    "lint:perf": "npm run lint:tokens && npm run lint:lazy-views && npm run lint:bundle-budget",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",

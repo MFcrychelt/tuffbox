@@ -1041,7 +1041,7 @@
     text-align: left;
     padding: 9px 10px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: transparent;
     color: var(--text-primary);
     font-size: 12px;
@@ -1149,7 +1149,7 @@
   .pack-meta { font-size: 12px; color: var(--text-muted); text-transform: capitalize; }
   .pack-desc {
     margin: 4px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.4;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
     min-height: 34px;
   }
   .pack-footer { display: flex; align-items: center; justify-content: space-between; margin-top: auto; padding-top: 8px; gap: 8px; }
@@ -1165,7 +1165,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -1203,7 +1203,7 @@
     width: 100%;
     padding: 8px 10px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: transparent;
     color: var(--text-primary);
     font-size: 12px;
@@ -1364,7 +1364,7 @@
   }
   .pack-page {
     display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    padding: 8px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    padding: 8px 10px; border-radius: var(--border-radius-sm); font-size: 12px; font-weight: 600;
     background: var(--bg-tertiary); border: 1px solid var(--border-color);
     color: var(--text-secondary); cursor: pointer; flex-shrink: 0;
   }
@@ -1372,7 +1372,7 @@
   .pack-add {
     flex: 1;
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 8px 12px; border-radius: 8px; font-size: 12px; font-weight: 700;
+    padding: 8px 12px; border-radius: var(--border-radius-sm); font-size: 12px; font-weight: 700;
     background: var(--accent-primary); color: #000; border: none; cursor: pointer;
     transition: background 0.15s ease;
   }
@@ -1399,7 +1399,7 @@
   }
   .provider-toggle button {
     padding: 6px 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: none;
     background: transparent;
     color: var(--text-secondary);

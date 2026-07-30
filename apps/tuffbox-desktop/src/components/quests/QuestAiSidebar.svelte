@@ -347,7 +347,7 @@
   .msg {
     font-size: 12px;
     padding: 8px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: rgba(255, 255, 255, 0.04);
   }
   .msg.user {
@@ -423,7 +423,7 @@
   textarea {
     width: 100%;
     resize: vertical;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--ftbq-border, #3a3a42);
     background: var(--ftbq-bg, #1a1a1e);
     color: inherit;

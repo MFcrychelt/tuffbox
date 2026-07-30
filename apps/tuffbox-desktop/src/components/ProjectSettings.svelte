@@ -192,7 +192,10 @@
         Loading instance settings…
       </div>
     {/if}
-    <div class="settings-grid" class:dimmed={loading}>
+    <div class="settings-groups" class:dimmed={loading}>
+      <div class="section-group">
+        <h2 class="section-heading">Runtime</h2>
+        <div class="settings-grid">
       <section class="card">
         <div class="card-title">
           <Container size={18} />
@@ -251,22 +254,6 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-title">
-          <Terminal size={18} />
-          <h3>Player</h3>
-        </div>
-        <div class="field">
-          <label for="player-name">Player name (offline test launches)</label>
-          <input id="player-name" bind:value={playerName} placeholder="Player" maxlength="16" />
-          <p class="field-hint">
-            Used for test runs. TuffBox derives a stable offline UUID from this name
-            (same algorithm vanilla uses), so the same name always maps to the same
-            in-game identity across launches.
-          </p>
-        </div>
-      </section>
-
       <section class="card wide">
         <div class="card-title">
           <Cpu size={18} />
@@ -305,6 +292,28 @@
           <textarea bind:value={jvmArgs} rows={4}></textarea>
         </div>
       </section>
+        </div>
+      </div>
+
+      <div class="section-group">
+        <h2 class="section-heading">Project</h2>
+        <div class="settings-grid">
+      <section class="card">
+        <div class="card-title">
+          <Terminal size={18} />
+          <h3>Player</h3>
+        </div>
+        <div class="field">
+          <label for="player-name">Player name (offline test launches)</label>
+          <input id="player-name" bind:value={playerName} placeholder="Player" maxlength="16" />
+          <p class="field-hint">
+            Used for test runs. TuffBox derives a stable offline UUID from this name
+            (same algorithm vanilla uses), so the same name always maps to the same
+            in-game identity across launches.
+          </p>
+        </div>
+      </section>
+
       <section class="card wide">
         <div class="card-title">
           <Database size={18} />
@@ -329,6 +338,8 @@
           {/if}
         </div>
       </section>
+        </div>
+      </div>
     </div>
 
     {#if error}
@@ -379,11 +390,39 @@
     padding: 8px 12px;
   }
 
+  .settings-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+    margin-bottom: 24px;
+  }
+
+  .settings-groups.dimmed {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .section-group {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .section-heading {
+    font-size: 13px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
   .settings-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 20px;
-    margin-bottom: 24px;
   }
 
   .settings-grid.dimmed {
@@ -614,7 +653,7 @@
   }
 
   .schema-info { display: grid; gap: 12px; }
-  .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: 12px; border: 1px solid var(--border-color); }
+  .schema-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--bg-tertiary); border-radius: var(--border-radius-md); border: 1px solid var(--border-color); }
   .schema-row span { color: var(--text-muted); font-size: 13px; }
   .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
   .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }

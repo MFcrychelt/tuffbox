@@ -84,6 +84,10 @@ jobs:
         if (-not (Test-Path dist/index.html)) { throw "dist/index.html missing" }
         if (-not (Get-ChildItem dist/assets/*.js -ErrorAction SilentlyContinue)) { throw "dist/assets/*.js missing" }
 
+    - name: Frontend perf/style regression guards
+      working-directory: apps/tuffbox-desktop
+      run: npm run lint:perf
+
     - name: Build JEI runtime bridges
       working-directory: bridges/jei-runtime
       run: .\gradlew.bat syncDesktopResources --no-daemon

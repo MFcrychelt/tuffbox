@@ -74,6 +74,9 @@
 
   let confirmOpen = false;
   let confirmEntry: ChangeEntry | null = null;
+  let visibleLimit = 40;
+  const VISIBLE_STEP = 40;
+  let prevFilterKey = "";
 
   function actorLabel(actor?: string) {
     switch ((actor ?? "").toLowerCase()) {
@@ -308,6 +311,13 @@
     return acc;
   }, {});
   $: dayKeys = Object.keys(byDay).sort((a, b) => b.localeCompare(a));
+  $: visibleSlice = visible.slice(0, visibleLimit);
+  $: filterKey = `${filter}|${categoryFilter}|${actorFilter}`;
+  $: if (filterKey !== prevFilterKey) {
+    prevFilterKey = filterKey;
+    visibleLimit = VISIBLE_STEP;
+  }
+  $: hasMoreVisible = visible.length > visibleLimit;
   $: editorDirty = editorContent !== editorOriginal;
   $: if ($projectPath && lastLoadedPath !== $projectPath) {
     load(true).then(() => scanNow(true));
@@ -328,7 +338,7 @@
       <select bind:value={actorFilter} title="Actor filter">
         {#each actors as a}<option value={a}>{a === "All" ? "All actors" : actorLabel(a)}</option>{/each}
       </select>
-      <button class="secondary" on:click={scanNow} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
+      <button class="secondary" on:click={() => scanNow()} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
         <ScanSearch size={16} /> {scanning ? "Scanning…" : "Scan now"}
       </button>
       <button class="secondary" on:click={saveHistorySettings} disabled={!$projectPath || loading}>Save settings</button>
@@ -386,7 +396,7 @@
 
       <section class="change-preview">
         <div class="all-changes-list">
-          {#each visible as entry (entry.id)}
+          {#each visibleSlice as entry (entry.id)}
             <div class="change-card" id="change-{entry.id}" class:jar-drift={entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}>
               <div class="preview-header">
                 <div>
@@ -447,6 +457,13 @@
               {/if}
             </div>
           {/each}
+          {#if hasMoreVisible}
+            <div class="show-more-row">
+              <button class="secondary" on:click={() => (visibleLimit += VISIBLE_STEP)}>
+                Show more ({visible.length - visibleLimit} remaining)
+              </button>
+            </div>
+          {/if}
         </div>
       </section>
     </div>
@@ -505,7 +522,7 @@
   .timeline-item { position: relative; margin-bottom: 10px; }
   .timeline-item::before { content: ""; position: absolute; left: -15px; top: 23px; width: 15px; height: 2px; background: rgba(27,217,106,.5); }
   .timeline-item::after { content: ""; position: absolute; left: -19px; top: 18px; width: 10px; height: 10px; border-radius: 50%; background: var(--bg-secondary); border: 2px solid var(--accent-primary); }
-  .file-strip { width: 100%; min-height: 54px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid transparent; border-radius: 12px; padding: 10px 12px; transform: none; }
+  .file-strip { width: 100%; min-height: 54px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; text-align: left; background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 10px 12px; transform: none; }
   .file-strip:hover, .file-strip.selected { border-color: rgba(27, 217, 106, 0.34); background: rgba(27, 217, 106, 0.07); }
   .file-title { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 800; }
   .file-strip small { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 12px; }
@@ -518,6 +535,7 @@
   .change-card { margin-bottom: 28px; padding-bottom: 28px; border-bottom: 1px solid var(--border-color); }
   .change-card.jar-drift { border-color: rgba(245,158,11,.35); }
   .change-card:last-child { border-bottom: none; }
+  .show-more-row { display: flex; justify-content: center; padding: 8px 0 16px; }
   .mini-preview { margin-top: 10px; max-height: 80px; overflow: hidden; opacity: 0.7; mask-image: linear-gradient(to bottom, black 50%, transparent 100%); }
   .preview-header { justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
   .preview-actions { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
@@ -534,13 +552,13 @@
   .summary-row { justify-content: space-between; }
   .summary-card strong, .diff-title { display: block; color: var(--text-secondary); margin-bottom: 10px; font-weight: 800; }
   pre { overflow: auto; white-space: pre-wrap; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.55; color: #d4d4d8; }
-  .diff-card pre { max-height: 58vh; background: #09090b; border-radius: 12px; padding: 12px; }
+  .diff-card pre { max-height: 58vh; background: #09090b; border-radius: var(--border-radius-md); padding: 12px; }
   pre span { display: block; }
   .added { color: #86efac; background: rgba(27, 217, 106, 0.08); }
   .removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }
   .context { color: #a1a1aa; }
   .editor-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.68); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; padding: 24px; }
-  .editor-modal { width: min(1500px, 96vw); height: min(900px, 92vh); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 24px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 30px 110px rgba(0,0,0,.55); }
+  .editor-modal { width: min(1500px, 96vw); height: min(900px, 92vh); background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-xl); overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 30px 110px rgba(0,0,0,.55); }
   .editor-head { justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--border-color); }
   .editor-head h2 { margin: 3px 0 0; font-size: 18px; }
   .editor-actions { gap: 10px; }

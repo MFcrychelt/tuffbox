@@ -119,6 +119,8 @@ export interface GameResolution {
 export interface LauncherSettings {
   theme: string;
   potatoPc: boolean;
+  /** Set once the one-time weak-hardware check (see detectWeakHardware) has run. */
+  perfAutoDetected: boolean;
   concurrentDownloads: number;
   gameResolution: GameResolution | null;
   preLaunchHook: string | null;
@@ -160,6 +162,25 @@ export function applyUiScale(percent: unknown) {
   if (typeof document === "undefined") return p;
   document.documentElement.style.setProperty("--ui-scale", String(p / 100));
   return p;
+}
+
+/**
+ * Cheap, synchronous heuristic for "this machine is probably weak" — used
+ * once on first launch to decide whether to auto-enable potato-pc (reduced
+ * motion) mode. Deliberately conservative (only obviously low-end hardware
+ * trips it) since it can only ever be overridden by the user afterwards.
+ *
+ * `navigator.deviceMemory` is Chromium-only (undefined on the WebKit
+ * webview Tauri uses on macOS/Linux) so it's treated as an optional signal,
+ * not a requirement.
+ */
+export function detectWeakHardware(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const cores = navigator.hardwareConcurrency;
+  if (typeof cores === "number" && cores > 0 && cores <= 2) return true;
+  const memoryGb = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  if (typeof memoryGb === "number" && memoryGb > 0 && memoryGb <= 2) return true;
+  return false;
 }
 
 /** Toggle rounded-corners appearance mode (`data-rounded-corners` on <html>). */

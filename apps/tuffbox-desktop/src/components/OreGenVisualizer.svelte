@@ -105,7 +105,6 @@
     ideStageRequest.set("world-map");
   }
 
-  $: if ($projectPath && $projectPath !== lastOreScanPath) scan();
 </script>
 
 <div class="ore-visualizer">
@@ -133,7 +132,7 @@
   {#if !$projectPath}
     <EmptyState icon={Mountain} title="No project selected" description="Open a project to scan ore generation." />
   {:else if oreBars.length === 0}
-    <EmptyState icon={Database} title="No ore data" description="Run an ore gen scan from Diagnostics to populate this view." />
+    <EmptyState icon={Database} title="No ore data" description="Click Refresh to scan ore generation from configs." />
   {:else}
     <div class="layout">
       <div class="chart-shell">
@@ -216,11 +215,11 @@
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.28); }
   .layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
-  .chart-shell { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 12px; overflow: auto; }
-  .ore-chart { width: 100%; }
-  .ore-list { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; max-height: 620px; overflow: auto; }
+  .chart-shell { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 12px; overflow: auto; min-height: 280px; max-height: min(70vh, 640px); }
+  .ore-chart { width: 100%; height: auto; min-height: 240px; }
+  .ore-list { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); padding: 14px; max-height: min(70vh, 640px); overflow: auto; }
   .ore-list h3 { color: var(--text-secondary); font-size: 14px; margin: 0 0 10px; }
-  .ore-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: transparent; color: var(--text-secondary); border: 1px solid transparent; text-align: left; margin-bottom: 4px; transform: none; }
+  .ore-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: transparent; color: var(--text-secondary); border: 1px solid transparent; text-align: left; margin-bottom: 4px; transform: none; }
   .ore-row:hover, .ore-row.selected { background: var(--bg-tertiary); border-color: rgba(27,217,106,.25); }
   .ore-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
   .ore-detail { display: grid; gap: 2px; flex: 1; min-width: 0; }

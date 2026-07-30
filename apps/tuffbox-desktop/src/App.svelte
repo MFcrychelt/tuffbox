@@ -2,33 +2,19 @@
   import Sidebar from "./components/Sidebar.svelte";
   import Header from "./components/Header.svelte";
   import Dashboard from "./components/Dashboard.svelte";
-  import IdeWorkspace from "./components/IdeWorkspace.svelte";
-  import Mods from "./components/Mods.svelte";
-  import Graph from "./components/Graph.svelte";
-  import Diagnostics from "./components/Diagnostics.svelte";
-  import CrashVotes from "./components/CrashVotes.svelte";
-  import Snapshots from "./components/Snapshots.svelte";
-  import ConfigEditor from "./components/ConfigEditor.svelte";
-  import OreGenVisualizer from "./components/OreGenVisualizer.svelte";
-  import RecipeBrowser from "./components/RecipeBrowser.svelte";
-  import QuestEditor from "./components/QuestEditor.svelte";
-  import Library from "./components/Library.svelte";
-  import Chats from "./components/Chats.svelte";
-  import World from "./components/World.svelte";
   import ToastContainer from "./components/ToastContainer.svelte";
   import KeyboardHelp from "./components/KeyboardHelp.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
   import ScrollToTopButton from "./components/ScrollToTopButton.svelte";
-  import Settings from "./components/Settings.svelte";
-  import ProjectSettings from "./components/ProjectSettings.svelte";
-  import Me from "./components/Me.svelte";
+  import ViewLoading from "./components/ViewLoading.svelte";
   import SwarmOnboarding from "./components/SwarmOnboarding.svelte";
   import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
+  import type { ComponentType, SvelteComponent } from "svelte";
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners, detectWeakHardware, type LauncherSettings } from "./lib/store";
   import { api } from "./lib/api";
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -81,7 +67,54 @@
     "settings",
   ];
 
+  /** Views loaded on demand (see ensureViewLoaded) — keeps startup bundle/parse cost
+      to just the Dashboard on weak machines instead of every screen at once. */
+  type LazyView = Exclude<View, "dashboard">;
+  type LazyComponent = ComponentType<SvelteComponent>;
+
+  const VIEW_LOADERS: Record<LazyView, () => Promise<{ default: LazyComponent }>> = {
+    ide: () => import("./components/IdeWorkspace.svelte"),
+    mods: () => import("./components/Mods.svelte"),
+    graph: () => import("./components/Graph.svelte"),
+    world: () => import("./components/World.svelte"),
+    diagnostics: () => import("./components/Diagnostics.svelte"),
+    "crash-votes": () => import("./components/CrashVotes.svelte"),
+    snapshots: () => import("./components/Snapshots.svelte"),
+    configs: () => import("./components/ConfigEditor.svelte"),
+    settings: () => import("./components/Settings.svelte"),
+    "project-settings": () => import("./components/ProjectSettings.svelte"),
+    "ore-gen": () => import("./components/OreGenVisualizer.svelte"),
+    recipes: () => import("./components/RecipeBrowser.svelte"),
+    quests: () => import("./components/QuestEditor.svelte"),
+    library: () => import("./components/Library.svelte"),
+    chats: () => import("./components/Chats.svelte"),
+    me: () => import("./components/Me.svelte"),
+  };
+
+  let loadedViews: Partial<Record<LazyView, LazyComponent>> = {};
+  const viewsLoading = new Set<LazyView>();
+  let viewLoadError: string | null = null;
+
+  async function ensureViewLoaded(view: View) {
+    if (view === "dashboard") return;
+    const key = view as LazyView;
+    if (loadedViews[key] || viewsLoading.has(key)) return;
+    viewsLoading.add(key);
+    viewLoadError = null;
+    try {
+      const mod = await VIEW_LOADERS[key]();
+      loadedViews = { ...loadedViews, [key]: mod.default };
+    } catch (e) {
+      console.error(`[App] failed to load view "${key}"`, e);
+      viewLoadError = String(e);
+    } finally {
+      viewsLoading.delete(key);
+    }
+  }
+
   let currentView: View = "dashboard";
+  $: void ensureViewLoaded(currentView);
+
   let showShortcuts = false;
   let showCommandPalette = false;
   let contentEl: HTMLElement;
@@ -125,6 +158,33 @@
     });
   }
 
+  /**
+   * One-time (per install) weak-hardware check. Runs after launcher settings
+   * resolve; if the user has never had potato-pc decided for them, checks
+   * `navigator.hardwareConcurrency`/`deviceMemory` and auto-enables reduced
+   * motion on obviously low-end machines. Never re-runs and never overrides
+   * a choice the user makes afterwards in Settings (guarded by
+   * `perfAutoDetected`, persisted alongside the rest of LauncherSettings).
+   */
+  async function applyPerfAutoDetect(s: LauncherSettings) {
+    if (s.perfAutoDetected) return;
+    const patch: Partial<LauncherSettings> = { perfAutoDetected: true };
+    if (!s.potatoPc && detectWeakHardware()) {
+      patch.potatoPc = true;
+      localStorage.setItem("tuffbox-reduced-motion", "1");
+      document.documentElement.classList.add("potato-pc");
+      toasts.info(
+        "Detected lower-end hardware — enabled reduced-motion mode to keep things smooth. Turn it off anytime in Settings → Appearance.",
+        8000,
+      );
+    }
+    try {
+      await api.launcher.save({ ...s, ...patch });
+    } catch {
+      // best-effort — perfAutoDetected stays false server-side, so we simply retry next launch
+    }
+  }
+
   onMount(() => {
     if (localStorage.getItem("tuffbox-reduced-motion") === "1") {
       document.documentElement.classList.add("potato-pc");
@@ -150,6 +210,7 @@
       sidebarMode.set(normalizeSidebarMode(s.sidebarMode));
       applyUiScale(s.uiScalePercent);
       applyRoundedCorners(s.roundedCorners !== false);
+      void applyPerfAutoDetect(s);
     }).catch(() => {});
     const onOpenGraph = () => {
       currentView = "graph";
@@ -350,37 +411,37 @@
           {#if currentView === "dashboard"}
             <Dashboard bind:currentView />
           {:else if currentView === "ide"}
-            <IdeWorkspace />
+            {#if loadedViews.ide}<svelte:component this={loadedViews.ide} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "mods"}
-            <Mods />
+            {#if loadedViews.mods}<svelte:component this={loadedViews.mods} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "graph"}
-            <Graph />
+            {#if loadedViews.graph}<svelte:component this={loadedViews.graph} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "diagnostics"}
-            <Diagnostics />
+            {#if loadedViews.diagnostics}<svelte:component this={loadedViews.diagnostics} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "crash-votes"}
-            <CrashVotes />
+            {#if loadedViews["crash-votes"]}<svelte:component this={loadedViews["crash-votes"]} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "snapshots"}
-            <Snapshots />
+            {#if loadedViews.snapshots}<svelte:component this={loadedViews.snapshots} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "configs"}
-            <ConfigEditor />
+            {#if loadedViews.configs}<svelte:component this={loadedViews.configs} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "settings"}
-            <Settings />
+            {#if loadedViews.settings}<svelte:component this={loadedViews.settings} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "project-settings"}
-            <ProjectSettings onBack={() => (currentView = "dashboard")} />
+            {#if loadedViews["project-settings"]}<svelte:component this={loadedViews["project-settings"]} onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "ore-gen"}
-            <OreGenVisualizer />
+            {#if loadedViews["ore-gen"]}<svelte:component this={loadedViews["ore-gen"]} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "recipes"}
-            <RecipeBrowser />
+            {#if loadedViews.recipes}<svelte:component this={loadedViews.recipes} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "quests"}
-            <QuestEditor />
+            {#if loadedViews.quests}<svelte:component this={loadedViews.quests} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "world"}
-            <World />
+            {#if loadedViews.world}<svelte:component this={loadedViews.world} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "library"}
-            <Library bind:currentView />
+            {#if loadedViews.library}<svelte:component this={loadedViews.library} bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "chats"}
-            <Chats bind:currentView />
+            {#if loadedViews.chats}<svelte:component this={loadedViews.chats} bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
           {:else if currentView === "me"}
-            <Me onBack={() => (currentView = "dashboard")} />
+            {#if loadedViews.me}<svelte:component this={loadedViews.me} onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
           {/if}
         </div>
       {/key}

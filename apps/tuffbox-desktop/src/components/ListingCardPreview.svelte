@@ -219,7 +219,7 @@
     align-items: stretch;
     gap: 16px;
     padding: 16px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid #2d323a;
     background: #16181c;
   }
@@ -279,12 +279,14 @@
   .card-summary {
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
 
   .cf-summary.card-summary {
     -webkit-line-clamp: 1;
+    line-clamp: 1;
   }
 
   .mr-tags {
@@ -337,7 +339,7 @@
 
   .mr-dl-btn {
     border: none;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 8px 14px;
     font-weight: 700;
     font-size: 13px;
@@ -408,7 +410,7 @@
   .cf-icon {
     width: 120px;
     height: 120px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     overflow: hidden;
     background: #0f0f11;
     border: 1px solid #3a3a40;
@@ -523,7 +525,7 @@
 
   .mr-page,
   .cf-page {
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid #2d323a;
     background: #121419;
     overflow: hidden;
@@ -560,7 +562,7 @@
   .cf-page-icon {
     width: 72px;
     height: 72px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     overflow: hidden;
     background: #0f1115;
     border: 1px solid #2d323a;
@@ -628,7 +630,7 @@
 
   .cf-install-btn {
     border: none;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 8px 14px;
     font-weight: 700;
     font-size: 13px;
@@ -674,7 +676,7 @@
 
   .prose :global(img) {
     max-width: 100%;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
 
   .prose :global(a) {

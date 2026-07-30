@@ -220,7 +220,7 @@
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     padding: 2px 8px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
   }
 
   .layout-picker {

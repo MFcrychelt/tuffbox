@@ -296,6 +296,9 @@ Shortcuts / UX:
 5. **AI не применяет изменения сам.** AI объясняет и предлагает план, core применяет детерминированно.
 6. **Обычный игрок не обязан понимать всё.** Для него есть happy path: Create → Add mods → Resolve → Test → Export.
 7. **Разработчик получает глубину.** Profiles, lockfile, diff, configs, server pack, release notes.
+8. **Знакомые ментальные модели.** Нижний workflow rail — как этапы в NLE (DaVinci Resolve); Brief ≈ Modrinth listing; Content ≈ Prism/Modrinth; Tune ≈ VS Code; Test ≈ terminal runner; Diagnose ≈ вердикт → план. Отдельного Guided/Pro-режима нет: глубина в inspector/details.
+9. **Layout contract (fill-stage).** Приоритетные стадии (Brief, Content, Resolve, Tune, Test, Diagnose, Quests, World) занимают высоту stage: sticky chrome ≤ ~64px, primary canvas (list/editor/graph/log) — остаток. Дублирующие jump-кнопки на History/Resolve/Snapshots не нужны в chrome — они уже на rail.
+10. **Слабые ПК.** `potato-pc` глушит continuous force/3D; длинные списки и логи виртуализуются; focused scan крутится только на History/Diagnose.
 
 ## Каркас в текущем UI
 

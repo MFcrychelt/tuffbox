@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Youtube, ChevronDown } from "lucide-svelte";
+  import { Youtube, ChevronDown, PictureInPicture2 } from "lucide-svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { api } from "../lib/api";
   import YoutubePlayer from "./YoutubePlayer.svelte";
@@ -35,6 +35,29 @@
   let inlinePlayer = true;
   let activeVideo: FeedVideo | null = null;
   let activeOrigin: DOMRect | null = null;
+  let openAsMini = false;
+
+  function onCardClick(video: FeedVideo, event: MouseEvent) {
+    if (inlinePlayer) {
+      const el = event.currentTarget as HTMLElement | null;
+      activeOrigin = el?.getBoundingClientRect?.() ?? null;
+      openAsMini = false;
+      activeVideo = video;
+    } else {
+      void openVideo(video.video_id);
+    }
+  }
+
+  function onCardMini(video: FeedVideo, event: MouseEvent) {
+    event.stopPropagation();
+    if (!inlinePlayer) {
+      void openVideo(video.video_id);
+      return;
+    }
+    openAsMini = true;
+    activeOrigin = null;
+    activeVideo = video;
+  }
 
   /** User UI language primary tag (ru-RU → ru). Recommendations: native OR en. */
   function userLang(): string {
@@ -78,8 +101,7 @@
   }
 
   /**
-   * Build a varied strip: channel caps, popular↔creator interleave,
-   * native-lang preference with English filler.
+   * Build a varied strip: channel caps, then native-lang first, foreign after.
    */
   function diversifyFeed(rows: FeedVideo[], limit: number, preferLang: string): FeedVideo[] {
     if (rows.length === 0) return [];
@@ -97,17 +119,18 @@
     );
     const popularTarget = limit - channelTarget;
 
+    function isNative(v: FeedVideo): boolean {
+      return (v.lang || "en") === preferLang;
+    }
+
     function pick(pool: FeedVideo[], n: number): FeedVideo[] {
       const out: FeedVideo[] = [];
       const counts = new Map<string, number>();
+      // Native language first, then any remaining (foreign / unknown).
       const passes: Array<(v: FeedVideo) => boolean> =
         preferLang === "en"
           ? [() => true]
-          : [
-              (v) => (v.lang || "en") === preferLang,
-              (v) => (v.lang || "en") === "en",
-              () => true,
-            ];
+          : [isNative, () => true];
 
       for (const pass of passes) {
         for (const v of pool) {
@@ -127,35 +150,37 @@
     const popular = pick(popularPool, popularTarget);
     const creators = pick(channelPool, channelTarget);
 
-    // Interleave ~3 popular : 2 creators for a mixed strip.
-    const out: FeedVideo[] = [];
+    // Interleave pools, then re-order: all native first, foreign after (stable within each).
+    const mixed: FeedVideo[] = [];
     let pi = 0;
     let ci = 0;
-    while (out.length < limit && (pi < popular.length || ci < creators.length)) {
-      for (let k = 0; k < 3 && pi < popular.length && out.length < limit; k++) {
-        out.push(popular[pi++]);
+    while (mixed.length < limit && (pi < popular.length || ci < creators.length)) {
+      for (let k = 0; k < 3 && pi < popular.length && mixed.length < limit; k++) {
+        mixed.push(popular[pi++]);
       }
-      for (let k = 0; k < 2 && ci < creators.length && out.length < limit; k++) {
-        out.push(creators[ci++]);
+      for (let k = 0; k < 2 && ci < creators.length && mixed.length < limit; k++) {
+        mixed.push(creators[ci++]);
       }
     }
 
-    if (out.length < limit) {
-      const used = new Set(out.map((v) => v.video_id));
+    if (mixed.length < limit) {
+      const used = new Set(mixed.map((v) => v.video_id));
       const counts = new Map<string, number>();
-      for (const v of out) counts.set(channelKey(v), (counts.get(channelKey(v)) ?? 0) + 1);
+      for (const v of mixed) counts.set(channelKey(v), (counts.get(channelKey(v)) ?? 0) + 1);
       for (const v of ranked) {
-        if (out.length >= limit) break;
+        if (mixed.length >= limit) break;
         if (used.has(v.video_id)) continue;
         const ch = channelKey(v);
         if ((counts.get(ch) ?? 0) >= MAX_PER_CHANNEL) continue;
         counts.set(ch, (counts.get(ch) ?? 0) + 1);
         used.add(v.video_id);
-        out.push(v);
+        mixed.push(v);
       }
     }
 
-    return out;
+    const native = mixed.filter(isNative);
+    const foreign = mixed.filter((v) => !isNative(v));
+    return [...native, ...foreign].slice(0, limit);
   }
 
   onMount(() => {
@@ -183,7 +208,9 @@
     loadError = "";
     try {
       const lang = userLang();
-      const langs = lang === "en" ? ["en"] : [lang, "en"];
+      // Prefer native + English; also pull a wider pool so "foreign" slots aren't empty.
+      const langs =
+        lang === "en" ? ["en"] : [lang, "en", "es", "pt", "de", "fr", "pl", "uk"];
       const cols =
         "video_id,title,thumbnail_url,channel_name,source,lang,view_count,published_at";
 
@@ -245,16 +272,6 @@
   async function openVideo(videoId: string) {
     await open(`https://www.youtube.com/watch?v=${videoId}`);
   }
-
-  function onCardClick(video: FeedVideo, event: MouseEvent) {
-    if (inlinePlayer) {
-      const el = event.currentTarget as HTMLElement | null;
-      activeOrigin = el?.getBoundingClientRect?.() ?? null;
-      activeVideo = video;
-    } else {
-      void openVideo(video.video_id);
-    }
-  }
 </script>
 
 {#if loading || videos.length > 0 || loadError !== "" || (!loading && videos.length === 0)}
@@ -291,21 +308,34 @@
       {:else}
         <div class="feed-row tb-anim-fade-in">
           {#each videos as video (video.video_id)}
-            <button
-              type="button"
-              class="video-card"
-              on:click={(e) => onCardClick(video, e)}
-            >
-              <div class="thumb">
-                {#if video.thumbnail_url}
-                  <img src={video.thumbnail_url} alt="" loading="lazy" />
+            <div class="video-card-wrap">
+              <button
+                type="button"
+                class="video-card"
+                on:click={(e) => onCardClick(video, e)}
+              >
+                <div class="thumb">
+                  {#if video.thumbnail_url}
+                    <img src={video.thumbnail_url} alt="" loading="lazy" />
+                  {/if}
+                </div>
+                <span class="title">{video.title}</span>
+                {#if video.channel_name}
+                  <span class="channel">{video.channel_name}</span>
                 {/if}
-              </div>
-              <span class="title">{video.title}</span>
-              {#if video.channel_name}
-                <span class="channel">{video.channel_name}</span>
+              </button>
+              {#if inlinePlayer}
+                <button
+                  type="button"
+                  class="pip-btn"
+                  title="Play in mini window"
+                  aria-label="Play in mini window"
+                  on:click={(e) => onCardMini(video, e)}
+                >
+                  <PictureInPicture2 size={14} />
+                </button>
               {/if}
-            </button>
+            </div>
           {/each}
         </div>
       {/if}
@@ -318,9 +348,11 @@
     videoId={activeVideo.video_id}
     title={activeVideo.title}
     originRect={activeOrigin}
+    startMini={openAsMini}
     on:close={() => {
       activeVideo = null;
       activeOrigin = null;
+      openAsMini = false;
     }}
   />
 {/if}
@@ -424,6 +456,52 @@
     transition: transform 0.15s ease;
   }
 
+  .video-card-wrap {
+    position: relative;
+    flex: 0 0 190px;
+    width: 190px;
+  }
+
+  .rail .video-card-wrap {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
+  .video-card-wrap .video-card {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+
+  .pip-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: var(--border-radius-sm);
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+
+  .video-card-wrap:hover .pip-btn,
+  .video-card-wrap:focus-within .pip-btn {
+    opacity: 1;
+  }
+
+  .pip-btn:hover {
+    background: color-mix(in srgb, var(--accent-primary) 70%, #000);
+    border-color: transparent;
+  }
+
   .rail .video-card {
     flex: 0 0 auto;
     width: 100%;
@@ -475,6 +553,7 @@
     line-height: 1.35;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
@@ -510,7 +589,7 @@
 
   .retry-btn {
     padding: 6px 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
     color: var(--accent-primary);

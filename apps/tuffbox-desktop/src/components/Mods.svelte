@@ -23,6 +23,9 @@
     Bookmark,
     LayoutGrid,
     List,
+    Infinity as InfinityIcon,
+    PanelLeftClose,
+    PanelLeftOpen,
     ArrowRight,
     ArrowDown,
     Scroll,
@@ -37,8 +40,6 @@
     PowerOff,
     ExternalLink,
     Users,
-    History,
-    Camera,
     FilePlus,
   } from "lucide-svelte";
   import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
@@ -385,6 +386,8 @@ import { trapFocus } from "../lib/focusTrap";
     unlistenBatch?.();
     unlistenUpdateProgress?.();
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    infiniteObserver?.disconnect();
+    listResizeObserver?.disconnect();
   });
 
   let addOpen = false;
@@ -395,6 +398,10 @@ import { trapFocus } from "../lib/focusTrap";
   let searchResults: SearchResult[] = [];
   let searchTotal = 0;
   let searchLoading = false;
+  let loadingMore = false;
+  let browserResultsEl: HTMLElement | null = null;
+  let infiniteSentinel: HTMLElement | null = null;
+  let infiniteObserver: IntersectionObserver | null = null;
   let searchRequestId = 0;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let selectedSide = "auto";
@@ -410,24 +417,32 @@ import { trapFocus } from "../lib/focusTrap";
   // --- Add-mods browser chrome ---
   const ADD_VIEW_KEY = "tuffbox.mods.addView";
   type CardSize = "S" | "M" | "L";
-  function readAddViewPref(): { viewMode: "grid" | "list"; pageSize: number; cardSize: CardSize } {
+  function readAddViewPref(): {
+    viewMode: "grid" | "list" | "infinite";
+    pageSize: number;
+    cardSize: CardSize;
+    filtersCollapsed: boolean;
+  } {
     try {
       const raw = localStorage.getItem(ADD_VIEW_KEY);
-      if (!raw) return { viewMode: "grid", pageSize: 40, cardSize: "M" };
+      if (!raw) return { viewMode: "grid", pageSize: 40, cardSize: "M", filtersCollapsed: false };
       const parsed = JSON.parse(raw);
+      const mode = parsed.viewMode;
       return {
-        viewMode: parsed.viewMode === "list" ? "list" : "grid",
+        viewMode: mode === "list" ? "list" : mode === "infinite" ? "infinite" : "grid",
         pageSize: [20, 40, 60].includes(Number(parsed.pageSize)) ? Number(parsed.pageSize) : 40,
         cardSize: ["S", "M", "L"].includes(parsed.cardSize) ? parsed.cardSize : "M",
+        filtersCollapsed: !!parsed.filtersCollapsed,
       };
     } catch {
-      return { viewMode: "grid", pageSize: 40, cardSize: "M" };
+      return { viewMode: "grid", pageSize: 40, cardSize: "M", filtersCollapsed: false };
     }
   }
   const addViewPref = readAddViewPref();
   let versionSearch = "";
   let loaderExpanded = false;
-  let viewMode: "grid" | "list" = addViewPref.viewMode;
+  let filtersCollapsed = addViewPref.filtersCollapsed;
+  let viewMode: "grid" | "list" | "infinite" = addViewPref.viewMode;
   let cardSize: CardSize = addViewPref.cardSize;
   let page = 1;
   let pageSize = addViewPref.pageSize;
@@ -442,14 +457,27 @@ import { trapFocus } from "../lib/focusTrap";
 
   function persistAddView() {
     try {
-      localStorage.setItem(ADD_VIEW_KEY, JSON.stringify({ viewMode, pageSize, cardSize }));
+      localStorage.setItem(
+        ADD_VIEW_KEY,
+        JSON.stringify({ viewMode, pageSize, cardSize, filtersCollapsed })
+      );
     } catch {
       /* ignore */
     }
   }
 
-  function setViewMode(mode: "grid" | "list") {
+  function setViewMode(mode: "grid" | "list" | "infinite") {
+    const prev = viewMode;
     viewMode = mode;
+    persistAddView();
+    // Server pages vs accumulated infinite list — always reload from page 1 on switch.
+    if (prev !== mode && addOpen && !isSavedViewFilter(contentFilter)) {
+      void searchMods(1);
+    }
+  }
+
+  function toggleFiltersCollapsed() {
+    filtersCollapsed = !filtersCollapsed;
     persistAddView();
   }
 
@@ -625,8 +653,39 @@ import { trapFocus } from "../lib/focusTrap";
     : loaders.slice(0, 3);
 
   $: totalPages = Math.max(1, Math.ceil(searchTotal / pageSize));
-  $: pagedResults = searchResults.slice((page - 1) * pageSize, page * pageSize);
+  // Catalog search is server-paginated; searchResults is the current page (or
+  // accumulated pages in infinite mode). Do not client-slice again.
+  $: pagedResults = searchResults;
+  $: displayedResults = searchResults;
   $: if (page > totalPages) page = totalPages;
+
+  function setupInfiniteObserver() {
+    infiniteObserver?.disconnect();
+    infiniteObserver = null;
+    if (viewMode !== "infinite" || !addOpen || !infiniteSentinel || !browserResultsEl) return;
+    infiniteObserver = new IntersectionObserver(
+      (entries) => {
+        if (
+          entries[0]?.isIntersecting &&
+          !searchLoading &&
+          !loadingMore &&
+          page < totalPages &&
+          !isSavedViewFilter(contentFilter)
+        ) {
+          void searchMods(page + 1);
+        }
+      },
+      { root: browserResultsEl, rootMargin: "240px", threshold: 0 }
+    );
+    infiniteObserver.observe(infiniteSentinel);
+  }
+
+  $: if (addOpen && viewMode === "infinite" && infiniteSentinel && browserResultsEl) {
+    setupInfiniteObserver();
+  } else if (viewMode !== "infinite") {
+    infiniteObserver?.disconnect();
+    infiniteObserver = null;
+  }
 
   function goToPage(p: number) {
     const target = Math.min(totalPages, Math.max(1, p));
@@ -946,7 +1005,6 @@ import { trapFocus } from "../lib/focusTrap";
       }
       await reloadModsSilent();
       message = `Disabled ${targets.length} item${targets.length === 1 ? "" : "s"}.`;
-      showWorkflowTrail = true;
       clearSelection();
     } catch (e) {
       error = String(e);
@@ -991,7 +1049,6 @@ import { trapFocus } from "../lib/focusTrap";
         await invoke("remove_project_mod", { path: $projectPath, modId: id });
       }
       message = `Removed ${ids.length} item${ids.length === 1 ? "" : "s"}.`;
-      showWorkflowTrail = true;
       clearSelection();
     } catch (e) {
       error = String(e);
@@ -1017,7 +1074,6 @@ import { trapFocus } from "../lib/focusTrap";
       }
       await reloadModsSilent();
       message = `Updated ${updatable.length} item${updatable.length === 1 ? "" : "s"}.`;
-      showWorkflowTrail = true;
       clearSelection();
     } catch (e) {
       error = String(e);
@@ -1115,8 +1171,8 @@ import { trapFocus } from "../lib/focusTrap";
       : localStorage.getItem(IDEAS_STORAGE_KEY) !== "false";
   let heroExpanded =
     typeof localStorage === "undefined"
-      ? true
-      : localStorage.getItem(HERO_STORAGE_KEY) !== "false";
+      ? false
+      : localStorage.getItem(HERO_STORAGE_KEY) === "true";
 
   function toggleHeroExpanded() {
     heroExpanded = !heroExpanded;
@@ -1345,8 +1401,44 @@ import { trapFocus } from "../lib/focusTrap";
   };
   let wrongLoaderHits: WrongLoaderHit[] = [];
   let wrongLoaderFixing: string | null = null;
-  let showWorkflowTrail = false;
   let importingLocal = false;
+
+  const INSTALLED_ROW_HEIGHT = 86;
+  const VIRTUAL_OVERSCAN = 5;
+  let listScrollEl: HTMLDivElement | null = null;
+  let listScrollTop = 0;
+  let listViewportHeight = 480;
+  let listResizeObserver: ResizeObserver | null = null;
+  let lastListFilterKey = "";
+
+  function onListScroll(e: Event) {
+    listScrollTop = (e.currentTarget as HTMLDivElement).scrollTop;
+  }
+
+  function attachListViewportObserver(node: HTMLDivElement | null) {
+    listResizeObserver?.disconnect();
+    listResizeObserver = null;
+    if (!node) return;
+    listViewportHeight = node.clientHeight || 480;
+    if (typeof ResizeObserver !== "undefined") {
+      listResizeObserver = new ResizeObserver(() => {
+        if (listScrollEl) listViewportHeight = listScrollEl.clientHeight || 480;
+      });
+      listResizeObserver.observe(node);
+    }
+  }
+
+  $: attachListViewportObserver(listScrollEl);
+
+  $: {
+    const key = `${contentFilter}|${sideFilter}|${filter}`;
+    if (key !== lastListFilterKey) {
+      lastListFilterKey = key;
+      listScrollTop = 0;
+      if (listScrollEl) listScrollEl.scrollTop = 0;
+    }
+  }
+
   let lastSyncSummary: string | null = null;
 
   async function detectDuplicateModJars() {
@@ -1379,7 +1471,6 @@ import { trapFocus } from "../lib/focusTrap";
     error = null;
     try {
       message = await api.mods.disableJar(fileName, $projectPath);
-      showWorkflowTrail = true;
       await detectWrongLoaderMods();
       await load(true);
     } catch (e) {
@@ -1395,7 +1486,6 @@ import { trapFocus } from "../lib/focusTrap";
     error = null;
     try {
       message = await api.mods.removeLooseJar(fileName, $projectPath);
-      showWorkflowTrail = true;
       await detectWrongLoaderMods();
       await load(true);
     } catch (e) {
@@ -1405,19 +1495,8 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  function openHistory() {
-    ideStageRequest.set("history");
-  }
-  function openResolve() {
-    ideStageRequest.set("resolve");
-  }
-  function openSnapshots() {
-    ideStageRequest.set("snapshots");
-  }
-
-  function setSuccessMessage(text: string, withTrail = true) {
+  function setSuccessMessage(text: string) {
     message = text;
-    showWorkflowTrail = withTrail;
   }
 
   async function importLocalFiles() {
@@ -2058,9 +2137,14 @@ import { trapFocus } from "../lib/focusTrap";
       searchDebounceTimer = null;
     }
     const requestId = ++searchRequestId;
-    searchLoading = true;
+    const appendLoad = viewMode === "infinite" && targetPage > 1;
+    if (appendLoad) {
+      loadingMore = true;
+    } else {
+      searchLoading = true;
+    }
     error = null;
-    brokenCatalogIcons = [];
+    if (!appendLoad) brokenCatalogIcons = [];
     try {
       const loader =
         contentFilter === "mod" && filterLoader ? filterLoader.toLowerCase() : null;
@@ -2091,20 +2175,29 @@ import { trapFocus } from "../lib/focusTrap";
         });
       }
       if (requestId !== searchRequestId) return;
-      searchResults = payload.results.map((r) => ({
+      const mapped = payload.results.map((r) => ({
         ...r,
         provider: r.provider ?? (catalogProvider === "curseforge" ? "curseforge" : "modrinth"),
       }));
+      if (appendLoad) {
+        const seen = new Set(searchResults.map((r) => r.id));
+        searchResults = [...searchResults, ...mapped.filter((r) => !seen.has(r.id))];
+      } else {
+        searchResults = mapped;
+      }
       searchTotal = payload.total;
       page = targetPage;
     } catch (e) {
       if (requestId !== searchRequestId) return;
       error = String(e);
-      searchResults = [];
-      searchTotal = 0;
+      if (!appendLoad) {
+        searchResults = [];
+        searchTotal = 0;
+      }
     } finally {
       if (requestId === searchRequestId) {
         searchLoading = false;
+        loadingMore = false;
       }
     }
   }
@@ -2138,7 +2231,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   function selectVisibleResults() {
     const next = { ...selectedResultIds };
-    for (const result of searchResults) {
+    for (const result of displayedResults) {
       if (!isInstalled(result)) next[result.id] = true;
     }
     selectedResultIds = next;
@@ -2378,6 +2471,15 @@ import { trapFocus } from "../lib/focusTrap";
         return matchesText && matchesSide;
       });
 
+  $: virtualStart = Math.max(0, Math.floor(listScrollTop / INSTALLED_ROW_HEIGHT) - VIRTUAL_OVERSCAN);
+  $: virtualEnd = Math.min(
+    filtered.length,
+    Math.ceil((listScrollTop + listViewportHeight) / INSTALLED_ROW_HEIGHT) + VIRTUAL_OVERSCAN
+  );
+  $: visibleMods = filtered.slice(virtualStart, virtualEnd);
+  $: virtualPaddingTop = virtualStart * INSTALLED_ROW_HEIGHT;
+  $: virtualPaddingBottom = Math.max(0, (filtered.length - virtualEnd) * INSTALLED_ROW_HEIGHT);
+
   $: listTabNames = Object.keys(userState.lists).sort((a, b) => a.localeCompare(b));
 
   $: savedViewKey = isSavedViewFilter(contentFilter)
@@ -2432,6 +2534,7 @@ import { trapFocus } from "../lib/focusTrap";
 <svelte:window on:keydown={onAddModalKeydown} />
 
 <div class="mods fade-slide-in">
+  <div class="mods-chrome">
   <header class="content-hero" class:collapsed={!heroExpanded}>
     <button type="button" class="content-hero-toggle" on:click={toggleHeroExpanded} aria-expanded={heroExpanded}>
       <div class="content-hero-copy">
@@ -2566,64 +2669,51 @@ import { trapFocus } from "../lib/focusTrap";
         </button>
       {/each}
     </div>
-    <div class="toolbar-row">
-      <div class="actions toolbar-actions">
-        <button
-          class="ghost mini quiet-action"
-          on:click={importLocalFiles}
-          disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
-          title="Copy local jars/zips into the pack and register them in the manifest"
-        >
-          <FilePlus size={14} />
-          {importingLocal ? "…" : "Import"}
-        </button>
-        <button
-          class="ghost mini quiet-action"
-          on:click={syncModsFolderFromUi}
-          disabled={!$projectPath || loading}
-          title="Rescan content folders and register new files"
-        >
-          <RotateCw size={14} /> Resync
-        </button>
-        <button class="ghost mini quiet-action" on:click={openHistory} disabled={!$projectPath} title="Open History timeline">
-          <History size={14} /> History
-        </button>
-        <button class="ghost mini quiet-action" on:click={openResolve} disabled={!$projectPath} title="Open Resolve graph">
-          <GitGraph size={14} /> Resolve
-        </button>
-        <button class="ghost mini quiet-action" on:click={openSnapshots} disabled={!$projectPath} title="Open Snapshots">
-          <Camera size={14} /> Snapshots
-        </button>
-        <button
-          class="ghost mini quiet-action"
-          class:has-updates={updateList.length > 0}
-          on:click={applyAllUpdates}
-          disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
-          title="Update all mods to the latest build for this Minecraft version"
-        >
-          <Sparkles size={14} />
-          {#if updateApplying}
-            Updating…
-          {:else if updateCheckLoading}
-            Checking…
-          {:else if updateList.length > 0}
-            Update ({updateList.length})
-          {:else}
-            Update all
-          {/if}
-        </button>
-        <button
-          class="ghost mini quiet-action"
-          on:click={loadRecommendations}
-          disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
-          title="Suggest optimization mods for this loader, Minecraft version, and pack"
-        >
-          <Lightbulb size={14} />
-          {recsLoading ? "…" : "Ideas"}
-        </button>
-      </div>
-    </div>
-    <div class="toolbar-quiet" aria-label="Optional tools">
+    <div class="toolbar-actions-row">
+      <button
+        class="ghost mini quiet-action"
+        on:click={importLocalFiles}
+        disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
+        title="Copy local jars/zips into the pack and register them in the manifest"
+      >
+        <FilePlus size={14} />
+        {importingLocal ? "…" : "Import"}
+      </button>
+      <button
+        class="ghost mini quiet-action"
+        on:click={syncModsFolderFromUi}
+        disabled={!$projectPath || loading}
+        title="Rescan content folders and register new files"
+      >
+        <RotateCw size={14} /> Resync
+      </button>
+      <button
+        class="ghost mini quiet-action"
+        class:has-updates={updateList.length > 0}
+        on:click={applyAllUpdates}
+        disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
+        title="Update all mods to the latest build for this Minecraft version"
+      >
+        <Sparkles size={14} />
+        {#if updateApplying}
+          Updating…
+        {:else if updateCheckLoading}
+          Checking…
+        {:else if updateList.length > 0}
+          Update ({updateList.length})
+        {:else}
+          Update all
+        {/if}
+      </button>
+      <button
+        class="ghost mini quiet-action"
+        on:click={loadRecommendations}
+        disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
+        title="Suggest optimization mods for this loader, Minecraft version, and pack"
+      >
+        <Lightbulb size={14} />
+        {recsLoading ? "…" : "Ideas"}
+      </button>
       <label
         class="ideas-toggle"
         class:on={ideasEnabled}
@@ -2734,18 +2824,11 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="error">{error}</div>
   {/if}
   {#if message}
-    <div class="notice success trail-notice">
-      <span>{message}</span>
-      {#if showWorkflowTrail}
-        <div class="trail-links">
-          <button class="ghost mini" on:click={openHistory}><History size={12} /> History</button>
-          <button class="ghost mini" on:click={openResolve}><GitGraph size={12} /> Resolve</button>
-          <button class="ghost mini" on:click={openSnapshots}><Camera size={12} /> Snapshots</button>
-        </div>
-      {/if}
-    </div>
+    <div class="notice success">{message}</div>
   {/if}
+  </div>
 
+  <div class="mods-list" bind:this={listScrollEl} on:scroll={onListScroll}>
   {#if loading}
     <div class="loading">Loading {contentNoun}...</div>
   {:else if !$projectPath}
@@ -2840,14 +2923,22 @@ import { trapFocus } from "../lib/focusTrap";
   {:else if filtered.length === 0}
     <EmptyState icon={Package} title={`No ${contentNoun} found`} description="Try Sync, adjust filters, or add content from Modrinth." actionLabel={`Add ${contentFilter}`} on:action={openAddModal} />
   {:else}
-    <div class="installed-list tb-stagger" class:selecting={selectionMode}>
-      {#each filtered as mod, i (mod.id)}
+    <div
+      class="installed-list-virtual"
+      style="min-height: {filtered.length * INSTALLED_ROW_HEIGHT}px"
+    >
+      <div
+        class="installed-list tb-stagger"
+        class:selecting={selectionMode}
+        style="padding-top: {virtualPaddingTop}px; padding-bottom: {virtualPaddingBottom}px"
+      >
+      {#each visibleMods as mod, i (mod.id)}
         <article
           class="installed-card tb-card"
           class:has-update={mod.updateAvailable}
           class:disabled={mod.disabled}
           class:selected={!!selectedModIds[mod.id]}
-          style="--i: {i}"
+          style="--i: {virtualStart + i}"
           role={selectionMode ? "button" : undefined}
           tabindex={selectionMode ? 0 : undefined}
           on:contextmenu={(e) => onCardContextMenu(e, mod)}
@@ -2943,8 +3034,10 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
         </article>
       {/each}
+      </div>
     </div>
   {/if}
+  </div>
 </div>
 
 {#if confirmOpen && confirmMod}
@@ -3158,7 +3251,7 @@ import { trapFocus } from "../lib/focusTrap";
               {#each sortOptions as option (option.id)}<option value={option.id}>{option.label}</option>{/each}
             </select>
           </label>
-          <label class="sort-select">View:
+          <label class="sort-select">{viewMode === "infinite" ? "Batch size:" : "Page size:"}
             <select bind:value={pageSize} on:change={onPageSizeChange}>
               <option value={20}>20</option>
               <option value={40}>40</option>
@@ -3173,11 +3266,26 @@ import { trapFocus } from "../lib/focusTrap";
           </span>
           <button class="view-toggle" class:active={viewMode === "grid"} on:click={() => setViewMode("grid")} title="Grid view"><LayoutGrid size={16} /></button>
           <button class="view-toggle" class:active={viewMode === "list"} on:click={() => setViewMode("list")} title="List view"><List size={16} /></button>
+          <button class="view-toggle" class:active={viewMode === "infinite"} on:click={() => setViewMode("infinite")} title="Infinite scroll"><InfinityIcon size={16} /></button>
         </div>
       </div>
 
-      <div class="browser-layout">
-        <aside class="filter-sidebar">
+      <div class="browser-layout" class:filters-collapsed={filtersCollapsed}>
+        <aside class="filter-sidebar" class:collapsed={filtersCollapsed}>
+          <button
+            type="button"
+            class="filter-collapse-toggle"
+            on:click={toggleFiltersCollapsed}
+            title={filtersCollapsed ? "Expand filters" : "Collapse filters"}
+            aria-label={filtersCollapsed ? "Expand filters" : "Collapse filters"}
+          >
+            {#if filtersCollapsed}
+              <PanelLeftOpen size={18} />
+            {:else}
+              <PanelLeftClose size={18} />
+            {/if}
+          </button>
+          {#if !filtersCollapsed}
           <section class="filter-block" class:closed={!accordionOpen.gameVersion}>
             <button class="filter-head" on:click={() => toggleAccordion("gameVersion")}>
               <span>Game version</span>
@@ -3262,9 +3370,11 @@ import { trapFocus } from "../lib/focusTrap";
               </div>
             {/if}
           </section>
+          {/if}
         </aside>
 
-        <section class="browser-results">
+        <section class="browser-results" bind:this={browserResultsEl}>
+          {#if viewMode !== "infinite"}
           <div class="pagination">
             <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹</button>
             {#each Array.from({ length: Math.min(totalPages, 5) }, (_, i) => i + 1) as p (p)}
@@ -3273,6 +3383,7 @@ import { trapFocus } from "../lib/focusTrap";
             {#if totalPages > 5}<span class="page-ellipsis">…</span><button class="page-btn" on:click={() => goToPage(totalPages)}>{totalPages}</button>{/if}
             <button class="page-btn" disabled={page >= totalPages} on:click={() => goToPage(page + 1)}><ArrowRight size={14} /></button>
           </div>
+          {/if}
 
           <div class="bulk-bar">
             <div>
@@ -3280,7 +3391,7 @@ import { trapFocus } from "../lib/focusTrap";
               <span>selected for bulk install</span>
             </div>
             <div class="bulk-actions">
-              <button class="ghost" on:click={selectVisibleResults} disabled={pagedResults.length === 0}>Select visible</button>
+              <button class="ghost" on:click={selectVisibleResults} disabled={displayedResults.length === 0}>Select visible</button>
               <button class="ghost" on:click={clearResultSelection} disabled={selectedResults.length === 0}>Clear</button>
               <button on:click={bulkInstallSelected} disabled={selectedResults.length === 0 || mutating} title="Install selected projects with required dependencies (one provider at a time)">Install selected + dependencies</button>
             </div>
@@ -3298,7 +3409,7 @@ import { trapFocus } from "../lib/focusTrap";
                 <EmptyState icon={Bookmark} compact={true} title="This list is empty" description="Saved projects will appear here." />
               {/if}
             {:else}
-              <div class="results {viewMode} card-size-{cardSize.toLowerCase()} tb-stagger">
+              <div class="results {viewMode === 'list' ? 'list' : 'grid'} card-size-{cardSize.toLowerCase()} tb-stagger">
                 {#each savedMods as result, i (result.id)}
                   <article
                     class="result-card tb-card"
@@ -3384,11 +3495,11 @@ import { trapFocus } from "../lib/focusTrap";
                 {/each}
               </div>
             {/if}
-          {:else if pagedResults.length === 0}
+          {:else if displayedResults.length === 0}
             <EmptyState icon={Search} compact={true} title="No results" description="Adjust filters or search text." />
           {:else}
-            <div class="results {viewMode} card-size-{cardSize.toLowerCase()} tb-stagger">
-          {#each pagedResults as result, i (result.id)}
+            <div class="results {viewMode === 'list' ? 'list' : 'grid'} card-size-{cardSize.toLowerCase()} tb-stagger">
+          {#each displayedResults as result, i (result.id)}
             <article
               class="result-card tb-card"
               style={`--i: ${i}`}
@@ -3490,8 +3601,14 @@ import { trapFocus } from "../lib/focusTrap";
             </article>
           {/each}
             </div>
+            {#if viewMode === "infinite"}
+              <div bind:this={infiniteSentinel} class="infinite-sentinel" aria-hidden="true"></div>
+              {#if loadingMore}
+                <div class="loading-more compact">Loading more projects…</div>
+              {/if}
+            {/if}
           {/if}
-          {#if totalPages > 1 && !isSavedViewFilter(contentFilter)}
+          {#if viewMode !== "infinite" && totalPages > 1 && !isSavedViewFilter(contentFilter)}
             <div class="pagination bottom">
               <button class="page-btn" disabled={page <= 1} on:click={() => goToPage(page - 1)}>‹ Prev</button>
               {#each Array.from({ length: Math.min(totalPages, 7) }, (_, i) => i + 1) as p (p)}
@@ -3940,9 +4057,29 @@ import { trapFocus } from "../lib/focusTrap";
 
 <style>
   .mods {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
     max-width: none;
     width: 100%;
     position: relative;
+  }
+
+  .mods-chrome {
+    flex-shrink: 0;
+  }
+
+  .mods-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .installed-list-virtual {
+    position: relative;
+    width: 100%;
   }
 
   .content-hero {
@@ -3950,7 +4087,7 @@ import { trapFocus } from "../lib/focusTrap";
     justify-content: space-between;
     align-items: flex-end;
     gap: 24px;
-    margin-bottom: 22px;
+    margin-bottom: 12px;
     padding: 22px 24px;
     border-radius: 20px;
     border: 1px solid rgba(27, 217, 106, 0.18);
@@ -4021,7 +4158,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .conflicts-jars {
-    margin-bottom: 18px;
+    margin-bottom: 10px;
     padding: 14px 16px;
     border: 1px solid rgba(251, 191, 36, 0.28);
     border-radius: var(--border-radius-lg);
@@ -4188,8 +4325,15 @@ import { trapFocus } from "../lib/focusTrap";
   .toolbar {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    margin-bottom: 14px;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .toolbar-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
   }
 
   .content-tabs {
@@ -4211,9 +4355,9 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
-    margin-bottom: 20px;
+    margin-bottom: 10px;
   }
 
   .filters-search-row .quick-filters {
@@ -4500,12 +4644,16 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .installed-pill {
-    font-size: 11px;
-    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 1px 7px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.15);
+    background: rgba(27, 217, 106, 0.12);
     color: #1bd96a;
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    border: 1px solid rgba(27, 217, 106, 0.28);
+    flex-shrink: 0;
   }
 
   .installed-list {
@@ -4526,7 +4674,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 12px 14px;
     background: linear-gradient(135deg, rgba(255,255,255,0.02), transparent 40%), var(--bg-secondary);
     border: 1px solid var(--border-color);
-    border-radius: 16px;
+    border-radius: var(--border-radius-lg);
   }
 
   .installed-card:hover {
@@ -4593,7 +4741,7 @@ import { trapFocus } from "../lib/focusTrap";
     flex-wrap: wrap;
     margin-bottom: 12px;
     padding: 10px 12px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid rgba(27, 217, 106, 0.35);
     background: rgba(27, 217, 106, 0.08);
   }
@@ -4949,7 +5097,7 @@ import { trapFocus } from "../lib/focusTrap";
   .update-icon {
     width: 40px;
     height: 40px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     overflow: hidden;
     background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
     display: flex;
@@ -5089,7 +5237,7 @@ import { trapFocus } from "../lib/focusTrap";
     justify-content: center;
     color: #1bd96a;
   }
-  .update-btn.hot { background: rgba(27, 217, 106, 0.12); border-radius: 8px; }
+  .update-btn.hot { background: rgba(27, 217, 106, 0.12); border-radius: var(--border-radius-sm); }
 
   .empty,
   .loading,
@@ -5127,8 +5275,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .modal-backdrop.add-mods-backdrop {
-    background: rgba(0, 0, 0, 0.48);
-    backdrop-filter: blur(5px);
+    background: rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(4px);
   }
 
   .modal {
@@ -5144,9 +5292,9 @@ import { trapFocus } from "../lib/focusTrap";
 
   /* Add content browser: large but leaves backdrop visible around edges. */
   .modal.add-mods-modal {
-    width: min(1680px, calc(100vw - 64px));
-    height: min(920px, calc(100vh - 72px));
-    max-height: calc(100vh - 72px);
+    width: min(1840px, calc(100vw - 28px));
+    height: min(980px, calc(100vh - 28px));
+    max-height: calc(100vh - 28px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -5205,6 +5353,12 @@ import { trapFocus } from "../lib/focusTrap";
     min-height: 0;
     height: auto;
     align-items: stretch;
+    grid-template-columns: minmax(160px, 20%) minmax(0, 1fr);
+    transition: grid-template-columns 0.22s ease;
+  }
+
+  .modal.add-mods-modal .browser-layout.filters-collapsed {
+    grid-template-columns: 48px minmax(0, 1fr);
   }
 
   .modal.add-mods-modal .catalog-body {
@@ -5216,6 +5370,129 @@ import { trapFocus } from "../lib/focusTrap";
   .modal.add-mods-modal .filter-sidebar {
     max-height: none;
     height: 100%;
+    transition: width 0.22s ease, min-width 0.22s ease, padding 0.22s ease;
+  }
+
+  .modal.add-mods-modal .filter-sidebar.collapsed {
+    width: 48px;
+    min-width: 48px;
+    overflow: hidden;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+
+  .modal.add-mods-modal .filter-collapse-toggle {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    margin: 4px auto 6px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    cursor: pointer;
+    transform: none;
+  }
+
+  .modal.add-mods-modal .filter-collapse-toggle:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-color: rgba(27, 217, 106, 0.28);
+  }
+
+  .modal.add-mods-modal .filter-sidebar.collapsed .filter-collapse-toggle {
+    margin: 8px auto;
+  }
+
+  .modal.add-mods-modal .search,
+  .modal.add-mods-modal .search.mini {
+    position: relative;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+  }
+
+  .modal.add-mods-modal .search .search-glyph,
+  .modal.add-mods-modal .search.mini .search-glyph {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .modal.add-mods-modal .search.mini .search-glyph {
+    left: 8px;
+  }
+
+  .modal.add-mods-modal .search input,
+  .modal.add-mods-modal .search.mini input {
+    width: 100%;
+    min-height: 38px;
+    box-sizing: border-box;
+    padding-left: 38px;
+    padding-right: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .modal.add-mods-modal .search.mini input {
+    min-height: 32px;
+    padding-left: 30px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    font-size: 12px;
+    border-radius: var(--border-radius-sm);
+  }
+
+  .modal.add-mods-modal .search .search-spinner {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .modal.add-mods-modal .search:has(.search-spinner) input {
+    padding-right: 36px;
+  }
+
+  .modal.add-mods-modal .infinite-sentinel {
+    width: 100%;
+    height: 1px;
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+
+  .modal.add-mods-modal .loading-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: 13px;
   }
 
   .modal.add-mods-modal .browser-results {
@@ -5304,7 +5581,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .provider-toggle button {
     padding: 6px 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: none;
     background: transparent;
     color: var(--text-secondary);
@@ -5396,7 +5673,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   .filter-block {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: rgba(255,255,255,0.018);
     overflow: hidden;
   }
@@ -5445,7 +5722,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     transform: none;
     font-size: 13px;
   }
@@ -5472,7 +5749,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: transparent;
     color: var(--text-muted);
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     transform: none;
     font-size: 12px;
   }
@@ -5534,7 +5811,7 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     color: var(--text-muted);
@@ -5610,7 +5887,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 8px;
     padding: 8px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: rgba(255,255,255,.018);
   }
 
@@ -5643,7 +5920,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 6px 8px;
     align-items: start;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     cursor: pointer;
@@ -5661,21 +5938,18 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .result-card.installed {
-    border-color: rgba(27, 217, 106, 0.65);
+    border-color: rgba(27, 217, 106, 0.34);
     background:
-      linear-gradient(90deg, rgba(27, 217, 106, 0.16) 0%, rgba(27, 217, 106, 0.07) 22%, var(--bg-secondary) 42%);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.22) inset;
+      linear-gradient(145deg, rgba(27, 217, 106, 0.09) 0%, rgba(27, 217, 106, 0.03) 38%, var(--bg-secondary) 72%);
+    box-shadow:
+      0 0 0 1px rgba(27, 217, 106, 0.1) inset,
+      0 0 0 1px rgba(27, 217, 106, 0.06);
   }
 
-  .result-card.installed::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
-    border-radius: 0 2px 2px 0;
-    background: #1bd96a;
+  .result-card.installed:hover {
+    border-color: rgba(27, 217, 106, 0.42);
+    background:
+      linear-gradient(145deg, rgba(27, 217, 106, 0.11) 0%, rgba(27, 217, 106, 0.04) 38%, var(--bg-elevated, var(--bg-tertiary)) 72%);
   }
 
   .results.card-size-s .result-card {
@@ -5725,7 +5999,7 @@ import { trapFocus } from "../lib/focusTrap";
     grid-area: icon;
     width: 48px;
     height: 48px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     overflow: hidden;
     background: linear-gradient(135deg, var(--accent-secondary), var(--accent-primary));
     display: flex; align-items: center; justify-content: center;
@@ -5827,7 +6101,7 @@ import { trapFocus } from "../lib/focusTrap";
   .download-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
     color: #fff;
     font-weight: 800;
@@ -5972,10 +6246,10 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
   .install-plan-panel .dep-target { font-family: ui-monospace,monospace; font-size: 12px; }
   .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
-  .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); cursor: pointer; }
+  .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); cursor: pointer; }
   .install-plan-panel .checkbox-row span { font-size: 13px; color: var(--text-primary); }
   .plan-deps { margin-top: 8px; max-height: 80px; overflow: auto; }
-  .conflict-warning { margin-top: 10px; padding: 10px; border: 1px solid rgba(239,68,68,.32); border-radius: 12px; background: rgba(239,68,68,.08); display: grid; gap: 6px; }
+  .conflict-warning { margin-top: 10px; padding: 10px; border: 1px solid rgba(239,68,68,.32); border-radius: var(--border-radius-md); background: rgba(239,68,68,.08); display: grid; gap: 6px; }
   .conflict-warning strong { color: #fecaca; }
   .conflict-warning span { color: var(--text-muted); font-size: 12px; }
   .dep-node { position: relative; display: flex; gap: 8px; align-items: center; margin-left: 14px; padding-left: 14px; color: var(--text-muted); font-size: 12px; }
@@ -6074,7 +6348,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .version-row {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-color);
+    padding: 10px 12px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-secondary); text-align: left;
     width: 100%; transform: none;
   }

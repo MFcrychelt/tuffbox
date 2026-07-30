@@ -349,7 +349,7 @@
     align-items: center;
     gap: 6px;
     padding: 7px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-muted);
@@ -367,7 +367,7 @@
   .icon-btn {
     width: 30px; height: 30px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 8px; border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm); border: 1px solid var(--border-color);
     background: var(--bg-primary); color: var(--text-muted); cursor: pointer;
   }
   .icon-btn:hover { color: var(--text-primary); }
@@ -393,7 +393,7 @@
 
   .toggle, .ghost, .danger, .accent {
     display: inline-flex; align-items: center; gap: 5px;
-    padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-color);
+    padding: 6px 10px; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color);
     background: var(--bg-elevated); color: var(--text-secondary);
     font-size: 11px; font-weight: 700; cursor: pointer;
   }
@@ -404,7 +404,7 @@
 
   .mods-cta {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 16px; border-radius: 12px; background: var(--bg-primary); border: 1px solid var(--border-color);
+    padding: 16px; border-radius: var(--border-radius-md); background: var(--bg-primary); border: 1px solid var(--border-color);
   }
   .mods-cta strong { display: block; font-size: 28px; color: var(--accent-primary); }
   .mods-cta span { color: var(--text-muted); font-size: 12px; }
@@ -413,7 +413,7 @@
     display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 8px; margin-bottom: 10px;
   }
   .add-server input {
-    padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-color);
+    padding: 8px 10px; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color);
     background: var(--bg-primary); color: var(--text-primary); font-size: 12px;
   }
   .ping { font-weight: 700; }

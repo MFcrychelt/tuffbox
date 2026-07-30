@@ -155,7 +155,7 @@
     flex-direction: column;
     background: #12161e;
     border: 1px solid var(--border-color);
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
     overflow: hidden;
   }
@@ -195,7 +195,7 @@
     align-items: center;
     gap: 4px;
     padding: 8px 6px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: #0c1016;
     color: var(--text-secondary);

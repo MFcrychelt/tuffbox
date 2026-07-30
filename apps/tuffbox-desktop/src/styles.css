@@ -288,6 +288,26 @@ select:focus {
   background: var(--bg-active);
 }
 
+/* Single-line text truncation (titles, filenames, tags in cards/lists).
+   Reach for this instead of a one-off `overflow:hidden; text-overflow:ellipsis;
+   white-space:nowrap;` trio scattered per-component — keeps long mod names,
+   paths, etc. from overflowing their card/row instead of being clipped. */
+.tb-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Multi-line clamp (2 lines) for descriptions/summaries in cards. */
+.tb-truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* Potato PC mode — strip motion cost on weak machines. */
 html.potato-pc *,
 html.potato-pc *::before,

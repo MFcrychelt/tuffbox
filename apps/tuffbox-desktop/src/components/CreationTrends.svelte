@@ -474,7 +474,7 @@
     width: 100%;
     max-width: 320px;
     padding: 8px 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-primary);
@@ -505,7 +505,7 @@
     padding: 12px;
     margin-top: 14px;
     background: var(--bg-elevated);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
   .err {
     color: #fecaca;
@@ -541,7 +541,7 @@
     align-items: center;
     text-align: left;
     padding: 10px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-secondary);

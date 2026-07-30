@@ -147,6 +147,7 @@
   let capeCatalog: CapeCatalog | null = null;
   let capeBusy = false;
   let mojangCapeMenuOpen = false;
+  let potatoPc = false;
   const capeProviderOptions: { id: CapeProvider; label: string }[] = [
     { id: "mojang", label: "Mojang" },
     { id: "optifine", label: "OptiFine" },
@@ -272,6 +273,7 @@
   }
 
   onMount(async () => {
+    potatoPc = document.documentElement.classList.contains("potato-pc");
     try {
       const status = await api.mcAuth.getAuthStatus();
       authState.set(status);
@@ -815,6 +817,12 @@
             </div>
           </div>
         {:else if $authState.loggedIn && $authState.profile}
+          {#if potatoPc}
+            <div class="skin-static-fallback">
+              <HeadAvatar skinSrc={$skinPath} size={120} alt={$authState.profile.name} />
+              <span class="skin-static-name">{$authState.profile.name}</span>
+            </div>
+          {:else}
           <SkinPreview3D
             skinUrl={skinUrl}
             capeUrl={capeUrl}
@@ -824,6 +832,7 @@
             width={300}
             height={400}
           />
+          {/if}
           <div class="skin-panel-footer">
             <div class="skin-meta">
               <span
@@ -1163,6 +1172,7 @@
 
   .skin-rail-youtube {
     min-width: 0;
+    flex-shrink: 0;
   }
 
   .skin-panel {
@@ -1172,6 +1182,14 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    /* Don't let yt-under-skin rail compress the 3D preview (overflow clips the model). */
+    flex-shrink: 0;
+  }
+
+  /* Keep the canvas frame from being flexed/squashed inside the panel. */
+  .skin-panel :global(.skin-3d-wrap),
+  .skin-panel :global(.skin-3d-container) {
+    flex-shrink: 0;
   }
 
   .skin-panel-footer {
@@ -1240,7 +1258,7 @@
     align-items: center;
     gap: 5px;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
@@ -1276,7 +1294,7 @@
   }
   .cape-provider-btn {
     padding: 7px 4px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-secondary);
@@ -1294,7 +1312,7 @@
   .cape-offers { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
   .cape-offer {
     display: flex; align-items: center; gap: 10px;
-    padding: 8px; border-radius: 8px;
+    padding: 8px; border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color); background: var(--bg-primary);
   }
   .cape-offer.active { border-color: var(--accent-primary); }
@@ -1326,6 +1344,24 @@
 
   .skin-panel-empty p {
     font-size: 13px;
+  }
+
+  .skin-static-fallback {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 32px 24px;
+    min-height: 400px;
+    background: var(--bg-primary);
+  }
+
+  .skin-static-name {
+    font-family: var(--font-minecraft);
+    font-size: 12px;
+    letter-spacing: 0.5px;
+    color: var(--text-primary);
   }
 
   .skin-skel {
@@ -1413,7 +1449,7 @@
     color: var(--text-muted);
     background: var(--bg-secondary);
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
 
   .play-btn {

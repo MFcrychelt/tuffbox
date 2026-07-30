@@ -660,7 +660,7 @@
     flex: 1;
     min-width: 0;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -680,7 +680,7 @@
 
   .chip {
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-secondary);
@@ -713,7 +713,7 @@
     justify-content: space-between;
     gap: 8px;
     padding: 8px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
     font-size: 12px;
@@ -771,7 +771,7 @@
     gap: 10px;
     padding: 6px 8px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: transparent;
     color: inherit;
     cursor: pointer;
@@ -789,7 +789,7 @@
   .account-ico {
     width: 32px;
     height: 32px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;

@@ -341,7 +341,7 @@
   {:else}
     <div class="layout">
       <section class="panel release-panel">
-        <h2>Version & checklist</h2>
+        <h2>Version & ship</h2>
         <label>
           Release version
           <div class="version-row">
@@ -356,17 +356,6 @@
           <div class:error-card={errorCount > 0}><strong>{errorCount}</strong><span>blocking errors</span></div>
           <div class:warning-card={warningCount > 0}><strong>{warningCount}</strong><span>warnings</span></div>
           <div><strong>{changelog.split("\n").filter(Boolean).length}</strong><span>changelog lines</span></div>
-        </div>
-
-        <div class="release-checklist">
-          <h3>Release checklist</h3>
-          {#each Object.entries(checklist) as [key, done] (key)}
-            <label class:done>
-              <input type="checkbox" bind:checked={checklist[key]} />
-              <span>{key}</span>
-            </label>
-          {/each}
-          <div class="ready" class:ok={releaseReady}>{releaseReady ? "Ready to ship" : "Release not ready yet"}</div>
         </div>
 
         <div class="publish-config">
@@ -460,6 +449,19 @@
             {/if}
           </div>
         </div>
+
+        <details class="release-checklist-details" open={!releaseReady}>
+          <summary>Release checklist</summary>
+          <div class="release-checklist">
+            {#each Object.entries(checklist) as [key, done] (key)}
+              <label class:done>
+                <input type="checkbox" bind:checked={checklist[key]} />
+                <span>{key}</span>
+              </label>
+            {/each}
+            <div class="ready" class:ok={releaseReady}>{releaseReady ? "Ready to ship" : "Release not ready yet"}</div>
+          </div>
+        </details>
 
         <div class="quick-exports">
           <h3>Quick exports</h3>
@@ -563,14 +565,18 @@
   .error-card { border-color: rgba(239, 68, 68, 0.35) !important; color: #fecaca; }
   .warning-card { border-color: rgba(245, 158, 11, 0.35) !important; color: #fde68a; }
   .release-checklist, .artifact-list, .publish-targets, .publish-config { display: grid; gap: 8px; }
+  .release-checklist-details { border: 1px solid var(--border-color); border-radius: var(--border-radius-md); background: var(--bg-tertiary); }
+  .release-checklist-details summary { padding: 10px 12px; cursor: pointer; color: var(--text-secondary); font-size: 14px; font-weight: 700; list-style: none; }
+  .release-checklist-details summary::-webkit-details-marker { display: none; }
+  .release-checklist-details .release-checklist { padding: 0 12px 12px; }
   .release-checklist h3, .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
   .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 12px; text-transform: none; letter-spacing: 0; }
+  .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
   .release-checklist label.done { border-color: rgba(27, 217, 106, .28); }
   .release-checklist input { width: auto; }
-  .ready { padding: 9px 10px; border-radius: 12px; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .ready.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, .35); }
-  .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .publish-target > div:first-child { display: grid; gap: 3px; }
   .target-actions, .export-btns { display: flex; gap: 6px; flex-wrap: wrap; }
   .quick-exports { display: grid; gap: 8px; }
@@ -580,13 +586,13 @@
   .pub-err { color: #fecaca; font-size: 11px; word-break: break-word; }
   .pub-ok { color: var(--accent-primary); font-size: 11px; word-break: break-all; }
   .linkish { background: none; border: none; color: var(--accent-secondary); padding: 0; font-size: 11px; cursor: pointer; text-decoration: underline; }
-  .artifact-row, .muted-box { display: grid; gap: 4px; padding: 10px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .artifact-row, .muted-box { display: grid; gap: 4px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .artifact-row strong { color: var(--text-primary); text-transform: uppercase; font-size: 12px; }
   .artifact-row span, .artifact-row small, .muted-box { color: var(--text-muted); font-size: 12px; word-break: break-all; }
   .mini { padding: 5px 8px; font-size: 11px; justify-self: start; }
   .release-actions { display: flex; gap: 10px; flex-wrap: wrap; }
   .issues { display: grid; gap: 8px; }
-  .issue { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .issue { display: grid; gap: 4px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue.ok { color: var(--accent-primary); display: flex; align-items: center; gap: 8px; }
@@ -594,7 +600,7 @@
   .github-preview h4 { color: var(--accent-secondary); margin: 0 0 8px; font-size: 14px; }
   .github-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .gh-meta { color: var(--text-muted); font-size: 11px; }
-  .gh-body-preview { margin: 0; padding: 12px; border-radius: 8px; background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
+  .gh-body-preview { margin: 0; padding: 12px; border-radius: var(--border-radius-sm); background: #0d0d10; color: #d4d4d8; font-size: 11px; line-height: 1.5; max-height: 300px; overflow: auto; white-space: pre-wrap; font-family: ui-monospace,monospace; }
 
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }

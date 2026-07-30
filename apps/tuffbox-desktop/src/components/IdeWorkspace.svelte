@@ -239,13 +239,20 @@
   }
 
   let focusedScanTimer: ReturnType<typeof setInterval> | null = null;
+  /** Background delta scan is useful on History/Diagnose; skip on other stages to save CPU. */
+  const FOCUSED_SCAN_STAGES: StageId[] = ["history", "diagnose"];
 
-  async function refreshFocusedScanLoop() {
+  function stopFocusedScanLoop() {
     if (focusedScanTimer) {
       clearInterval(focusedScanTimer);
       focusedScanTimer = null;
     }
+  }
+
+  async function refreshFocusedScanLoop() {
+    stopFocusedScanLoop();
     if (!$projectPath) return;
+    if (!FOCUSED_SCAN_STAGES.includes(activeStage)) return;
     try {
       const settings: { focusedScan?: boolean } = await invoke("get_history_settings", {
         path: $projectPath,
@@ -253,6 +260,7 @@
       if (!settings?.focusedScan) return;
       focusedScanTimer = setInterval(() => {
         if (!$projectPath) return;
+        if (!FOCUSED_SCAN_STAGES.includes(activeStage)) return;
         void invoke("scan_project_changes", { path: $projectPath }).catch(() => {});
       }, 60_000);
     } catch {
@@ -260,15 +268,16 @@
     }
   }
 
-  $: if ($projectPath) void refreshFocusedScanLoop();
+  $: if ($projectPath && FOCUSED_SCAN_STAGES.includes(activeStage)) {
+    void refreshFocusedScanLoop();
+  } else {
+    stopFocusedScanLoop();
+  }
 
   onMount(() => {
     const onVis = () => {
       if (document.visibilityState === "visible") void refreshFocusedScanLoop();
-      else if (focusedScanTimer) {
-        clearInterval(focusedScanTimer);
-        focusedScanTimer = null;
-      }
+      else stopFocusedScanLoop();
     };
     const onSettings = () => void refreshFocusedScanLoop();
     document.addEventListener("visibilitychange", onVis);
@@ -321,14 +330,26 @@
   }
 
   onDestroy(() => {
-    if (focusedScanTimer) clearInterval(focusedScanTimer);
+    stopFocusedScanLoop();
     clearRailHideTimer();
   });
 </script>
 
 <div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
   <section class="stage-shell">
-    <div class="stage-content" class:fill-stage={activeStage === "configs" || activeStage === "world-map" || activeStage === "brief" || activeStage === "quests"}>
+    <div
+      class="stage-content"
+      class:fill-stage={
+        activeStage === "configs" ||
+        activeStage === "world-map" ||
+        activeStage === "brief" ||
+        activeStage === "quests" ||
+        activeStage === "content" ||
+        activeStage === "resolve" ||
+        activeStage === "test" ||
+        activeStage === "diagnose"
+      }
+    >
       {#if activeStage === "brief"}
         <BriefEditor />
       {:else if activeStage === "setup"}
@@ -503,6 +524,29 @@
     flex: 1;
     min-height: 0;
     height: 100%;
+  }
+
+  /* Priority stages: one primary canvas fills the stage (DaVinci-style work area). */
+  .stage-content.fill-stage > :global(.mods),
+  .stage-content.fill-stage > :global(.graph),
+  .stage-content.fill-stage > :global(.test-runs),
+  .stage-content.fill-stage > :global(.diagnostics) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    max-width: none;
+    margin: 0;
+    box-sizing: border-box;
+  }
+
+  .stage-content.fill-stage > :global(.mods),
+  .stage-content.fill-stage > :global(.graph),
+  .stage-content.fill-stage > :global(.test-runs),
+  .stage-content.fill-stage > :global(.diagnostics) {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    overflow: hidden;
   }
 
   .rail-hotzone {

@@ -51,6 +51,9 @@
   let lastPath: string | null = null;
   let dirty = false;
   let mdView: "split" | "edit" | "preview" = "split";
+  let renderedHtml = "";
+  let mdDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const MD_DEBOUNCE_MS = 200;
 
   let modrinthCategories: Array<{ name: string; header: string; icon: string }> = [];
   let categoriesLoading = false;
@@ -62,7 +65,14 @@
   $: summaryOver = summaryLen > SUMMARY_LIMIT;
   $: nameEmpty = !name.trim();
 
-  $: renderedHtml = renderMarkdown(bodyMarkdown, galleryUrls);
+  function scheduleMarkdownRender(src: string, assets: Record<string, string>) {
+    if (mdDebounceTimer) clearTimeout(mdDebounceTimer);
+    mdDebounceTimer = setTimeout(() => {
+      renderedHtml = renderMarkdown(src, assets);
+    }, MD_DEBOUNCE_MS);
+  }
+
+  $: scheduleMarkdownRender(bodyMarkdown, galleryUrls);
 
   function lines(value: string) {
     return value
@@ -508,6 +518,7 @@
 
   onDestroy(() => {
     briefDirty.set(false);
+    if (mdDebounceTimer) clearTimeout(mdDebounceTimer);
   });
 </script>
 
@@ -521,12 +532,6 @@
       </p>
     </div>
     <div class="header-actions">
-      <button type="button" class="ghost" on:click={copySummary} disabled={!summary}>
-        <Copy size={14} /> Copy summary
-      </button>
-      <button type="button" class="ghost" on:click={openListingFolder} disabled={!$projectPath}>
-        <FolderOpen size={14} /> Listing folder
-      </button>
       <button type="button" on:click={saveAll} disabled={!$projectPath || saving || nameEmpty}>
         <Save size={14} /> {saving ? "Saving…" : dirty ? "Save*" : "Save"}
       </button>
@@ -538,182 +543,186 @@
   {:else if loading}
     <div class="empty">Loading listing…</div>
   {:else}
-    {#if error}<div class="inline-error">{error}</div>{/if}
-    {#if message}<div class="inline-success">{message}</div>{/if}
+    <div class="main-body">
+      {#if error}<div class="inline-error">{error}</div>{/if}
+      {#if message}<div class="inline-success">{message}</div>{/if}
 
-    <section class="panel identity-panel">
-      <h3>Identity</h3>
-      <label>
-        Pack name
-        <input
-          bind:value={name}
-          on:input={markDirty}
-          placeholder="My Pack"
-          class:invalid={nameEmpty}
-        />
-        {#if nameEmpty}<small class="hint warn">Name is required</small>{/if}
-      </label>
-      <label>
-        Summary
-        <textarea
-          bind:value={summary}
-          on:input={markDirty}
-          maxlength={512}
-          rows="3"
-          placeholder="Short card blurb (Modrinth soft limit 256)"
-        ></textarea>
-        <small class="hint" class:warn={summaryWarn} class:bad={summaryOver}>
-          {summaryLen}/{SUMMARY_LIMIT}
-          {#if summaryOver} — over Modrinth limit{/if}
-          {#if summaryWarn && !summaryOver} — getting long{/if}
-        </small>
-      </label>
-      <label>
-        Categories
-        <div class="cat-picker" role="group" aria-label="Modrinth modpack categories">
-          {#if categoriesLoading && modrinthCategories.length === 0}
-            <span class="muted">Loading Modrinth categories…</span>
-          {:else}
-            {#each modrinthCategories as cat (cat.name)}
+      <div class="main-split">
+        <div class="editor-column">
+          <section class="panel identity-panel">
+            <h3>Identity</h3>
+            <div class="identity-grid">
+              <div class="identity-fields">
+                <label>
+                  Pack name
+                  <input
+                    bind:value={name}
+                    on:input={markDirty}
+                    placeholder="My Pack"
+                    class:invalid={nameEmpty}
+                  />
+                  {#if nameEmpty}<small class="hint warn">Name is required</small>{/if}
+                </label>
+                <label>
+                  Summary
+                  <textarea
+                    bind:value={summary}
+                    on:input={markDirty}
+                    maxlength={512}
+                    rows="3"
+                    placeholder="Short card blurb (Modrinth soft limit 256)"
+                  ></textarea>
+                  <small class="hint" class:warn={summaryWarn} class:bad={summaryOver}>
+                    {summaryLen}/{SUMMARY_LIMIT}
+                    {#if summaryOver} — over Modrinth limit{/if}
+                    {#if summaryWarn && !summaryOver} — getting long{/if}
+                  </small>
+                </label>
+              </div>
+              <div class="icon-block">
+                <span class="icon-label">Icon</span>
+                <div class="icon-preview">
+                  {#if iconUrl}
+                    <img src={iconUrl} alt="Pack icon" />
+                  {:else}
+                    <span>No icon</span>
+                  {/if}
+                </div>
+                <div class="icon-actions">
+                  <button type="button" on:click={pickIcon}>Choose…</button>
+                  <button type="button" class="ghost" on:click={clearIcon} disabled={!iconPath}>
+                    Clear
+                  </button>
+                </div>
+                <small class="hint">Square PNG/WebP/JPG</small>
+              </div>
+            </div>
+            <label>
+              Categories
+              <div class="cat-picker" role="group" aria-label="Modrinth modpack categories">
+                {#if categoriesLoading && modrinthCategories.length === 0}
+                  <span class="muted">Loading Modrinth categories…</span>
+                {:else}
+                  {#each modrinthCategories as cat (cat.name)}
+                    <button
+                      type="button"
+                      class="cat-chip"
+                      class:on={isCategorySelected(cat.name)}
+                      on:click={() => toggleCategory(cat.name)}
+                      title={cat.name}
+                    >
+                      {prettyCat(cat.name)}
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+              {#if categoriesError}
+                <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
+              {:else}
+                <small class="hint">Official Modrinth modpack tags</small>
+              {/if}
+              {#if categories.length}
+                <small class="hint">Selected: {categories.map(prettyCat).join(", ")}</small>
+              {/if}
+            </label>
+          </section>
+
+          <section class="panel description-panel">
+            <div class="panel-head">
+              <h3>Description</h3>
+              <div class="seg">
+                <button type="button" class:active={mdView === "edit"} on:click={() => (mdView = "edit")}
+                  >Edit</button
+                >
+                <button
+                  type="button"
+                  class:active={mdView === "split"}
+                  on:click={() => (mdView = "split")}>Split</button
+                >
+                <button
+                  type="button"
+                  class:active={mdView === "preview"}
+                  on:click={() => (mdView = "preview")}>Preview</button
+                >
+              </div>
+            </div>
+            <div class="md-toolbar">
+              <button type="button" class="ghost" title="Bold" on:click={() => insertAround("**")}
+                ><Bold size={14} /></button
+              >
+              <button type="button" class="ghost" title="Italic" on:click={() => insertAround("_")}
+                ><Italic size={14} /></button
+              >
+              <button type="button" class="ghost" title="Heading" on:click={insertHeading}
+                ><Heading size={14} /></button
+              >
+              <button type="button" class="ghost" title="Link" on:click={insertLink}
+                ><Link size={14} /></button
+              >
+              <button type="button" class="ghost" title="Image URL" on:click={insertImageUrl}
+                ><ImageIcon size={14} /></button
+              >
+              <button type="button" class="ghost" on:click={insertLocalImage}>Insert local image</button>
+            </div>
+            <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
+              {#if mdView !== "preview"}
+                <div class="cm-wrap">
+                  <CodeMirror
+                    value={bodyMarkdown}
+                    lang={markdown()}
+                    theme={oneDark}
+                    on:change={onBodyChange}
+                  />
+                </div>
+              {/if}
+              {#if mdView !== "edit"}
+                <div class="md-preview prose">
+                  {#if bodyMarkdown.trim()}
+                    {@html renderedHtml}
+                  {:else}
+                    <p class="muted">Markdown preview — paste images or insert from gallery.</p>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          </section>
+        </div>
+
+        <aside class="preview-column">
+          <div class="preview-sticky">
+            <div class="preview-heading">Listing preview</div>
+            <div class="style-toggle">
               <button
                 type="button"
-                class="cat-chip"
-                class:on={isCategorySelected(cat.name)}
-                on:click={() => toggleCategory(cat.name)}
-                title={cat.name}
+                class:active={cardStyle === "modrinth"}
+                on:click={() => (cardStyle = "modrinth")}>Modrinth</button
               >
-                {prettyCat(cat.name)}
-              </button>
-            {/each}
-          {/if}
-        </div>
-        {#if categoriesError}
-          <small class="hint warn">Using offline Modrinth list ({categoriesError})</small>
-        {:else}
-          <small class="hint">Official Modrinth modpack tags</small>
-        {/if}
-        {#if categories.length}
-          <small class="hint">Selected: {categories.map(prettyCat).join(", ")}</small>
-        {/if}
-      </label>
-    </section>
-
-    <div class="icon-preview-row">
-      <section class="panel icon-panel">
-        <h3>Icon</h3>
-        <div class="icon-row">
-          <div class="icon-preview">
-            {#if iconUrl}
-              <img src={iconUrl} alt="Pack icon" />
-            {:else}
-              <span>No icon</span>
-            {/if}
-          </div>
-          <div class="icon-actions">
-            <button type="button" on:click={pickIcon}>Choose image…</button>
-            <button type="button" class="ghost" on:click={clearIcon} disabled={!iconPath}>
-              Clear
-            </button>
-            <small class="hint">Square PNG/WebP/JPG · exported as icon.png / pack.png</small>
-          </div>
-        </div>
-      </section>
-
-      <aside class="panel preview-panel">
-        <div class="preview-sticky">
-          <div class="preview-heading">Listing preview</div>
-          <div class="style-toggle">
-            <button
-              type="button"
-              class:active={cardStyle === "modrinth"}
-              on:click={() => (cardStyle = "modrinth")}>Modrinth</button
-            >
-            <button
-              type="button"
-              class:active={cardStyle === "curseforge"}
-              on:click={() => (cardStyle = "curseforge")}>CurseForge</button
-            >
-          </div>
-          <ListingCardPreview
-            style={cardStyle}
-            variant="card"
-            {name}
-            {summary}
-            {categories}
-            {iconUrl}
-            author={name}
-            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
-            loaderKind={$projectInfo?.loaderKind ?? null}
-            version={$projectInfo?.version ?? null}
-          />
-          <p class="muted preview-note">
-            Live Modrinth / CurseForge-style card preview from your listing fields.
-          </p>
-        </div>
-      </aside>
-    </div>
-
-    <section class="panel description-full">
-      <div class="panel-head">
-        <h3>Description</h3>
-        <div class="seg">
-          <button type="button" class:active={mdView === "edit"} on:click={() => (mdView = "edit")}
-            >Edit</button
-          >
-          <button
-            type="button"
-            class:active={mdView === "split"}
-            on:click={() => (mdView = "split")}>Split</button
-          >
-          <button
-            type="button"
-            class:active={mdView === "preview"}
-            on:click={() => (mdView = "preview")}>Preview</button
-          >
-        </div>
-      </div>
-      <div class="md-toolbar">
-        <button type="button" class="ghost" title="Bold" on:click={() => insertAround("**")}
-          ><Bold size={14} /></button
-        >
-        <button type="button" class="ghost" title="Italic" on:click={() => insertAround("_")}
-          ><Italic size={14} /></button
-        >
-        <button type="button" class="ghost" title="Heading" on:click={insertHeading}
-          ><Heading size={14} /></button
-        >
-        <button type="button" class="ghost" title="Link" on:click={insertLink}
-          ><Link size={14} /></button
-        >
-        <button type="button" class="ghost" title="Image URL" on:click={insertImageUrl}
-          ><ImageIcon size={14} /></button
-        >
-        <button type="button" class="ghost" on:click={insertLocalImage}>Insert local image</button>
-      </div>
-      <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
-        {#if mdView !== "preview"}
-          <div class="cm-wrap">
-            <CodeMirror
-              value={bodyMarkdown}
-              lang={markdown()}
-              theme={oneDark}
-              on:change={onBodyChange}
+              <button
+                type="button"
+                class:active={cardStyle === "curseforge"}
+                on:click={() => (cardStyle = "curseforge")}>CurseForge</button
+              >
+            </div>
+            <ListingCardPreview
+              style={cardStyle}
+              variant="card"
+              {name}
+              {summary}
+              {categories}
+              {iconUrl}
+              author={name}
+              minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+              loaderKind={$projectInfo?.loaderKind ?? null}
+              version={$projectInfo?.version ?? null}
             />
+            <p class="muted preview-note">
+              Live Modrinth / CurseForge-style card from your listing fields.
+            </p>
           </div>
-        {/if}
-        {#if mdView !== "edit"}
-          <div class="md-preview prose">
-            {#if bodyMarkdown.trim()}
-              {@html renderedHtml}
-            {:else}
-              <p class="muted">Markdown preview — paste images or insert from gallery.</p>
-            {/if}
-          </div>
-        {/if}
+        </aside>
       </div>
-    </section>
 
-    <div class="brief-below">
+      <div class="brief-below">
         <section class="panel">
           <div class="panel-head">
             <h3>Gallery</h3>
@@ -806,18 +815,31 @@
           </div>
         </details>
 
-        <div class="trail">
-          <span>Next:</span>
-          <button type="button" class="ghost" on:click={() => goTrail("history")}
-            ><History size={14} /> History</button
-          >
-          <button type="button" class="ghost" on:click={() => goTrail("export")}
-            ><UploadCloud size={14} /> Export</button
-          >
-          <button type="button" class="ghost" on:click={() => goTrail("release")}
-            ><Rocket size={14} /> Release</button
-          >
-        </div>
+        <details class="panel extras-panel">
+          <summary>More · copy, folder, workflow</summary>
+          <div class="extras-grid">
+            <div class="extras-actions">
+              <button type="button" class="ghost" on:click={copySummary} disabled={!summary}>
+                <Copy size={14} /> Copy summary
+              </button>
+              <button type="button" class="ghost" on:click={openListingFolder} disabled={!$projectPath}>
+                <FolderOpen size={14} /> Listing folder
+              </button>
+            </div>
+            <div class="trail">
+              <button type="button" class="ghost" on:click={() => goTrail("history")}
+                ><History size={14} /> History</button
+              >
+              <button type="button" class="ghost" on:click={() => goTrail("export")}
+                ><UploadCloud size={14} /> Export</button
+              >
+              <button type="button" class="ghost" on:click={() => goTrail("release")}
+                ><Rocket size={14} /> Release</button
+              >
+            </div>
+          </div>
+        </details>
+      </div>
     </div>
   {/if}
 </div>
@@ -828,11 +850,18 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    overflow: auto;
-    padding: 16px 20px 28px;
+    overflow: hidden;
+    padding: 12px 16px 16px;
     box-sizing: border-box;
-    scrollbar-gutter: stable;
+  }
+
+  .main-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
   }
 
   .page-header {
@@ -841,16 +870,19 @@
     gap: 16px;
     align-items: flex-start;
     flex-shrink: 0;
+    margin-bottom: 4px;
   }
 
   .page-header h2 {
-    margin: 0 0 6px;
+    margin: 0 0 4px;
+    font-size: 18px;
   }
 
   .page-header p {
     margin: 0;
     color: var(--text-muted);
     max-width: 62ch;
+    font-size: 13px;
   }
 
   .header-actions {
@@ -865,52 +897,95 @@
   .trail button,
   .row-actions button,
   .icon-actions button,
-  .gal-actions button {
+  .gal-actions button,
+  .extras-actions button {
     display: inline-flex;
     align-items: center;
     gap: 6px;
   }
 
-  .icon-preview-row {
+  .main-split {
+    flex: 1;
+    min-height: 0;
     display: grid;
-    grid-template-columns: minmax(240px, 0.9fr) minmax(320px, 1.4fr);
-    gap: 18px;
-    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    gap: 14px;
+    overflow: hidden;
   }
 
-  .icon-panel,
-  .preview-panel {
+  .editor-column {
+    min-height: 0;
+    overflow: auto;
     display: flex;
     flex-direction: column;
-    height: 100%;
-    min-height: 0;
+    gap: 10px;
+    padding-right: 2px;
   }
 
-  .preview-panel .preview-sticky {
-    flex: 1;
+  .preview-column {
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    padding: 12px;
+  }
+
+  .preview-sticky {
+    position: sticky;
+    top: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
 
-  .description-full {
-    width: 100%;
+  .identity-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: start;
+    margin-bottom: 8px;
   }
 
-  .description-full .md-split {
-    min-height: 320px;
+  .icon-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 108px;
   }
 
-  .description-full .cm-wrap,
-  .description-full .md-preview {
-    min-height: 320px;
+  .icon-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-secondary);
+  }
+
+  .description-panel {
+    flex: 1;
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .description-panel .md-split {
+    flex: 1;
+    min-height: 180px;
+  }
+
+  .description-panel .cm-wrap,
+  .description-panel .md-preview {
+    min-height: 180px;
   }
 
   .brief-below {
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    width: 100%;
+    gap: 8px;
+    max-height: 38vh;
+    overflow: auto;
+    padding-top: 2px;
   }
 
   .preview-heading {
@@ -919,21 +994,15 @@
     color: var(--text-secondary);
   }
 
-  .preview-sticky {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
   .panel {
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
-    padding: 14px;
+    padding: 12px;
   }
 
   .panel h3 {
-    margin: 0 0 12px;
+    margin: 0 0 10px;
     font-size: 14px;
   }
 
@@ -942,7 +1011,7 @@
     justify-content: space-between;
     align-items: center;
     gap: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   .panel-head h3 {
@@ -957,6 +1026,10 @@
     color: var(--text-secondary);
     font-weight: 600;
     font-size: 13px;
+  }
+
+  .identity-fields label:last-child {
+    margin-bottom: 0;
   }
 
   .cat-picker {
@@ -995,7 +1068,7 @@
     border-radius: var(--border-radius-md);
     background: var(--bg-tertiary);
     color: var(--text-primary);
-    padding: 10px 12px;
+    padding: 8px 10px;
     font-family: inherit;
   }
 
@@ -1006,6 +1079,7 @@
   .hint {
     font-weight: 500;
     color: var(--text-muted);
+    font-size: 12px;
   }
 
   .hint.warn {
@@ -1016,23 +1090,17 @@
     color: #f87171;
   }
 
-  .icon-row {
-    display: flex;
-    gap: 14px;
-    align-items: center;
-  }
-
   .icon-preview {
-    width: 96px;
-    height: 96px;
-    border-radius: 12px;
+    width: 88px;
+    height: 88px;
+    border-radius: var(--border-radius-md);
     border: 1px dashed var(--border-color);
     background: var(--bg-tertiary);
     overflow: hidden;
     display: grid;
     place-items: center;
     color: var(--text-muted);
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .icon-preview img {
@@ -1043,23 +1111,23 @@
 
   .icon-actions {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
   }
 
   .md-toolbar {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
 
   .md-split {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
-    min-height: 220px;
+    min-height: 180px;
   }
 
   .md-split.edit-only,
@@ -1069,24 +1137,28 @@
 
   .cm-wrap {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     overflow: hidden;
-    min-height: 220px;
+    min-height: 180px;
   }
 
-  .md-preview,
-  .page-preview {
+  .cm-wrap :global(.cm-editor) {
+    height: 100%;
+    min-height: 180px;
+  }
+
+  .md-preview {
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 12px;
     background: var(--bg-tertiary);
-    min-height: 220px;
+    min-height: 180px;
     overflow: auto;
   }
 
   .prose :global(img) {
     max-width: 100%;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
 
   .prose :global(a) {
@@ -1118,7 +1190,7 @@
     width: 120px;
     height: 72px;
     object-fit: cover;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
   }
@@ -1139,10 +1211,12 @@
     color: #f87171;
   }
 
-  .author-notes summary {
+  .author-notes summary,
+  .extras-panel summary {
     cursor: pointer;
     font-weight: 700;
     color: var(--text-secondary);
+    font-size: 13px;
   }
 
   .brief-grid {
@@ -1152,13 +1226,19 @@
     margin-top: 12px;
   }
 
+  .extras-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 10px;
+  }
+
+  .extras-actions,
   .trail {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-    color: var(--text-muted);
-    font-size: 13px;
   }
 
   .style-toggle,
@@ -1176,7 +1256,7 @@
     border: none;
     background: transparent;
     color: var(--text-muted);
-    padding: 6px 10px;
+    padding: 5px 10px;
     border-radius: 999px;
     font-size: 12px;
     cursor: pointer;
@@ -1193,30 +1273,6 @@
     font-size: 12px;
   }
 
-  .page-hero {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 14px;
-  }
-
-  .page-icon {
-    width: 64px;
-    height: 64px;
-    border-radius: 10px;
-    object-fit: cover;
-  }
-
-  .page-hero h2 {
-    margin: 0 0 4px;
-    font-size: 18px;
-  }
-
-  .page-hero p {
-    margin: 0;
-    color: var(--text-secondary);
-  }
-
   .muted {
     color: var(--text-muted);
   }
@@ -1228,9 +1284,11 @@
 
   .inline-error,
   .inline-success {
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
+    flex-shrink: 0;
+    font-size: 13px;
   }
 
   .inline-error {
@@ -1246,14 +1304,40 @@
   }
 
   @media (max-width: 1100px) {
-    .icon-preview-row {
+    .main-split {
+      grid-template-columns: 1fr;
+      overflow: auto;
+    }
+
+    .preview-column {
+      order: -1;
+    }
+
+    .preview-sticky {
+      position: static;
+    }
+
+    .identity-grid {
       grid-template-columns: 1fr;
     }
+
+    .icon-block {
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: flex-start;
+      min-width: 0;
+    }
+
     .brief-grid {
       grid-template-columns: 1fr;
     }
+
     .md-split {
       grid-template-columns: 1fr;
+    }
+
+    .brief-below {
+      max-height: none;
     }
   }
 </style>

@@ -263,7 +263,7 @@
   }
   .sc-excerpt {
     background: var(--bg-elevated);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     padding: 10px;
     font-size: 12px;
     text-align: left;
@@ -280,7 +280,7 @@
   .sc-actions-list li {
     padding: 8px 10px;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     margin-bottom: 6px;
     font-size: 12px;
   }
@@ -304,7 +304,7 @@
     width: 100%;
     box-sizing: border-box;
     margin-bottom: 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-primary);

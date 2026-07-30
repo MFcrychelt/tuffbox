@@ -6,7 +6,11 @@
  * Usage:
  *   <div use:trapFocus={{ onEscape: () => close() }}>
  */
-export function trapFocus(node: HTMLElement, options?: { onEscape?: () => void }) {
+export function trapFocus(
+  node: HTMLElement,
+  options?: { onEscape?: () => void; enabled?: boolean }
+) {
+  let opts = options ?? {};
   const selector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
   function getFocusable(): HTMLElement[] {
@@ -16,10 +20,12 @@ export function trapFocus(node: HTMLElement, options?: { onEscape?: () => void }
   }
 
   function handleKey(e: KeyboardEvent) {
+    if (opts.enabled === false) return;
+
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      options?.onEscape?.();
+      opts.onEscape?.();
       return;
     }
 
@@ -44,19 +50,23 @@ export function trapFocus(node: HTMLElement, options?: { onEscape?: () => void }
     }
   }
 
-  // Focus the first focusable element on mount
-  const focusable = getFocusable();
-  if (focusable.length > 0) {
-    // Small delay to let the modal render
-    requestAnimationFrame(() => {
-      const autofocus = node.querySelector<HTMLElement>("[autofocus]");
-      (autofocus || focusable[0]).focus();
-    });
+  // Focus the first focusable element on mount (modal only).
+  if (opts.enabled !== false) {
+    const focusable = getFocusable();
+    if (focusable.length > 0) {
+      requestAnimationFrame(() => {
+        const autofocus = node.querySelector<HTMLElement>("[autofocus]");
+        (autofocus || focusable[0]).focus();
+      });
+    }
   }
 
   node.addEventListener("keydown", handleKey);
 
   return {
+    update(newOpts?: { onEscape?: () => void; enabled?: boolean }) {
+      opts = newOpts ?? {};
+    },
     destroy() {
       node.removeEventListener("keydown", handleKey);
     },

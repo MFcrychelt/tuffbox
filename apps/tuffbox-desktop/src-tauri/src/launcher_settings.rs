@@ -18,6 +18,12 @@ pub struct LauncherSettings {
     pub theme: String,
     #[serde(default)]
     pub potato_pc: bool,
+    /// Set once the frontend has run its one-time weak-hardware check (see
+    /// store.ts `detectWeakHardware`) and either left `potato_pc` alone or
+    /// auto-enabled it. Prevents re-deciding on every launch / overriding a
+    /// later manual choice in Settings.
+    #[serde(default)]
+    pub perf_auto_detected: bool,
     #[serde(default = "default_concurrent")]
     pub concurrent_downloads: u32,
     #[serde(default)]
@@ -86,6 +92,7 @@ impl Default for LauncherSettings {
         Self {
             theme: default_theme(),
             potato_pc: false,
+            perf_auto_detected: false,
             concurrent_downloads: default_concurrent(),
             game_resolution: None,
             pre_launch_hook: None,

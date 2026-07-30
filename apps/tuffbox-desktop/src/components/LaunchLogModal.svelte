@@ -341,7 +341,7 @@
     max-height: min(85vh, 820px);
     background: var(--bg-elevated, #1a1f28);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     display: flex;
     flex-direction: column;
     box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
@@ -407,7 +407,7 @@
     overflow: auto;
     background: var(--bg-elevated, #1a1f28);
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     min-width: 260px;
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
   }

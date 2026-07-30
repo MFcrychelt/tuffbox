@@ -1233,7 +1233,7 @@
     font-size: 13px;
     padding: 6px 8px;
     background: var(--bg-elevated);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
 
   .action-list li {
@@ -1244,7 +1244,7 @@
     font-size: 12px;
     padding: 6px 8px;
     background: var(--bg-elevated);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
 
   .diff-chip {

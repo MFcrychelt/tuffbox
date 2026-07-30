@@ -195,9 +195,8 @@
       if (!dir) return;
       const nextDiff: SnapshotDiff = await invoke("diff_snapshots", { projectDir: dir, from: fromId, to: toId });
       diff = nextDiff;
-      const files = Array.from(new Set([...nextDiff.addedFiles, ...nextDiff.removedFiles, ...nextDiff.modifiedFiles])).sort();
-      selectedDiffPath = files[0] ?? "";
-      if (selectedDiffPath) await openFileDiff(selectedDiffPath);
+      selectedDiffPath = "";
+      fileDiff = null;
     } catch (e) {
       error = String(e);
     }
@@ -436,7 +435,7 @@
   .compare-panel { display: grid; grid-template-columns: auto 1fr 1fr auto; gap: 10px; align-items: center; }
   .compare-title { color: var(--text-secondary); font-weight: 700; }
   .diff-panel { display: grid; grid-template-columns: repeat(3, minmax(120px, 1fr)); gap: 12px; }
-  .diff-panel div { background: var(--bg-tertiary); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .diff-panel div { background: var(--bg-tertiary); border-radius: var(--border-radius-md); padding: 12px; display: flex; flex-direction: column; gap: 4px; }
   .diff-panel strong { font-size: 24px; color: var(--text-primary); }
   .diff-panel span, .changed, .muted { color: var(--text-muted); font-size: 12px; }
   .inline-diff-shell { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 14px; }
@@ -450,7 +449,7 @@
   .manifest-diff-panel { margin-top: 14px; padding: 14px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .manifest-diff-panel h3 { font-size: 13px; margin: 0 0 10px; color: var(--text-secondary); }
   .manifest-diff-stats { display: grid; gap: 6px; margin-bottom: 12px; }
-  .diff-stat { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+  .diff-stat { display: flex; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); font-size: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
   .diff-stat strong { color: var(--text-primary); }
   .diff-stat span { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .diff-stat.changed { border-color: rgba(245,158,11,.30); }
@@ -460,7 +459,7 @@
   .inline-diff { min-width: 0; }
   .inline-diff-header { display: flex; justify-content: space-between; gap: 12px; padding: 0 0 10px; color: var(--text-secondary); }
   .inline-diff-header span { color: var(--text-muted); font-size: 12px; }
-  pre { overflow: auto; max-height: 620px; background: #0d0d10; border-radius: 12px; padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
+  pre { overflow: auto; max-height: 620px; background: #0d0d10; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0; }
   pre span { display: block; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   pre span.added { color: #86efac; background: rgba(27, 217, 106, 0.08); }
   pre span.removed { color: #fca5a5; background: rgba(239, 68, 68, 0.08); }

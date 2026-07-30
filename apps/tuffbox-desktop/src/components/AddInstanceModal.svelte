@@ -708,7 +708,7 @@
   .pack-icon {
     width: 56px;
     height: 56px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -817,7 +817,7 @@
   .cf-list { overflow: auto; display: grid; gap: 6px; align-content: start; }
   .cf-row {
     display: grid; grid-template-columns: 40px 1fr; gap: 10px; text-align: left;
-    padding: 10px; border-radius: 12px; border: 1px solid var(--border-color);
+    padding: 10px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-secondary);
   }
   .cf-row.active, .cf-row:hover { border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.06); }

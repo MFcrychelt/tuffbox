@@ -386,7 +386,7 @@
     display: grid;
     place-items: center;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-primary);
     color: var(--text-muted);
     cursor: pointer;

@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+/**
+ * Perf-regression guard for the 2026-07 lazy-loading pass (Phase 1).
+ *
+ * Only the JS + CSS files that `dist/index.html` references directly
+ * (<script src>, <link rel="stylesheet">) are guaranteed to load on every
+ * startup, on every machine — everything else is behind App.svelte's
+ * `VIEW_LOADERS` dynamic imports and only loads when a user opens that view.
+ * This script sums the gzip size of exactly those startup-critical files
+ * and fails the build if either budget is exceeded, so a future change that
+ * accidentally re-adds a heavy static import (see check-lazy-views.mjs) or
+ * pulls a large new dependency into the shared/startup chunk gets caught
+ * here instead of shipping and re-slowing startup on weak laptops.
+ *
+ * Budgets have ~35-70% headroom over the current baseline (~163 KB JS /
+ * ~17 KB CSS gzipped) for normal growth; run `npm run build` locally and
+ * bump these deliberately (with a note why) if a real feature needs it.
+ */
+import { readFileSync, existsSync } from "node:fs";
+import { gzipSync } from "node:zlib";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const distDir = path.join(root, "dist");
+const indexHtmlPath = path.join(distDir, "index.html");
+
+const BUDGETS_GZIP_BYTES = {
+  ".js": 230 * 1024,
+  ".css": 30 * 1024,
+};
+
+if (!existsSync(indexHtmlPath)) {
+  console.error(`check-bundle-budget: ${indexHtmlPath} not found — run "npm run build" first.`);
+  process.exit(1);
+}
+
+const html = readFileSync(indexHtmlPath, "utf8");
+const refs = [];
+for (const m of html.matchAll(/(?:src|href)="(\/assets\/[^"]+\.(?:js|css))"/g)) {
+  refs.push(m[1]);
+}
+
+if (refs.length === 0) {
+  console.error("check-bundle-budget: found 0 asset references in dist/index.html — markup may have changed, please check scripts/check-bundle-budget.mjs");
+  process.exit(1);
+}
+
+let failed = false;
+for (const ref of refs) {
+  const ext = path.extname(ref);
+  const filePath = path.join(distDir, ref.replace(/^\//, ""));
+  const raw = readFileSync(filePath);
+  const gzip = gzipSync(raw).length;
+  const budget = BUDGETS_GZIP_BYTES[ext];
+  const kb = (n) => `${(n / 1024).toFixed(1)} KB`;
+  if (budget && gzip > budget) {
+    failed = true;
+    console.error(`✗ ${ref}: ${kb(gzip)} gzipped exceeds ${kb(budget)} startup budget`);
+  } else {
+    console.log(`✓ ${ref}: ${kb(gzip)} gzipped (budget ${kb(budget ?? Infinity)})`);
+  }
+}
+
+if (failed) {
+  console.error("\nStartup bundle budget exceeded. See comment at top of scripts/check-bundle-budget.mjs.");
+  process.exit(1);
+}

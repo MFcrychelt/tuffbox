@@ -2114,7 +2114,7 @@
   }
   .focus-tabs { display: flex; gap: 4px; }
   .focus-tabs button {
-    padding: 8px 14px; font-size: 12px; border-radius: 8px;
+    padding: 8px 14px; font-size: 12px; border-radius: var(--border-radius-sm);
     background: var(--bg-tertiary); border: 1px solid var(--border-color);
     color: var(--text-muted); cursor: pointer;
     transform: none;
@@ -2135,7 +2135,7 @@
   .editor-view .gui-top { justify-content: space-between; }
   .focus-item code { font-size: 10px; color: var(--text-muted); }
   .star {
-    background: transparent; border: 1px solid var(--border-color); border-radius: 8px;
+    background: transparent; border: 1px solid var(--border-color); border-radius: var(--border-radius-sm);
     color: var(--text-muted); padding: 6px; cursor: pointer;
   }
   .star.on { color: var(--jei-gold); border-color: rgba(251, 191, 36, 0.45); }
@@ -2143,7 +2143,7 @@
   .recipe-stage { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; }
   .recipe-nav { display: flex; align-items: center; gap: 12px; color: var(--text-muted); font-size: 13px; }
   .nav-btn {
-    width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border-color);
+    width: 32px; height: 32px; border-radius: var(--border-radius-sm); border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer;
     display: grid; place-items: center;
   }
@@ -2251,7 +2251,7 @@
   .recipe-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
   .recipe-actions .secondary {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 8px 12px; border-radius: 8px; font-size: 12px;
+    padding: 8px 12px; border-radius: var(--border-radius-sm); font-size: 12px;
     background: var(--bg-tertiary); border: 1px solid var(--border-color);
     color: var(--text-secondary); cursor: pointer;
   }

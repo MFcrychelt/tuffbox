@@ -128,6 +128,7 @@
   let launcher: LauncherSettings = {
     theme: "tuffbox",
     potatoPc: false,
+    perfAutoDetected: false,
     concurrentDownloads: 8,
     gameResolution: null,
     preLaunchHook: null,
@@ -1830,7 +1831,7 @@
   .shortcut-row span { flex: 1; color: var(--text-secondary); font-size: 12px; }
   .shortcut-row small { color: var(--text-muted); font-size: 10px; }
 
-  .update-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); border: 1px solid var(--border-color); margin: 10px 0; font-size: 12px; }
+  .update-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); border: 1px solid var(--border-color); margin: 10px 0; font-size: 12px; }
   .update-info.error { color: #fecaca; border-color: rgba(239, 68, 68, 0.28); background: rgba(239, 68, 68, 0.08); }
   .update-avail { color: var(--accent-primary); font-weight: 700; }
   .update-ok { color: var(--text-muted); }
@@ -1844,7 +1845,7 @@
   }
 
   .integrations { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-  .provider-block { display: grid; gap: 10px; padding: 14px; border-radius: 12px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .provider-block { display: grid; gap: 10px; padding: 14px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .provider-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .provider-head strong { color: var(--text-primary); }
   .provider-head span { font-size: 11px; color: var(--text-muted); font-weight: 700; }
