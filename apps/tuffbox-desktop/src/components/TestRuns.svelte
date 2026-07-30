@@ -898,7 +898,7 @@
           <div class="log-tools-right">
             {#if activeLogRoot && activeLogRoot !== $projectPath}
               <span class="log-trunc-hint">Server console</span>
-              <button class="ghost mini" on:click={() => openLaunchLog(activeLogRoot!, "Server console")}>
+              <button class="ghost mini" on:click={() => activeLogRoot && openLaunchLog(activeLogRoot, "Server console")}>
                 <Terminal size={12} /> Open server console
               </button>
             {/if}
