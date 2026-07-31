@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { projectPath, type AuthState, type McProfile, type DeviceCodeInfo, type SkinSource, type AccountEntry, type McCapeEntry, type CapeProvider, type CapeCatalog, type YggdrasilPreset, type PresenceSettings, type LauncherSettings } from "./store";
 import { get } from "svelte/store";
 
@@ -1006,6 +1006,9 @@ function pathArg(p?: string): { path: string } {
 }
 
 async function cmd<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) {
+    throw new Error(`Desktop IPC unavailable (${name}). Run the Tauri app, not the browser preview.`);
+  }
   try {
     return await invoke<T>(name, args);
   } catch (e) {

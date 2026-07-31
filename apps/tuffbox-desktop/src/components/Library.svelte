@@ -9,6 +9,7 @@
     Star,
     Compass,
     LayoutGrid,
+    Columns2,
     ExternalLink,
   } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
@@ -30,10 +31,37 @@
   let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
   type Tab = "yours" | "discover" | "create";
+  type LibraryUi = "classic" | "prism";
+  const LIBRARY_UI_KEY = "tuffbox.library.ui";
+
+  function loadLibraryUi(): LibraryUi {
+    try {
+      const v = localStorage.getItem(LIBRARY_UI_KEY);
+      if (v === "prism" || v === "classic") return v;
+    } catch {
+      /* ignore */
+    }
+    return "classic";
+  }
+
   let tab = $state<Tab>("yours");
+  let libraryUi = $state<LibraryUi>(loadLibraryUi());
   let swarmEnabled = $state(false);
   let importing = $state(false);
   let importMenuOpen = $state(false);
+
+  function setLibraryUi(next: LibraryUi) {
+    libraryUi = next;
+    try {
+      localStorage.setItem(LIBRARY_UI_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function toggleLibraryUi() {
+    setLibraryUi(libraryUi === "classic" ? "prism" : "classic");
+  }
 
   async function loadSwarm() {
     try {
@@ -428,12 +456,14 @@
   );
 </script>
 
-<div class="library fade-slide-in lib-page">
-  <div class="library-header lib-header-enter">
-    <div class="title-row">
-      <span class="lib-title-icon"><LibraryIcon size={22} /></span>
-      <h1>Library</h1>
-    </div>
+<div class="library fade-slide-in lib-page" data-ui={libraryUi}>
+  <div class="library-header lib-header-enter" class:slim={libraryUi === "prism"}>
+    {#if libraryUi === "classic"}
+      <div class="title-row">
+        <span class="lib-title-icon"><LibraryIcon size={22} /></span>
+        <h1>Library</h1>
+      </div>
+    {/if}
     <div class="header-actions">
       {#if tab !== "yours"}
         <div class="import-wrap">
@@ -478,11 +508,28 @@
           <Plus size={15} /> Create
         </button>
       </div>
+      <button
+        type="button"
+        class="ui-mode-btn"
+        title="Switch library layout"
+        aria-label="Switch library layout"
+        onclick={toggleLibraryUi}
+      >
+        {#if libraryUi === "classic"}
+          <Columns2 size={15} />
+          <span>Prism</span>
+        {:else}
+          <LayoutGrid size={15} />
+          <span>Classic</span>
+        {/if}
+      </button>
     </div>
   </div>
 
   {#if tab === "yours"}
-    <LibraryInstancesPane bind:currentView />
+    <div class="yours-wrap">
+      <LibraryInstancesPane bind:currentView uiMode={libraryUi} />
+    </div>
   {:else if tab === "discover"}
     <div class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
@@ -657,6 +704,20 @@
     max-width: 1200px;
     margin: 0 auto;
   }
+  .library[data-ui="prism"] {
+    max-width: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    height: calc(100dvh - 96px);
+    min-height: 420px;
+  }
+  .library[data-ui="prism"] .yours-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
 
   .lib-header-enter {
     animation: lib-page-header var(--motion-enter) var(--ease-spring) both;
@@ -674,11 +735,35 @@
     gap: 16px;
     flex-wrap: wrap;
   }
+  .library-header.slim {
+    margin-bottom: 8px;
+    justify-content: flex-end;
+  }
   .header-actions {
     display: flex;
     align-items: center;
     gap: 12px;
     flex-wrap: wrap;
+  }
+  .ui-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: var(--border-radius-sm, 6px);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .ui-mode-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+  }
+  .library[data-ui="prism"] .ui-mode-btn {
+    padding: 6px 10px;
   }
   .import-wrap {
     position: relative;

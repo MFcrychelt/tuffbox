@@ -105,11 +105,11 @@
     <div
       class="online-chip"
       class:live={onlineOk}
-      title={onlineOk ? "Users with TuffBox open right now" : "Online status unavailable"}
+      title={onlineOk ? "Users with TuffBox open right now" : "Community presence unavailable (no network / Supabase)"}
     >
       <span class="online-dot" class:on={onlineOk && onlineCount > 0}></span>
       <span class="online-label">{onlineOk ? onlineCount : "—"}</span>
-      <span class="online-hint">online</span>
+      <span class="online-hint">{onlineOk ? "online" : "offline"}</span>
     </div>
 
     {#if $projectInfo}

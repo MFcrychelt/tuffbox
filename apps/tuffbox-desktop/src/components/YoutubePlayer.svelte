@@ -488,11 +488,13 @@
       );
     opacity: 0;
     transition: opacity 0.28s ease;
-    pointer-events: auto;
+    /* Invisible until .yp-in — must not steal clicks from the launcher. */
+    pointer-events: none;
   }
 
   .yp-shell.yp-in {
     opacity: 1;
+    pointer-events: auto;
   }
 
   .yp-shell.yp-out {

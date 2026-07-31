@@ -2490,7 +2490,7 @@
                       <button
                         class="card-icon-btn"
                         title="Click to re-download this dependency"
-                        onclick={(e) => { e.stopPropagation(); downloadMissingFiles; } }
+                        onclick={(e) => { e.stopPropagation(); downloadMissingFiles(); } }
                       >
                         <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                       </button>
@@ -2501,7 +2501,7 @@
                     <button
                       class="card-icon-btn"
                       title="Click to re-download this dependency"
-                      onclick={(e) => { e.stopPropagation(); downloadMissingFiles; } }
+                      onclick={(e) => { e.stopPropagation(); downloadMissingFiles(); } }
                     >
                       <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                     </button>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, isTauri } from "@tauri-apps/api/core";
   import { open as openShell } from "@tauri-apps/plugin-shell";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
@@ -65,6 +65,13 @@
     releaseUrl?: string | null;
     checkedAt?: string;
   };
+
+  async function ipc<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+    if (!isTauri()) {
+      throw new Error("Desktop IPC unavailable. Run the Tauri app, not the browser preview.");
+    }
+    return invoke<T>(cmd, args);
+  }
 
   let theme = $state<ThemeId>(readStoredTheme());
   let reducedMotion = $state(localStorage.getItem("tuffbox-reduced-motion") === "1");
@@ -353,7 +360,7 @@
     updateError = "";
     updateCheck = null;
     try {
-      updateCheck = await invoke<UpdateCheck>("check_for_app_update");
+      updateCheck = await ipc<UpdateCheck>("check_for_app_update");
     } catch (e) {
       updateError = String(e);
     } finally {
@@ -363,7 +370,7 @@
 
   async function loadAppVersion() {
     try {
-      appVersion = await invoke<string>("get_app_version");
+      appVersion = await ipc<string>("get_app_version");
     } catch {
       appVersion = "";
     }
@@ -373,7 +380,7 @@
     integrationsLoading = true;
     integrationsError = "";
     try {
-      const status = await invoke<IntegrationStatus>("get_integration_status");
+      const status = await ipc<IntegrationStatus>("get_integration_status");
       githubRepository = status.settings?.githubRepository ?? "";
       aiProvider = (status.settings?.ai?.provider === "openai-compatible" ? "openai-compatible" : "ollama");
       aiEndpoint = status.settings?.ai?.endpoint ?? "";
@@ -421,7 +428,7 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
-      await invoke("save_integration_settings", {
+      await ipc("save_integration_settings", {
         settings: {
           githubRepository: githubRepository.trim(),
           ai: {
@@ -462,7 +469,7 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
-      await invoke("set_integration_secret", { kind, value: value.trim() });
+      await ipc("set_integration_secret", { kind, value: value.trim() });
       integrationsMessage = `${kind} credential saved.`;
       if (kind === "github") githubTokenDraft = "";
       if (kind === "modrinth") modrinthTokenDraft = "";
@@ -483,7 +490,7 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
-      await invoke("clear_integration_secret", { kind });
+      await ipc("clear_integration_secret", { kind });
       integrationsMessage = `${kind} credential cleared.`;
       await loadIntegrations();
     } catch (e) {
@@ -497,7 +504,7 @@
     testingProvider = provider;
     integrationsError = "";
     try {
-      const result = await invoke<string>("test_integration", { provider });
+      const result = await ipc<string>("test_integration", { provider });
       testResults = { ...testResults, [provider]: result };
       integrationsMessage = result;
     } catch (e) {
@@ -513,7 +520,7 @@
     integrationsError = "";
     try {
       const next = !swarmEnabled;
-      const s = await invoke<SwarmSettings>("set_swarm_enabled", { enabled: next });
+      const s = await ipc<SwarmSettings>("set_swarm_enabled", { enabled: next });
       swarmEnabled = !!s.enabled;
       integrationsMessage = swarmEnabled
         ? "TuffSwarm network enabled — Fix Mode (network) and Creation Mode available."
@@ -529,7 +536,7 @@
     swarmSaving = true;
     try {
       const next = !swarmSharePrompts;
-      const s = await invoke<SwarmSettings>("set_swarm_share_prompts", { enabled: next });
+      const s = await ipc<SwarmSettings>("set_swarm_share_prompts", { enabled: next });
       swarmSharePrompts = s.sharePromptsEnabled !== false;
     } catch (e) {
       integrationsError = String(e);
@@ -542,7 +549,7 @@
     swarmSaving = true;
     integrationsError = "";
     try {
-      const s = await invoke<SwarmSettings>("set_swarm_supabase_url", {
+      const s = await ipc<SwarmSettings>("set_swarm_supabase_url", {
         supabaseUrl: swarmSupabaseUrl.trim(),
       });
       swarmSupabaseUrl = s.supabaseUrl ?? "";
@@ -561,7 +568,7 @@
     integrationsError = "";
     try {
       const next = !swarmP2pEnabled;
-      const s = await invoke<SwarmSettings>("set_swarm_p2p", {
+      const s = await ipc<SwarmSettings>("set_swarm_p2p", {
         enabled: next,
         controlUrl: swarmP2pControlUrl.trim() || null,
       });
@@ -581,7 +588,7 @@
 
   async function refreshP2pStatus() {
     try {
-      const st = await invoke<{ enabled?: boolean; healthy?: boolean; controlUrl?: string; node?: { peers?: number; capsuleCount?: number } }>(
+      const st = await ipc<{ enabled?: boolean; healthy?: boolean; controlUrl?: string; node?: { peers?: number; capsuleCount?: number } }>(
         "get_p2p_node_status",
       );
       if (!st.enabled) {
@@ -604,7 +611,7 @@
     swarmSaving = true;
     integrationsError = "";
     try {
-      await invoke("ensure_p2p_node");
+      await ipc("ensure_p2p_node");
       await refreshP2pStatus();
       integrationsMessage = "tuffswarm-node attached (P2P preferred; hub remains fallback).";
     } catch (e) {
@@ -626,7 +633,7 @@
 
   onMount(async () => {
     applyPotatoPc(reducedMotion);
-    try { shortcuts = await invoke("get_keyboard_shortcuts"); } catch {}
+    try { shortcuts = await ipc("get_keyboard_shortcuts"); } catch {}
     await loadAppVersion();
     await loadIntegrations();
     await loadPresence();
@@ -1642,6 +1649,16 @@
     min-height: 72px;
     font-family: ui-monospace, monospace;
     font-size: 12px;
+    line-height: 1.45;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 10px 14px;
+  }
+
+  textarea::placeholder {
+    color: var(--text-muted);
   }
 
   .path-row {

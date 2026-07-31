@@ -21,12 +21,18 @@
   let { variant = "row" }: { variant?: "row" | "rail" } = $props();
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
-  const FEED_LIMIT = 20;
-  const SKEL_COUNT = 5;
+  /** Horizontal strip can show more; rail sits under the skin — keep it short. */
+  const FEED_LIMIT_ROW = 20;
+  const FEED_LIMIT_RAIL = 8;
+  const SKEL_COUNT_ROW = 5;
+  const SKEL_COUNT_RAIL = 4;
   /** Cap clips from the same channel so mega-creators don't fill the strip. */
   const MAX_PER_CHANNEL = 2;
   /** Share of tracked-creator videos in the final strip. */
   const CHANNEL_SHARE = 0.4;
+
+  const feedLimit = $derived(variant === "rail" ? FEED_LIMIT_RAIL : FEED_LIMIT_ROW);
+  const skelCount = $derived(variant === "rail" ? SKEL_COUNT_RAIL : SKEL_COUNT_ROW);
 
   let videos = $state<FeedVideo[]>([]);
   let loading = $state(true);
@@ -251,7 +257,7 @@
       for (const v of channel) byId.set(v.video_id, v);
       for (const v of popular) byId.set(v.video_id, v);
 
-      videos = diversifyFeed([...byId.values()], FEED_LIMIT, lang);
+      videos = diversifyFeed([...byId.values()], feedLimit, lang);
       if (videos.length === 0) {
         loadError = "";
       }
@@ -289,7 +295,7 @@
     {#if expanded}
       {#if loading}
         <div class="feed-row home-skel-stagger" aria-hidden="true">
-          {#each Array(SKEL_COUNT) as _, i (i)}
+          {#each Array(skelCount) as _, i (i)}
             <div class="video-card skel-card" style={`--i: ${i}`}>
               <div class="thumb skeleton skeleton-block skeleton-card"></div>
               <span class="skeleton skeleton-block skeleton-line medium"></span>
@@ -407,11 +413,11 @@
     scrollbar-color: var(--bg-elevated) transparent;
   }
 
+  /* Rail: grow with content, scroll with the page — no nested scrollbar. */
   .rail .feed-row {
     flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
-    max-height: min(70vh, 640px);
+    gap: 10px;
+    overflow: visible;
     padding-bottom: 0;
   }
 
@@ -419,14 +425,17 @@
     height: 6px;
   }
 
-  .rail .feed-row::-webkit-scrollbar {
-    width: 6px;
-    height: auto;
-  }
-
   .feed-row::-webkit-scrollbar-thumb {
     background: var(--bg-elevated);
     border-radius: 3px;
+  }
+
+  .youtube-feed.rail {
+    min-width: 0;
+  }
+
+  .rail .section-header {
+    margin-bottom: 10px;
   }
 
   .video-card {
@@ -494,6 +503,25 @@
   .rail .video-card {
     flex: 0 0 auto;
     width: 100%;
+    gap: 6px;
+  }
+
+  .rail .thumb {
+    border-radius: var(--border-radius-sm);
+  }
+
+  .rail .title {
+    font-size: 12px;
+    line-height: 1.35;
+    -webkit-line-clamp: 2;
+  }
+
+  .rail .channel {
+    font-size: 11px;
+  }
+
+  .rail .video-card:hover {
+    transform: none;
   }
 
   .skel-card {

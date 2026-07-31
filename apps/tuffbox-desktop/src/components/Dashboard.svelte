@@ -698,7 +698,7 @@
             {:else}
               <div class="project-quick-info">
                 <span class="project-name muted">No instance selected</span>
-                <span class="project-version">Select an instance below or create a new one</span>
+                <span class="project-hint">Select an instance below or create a new one</span>
               </div>
             {/if}
 
@@ -847,7 +847,7 @@
             playerName={$authState.profile.name}
             showName={false}
             width={300}
-            height={400}
+            height={homeLayout === "yt-under-skin" ? 280 : 400}
           />
           {/if}
           <div class="skin-panel-footer">
@@ -1187,9 +1187,23 @@
     align-self: start;
   }
 
+  /*
+   * yt-under-skin: skin + YouTube share the sticky column.
+   * Don't nest a column scrollbar on top of the page scroll + feed scroll —
+   * let the page scroll, keep the rail feed at natural height.
+   */
+  .main-layout[data-layout="yt-under-skin"] .home-side {
+    max-height: none;
+    overflow: visible;
+  }
+
   .skin-rail-youtube {
     min-width: 0;
     flex-shrink: 0;
+  }
+
+  .main-layout[data-layout="yt-under-skin"] .skin-rail-youtube {
+    padding-top: 0;
   }
 
   .skin-panel {
@@ -1436,15 +1450,18 @@
     align-items: center;
     gap: 16px 24px;
     min-width: 0;
+    flex: 1;
     flex-wrap: wrap;
   }
 
   .hero-main {
     display: flex;
     flex-direction: column;
+    justify-content: center;
     align-items: flex-start;
-    gap: 14px;
+    gap: 10px;
     min-width: 0;
+    flex: 1;
   }
 
   .hero-right {
@@ -1510,12 +1527,14 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
+    gap: 4px;
+    max-width: 420px;
   }
 
   .project-name {
     font-weight: 700;
     font-size: 15px;
+    line-height: 1.3;
     color: var(--text-primary);
   }
 
@@ -1525,14 +1544,24 @@
 
   .project-version {
     font-size: 12px;
+    line-height: 1.35;
     color: var(--text-muted);
     text-transform: capitalize;
+  }
+
+  /* Empty-state copy — do not Title-Case the sentence. */
+  .project-hint {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+    text-transform: none;
   }
 
   .hero-actions {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    align-items: center;
   }
 
   .crash-fix-banner {

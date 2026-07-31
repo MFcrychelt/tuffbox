@@ -324,6 +324,8 @@
   }
 
   async function finishSwarmOnboarding(enabled: boolean) {
+    // Dismiss first so a slow/hung IPC never leaves the UI unclickable.
+    showSwarmOnboarding = false;
     try {
       await invoke("complete_swarm_onboarding", { enabled });
       toasts.success(
@@ -333,8 +335,6 @@
       );
     } catch (e) {
       toasts.error(String(e));
-    } finally {
-      showSwarmOnboarding = false;
     }
   }
 
@@ -476,8 +476,8 @@
 
 {#if showSwarmOnboarding}
   <SwarmOnboarding
-    onenable={() => finishSwarmOnboarding(true)}
-    onskip={() => finishSwarmOnboarding(false)}
+    onEnable={() => finishSwarmOnboarding(true)}
+    onSkip={() => finishSwarmOnboarding(false)}
   />
 {/if}
 

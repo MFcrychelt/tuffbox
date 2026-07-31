@@ -57,7 +57,13 @@
   import PromptDialog from "./PromptDialog.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
-  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
+  let {
+    currentView = $bindable(),
+    uiMode = "classic",
+  }: {
+    currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
+    uiMode?: "classic" | "prism";
+  } = $props();
 
   const LONG_PRESS_MS = 420;
   const MOVE_CANCEL_PX = 10;
@@ -770,7 +776,7 @@
   });
 </script>
 
-<div class="prism-lib lib-motion" class:drag-mode={dragging}>
+<div class="prism-lib lib-motion" class:drag-mode={dragging} data-ui={uiMode}>
   <div class="prism-toolbar lib-toolbar-enter">
     <div class="tb-left">
       <div class="tb-add-wrap">
@@ -951,7 +957,11 @@
                         {project.info.name[0]?.toUpperCase() ?? "?"}
                       {/if}
                     </div>
-                    <span class="inst-name tb-truncate" title={project.info.name}>{project.info.name}</span>
+                    <span
+                      class="inst-name"
+                      class:tb-truncate={uiMode !== "prism"}
+                      title={project.info.name}
+                    >{project.info.name}</span>
                   </div>
                 {/each}
               </div>
@@ -999,6 +1009,7 @@
               >
                 <Square size={14} /> Stop
               </button>
+              <div class="side-sep" aria-hidden="true"></div>
               <button type="button" class="side-btn" disabled={actionBusy} onclick={() => runAction("edit", selected)}>
                 <Pencil size={14} /> Edit
               </button>
@@ -1074,20 +1085,44 @@
   </div>
 
   <div class="prism-status">
-    <span>
-      {#if selected}
-        Minecraft {selected.info.minecraftVersion}
-      {:else}
-        —
-      {/if}
-    </span>
-    <span>
-      {#if selected}
-        Total playtime: {formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}
-      {:else}
-        Total playtime: —
-      {/if}
-    </span>
+    {#if uiMode === "prism"}
+      <div class="status-row">
+        <span>TuffBox</span>
+        <span></span>
+      </div>
+      <div class="status-row">
+        <span>
+          {#if selected}
+            Minecraft {selected.info.minecraftVersion} · {selected.info.loaderKind}
+            {#if projectStats[selected.path]?.playtime}
+              · playtime {formatPlaytime(projectStats[selected.path].playtime)}
+            {/if}
+          {:else}
+            —
+          {/if}
+        </span>
+        <span>
+          Total playtime: {formatPlaytime(
+            Object.values(projectStats).reduce((s, p) => s + (p?.playtime ?? 0), 0),
+          )}
+        </span>
+      </div>
+    {:else}
+      <span>
+        {#if selected}
+          Minecraft {selected.info.minecraftVersion}
+        {:else}
+          —
+        {/if}
+      </span>
+      <span>
+        {#if selected}
+          Total playtime: {formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}
+        {:else}
+          Total playtime: —
+        {/if}
+      </span>
+    {/if}
   </div>
 </div>
 
@@ -1700,6 +1735,175 @@
     font-size: 11px;
     color: var(--text-muted);
     animation: lib-status-in var(--motion-enter) var(--ease-spring) 100ms both;
+  }
+  .status-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+  }
+  .side-sep {
+    display: none;
+  }
+
+  /* —— Prism UI mode overrides —— */
+  .prism-lib[data-ui="prism"] {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+  }
+  .prism-lib[data-ui="prism"].lib-motion::before {
+    display: none;
+  }
+  .prism-lib[data-ui="prism"] .prism-toolbar {
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+    padding: 4px 8px;
+  }
+  .prism-lib[data-ui="prism"] .tb-btn {
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-weight: 500;
+  }
+  .prism-lib[data-ui="prism"] .tb-btn.primary {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-primary);
+  }
+  .prism-lib[data-ui="prism"] .tb-btn.primary:hover {
+    background: var(--bg-hover);
+    box-shadow: none;
+  }
+  .prism-lib[data-ui="prism"] .tb-account {
+    border-radius: 4px;
+  }
+  .prism-lib[data-ui="prism"] .prism-body {
+    flex: 1;
+    min-height: 0;
+    grid-template-columns: 1fr 200px;
+  }
+  .prism-lib[data-ui="prism"] .prism-grid-pane {
+    padding: 8px 10px 12px;
+    min-height: 0;
+  }
+  .prism-lib[data-ui="prism"] .inst-grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 6px 4px;
+  }
+  .prism-lib[data-ui="prism"] .inst-tile {
+    padding: 6px 4px 8px;
+    border-radius: 2px;
+    gap: 6px;
+  }
+  .prism-lib[data-ui="prism"] .inst-tile:hover {
+    background: rgba(255, 255, 255, 0.04);
+    transform: none;
+  }
+  .prism-lib[data-ui="prism"] .inst-tile:hover .inst-icon {
+    transform: none;
+    box-shadow: none;
+  }
+  .prism-lib[data-ui="prism"] .inst-tile.selected {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+  .prism-lib[data-ui="prism"] .inst-tile.selected .inst-icon {
+    animation: none;
+    background: #5a9e36 !important;
+    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.25);
+  }
+  .prism-lib[data-ui="prism"] .inst-tile.selected .inst-name {
+    background: rgba(90, 158, 54, 0.35);
+    border-radius: 2px;
+    padding: 1px 4px;
+  }
+  .prism-lib[data-ui="prism"] .inst-tile.running .inst-icon {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--accent-primary);
+  }
+  .prism-lib[data-ui="prism"] .inst-icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 6px;
+    font-size: 22px;
+  }
+  .prism-lib[data-ui="prism"] .hold-ring {
+    width: 64px;
+    height: 64px;
+    margin-left: -32px;
+    top: 4px;
+    border-radius: 8px;
+  }
+  .prism-lib[data-ui="prism"] .inst-name {
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
+    max-width: 90px;
+  }
+  .prism-lib[data-ui="prism"] .group-header {
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .prism-lib[data-ui="prism"] .group-header:hover {
+    transform: none;
+  }
+  .prism-lib[data-ui="prism"] .prism-side {
+    padding: 10px 8px;
+    background: var(--bg-secondary);
+  }
+  .prism-lib[data-ui="prism"] .side-icon {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    box-shadow: none;
+    animation: none;
+  }
+  .prism-lib[data-ui="prism"] .side-title,
+  .prism-lib[data-ui="prism"] .side-meta {
+    animation: none;
+  }
+  .prism-lib[data-ui="prism"] .side-btn {
+    border-radius: 2px;
+    font-weight: 500;
+    padding: 6px 8px;
+    animation: none;
+  }
+  .prism-lib[data-ui="prism"] .side-btn:hover:not(:disabled) {
+    transform: none;
+    background: var(--bg-hover);
+  }
+  .prism-lib[data-ui="prism"] .side-btn.launch {
+    background: transparent;
+    color: var(--accent-primary);
+    border: none;
+  }
+  .prism-lib[data-ui="prism"] .side-btn.launch:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+  .prism-lib[data-ui="prism"] .side-actions .side-btn {
+    animation: none;
+  }
+  .prism-lib[data-ui="prism"] .side-sep {
+    display: block;
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--border-color);
+  }
+  .prism-lib[data-ui="prism"] .prism-status {
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 10px;
+    animation: none;
   }
 
   .empty-state {

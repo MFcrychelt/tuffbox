@@ -254,7 +254,8 @@ h4 {
 
 /* Text fields only — radio/checkbox/range break if padded like text inputs */
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
-select {
+select,
+textarea {
   font-family: inherit;
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
@@ -266,7 +267,8 @@ select {
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent-primary);
 }
 

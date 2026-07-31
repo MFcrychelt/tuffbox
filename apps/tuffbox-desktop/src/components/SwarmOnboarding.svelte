@@ -3,27 +3,27 @@
   import { trapFocus } from "../lib/focusTrap";
 
   let {
-    onenable,
-    onskip,
+    onEnable,
+    onSkip,
   }: {
-    onenable?: () => void;
-    onskip?: () => void;
+    onEnable?: () => void;
+    onSkip?: () => void;
   } = $props();
 </script>
 
 <div
   class="sw-backdrop"
-  role="button"
-  tabindex="-1"
-  onclick={(e) => e.target === e.currentTarget && onskip?.()}
-  onkeydown={() => {}}
+  role="presentation"
+  onclick={(e) => {
+    if (e.target === e.currentTarget) onSkip?.();
+  }}
 >
   <div
     class="sw-dialog"
     role="dialog"
     aria-modal="true"
     aria-labelledby="swarm-onboard-title"
-    use:trapFocus={{ onEscape: () => onskip?.() }}
+    use:trapFocus={{ onEscape: () => onSkip?.() }}
   >
     <div class="sw-icon"><Network size={28} /></div>
     <h3 id="swarm-onboard-title">Use TuffSwarm network?</h3>
@@ -32,8 +32,8 @@
       (modpack trends). Without the network, those modes stay unavailable. You can change this anytime in Settings.
     </p>
     <div class="sw-actions">
-      <button class="ghost" type="button" onclick={() => onskip?.()}>Not now</button>
-      <button type="button" onclick={() => onenable?.()}>Use network</button>
+      <button class="ghost" type="button" onclick={() => onSkip?.()}>Not now</button>
+      <button type="button" onclick={() => onEnable?.()}>Use network</button>
     </div>
   </div>
 </div>
