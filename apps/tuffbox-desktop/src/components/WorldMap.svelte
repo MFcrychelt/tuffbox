@@ -2631,7 +2631,7 @@
     align-items: stretch;
     padding: 2px;
     border: 1px solid var(--mca-line);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--mca-chip);
   }
   .mca-topbar .tool-segment .ghost {
@@ -2692,7 +2692,7 @@
     color: var(--mca-ink);
     padding: 2px 8px;
     border: 1px solid var(--mca-line);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--mca-chip);
     height: 30px;
   }
@@ -2922,7 +2922,7 @@
     transform: translateX(-50%);
     z-index: 8;
     padding: 7px 14px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--bg-elevated) 88%, var(--accent-primary) 12%);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
     color: var(--accent-primary);
@@ -3017,7 +3017,7 @@
     align-items: center;
     gap: 8px;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
     border: 1px solid var(--border-color);
     color: var(--text-secondary);
@@ -3048,7 +3048,7 @@
   .goto-dialog {
     width: min(360px, 100%);
     padding: 18px;
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     box-shadow: var(--shadow-lg);
@@ -3065,7 +3065,7 @@
     margin-bottom: 12px;
     padding: 2px;
     border: 1px solid var(--border-color);
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--bg-tertiary);
   }
   .goto-mode button {
@@ -3098,7 +3098,7 @@
   .goto-fields input {
     height: 36px;
     padding: 0 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
@@ -3115,7 +3115,7 @@
   .goto-actions .primary {
     padding: 8px 14px;
     border: none;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: var(--accent-primary);
     color: #04140a;
     font-weight: 700;
@@ -3165,7 +3165,7 @@
   .from-world-offsets input {
     height: 32px;
     padding: 0 8px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-primary);
@@ -3182,7 +3182,7 @@
     gap: 10px;
     align-items: flex-start;
     padding: 9px 10px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
   }

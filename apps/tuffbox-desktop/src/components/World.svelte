@@ -298,7 +298,7 @@
     gap: 8px;
     padding: 8px;
     border: 1px solid transparent;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     background: transparent;
     cursor: pointer;
     text-align: left;
