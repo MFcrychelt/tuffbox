@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
   import { api } from "../lib/api";
 
   let {
@@ -21,14 +20,18 @@
   } = $props();
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined);
+  // Plain fields — must not be $state. Reading+writing them inside $effect
+  // (Svelte 5 tracks sync reads in callees) causes effect_update_depth_exceeded.
   let viewer: any = null;
   let loading = $state(false);
-  let lastSkin = $state("");
-  let lastCape = $state("");
-  let lastAccount = $state("");
-  let capeFrames = $state<HTMLCanvasElement[]>([]);
-  let capeFrameIdx = $state(0);
+  let loadError = $state("");
+  let lastSkin = "";
+  let lastCape = "";
+  let lastAccount = "";
+  let capeFrames: HTMLCanvasElement[] = [];
+  let capeFrameIdx = 0;
   let capeAnimTimer: ReturnType<typeof setInterval> | null = null;
+  let initGen = 0;
 
   function stopCapeAnim() {
     if (capeAnimTimer) {
@@ -58,9 +61,12 @@
 
   async function initViewer() {
     if (!canvas) return;
+    const myGen = ++initGen;
+    loadError = "";
 
     try {
       const { SkinViewer, WalkingAnimation } = await import("skinview3d");
+      if (myGen !== initGen || !canvas) return;
 
       if (viewer) {
         stopCapeAnim();
@@ -106,6 +112,7 @@
       await applyTextures();
     } catch (e) {
       console.error("[SkinPreview3D] init failed:", e);
+      loadError = String(e);
     }
   }
 
@@ -320,6 +327,7 @@
   async function applyTextures() {
     if (!viewer) return;
     loading = true;
+    loadError = "";
     try {
       if (skinUrl && skinUrl !== lastSkin) {
         const dataUrl = await toDataUrl(skinUrl);
@@ -347,42 +355,65 @@
       }
     } catch (e) {
       console.error("[SkinPreview3D] load textures failed:", e);
+      loadError = String(e);
     } finally {
       loading = false;
     }
   }
 
+  function retry() {
+    lastSkin = "";
+    lastCape = "";
+    lastAccount = "";
+    loadError = "";
+    void initViewer();
+  }
+
+  // Track texture props; apply when viewer already exists (init also applies).
   $effect(() => {
-    if (
-      viewer &&
-      (skinUrl !== lastSkin || capeKey(capeUrl) !== lastCape || accountKey !== lastAccount)
-    ) {
-      if (accountKey !== lastAccount) {
-        lastAccount = accountKey;
-        lastSkin = "";
-        // Force cape clear branch even when previous account also had no cape.
-        lastCape = lastCape || "__pending_clear__";
-        stopCapeAnim();
-        try {
-          viewer.loadCape(null);
-        } catch {
-          /* ignore */
-        }
+    const skin = skinUrl;
+    const cape = capeUrl;
+    const acct = accountKey;
+    if (!viewer) return;
+    if (skin === lastSkin && capeKey(cape) === lastCape && acct === lastAccount) return;
+    if (acct !== lastAccount) {
+      lastAccount = acct;
+      lastSkin = "";
+      lastCape = lastCape || "__pending_clear__";
+      stopCapeAnim();
+      try {
+        viewer.loadCape(null);
+      } catch {
+        /* ignore */
       }
-      void applyTextures();
+    }
+    void applyTextures();
+  });
+
+  // Keep WebGL viewport in sync when home layout switches skin height (400 ↔ 280).
+  $effect(() => {
+    const w = width;
+    const h = height;
+    if (!viewer) return;
+    try {
+      viewer.setSize(w, h);
+    } catch {
+      /* ignore */
     }
   });
 
-  onMount(() => {
-    initViewer();
-  });
-
-  onDestroy(() => {
-    stopCapeAnim();
-    if (viewer) {
-      viewer.dispose();
-      viewer = null;
-    }
+  // Init when canvas binds (Svelte 5: onMount can race bind:this on $state).
+  $effect(() => {
+    if (!canvas) return;
+    void initViewer();
+    return () => {
+      initGen++;
+      stopCapeAnim();
+      if (viewer) {
+        viewer.dispose();
+        viewer = null;
+      }
+    };
   });
 </script>
 
@@ -400,6 +431,12 @@
         <div class="loading-shimmer">
           <div class="loading-figure skeleton skeleton-block"></div>
         </div>
+      </div>
+    {/if}
+    {#if loadError && !loading}
+      <div class="error-overlay">
+        <p>Skin failed to load</p>
+        <button type="button" class="retry-btn" onclick={retry}>Retry</button>
       </div>
     {/if}
   </div>
@@ -461,6 +498,41 @@
     justify-content: center;
     background: rgba(18, 20, 22, 0.18);
     pointer-events: none;
+  }
+
+  .error-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(12, 14, 16, 0.72);
+    padding: 16px;
+    text-align: center;
+  }
+
+  .error-overlay p {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .retry-btn {
+    padding: 6px 12px;
+    border-radius: var(--border-radius-sm, 6px);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated, var(--bg-secondary));
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .retry-btn:hover {
+    border-color: var(--accent-primary);
   }
 
   .loading-shimmer {

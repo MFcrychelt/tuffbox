@@ -14,6 +14,12 @@
     risk?: string;
   };
 
+  type DistillValidation = {
+    ok?: boolean;
+    errors?: string[];
+    warnings?: string[];
+  };
+
   type DistillPlan = {
     humanExplanation?: string;
     confidence?: number;
@@ -22,7 +28,19 @@
     distillSource?: string;
     resolutionId?: string;
     beta?: boolean;
+    validation?: DistillValidation;
+    groundingNotes?: string[];
   };
+
+  const KNOWN_OPS = new Set([
+    "install_mod",
+    "remove_mod",
+    "disable_mod",
+    "update_mod",
+    "change_mod_version",
+    "reinstall_mod",
+    "edit_config",
+  ]);
 
   let {
     path = "",
@@ -51,6 +69,13 @@
   let editError = $state<string | null>(null);
   let confirmBusy = $state(false);
 
+  const validationOk = $derived(plan?.validation?.ok !== false);
+  const validationErrors = $derived(plan?.validation?.errors ?? []);
+  const validationWarnings = $derived(plan?.validation?.warnings ?? []);
+  const canConfirm = $derived(
+    !!plan && !confirmBusy && !loading && validationOk && !error,
+  );
+
   onMount(() => {
     void runDistill();
   });
@@ -70,14 +95,13 @@
       });
       editExplanation = plan?.humanExplanation ?? seedExplanation ?? "";
       editActionsJson = JSON.stringify(plan?.actions ?? [], null, 2);
+      if (plan?.validation && plan.validation.ok === false) {
+        error = (plan.validation.errors ?? []).join("; ") || "Plan failed validation";
+      }
     } catch (e) {
       error = String(e);
-      plan = {
-        humanExplanation: seedExplanation || "Could not distill plan — review before sharing.",
-        actions: [],
-        distillSource: "fallback_error",
-      };
-      editExplanation = plan.humanExplanation ?? "";
+      plan = null;
+      editExplanation = seedExplanation || "";
       editActionsJson = "[]";
     } finally {
       loading = false;
@@ -96,6 +120,18 @@
     editActionsJson = JSON.stringify(plan?.actions ?? [], null, 2);
   }
 
+  function validateActions(actions: DistillAction[]): string | null {
+    for (const a of actions) {
+      if (!a || typeof a !== "object") return "Each action must be an object";
+      if (!a.op || typeof a.op !== "string") return "Each action needs an op string";
+      if (!KNOWN_OPS.has(a.op)) return `Unknown op: ${a.op}`;
+      if (a.op !== "edit_config" && !a.modId && !a.projectId) {
+        return `${a.op} requires modId or projectId`;
+      }
+    }
+    return null;
+  }
+
   function applyEdit() {
     editError = null;
     let actions: DistillAction[];
@@ -110,17 +146,24 @@
       editError = "Invalid JSON for actions";
       return;
     }
+    const bad = validateActions(actions);
+    if (bad) {
+      editError = bad;
+      return;
+    }
     plan = {
       ...(plan ?? {}),
       humanExplanation: editExplanation.trim() || plan?.humanExplanation || "",
       actions,
       distillSource: "user_edited",
+      validation: { ok: true, errors: [], warnings: plan?.validation?.warnings ?? [] },
     };
+    error = null;
     editing = false;
   }
 
   async function onConfirm() {
-    if (!plan || confirmBusy) return;
+    if (!plan || !canConfirm) return;
     confirmBusy = true;
     try {
       onconfirm?.({
@@ -157,9 +200,16 @@
 
     {#if loading}
       <p class="sc-status">AI analyzing your fix history…</p>
-    {:else if error && !(plan?.actions?.length || plan?.humanExplanation)}
+    {:else if error && !plan}
       <p class="sc-error">{error}</p>
+      <div class="sc-actions">
+        <button class="ghost" type="button" onclick={() => ondismiss?.()}>Not now</button>
+        <button type="button" onclick={() => void runDistill()}>Retry</button>
+      </div>
     {:else}
+      {#if error}
+        <p class="sc-error">{error}</p>
+      {/if}
       {#if plan?.distillSource}
         <p class="sc-meta">
           Source: {plan.distillSource}
@@ -183,6 +233,20 @@
         </div>
       {:else}
         <div class="sc-excerpt">{plan?.humanExplanation || seedExplanation}</div>
+        {#if validationErrors.length}
+          <ul class="sc-validation err">
+            {#each validationErrors as err (err)}
+              <li>{err}</li>
+            {/each}
+          </ul>
+        {/if}
+        {#if validationWarnings.length}
+          <ul class="sc-validation warn">
+            {#each validationWarnings as w (w)}
+              <li>{w}</li>
+            {/each}
+          </ul>
+        {/if}
         {#if (plan?.actions ?? []).length}
           <ul class="sc-actions-list">
             {#each plan?.actions ?? [] as a, i (i)}
@@ -204,7 +268,7 @@
           <button class="ghost" type="button" onclick={startEdit}>
             <Pencil size={14} /> Edit
           </button>
-          <button type="button" disabled={confirmBusy} onclick={onConfirm}>
+          <button type="button" disabled={!canConfirm} onclick={onConfirm}>
             <Check size={14} /> {confirmBusy ? "Sharing…" : "Confirm & share"}
           </button>
         </div>
@@ -259,77 +323,89 @@
     line-height: 1.5;
     margin-bottom: 12px;
   }
-  .sc-meta {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
   .sc-error {
-    color: var(--danger, #e57373);
+    color: #fca5a5;
     font-size: 13px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
   }
   .sc-excerpt {
-    background: var(--bg-elevated);
-    border-radius: var(--border-radius-sm);
-    padding: 10px;
-    font-size: 12px;
     text-align: left;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 12px 14px;
+    font-size: 13px;
     color: var(--text-primary);
     margin-bottom: 12px;
-    white-space: pre-wrap;
+    line-height: 1.45;
   }
   .sc-actions-list {
     list-style: none;
     padding: 0;
     margin: 0 0 14px;
     text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
   .sc-actions-list li {
-    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.25);
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    margin-bottom: 6px;
-    font-size: 12px;
+    border-radius: var(--border-radius-md);
+    padding: 8px 10px;
   }
   .sc-actions-list code {
     font-size: 12px;
-    color: var(--text-primary);
+    color: #fdba74;
   }
   .sc-reason {
     display: block;
     margin-top: 4px;
+    font-size: 11px;
     color: var(--text-muted);
+  }
+  .sc-validation {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 12px;
+    text-align: left;
+    font-size: 12px;
+  }
+  .sc-validation.err li {
+    color: #fca5a5;
+  }
+  .sc-validation.warn li {
+    color: #fcd34d;
   }
   .sc-label {
     display: block;
     text-align: left;
     font-size: 12px;
-    color: var(--text-muted);
-    margin-bottom: 4px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 8px 0 4px;
   }
   .sc-textarea {
     width: 100%;
     box-sizing: border-box;
-    margin-bottom: 10px;
-    border-radius: var(--border-radius-sm);
+    border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated);
     color: var(--text-primary);
     padding: 8px 10px;
-    font-size: 12px;
-    font-family: inherit;
+    font-size: 13px;
     resize: vertical;
   }
   .sc-code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
   }
   .sc-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
     justify-content: center;
-    margin-top: 8px;
+    margin-top: 16px;
   }
   .sc-actions button {
     display: inline-flex;

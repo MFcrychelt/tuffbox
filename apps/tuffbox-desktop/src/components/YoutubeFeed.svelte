@@ -281,6 +281,18 @@
   async function openVideo(videoId: string) {
     await open(`https://www.youtube.com/watch?v=${videoId}`);
   }
+
+  /** Map vertical wheel to horizontal scroll so the strip is usable with a mouse. */
+  function onFeedWheel(e: WheelEvent) {
+    if (variant === "rail") return;
+    const el = e.currentTarget as HTMLElement;
+    if (el.scrollWidth <= el.clientWidth) return;
+    // Prefer horizontal delta; otherwise tilt vertical into horizontal.
+    const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (dx === 0) return;
+    el.scrollLeft += dx;
+    e.preventDefault();
+  }
 </script>
 
 {#if loading || videos.length > 0 || loadError !== "" || (!loading && videos.length === 0)}
@@ -294,7 +306,7 @@
     </button>
     {#if expanded}
       {#if loading}
-        <div class="feed-row home-skel-stagger" aria-hidden="true">
+        <div class="feed-row home-skel-stagger" aria-hidden="true" onwheel={onFeedWheel}>
           {#each Array(skelCount) as _, i (i)}
             <div class="video-card skel-card" style={`--i: ${i}`}>
               <div class="thumb skeleton skeleton-block skeleton-card"></div>
@@ -315,7 +327,7 @@
           <button type="button" class="retry-btn" onclick={() => loadFeed()}>Refresh</button>
         </div>
       {:else}
-        <div class="feed-row tb-anim-fade-in">
+        <div class="feed-row tb-anim-fade-in" onwheel={onFeedWheel}>
           {#each videos as video (video.video_id)}
             <div class="video-card-wrap">
               <button
@@ -406,11 +418,19 @@
 
   .feed-row {
     display: flex;
+    flex-wrap: nowrap;
     gap: 12px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow-x: auto;
-    padding-bottom: 4px;
+    overflow-y: hidden;
+    padding-bottom: 6px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
   }
 
   /* Rail: grow with content, scroll with the page — no nested scrollbar. */

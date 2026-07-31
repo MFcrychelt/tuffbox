@@ -905,7 +905,7 @@
     width: 100%;
     min-height: 32px;
     box-sizing: border-box;
-    padding: 6px 12px 6px 34px;
+    padding: 6px 12px 6px 40px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);

@@ -531,6 +531,7 @@
       <LibraryInstancesPane bind:currentView uiMode={libraryUi} />
     </div>
   {:else if tab === "discover"}
+  <div class="tab-scroll">
     <div class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
         <button
@@ -656,7 +657,9 @@
         {/each}
       </div>
     {/if}
+  </div>
   {:else if tab === "create"}
+  <div class="tab-scroll">
     <div class="create-pane">
       <header class="create-hero">
         <h2>Start a pack</h2>
@@ -687,6 +690,7 @@
         <CreationTrends {swarmEnabled} />
       </div>
     </div>
+  </div>
   {/if}
 </div>
 
@@ -701,20 +705,35 @@
 
 <style>
   .library {
-    max-width: 1200px;
-    margin: 0 auto;
-  }
-  .library[data-ui="prism"] {
     max-width: none;
     margin: 0;
     display: flex;
     flex-direction: column;
-    height: calc(100dvh - 96px);
-    min-height: 420px;
-  }
-  .library[data-ui="prism"] .yours-wrap {
     flex: 1;
     min-height: 0;
+    height: 100%;
+  }
+  .library[data-ui="prism"],
+  .library[data-ui="classic"] {
+    max-width: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    height: 100%;
+    min-height: 0;
+  }
+  .library .yours-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .library .tab-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
     display: flex;
     flex-direction: column;
   }

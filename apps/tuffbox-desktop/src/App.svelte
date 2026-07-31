@@ -458,7 +458,7 @@
     <main
       class="content"
       class:ide-view={currentView === "ide"}
-      class:fill-view={currentView === "world" || currentView === "configs" || currentView === "quests"}
+      class:fill-view={currentView === "world" || currentView === "configs" || currentView === "quests" || currentView === "mods" || currentView === "graph" || currentView === "library"}
       bind:this={contentEl}
     >
       {#key currentView}
@@ -681,6 +681,13 @@
     height: 100%;
   }
   .content.fill-view .view-pane > :global(.qe.ftbq) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+  .content.fill-view .view-pane > :global(.mods),
+  .content.fill-view .view-pane > :global(.graph),
+  .content.fill-view .view-pane > :global(.library) {
     flex: 1;
     min-height: 0;
     height: 100%;

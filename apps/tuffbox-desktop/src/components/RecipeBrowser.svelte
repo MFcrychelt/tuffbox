@@ -2046,11 +2046,11 @@
   .notice.ok { background: rgba(27, 217, 106, 0.08); color: var(--accent-primary); border: 1px solid rgba(27, 217, 106, 0.25); }
 
   .jei-search-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .jei-search { flex: 1; min-width: 220px; display: flex; align-items: center; position: relative; }
-  .jei-search :global(svg) { position: absolute; left: 10px; color: var(--text-muted); pointer-events: none; }
+  .jei-search { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-muted); position: relative; }
+  .jei-search :global(svg) { flex-shrink: 0; color: var(--text-muted); position: static; }
   .jei-search input {
-    width: 100%; padding: 10px 32px 10px 34px; border-radius: 10px;
-    border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-primary);
+    flex: 1; min-width: 0; width: 100%; padding: 10px 28px 10px 0; border: 0; border-radius: 0;
+    background: transparent; color: var(--text-primary); outline: none;
   }
   .jei-search .clear {
     position: absolute; right: 8px; background: transparent; border: none;

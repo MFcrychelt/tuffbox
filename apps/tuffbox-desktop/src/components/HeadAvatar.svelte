@@ -18,7 +18,9 @@
 
   let canvas = $state<HTMLCanvasElement | undefined>();
   let ready = $state(false);
-  let gen = $state(0);
+  // Must NOT be $state: ++gen inside drawHead is sync-tracked by $effect and
+  // causes https://svelte.dev/e/effect_update_depth_exceeded (dead UI).
+  let gen = 0;
 
   async function drawHead() {
     const myGen = ++gen;

@@ -114,9 +114,12 @@
     }
   }
 
+  const statsRequested = new Set<string>();
+
   function ensureStats(paths: string[]) {
     for (const path of paths) {
-      if (projectStats[path] !== undefined) continue;
+      if (statsRequested.has(path) || projectStats[path] !== undefined) continue;
+      statsRequested.add(path);
       void loadProjectStats(path);
     }
   }
@@ -339,14 +342,18 @@
     selectedPath = manifestPath;
   }
 
-  function selectProject(path: string) {
-    const project = $recentProjects.find((p) => p.path === path);
-    if (project) {
-      selectedPath = path;
-      projectPath.set(path);
-      projectInfo.set(project.info);
-    }
+  async function selectProject(path: string) {
     activeMenuPath = null;
+    try {
+      await loadProject(path);
+    } catch {
+      const project = $recentProjects.find((p) => p.path === path);
+      if (project) {
+        selectedPath = path;
+        projectPath.set(path);
+        projectInfo.set(project.info);
+      }
+    }
   }
 
   async function launch() {
@@ -396,8 +403,11 @@
 
   function ensurePins(paths: string[]) {
     let changed = false;
+    // Snapshot keys first so sync Proxy writes don't re-enter this $effect.
+    const known = new Set(Object.keys(pinnedPaths));
     for (const path of paths) {
-      if (pinnedPaths[path] !== undefined) continue;
+      if (known.has(path)) continue;
+      known.add(path);
       pinnedPaths[path] = false;
       changed = true;
       api.session.isPinned(path).then((pinned) => {
@@ -410,22 +420,27 @@
 
   let instanceSizes = $state<Record<string, string>>({});
   let loadingSizes = $state<Record<string, boolean>>({});
+  const sizeRequested = new Set<string>();
 
   async function loadSize(projectPath: string) {
-    if (instanceSizes[projectPath] || loadingSizes[projectPath]) return;
+    if (sizeRequested.has(projectPath)) return;
+    sizeRequested.add(projectPath);
     loadingSizes[projectPath] = true;
+    loadingSizes = { ...loadingSizes };
     try {
       instanceSizes[projectPath] = await api.instance.getSize(projectPath);
       instanceSizes = { ...instanceSizes };
     } catch {
       instanceSizes[projectPath] = "?";
+      instanceSizes = { ...instanceSizes };
     } finally {
       loadingSizes[projectPath] = false;
+      loadingSizes = { ...loadingSizes };
     }
   }
 
   function ensureSizes(paths: string[]) {
-    for (const path of paths) loadSize(path);
+    for (const path of paths) void loadSize(path);
   }
 
   $effect(() => {
@@ -840,6 +855,7 @@
               <span class="skin-static-name">{$authState.profile.name}</span>
             </div>
           {:else}
+          {#key homeLayout === "yt-under-skin" ? 280 : 400}
           <SkinPreview3D
             skinUrl={skinUrl}
             capeUrl={capeUrl}
@@ -849,6 +865,7 @@
             width={300}
             height={homeLayout === "yt-under-skin" ? 280 : 400}
           />
+          {/key}
           {/if}
           <div class="skin-panel-footer">
             <div class="skin-meta">
@@ -1172,6 +1189,12 @@
     flex-direction: column;
     gap: 24px;
     min-width: 0;
+    overflow: visible;
+  }
+
+  .home-main :global(.youtube-feed) {
+    min-width: 0;
+    width: 100%;
   }
 
   .home-side {

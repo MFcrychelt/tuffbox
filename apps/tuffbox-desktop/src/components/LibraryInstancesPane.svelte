@@ -144,17 +144,21 @@
   }
 
   const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
-  const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  const selectedRunning = $derived(
+    isProjectRunning(selectedPath, $runningInstances),
+  );
+  let selectingPath = false;
   $effect(() => {
-    if (selectedPath && !$recentProjects.some((p) => p.path === selectedPath)) {
-      selectedPath = $recentProjects[0]?.path ?? null;
+    const recent = $recentProjects;
+    const current = $projectPath;
+    if (selectingPath) return;
+    if (selectedPath && !recent.some((p) => p.path === selectedPath)) {
+      selectedPath = recent[0]?.path ?? null;
+      return;
     }
-  });
-  $effect(() => {
-    if (!selectedPath && $recentProjects.length) {
-      selectedPath = $projectPath && $recentProjects.some((p) => p.path === $projectPath)
-        ? $projectPath
-        : $recentProjects[0].path;
+    if (!selectedPath && recent.length) {
+      selectedPath =
+        current && recent.some((p) => p.path === current) ? current : recent[0].path;
     }
   });
 
@@ -211,38 +215,65 @@
     ensureStats($recentProjects.map((p) => p.path));
   });
 
-  function selectInstance(project: RecentProject) {
-    selectedPath = project.path;
-    projectPath.set(project.path);
-    projectInfo.set(project.info);
+  async function selectInstance(project: RecentProject): Promise<string> {
     closeMenus();
+    selectingPath = true;
+    // Optimistic select so tiles feel clickable even while validate runs.
+    selectedPath = project.path;
+    try {
+      const info = (await invoke("validate_project", {
+        path: project.path,
+      })) as RecentProject["info"] & { manifestPath?: string };
+      const manifestPath = info.manifestPath || project.path;
+      recentProjects.add({ path: manifestPath, info });
+      selectedPath = manifestPath;
+      projectPath.set(manifestPath);
+      projectInfo.set(info);
+      // Remove stale path after selectedPath points at the resolved manifest,
+      // otherwise the "missing from recent" effect can steal the selection.
+      if (manifestPath !== project.path) {
+        recentProjects.remove(project.path);
+      }
+      return manifestPath;
+    } catch {
+      selectedPath = project.path;
+      projectPath.set(project.path);
+      projectInfo.set(project.info);
+      return project.path;
+    } finally {
+      selectingPath = false;
+    }
   }
 
   function openInIde(project: RecentProject) {
-    selectInstance(project);
+    void selectInstance(project);
     ideStageRequest.set("content");
     currentView = "ide";
   }
 
   function openEdit(project: RecentProject) {
-    selectInstance(project);
+    void selectInstance(project);
     currentView = "project-settings";
   }
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
-    if (isProjectRunning(project.path, $runningInstances)) {
-      await killWithFeedback(project.path);
-      return;
-    }
     launching = project.path;
     try {
-      await invoke("set_last_opened_project", { path: project.path });
-      selectInstance(project);
-      await launchWithFeedback({ path: project.path, profile: "client" });
+      const path = await selectInstance(project);
+      if (
+        isProjectRunning(path, $runningInstances) ||
+        isProjectRunning(project.path, $runningInstances)
+      ) {
+        await killWithFeedback(path);
+        if (path !== project.path) await killWithFeedback(project.path);
+        return;
+      }
+      await invoke("set_last_opened_project", { path });
+      await launchWithFeedback({ path, profile: "client" });
     } finally {
       launching = null;
-      void loadStats(project.path);
+      void loadStats(selectedPath ?? project.path);
     }
   }
 
@@ -1231,7 +1262,9 @@
   .prism-lib {
     display: flex;
     flex-direction: column;
-    min-height: min(70vh, 640px);
+    flex: 1;
+    min-height: 0;
+    height: 100%;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     background: var(--bg-secondary);
@@ -1391,7 +1424,8 @@
   .prism-grid-pane {
     padding: 12px 14px 16px;
     overflow: auto;
-    min-height: 280px;
+    min-height: 0;
+    height: 100%;
   }
   .drag-hint {
     margin: 0 0 10px;
@@ -1463,7 +1497,7 @@
     cursor: pointer;
     text-align: center;
     outline: none;
-    touch-action: none;
+    touch-action: manipulation;
     position: relative;
     transition:
       transform var(--motion-med) var(--ease-spring),

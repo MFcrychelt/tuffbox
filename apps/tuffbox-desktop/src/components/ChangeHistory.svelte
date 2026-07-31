@@ -517,9 +517,32 @@
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 800; }
   .toolbar-actions { gap: 10px; flex-wrap: wrap; }
-  .search { position: relative; display: flex; align-items: center; min-width: 240px; }
-  .search :global(svg) { position: absolute; left: 12px; color: var(--text-muted); }
-  .search input { width: 100%; padding-left: 36px; }
+  .search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 240px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+  }
+  .search :global(svg) {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    padding: 10px 0;
+    outline: none;
+  }
   .notice, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .notice { padding: 12px 14px; margin-bottom: 14px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }

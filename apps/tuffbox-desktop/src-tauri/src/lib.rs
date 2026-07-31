@@ -299,15 +299,17 @@ fn project_summary_from_manifest(
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_project_brief(path: String) -> Result<PackBrief, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     Ok(manifest.brief.unwrap_or_default())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 fn update_project_brief(path: String, brief: PackBrief) -> Result<(), String> {
-    let manifest_path = PathBuf::from(&path);
+    let manifest_path = resolve_manifest_path(&path)?;
     auto_snapshot(&manifest_path, "update-brief").map_err(|e| e.to_string())?;
-    let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let mut manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     manifest.brief = Some(brief);
     save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())
 }
@@ -902,6 +904,7 @@ async fn search_unified_mods(
     page_size: Option<u32>,
 ) -> Result<PagedCatalog, String> {
     tokio::task::spawn_blocking(move || {
+        let path = resolve_manifest_path(&path)?;
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let page_size = page_size.unwrap_or(30).clamp(1, 100);
         let page = page.unwrap_or(1).max(1);
@@ -1032,6 +1035,7 @@ async fn search_modrinth_mods(
         // A manifest is only needed to infer a default loader / game version.
         // When no project is open (empty path) we still allow browsing the
         // Modrinth catalog with the caller-supplied filters.
+        let path = resolve_manifest_path(&path).unwrap_or_else(|_| PathBuf::from(&path));
         let manifest = ProjectManifest::load_from_path(&path).ok();
         let provider = tuffbox_core::ModrinthProvider::new();
         let default_loader = manifest
@@ -1192,6 +1196,7 @@ async fn search_curseforge_mods(
     sort_field: Option<u32>,
 ) -> Result<PagedCatalog, String> {
     tokio::task::spawn_blocking(move || {
+        let path = resolve_manifest_path(&path)?;
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let provider = tuffbox_core::CurseForgeProvider::new();
         if !provider.is_configured() {
@@ -4879,7 +4884,8 @@ fn prepare_ai_crash_context(
     path: &str,
     report_id: Option<&str>,
 ) -> Result<(tuffbox_core::ai_explanation::CrashAiContext, usize), String> {
-    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    let manifest_path = resolve_manifest_path(path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(path)?;
 
     let crash_content =
@@ -5583,14 +5589,25 @@ async fn apply_action_plan(
     plan: tuffbox_core::action_plan::ActionPlan,
     fingerprint_key: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
+    let manifest_path = resolve_manifest_path(&path)?;
+    let path_str = manifest_path.to_string_lossy().to_string();
+    let inventory_ids = {
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+        tuffbox_core::swarm::pack_mod_ids(&manifest)
+    };
+    let grounded = tuffbox_core::action_plan::ground_action_plan(plan, &inventory_ids, &[]);
+    let plan = grounded.plan;
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+        &plan,
+        &inventory_ids,
+        &[],
+    );
     if !validation.ok {
         return Err(format!(
             "ActionPlan validation failed: {}",
             validation.errors.join("; ")
         ));
     }
-    let manifest_path = PathBuf::from(&path);
     let snapshot = swarm_api::auto_snapshot_crash_fix(
         &manifest_path,
         &plan,
@@ -5619,7 +5636,7 @@ async fn apply_action_plan(
                 continue;
             }
             let mut manifest =
-                ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+                ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
             match update_mod_from_modrinth(
                 &manifest_path,
                 &mut manifest,
@@ -5635,7 +5652,7 @@ async fn apply_action_plan(
             continue;
         }
         if let Some(fix) = tuffbox_core::action_plan::launcher_action_to_fix_action(action) {
-            match apply_fix_action(app.clone(), path.clone(), fix).await {
+            match apply_fix_action(app.clone(), path_str.clone(), fix).await {
                 Ok(msg) => applied.push(msg),
                 Err(e) => errors.push(e),
             }
@@ -5646,7 +5663,7 @@ async fn apply_action_plan(
 
     // Record co-occurrence after successful crash-fix apply (local + optional Supabase).
     if errors.is_empty() {
-        let _ = swarm_api::record_and_upload_cooccurrence(&path, &[], "crash_fix_apply").await;
+        let _ = swarm_api::record_and_upload_cooccurrence(&path_str, &[], "crash_fix_apply").await;
     }
 
     Ok(serde_json::json!({
@@ -8420,8 +8437,10 @@ fn get_crash_diagnosis(
     path: String,
     report_id: Option<String>,
 ) -> Result<tuffbox_core::crash::CrashDiagnosis, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let project_dir = manifest_parent(&path)?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let path_str = manifest_path.to_string_lossy().to_string();
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_parent(&path_str)?;
     let mut snapshots = SnapshotStore::new(&project_dir).list().unwrap_or_default();
     snapshots.reverse();
     snapshots.truncate(6);
@@ -8439,7 +8458,7 @@ fn get_crash_diagnosis(
     // leftover ERROR lines from a previously fixed crash.
     if !diagnosis.session_healthy {
         if let Ok(assistant) =
-            run_crash_assistant_analysis(&path, &manifest, &project_dir, report_id.as_deref())
+            run_crash_assistant_analysis(&path_str, &manifest, &project_dir, report_id.as_deref())
         {
             for finding in assistant.findings {
                 let id = format!("ca:{}", finding.code);
@@ -8612,16 +8631,17 @@ async fn apply_crash_fix_plan(
     report_id: Option<String>,
 ) -> Result<Vec<String>, String> {
     let result = tokio::task::spawn_blocking(move || {
-        let manifest_path = PathBuf::from(&path);
-        let project_dir = manifest_parent(&path)?;
-        let diagnosis = get_crash_diagnosis(path.clone(), report_id.clone())?;
+        let manifest_path = resolve_manifest_path(&path)?;
+        let path_str = manifest_path.to_string_lossy().to_string();
+        let project_dir = manifest_parent(&path_str)?;
+        let diagnosis = get_crash_diagnosis(path_str.clone(), report_id.clone())?;
         let plan = diagnosis.fix_plan;
 
         if plan.actions.is_empty() {
-            return Ok((path, Vec::new()));
+            return Ok((path_str, Vec::new()));
         }
 
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
         let crash = load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
         let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
@@ -8642,7 +8662,7 @@ async fn apply_crash_fix_plan(
             )?;
         }
 
-        let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let mut manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
         let mut applied = Vec::new();
         for action in plan.actions {
             apply_change_action(&manifest_path, &mut manifest, action, &mut applied)?;
@@ -8663,8 +8683,8 @@ async fn apply_crash_fix_plan(
             Some(fingerprint.key.as_str()),
         );
 
-        let _ = swarm_api::record_project_cooccurrence(path.clone());
-        Ok::<_, String>((path, applied))
+        let _ = swarm_api::record_project_cooccurrence(path_str.clone());
+        Ok::<_, String>((path_str, applied))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -11584,9 +11604,14 @@ fn is_project_pinned(path: String) -> Result<bool, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 fn set_last_opened_project(path: String) -> Result<(), String> {
-    let project_dir = manifest_parent(&path)?;
+    let resolved = resolve_manifest_path(&path)?;
+    let path = resolved.to_string_lossy().to_string();
+    let project_dir = resolved
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "manifest has no parent directory".to_string())?;
     let mut state = load_launcher_data(&project_dir);
-    state.last_opened = Some(path.clone());
+    state.last_opened = Some(path);
     save_launcher_data(&project_dir, &state)
 }
 
@@ -11739,7 +11764,7 @@ fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
 
 /// Resolve a project directory or manifest path to the canonical `.tuffbox.json` file.
 /// If the given manifest path does not exist, scans the parent folder for any manifest.
-fn resolve_manifest_path(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_manifest_path(path: &str) -> Result<PathBuf, String> {
     let path_buf = PathBuf::from(path);
 
     if path_buf.is_dir() {
@@ -11765,7 +11790,10 @@ fn resolve_manifest_path(path: &str) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn manifest_parent(path: &str) -> Result<PathBuf, String> {
-    PathBuf::from(path)
+    // Resolve directory / stale manifest names first; otherwise a project-dir
+    // path yields the wrong parent and worlds/map look in ../saves.
+    let resolved = resolve_manifest_path(path)?;
+    resolved
         .parent()
         .map(|p| p.to_path_buf())
         .ok_or_else(|| "manifest has no parent directory".to_string())

@@ -53,7 +53,7 @@ Hard rules:
 6. confidence 0.0–1.0; lower if no KB match or ambiguous stacktrace.
 7. Do not invent Modrinth project IDs; omit projectId if unknown (launcher resolves by modId).
 8. Never invent version numbers or file paths. If the exact version is unknown, set "version" and "path" to null (launcher resolves). Do not use placeholders like 1.2.3, 0.0.1, or /game/mods/….
-9. If a mod is a suspected culprit / already installed, prefer disable_mod or remove_mod — never install_mod for that mod.
+9. If a mod is a suspected culprit AND already installed, prefer disable_mod or remove_mod — never install_mod for that culprit. Missing dependencies named in the crash stay install_mod (they are not culprits).
 10. Return JSON only. No markdown fences."#;
 
 /// Post-resolution distill: compress a user's trial-and-error fix path into a
@@ -69,7 +69,9 @@ Rules:
 5. Set source to "distill", needsUserReview to true (beta human confirm before network share).
 6. confidence 0.0–1.0 based on how clear the causal path is.
 7. Every mutating action MUST include modId (except pure edit_config).
-8. Return JSON only. No markdown fences."#;
+8. suspectedMods = culprits that needed disable/remove — NEVER list a mod you install_mod as a missing dependency.
+9. If the efficient fix was installing a missing dependency, keep op install_mod (do not flip to disable).
+10. Return JSON only. No markdown fences."#;
 
 pub const ACTION_PLAN_JSON_SCHEMA_HINT: &str = r#"Return ONLY valid JSON with this schema:
 {
@@ -358,6 +360,10 @@ pub fn ground_action_plan(
         .filter(|s| !s.is_empty())
         .collect();
     let has_inventory = !inventory_l.is_empty();
+    let is_distill = plan
+        .source
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("distill") || s.starts_with("distill"));
 
     let mut kept = Vec::with_capacity(plan.actions.len());
     for mut a in plan.actions.drain(..) {
@@ -383,12 +389,20 @@ pub fn ground_action_plan(
         let id_l = a
             .mod_id
             .as_deref()
+            .or(a.project_id.as_deref())
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| !s.is_empty());
 
         if a.op == "install_mod" {
             if let Some(ref id) = id_l {
-                if suspected.iter().any(|s| s == id) {
+                let is_suspect = suspected.iter().any(|s| s == id);
+                let in_inv = inventory_l.iter().any(|s| s == id);
+                let in_missing = missing_l.iter().any(|s| s == id);
+
+                // Polarity flip install→disable only when the mod is an installed
+                // culprit. Distill / missing-deps must keep install_mod — rewriting
+                // a successful install into disable is how peers get broken capsules.
+                if is_suspect && in_inv && !in_missing && !is_distill {
                     a.op = "disable_mod".into();
                     let note = "rewrote install→disable: mod is a suspected culprit";
                     notes.push(format!("{id}: {note}"));
@@ -399,8 +413,8 @@ pub fn ground_action_plan(
                     if a.risk.eq_ignore_ascii_case("low") {
                         a.risk = "medium".into();
                     }
-                } else if has_inventory && inventory_l.iter().any(|s| s == id) {
-                    // Already installed and not a suspect → reinstall instead of install.
+                } else if has_inventory && in_inv && !in_missing && !is_distill {
+                    // Already installed and not a missing dep → reinstall instead of install.
                     a.op = "reinstall_mod".into();
                     let note = "rewrote install→reinstall: mod already in inventory";
                     notes.push(format!("{id}: {note}"));
@@ -429,6 +443,8 @@ pub fn ground_action_plan(
                 let in_missing = missing_l.iter().any(|s| s == id);
                 let in_suspect = suspected.iter().any(|s| s == id);
                 let allowed = match a.op.as_str() {
+                    // Distill shares the efficient fix for peers who still lack the mod.
+                    "install_mod" if is_distill => true,
                     "install_mod" => {
                         if missing_l.is_empty() {
                             // No explicit missing list → keep installs of mods not already present
@@ -453,6 +469,33 @@ pub fn ground_action_plan(
         kept.push(a);
     }
     plan.actions = kept;
+
+    // Distill: never keep install targets in suspectedMods (they are the fix, not culprits).
+    if is_distill {
+        let install_ids: Vec<String> = plan
+            .actions
+            .iter()
+            .filter(|a| a.op == "install_mod")
+            .filter_map(|a| {
+                a.mod_id
+                    .as_deref()
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|s| !s.is_empty())
+            })
+            .collect();
+        if !install_ids.is_empty() {
+            let before = plan.suspected_mods.len();
+            plan.suspected_mods
+                .retain(|s| !install_ids.iter().any(|id| id == &s.trim().to_ascii_lowercase()));
+            if plan.suspected_mods.len() != before {
+                notes.push(
+                    "cleared suspectedMods entries that are install_mod targets (fix ≠ culprit)"
+                        .into(),
+                );
+            }
+        }
+    }
+
     GroundingResult { plan, notes }
 }
 
@@ -1089,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn strips_placeholder_version_and_flips_install_on_suspect() {
+    fn strips_placeholder_version_and_flips_install_on_installed_suspect() {
         let json = r#"{
           "schemaVersion": 1,
           "humanExplanation": "Critters crashed",
@@ -1108,14 +1151,72 @@ mod tests {
           ]
         }"#;
         let plan = parse_action_plan(json).unwrap();
-        assert_eq!(plan.actions[0].op, "disable_mod");
+        // Parse-time grounding has no inventory → keep install (do not blind-flip).
+        assert_eq!(plan.actions[0].op, "install_mod");
         assert_eq!(plan.actions[0].version, None);
         assert_eq!(plan.actions[0].path, None);
-        assert!(plan.actions[0]
+
+        let grounded = ground_action_plan(
+            plan,
+            &["crittersandcompanions".into()],
+            &[],
+        );
+        assert_eq!(grounded.plan.actions[0].op, "disable_mod");
+        assert!(grounded.plan.actions[0]
             .reason
             .as_deref()
             .unwrap_or("")
             .contains("install→disable"));
+    }
+
+    #[test]
+    fn distill_keeps_install_even_if_mod_listed_as_suspect() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Missing dependency; installing placeholder-api fixed it.",
+          "confidence": 0.95,
+          "source": "distill",
+          "suspectedMods": ["placeholder-api"],
+          "needsUserReview": true,
+          "actions": [
+            {
+              "op":"install_mod",
+              "modId":"placeholder-api",
+              "reason":"Resolving missing dependency to initialize the game successfully.",
+              "risk":"low"
+            }
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        assert_eq!(plan.actions[0].op, "install_mod");
+        let grounded = ground_action_plan(
+            plan,
+            &["placeholder-api".into(), "fabric-api".into()],
+            &[],
+        );
+        assert_eq!(grounded.plan.actions[0].op, "install_mod");
+        assert!(!grounded.notes.iter().any(|n| n.contains("install→disable")));
+    }
+
+    #[test]
+    fn missing_dep_install_not_flipped_to_disable() {
+        let json = r#"{
+          "schemaVersion": 1,
+          "humanExplanation": "Need Indium",
+          "confidence": 0.9,
+          "suspectedMods": ["indium"],
+          "needsUserReview": true,
+          "actions": [
+            {"op":"install_mod","modId":"indium","reason":"Missing dep","risk":"low"}
+          ]
+        }"#;
+        let plan = parse_action_plan(json).unwrap();
+        let grounded = ground_action_plan(
+            plan,
+            &["sodium".into()],
+            &["indium".into()],
+        );
+        assert_eq!(grounded.plan.actions[0].op, "install_mod");
     }
 
     #[test]

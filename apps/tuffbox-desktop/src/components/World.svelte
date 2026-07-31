@@ -54,8 +54,10 @@
     detailLoading = true;
     try {
       worldDetail = await api.worlds.readInfo(name, p);
-    } catch {
+      error = null;
+    } catch (e) {
       worldDetail = null;
+      error = String(e);
     } finally {
       detailLoading = false;
     }
@@ -140,7 +142,19 @@
 
     {#if railOpen}
       <div class="world-list">
-        {#if worlds.length === 0 && !loading}
+        {#if !$projectPath}
+          <EmptyState
+            icon={Globe}
+            title="No project open"
+            description="Open a pack first, then worlds from its saves folder will appear here."
+          />
+        {:else if error && worlds.length === 0 && !loading}
+          <EmptyState
+            icon={Globe}
+            title="Couldn’t list worlds"
+            description={error}
+          />
+        {:else if worlds.length === 0 && !loading}
           <EmptyState
             icon={Globe}
             title="No worlds found"

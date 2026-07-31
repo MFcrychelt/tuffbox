@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick } from "svelte";
+  import { onMount, onDestroy, tick, untrack } from "svelte";
   import {
     Map as MapIcon, RefreshCw, Trash2, MousePointer2, Square, Layers, Download,
     CalendarRange, CheckSquare, XSquare, Copy, Scissors, Clipboard, Circle,
@@ -154,8 +154,10 @@
 
   let flashMsg = $state<string | null>(null);
   let flashTimer = $state<ReturnType<typeof setTimeout> | undefined>(undefined);
-  let drawScheduled = $state(false);
-  let lastDrawAt = $state(0);
+  // Plain flags — scheduleDraw reads+writes these; must not be $state or
+  // $effect(if map → scheduleDraw) thrash-loops at ~60 Hz.
+  let drawScheduled = false;
+  let lastDrawAt = 0;
   const POTATO_DRAW_MIN_MS = 100;
 
   function isPotatoPc() {
@@ -1895,11 +1897,16 @@
     if (worldName && $projectPath) load();
   });
   $effect(() => {
-    if (map) scheduleDraw();
+    if (!map) return;
+    untrack(() => scheduleDraw());
   });
   const canvasCursor = $derived(tool === "pan" ? "grab" : (tool === "click" || tool === "region" || tool === "poly") ? "pointer" : "crosshair");
   $effect(() => {
-    if (heightMin !== undefined && heightMax !== undefined) scheduleDraw();
+    // Track filter bounds only; do not track drawScheduled.
+    const _lo = heightMin;
+    const _hi = heightMax;
+    if (_lo === undefined || _hi === undefined) return;
+    untrack(() => scheduleDraw());
   });
 </script>
 
@@ -2351,7 +2358,16 @@
           Loading map…
         </div>
       {:else if error}
-        <EmptyState icon={MapIcon} title="No map yet" description="Generate the world by running the pack, then refresh. Switch dimension if you explored Nether/End." />
+        {@const noRegions =
+          /^(no region folder for dimension|no region files found)/i.test(error.trim()) ||
+          /not generated yet\)?$/i.test(error.trim())}
+        <EmptyState
+          icon={MapIcon}
+          title={noRegions ? "No map yet" : "Map unavailable"}
+          description={noRegions
+            ? "This dimension has no region files. Launch the pack, explore a bit, then refresh. Try Nether/End if you only visited those."
+            : error}
+        />
       {:else if !loading}
         <EmptyState icon={MapIcon} title="No world selected" description="Open a world to view its 2D map." />
       {/if}

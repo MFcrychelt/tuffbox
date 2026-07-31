@@ -6,7 +6,7 @@
   import EmptyState from "./EmptyState.svelte";
   import { trapFocus } from "../lib/focusTrap";
   import * as d3 from "d3-force";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
 
 
   type GraphNode = {
@@ -54,7 +54,7 @@
   let message = $state<string | null>(null);
   let changePlan = $state<any | null>(null);
   /** Monotonic token so stale loadChangePlan / refresh results never overwrite a newer load. */
-  let changePlanGen = $state(0);
+  let changePlanGen = 0;
   let changePlanLoading = $state(false);
   let graphSource = $state("local");
   let graphGeneratedAt = $state<string | null>(null);
@@ -94,13 +94,11 @@
   }
 
   $effect(() => {
-    if (changePlan) {
-        const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
-        if (key !== changePlanSeenKey) {
-          changePlanSeenKey = key;
-          changePlanExpanded = !!(changePlan.actions?.length);
-        }
-      }
+    if (!changePlan) return;
+    const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
+    if (key === changePlanSeenKey) return;
+    changePlanSeenKey = key;
+    changePlanExpanded = !!(changePlan.actions?.length);
   });
 
   /** Right-click = same install path as left-click (hint: "click or right-click to install"). */
@@ -279,7 +277,7 @@
   // Track which nodes have a broken icon so we can fall back to a letter avatar
   let brokenIcons = $state(new Set<string>())
   /// Modrinth/CurseForge metadata for missing (ghost) dependency nodes.
-  let ghostMeta: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
+  let ghostMeta = $state<Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }>>({});
 
   function markIconBroken(id: string) {
     if (!brokenIcons.has(id)) {
@@ -303,8 +301,11 @@
       if (url) {
         node.metadata = { ...(node.metadata ?? {}), icon_url: url };
         graph = { ...graph };
-        brokenIcons.delete(node.id);
-        brokenIcons = brokenIcons;
+        if (brokenIcons.has(node.id)) {
+          const next = new Set(brokenIcons);
+          next.delete(node.id);
+          brokenIcons = next;
+        }
       }
     } catch {
       // keep letter-avatar fallback
@@ -1086,6 +1087,12 @@
     );
     if (Object.keys(updates).length > 0) {
       ghostMeta = { ...ghostMeta, ...updates };
+      if (positioned.length > 0) {
+        positioned = positioned.map((node) => ({
+          ...node,
+          label: displayLabel(node),
+        }));
+      }
     }
   }
 
@@ -1125,20 +1132,21 @@
   };
 
   type GroupMeta = { key: string; label: string; color: string; x: number; y: number; r: number };
-  let groupMeta: GroupMeta[] = [];
+  let groupMeta = $state<GroupMeta[]>([]);
 
   /// Cluster currently hovered in the legend / on a halo; used to spotlight that
   /// group's nodes and edges and dim the rest.
-  let hoveredGroup: string | null = null;
+  let hoveredGroup = $state<string | null>(null);
 
   /** Spotlight conflicts or missing deps (toolbar toggle). */
-  let highlightMode: null | "conflicts" | "missing" = null;
+  let highlightMode = $state<null | "conflicts" | "missing">(null);
 
   const LEGEND_STORAGE_KEY = "tuffbox.graph.legend-expanded";
-  let legendExpanded =
+  let legendExpanded = $state(
     typeof localStorage === "undefined"
       ? true
-      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false";
+      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false",
+  );
 
   function toggleLegend() {
     legendExpanded = !legendExpanded;
@@ -1186,13 +1194,17 @@
 
   let canvasWidth = $state(1600);
   let canvasHeight = $state(900);
-  let positioned: PositionedNode[] = [];
+  // Must be $state so {#each positioned} mounts nodes after simulation starts.
+  // Do NOT $effect(read positioned → write positioned) — that loops forever.
+  let positioned = $state<PositionedNode[]>([]);
   let simulation: any = null;
   let simulationLayoutKey = "";
   let simNodes: LayoutNode[] = [];
   const nodeEls = new Map<string, SVGGElement>();
   const edgeEls = new Map<string, SVGPathElement>();
-  let resetViewOnNextLayout = $state(true);
+  // Camera fit flag — plain let. Must NOT be $state: startSimulation reads+writes
+  // it, and that used to live inside $effect → effect_update_depth_exceeded (tab hang).
+  let resetViewOnNextLayout = true;
 
   /// Modrinth's official category taxonomy → our cluster key. This is the
   /// authoritative distribution: a mod tagged `optimization` on the site lands
@@ -1308,7 +1320,6 @@
     LAYOUT_VERSION,
     ...displayNodes.map((n) => n.id).sort(),
     ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
-    groupMeta.map((g) => g.key).join(","),
   ].join("|"));
 
   // Edge kinds that link every mod to the core runtime. They carry no layout
@@ -1576,22 +1587,21 @@
   }
 
   $effect(() => {
-    if (displayNodes.length && layoutKey !== simulationLayoutKey) {
-        simulationLayoutKey = layoutKey;
-        startSimulation();
-      }
+    const key = layoutKey;
+    const count = displayNodes.length;
+    if (!count || key === simulationLayoutKey) return;
+    simulationLayoutKey = key;
+    // Defer + untrack: startSimulation writes positioned / camera $state.
+    // Tracking those inside this effect re-enters forever under Svelte 5.
+    queueMicrotask(() => {
+      if (simulationLayoutKey !== key) return;
+      untrack(() => startSimulation());
+    });
   });
 
-  // Refresh labels when Modrinth metadata arrives without restarting layout.
-  $effect(() => {
-    if (positioned.length && Object.keys(ghostMeta).length > 0) {
-        positioned = positioned.map((node) => ({
-          ...node,
-          label: displayLabel(node),
-        }));
-      }
-  });
-
+  // Refresh labels when Modrinth metadata arrives — update in place at the
+  // fetch site. Do NOT $effect(read positioned → write positioned): that
+  // loops forever under Svelte 5 runes (tab hang).
   const positionById = $derived(new Map(positioned.map((node) => [node.id, node])));
 
   // Reactive edge paths: recomputed whenever `positioned` (and thus
@@ -2877,10 +2887,10 @@
 
   .graph-canvas {
     position: relative;
-    flex: 0 0 auto;
+    flex: 1;
+    min-height: 200px;
+    height: auto;
     width: 100%;
-    height: min(28vh, 240px);
-    min-height: 160px;
     min-width: 0;
     display: flex;
     flex-direction: column;

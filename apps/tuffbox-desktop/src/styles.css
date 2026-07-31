@@ -331,3 +331,73 @@ html.potato-pc button:active:not(:disabled) {
   transform: none;
 }
 
+/* ── Search fields with overlaid glyph ─────────────────────────────
+   Absolute icon + input without extra left padding = placeholder
+   colliding with the magnifying glass (common project bug). */
+.search-glyph {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 1;
+  flex-shrink: 0;
+  line-height: 0;
+}
+.search:has(> .search-glyph),
+.search-field:has(> .search-glyph),
+.toolbar-search:has(> .search-glyph) {
+  position: relative;
+}
+.search:has(> .search-glyph) > input,
+.search-field:has(> .search-glyph) > input,
+.toolbar-search:has(> .search-glyph) > input {
+  /* Beat local `padding:` shorthands that wipe padding-left */
+  padding-left: 40px !important;
+}
+.search.mini:has(> .search-glyph) > .search-glyph {
+  left: 8px;
+}
+.search.mini:has(> .search-glyph) > input {
+  padding-left: 30px !important;
+}
+
+/* Prefer in-flow icon (no overlay). Use on new search UIs. */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  box-sizing: border-box;
+}
+.search-box > input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 10px 0;
+  outline: none;
+  font: inherit;
+}
+.search-box > input::placeholder {
+  color: var(--text-muted);
+}
+.search-box.mini {
+  padding: 0 8px;
+  gap: 6px;
+}
+.search-box.mini > input {
+  padding: 6px 0;
+  font-size: 12px;
+}
+
