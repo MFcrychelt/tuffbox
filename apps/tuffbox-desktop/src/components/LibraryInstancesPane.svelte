@@ -1836,7 +1836,7 @@
     height: 64px;
     margin-left: -32px;
     top: 4px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
   }
   .prism-lib[data-ui="prism"] .inst-name {
     font-size: 11px;
