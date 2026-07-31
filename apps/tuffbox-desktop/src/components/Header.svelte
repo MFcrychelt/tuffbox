@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Play, Square, FolderOpen, ChevronRight, Terminal } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, isTauri } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
@@ -18,6 +18,11 @@
 
   async function refreshOnline() {
     try {
+      if (!isTauri()) {
+        onlineOk = false;
+        onlineCount = 0;
+        return;
+      }
       const stats: any = await invoke("get_launcher_online");
       onlineCount = Number(stats?.onlineCount ?? 0);
       onlineOk = true;
@@ -105,11 +110,15 @@
     <div
       class="online-chip"
       class:live={onlineOk}
-      title={onlineOk ? "Users with TuffBox open right now" : "Community presence unavailable (no network / Supabase)"}
+      title={onlineOk
+        ? "Users with TuffBox open right now"
+        : isTauri()
+          ? "Community presence unavailable (no network / Supabase)"
+          : "Presence requires the Tauri app (browser preview is offline)"}
     >
       <span class="online-dot" class:on={onlineOk && onlineCount > 0}></span>
       <span class="online-label">{onlineOk ? onlineCount : "—"}</span>
-      <span class="online-hint">{onlineOk ? "online" : "offline"}</span>
+      <span class="online-hint">{onlineOk ? "online" : isTauri() ? "offline" : "preview"}</span>
     </div>
 
     {#if $projectInfo}

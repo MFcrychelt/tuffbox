@@ -32,8 +32,8 @@
       (modpack trends). Without the network, those modes stay unavailable. You can change this anytime in Settings.
     </p>
     <div class="sw-actions">
-      <button class="ghost" type="button" onclick={() => onSkip?.()}>Not now</button>
-      <button type="button" onclick={() => onEnable?.()}>Use network</button>
+      <button class="ghost" type="button" onclick={(e) => { e.stopPropagation(); onSkip?.(); }}>Not now</button>
+      <button type="button" onclick={(e) => { e.stopPropagation(); onEnable?.(); }}>Use network</button>
     </div>
   </div>
 </div>
@@ -47,9 +47,11 @@
     align-items: center;
     justify-content: center;
     z-index: 220;
-    backdrop-filter: blur(8px);
+    /* WebView2: backdrop-filter can eat clicks; keep a plain dim instead. */
   }
   .sw-dialog {
+    position: relative;
+    z-index: 1;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
@@ -77,5 +79,10 @@
     display: flex;
     gap: 10px;
     justify-content: center;
+  }
+  .sw-actions button {
+    position: relative;
+    z-index: 2;
+    cursor: pointer;
   }
 </style>

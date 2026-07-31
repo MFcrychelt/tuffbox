@@ -499,6 +499,7 @@
 
   .yp-shell.yp-out {
     opacity: 0;
+    pointer-events: none;
   }
 
   /* Mini: no dimmed backdrop — developer keeps working underneath */

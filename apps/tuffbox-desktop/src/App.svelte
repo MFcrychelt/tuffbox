@@ -17,7 +17,7 @@
   import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners, detectWeakHardware, youtubePlayerSession, closeYoutubePlayer, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { toasts } from "./lib/toast";
   import LaunchLogModal from "./components/LaunchLogModal.svelte";
@@ -27,6 +27,24 @@
     refreshRunningInstances,
   } from "./lib/launch";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
+
+  const SWARM_ONBOARD_KEY = "tuffbox.swarm.onboarding.done";
+
+  function swarmOnboardLocallyDone(): boolean {
+    try {
+      return localStorage.getItem(SWARM_ONBOARD_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function markSwarmOnboardLocallyDone() {
+    try {
+      localStorage.setItem(SWARM_ONBOARD_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  }
 
   type View =
     | "dashboard"
@@ -275,15 +293,27 @@
     });
 
     void (async () => {
-      try {
-        const swarm = await invoke<{ onboardingDone?: boolean; enabled?: boolean }>(
-          "get_swarm_settings",
-        );
-        if (!swarm?.onboardingDone) {
-          showSwarmOnboarding = true;
+      // Browser preview has no IPC — never block the UI with onboarding.
+      if (!isTauri() || swarmOnboardLocallyDone()) {
+        showSwarmOnboarding = false;
+      } else {
+        try {
+          const swarm = await invoke<{
+            onboardingDone?: boolean;
+            onboarding_done?: boolean;
+            enabled?: boolean;
+          }>("get_swarm_settings");
+          const done = !!(swarm?.onboardingDone ?? swarm?.onboarding_done);
+          if (done) {
+            markSwarmOnboardLocallyDone();
+            showSwarmOnboarding = false;
+          } else {
+            showSwarmOnboarding = true;
+          }
+        } catch {
+          // If settings can't be read, don't trap the user behind a modal.
+          showSwarmOnboarding = false;
         }
-      } catch {
-        // ignore
       }
       try {
         const lastPath = await api.session.getLastOpened();
@@ -326,6 +356,7 @@
   async function finishSwarmOnboarding(enabled: boolean) {
     // Dismiss first so a slow/hung IPC never leaves the UI unclickable.
     showSwarmOnboarding = false;
+    markSwarmOnboardLocallyDone();
     try {
       await invoke("complete_swarm_onboarding", { enabled });
       toasts.success(
@@ -509,23 +540,43 @@
 
 <svelte:window
   onkeydown={(e) => {
-    if (e.ctrlKey || e.metaKey) {
-      switch (e.key) {
-        case '1': currentView = 'dashboard'; e.preventDefault(); break;
-        case '2': currentView = 'ide'; e.preventDefault(); break;
-        case '3': currentView = 'mods'; e.preventDefault(); break;
-        case '4': currentView = 'graph'; e.preventDefault(); break;
-        case '5': currentView = 'configs'; e.preventDefault(); break;
-        case '6': currentView = 'diagnostics'; e.preventDefault(); break;
-        case '7': currentView = 'snapshots'; e.preventDefault(); break;
-        case '8': currentView = 'world'; e.preventDefault(); break;
-      }
-    } else if (e.key === '?' && !showShortcuts) {
-      showShortcuts = true;
-      e.preventDefault();
-    } else if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
+    if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
       showCommandPalette = !showCommandPalette;
       e.preventDefault();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key) {
+        case "1": currentView = "dashboard"; e.preventDefault(); break;
+        case "2": currentView = "ide"; e.preventDefault(); break;
+        case "3": currentView = "mods"; e.preventDefault(); break;
+        case "4": currentView = "graph"; e.preventDefault(); break;
+        case "5": currentView = "configs"; e.preventDefault(); break;
+        case "6": currentView = "diagnostics"; e.preventDefault(); break;
+        case "7": currentView = "snapshots"; e.preventDefault(); break;
+        case "8": currentView = "world"; e.preventDefault(); break;
+      }
+      return;
+    }
+    if (e.key === "?" && !showShortcuts) {
+      showShortcuts = true;
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "Escape") {
+      if (showSwarmOnboarding) {
+        void finishSwarmOnboarding(false);
+        e.preventDefault();
+      } else if ($youtubePlayerSession) {
+        closeYoutubePlayer();
+        e.preventDefault();
+      } else if (showCommandPalette) {
+        showCommandPalette = false;
+        e.preventDefault();
+      } else if (showShortcuts) {
+        showShortcuts = false;
+        e.preventDefault();
+      }
     }
   }}
 />
