@@ -337,7 +337,7 @@
         <button
           class="chip"
           class:active={statusFilter === "all"}
-          on:click={() => setFilter("all")}
+          onclick={() => setFilter("all")}
           disabled={!swarmEnabled || loading}
         >
           All
@@ -345,7 +345,7 @@
         <button
           class="chip"
           class:active={statusFilter === "open"}
-          on:click={() => setFilter("open")}
+          onclick={() => setFilter("open")}
           disabled={!swarmEnabled || loading}
         >
           Open
@@ -353,7 +353,7 @@
         <button
           class="chip"
           class:active={statusFilter === "saved"}
-          on:click={() => setFilter("saved")}
+          onclick={() => setFilter("saved")}
           disabled={!swarmEnabled || loading}
         >
           Saved
@@ -362,7 +362,7 @@
       <button
         class="ghost refresh-btn"
         disabled={!swarmEnabled || loading}
-        on:click={() => refresh()}
+        onclick={() => refresh()}
         title="Refresh capsules"
       >
         <span class:spin={loading} style="display:inline-flex">
@@ -381,7 +381,7 @@
             <strong>Signed in</strong>
             <p class="auth-email">{authUser.email}</p>
           </div>
-          <button class="secondary" disabled={authBusy} on:click={() => handleSignOut()}>
+          <button class="secondary" disabled={authBusy} onclick={() => handleSignOut()}>
             <LogOut size={14} /> Sign out
           </button>
         </div>
@@ -394,7 +394,7 @@
           <button
             class="chip"
             class:active={authMode === "signin"}
-            on:click={() => (authMode = "signin")}
+            onclick={() => (authMode = "signin")}
             disabled={authBusy}
           >
             <LogIn size={13} /> Sign in
@@ -402,13 +402,13 @@
           <button
             class="chip"
             class:active={authMode === "signup"}
-            on:click={() => (authMode = "signup")}
+            onclick={() => (authMode = "signup")}
             disabled={authBusy}
           >
             <UserPlus size={13} /> Register
           </button>
         </div>
-        <form class="auth-form" on:submit|preventDefault={submitAuth}>
+        <form class="auth-form" onsubmit={(e) => { e.preventDefault(); void submitAuth(); }}>
           <label>
             Email
             <input type="email" bind:value={authEmail} autocomplete="username" required disabled={authBusy} />
@@ -465,7 +465,7 @@
     <div class="state error-state tb-card">
       <AlertTriangle size={20} />
       <p>{error}</p>
-      <button class="secondary" on:click={() => refresh()}>Retry</button>
+      <button class="secondary" onclick={() => refresh()}>Retry</button>
     </div>
   {:else if capsules.length === 0}
     <EmptyState
@@ -473,7 +473,7 @@
       title="No capsules yet"
       description="When the community shares crash fix plans, they appear here for voting."
       actionLabel="Refresh"
-      on:action={() => refresh()}
+      onaction={() => refresh()}
     />
   {:else}
     {#if error}
@@ -487,7 +487,7 @@
           <button
             type="button"
             class="tile-hit"
-            on:click={() => toggleExpand(c)}
+            onclick={() => toggleExpand(c)}
             aria-expanded={isOpen}
           >
             <div class="tile-top">
@@ -542,7 +542,7 @@
             <button
               class="vote keep"
               disabled={!!votingHash || !canVote}
-              on:click={() => vote(c, "confirm")}
+              onclick={() => vote(c, "confirm")}
               title={canVote ? "Keep — this fix helped" : "Sign in to vote"}
             >
               <ThumbsUp size={14} />
@@ -551,7 +551,7 @@
             <button
               class="vote discard secondary"
               disabled={!!votingHash || !canVote}
-              on:click={() => vote(c, "reject")}
+              onclick={() => vote(c, "reject")}
               title={canVote ? "Discard — this fix is wrong or harmful" : "Sign in to vote"}
             >
               <ThumbsDown size={14} />
@@ -572,7 +572,7 @@
             <h2>{expanded.exception || "Crash signature"}</h2>
             <p class="fp-key" title={expanded.fingerprintKey}>{expanded.fingerprintKey}</p>
           </div>
-          <button class="ghost" on:click={() => (expandedId = null)}>Close</button>
+          <button class="ghost" onclick={() => (expandedId = null)}>Close</button>
         </div>
 
         <div class="drawer-grid">
@@ -670,14 +670,14 @@
             <button
               class="vote keep"
               disabled={!!votingHash || !canVote}
-              on:click={() => expanded && vote(expanded, "confirm")}
+              onclick={() => expanded && vote(expanded, "confirm")}
             >
               <ThumbsUp size={14} /> Keep
             </button>
             <button
               class="vote discard secondary"
               disabled={!!votingHash || !canVote}
-              on:click={() => expanded && vote(expanded, "reject")}
+              onclick={() => expanded && vote(expanded, "reject")}
             >
               <ThumbsDown size={14} /> Discard
             </button>
@@ -688,7 +688,7 @@
                 : !swarmEnabled
                   ? "Enable TuffSwarm in Settings"
                   : "Write pending plan for Diagnostics"}
-              on:click={() => expanded && tryFix(expanded)}
+              onclick={() => expanded && tryFix(expanded)}
             >
               <Wrench size={14} />
               {proposingHash === expanded.contentHash ? "Proposing…" : "Try fix on this project"}

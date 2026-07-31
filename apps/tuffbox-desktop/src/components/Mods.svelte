@@ -3055,7 +3055,7 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Confirm remove mod"
-    onclick={(e) => { if (e.target === e.currentTarget) { () => { confirmOpen = false; confirmMod = null;(e); } } }}
+    onclick={(e) => { if (e.target === e.currentTarget) { confirmOpen = false; confirmMod = null; } }}
     onkeydown={() => {}}
   >
     <div class="modal confirm-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { confirmOpen = false; confirmMod = null; } }}>
@@ -3180,7 +3180,7 @@ import { trapFocus } from "../lib/focusTrap";
     role="button"
     tabindex="-1"
     aria-label="Close add mod dialog"
-    onclick={(e) => { if (e.target === e.currentTarget) { () => { catalogViewResult = null; addOpen = false;(e); } } }}
+    onclick={(e) => { if (e.target === e.currentTarget) { catalogViewResult = null; addOpen = false; } }}
     onkeydown={() => {}}
   >
     <div class="modal add-mods-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>

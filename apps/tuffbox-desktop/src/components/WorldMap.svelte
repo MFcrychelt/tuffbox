@@ -955,6 +955,7 @@
 
   function onWheel(evt: WheelEvent) {
     evt.preventDefault();
+    if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = evt.clientX - rect.left;
     const my = evt.clientY - rect.top;

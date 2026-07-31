@@ -127,7 +127,7 @@
   ];
 
   let files: ConfigFile[] = [];
-  let selected: ConfigFile | null = null;
+  let selected = $state<ConfigFile | null>(null);
   let content = "";
   let originalContent = "";
   let filter = "";
@@ -767,8 +767,8 @@
                 value={content}
                 lang={currentLang}
                 theme={oneDark}
-                onchange={handleCmChange}
-                onready={onCmReady}
+                on:change={(e) => handleCmChange(e.detail)}
+                on:ready={(e) => onCmReady(e.detail)}
               />
             {/key}
           </div>

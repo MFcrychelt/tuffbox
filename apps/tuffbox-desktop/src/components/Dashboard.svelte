@@ -281,48 +281,52 @@
     }
   });
 
-  onMount(async () => {
-    potatoPc = document.documentElement.classList.contains("potato-pc");
-    try {
-      const status = await api.mcAuth.getAuthStatus();
-      authState.set(status);
-      if (status.loggedIn && status.profile) {
-        try {
-          const path = await api.mcAuth.getSkinPath(status.profile.uuid);
-          skinPath.set(path);
-        } catch {}
+  onMount(() => {
+    let cleanup: (() => void) | undefined;
+    void (async () => {
+      potatoPc = document.documentElement.classList.contains("potato-pc");
+      try {
+        const status = await api.mcAuth.getAuthStatus();
+        authState.set(status);
+        if (status.loggedIn && status.profile) {
+          try {
+            const path = await api.mcAuth.getSkinPath(status.profile.uuid);
+            skinPath.set(path);
+          } catch {}
+        }
+      } catch {
+      } finally {
+        authReady = true;
       }
-    } catch {
-    } finally {
-      authReady = true;
-    }
 
-    if (selectedPath && !selectedProject && $recentProjects.length > 0) {
-      selectProject($recentProjects[0].path);
-    }
+      if (selectedPath && !selectedProject && $recentProjects.length > 0) {
+        selectProject($recentProjects[0].path);
+      }
 
-    // Global handler for JVM crashes that happen after the launch command
-    // has returned "started" — surfaces a categorized, retryable toast.
-    registerLaunchCrashListener();
+      // Global handler for JVM crashes that happen after the launch command
+      // has returned "started" — surfaces a categorized, retryable toast.
+      registerLaunchCrashListener();
 
-    // Refresh playtime when a session ends.
-    const { listen } = await import("@tauri-apps/api/event");
-    const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
-      const id = event.payload?.id;
-      if (id) void loadProjectStats(id);
-    });
-    const unlistenSoft = await listen("tuffbox:soft-verify-outcome", () => {
-      void refreshCrashFixBanner(selectedPath);
-    });
-    const onCrashFixApplied = () => {
-      void refreshCrashFixBanner(selectedPath);
-    };
-    window.addEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
-    return () => {
-      unlistenExit();
-      unlistenSoft();
-      window.removeEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
-    };
+      // Refresh playtime when a session ends.
+      const { listen } = await import("@tauri-apps/api/event");
+      const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
+        const id = event.payload?.id;
+        if (id) void loadProjectStats(id);
+      });
+      const unlistenSoft = await listen("tuffbox:soft-verify-outcome", () => {
+        void refreshCrashFixBanner(selectedPath);
+      });
+      const onCrashFixApplied = () => {
+        void refreshCrashFixBanner(selectedPath);
+      };
+      window.addEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
+      cleanup = () => {
+        unlistenExit();
+        unlistenSoft();
+        window.removeEventListener("tuffbox:crash-fix-applied", onCrashFixApplied);
+      };
+    })();
+    return () => cleanup?.();
   });
 
   async function loadProject(path: string) {

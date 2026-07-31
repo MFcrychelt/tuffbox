@@ -9,7 +9,7 @@
   let { onclose }: { onclose?: () => void } = $props();
 
   let mode = $state<"select" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form">("select");
-  let deviceCode = $state<{ userCode: string; verificationUri: string } | null>(null);
+  let deviceCode = $state<{ userCode: string; verificationUri: string; interval?: number } | null>(null);
   let polling = $state(false);
   let errorMsg = $state("");
   let copied = $state(false);

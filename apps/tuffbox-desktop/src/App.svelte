@@ -10,7 +10,7 @@
   import SwarmOnboarding from "./components/SwarmOnboarding.svelte";
   import ShareCapsuleDialog from "./components/ShareCapsuleDialog.svelte";
   import TaskProgressPanel from "./components/TaskProgressPanel.svelte";
-  import type { ComponentType, SvelteComponent } from "svelte";
+  import type { Component } from "svelte";
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
@@ -71,7 +71,7 @@
   /** Views loaded on demand (see ensureViewLoaded) — keeps startup bundle/parse cost
       to just the Dashboard on weak machines instead of every screen at once. */
   type LazyView = Exclude<View, "dashboard">;
-  type LazyComponent = ComponentType<SvelteComponent>;
+  type LazyComponent = Component<any, any, any>;
 
   const VIEW_LOADERS: Record<LazyView, () => Promise<{ default: LazyComponent }>> = {
     ide: () => import("./components/IdeWorkspace.svelte"),

@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "feat/svelte-5-migration" ]
   pull_request:
     branches: [ "master" ]
 

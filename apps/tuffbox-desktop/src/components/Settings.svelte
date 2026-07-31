@@ -690,13 +690,14 @@
 <div class="settings fade-slide-in">
   <nav class="tabs" aria-label="Settings sections">
     {#each tabs as t (t.id)}
+      {@const Icon = t.icon}
       <button
         type="button"
         class="tab press-effect"
         class:active={tab === t.id}
-        on:click={() => (tab = t.id)}
+        onclick={() => (tab = t.id)}
       >
-        <svelte:component this={t.icon} size={16} />
+        <Icon size={16} />
         {t.label}
       </button>
     {/each}
@@ -718,7 +719,7 @@
           <p class="hint">Hover a swatch to preview — click to save.</p>
         </div>
         <label class="check-row">
-          <input type="checkbox" checked={reducedMotion} on:change={toggleReducedMotion} />
+          <input type="checkbox" checked={reducedMotion} onchange={toggleReducedMotion} />
           Potato PC mode (reduce motion / animations)
         </label>
         <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
@@ -728,7 +729,7 @@
             type="checkbox"
             checked={launcher.roundedCorners !== false}
             disabled={launcherSaving}
-            on:change={(e) => void persistLauncher({ roundedCorners: e.currentTarget.checked })}
+            onchange={(e) => void persistLauncher({ roundedCorners: e.currentTarget.checked })}
           />
           Rounded corners
         </label>
@@ -750,7 +751,7 @@
                   class="chip press-effect"
                   class:active={normalizeUiScalePercent(launcher.uiScalePercent) === pct}
                   disabled={launcherSaving}
-                  on:click={() => void persistLauncher({ uiScalePercent: pct })}
+                  onclick={() => void persistLauncher({ uiScalePercent: pct })}
                 >
                   {pct}%
                 </button>
@@ -783,7 +784,7 @@
                 class="chip press-effect"
                 class:active={launcher.youtubeInlinePlayer !== false}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ youtubeInlinePlayer: true })}
+                onclick={() => void persistLauncher({ youtubeInlinePlayer: true })}
               >
                 In-app player
               </button>
@@ -792,7 +793,7 @@
                 class="chip press-effect"
                 class:active={launcher.youtubeInlinePlayer === false}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ youtubeInlinePlayer: false })}
+                onclick={() => void persistLauncher({ youtubeInlinePlayer: false })}
               >
                 Preview only
               </button>
@@ -815,7 +816,7 @@
                 class="chip press-effect"
                 class:active={launcher.autoHideWorkflowRail === true}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ autoHideWorkflowRail: true })}
+                onclick={() => void persistLauncher({ autoHideWorkflowRail: true })}
               >
                 Auto-hide
               </button>
@@ -824,7 +825,7 @@
                 class="chip press-effect"
                 class:active={launcher.autoHideWorkflowRail !== true}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ autoHideWorkflowRail: false })}
+                onclick={() => void persistLauncher({ autoHideWorkflowRail: false })}
               >
                 Always visible
               </button>
@@ -847,7 +848,7 @@
                 class="chip press-effect"
                 class:active={normalizeSidebarMode(launcher.sidebarMode) === "full"}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "full" })}
+                onclick={() => void persistLauncher({ sidebarMode: "full" })}
               >
                 Expanded
               </button>
@@ -856,7 +857,7 @@
                 class="chip press-effect"
                 class:active={normalizeSidebarMode(launcher.sidebarMode) === "icons"}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "icons" })}
+                onclick={() => void persistLauncher({ sidebarMode: "icons" })}
               >
                 Icons toggle
               </button>
@@ -865,7 +866,7 @@
                 class="chip press-effect"
                 class:active={normalizeSidebarMode(launcher.sidebarMode) === "autoHide"}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "autoHide" })}
+                onclick={() => void persistLauncher({ sidebarMode: "autoHide" })}
               >
                 Auto-hide
               </button>
@@ -882,7 +883,7 @@
             <select
               class="control-select"
               value={String(launcher.concurrentDownloads)}
-              on:change={onConcurrentChange}
+              onchange={onConcurrentChange}
               disabled={launcherSaving}
               aria-label="Concurrent downloads"
             >
@@ -900,11 +901,11 @@
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
-              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} on:click={() => applyResolution("default")}>Default</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "854x480"} disabled={launcherSaving} on:click={() => applyResolution("854x480")}>854×480</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "1280x720"} disabled={launcherSaving} on:click={() => applyResolution("1280x720")}>720p</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "1920x1080"} disabled={launcherSaving} on:click={() => applyResolution("1920x1080")}>1080p</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} on:click={() => (resMode = "custom")}>Custom</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} onclick={() => applyResolution("default")}>Default</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "854x480"} disabled={launcherSaving} onclick={() => applyResolution("854x480")}>854×480</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "1280x720"} disabled={launcherSaving} onclick={() => applyResolution("1280x720")}>720p</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "1920x1080"} disabled={launcherSaving} onclick={() => applyResolution("1920x1080")}>1080p</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} onclick={() => (resMode = "custom")}>Custom</button>
             </div>
             {#if resMode === "custom"}
               <div class="res-custom">
@@ -916,7 +917,7 @@
                   Height
                   <input type="number" min="480" max="4320" step="1" bind:value={customH} />
                 </label>
-                <button type="button" class="secondary" on:click={() => applyResolution("custom")} disabled={launcherSaving}>
+                <button type="button" class="secondary" onclick={() => applyResolution("custom")} disabled={launcherSaving}>
                   Apply
                 </button>
               </div>
@@ -937,7 +938,7 @@
                 type="checkbox"
                 checked={discordRpcEnabled}
                 disabled={discordSaving}
-                on:change={onDiscordToggle}
+                onchange={onDiscordToggle}
               />
               Enable Rich Presence
             </label>
@@ -949,15 +950,15 @@
                   placeholder="Application ID from Discord Developer Portal"
                   autocomplete="off"
                   disabled={discordSaving}
-                  on:input={() => (discordDirty = true)}
+                  oninput={() => (discordDirty = true)}
                 />
-                <button type="button" class="ghost mini" on:click={openDiscordPortal} title="Open Discord Developer Portal">
+                <button type="button" class="ghost mini" onclick={openDiscordPortal} title="Open Discord Developer Portal">
                   <ExternalLink size={14} /> Portal
                 </button>
               </div>
             </label>
             <div class="row-actions">
-              <button type="button" on:click={savePresence} disabled={discordSaving || !discordDirty}>
+              <button type="button" onclick={savePresence} disabled={discordSaving || !discordDirty}>
                 {#if discordSaving}
                   <Loader2 size={14} class="spin" /> Saving…
                 {:else}
@@ -975,7 +976,7 @@
             <p>Built-in hotkeys for navigating TuffBox.</p>
           </div>
           <div class="settings-row-control">
-            <button type="button" class="ghost" on:click={() => (shortcutsOpen = !shortcutsOpen)}>
+            <button type="button" class="ghost" onclick={() => (shortcutsOpen = !shortcutsOpen)}>
               <Command size={14} />
               {shortcutsOpen ? "Hide" : "Show"} shortcuts ({shortcuts.length})
             </button>
@@ -1009,7 +1010,7 @@
               value={launcher.defaultJavaPath ?? "Auto-detect"}
               title={launcher.defaultJavaPath ?? "Auto-detect"}
             />
-            <button type="button" class="secondary" on:click={() => (showJavaPicker = true)}>Browse…</button>
+            <button type="button" class="secondary" onclick={() => (showJavaPicker = true)}>Browse…</button>
           </div>
         </label>
         <label>
@@ -1018,7 +1019,7 @@
             rows="3"
             bind:value={launcher.javaCustomArgs}
             placeholder="-XX:+UseG1GC …"
-            on:blur={() => persistLauncher({ javaCustomArgs: launcher.javaCustomArgs?.trim() || null })}
+            onblur={() => persistLauncher({ javaCustomArgs: launcher.javaCustomArgs?.trim() || null })}
           ></textarea>
         </label>
         <label>
@@ -1028,7 +1029,7 @@
             min="512"
             step="256"
             bind:value={launcher.defaultMemoryMb}
-            on:change={() =>
+            onchange={() =>
               persistLauncher({
                 defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
               })}
@@ -1038,7 +1039,7 @@
           <button
             type="button"
             disabled={launcherSaving}
-            on:click={() =>
+            onclick={() =>
               persistLauncher({
                 javaCustomArgs: launcher.javaCustomArgs?.trim() || null,
                 defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
@@ -1061,7 +1062,7 @@
           <input
             bind:value={launcher.preLaunchHook}
             placeholder="Command before game start"
-            on:blur={() => persistLauncher({ preLaunchHook: launcher.preLaunchHook?.trim() || null })}
+            onblur={() => persistLauncher({ preLaunchHook: launcher.preLaunchHook?.trim() || null })}
           />
         </label>
         <label>
@@ -1069,7 +1070,7 @@
           <input
             bind:value={launcher.postExitHook}
             placeholder="Command after game exits"
-            on:blur={() => persistLauncher({ postExitHook: launcher.postExitHook?.trim() || null })}
+            onblur={() => persistLauncher({ postExitHook: launcher.postExitHook?.trim() || null })}
           />
         </label>
         <label>
@@ -1077,14 +1078,14 @@
           <input
             bind:value={launcher.wrapperCommand}
             placeholder="e.g. gamemoderun"
-            on:blur={() => persistLauncher({ wrapperCommand: launcher.wrapperCommand?.trim() || null })}
+            onblur={() => persistLauncher({ wrapperCommand: launcher.wrapperCommand?.trim() || null })}
           />
         </label>
         <div class="row-actions save-row">
           <button
             type="button"
             disabled={launcherSaving}
-            on:click={() =>
+            onclick={() =>
               persistLauncher({
                 preLaunchHook: launcher.preLaunchHook?.trim() || null,
                 postExitHook: launcher.postExitHook?.trim() || null,
@@ -1111,18 +1112,18 @@
           Runtime directory
           <div class="path-row">
             <input bind:value={runtimeDraft} placeholder={defaultRuntimePath || "Runtime path"} />
-            <button type="button" class="secondary" on:click={browseRuntime}>Browse…</button>
+            <button type="button" class="secondary" onclick={browseRuntime}>Browse…</button>
           </div>
         </label>
         <div class="row-actions">
-          <button type="button" on:click={applyRuntimePath} disabled={launcherSaving}>
+          <button type="button" onclick={applyRuntimePath} disabled={launcherSaving}>
             {launcherSaving ? "Saving…" : "Apply path"}
           </button>
           <button
             type="button"
             class="ghost"
             disabled={!defaultRuntimePath}
-            on:click={() => {
+            onclick={() => {
               runtimeDraft = defaultRuntimePath;
               void applyRuntimePath();
             }}
@@ -1145,18 +1146,18 @@
           Download directory
           <div class="path-row">
             <input bind:value={instancesDraft} placeholder={defaultInstancesPath || "Instances path"} />
-            <button type="button" class="secondary" on:click={browseInstances}>Browse…</button>
+            <button type="button" class="secondary" onclick={browseInstances}>Browse…</button>
           </div>
         </label>
         <div class="row-actions">
-          <button type="button" on:click={applyInstancesPath} disabled={launcherSaving}>
+          <button type="button" onclick={applyInstancesPath} disabled={launcherSaving}>
             {launcherSaving ? "Saving…" : "Apply path"}
           </button>
           <button
             type="button"
             class="ghost"
             disabled={!defaultInstancesPath}
-            on:click={() => {
+            onclick={() => {
               instancesDraft = defaultInstancesPath;
               void applyInstancesPath();
             }}
@@ -1200,13 +1201,13 @@
               />
             </label>
             <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("github", githubTokenDraft)} disabled={!!savingSecret || !githubTokenDraft.trim()}>
+              <button class="secondary mini" onclick={() => saveSecret("github", githubTokenDraft)} disabled={!!savingSecret || !githubTokenDraft.trim()}>
                 {savingSecret === "github" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" on:click={() => clearSecret("github")} disabled={!githubTokenSet || !!clearingSecret}>
+              <button class="ghost mini" onclick={() => clearSecret("github")} disabled={!githubTokenSet || !!clearingSecret}>
                 {clearingSecret === "github" ? "Clearing…" : "Clear"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("github")} disabled={!githubTokenSet || !!testingProvider}>
+              <button class="ghost mini" onclick={() => testProvider("github")} disabled={!githubTokenSet || !!testingProvider}>
                 {testingProvider === "github" ? "Testing…" : "Test"}
               </button>
             </div>
@@ -1228,13 +1229,13 @@
               />
             </label>
             <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("modrinth", modrinthTokenDraft)} disabled={!!savingSecret || !modrinthTokenDraft.trim()}>
+              <button class="secondary mini" onclick={() => saveSecret("modrinth", modrinthTokenDraft)} disabled={!!savingSecret || !modrinthTokenDraft.trim()}>
                 {savingSecret === "modrinth" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" on:click={() => clearSecret("modrinth")} disabled={!modrinthTokenSet || !!clearingSecret}>
+              <button class="ghost mini" onclick={() => clearSecret("modrinth")} disabled={!modrinthTokenSet || !!clearingSecret}>
                 {clearingSecret === "modrinth" ? "Clearing…" : "Clear"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("modrinth")} disabled={!modrinthTokenSet || !!testingProvider}>
+              <button class="ghost mini" onclick={() => testProvider("modrinth")} disabled={!modrinthTokenSet || !!testingProvider}>
                 {testingProvider === "modrinth" ? "Testing…" : "Test"}
               </button>
             </div>
@@ -1256,13 +1257,13 @@
               />
             </label>
             <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("curseforge", curseforgeTokenDraft)} disabled={!!savingSecret || !curseforgeTokenDraft.trim()}>
+              <button class="secondary mini" onclick={() => saveSecret("curseforge", curseforgeTokenDraft)} disabled={!!savingSecret || !curseforgeTokenDraft.trim()}>
                 {savingSecret === "curseforge" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" on:click={() => clearSecret("curseforge")} disabled={!curseforgeTokenSet || !!clearingSecret}>
+              <button class="ghost mini" onclick={() => clearSecret("curseforge")} disabled={!curseforgeTokenSet || !!clearingSecret}>
                 {clearingSecret === "curseforge" ? "Clearing…" : "Clear"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("curseforge")} disabled={!curseforgeTokenSet || !!testingProvider}>
+              <button class="ghost mini" onclick={() => testProvider("curseforge")} disabled={!curseforgeTokenSet || !!testingProvider}>
                 {testingProvider === "curseforge" ? "Testing…" : "Test"}
               </button>
             </div>
@@ -1286,10 +1287,10 @@
               {/if}
             </p>
             <div class="row-actions">
-              <button type="button" class="secondary mini" on:click={() => (aiModalOpen = true)}>
+              <button type="button" class="secondary mini" onclick={() => (aiModalOpen = true)}>
                 <Bot size={14} /> Configure AI connection…
               </button>
-              <button class="ghost mini" on:click={() => testProvider("ai")} disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}>
+              <button class="ghost mini" onclick={() => testProvider("ai")} disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}>
                 {testingProvider === "ai" ? "Testing…" : "Test AI"}
               </button>
             </div>
@@ -1311,7 +1312,7 @@
                 type="checkbox"
                 checked={swarmEnabled}
                 disabled={swarmSaving}
-                on:change={toggleSwarmEnabled}
+                onchange={toggleSwarmEnabled}
               />
               Use TuffSwarm network
             </label>
@@ -1328,7 +1329,7 @@
               type="button"
               class="ghost mini"
               disabled={!swarmEnabled}
-              on:click={() => (swarmSupabaseAdvanced = !swarmSupabaseAdvanced)}
+              onclick={() => (swarmSupabaseAdvanced = !swarmSupabaseAdvanced)}
             >
               {swarmSupabaseAdvanced ? "Hide advanced backend" : "Advanced backend override…"}
             </button>
@@ -1347,7 +1348,7 @@
                 type="button"
                 class="mini"
                 disabled={swarmSaving || !swarmEnabled}
-                on:click={saveSupabaseUrl}
+                onclick={saveSupabaseUrl}
               >
                 Save Supabase URL
               </button>
@@ -1370,7 +1371,7 @@
                   savingSecret === "swarm_supabase" ||
                   !swarmSupabaseAnonDraft.trim()
                 }
-                on:click={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
+                onclick={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
               >
                 {savingSecret === "swarm_supabase" ? "Saving…" : "Save anon key"}
               </button>
@@ -1381,7 +1382,7 @@
                   clearingSecret === "swarm_supabase" ||
                   !swarmSupabaseAnonSet
                 }
-                on:click={() => clearSecret("swarm_supabase")}
+                onclick={() => clearSecret("swarm_supabase")}
               >
                 Clear override
               </button>
@@ -1401,7 +1402,7 @@
                 type="checkbox"
                 checked={swarmP2pEnabled}
                 disabled={swarmSaving || !swarmEnabled}
-                on:change={toggleP2pEnabled}
+                onchange={toggleP2pEnabled}
               />
               Prefer local P2P node (Phase C)
             </label>
@@ -1419,7 +1420,7 @@
                 type="button"
                 class="secondary mini"
                 disabled={!swarmEnabled || !swarmP2pEnabled || swarmSaving}
-                on:click={ensureP2pNode}
+                onclick={ensureP2pNode}
               >
                 Start / attach node
               </button>
@@ -1427,7 +1428,7 @@
                 type="button"
                 class="ghost mini"
                 disabled={!swarmEnabled || !swarmP2pEnabled || swarmSaving}
-                on:click={refreshP2pStatus}
+                onclick={refreshP2pStatus}
               >
                 Refresh status
               </button>
@@ -1440,7 +1441,7 @@
                 type="checkbox"
                 checked={swarmSharePrompts}
                 disabled={swarmSaving || !swarmEnabled}
-                on:change={toggleSharePrompts}
+                onchange={toggleSharePrompts}
               />
               Ask to share capsule after a successful relaunch
             </label>
@@ -1469,10 +1470,10 @@
               <input type="password" bind:value={crashKbTokenDraft} placeholder={crashKbTokenSet ? "•••••••• (set)" : "optional bearer token"} autocomplete="off" />
             </label>
             <div class="row-actions">
-              <button class="mini" disabled={savingSecret === "crash_kb" || !crashKbTokenDraft.trim()} on:click={() => saveSecret("crash_kb", crashKbTokenDraft)}>
+              <button class="mini" disabled={savingSecret === "crash_kb" || !crashKbTokenDraft.trim()} onclick={() => saveSecret("crash_kb", crashKbTokenDraft)}>
                 {savingSecret === "crash_kb" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" disabled={clearingSecret === "crash_kb" || !crashKbTokenSet} on:click={() => clearSecret("crash_kb")}>
+              <button class="ghost mini" disabled={clearingSecret === "crash_kb" || !crashKbTokenSet} onclick={() => clearSecret("crash_kb")}>
                 Clear
               </button>
             </div>
@@ -1480,10 +1481,10 @@
         </div>
 
         <div class="row-actions save-row">
-          <button on:click={saveIntegrationSettings} disabled={savingSettings || integrationsLoading}>
+          <button onclick={saveIntegrationSettings} disabled={savingSettings || integrationsLoading}>
             {savingSettings ? "Saving…" : "Save settings"}
           </button>
-          <button class="ghost" on:click={loadIntegrations} disabled={integrationsLoading}>Reload status</button>
+          <button class="ghost" onclick={loadIntegrations} disabled={integrationsLoading}>Reload status</button>
         </div>
       </section>
     {/if}
@@ -1494,7 +1495,7 @@
           <Info size={18} />
           <h3>About</h3>
         </div>
-        <button class="ghost" on:click={async () => { await loadAppVersion(); await checkUpdate(); }} disabled={updateLoading}>
+        <button class="ghost" onclick={async () => { await loadAppVersion(); await checkUpdate(); }} disabled={updateLoading}>
           {updateLoading ? "Checking…" : "Check for updates"}
         </button>
         {#if updateError}
@@ -1505,7 +1506,7 @@
             {#if updateCheck.updateAvailable}
               <span class="update-avail">Update available: {updateCheck.latestVersion}</span>
               {#if updateCheck.releaseUrl}
-                <button class="ghost mini" on:click={openReleaseUrl}>Open release</button>
+                <button class="ghost mini" onclick={openReleaseUrl}>Open release</button>
               {/if}
             {:else}
               <span class="update-ok">Up to date ({updateCheck.currentVersion})</span>
@@ -1525,13 +1526,13 @@
   </div>
 </div>
 
-<AiConnectionModal bind:open={aiModalOpen} on:saved={loadIntegrations} />
+<AiConnectionModal bind:open={aiModalOpen} onsaved={loadIntegrations} />
 
 {#if showJavaPicker}
   <JavaPickerModal
     current={launcher.defaultJavaPath ?? "Auto-detect"}
-    on:close={() => (showJavaPicker = false)}
-    on:selected={(e) => { showJavaPicker = false; void persistLauncher({ defaultJavaPath: e.detail }); }}
+    onclose={() => (showJavaPicker = false)}
+    onselected={(path) => { showJavaPicker = false; void persistLauncher({ defaultJavaPath: path }); }}
   />
 {/if}
 

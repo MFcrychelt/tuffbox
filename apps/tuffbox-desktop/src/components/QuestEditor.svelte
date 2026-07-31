@@ -53,7 +53,7 @@
   let progressTeams: QuestProgressTeamRef[] = [];
   let progressKey = ""; // relativePath
   let progressOverlay = $state(false);
-  let progressSnap: QuestProgressSnapshot | null = null;
+  let progressSnap = $state<QuestProgressSnapshot | null>(null);
   let progressLoading = $state(false);
 
   let aiSidebarOpen = $state(readAiSidebarPref())

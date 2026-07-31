@@ -88,7 +88,7 @@
   let validationError: string | null = null;
   let autoScroll = $state(true);
   let logEl: HTMLPreElement | null = null;
-  let live: LiveDebugStats | null = null;
+  let live = $state<LiveDebugStats | null>(null);
   let killing = $state(false);
   let launchStats: any = null;
   let forceRun = $state(false);
@@ -96,7 +96,7 @@
   let levelSeed = "";
   let onlineModeOff = $state(true);
   let timeoutSeconds = $state(DEFAULT_TIMEOUT_S);
-  let livePhase: LivePhase = "idle";
+  let livePhase = $state<LivePhase>("idle");
   let verdictReason: string | null = null;
   let startupSeconds: number | null = null;
   let activeRunId: string | null = null;

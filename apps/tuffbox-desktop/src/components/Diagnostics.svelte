@@ -1021,7 +1021,7 @@
             ? String(path)
             : null;
       }
-      const diffKind = destructiveOps.has(op)
+      const diffKind: "add" | "remove" | "change" | "other" = destructiveOps.has(op)
         ? "remove"
         : op === "edit_config" || op === "update_config" || op === "update_mod" || op === "change_mod_version"
           ? "change"
@@ -1032,8 +1032,8 @@
         key: `${op}:${modId ?? path ?? idx}`,
         selected: true,
         op,
-        modId,
-        path,
+        modId: modId != null ? String(modId) : null,
+        path: path != null ? String(path) : null,
         patchPreview,
         reason: String(a.reason ?? a.description ?? ""),
         risk: String(a.risk ?? "medium"),
@@ -1916,9 +1916,9 @@
         <span>{message}</span>
         {#if showApplyTrail}
           <div class="trail-links">
-            <button class="ghost mini" type="button" on:click={() => ideStageRequest.set("history")}><History size={12} /> History</button>
-            <button class="ghost mini" type="button" on:click={() => ideStageRequest.set("test")}><Play size={12} /> Test</button>
-            <button class="ghost mini" type="button" on:click={() => ideStageRequest.set("snapshots")}><Database size={12} /> Snapshots</button>
+            <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("history")}><History size={12} /> History</button>
+            <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("test")}><Play size={12} /> Test</button>
+            <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("snapshots")}><Database size={12} /> Snapshots</button>
           </div>
         {/if}
       </div>
@@ -1926,14 +1926,14 @@
     {#if aiSoftError}
       <div class="notice warning">
         AI unavailable — rules still work.
-        <button class="ghost mini" type="button" on:click={() => (aiModalOpen = true)}>AI settings</button>
+        <button class="ghost mini" type="button" onclick={() => (aiModalOpen = true)}>AI settings</button>
       </div>
     {/if}
     {#if pendingPlan && swarmEnabled}
       <div class="notice warning network-pending">
         <div class="network-pending-head">
           <span>Network ActionPlan ready ({(pendingPlan.actions ?? []).length} action(s)).</span>
-          <button class="secondary small" on:click={applyPendingNetworkFix} disabled={pendingBusy}>
+          <button class="secondary small" onclick={applyPendingNetworkFix} disabled={pendingBusy}>
             {pendingBusy ? "Applying…" : "Review & apply"}
           </button>
         </div>
@@ -1972,11 +1972,11 @@
     <section class="panel recent-pack-panel">
       <div class="recent-head">
         <strong><History size={14} /> Recent pack changes</strong>
-        <button class="ghost mini" on:click={() => ideStageRequest.set("history")}>Open History</button>
+        <button class="ghost mini" onclick={() => ideStageRequest.set("history")}>Open History</button>
       </div>
       <div class="recent-list">
         {#each recentPackEvents as ev (ev.id)}
-          <button type="button" class="recent-row" on:click={() => openHistoryEvent(ev.id)}>
+          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id)}>
             <span class="recent-actor">{ev.actor}</span>
             <span class="recent-sum">{ev.summary}</span>
             <small>{ev.ts?.slice(0, 19) ?? ""}</small>
@@ -1998,7 +1998,7 @@
         id="dx-source-select"
         class="dx-source-select"
         value={preferLatestLog ? LATEST_LOG_SOURCE : preferLauncherLog ? LAUNCHER_LOG_SOURCE : selectedReportId}
-        on:change={onSourceChange}
+        onchange={onSourceChange}
       >
         <option value={LATEST_LOG_SOURCE}>
           latest.log{diagnosis.latestLog.exists ? ` · ${diagnosis.latestLog.signals.length} signals` : " · missing"}
@@ -2019,31 +2019,31 @@
       {#if !diagnosis.reports.some((r) => r.id.startsWith("crash-reports/"))}
         <div class="dx-empty-sources">
           <span>No crash-reports yet.</span>
-          <button type="button" class="ghost mini" on:click={chooseLatestLog}>latest.log</button>
-          <button type="button" class="ghost mini" on:click={chooseLauncherLog}>launcher.log</button>
+          <button type="button" class="ghost mini" onclick={chooseLatestLog}>latest.log</button>
+          <button type="button" class="ghost mini" onclick={chooseLauncherLog}>launcher.log</button>
           {#if diagnosis.hsErrLogs?.length}
             {@const hsErr = diagnosis.hsErrLogs[0]}
-            <button type="button" class="ghost mini" on:click={() => chooseReport(hsErr.id)}>
+            <button type="button" class="ghost mini" onclick={() => chooseReport(hsErr.id)}>
               {hsErr.name}
             </button>
           {/if}
-          <button type="button" class="ghost mini" on:click={runTest} disabled={launching}>Test launch</button>
+          <button type="button" class="ghost mini" onclick={runTest} disabled={launching}>Test launch</button>
         </div>
       {/if}
       <div
         class="dx-drop"
         role="region"
         aria-label="Import player crash"
-        on:dragover|preventDefault
-        on:drop={onDropCrash}
+        ondragover={(e) => e.preventDefault()}
+        ondrop={onDropCrash}
       >
         <span>Drop a player crash-*.txt here, or paste mclo.gs URL:</span>
         <div class="dx-drop-row">
           <input type="url" placeholder="https://mclo.gs/…" bind:value={importUrl} />
-          <button type="button" class="ghost mini" disabled={importBusy || !importUrl.trim()} on:click={importFromMclogsUrl}>
+          <button type="button" class="ghost mini" disabled={importBusy || !importUrl.trim()} onclick={importFromMclogsUrl}>
             {importBusy ? "…" : "Import"}
           </button>
-          <button type="button" class="secondary small" disabled={supportBusy} on:click={exportSupportPack}>
+          <button type="button" class="secondary small" disabled={supportBusy} onclick={exportSupportPack}>
             {supportBusy ? "…" : "Support pack"}
           </button>
         </div>
@@ -2074,11 +2074,11 @@
       mixinFinding={mixinFinding}
       sideMismatchFinding={sideMismatchFinding}
       suspected={suspected}
-      on:fixDisableMod={(e) => fixDisableMod(e.detail)}
-      on:applyTopSuspectUpdate={() => applyTopSuspectUpdate()}
-      on:applyAiPlan={applyAiPlan}
-      on:jumpToFirstError={jumpToFirstError}
-      on:applyBisectDisableHalf={applyBisectDisableHalf}
+      onFixDisableMod={fixDisableMod}
+      onApplyTopSuspectUpdate={applyTopSuspectUpdate}
+      onApplyAiPlan={applyAiPlan}
+      onJumpToFirstError={jumpToFirstError}
+      onApplyBisectDisableHalf={applyBisectDisableHalf}
     />
 
     <!-- Secondary tools (collapsed — Analyze is primary in verdict) -->
@@ -2094,38 +2094,38 @@
         <div class="tools-primary-row">
           <button
             class="primary"
-            on:click={() => runUnifiedAnalysis()}
+            onclick={() => runUnifiedAnalysis()}
             disabled={!$projectPath || analysisBusy || loading || sessionOk}
             title="Re-run Crash Assistant + AI"
           >
             <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
             {analysisBusy ? "Analyzing…" : "Re-analyze"}
           </button>
-          <button class="secondary" on:click={runTest} disabled={!$projectPath || launching || loading}>
+          <button class="secondary" onclick={runTest} disabled={!$projectPath || launching || loading}>
             <Play size={15} class={launching ? "spin" : ""} />
             {launching ? "Launching…" : "Test launch"}
           </button>
-          <button class="ghost" on:click={() => load(true)} disabled={!$projectPath || loading} title="Reload crash reports & logs">
+          <button class="ghost" onclick={() => load(true)} disabled={!$projectPath || loading} title="Reload crash reports & logs">
             <RefreshCw size={15} class={loading ? "spin" : ""} /> Refresh
           </button>
-          <button class="ghost" on:click={() => runAiExplain()} disabled={!$projectPath || aiLoading || sessionOk}>
+          <button class="ghost" onclick={() => runAiExplain()} disabled={!$projectPath || aiLoading || sessionOk}>
             <Bot size={15} /> AI explain
           </button>
         </div>
         <div class="tools-group">
           <span class="tools-label">Log</span>
-          <button class="ghost" on:click={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
+          <button class="ghost" onclick={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
             <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
           </button>
-          <button class="ghost" on:click={exportSupportPack} disabled={!$projectPath || supportBusy} title="Zip crash + findings for Discord/GitHub">
+          <button class="ghost" onclick={exportSupportPack} disabled={!$projectPath || supportBusy} title="Zip crash + findings for Discord/GitHub">
             <Download size={15} /> {supportBusy ? "…" : "Support pack"}
           </button>
-          <button class="ghost" on:click={copyCurrentLog} disabled={!currentLogText} title="Copy the full raw log to clipboard">
+          <button class="ghost" onclick={copyCurrentLog} disabled={!currentLogText} title="Copy the full raw log to clipboard">
             <Copy size={15} /> Copy log
           </button>
           <button
             class="ghost"
-            on:click={jumpToNextError}
+            onclick={jumpToNextError}
             disabled={!errorHits.length}
             title={errorHits.length ? `Cycle errors (${errorHits.length})` : "No error lines in this log"}
           >
@@ -2135,32 +2135,32 @@
         </div>
         <div class="tools-group">
           <span class="tools-label">Folders</span>
-          <button class="ghost" on:click={openFolder} disabled={!$projectPath} title="Open instance folder">
+          <button class="ghost" onclick={openFolder} disabled={!$projectPath} title="Open instance folder">
             <FolderOpen size={15} /> Instance
           </button>
-          <button class="ghost" on:click={() => openSubdir("logs")} disabled={!$projectPath}>
+          <button class="ghost" onclick={() => openSubdir("logs")} disabled={!$projectPath}>
             <FileText size={15} /> logs/
           </button>
-          <button class="ghost" on:click={() => openSubdir("crash-reports")} disabled={!$projectPath}>
+          <button class="ghost" onclick={() => openSubdir("crash-reports")} disabled={!$projectPath}>
             <Bug size={15} /> crashes/
           </button>
         </div>
         <div class="tools-group">
           <span class="tools-label">Scanners</span>
-          <button class="ghost" on:click={createFixPlan} disabled={!$projectPath || planning}>{planning ? "…" : "Fix plan"}</button>
-          <button class="ghost" on:click={scanOreGen} disabled={!$projectPath || oreLoading}>{oreLoading ? "…" : "Ore gen"}</button>
-          <button class="ghost" on:click={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>{duplicateLoading ? "…" : "Duplicates"}</button>
-          <button class="ghost" on:click={generateUnify} disabled={!$projectPath || unifyLoading}>{unifyLoading ? "…" : "Unify"}</button>
-          <button class="ghost" on:click={() => detectWrongLoaderMods()} disabled={!$projectPath || wrongLoaderLoading}>Wrong jars</button>
-          <button class="ghost" on:click={() => detectDuplicateModJars()} disabled={!$projectPath || duplicateJarLoading}>
+          <button class="ghost" onclick={createFixPlan} disabled={!$projectPath || planning}>{planning ? "…" : "Fix plan"}</button>
+          <button class="ghost" onclick={scanOreGen} disabled={!$projectPath || oreLoading}>{oreLoading ? "…" : "Ore gen"}</button>
+          <button class="ghost" onclick={scanDuplicateItems} disabled={!$projectPath || duplicateLoading}>{duplicateLoading ? "…" : "Duplicates"}</button>
+          <button class="ghost" onclick={generateUnify} disabled={!$projectPath || unifyLoading}>{unifyLoading ? "…" : "Unify"}</button>
+          <button class="ghost" onclick={() => detectWrongLoaderMods()} disabled={!$projectPath || wrongLoaderLoading}>Wrong jars</button>
+          <button class="ghost" onclick={() => detectDuplicateModJars()} disabled={!$projectPath || duplicateJarLoading}>
             {duplicateJarLoading ? "Dupes…" : "Dup jars"}
           </button>
-          <button class="ghost" on:click={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy}>
+          <button class="ghost" onclick={() => openAuthorForm({ fromAnalysis: !!aiAnalysis })} disabled={!$projectPath || authorBusy}>
             <BookMarked size={15} /> Save KB
           </button>
-          <button class="ghost" on:click={() => (aiModalOpen = true)}><Bot size={15} /> AI settings</button>
+          <button class="ghost" onclick={() => (aiModalOpen = true)}><Bot size={15} /> AI settings</button>
           {#if aiPrompt}
-            <button class="ghost" on:click={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
+            <button class="ghost" onclick={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
           {/if}
         </div>
       </div>
@@ -2184,14 +2184,13 @@
       memoryHint={null}
       cascadingBanner={cascadingFinding ? cascadingFinding.description : null}
       sourceHint=""
-      on:jumpLine={(e) => {
-        const ln = Number(e.detail) || 0;
-        if (ln <= 0) jumpToFirstError();
-        else scrollLogToLine(Math.max(0, ln - 1));
+      onJumpLine={(ln) => {
+        const n = Number(ln) || 0;
+        if (n <= 0) jumpToFirstError();
+        else scrollLogToLine(Math.max(0, n - 1));
       }}
-      on:disableMod={(e) => fixDisableMod(e.detail)}
-      on:updateMod={async (e) => {
-        const id = e.detail;
+      onDisableMod={fixDisableMod}
+      onUpdateMod={async (id) => {
         if (!id) return;
         fixingIdx = -1;
         try {
@@ -2207,16 +2206,16 @@
           fixingIdx = null;
         }
       }}
-      on:toggleBisect={(e) => toggleBisect(e.detail)}
-      on:findClass={(e) => runClassFinder(e.detail)}
-      on:findDependents={(e) => runFindDependents(e.detail)}
-      on:openSnapshots={() => ideStageRequest.set("snapshots")}
+      onToggleBisect={toggleBisect}
+      onFindClass={runClassFinder}
+      onFindDependents={runFindDependents}
+      onOpenSnapshots={() => ideStageRequest.set("snapshots")}
     />
 
     {#if bisectMods.length >= 2}
       <div class="notice warning">
         Bisect checklist: {bisectMods.join(", ")}
-        <button type="button" class="secondary small" on:click={applyBisectDisableHalf}>Disable first half & retest</button>
+        <button type="button" class="secondary small" onclick={applyBisectDisableHalf}>Disable first half & retest</button>
       </div>
     {/if}
 
@@ -2232,9 +2231,9 @@
       sharingLog={sharingLog}
       hasLogText={!!currentLogText}
       sourceKey={logSourceKey}
-      on:jumpNextError={jumpToNextError}
-      on:copy={copyCurrentLog}
-      on:share={shareCurrentLog}
+      onJumpNextError={jumpToNextError}
+      onCopy={copyCurrentLog}
+      onShare={shareCurrentLog}
     />
 
     <!-- 3. Analysis as tabs (not side-by-side) -->
@@ -2248,10 +2247,10 @@
       aiFeedbackBusy={aiFeedbackBusy}
       aiFeedbackMsg={aiFeedbackMsg}
       applyingHintId={applyingHintId}
-      on:applyFindingFix={(e) => applyCrashFindingFix(e.detail.finding, e.detail.action)}
-      on:retryAi={() => runAiExplain()}
-      on:applyAiPlan={applyAiPlan}
-      on:feedback={(e) => sendAiFeedback(e.detail)}
+      onApplyFindingFix={({ finding, action }) => applyCrashFindingFix(finding, action)}
+      onRetryAi={() => runAiExplain()}
+      onApplyAiPlan={applyAiPlan}
+      onFeedback={sendAiFeedback}
     />
 
     <!-- 4. Evidence (secondary) -->
@@ -2262,11 +2261,11 @@
       fixingIdx={fixingIdx}
       duplicateJarFixing={duplicateJarFixing}
       wrongLoaderFixing={wrongLoaderFixing}
-      on:fixMissingDependency={(e) => fixMissingDependency(e.detail.modId, e.detail.idx)}
-      on:fixDeduplicate={(e) => fixDeduplicate(e.detail)}
-      on:keepOneDuplicateJar={(e) => keepOneDuplicateJar(e.detail.modId, e.detail.fileName)}
-      on:disableWrongJar={(e) => disableWrongJar(e.detail)}
-      on:removeWrongJar={(e) => removeWrongJar(e.detail)}
+      onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
+      onFixDeduplicate={fixDeduplicate}
+      onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
+      onDisableWrongJar={disableWrongJar}
+      onRemoveWrongJar={removeWrongJar}
     />
 
     <!-- Scanner results / KB authoring (tools live in the top strip) -->
@@ -2281,7 +2280,7 @@
             <h3>Heuristic Fix plan (Crash Assistant)</h3>
             <p class="muted-inline">Rule-based — separate from AI ActionPlan above.</p>
             <p>{plan.summary}</p>
-            <button class="primary" on:click={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
+            <button class="primary" onclick={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
           </div>
         {/if}
         {#if authorOpen}
@@ -2294,16 +2293,16 @@
             <label>Actions JSON<textarea bind:value={authorActionsJson} rows="6" class="mono"></textarea></label>
             <label>Notes (local only)<textarea bind:value={authorNotes} rows="2"></textarea></label>
             <div class="actions">
-              <button class="primary" on:click={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
-              <button class="ghost" on:click={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
-              <button class="ghost" on:click={openAuthorExportFolder}>Open folder</button>
-              <button class="ghost" on:click={() => (authorOpen = false)}>Close</button>
+              <button class="primary" onclick={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
+              <button class="ghost" onclick={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
+              <button class="ghost" onclick={openAuthorExportFolder}>Open folder</button>
+              <button class="ghost" onclick={() => (authorOpen = false)}>Close</button>
             </div>
             {#if authorCases.length}
               <div class="author-cases">
                 <strong>Saved cases</strong>
                 {#each authorCases.slice(0, 6) as c (c.id)}
-                  <button type="button" class="ghost mini" on:click={() => copyAuthorExport(c.id)}>{c.id}</button>
+                  <button type="button" class="ghost mini" onclick={() => copyAuthorExport(c.id)}>{c.id}</button>
                 {/each}
               </div>
             {/if}
@@ -2319,15 +2318,15 @@
               <div class="scanner-card">
                 <strong>Ore gen</strong>
                 <p>{oreFindings.length} finding(s)</p>
-                <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("world-map")}>World map</button>
+                <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("world-map")}>World map</button>
               </div>
             {/if}
             {#if duplicateFindings?.length}
               <div class="scanner-card">
                 <strong>Duplicate items</strong>
                 <p>{duplicateFindings.length} finding(s)</p>
-                <button type="button" class="ghost mini" on:click={generateUnify} disabled={unifyLoading}>Generate unify</button>
-                <button type="button" class="ghost mini" on:click={() => ideStageRequest.set("resolve")}>Resolve</button>
+                <button type="button" class="ghost mini" onclick={generateUnify} disabled={unifyLoading}>Generate unify</button>
+                <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("resolve")}>Resolve</button>
               </div>
             {/if}
             {#if unifyConfigResult}
@@ -2341,14 +2340,14 @@
               <div class="scanner-card">
                 <strong>Wrong-loader jars</strong>
                 <p>{wrongLoaderJars.length} jar(s)</p>
-                <button type="button" class="ghost mini" on:click={() => detectWrongLoaderMods()}>Refresh</button>
+                <button type="button" class="ghost mini" onclick={() => detectWrongLoaderMods()}>Refresh</button>
               </div>
             {/if}
             {#if duplicateJarGroups.length}
               <div class="scanner-card">
                 <strong>Duplicate mod jars</strong>
                 <p>{duplicateJarGroups.length} group(s)</p>
-                <button type="button" class="ghost mini" on:click={() => detectDuplicateModJars()}>Refresh</button>
+                <button type="button" class="ghost mini" onclick={() => detectDuplicateModJars()}>Refresh</button>
               </div>
             {/if}
           </div>
@@ -2372,8 +2371,8 @@
   canApply={planReviewCanApply}
   selectedCount={planReviewSelectedCount}
   busy={aiApplyBusy || pendingBusy}
-  on:cancel={() => (planReviewOpen = false)}
-  on:confirm={confirmPlanReviewApply}
+  onCancel={() => (planReviewOpen = false)}
+  onConfirm={confirmPlanReviewApply}
 />
 
 <AiConnectionModal bind:open={aiModalOpen} />

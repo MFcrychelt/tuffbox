@@ -25,7 +25,7 @@
   let lastLoadedPath: string | null = null;
   let fromId = "";
   let toId = "";
-  let diff: SnapshotDiff | null = null;
+  let diff = $state<SnapshotDiff | null>(null);
   let selectedDiffPath = "";
   let fileDiff: SnapshotFileDiff | null = null;
   let diffLoading = $state(false);
@@ -34,7 +34,7 @@
   let detail: SnapshotDetail | null = null;
   let detailLoading = $state(false);
   let search = "";
-  let filterKind: "all" | "auto" | "manual" | "crash" = "all";
+  let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
   let backupsOpen = $state(false);
   let compareOpen = $state(false);
 

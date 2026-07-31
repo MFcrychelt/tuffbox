@@ -1822,7 +1822,8 @@
       if (graphFullscreen) {
         await document.exitFullscreen();
       } else {
-        await graphCanvasEl.requestFullscreen();
+        const el = graphCanvasEl;
+        if (el) await el.requestFullscreen();
       }
       resetView();
     } catch (e) {
@@ -2516,9 +2517,13 @@
                       class="card-install-btn"
                       type="button"
                       title="Install {missingDeps.length} missing dependencies"
-                      onclick={(e) => { e.stopPropagation(); async () => {
-                        for (const edge of missingDeps) {
-                          await installSingleMissingDep(edge);(e); } }
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        void (async () => {
+                          for (const edge of missingDeps) {
+                            await installSingleMissingDep(edge);
+                          }
+                        })();
                       }}
                       disabled={resolving}
                     >
@@ -2526,7 +2531,7 @@
                       <span>Install</span>
                     </button>
                   {/if}
-                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); (e) => e.key === "Enter" && removeConflictNode(node.id)(e); } }>
+                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") void removeConflictNode(node.id); } }>
                     <X size={14} />
                   </span>
                 </div>

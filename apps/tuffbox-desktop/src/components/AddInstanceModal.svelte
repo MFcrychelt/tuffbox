@@ -25,13 +25,13 @@
   // --- Blank instance (explicit, typed inputs) ---
   let name = $state("New Instance");
   let minecraftVersion = $state("1.20.1");
-  let loader: "vanilla" | "fabric" | "forge" | "neoforge" | "quilt" = $state("fabric");
+  let loader = $state<"vanilla" | "fabric" | "forge" | "neoforge" | "quilt">("fabric");
   let loaderVersion = $state("");
   let mcVersions = $state<{ id: string; popular: boolean }[]>([]);
   let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
   let loadingMc = $state(true);
   let loadingLoader = $state(false);
-  let memoryMode: "auto" | "manual" = $state("auto");
+  let memoryMode = $state<"auto" | "manual">("auto");
   let recommendedMemoryMb = $state(8192);
   let memoryMb = $state(8192);
   let memoryMaxMb = $state(16384);

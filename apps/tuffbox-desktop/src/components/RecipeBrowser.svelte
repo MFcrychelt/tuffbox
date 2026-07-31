@@ -117,7 +117,7 @@
   let editAddition: string | null = null;
   let replaceRecipeId: string | null = null;
   let editorSaving = $state(false);
-  let paletteMode: PaletteMode = "items";
+  let paletteMode = $state<PaletteMode>("items");
   let knownTags: string[] = [];
   let tagsLoading = $state(false);
   let editTagId = "";
@@ -1383,11 +1383,13 @@
                       style="--hue: {itemHue(slot.val ?? '')}"
                       title={slot.val ?? slot.label}
                       ondragover={onDragOverSlot}
-                      ondrop={(e) => onDropSmithing(e, slot.key)}
-                      oncontextmenu={(e) => { e.preventDefault(); {
+                      ondrop={(e) => onDropSmithing(e, slot.key as "template" | "base" | "addition")}
+                      oncontextmenu={(e) => {
+                        e.preventDefault();
                         if (slot.key === "template") editTemplate = null;
                         else if (slot.key === "base") editBase = null;
-                        else editAddition = null;(e); } }}
+                        else editAddition = null;
+                      }}
                       onclick={() => {
                         if (slot.key === "template") editTemplate = null;
                         else if (slot.key === "base") editBase = null;

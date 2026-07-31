@@ -530,7 +530,7 @@
   });
 </script>
 
-<div class="brief-editor" on:paste={handlePaste}>
+<div class="brief-editor" onpaste={handlePaste}>
   <div class="page-header">
     <div>
       <h2>Storefront listing</h2>
@@ -540,7 +540,7 @@
       </p>
     </div>
     <div class="header-actions">
-      <button type="button" on:click={saveAll} disabled={!$projectPath || saving || nameEmpty}>
+      <button type="button" onclick={saveAll} disabled={!$projectPath || saving || nameEmpty}>
         <Save size={14} /> {saving ? "Saving…" : dirty ? "Save*" : "Save"}
       </button>
     </div>
@@ -564,7 +564,7 @@
                 Pack name
                 <input
                   bind:value={name}
-                  on:input={markDirty}
+                  oninput={markDirty}
                   placeholder="My Pack"
                   class:invalid={nameEmpty}
                 />
@@ -574,7 +574,7 @@
                 Summary
                 <textarea
                   bind:value={summary}
-                  on:input={markDirty}
+                  oninput={markDirty}
                   maxlength={512}
                   rows="3"
                   placeholder="Short card blurb (Modrinth soft limit 256)"
@@ -596,8 +596,8 @@
                 {/if}
               </div>
               <div class="icon-actions">
-                <button type="button" on:click={pickIcon}>Choose…</button>
-                <button type="button" class="ghost" on:click={clearIcon} disabled={!iconPath}>
+                <button type="button" onclick={pickIcon}>Choose…</button>
+                <button type="button" class="ghost" onclick={clearIcon} disabled={!iconPath}>
                   Clear
                 </button>
               </div>
@@ -615,7 +615,7 @@
                     type="button"
                     class="cat-chip"
                     class:on={isCategorySelected(cat.name)}
-                    on:click={() => toggleCategory(cat.name)}
+                    onclick={() => toggleCategory(cat.name)}
                     title={cat.name}
                   >
                     {prettyCat(cat.name)}
@@ -642,12 +642,12 @@
                 <button
                   type="button"
                   class:active={cardStyle === "modrinth"}
-                  on:click={() => (cardStyle = "modrinth")}>Modrinth</button
+                  onclick={() => (cardStyle = "modrinth")}>Modrinth</button
                 >
                 <button
                   type="button"
                   class:active={cardStyle === "curseforge"}
-                  on:click={() => (cardStyle = "curseforge")}>CurseForge</button
+                  onclick={() => (cardStyle = "curseforge")}>CurseForge</button
                 >
               </div>
             </div>
@@ -673,38 +673,38 @@
         <div class="panel-head">
           <h3>Description</h3>
           <div class="seg">
-            <button type="button" class:active={mdView === "edit"} on:click={() => (mdView = "edit")}
+            <button type="button" class:active={mdView === "edit"} onclick={() => (mdView = "edit")}
               >Edit</button
             >
             <button
               type="button"
               class:active={mdView === "split"}
-              on:click={() => (mdView = "split")}>Split</button
+              onclick={() => (mdView = "split")}>Split</button
             >
             <button
               type="button"
               class:active={mdView === "preview"}
-              on:click={() => (mdView = "preview")}>Preview</button
+              onclick={() => (mdView = "preview")}>Preview</button
             >
           </div>
         </div>
         <div class="md-toolbar">
-          <button type="button" class="ghost" title="Bold" on:click={() => insertAround("**")}
+          <button type="button" class="ghost" title="Bold" onclick={() => insertAround("**")}
             ><Bold size={14} /></button
           >
-          <button type="button" class="ghost" title="Italic" on:click={() => insertAround("_")}
+          <button type="button" class="ghost" title="Italic" onclick={() => insertAround("_")}
             ><Italic size={14} /></button
           >
-          <button type="button" class="ghost" title="Heading" on:click={insertHeading}
+          <button type="button" class="ghost" title="Heading" onclick={insertHeading}
             ><Heading size={14} /></button
           >
-          <button type="button" class="ghost" title="Link" on:click={insertLink}
+          <button type="button" class="ghost" title="Link" onclick={insertLink}
             ><Link size={14} /></button
           >
-          <button type="button" class="ghost" title="Image URL" on:click={insertImageUrl}
+          <button type="button" class="ghost" title="Image URL" onclick={insertImageUrl}
             ><ImageIcon size={14} /></button
           >
-          <button type="button" class="ghost" on:click={insertLocalImage}>Insert local image</button>
+          <button type="button" class="ghost" onclick={insertLocalImage}>Insert local image</button>
         </div>
         <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
           {#if mdView !== "preview"}
@@ -734,10 +734,10 @@
           <div class="panel-head">
             <h3>Gallery</h3>
             <div class="row-actions">
-              <button type="button" class="ghost" on:click={addGalleryFile}
+              <button type="button" class="ghost" onclick={addGalleryFile}
                 ><Plus size={14} /> File</button
               >
-              <button type="button" class="ghost" on:click={addGalleryUrl}
+              <button type="button" class="ghost" onclick={addGalleryUrl}
                 ><Plus size={14} /> URL</button
               >
             </div>
@@ -754,19 +754,19 @@
                     <div class="gal-ph">?</div>
                   {/if}
                   <div class="gal-actions">
-                    <button type="button" class="ghost" on:click={() => insertGalleryIntoBody(item)}
+                    <button type="button" class="ghost" onclick={() => insertGalleryIntoBody(item)}
                       >Insert</button
                     >
-                    <button type="button" class="ghost" on:click={() => moveGallery(i, i - 1)} disabled={i === 0}
+                    <button type="button" class="ghost" onclick={() => moveGallery(i, i - 1)} disabled={i === 0}
                       >↑</button
                     >
                     <button
                       type="button"
                       class="ghost"
-                      on:click={() => moveGallery(i, i + 1)}
+                      onclick={() => moveGallery(i, i + 1)}
                       disabled={i === gallery.length - 1}>↓</button
                     >
-                    <button type="button" class="ghost danger" on:click={() => removeGallery(i)}
+                    <button type="button" class="ghost danger" onclick={() => removeGallery(i)}
                       ><X size={12} /></button
                     >
                   </div>
@@ -781,20 +781,20 @@
           <summary>Author notes (planning)</summary>
           <div class="brief-grid">
             <label
-              >Pack goal<textarea bind:value={briefGoal} on:input={markDirty} rows="3"></textarea
+              >Pack goal<textarea bind:value={briefGoal} oninput={markDirty} rows="3"></textarea
               ></label
             >
             <label
               >Target player<textarea
                 bind:value={briefAudience}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
               ></textarea></label
             >
             <label
               >Gameplay pillars<textarea
                 bind:value={briefPillars}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
                 placeholder="One per line"
               ></textarea></label
@@ -802,7 +802,7 @@
             <label
               >Hard constraints<textarea
                 bind:value={briefConstraints}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
                 placeholder="One per line"
               ></textarea></label
@@ -810,13 +810,13 @@
             <label
               >Release targets<textarea
                 bind:value={briefReleaseTargets}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
                 placeholder="One per line"
               ></textarea></label
             >
             <label
-              >Notes<textarea bind:value={briefNotes} on:input={markDirty} rows="3"></textarea
+              >Notes<textarea bind:value={briefNotes} oninput={markDirty} rows="3"></textarea
               ></label
             >
           </div>
@@ -826,21 +826,21 @@
           <summary>More · copy, folder, workflow</summary>
           <div class="extras-grid">
             <div class="extras-actions">
-              <button type="button" class="ghost" on:click={copySummary} disabled={!summary}>
+              <button type="button" class="ghost" onclick={copySummary} disabled={!summary}>
                 <Copy size={14} /> Copy summary
               </button>
-              <button type="button" class="ghost" on:click={openListingFolder} disabled={!$projectPath}>
+              <button type="button" class="ghost" onclick={openListingFolder} disabled={!$projectPath}>
                 <FolderOpen size={14} /> Listing folder
               </button>
             </div>
             <div class="trail">
-              <button type="button" class="ghost" on:click={() => goTrail("history")}
+              <button type="button" class="ghost" onclick={() => goTrail("history")}
                 ><History size={14} /> History</button
               >
-              <button type="button" class="ghost" on:click={() => goTrail("export")}
+              <button type="button" class="ghost" onclick={() => goTrail("export")}
                 ><UploadCloud size={14} /> Export</button
               >
-              <button type="button" class="ghost" on:click={() => goTrail("release")}
+              <button type="button" class="ghost" onclick={() => goTrail("release")}
                 ><Rocket size={14} /> Release</button
               >
             </div>

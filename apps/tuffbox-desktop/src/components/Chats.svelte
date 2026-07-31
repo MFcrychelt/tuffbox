@@ -1119,7 +1119,7 @@
               <div class="muted pad small">No results</div>
             {/if}
             {#each addModResults as r (r.id)}
-              <button type="button" class="add-mod-row" onmousedown={(e) => { e.preventDefault(); (() => addModDirectly(r))(e); }}>
+              <button type="button" class="add-mod-row" onmousedown={(e) => { e.preventDefault(); addModDirectly(r); }}>
                 <span class="mod-name">{r.name}</span>
                 <code>{r.slug}</code>
               </button>

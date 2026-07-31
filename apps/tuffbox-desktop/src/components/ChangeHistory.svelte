@@ -353,11 +353,11 @@
       <select bind:value={actorFilter} title="Actor filter">
         {#each actors as a}<option value={a}>{a === "All" ? "All actors" : actorLabel(a)}</option>{/each}
       </select>
-      <button class="secondary" on:click={() => scanNow()} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
+      <button class="secondary" onclick={() => scanNow()} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
         <ScanSearch size={16} /> {scanning ? "Scanning…" : "Scan now"}
       </button>
-      <button class="secondary" on:click={saveHistorySettings} disabled={!$projectPath || loading}>Save settings</button>
-      <button class="ghost" on:click={() => load(true)} disabled={!$projectPath || loading}>
+      <button class="secondary" onclick={saveHistorySettings} disabled={!$projectPath || loading}>Save settings</button>
+      <button class="ghost" onclick={() => load(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
@@ -371,7 +371,7 @@
       <label><input type="checkbox" bind:checked={tracked[key]} /> {key}{#if key === "World/Data"}<small>opt-in</small>{/if}</label>
     {/each}
     <label title="While IDE is open, rescan every 60s">
-      <input type="checkbox" bind:checked={focusedScan} on:change={saveHistorySettings} /> Focused scan
+      <input type="checkbox" bind:checked={focusedScan} onchange={saveHistorySettings} /> Focused scan
     </label>
   </div>
 
@@ -393,7 +393,7 @@
                 <button
                   class="file-strip {entry.kind}"
                   class:selected={selectedId === entry.id}
-                  on:click={() => {
+                  onclick={() => {
                     selectedId = entry.id;
                     document.getElementById("change-" + entry.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
                   }}
@@ -429,16 +429,16 @@
                   <p>{entry.createdAt} · {entry.reason}</p>
                 </div>
                 <div class="preview-actions">
-                  <button class="secondary" on:click={() => explainEntry(entry)} title="Explain this change">
+                  <button class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
                     <Sparkles size={16} /> Explain
                   </button>
-                  <button class="secondary" on:click={() => openDiagnose(entry)} title="Open Diagnose">
+                  <button class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
                     <Stethoscope size={16} /> Diagnose
                   </button>
-                  <button class="secondary" on:click={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
+                  <button class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
                     <RotateCcw size={16} /> Rollback
                   </button>
-                  <button class="secondary" on:click={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                  <button class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
                     <Maximize2 size={16} /> Open
                   </button>
                 </div>
@@ -448,8 +448,8 @@
                 class="summary-card"
                 role="button"
                 tabindex="0"
-                on:click={() => toggleExpanded(entry)}
-                on:keydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
+                onclick={() => toggleExpanded(entry)}
+                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
               >
                 <div class="summary-row">
                   <strong>{entry.operation}</strong>
@@ -474,7 +474,7 @@
           {/each}
           {#if hasMoreVisible}
             <div class="show-more-row">
-              <button class="secondary" on:click={() => (visibleLimit += VISIBLE_STEP)}>
+              <button class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
                 Show more ({visible.length - visibleLimit} remaining)
               </button>
             </div>
@@ -495,10 +495,10 @@
         </div>
         <div class="editor-actions">
           {#if editorDirty}<span class="dirty">Unsaved</span>{/if}
-          <button on:click={saveEditor} disabled={!editorDirty || saving}>
+          <button onclick={saveEditor} disabled={!editorDirty || saving}>
             <Save size={16} /> {saving ? "Saving…" : "Save"}
           </button>
-          <button class="icon-btn" on:click={() => (editorOpen = false)}><X size={18} /></button>
+          <button class="icon-btn" onclick={() => (editorOpen = false)}><X size={18} /></button>
         </div>
       </div>
       <textarea bind:value={editorContent} spellcheck="false" />
@@ -508,7 +508,7 @@
 
 {#if confirmOpen}
   <ConfirmDialog title="Rollback file?" message={`Restore ${confirmEntry?.path ?? "file"} from snapshot?`} danger={false}
-    confirmLabel="Rollback" on:confirm={doRollback} on:cancel={() => (confirmOpen = false, confirmEntry = null)} />
+    confirmLabel="Rollback" onconfirm={doRollback} oncancel={() => (confirmOpen = false, confirmEntry = null)} />
 {/if}
 
 <style>
