@@ -211,6 +211,20 @@
   }
 
   onMount(() => {
+    // Orphan portals / error overlays can survive HMR and eat all clicks.
+    try {
+      document
+        .querySelectorAll(".yp-shell, .sw-backdrop, vite-error-overlay")
+        .forEach((el) => el.remove());
+      const app = document.getElementById("app");
+      if (app) app.style.pointerEvents = "auto";
+      closeYoutubePlayer();
+      showSwarmOnboarding = false;
+      showCommandPalette = false;
+      showShortcuts = false;
+    } catch {
+      /* ignore */
+    }
     if (localStorage.getItem("tuffbox-reduced-motion") === "1") {
       document.documentElement.classList.add("potato-pc");
     }
@@ -293,27 +307,27 @@
     });
 
     void (async () => {
-      // Browser preview has no IPC — never block the UI with onboarding.
-      if (!isTauri() || swarmOnboardLocallyDone()) {
-        showSwarmOnboarding = false;
-      } else {
+      // Never block the launcher behind a fullscreen modal. First-run swarm
+      // choice defaults to "off"; user can enable later in Settings.
+      showSwarmOnboarding = false;
+      if (isTauri() && !swarmOnboardLocallyDone()) {
         try {
           const swarm = await invoke<{
             onboardingDone?: boolean;
             onboarding_done?: boolean;
-            enabled?: boolean;
           }>("get_swarm_settings");
           const done = !!(swarm?.onboardingDone ?? swarm?.onboarding_done);
-          if (done) {
-            markSwarmOnboardLocallyDone();
-            showSwarmOnboarding = false;
-          } else {
-            showSwarmOnboarding = true;
+          if (!done) {
+            try {
+              await invoke("complete_swarm_onboarding", { enabled: false });
+            } catch {
+              /* ignore — local flag still prevents any future modal */
+            }
           }
         } catch {
-          // If settings can't be read, don't trap the user behind a modal.
-          showSwarmOnboarding = false;
+          /* ignore */
         }
+        markSwarmOnboardLocallyDone();
       }
       try {
         const lastPath = await api.session.getLastOpened();
@@ -584,12 +598,18 @@
 <style>
   .app-shell {
     display: flex;
-    /* Compensate Chromium zoom so the shell still fills the window. */
-    width: calc(100vw / var(--ui-scale, 1));
-    height: calc(100vh / var(--ui-scale, 1));
+    width: 100%;
+    height: 100%;
     overflow: hidden;
     background: var(--bg-primary);
     color: var(--text-primary);
+    pointer-events: auto;
+    /* UI scale applied via JS (see applyUiScale) — CSS zoom here broke
+       hit-testing in some WebView/embed previews even at scale=1. */
+  }
+  .app-shell[data-ui-scaled="1"] {
+    width: calc(100vw / var(--ui-scale, 1));
+    height: calc(100vh / var(--ui-scale, 1));
     zoom: var(--ui-scale, 1);
   }
 

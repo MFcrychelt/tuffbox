@@ -160,7 +160,17 @@ export function normalizeUiScalePercent(raw: unknown): number {
 export function applyUiScale(percent: unknown) {
   const p = normalizeUiScalePercent(percent);
   if (typeof document === "undefined") return p;
-  document.documentElement.style.setProperty("--ui-scale", String(p / 100));
+  const scale = p / 100;
+  document.documentElement.style.setProperty("--ui-scale", String(scale));
+  const shell = document.querySelector(".app-shell");
+  if (shell instanceof HTMLElement) {
+    // Avoid CSS zoom at 100% — it desyncs click hit-testing in some embeds.
+    if (p === 100) {
+      shell.removeAttribute("data-ui-scaled");
+    } else {
+      shell.setAttribute("data-ui-scaled", "1");
+    }
+  }
   return p;
 }
 
