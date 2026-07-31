@@ -48,6 +48,12 @@
   let resizeFromLeft = false;
   let resizeFromTop = false;
 
+  let embedLoaded = $state(false);
+  let embedError = $state(false);
+  let showEmbedTip = $state(false);
+  let embedTipDismissed = $state(false);
+  let embedLoadTimer: ReturnType<typeof setTimeout> | undefined;
+
   const embedSrc = $derived(`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3`);
   const miniVideoH = $derived(Math.round((miniW * 9) / 16));
 
@@ -60,7 +66,52 @@
     };
   }
 
+  function clearEmbedLoadTimer() {
+    if (embedLoadTimer !== undefined) {
+      clearTimeout(embedLoadTimer);
+      embedLoadTimer = undefined;
+    }
+  }
+
+  function resetEmbedLoadState() {
+    embedLoaded = false;
+    embedError = false;
+    showEmbedTip = false;
+    embedTipDismissed = false;
+  }
+
+  function startEmbedLoadWatch() {
+    clearEmbedLoadTimer();
+    resetEmbedLoadState();
+    if (!embedAlive) return;
+    embedLoadTimer = window.setTimeout(() => {
+      if (!embedLoaded && !embedTipDismissed && embedAlive) {
+        showEmbedTip = true;
+      }
+    }, 5000);
+  }
+
+  function onEmbedLoad() {
+    embedLoaded = true;
+    showEmbedTip = false;
+    clearEmbedLoadTimer();
+  }
+
+  function onEmbedError() {
+    embedError = true;
+    if (!embedTipDismissed && embedAlive) {
+      showEmbedTip = true;
+    }
+    clearEmbedLoadTimer();
+  }
+
+  function dismissEmbedTip() {
+    embedTipDismissed = true;
+    showEmbedTip = false;
+  }
+
   function destroyEmbed() {
+    clearEmbedLoadTimer();
     embedAlive = false;
   }
 
@@ -214,6 +265,7 @@
   function close() {
     if (closing) return;
     closing = true;
+    backdropIn = false;
     destroyEmbed();
 
     const finish = () => onclose?.();
@@ -223,7 +275,6 @@
       return;
     }
 
-    backdropIn = false;
     backdropOut = true;
     dialogIn = false;
     dialogOut = true;
@@ -335,6 +386,16 @@
     void playOpenAnimation();
   });
 
+  $effect(() => {
+    if (!embedAlive) {
+      clearEmbedLoadTimer();
+      return;
+    }
+    videoId;
+    startEmbedLoadWatch();
+    return () => clearEmbedLoadTimer();
+  });
+
   onDestroy(destroyEmbed);
 </script>
 
@@ -409,7 +470,21 @@
           title={title || "YouTube video"}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowfullscreen
+          onload={onEmbedLoad}
+          onerror={onEmbedError}
         ></iframe>
+      {/if}
+      {#if showEmbedTip && embedAlive}
+        <div class="yp-embed-tip">
+          <span class="yp-embed-tip-text">Video not playing?</span>
+          <button type="button" class="yp-btn yp-embed-tip-btn" onclick={openInBrowser}>
+            <ExternalLink size={14} />
+            <span>Open in browser</span>
+          </button>
+          <button type="button" class="yp-icon-btn" onclick={dismissEmbedTip} aria-label="Dismiss tip">
+            <X size={16} />
+          </button>
+        </div>
       {/if}
     </div>
 
@@ -492,7 +567,7 @@
     pointer-events: none;
   }
 
-  .yp-shell.yp-in {
+  .yp-shell.yp-in:not(.is-mini) {
     opacity: 1;
     pointer-events: auto;
   }
@@ -684,6 +759,36 @@
     width: 100%;
     height: 100%;
     border: 0;
+  }
+
+  .yp-embed-tip {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md, 8px);
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-secondary) 92%, #000);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+    z-index: 1;
+    max-width: calc(100% - 24px);
+  }
+
+  .yp-embed-tip-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+
+  .yp-embed-tip-btn {
+    padding: 5px 8px;
+    font-size: 11px;
   }
 
   .yp-resize {
