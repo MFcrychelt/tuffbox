@@ -2479,7 +2479,7 @@
   .pillar-checklist {
     margin-top: 10px;
     padding: 10px 12px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color, #2a2f3a);
     background: var(--bg-tertiary, #1a1f2a);
     font-size: 12px;
