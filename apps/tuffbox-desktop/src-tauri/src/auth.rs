@@ -2480,7 +2480,11 @@ mod tests {
     fn auth_state_serializes() {
         let state = AuthState::default();
         let json = serde_json::to_string(&state).unwrap();
-        assert!(json.contains("logged_in"));
+        // AuthState uses rename_all = "camelCase".
+        assert!(
+            json.contains("loggedIn"),
+            "expected camelCase loggedIn in {json}"
+        );
     }
 
     #[test]
