@@ -5,7 +5,7 @@
   let { onclose }: { onclose?: () => void } = $props();
 
   const shortcuts = [
-    { keys: ["Ctrl", "K"], label: "Quick navigate" },
+    { keys: ["Ctrl", "K"], label: "Command palette" },
     { keys: ["Ctrl", "1"], label: "Launcher" },
     { keys: ["Ctrl", "2"], label: "Open IDE" },
     { keys: ["Ctrl", "3"], label: "Mods" },
@@ -13,6 +13,10 @@
     { keys: ["Ctrl", "5"], label: "Configs" },
     { keys: ["Ctrl", "6"], label: "Diagnostics" },
     { keys: ["Ctrl", "7"], label: "Snapshots" },
+    { keys: ["Ctrl", "Enter"], label: "IDE · Next Action" },
+    { keys: ["Ctrl", "Shift", "P"], label: "IDE · Play / Test launch" },
+    { keys: ["["], label: "IDE · Prev stage in phase" },
+    { keys: ["]"], label: "IDE · Next stage in phase" },
     { keys: ["?"], label: "Show shortcuts" },
   ];
 </script>

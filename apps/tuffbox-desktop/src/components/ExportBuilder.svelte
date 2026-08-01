@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "@lucide/svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { projectPath, projectInfo, pushWorkTrail } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
   type ExportResult = {
@@ -71,6 +71,12 @@
         path: $projectPath,
         targetPath: pathValue,
       });
+      if (result) {
+        pushWorkTrail(`Export ready · ${result.path}`, [
+          { id: "release", label: "Open Release", kind: "stage", stage: "release" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+      }
     } catch (e) {
       error = String(e);
     } finally {

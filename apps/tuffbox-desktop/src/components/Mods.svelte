@@ -42,7 +42,7 @@
     Users,
     FilePlus,
   } from "@lucide/svelte";
-  import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import { toasts } from "../lib/toast";
@@ -1155,8 +1155,26 @@ import { trapFocus } from "../lib/focusTrap";
       if (missing.length > 0) {
         dependencyMissingCount = missing.length;
         dependencyDialogOpen = true;
+        pushWorkTrail(`Installed mods · ${missing.length} missing dep${missing.length === 1 ? "" : "s"}`, [
+          { id: "resolve", label: "Fix in Resolve", kind: "stage", stage: "resolve" },
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      } else {
+        pushWorkTrail("Mods installed", [
+          { id: "resolve", label: "Check Resolve", kind: "stage", stage: "resolve" },
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
       }
-    }).catch(() => {});
+    }).catch(() => {
+      pushWorkTrail("Mods installed", [
+        { id: "test", label: "Test launch", kind: "play" },
+        { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+      ]);
+    });
   }
 
   // Ideas: after Add-mod install, offer popular co-occurring companions (user can decline).
@@ -1374,6 +1392,14 @@ import { trapFocus } from "../lib/focusTrap";
       dependencyDialogOpen = false;
       message = installed.length ? `Auto-installed ${installed.length} dependencies: ${installed.join(", ")}` : "No missing dependencies to install.";
       await reloadModsSilent();
+      if (installed.length) {
+        pushWorkTrail(`Installed ${installed.length} missing dependencies`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "resolve", label: "Open Resolve", kind: "stage", stage: "resolve" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -2502,6 +2528,28 @@ import { trapFocus } from "../lib/focusTrap";
           ? "shaders"
           : "mods");
 
+  const heroTitle = $derived(
+    contentFilter === "resourcepack"
+      ? "Resource packs"
+      : contentFilter === "datapack"
+        ? "Datapacks"
+        : contentFilter === "shader"
+          ? "Shaders"
+          : contentFilter === "favorites"
+            ? "Favorites"
+            : isSavedViewFilter(contentFilter)
+              ? savedViewLabel(contentFilter)
+              : "Mods",
+  );
+
+  const heroBlurb = $derived(
+    isSavedViewFilter(contentFilter)
+      ? "Browse and install mods from this saved list."
+      : contentFilter === "favorites"
+        ? "Your starred Modrinth projects for this instance."
+        : `Installed ${contentNoun}, updates, and add-from-catalog search.`,
+  );
+
   const tabCounts = $derived({
     mod: mods.filter((m) => (m.contentType ?? "mod") === "mod").length,
     resourcepack: mods.filter((m) => m.contentType === "resourcepack").length,
@@ -2518,10 +2566,10 @@ import { trapFocus } from "../lib/focusTrap";
   <header class="content-hero" class:collapsed={!heroExpanded}>
     <button type="button" class="content-hero-toggle" onclick={toggleHeroExpanded} aria-expanded={heroExpanded}>
       <div class="content-hero-copy">
-        <div class="content-kicker"><Package size={14} /> Content library</div>
-        <h1>Your pack, sharpened</h1>
+        <div class="content-kicker"><Package size={14} /> Content</div>
+        <h1>{heroTitle}</h1>
         {#if heroExpanded}
-          <p>Install, update and curate mods with live download feedback — no guessing, no orphan jars.</p>
+          <p>{heroBlurb}</p>
         {/if}
       </div>
       <span class="hero-chevron" class:rotated={heroExpanded} aria-hidden="true">
@@ -3069,7 +3117,7 @@ import { trapFocus } from "../lib/focusTrap";
     <div class="download-modal">
       <div class="download-modal-header">
         <div>
-          <div class="content-kicker"><Download size={14} /> Live transfer</div>
+          <div class="content-kicker"><Download size={14} /> Download</div>
           <h2>{downloadTitle}</h2>
           <p>
             {#if downloadDone}
@@ -4087,16 +4135,11 @@ import { trapFocus } from "../lib/focusTrap";
     align-items: flex-end;
     gap: 24px;
     margin-bottom: 12px;
-    padding: 22px 24px;
-    border-radius: 20px;
-    border: 1px solid rgba(27, 217, 106, 0.18);
-    background:
-      radial-gradient(ellipse 80% 120% at 0% 0%, rgba(27, 217, 106, 0.16), transparent 55%),
-      radial-gradient(ellipse 60% 100% at 100% 0%, rgba(139, 92, 246, 0.12), transparent 50%),
-      linear-gradient(180deg, rgba(255,255,255,0.03), transparent),
-      var(--bg-secondary);
+    padding: 16px 18px;
+    border-radius: var(--border-radius-xl, 16px);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
     overflow: hidden;
-    animation: hero-in 0.45s ease both;
     transition: padding 0.2s ease;
   }
 
@@ -4258,14 +4301,11 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .content-hero h1 {
-    margin: 0 0 6px;
-    font-size: 28px;
+    margin: 0 0 4px;
+    font-size: 20px;
     font-weight: 800;
-    letter-spacing: -0.03em;
-    background: linear-gradient(120deg, #fff 30%, var(--accent-primary));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
   }
 
   .content-hero-copy p {
@@ -4285,8 +4325,8 @@ import { trapFocus } from "../lib/focusTrap";
   .stat-pill {
     min-width: 72px;
     padding: 10px 14px;
-    border-radius: 14px;
-    background: rgba(0,0,0,0.28);
+    border-radius: var(--border-radius-md, 10px);
+    background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     text-align: center;
   }

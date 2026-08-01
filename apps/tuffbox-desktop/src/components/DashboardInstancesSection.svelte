@@ -37,6 +37,7 @@
     projectStats,
     pinnedPaths,
     activeMenuPath,
+    menuPos = null,
     homeLayoutOptions,
     sideColumn = false,
     onHomeLayoutChange,
@@ -54,6 +55,7 @@
     projectStats: Record<string, { playtime: number; lastLaunch: string | null }>;
     pinnedPaths: Record<string, boolean>;
     activeMenuPath: string | null;
+    menuPos?: { top: number; left: number } | null;
     homeLayoutOptions: { id: HomeLayout; label: string }[];
     sideColumn?: boolean;
     onHomeLayoutChange: (e: Event) => void;
@@ -148,8 +150,15 @@
             <MoreVertical size={18} />
           </button>
 
-          {#if activeMenuPath === project.path}
-            <div class="actions-menu" role="menu" tabindex="-1" onkeydown={() => {}}>
+          {#if activeMenuPath === project.path && menuPos}
+            <div
+              class="actions-menu"
+              role="menu"
+              tabindex="-1"
+              style={`top:${menuPos.top}px; left:${menuPos.left}px`}
+              onclick={(e) => e.stopPropagation()}
+              onkeydown={() => {}}
+            >
               <div class="menu-group">
                 <button onclick={() => handleAction("change-version", project)}>
                   <ShieldAlert size={14} /> Change Version
@@ -416,16 +425,17 @@
   }
 
   .actions-menu {
-    position: absolute;
-    top: 42px;
-    right: 10px;
+    position: fixed;
     width: 200px;
+    max-height: min(420px, calc(100vh - 16px));
+    overflow-y: auto;
     background: var(--bg-elevated);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
-    z-index: 50;
+    z-index: 400;
     padding: 4px;
+    scrollbar-width: thin;
   }
 
   .actions-menu button {

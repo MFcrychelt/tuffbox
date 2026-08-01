@@ -37,12 +37,15 @@
     loginTypeLabel,
     formatPlaytime,
     ideStageRequest,
+    ideSuggestedStage,
+    ideIssueCount,
     type RecentProject,
     type CapeProvider,
     type CapeCatalog,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
+  import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
   import {
     fetchCrashFixBanner,
@@ -141,7 +144,8 @@
 
   let selectedPath = $state<string | null>($projectPath);
   let activeMenuPath = $state<string | null>(null);
-  let menuAnchor = $state<HTMLElement | null>(null);
+  /** Fixed-position coords for the instance actions menu (viewport space). */
+  let menuPos = $state<{ top: number; left: number } | null>(null);
   let showLoginModal = $state(false);
   let showAccountManager = $state(false);
   let showWorldPrompt = $state(false);
@@ -167,6 +171,15 @@
   const skinUrl = $derived($authState.profile?.skinUrl ?? null);
   const capeUrl = $derived($authState.profile?.capeUrl ?? null);
   const accountKey = $derived($authState.activeAccountUuid ?? $authState.profile?.uuid ?? "");
+  /** Shrink Minecraft nick under the skin preview so long names fit the 320px rail. */
+  const skinNameFontPx = $derived.by(() => {
+    const n = ($authState.profile?.name ?? "").length;
+    if (n <= 8) return 12;
+    if (n <= 12) return 11;
+    if (n <= 16) return 10;
+    if (n <= 20) return 9;
+    return 8;
+  });
   const mojangCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang"));
   const otherCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang"));
   const canChangeMojangCape = $derived(
@@ -380,14 +393,42 @@
     event.stopPropagation();
     if (activeMenuPath === path) {
       activeMenuPath = null;
-    } else {
-      activeMenuPath = path;
-      menuAnchor = event.currentTarget as HTMLElement;
+      menuPos = null;
+      return;
     }
+    activeMenuPath = path;
+    const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const menuW = 200;
+    const menuH = 420;
+    const pad = 8;
+    const left = Math.max(
+      pad,
+      Math.min(anchor.right - menuW, window.innerWidth - menuW - pad),
+    );
+    const spaceBelow = window.innerHeight - anchor.bottom - pad;
+    const spaceAbove = anchor.top - pad;
+    let openUp = spaceBelow < 260 || (anchor.bottom > window.innerHeight * 0.55 && spaceAbove > 160);
+    // Prefer above when a downward menu would cover the "Add instance" tile.
+    const addEl = document.querySelector(".projects-section .add-tile");
+    if (addEl instanceof HTMLElement && spaceAbove > 100) {
+      const addRect = addEl.getBoundingClientRect();
+      const menuBottomIfDown = anchor.bottom + 4 + Math.min(menuH, Math.max(spaceBelow, 0));
+      if (addRect.top < menuBottomIfDown && addRect.bottom > anchor.bottom - 4) {
+        openUp = true;
+      }
+    }
+    let top: number;
+    if (openUp) {
+      top = Math.max(pad, anchor.top - Math.min(menuH, spaceAbove) - 4);
+    } else {
+      top = Math.min(anchor.bottom + 4, window.innerHeight - pad - 80);
+    }
+    menuPos = { top, left };
   }
 
   function closeMenu() {
     activeMenuPath = null;
+    menuPos = null;
   }
 
   let pinnedPaths = $state<Record<string, boolean>>({});
@@ -454,6 +495,7 @@
 
   async function handleAction(action: string, project: RecentProject) {
     activeMenuPath = null;
+    menuPos = null;
     switch (action) {
       case "open-folder":
         await invoke("open_project_folder", { path: project.path });
@@ -513,8 +555,13 @@
         finally { actionBusy = false; }
         break;
       case "copy-link":
-        await navigator.clipboard.writeText(project.path);
-        toasts.success("Path copied to clipboard");
+        try {
+          const dir = await api.project.getDir(project.path);
+          await copyText(dir);
+          toasts.success("Instance folder path copied");
+        } catch (e) {
+          toasts.error(String(e));
+        }
         break;
       case "clone":
         clonePromptName = `${project.info.name} copy`;
@@ -525,8 +572,12 @@
         actionBusy = true;
         try {
           const exported: any = await api.export.modrinthPack(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported .mrpack: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported .mrpack: ${exported.path}`);
+          }
         } catch (e) { toasts.error(String(e)); }
         finally { actionBusy = false; }
         break;
@@ -626,6 +677,37 @@
     } catch (e) { toasts.error(String(e)); }
     finally { actionBusy = false; }
   }
+  function openIdeStage(stage: string) {
+    ideStageRequest.set(stage);
+    currentView = "ide";
+  }
+
+  function openIdeSuggested() {
+    ideStageRequest.set($ideSuggestedStage || "content");
+    currentView = "ide";
+  }
+
+  async function refreshIdeIssueBadge() {
+    if (!$projectPath) {
+      ideIssueCount.set(0);
+      return;
+    }
+    try {
+      const diags: { severity?: string }[] = await invoke("get_diagnostics", { path: $projectPath });
+      const blocking = (diags ?? []).filter((d) => {
+        const sev = String(d.severity ?? "");
+        return sev === "Error" || sev === "error" || sev === "critical";
+      });
+      ideIssueCount.set(blocking.length);
+    } catch {
+      /* keep last */
+    }
+  }
+
+  $effect(() => {
+    void $projectPath;
+    void refreshIdeIssueBadge();
+  });
 </script>
 
 <svelte:window onclick={closeMenu} />
@@ -634,28 +716,28 @@
   <!-- Top bar: Quick actions left, Avatar right -->
   <div class="top-bar">
     <div class="quick-nav">
-      <button class="quick-action" onclick={() => (currentView = "mods")} title="Mods">
+      <button class="quick-action" onclick={() => openIdeStage("content")} title="Mods">
         <Package size={18} />
         <span>Mods</span>
       </button>
-      <button class="quick-action" onclick={() => (currentView = "graph")} title="Dependency Graph">
+      <button class="quick-action" onclick={() => openIdeStage("resolve")} title="Dependency Graph">
         <GitGraph size={18} />
         <span>Graph</span>
       </button>
-      <button class="quick-action" onclick={() => (currentView = "diagnostics")} title="Diagnostics">
+      <button class="quick-action" onclick={() => openIdeStage("diagnose")} title="Diagnostics">
         <Stethoscope size={18} />
         <span>Diagnostics</span>
       </button>
-      <button class="quick-action" onclick={() => (currentView = "snapshots")} title="Snapshots">
+      <button class="quick-action" onclick={() => openIdeStage("snapshots")} title="Snapshots">
         <History size={18} />
         <span>Snapshots</span>
       </button>
       {#if selectedProject}
-        <button class="quick-action" onclick={() => (currentView = "recipes")} title="Recipes">
+        <button class="quick-action" onclick={() => openIdeStage("recipes")} title="Recipes">
           <Puzzle size={18} />
           <span>Recipes</span>
         </button>
-        <button class="quick-action" onclick={() => (currentView = "quests")} title="Quests">
+        <button class="quick-action" onclick={() => openIdeStage("quests")} title="Quests">
           <Sparkles size={18} />
           <span>Quests</span>
         </button>
@@ -722,9 +804,12 @@
 
             <div class="hero-actions">
               {#if selectedProject}
-                <button class="action-btn primary" onclick={() => (currentView = "ide")}>
+                <button class="action-btn primary ide-open-btn" onclick={openIdeSuggested}>
                   <Workflow size={15} />
                   IDE
+                  {#if $ideIssueCount > 0}
+                    <span class="ide-issue-badge" title="{$ideIssueCount} pack issue{$ideIssueCount === 1 ? '' : 's'}">{$ideIssueCount}</span>
+                  {/if}
                 </button>
                 <button class="action-btn" onclick={openSettings}>
                   <Settings size={15} />
@@ -802,13 +887,13 @@
       {#if hasInstanceHome && selectedPath}
         <InstanceHome
           projectPath={selectedPath}
-          onOpenMods={() => (currentView = "mods")}
+          onOpenMods={() => openIdeStage("content")}
           onOpenWorld={() => (currentView = "world")}
         />
       {/if}
 
       {#if homeLayout !== "yt-hidden" && homeLayout !== "yt-under-skin"}
-        <YoutubeFeed variant="row" />
+        <YoutubeFeed variant={homeLayout === "yt-main" ? "grid" : "row"} />
       {/if}
 
       {#if homeLayout !== "yt-main"}
@@ -821,6 +906,7 @@
           {projectStats}
           {pinnedPaths}
           {activeMenuPath}
+          {menuPos}
           homeLayoutOptions={HOME_LAYOUT_OPTIONS}
           onHomeLayoutChange={onHomeLayoutChange}
           {selectProject}
@@ -855,10 +941,9 @@
           {#if potatoPc}
             <div class="skin-static-fallback">
               <HeadAvatar skinSrc={$skinPath} size={120} alt={$authState.profile.name} />
-              <span class="skin-static-name">{$authState.profile.name}</span>
+              <span class="skin-static-name" style={`font-size: ${skinNameFontPx}px`}>{$authState.profile.name}</span>
             </div>
           {:else}
-          {#key homeLayout === "yt-under-skin" ? 280 : 400}
           <SkinPreview3D
             skinUrl={skinUrl}
             capeUrl={capeUrl}
@@ -866,9 +951,8 @@
             playerName={$authState.profile.name}
             showName={false}
             width={300}
-            height={homeLayout === "yt-under-skin" ? 280 : 400}
+            height={400}
           />
-          {/key}
           {/if}
           <div class="skin-panel-footer">
             <div class="skin-meta">
@@ -891,7 +975,11 @@
                 : "Accounts"}
             </button>
           </div>
-          <div class="skin-player-name" title={$authState.profile.name}>
+          <div
+            class="skin-player-name"
+            title={$authState.profile.name}
+            style={`font-size: ${skinNameFontPx}px`}
+          >
             {$authState.profile.name}
           </div>
 
@@ -1027,6 +1115,7 @@
           {projectStats}
           {pinnedPaths}
           {activeMenuPath}
+          {menuPos}
           homeLayoutOptions={HOME_LAYOUT_OPTIONS}
           onHomeLayoutChange={onHomeLayoutChange}
           {selectProject}
@@ -1150,7 +1239,7 @@
     font-size: 10px;
     letter-spacing: 0.4px;
     color: var(--text-primary);
-    max-width: 120px;
+    max-width: 220px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1190,7 +1279,7 @@
   .home-main {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 16px;
     min-width: 0;
     overflow: visible;
   }
@@ -1215,17 +1304,24 @@
 
   /*
    * yt-under-skin: skin + YouTube share the sticky column.
-   * Don't nest a column scrollbar on top of the page scroll + feed scroll —
-   * let the page scroll, keep the rail feed at natural height.
+   * Bound the column to the viewport so the feed under the skin can scroll
+   * into view on short screens (page scroll alone won't reveal it while sticky).
    */
   .main-layout[data-layout="yt-under-skin"] .home-side {
-    max-height: none;
-    overflow: visible;
+    max-height: calc(100vh - 40px);
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .skin-rail-youtube {
     min-width: 0;
-    flex-shrink: 0;
+    flex: 1 1 auto;
+    /* Floor so at least one card peeks; parent scrolls if skin alone is taller. */
+    min-height: min(200px, 35vh);
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
   }
 
   .main-layout[data-layout="yt-under-skin"] .skin-rail-youtube {
@@ -1303,10 +1399,11 @@
       0 -1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
       0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000);
     text-align: center;
-    padding: 0 16px 12px;
+    padding: 0 10px 12px;
     margin-top: -4px;
+    max-width: 100%;
+    box-sizing: border-box;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -1649,6 +1746,26 @@
 
   .action-btn.primary:hover {
     background: rgba(27, 217, 106, 0.1);
+  }
+
+  .ide-open-btn {
+    position: relative;
+  }
+
+  .ide-issue-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-left: 2px;
+    border-radius: 999px;
+    background: var(--danger, #e5484d);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1;
   }
 
   .action-btn.accent {

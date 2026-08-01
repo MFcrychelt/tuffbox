@@ -17,13 +17,13 @@
     published_at?: string | null;
   };
 
-  /** `row` = horizontal home strip; `rail` = vertical under-skin column. */
-  let { variant = "row" }: { variant?: "row" | "rail" } = $props();
+  /** `row` = horizontal strip; `grid` = main card grid; `rail` = vertical under-skin column. */
+  let { variant = "row" }: { variant?: "row" | "grid" | "rail" } = $props();
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
-  /** Horizontal strip can show more; rail sits under the skin — keep it short. */
+  /** Horizontal/grid can show more; rail sits under the skin — keep it short. */
   const FEED_LIMIT_ROW = 20;
-  const FEED_LIMIT_RAIL = 8;
+  const FEED_LIMIT_RAIL = 12;
   const SKEL_COUNT_ROW = 5;
   const SKEL_COUNT_RAIL = 4;
   /** Cap clips from the same channel so mega-creators don't fill the strip. */
@@ -284,7 +284,7 @@
 
   /** Map vertical wheel to horizontal scroll so the strip is usable with a mouse. */
   function onFeedWheel(e: WheelEvent) {
-    if (variant === "rail") return;
+    if (variant !== "row") return;
     const el = e.currentTarget as HTMLElement;
     if (el.scrollWidth <= el.clientWidth) return;
     // Prefer horizontal delta; otherwise tilt vertical into horizontal.
@@ -296,7 +296,12 @@
 </script>
 
 {#if loading || videos.length > 0 || loadError !== "" || (!loading && videos.length === 0)}
-  <section class="youtube-feed" class:rail={variant === "rail"} aria-busy={loading}>
+  <section
+    class="youtube-feed"
+    class:rail={variant === "rail"}
+    class:grid={variant === "grid"}
+    aria-busy={loading}
+  >
     <button type="button" class="section-header" onclick={toggleExpanded} disabled={loading}>
       <Youtube size={18} />
       <h2>Minecraft on YouTube</h2>
@@ -433,12 +438,34 @@
     touch-action: pan-x;
   }
 
-  /* Rail: grow with content, scroll with the page — no nested scrollbar. */
+  /* Rail: vertical stack; parent `.skin-rail-youtube` owns the scrollbar. */
   .rail .feed-row {
     flex-direction: column;
     gap: 10px;
     overflow: visible;
+    padding-bottom: 4px;
+    touch-action: pan-y;
+  }
+
+  /* Grid: card mosaic for YouTube-main home layout. */
+  .grid .feed-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px 12px;
+    overflow: visible;
     padding-bottom: 0;
+    touch-action: auto;
+  }
+
+  .grid .video-card-wrap {
+    flex: unset;
+    width: auto;
+    min-width: 0;
+  }
+
+  .grid .video-card {
+    flex: unset;
+    width: 100%;
   }
 
   .feed-row::-webkit-scrollbar {

@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List, ExternalLink } from "@lucide/svelte";
-  import { projectPath } from "../lib/store";
+  import { projectPath, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import { trapFocus } from "../lib/focusTrap";
@@ -504,6 +504,13 @@
       const applied: string[] = await invoke("apply_resolve_action", { path: $projectPath, actionIndex: index });
       message = applied.length ? `Applied action: ${applied.join(", ")}` : "No deterministic action was applied.";
       await load(true);
+      if (applied.length) {
+        pushWorkTrail(`Applied resolve action · ${applied.join(", ")}`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -520,6 +527,13 @@
       const applied: string[] = await invoke("apply_resolve_change_plan", { path: $projectPath });
       message = applied.length ? `Applied plan: ${applied.join(", ")}` : "No deterministic actions were applied.";
       await load(true);
+      if (applied.length) {
+        pushWorkTrail(`Applied resolve plan (${applied.length})`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -548,6 +562,13 @@
       const installed: string[] = await invoke("resolve_missing_dependencies", { path: $projectPath });
       message = installed.length ? `Installed dependencies: ${installed.join(", ")}` : "No installable missing dependencies were found.";
       await load(true);
+      if (installed.length) {
+        pushWorkTrail(`Installed ${installed.length} dependencies`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -892,22 +913,166 @@
     matches: (id: string, label: string) => boolean;
   };
 
+  /// Clusters mirror Modrinth's official mod category taxonomy (1:1).
+  /// Keyword `matches` is only a fallback when provider categories are missing.
   const MOD_GROUPS: ModGroup[] = [
     {
+      key: "adventure",
+      label: "Adventure",
+      color: "rgba(239,68,68,0.5)",
+      matches: (id, label) =>
+        /(adventure|dungeon|exploration|quest|rpg.?quest|twilight|aether|cataclysm|yungs)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "cursed",
+      label: "Cursed",
+      color: "rgba(127,29,29,0.55)",
+      matches: (id, label) =>
+        /(cursed|horror|scary|creepy|nightmare|villain|evil|gore|haunt)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "decor",
+      label: "Decoration",
+      color: "rgba(45,212,191,0.5)",
+      matches: (id, label) =>
+        /(bookshelf|supplementaries|decor|furniture|macaw|macaws|chisel|construction|lantern|lighting|painting|statue|plant|flower|abundance|cobble|quark)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "economy",
+      label: "Economy",
+      color: "rgba(234,179,8,0.5)",
+      matches: (id, label) =>
+        /(economy|shop|trade|market|currency|coin|bank|claim|land.?claim)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "equipment",
+      label: "Equipment",
+      color: "rgba(248,113,113,0.5)",
+      matches: (id, label) =>
+        /(equipment|weapon|armor|tool|sword|bow|shield|combat|tactical)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "farming",
+      label: "Food",
+      color: "rgba(132,204,22,0.5)",
+      matches: (id, label) =>
+        /(farmers|croptopia|delight|food|farm|brewin|beer|cuisine|pam|crop|nutrition|spice|bee|honey)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "game_mechanics",
+      label: "Game Mechanics",
+      color: "rgba(251,146,60,0.5)",
+      matches: (id, label) =>
+        /(game.?mechanic|origin|origins|skill|level.?up|progression|difficulty|hardcore|serene|seasons?)/i.test(
+          id + " " + label
+        ),
+    },
+    {
       key: "library",
-      label: "Libraries & Core",
+      label: "Library",
       color: "rgba(148,163,184,0.55)",
       matches: (id, label) =>
-        /(api|lib|library|core|fabric|forge|neoforge|quilt|architectury|cloth|yacl|trinkets|cardinal|player|collective|midnightlib|resourceful|reacharound|commander|balm|container|configured|framework|platform|modmenu|curios|slight|packetfixer|fabric-language|java|mixin|config)/i.test(
+        /(api|lib|library|core|architectury|cloth|yacl|trinkets|cardinal|collective|midnightlib|resourceful|balm|configured|framework|modmenu|curios|packetfixer|fabric-language|mixin)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "magic",
+      label: "Magic",
+      color: "rgba(217,70,239,0.5)",
+      matches: (id, label) =>
+        /(magic|mana|arcanus|hexerei|ironspell|spell|bloodmagic|astral|occultism|forbidden|ars|naturesaura|reliquary|artifact|runes|mage|wizard|ritual)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "management",
+      label: "Management",
+      color: "rgba(96,165,250,0.5)",
+      matches: (id, label) =>
+        /(jei|rei|emi|justenough|roughlyenough|jade|wthit|theoneprobe|waila|appleskin|tooltip)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "minigame",
+      label: "Minigame",
+      color: "rgba(244,114,182,0.5)",
+      matches: (id, label) =>
+        /(minigame|arcade|bingo|parkour|party.?game)/i.test(id + " " + label),
+    },
+    {
+      key: "mobs",
+      label: "Mobs",
+      color: "rgba(220,38,38,0.55)",
+      matches: (id, label) =>
+        /(mob|creature|enemy|boss|undead|mutant|goblin|dragon|bestiary|alex.?mobs|guard|iceandfire|entity)/i.test(
           id + " " + label
         ),
     },
     {
       key: "rendering",
-      label: "Rendering & Performance",
+      label: "Optimization",
       color: "rgba(139,92,246,0.5)",
       matches: (id, label) =>
-        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|cull-less|continuity|entitytexture|entity-texture|etf|dashloader|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle|render|optifine|performance|fps|sky|skies)/i.test(
+        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|etf|entity.?texture|dashloader|smoothboot|memoryleakfix|modernfix|krypton|shader|exordium|optifine|performance|fps|distanthorizons)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "social",
+      label: "Social",
+      color: "rgba(56,189,248,0.5)",
+      matches: (id, label) =>
+        /(social|chat|emoji|discord|voice|proximity|skin|cosmetic|presence)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "storage",
+      label: "Storage",
+      color: "rgba(14,165,233,0.5)",
+      matches: (id, label) =>
+        /(inventory|sort|chest|shulker|sophisticated|ironchest|backpack|storage|expandedstorage|itemzo)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "create",
+      label: "Technology",
+      color: "rgba(245,158,11,0.55)",
+      matches: (id, label) =>
+        /(create|flywheel|ponder|steam|mechanical|automated|factory|pipez|integrateddynamics|applied|refinedstorage|thermal|mekanism|techreborn|industrial|immersive|powah|energy|ae2)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "transport",
+      label: "Transportation",
+      color: "rgba(94,234,212,0.5)",
+      matches: (id, label) =>
+        /(transport|train|rail|boat|vehicle|flight|elevator|teleport|waystone|waystones)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "qol",
+      label: "Utility",
+      color: "rgba(250,204,21,0.5)",
+      matches: (id, label) =>
+        /(qol|utility|xaero|journeymap|minimap|map|sound|music|rightclick|mouse|keybind|zoom|recipe|patchouli|comfort|physic|easy|fast)/i.test(
           id + " " + label
         ),
     },
@@ -916,70 +1081,7 @@
       label: "World Generation",
       color: "rgba(34,197,94,0.5)",
       matches: (id, label) =>
-        /(biome|terrablender|terralith|tectonic|biomesoplenty|byg|ohthebiomes|dungeons|reterraforged|yungs|cave|structure|waystones|explorify|wwoo|noise|worldgen|geophilic|largemeals|incendium|amplified|promenade|regions|nullscape|wilder|biomes)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "storage",
-      label: "Storage & Inventory",
-      color: "rgba(56,189,248,0.5)",
-      matches: (id, label) =>
-        /(jei|rei|emi|inventory|sort|chest|shulker|sophisticated|ironchest|trinket|backpack|curios|collective|roughly|jade|wthit|theoneprobe|glassential|itemzo|justenough|waila|storage|ironbar|expandedstorage)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "qol",
-      label: "Quality of Life",
-      color: "rgba(250,204,21,0.5)",
-      matches: (id, label) =>
-        /(qol|utility|tooltip|xaero|journeymap|minimap|map|sound|music|harvest|rightclick|mouse|keybind|zoom|chat|emoji|cosmetic|skin|recipe|patchouli|comfort|physic|presence|villager|easy|fast|extra|more|added)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "create",
-      label: "Create & Automation",
-      color: "rgba(245,158,11,0.55)",
-      matches: (id, label) =>
-        /(create|flywheel|ponder|train|steam|rc|trackwork|createplus|decorative|casing|sequenced|mechanical|automated|factory|pipez|integrateddynamics|applied|refinedstorage|thermal|mekanism|techreborn|industrial|immersive|botania|powah|energy|ae2)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "magic",
-      label: "Magic & RPG",
-      color: "rgba(217,70,239,0.5)",
-      matches: (id, label) =>
-        /(magic|mana|arcanus|hexerei|ironspell|spell|bloodmagic|astral|occultism|forbidden|ars|naturesaura|reliquary|artifact|origins|runes|mage|wizard|ritual)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "adventure",
-      label: "Adventure & Mobs",
-      color: "rgba(239,68,68,0.5)",
-      matches: (id, label) =>
-        /(mob|creature|enemy|entity|boss|dungeon|adventure|expansion|farm|alex|guard|equipment|weapon|armor|combat|tactical|cataclysm|goblin|undead|mutant|iceandfire|twilight|aether|shire|dragon|bestiary|poke)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "farming",
-      label: "Farming & Food",
-      color: "rgba(132,204,22,0.5)",
-      matches: (id, label) =>
-        /(farmers|croptopia|delight|food|farm|brewin|beer|harvest|cuisine|pam|vanilla|apple|crop|nutrition|spice|bee|honey)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "decor",
-      label: "Building & Decor",
-      color: "rgba(45,212,191,0.5)",
-      matches: (id, label) =>
-        /(bookshelf|supplementaries|decor|furniture|macaw|macaws|totem|waystone|building|chisel|construction|architectury-furniture|gravestone|lantern|lighting|painting|statue|plant|flower|terraform|abundance|cobble|quark)/i.test(
+        /(biome|terrablender|terralith|tectonic|biomesoplenty|byg|ohthebiomes|reterraforged|cave|structure|explorify|wwoo|noise|worldgen|geophilic|incendium|amplified|promenade|regions|nullscape|wilder)/i.test(
           id + " " + label
         ),
     },
@@ -1278,50 +1380,80 @@
   // it, and that used to live inside $effect → effect_update_depth_exceeded (tab hang).
   let resetViewOnNextLayout = true;
 
-  /// Modrinth's official category taxonomy → our cluster key. This is the
-  /// authoritative distribution: a mod tagged `optimization` on the site lands
-  /// in Rendering & Performance regardless of its name. Keyword matching is
-  /// only a fallback for mods with no cached categories (local jars, ghosts).
-  /// Ordered by specificity: technology/create before generic buckets.
+  /// Modrinth's official category taxonomy → our cluster key (1:1).
+  /// Keyword matching is only a fallback for mods with no cached categories.
   const MODRINTH_CATEGORY_TO_GROUP: Record<string, string> = {
-    // Rendering & Performance
-    optimization: "rendering",
-    // World Generation
-    worldgen: "worldgen",
-    // Storage & Inventory
-    storage: "storage",
-    management: "storage",
-    // Create & Automation / tech
-    technology: "create",
-    transportation: "create",
-    // Magic & RPG
-    magic: "magic",
-    // Adventure & Mobs
     adventure: "adventure",
-    mobs: "adventure",
-    equipment: "adventure",
-    minigame: "adventure",
-    // Farming & Food
-    food: "farming",
-    // Building & Decor
+    cursed: "cursed",
     decoration: "decor",
-    // Quality of Life (catch-all interface/social/economy/mechanics)
-    utility: "qol",
-    social: "qol",
-    economy: "qol",
-    "game-mechanics": "qol",
-    // Libraries & Core
+    economy: "economy",
+    equipment: "equipment",
+    food: "farming",
+    "game-mechanics": "game_mechanics",
     library: "library",
-    // Loose/aesthetic tags that shouldn't hijack a functional bucket fall
-    // through to keyword matching below (cursed, etc.).
+    magic: "magic",
+    management: "management",
+    minigame: "minigame",
+    mobs: "mobs",
+    optimization: "rendering",
+    social: "social",
+    storage: "storage",
+    technology: "create",
+    transportation: "transport",
+    utility: "qol",
+    worldgen: "worldgen",
   };
+
+  /// CurseForge display names → Modrinth slugs (after space/punct normalize).
+  const CATEGORY_ALIASES: Record<string, string> = {
+    "adventure-and-rpg": "adventure",
+    "api-and-library": "library",
+    "armor-tools-and-weapons": "equipment",
+    cosmetic: "social",
+    "map-and-information": "management",
+    performance: "optimization",
+    "utility-qol": "utility",
+    "world-gen": "worldgen",
+    "world-generation": "worldgen",
+    farming: "food",
+    redstone: "technology",
+    automation: "technology",
+    energy: "technology",
+    "energy-fluid-and-item-transport": "transportation",
+    "player-transport": "transportation",
+    biomes: "worldgen",
+    dimensions: "worldgen",
+    structures: "worldgen",
+    "ores-and-resources": "worldgen",
+    "bug-fixes": "utility",
+    "server-utility": "utility",
+    miscellaneous: "utility",
+    education: "utility",
+    genetics: "game-mechanics",
+    processing: "technology",
+    mcreator: "library",
+    "twitch-integration": "social",
+  };
+
+  /** CF returns "Utility & QoL" / "World Gen"; Modrinth uses "utility" / "worldgen". */
+  function normalizeCategorySlug(raw: string): string {
+    const slug = raw
+      .trim()
+      .toLowerCase()
+      .replace(/[&+,/]/g, " ")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    return CATEGORY_ALIASES[slug] ?? slug;
+  }
 
   function nodeCategories(node: { metadata?: Record<string, string> }): string[] {
     const raw = node.metadata?.categories;
     if (!raw) return [];
-    return raw
-      .split(",")
-      .map((c) => c.trim().toLowerCase())
+    // Prefer `|` (current graph serializer); also accept legacy comma-joined lists.
+    const parts = raw.includes("|") ? raw.split("|") : raw.split(",");
+    return parts
+      .map((c) => normalizeCategorySlug(c))
       .filter((c) => c && !LOADER_CATEGORY_NOISE.has(c));
   }
 
@@ -1330,10 +1462,27 @@
     "sponge", "bungeecord", "waterfall", "velocity",
   ]);
 
-  /// Specific Modrinth tags beat catch-alls (qol / library).
-  /// Decor before storage so furniture tagged both (Macaw's) lands in Building & Decor.
+  /// Content-specific tags beat catch-alls (utility / library).
   const GROUP_PRIORITY = [
-    "rendering", "worldgen", "decor", "storage", "create", "magic", "adventure", "farming", "library", "qol",
+    "cursed",
+    "rendering",
+    "worldgen",
+    "mobs",
+    "adventure",
+    "equipment",
+    "magic",
+    "game_mechanics",
+    "create",
+    "transport",
+    "farming",
+    "decor",
+    "storage",
+    "management",
+    "economy",
+    "social",
+    "minigame",
+    "library",
+    "qol",
   ];
 
   /// Assign every Mod/Missing node to one cluster. Strong name signals win over
@@ -1386,7 +1535,7 @@
   }
 
   // Bump when layout algorithm parameters change so cached graphs re-seed.
-  const LAYOUT_VERSION = "v4-modrinth-cats";
+  const LAYOUT_VERSION = "v5-modrinth-taxonomy";
 
   const layoutKey = $derived([
     LAYOUT_VERSION,
@@ -1487,7 +1636,7 @@
     });
 
     // Expose cluster halos/labels for rendering. Halo radius follows the disc
-    // size so big categories (a 100+ mod "Quality of Life" pack) stay inside.
+    // size so big categories (a 100+ mod Utility pack) stay inside.
     groupMeta = clusters.map((cluster) => {
       const def = MOD_GROUPS.find((g) => g.key === cluster.key) ?? {
         key: cluster.key,

@@ -42,6 +42,7 @@
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
+  import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback } from "../lib/launch";
   import {
     DEFAULT_GROUP,
@@ -661,8 +662,12 @@
         actionBusy = true;
         try {
           const exported = await api.export.modrinthPack(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported .mrpack: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported .mrpack: ${exported.path}`);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -673,8 +678,12 @@
         actionBusy = true;
         try {
           const exported = await api.export.prismInstance(null, project.path);
-          await navigator.clipboard.writeText(exported.path);
-          toasts.success(`Exported Prism zip: ${exported.path}`);
+          try {
+            await copyText(exported.path);
+            toasts.success(`Exported Prism zip — path copied: ${exported.path}`);
+          } catch {
+            toasts.success(`Exported Prism zip: ${exported.path}`);
+          }
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -702,8 +711,9 @@
         break;
       case "copy-path":
         try {
-          await navigator.clipboard.writeText(project.path);
-          toasts.success("Path copied");
+          const dir = await api.project.getDir(project.path);
+          await copyText(dir);
+          toasts.success("Instance folder path copied");
         } catch (e) {
           toasts.error(String(e));
         }

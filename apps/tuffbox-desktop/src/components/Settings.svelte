@@ -761,7 +761,7 @@
           />
           Rounded corners
         </label>
-        <p class="hint">Round edges on panels, cards, modals, and chrome across the whole app.</p>
+        <p class="hint">Round edges on panels, cards, modals, and chrome — works with every theme.</p>
 
         <div class="settings-row" style="margin-top: 18px;">
           <div class="settings-row-text">

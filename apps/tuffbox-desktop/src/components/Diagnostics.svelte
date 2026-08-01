@@ -6,12 +6,10 @@
     Stethoscope,
     Play,
     FolderOpen,
-    ArrowUpCircle,
     RefreshCw,
     AlertCircle,
     AlertTriangle,
     Info,
-    ListChecks,
     FileText,
     History,
     Wrench,
@@ -20,16 +18,12 @@
     Trash2,
     Database,
     Copy,
-    ChevronDown,
-    BadgeCheck,
-    Ban,
     Bot,
     BookMarked,
     Share2,
     ArrowDownToLine,
-    MoreHorizontal,
   } from "@lucide/svelte";
-  import { diagnoseFocusPaths, historyFocusEventId, ideStageRequest, projectPath } from "../lib/store";
+  import { diagnoseFocusPaths, historyFocusEventId, ideStageRequest, projectPath, pushWorkTrail, ideNeedsHealth, requestIdeIssuesRefresh } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
@@ -39,6 +33,14 @@
   import DiagnoseConflictsJars from "./diagnostics/DiagnoseConflictsJars.svelte";
   import DiagnoseAnalysisTabs from "./diagnostics/DiagnoseAnalysisTabs.svelte";
   import DiagnoseVerdictHero from "./diagnostics/DiagnoseVerdictHero.svelte";
+  import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
+  import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
+  import {
+    buildUnifiedProblems,
+    hasBlockingProblems,
+    type FixAction as ProblemFixAction,
+    type Problem,
+  } from "./diagnostics/problemModel";
   import { open as openShell } from "@tauri-apps/plugin-shell";
 
   type Diagnostic = {
@@ -151,6 +153,20 @@
   const LATEST_LOG_SOURCE = "__latest_log__";
   const LAUNCHER_LOG_SOURCE = "__launcher_log__";
   let analysisBusy = $state(false);
+  /** Main Health canvas tab. */
+  let mainTab = $state<"problems" | "evidence" | "ai" | "advanced">("problems");
+  /** After a fix: ask user to verify with Test launch. */
+  let verifyPrompt = $state(false);
+
+  $effect(() => {
+    if (verifyPrompt) {
+      pushWorkTrail("Fix applied — verify with a Test launch", [
+        { id: "test", label: "Test launch", kind: "play" },
+        { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+      ]);
+    }
+  });
+  let applyingProblemId = $state<string | null>(null);
   /** Detail panel under the verdict: rules findings vs AI explanation. */
   let aiSoftError = $state<string | null>(null);
   let sharingLog = $state(false);
@@ -225,8 +241,10 @@
         aiAnalysis = null;
         aiContext = null;
         aiSoftError = null;
+        ideNeedsHealth.set(false);
         void invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath }).catch(() => {});
       } else {
+        if (!data.sessionHealthy) ideNeedsHealth.set(true);
         void runUnifiedAnalysis();
       }
     } catch (e) {
@@ -1173,20 +1191,18 @@
       });
       const applied = result?.applied ?? [];
       const errs = result?.errors ?? [];
-      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""} Snapshot first — next: Test launch to verify.`;
+      message = `Applied ${applied.length} action(s).${errs.length ? ` Errors: ${errs.join("; ")}` : ""} Snapshot saved — Test launch to verify.`;
       showApplyTrail = applied.length > 0;
+      verifyPrompt = applied.length > 0 && !errs.length;
+      if (applied.length > 0 && !errs.length) {
+        ideNeedsHealth.set(false);
+        requestIdeIssuesRefresh();
+      }
       if (errs.length) error = errs.join("; ");
       await load(true);
       if (applied.length && !errs.length) {
         window.dispatchEvent(new CustomEvent("tuffbox:crash-fix-applied"));
-        const launchNow = confirm(
-          "Fix applied. Run a Test launch now to verify?\n\nAfter the game starts cleanly, TuffBox can soft-verify and offer to share the fix.",
-        );
-        if (launchNow) {
-          await runTest();
-        } else {
-          await openAuthorForm({ fromAnalysis: true });
-        }
+        mainTab = "problems";
       }
     } catch (e) {
       error = String(e);
@@ -1799,44 +1815,144 @@
     }
   }
 
-  // --- Unified Problems panel (IDE "Problems" tool window) ---
-  type ProblemRow = {
-    id: string;
-    severity: "critical" | "error" | "warning" | "info";
-    title: string;
-    detail: string;
-    actions: FixAction[];
-    source: string;
-  };
-
-  const problems = $derived(buildProblems(diagnosis));
-  function buildProblems(d: CrashDiagnosis | null): ProblemRow[] {
-    if (!d) return [];
-    const rows: ProblemRow[] = [];
-    for (const h of d.hints) {
-      rows.push({
-        id: `hint:${h.id}`,
-        severity: h.severity === "critical" ? "critical" : h.severity === "error" ? "error" : h.severity === "warning" ? "warning" : "info",
-        title: h.title,
-        detail: h.detail,
-        actions: h.fixes && h.fixes.length ? h.fixes : h.fix ? [h.fix] : [],
-        source: "Diagnosis",
-      });
-    }
-    for (const g of d.graphDiagnostics) {
-      rows.push({
-        id: `graph:${g.code}`,
-        severity: g.severity === "Error" ? "error" : g.severity === "Warning" ? "warning" : "info",
-        title: g.code,
-        detail: g.message,
-        actions: [],
-        source: "Graph",
-      });
-    }
-    return rows;
-  }
+  // --- Unified Problems panel (Health Check feed) ---
+  const unifiedProblems = $derived(
+    buildUnifiedProblems({
+      hints: [
+        ...(diagnosis?.hints ?? []),
+        ...(diagnosis?.latestLog?.hints ?? []),
+        ...(diagnosis?.launcherLog?.hints ?? []),
+      ],
+      findings: crashFindings,
+      graphDiagnostics: diagnosis?.graphDiagnostics ?? [],
+      wrongLoaderJars,
+      duplicateJarGroups,
+      memoryHint: diagnosis?.sessionHealthy && preferLatestLog ? null : diagnosis?.memoryHint,
+      worldCoords: diagnosis?.sessionHealthy && preferLatestLog ? null : diagnosis?.worldCoords,
+      aiAnalysis,
+    }),
+  );
+  const problemsBlocking = $derived(hasBlockingProblems(unifiedProblems));
 
   const graphDiagnostics = $derived(diagnosis?.graphDiagnostics ?? []);
+  const sourceLabel = $derived((() => {
+    if (preferLatestLog) return "Game log";
+    if (preferLauncherLog) return "Launcher log";
+    if (selectedReportId?.startsWith("hs_err")) return "Native crash";
+    if (selectedReportId) return "Crash report";
+    return "Log";
+  })());
+
+  async function applyProblemAction(problem: Problem, action: ProblemFixAction) {
+    if (!$projectPath) return;
+    const kind = action.kind;
+    if (kind === "openResolve") {
+      ideStageRequest.set("resolve");
+      return;
+    }
+    if (kind === "openSetup") {
+      ideStageRequest.set("setup");
+      return;
+    }
+    if (kind === "openEvidence") {
+      mainTab = "evidence";
+      if (problem.evidence?.line) {
+        queueMicrotask(() => scrollLogToLine(Math.max(0, (problem.evidence!.line ?? 1) - 1)));
+      } else {
+        jumpToFirstError();
+      }
+      return;
+    }
+    if (kind === "reviewAiPlan") {
+      await applyAiPlan();
+      return;
+    }
+    if (kind === "installAllMissing") {
+      applyingProblemId = problem.id;
+      error = null;
+      try {
+        const plan = await invoke<any>("get_resolve_change_plan", { path: $projectPath });
+        if (plan?.actions?.length) {
+          const applied = await invoke<string[]>("apply_resolve_change_plan", { path: $projectPath });
+          message = `Installed dependencies (${applied?.length ?? plan.actions.length}). Snapshot saved — Test launch to verify.`;
+          verifyPrompt = true;
+          showApplyTrail = true;
+          requestIdeIssuesRefresh();
+          await load(true);
+          void detectWrongLoaderMods();
+          void detectDuplicateModJars();
+        } else {
+          ideStageRequest.set("resolve");
+          message = "Open Resolve to install missing dependencies.";
+        }
+      } catch (e) {
+        error = String(e);
+        ideStageRequest.set("resolve");
+      } finally {
+        applyingProblemId = null;
+      }
+      return;
+    }
+    if (kind === "removeWrongJar" && action.modId) {
+      await removeWrongJar(action.modId);
+      verifyPrompt = true;
+      return;
+    }
+    if (kind === "raiseMemory") {
+      applyingProblemId = problem.id;
+      try {
+        await invoke("apply_fix_action", {
+          path: $projectPath,
+          action: { kind: "raiseMemory", label: action.label, modId: null },
+        });
+        message = "Memory raised. Snapshot saved — Test launch to verify.";
+        verifyPrompt = true;
+        showApplyTrail = true;
+        await load(true);
+      } catch (e) {
+        error = String(e);
+      } finally {
+        applyingProblemId = null;
+      }
+      return;
+    }
+
+    applyingProblemId = problem.id;
+    applyingHintId = problem.id;
+    error = null;
+    try {
+      await invoke("apply_fix_action", {
+        path: $projectPath,
+        action: { kind: action.kind, label: action.label, modId: action.modId },
+      });
+      message = `Applied: ${action.label}. Snapshot saved — Test launch to verify.`;
+      verifyPrompt = true;
+      showApplyTrail = true;
+      await load(true);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      applyingProblemId = null;
+      applyingHintId = null;
+    }
+  }
+
+  function onProblemWhy(problem: Problem) {
+    mainTab = "evidence";
+    if (problem.evidence?.line) {
+      queueMicrotask(() => scrollLogToLine(Math.max(0, (problem.evidence!.line ?? 1) - 1)));
+    } else {
+      jumpToFirstError();
+    }
+  }
+
+  function scrollToPackWarnings() {
+    mainTab = "problems";
+    queueMicrotask(() => {
+      document.getElementById("dx-pack-warnings")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   const allSignals = $derived(
     diagnosis?.sessionHealthy && preferLatestLog
       ? []
@@ -1873,9 +1989,6 @@
   const hsErrKind = $derived(
     diagnosis?.hsErrLogs?.find((h) => h.id === selectedReportId)?.kind ?? (isHsErr ? "native" : null),
   );
-
-  const errorCount = $derived(graphDiagnostics.filter((d) => d.severity === "Error").length);
-  const warningCount = $derived(graphDiagnostics.filter((d) => d.severity === "Warning").length);
   $effect(() => {
     onProjectPathChange($projectPath);
   });
@@ -1900,13 +2013,51 @@
 
 <div class="diagnostics">
   <div class="dx-top">
-    <div class="toolbar">
+    <div class="toolbar dx-chrome">
       <div class="title">
         <Stethoscope size={18} />
-        <span>Diagnose</span>
+        <span>Health</span>
         {#if analysisBusy || crashLoading || aiLoading}
           <span class="analyzing-pill">Analyzing…</span>
         {/if}
+      </div>
+      <div class="dx-chrome-actions">
+        {#if diagnosis}
+          <select
+            class="dx-source-select chrome-source"
+            value={preferLatestLog ? LATEST_LOG_SOURCE : preferLauncherLog ? LAUNCHER_LOG_SOURCE : selectedReportId}
+            onchange={onSourceChange}
+            title="Log source"
+          >
+            <option value={LATEST_LOG_SOURCE}>
+              Game log{diagnosis.latestLog.exists ? "" : " (missing)"}
+            </option>
+            <option value={LAUNCHER_LOG_SOURCE}>
+              Launcher log{diagnosis.launcherLog?.exists ? "" : " (missing)"}
+            </option>
+            {#each diagnosis.reports as report (report.id)}
+              <option value={report.id}>
+                {report.id.startsWith("hs_err") ? "Native crash" : "Crash report"} · {report.name}
+              </option>
+            {/each}
+          </select>
+        {/if}
+        <button class="ghost" onclick={() => load(true)} disabled={!$projectPath || loading} title="Reload logs & pack graph">
+          <RefreshCw size={15} class={loading ? "spin" : ""} /> Refresh
+        </button>
+        <button
+          class="secondary"
+          onclick={() => runUnifiedAnalysis()}
+          disabled={!$projectPath || analysisBusy || loading || sessionOk}
+          title="Re-run rules + AI"
+        >
+          <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
+          {analysisBusy ? "Analyzing…" : "Re-analyze"}
+        </button>
+        <button class="primary" onclick={runTest} disabled={!$projectPath || launching || loading}>
+          <Play size={15} class={launching ? "spin" : ""} />
+          {launching ? "Launching…" : "Test launch"}
+        </button>
       </div>
     </div>
 
@@ -1917,51 +2068,53 @@
         {#if showApplyTrail}
           <div class="trail-links">
             <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("history")}><History size={12} /> History</button>
-            <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("test")}><Play size={12} /> Test</button>
             <button class="ghost mini" type="button" onclick={() => ideStageRequest.set("snapshots")}><Database size={12} /> Snapshots</button>
           </div>
         {/if}
       </div>
     {/if}
+    {#if verifyPrompt}
+      <div class="notice warning verify-banner">
+        <span>Fix applied. Run a Test launch to confirm it worked?</span>
+        <div class="trail-links">
+          <button class="primary small" type="button" onclick={() => { verifyPrompt = false; void runTest(); }} disabled={launching}>
+            Test launch
+          </button>
+          <button class="ghost mini" type="button" onclick={() => (verifyPrompt = false)}>Later</button>
+          <button
+            class="ghost mini"
+            type="button"
+            onclick={async () => {
+              verifyPrompt = false;
+              if ($projectPath) {
+                try {
+                  await invoke("confirm_crash_resolution_from_diagnose", { path: $projectPath });
+                  message = "Marked as looks fixed.";
+                  await load(true);
+                } catch {
+                  /* ignore */
+                }
+              }
+            }}
+          >
+            Looks fixed
+          </button>
+        </div>
+      </div>
+    {/if}
     {#if aiSoftError}
       <div class="notice warning">
-        AI unavailable — rules still work.
+        AI unavailable — rules still work on Problems.
         <button class="ghost mini" type="button" onclick={() => (aiModalOpen = true)}>AI settings</button>
       </div>
     {/if}
     {#if pendingPlan && swarmEnabled}
       <div class="notice warning network-pending">
         <div class="network-pending-head">
-          <span>Network ActionPlan ready ({(pendingPlan.actions ?? []).length} action(s)).</span>
+          <span>Network fix ready ({(pendingPlan.actions ?? []).length} action(s)).</span>
           <button class="secondary small" onclick={applyPendingNetworkFix} disabled={pendingBusy}>
             {pendingBusy ? "Applying…" : "Review & apply"}
           </button>
-        </div>
-        {#if networkTrust && networkTrust.trustPercent != null}
-          <div class="trust-card-line" title="Community soft-verify trust">
-            <strong>{networkTrust.trustPercent}% trust</strong>
-            {#if networkTrust.keeps != null}
-              <span>· {networkTrust.keeps} keep / {networkTrust.discards ?? 0} discard</span>
-            {/if}
-            {#if networkTrust.mc || networkTrust.loader}
-              <span>· {[networkTrust.mc, networkTrust.loader].filter(Boolean).join(" · ")}</span>
-            {/if}
-          </div>
-        {/if}
-        <div class="action-diff-row">
-          {#each (pendingPlan.actions ?? []).slice(0, 6) as a, i (i + ":" + (a.op ?? ""))}
-            {@const op = String(a.op ?? "action")}
-            {@const kind =
-              op.includes("disable") || op.includes("remove")
-                ? "remove"
-                : op.includes("edit") || op.includes("update") || op.includes("change")
-                  ? "change"
-                  : "add"}
-            <span class="diff-chip {kind}">
-              {kind === "add" ? "+" : kind === "remove" ? "−" : "~"}
-              {op}{a.modId || a.mod_id ? ` ${a.modId ?? a.mod_id}` : ""}
-            </span>
-          {/each}
         </div>
       </div>
     {/if}
@@ -1991,66 +2144,15 @@
   {:else if !$projectPath}
     <EmptyState icon={Stethoscope} title="Pick a pack first" description="Open a project — we'll read the crash log and tell you what to click next." />
   {:else if diagnosis}
-    <!-- 1. Source + status (compact) -->
-    <section class="dx-source panel">
-      <label class="dx-source-label" for="dx-source-select">Looking at</label>
-      <select
-        id="dx-source-select"
-        class="dx-source-select"
-        value={preferLatestLog ? LATEST_LOG_SOURCE : preferLauncherLog ? LAUNCHER_LOG_SOURCE : selectedReportId}
-        onchange={onSourceChange}
-      >
-        <option value={LATEST_LOG_SOURCE}>
-          latest.log{diagnosis.latestLog.exists ? ` · ${diagnosis.latestLog.signals.length} signals` : " · missing"}
-        </option>
-        <option value={LAUNCHER_LOG_SOURCE}>
-          launcher.log{diagnosis.launcherLog?.exists ? ` · ${diagnosis.launcherLog.signals.length} signals` : " · missing"}
-        </option>
-        {#each diagnosis.reports as report (report.id)}
-          <option value={report.id}>{report.name} · {formatBytes(report.size)}</option>
-        {/each}
-      </select>
-      <p class="muted-inline">
-        Prefer a crash-report when present. If crash-reports is empty, use latest.log, launcher.log, or an hs_err_pid*.log.
-      </p>
-      {#if diagnosis.crashReportStale}
-        <p class="muted-inline">Crash report is older than latest.log — live log is preferred.</p>
-      {/if}
-      {#if !diagnosis.reports.some((r) => r.id.startsWith("crash-reports/"))}
-        <div class="dx-empty-sources">
-          <span>No crash-reports yet.</span>
-          <button type="button" class="ghost mini" onclick={chooseLatestLog}>latest.log</button>
-          <button type="button" class="ghost mini" onclick={chooseLauncherLog}>launcher.log</button>
-          {#if diagnosis.hsErrLogs?.length}
-            {@const hsErr = diagnosis.hsErrLogs[0]}
-            <button type="button" class="ghost mini" onclick={() => chooseReport(hsErr.id)}>
-              {hsErr.name}
-            </button>
-          {/if}
-          <button type="button" class="ghost mini" onclick={runTest} disabled={launching}>Test launch</button>
-        </div>
-      {/if}
-      <div
-        class="dx-drop"
-        role="region"
-        aria-label="Import player crash"
-        ondragover={(e) => e.preventDefault()}
-        ondrop={onDropCrash}
-      >
-        <span>Drop a player crash-*.txt here, or paste mclo.gs URL:</span>
-        <div class="dx-drop-row">
-          <input type="url" placeholder="https://mclo.gs/…" bind:value={importUrl} />
-          <button type="button" class="ghost mini" disabled={importBusy || !importUrl.trim()} onclick={importFromMclogsUrl}>
-            {importBusy ? "…" : "Import"}
-          </button>
-          <button type="button" class="secondary small" disabled={supportBusy} onclick={exportSupportPack}>
-            {supportBusy ? "…" : "Support pack"}
-          </button>
-        </div>
-      </div>
-    </section>
+    <DiagnoseStatusBar
+      problems={unifiedProblems}
+      sessionOk={sessionOk}
+      loading={loading}
+      analyzing={analysisBusy || crashLoading || aiLoading}
+      sourceLabel={sourceLabel}
+      onScrollToWarnings={scrollToPackWarnings}
+    />
 
-    <!-- Verdict first (answer before the scary log) -->
     <DiagnoseVerdictHero
       sessionOk={sessionOk}
       topSuspect={topSuspect}
@@ -2059,7 +2161,7 @@
       strongestEvidence={strongestEvidence}
       analysisBusy={analysisBusy}
       primaryRec={primaryRec}
-      mergedRecommendations={mergedRecommendations}
+      mergedRecommendations={[]}
       aiApplyBusy={aiApplyBusy}
       applyingHintId={applyingHintId}
       disablingModId={disablingModId}
@@ -2068,82 +2170,175 @@
       logDisplayText={logDisplayText}
       isHsErr={isHsErr}
       hsErrKind={hsErrKind}
-      memoryHint={diagnosis.memoryHint}
-      worldCoords={diagnosis.worldCoords}
-      cascadingFinding={cascadingFinding}
-      mixinFinding={mixinFinding}
-      sideMismatchFinding={sideMismatchFinding}
+      memoryHint={null}
+      worldCoords={null}
+      cascadingFinding={null}
+      mixinFinding={null}
+      sideMismatchFinding={null}
       suspected={suspected}
       onFixDisableMod={fixDisableMod}
       onApplyTopSuspectUpdate={applyTopSuspectUpdate}
       onApplyAiPlan={applyAiPlan}
-      onJumpToFirstError={jumpToFirstError}
+      onJumpToFirstError={() => { mainTab = "evidence"; jumpToFirstError(); }}
       onApplyBisectDisableHalf={applyBisectDisableHalf}
+      warningCount={unifiedProblems.filter((p) => p.severity === "warning" || p.severity === "info").length}
+      onShowWarnings={scrollToPackWarnings}
     />
 
-    <!-- Secondary tools (collapsed — Analyze is primary in verdict) -->
-    <details class="tools-strip panel collapsible-block">
-      <summary>
-        <span><MoreHorizontal size={16} /> More tools</span>
-        <span class="tools-hint">
-          Test launch · log · folders · scanners
-          <ChevronDown size={14} />
-        </span>
-      </summary>
-      <div class="tools-strip-body">
-        <div class="tools-primary-row">
-          <button
-            class="primary"
-            onclick={() => runUnifiedAnalysis()}
-            disabled={!$projectPath || analysisBusy || loading || sessionOk}
-            title="Re-run Crash Assistant + AI"
-          >
-            <RefreshCw size={15} class={analysisBusy ? "spin" : ""} />
-            {analysisBusy ? "Analyzing…" : "Re-analyze"}
+    {#if !diagnosis.reports.some((r) => r.id.startsWith("crash-reports/")) && !problemsBlocking && !sessionOk}
+      <div class="dx-empty-sources panel">
+        <span>No crash reports yet.</span>
+        <button type="button" class="ghost mini" onclick={chooseLatestLog}>Game log</button>
+        <button type="button" class="ghost mini" onclick={runTest} disabled={launching}>Test launch</button>
+      </div>
+    {/if}
+
+    <div
+      class="dx-drop panel"
+      role="region"
+      aria-label="Import player crash"
+      ondragover={(e) => e.preventDefault()}
+      ondrop={onDropCrash}
+    >
+      <span>Drop a player crash file, or paste mclo.gs URL:</span>
+      <div class="dx-drop-row">
+        <input type="url" placeholder="https://mclo.gs/…" bind:value={importUrl} />
+        <button type="button" class="ghost mini" disabled={importBusy || !importUrl.trim()} onclick={importFromMclogsUrl}>
+          {importBusy ? "…" : "Import"}
+        </button>
+      </div>
+    </div>
+
+    <div class="dx-main-tabs" role="tablist">
+      <button type="button" role="tab" class="dx-main-tab" class:active={mainTab === "problems"} aria-selected={mainTab === "problems"} onclick={() => (mainTab = "problems")}>
+        Problems{#if unifiedProblems.length}<span class="count">{unifiedProblems.length}</span>{/if}
+      </button>
+      <button type="button" role="tab" class="dx-main-tab" class:active={mainTab === "evidence"} aria-selected={mainTab === "evidence"} onclick={() => (mainTab = "evidence")}>
+        Evidence
+      </button>
+      <button type="button" role="tab" class="dx-main-tab" class:active={mainTab === "ai"} aria-selected={mainTab === "ai"} onclick={() => (mainTab = "ai")}>
+        AI plan{#if aiAnalysis}<span class="count">1</span>{/if}
+      </button>
+      <button type="button" role="tab" class="dx-main-tab" class:active={mainTab === "advanced"} aria-selected={mainTab === "advanced"} onclick={() => (mainTab = "advanced")}>
+        Advanced
+      </button>
+    </div>
+
+    {#if mainTab === "problems"}
+      <DiagnoseProblemsList
+        problems={unifiedProblems}
+        sessionOk={sessionOk}
+        applyingId={applyingProblemId}
+        onApply={applyProblemAction}
+        onWhy={onProblemWhy}
+      />
+      {#if problemsBlocking}
+        <div class="dx-resolve-bridge">
+          <button type="button" class="secondary" onclick={() => ideStageRequest.set("resolve")}>
+            Fix pack graph in Resolve
           </button>
-          <button class="secondary" onclick={runTest} disabled={!$projectPath || launching || loading}>
-            <Play size={15} class={launching ? "spin" : ""} />
-            {launching ? "Launching…" : "Test launch"}
-          </button>
-          <button class="ghost" onclick={() => load(true)} disabled={!$projectPath || loading} title="Reload crash reports & logs">
-            <RefreshCw size={15} class={loading ? "spin" : ""} /> Refresh
-          </button>
+        </div>
+      {/if}
+    {:else if mainTab === "evidence"}
+      <DiagnoseTriagePanels
+        signalGroups={signalGroups}
+        sections={selectedReport?.sections ?? []}
+        suspected={suspected}
+        recentSnapshots={diagnosis.recentSnapshots ?? []}
+        mcreatorMods={[]}
+        classFinderResults={[]}
+        bind:classQuery
+        classBusy={false}
+        classResults={[]}
+        dependentResults={[]}
+        bind:toolsOpen={analysisToolsOpen}
+        disablingModId={disablingModId}
+        bisectMods={[]}
+        worldCoords={diagnosis.worldCoords ?? null}
+        memoryHint={diagnosis.memoryHint ?? null}
+        cascadingBanner={cascadingFinding ? cascadingFinding.description : null}
+        sourceHint={sourceLabel}
+        onJumpLine={(ln) => {
+          const n = Number(ln) || 0;
+          if (n <= 0) jumpToFirstError();
+          else scrollLogToLine(Math.max(0, n - 1));
+        }}
+        onDisableMod={fixDisableMod}
+        onUpdateMod={async (id) => {
+          if (!id) return;
+          fixingIdx = -1;
+          try {
+            await invoke("apply_fix_action", {
+              path: $projectPath,
+              action: { kind: "updateMod", label: `Update ${id}`, modId: id },
+            });
+            message = `Update requested for ${id}`;
+            verifyPrompt = true;
+            await load(true);
+          } catch (err) {
+            error = String(err);
+          } finally {
+            fixingIdx = null;
+          }
+        }}
+        onToggleBisect={() => {}}
+        onFindClass={() => {}}
+        onFindDependents={() => {}}
+        onOpenSnapshots={() => ideStageRequest.set("snapshots")}
+      />
+      <DiagnoseLogViewer
+        bind:this={logViewerRef}
+        logDisplayText={logDisplayText}
+        currentLogTextLength={currentLogText.length}
+        sourceLabel={logSourceLabel}
+        signalLineMap={signalLineMap}
+        errorHits={errorHits}
+        activeErrorHit={activeErrorHit}
+        sharingLog={sharingLog}
+        hasLogText={!!currentLogText}
+        sourceKey={logSourceKey}
+        onJumpNextError={jumpToNextError}
+        onCopy={copyCurrentLog}
+        onShare={shareCurrentLog}
+      />
+    {:else if mainTab === "ai"}
+      <DiagnoseAnalysisTabs
+        crashFindings={crashFindings}
+        crashLoading={crashLoading}
+        aiAnalysis={aiAnalysis}
+        aiLoading={aiLoading}
+        aiSoftError={aiSoftError}
+        aiApplyBusy={aiApplyBusy}
+        aiFeedbackBusy={aiFeedbackBusy}
+        aiFeedbackMsg={aiFeedbackMsg}
+        applyingHintId={applyingHintId}
+        onApplyFindingFix={({ finding, action }) => applyCrashFindingFix(finding, action)}
+        onRetryAi={() => runAiExplain()}
+        onApplyAiPlan={applyAiPlan}
+        onFeedback={sendAiFeedback}
+      />
+    {:else}
+      <div class="dx-advanced panel">
+        <div class="tools-group">
+          <span class="tools-label">Triage</span>
           <button class="ghost" onclick={() => runAiExplain()} disabled={!$projectPath || aiLoading || sessionOk}>
             <Bot size={15} /> AI explain
           </button>
-        </div>
-        <div class="tools-group">
-          <span class="tools-label">Log</span>
           <button class="ghost" onclick={shareCurrentLog} disabled={!$projectPath || sharingLog || !currentLogText}>
             <Share2 size={15} /> {sharingLog ? "Sharing…" : "Share mclo.gs"}
           </button>
-          <button class="ghost" onclick={exportSupportPack} disabled={!$projectPath || supportBusy} title="Zip crash + findings for Discord/GitHub">
+          <button class="ghost" onclick={exportSupportPack} disabled={!$projectPath || supportBusy}>
             <Download size={15} /> {supportBusy ? "…" : "Support pack"}
           </button>
-          <button class="ghost" onclick={copyCurrentLog} disabled={!currentLogText} title="Copy the full raw log to clipboard">
+          <button class="ghost" onclick={copyCurrentLog} disabled={!currentLogText}>
             <Copy size={15} /> Copy log
-          </button>
-          <button
-            class="ghost"
-            onclick={jumpToNextError}
-            disabled={!errorHits.length}
-            title={errorHits.length ? `Cycle errors (${errorHits.length})` : "No error lines in this log"}
-          >
-            <ArrowDownToLine size={15} />
-            Error{errorHits.length ? ` ${(activeErrorHit < 0 ? 0 : activeErrorHit) + 1}/${errorHits.length}` : ""}
           </button>
         </div>
         <div class="tools-group">
           <span class="tools-label">Folders</span>
-          <button class="ghost" onclick={openFolder} disabled={!$projectPath} title="Open instance folder">
-            <FolderOpen size={15} /> Instance
-          </button>
-          <button class="ghost" onclick={() => openSubdir("logs")} disabled={!$projectPath}>
-            <FileText size={15} /> logs/
-          </button>
-          <button class="ghost" onclick={() => openSubdir("crash-reports")} disabled={!$projectPath}>
-            <Bug size={15} /> crashes/
-          </button>
+          <button class="ghost" onclick={openFolder} disabled={!$projectPath}><FolderOpen size={15} /> Instance</button>
+          <button class="ghost" onclick={() => openSubdir("logs")} disabled={!$projectPath}><FileText size={15} /> logs/</button>
+          <button class="ghost" onclick={() => openSubdir("crash-reports")} disabled={!$projectPath}><Bug size={15} /> crashes/</button>
         </div>
         <div class="tools-group">
           <span class="tools-label">Scanners</span>
@@ -2163,196 +2358,102 @@
             <button class="ghost" onclick={() => (aiShowPrompt = !aiShowPrompt)}>{aiShowPrompt ? "Hide" : "Show"} AI prompt</button>
           {/if}
         </div>
+
+        <DiagnoseTriagePanels
+          signalGroups={[]}
+          sections={[]}
+          suspected={suspected}
+          recentSnapshots={diagnosis.recentSnapshots ?? []}
+          mcreatorMods={crashMcreator}
+          classFinderResults={crashClassFinder}
+          bind:classQuery
+          classBusy={classBusy}
+          classResults={classResults}
+          dependentResults={dependentResults}
+          bind:toolsOpen={analysisToolsOpen}
+          disablingModId={disablingModId}
+          bisectMods={bisectMods}
+          worldCoords={null}
+          memoryHint={null}
+          cascadingBanner={null}
+          sourceHint=""
+          onJumpLine={() => { mainTab = "evidence"; jumpToFirstError(); }}
+          onDisableMod={fixDisableMod}
+          onUpdateMod={async (id) => {
+            if (!id) return;
+            try {
+              await invoke("apply_fix_action", {
+                path: $projectPath,
+                action: { kind: "updateMod", label: `Update ${id}`, modId: id },
+              });
+              message = `Update requested for ${id}`;
+              verifyPrompt = true;
+              await load(true);
+            } catch (err) {
+              error = String(err);
+            }
+          }}
+          onToggleBisect={toggleBisect}
+          onFindClass={runClassFinder}
+          onFindDependents={runFindDependents}
+          onOpenSnapshots={() => ideStageRequest.set("snapshots")}
+        />
+
+        {#if bisectMods.length >= 2}
+          <div class="notice warning">
+            Bisect: {bisectMods.join(", ")}
+            <button type="button" class="secondary small" onclick={applyBisectDisableHalf}>Disable first half & retest</button>
+          </div>
+        {/if}
+
+        <DiagnoseConflictsJars
+          graphDiagnostics={graphDiagnostics}
+          duplicateJarGroups={duplicateJarGroups}
+          wrongLoaderJars={wrongLoaderJars}
+          fixingIdx={fixingIdx}
+          duplicateJarFixing={duplicateJarFixing}
+          wrongLoaderFixing={wrongLoaderFixing}
+          onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
+          onFixDeduplicate={fixDeduplicate}
+          onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
+          onDisableWrongJar={disableWrongJar}
+          onRemoveWrongJar={removeWrongJar}
+        />
+
+        {#if plan || oreFindings?.length || duplicateFindings?.length || unifyConfigResult || authorOpen || aiShowPrompt}
+          <section class="tools-results">
+            <h2><Wrench size={16} /> Tool results</h2>
+            {#if aiShowPrompt && aiPrompt}
+              <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
+            {/if}
+            {#if plan}
+              <div class="plan-card">
+                <h3>Heuristic Fix plan</h3>
+                <p>{plan.summary}</p>
+                <button class="primary" onclick={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
+              </div>
+            {/if}
+            {#if authorOpen}
+              <div class="author-form">
+                <h3>Save KB case</h3>
+                <label>Case id<input bind:value={authorId} placeholder="authored-outofmemory" /></label>
+                <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
+                <label>Symptoms (one per line)<textarea bind:value={authorSymptoms} rows="3"></textarea></label>
+                <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
+                <label>Actions JSON<textarea bind:value={authorActionsJson} rows="6" class="mono"></textarea></label>
+                <label>Notes (local only)<textarea bind:value={authorNotes} rows="2"></textarea></label>
+                <div class="actions">
+                  <button class="primary" onclick={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
+                  <button class="ghost" onclick={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
+                  <button class="ghost" onclick={openAuthorExportFolder}>Open folder</button>
+                  <button class="ghost" onclick={() => (authorOpen = false)}>Close</button>
+                </div>
+                {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
+              </div>
+            {/if}
+          </section>
+        {/if}
       </div>
-    </details>
-
-    <DiagnoseTriagePanels
-      signalGroups={signalGroups}
-      sections={selectedReport?.sections ?? []}
-      suspected={suspected}
-      recentSnapshots={diagnosis.recentSnapshots ?? []}
-      mcreatorMods={crashMcreator}
-      classFinderResults={crashClassFinder}
-      bind:classQuery
-      classBusy={classBusy}
-      classResults={classResults}
-      dependentResults={dependentResults}
-      bind:toolsOpen={analysisToolsOpen}
-      disablingModId={disablingModId}
-      bisectMods={bisectMods}
-      worldCoords={null}
-      memoryHint={null}
-      cascadingBanner={cascadingFinding ? cascadingFinding.description : null}
-      sourceHint=""
-      onJumpLine={(ln) => {
-        const n = Number(ln) || 0;
-        if (n <= 0) jumpToFirstError();
-        else scrollLogToLine(Math.max(0, n - 1));
-      }}
-      onDisableMod={fixDisableMod}
-      onUpdateMod={async (id) => {
-        if (!id) return;
-        fixingIdx = -1;
-        try {
-          await invoke("apply_fix_action", {
-            path: $projectPath,
-            action: { kind: "updateMod", label: `Update ${id}`, modId: id },
-          });
-          message = `Update requested for ${id}`;
-          await load(true);
-        } catch (err) {
-          error = String(err);
-        } finally {
-          fixingIdx = null;
-        }
-      }}
-      onToggleBisect={toggleBisect}
-      onFindClass={runClassFinder}
-      onFindDependents={runFindDependents}
-      onOpenSnapshots={() => ideStageRequest.set("snapshots")}
-    />
-
-    {#if bisectMods.length >= 2}
-      <div class="notice warning">
-        Bisect checklist: {bisectMods.join(", ")}
-        <button type="button" class="secondary small" onclick={applyBisectDisableHalf}>Disable first half & retest</button>
-      </div>
-    {/if}
-
-    <!-- Log viewer (after verdict, plan, and evidence) -->
-    <DiagnoseLogViewer
-      bind:this={logViewerRef}
-      logDisplayText={logDisplayText}
-      currentLogTextLength={currentLogText.length}
-      sourceLabel={logSourceLabel}
-      signalLineMap={signalLineMap}
-      errorHits={errorHits}
-      activeErrorHit={activeErrorHit}
-      sharingLog={sharingLog}
-      hasLogText={!!currentLogText}
-      sourceKey={logSourceKey}
-      onJumpNextError={jumpToNextError}
-      onCopy={copyCurrentLog}
-      onShare={shareCurrentLog}
-    />
-
-    <!-- 3. Analysis as tabs (not side-by-side) -->
-    <DiagnoseAnalysisTabs
-      crashFindings={crashFindings}
-      crashLoading={crashLoading}
-      aiAnalysis={aiAnalysis}
-      aiLoading={aiLoading}
-      aiSoftError={aiSoftError}
-      aiApplyBusy={aiApplyBusy}
-      aiFeedbackBusy={aiFeedbackBusy}
-      aiFeedbackMsg={aiFeedbackMsg}
-      applyingHintId={applyingHintId}
-      onApplyFindingFix={({ finding, action }) => applyCrashFindingFix(finding, action)}
-      onRetryAi={() => runAiExplain()}
-      onApplyAiPlan={applyAiPlan}
-      onFeedback={sendAiFeedback}
-    />
-
-    <!-- 4. Evidence (secondary) -->
-    <DiagnoseConflictsJars
-      graphDiagnostics={graphDiagnostics}
-      duplicateJarGroups={duplicateJarGroups}
-      wrongLoaderJars={wrongLoaderJars}
-      fixingIdx={fixingIdx}
-      duplicateJarFixing={duplicateJarFixing}
-      wrongLoaderFixing={wrongLoaderFixing}
-      onFixMissingDependency={({ modId, idx }) => fixMissingDependency(modId, idx)}
-      onFixDeduplicate={fixDeduplicate}
-      onKeepOneDuplicateJar={({ modId, fileName }) => keepOneDuplicateJar(modId, fileName)}
-      onDisableWrongJar={disableWrongJar}
-      onRemoveWrongJar={removeWrongJar}
-    />
-
-    <!-- Scanner results / KB authoring (tools live in the top strip) -->
-    {#if plan || oreFindings?.length || duplicateFindings?.length || unifyConfigResult || authorOpen || aiShowPrompt}
-      <section class="panel tools-results">
-        <h2><Wrench size={16} /> Tool results</h2>
-        {#if aiShowPrompt && aiPrompt}
-          <pre class="log-pre">{aiPrompt.slice(0, 20000)}</pre>
-        {/if}
-        {#if plan}
-          <div class="plan-card">
-            <h3>Heuristic Fix plan (Crash Assistant)</h3>
-            <p class="muted-inline">Rule-based — separate from AI ActionPlan above.</p>
-            <p>{plan.summary}</p>
-            <button class="primary" onclick={applyFix} disabled={applying}>{applying ? "Applying…" : "Apply heuristic fix plan"}</button>
-          </div>
-        {/if}
-        {#if authorOpen}
-          <div class="author-form">
-            <h3>Save KB case</h3>
-            <label>Case id<input bind:value={authorId} placeholder="authored-outofmemory" /></label>
-            <label>Solution<textarea bind:value={authorSolution} rows="3"></textarea></label>
-            <label>Symptoms (one per line)<textarea bind:value={authorSymptoms} rows="3"></textarea></label>
-            <label>Suspected (comma)<input bind:value={authorSuspected} /></label>
-            <label>Actions JSON<textarea bind:value={authorActionsJson} rows="6" class="mono"></textarea></label>
-            <label>Notes (local only)<textarea bind:value={authorNotes} rows="2"></textarea></label>
-            <div class="actions">
-              <button class="primary" onclick={saveAuthorCase} disabled={authorBusy || !authorSolution.trim()}>Save</button>
-              <button class="ghost" onclick={() => copyAuthorExport()} disabled={!authorExportPreview}>Copy export</button>
-              <button class="ghost" onclick={openAuthorExportFolder}>Open folder</button>
-              <button class="ghost" onclick={() => (authorOpen = false)}>Close</button>
-            </div>
-            {#if authorCases.length}
-              <div class="author-cases">
-                <strong>Saved cases</strong>
-                {#each authorCases.slice(0, 6) as c (c.id)}
-                  <button type="button" class="ghost mini" onclick={() => copyAuthorExport(c.id)}>{c.id}</button>
-                {/each}
-              </div>
-            {/if}
-            {#if authorMsg}<p class="muted-inline">{authorMsg}</p>{/if}
-            {#if authorExportPreview}
-              <pre class="log-pre">{authorExportPreview.slice(0, 4000)}</pre>
-            {/if}
-          </div>
-        {/if}
-        {#if oreFindings?.length || duplicateFindings?.length || unifyConfigResult || wrongLoaderJars.length || duplicateJarGroups.length}
-          <div class="scanner-cards">
-            {#if oreFindings?.length}
-              <div class="scanner-card">
-                <strong>Ore gen</strong>
-                <p>{oreFindings.length} finding(s)</p>
-                <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("world-map")}>World map</button>
-              </div>
-            {/if}
-            {#if duplicateFindings?.length}
-              <div class="scanner-card">
-                <strong>Duplicate items</strong>
-                <p>{duplicateFindings.length} finding(s)</p>
-                <button type="button" class="ghost mini" onclick={generateUnify} disabled={unifyLoading}>Generate unify</button>
-                <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("resolve")}>Resolve</button>
-              </div>
-            {/if}
-            {#if unifyConfigResult}
-              <div class="scanner-card">
-                <strong>Unify config</strong>
-                <p>Generated — review before applying.</p>
-                <pre>{JSON.stringify(unifyConfigResult, null, 2).slice(0, 1200)}</pre>
-              </div>
-            {/if}
-            {#if wrongLoaderJars.length}
-              <div class="scanner-card">
-                <strong>Wrong-loader jars</strong>
-                <p>{wrongLoaderJars.length} jar(s)</p>
-                <button type="button" class="ghost mini" onclick={() => detectWrongLoaderMods()}>Refresh</button>
-              </div>
-            {/if}
-            {#if duplicateJarGroups.length}
-              <div class="scanner-card">
-                <strong>Duplicate mod jars</strong>
-                <p>{duplicateJarGroups.length} group(s)</p>
-                <button type="button" class="ghost mini" onclick={() => detectDuplicateModJars()}>Refresh</button>
-              </div>
-            {/if}
-          </div>
-        {/if}
-      </section>
     {/if}
   {:else}
     <div class="empty">Press Refresh to load diagnosis.</div>
@@ -2401,6 +2502,131 @@
   }
   .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }
+  .dx-chrome {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 8px 0 10px;
+    background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+    backdrop-filter: blur(8px);
+  }
+  .dx-chrome-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .chrome-source {
+    max-width: 220px;
+    padding: 6px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+  .verify-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .dx-main-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 12px 0 14px;
+    padding: 4px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+  }
+  .dx-main-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .dx-main-tab.active {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+  }
+  .dx-main-tab .count {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: rgba(27, 217, 106, 0.15);
+    color: var(--accent-primary);
+    font-size: 10px;
+  }
+  .dx-resolve-bridge {
+    margin-top: 12px;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .dx-advanced {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+  }
+  .dx-advanced .tools-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .dx-advanced .tools-label {
+    width: 100%;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .dx-empty-sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding: 10px 12px;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .dx-drop {
+    margin-bottom: 12px;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .dx-drop-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .dx-drop-row input {
+    flex: 1;
+    min-width: 160px;
+    padding: 6px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+  }
+  .primary.small, .secondary.small {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
   .title, h2 { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .actions { gap: 8px; flex-wrap: wrap; }
   .primary-actions { gap: 8px; flex-wrap: wrap; }

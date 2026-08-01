@@ -20,6 +20,7 @@
     projectPath,
     projectInfo,
     newProjectOpen,
+    libraryTabRequest,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -456,6 +457,13 @@
     void loadSwarm();
     void loadDownloadDir();
     if (tab === "discover") search();
+  });
+
+  $effect(() => {
+    const req = $libraryTabRequest;
+    if (!req) return;
+    libraryTabRequest.set(null);
+    switchTab(req);
   });
 
   function switchTab(t: Tab) {

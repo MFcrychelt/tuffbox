@@ -369,6 +369,9 @@ export const skinPath = writable<string | null>(null);
 // including the sidebar's + button which lives outside the Dashboard tree.
 export const newProjectOpen = writable<boolean>(false);
 
+/** Open a Library tab (`discover` / `yours` / `create`). Cleared by Library when applied. */
+export const libraryTabRequest = writable<"yours" | "discover" | "create" | null>(null);
+
 // Global launch state — true while a launch is in progress.
 // Used by Header to show spinner, and by Dashboard to disable play button.
 export const isLaunching = writable<boolean>(false);
@@ -408,6 +411,106 @@ export function closeLaunchLog() {
 
 /** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
 export const ideStageRequest = writable<string | null>(null);
+
+/** Suggested IDE stage when opening from Home (updated by IdeNextBar / diagnostics refresh). */
+export const ideSuggestedStage = writable<string>("content");
+
+/** Blocking pack issues count (missing deps + conflicts) for Home badge / Next bar. */
+export const ideIssueCount = writable(0);
+
+/** Optional crash/needs-fix hint for Next Action priority. */
+export const ideNeedsHealth = writable(false);
+
+export type WorkTrailAction = {
+  id: string;
+  label: string;
+  /** Navigate to IDE stage, launch test, or dismiss. */
+  kind: "stage" | "play" | "dismiss";
+  stage?: string;
+};
+
+export type WorkTrail = {
+  message: string;
+  actions: WorkTrailAction[];
+  createdAt: number;
+};
+
+/** Contextual continue strip after Content / Resolve / Diagnose mutations. */
+export const workTrail = writable<WorkTrail | null>(null);
+
+export function pushWorkTrail(message: string, actions: WorkTrailAction[]) {
+  workTrail.set({
+    message,
+    actions,
+    createdAt: Date.now(),
+  });
+}
+
+export function clearWorkTrail() {
+  workTrail.set(null);
+}
+
+/** Bump to ask IdeNextBar to run its Next action (Ctrl+Enter). */
+export const ideNextTrigger = writable(0);
+
+export function requestIdeNextAction() {
+  ideNextTrigger.update((n) => n + 1);
+}
+
+/** Bump to refresh issue counts on IdeNextBar. */
+export const ideIssuesRefresh = writable(0);
+
+export function requestIdeIssuesRefresh() {
+  ideIssuesRefresh.update((n) => n + 1);
+}
+
+/** Bump to ask IdeNextBar to run Play (Ctrl+Shift+P). */
+export const idePlayTrigger = writable(0);
+
+export function requestIdePlay() {
+  idePlayTrigger.update((n) => n + 1);
+}
+
+/** Recent IDE stages / commands for the command palette (max 5). */
+export const ideRecentCommands = writable<{ id: string; label: string }[]>([]);
+
+export function pushIdeRecent(id: string, label: string) {
+  ideRecentCommands.update((list) => {
+    const next = [{ id, label }, ...list.filter((x) => x.id !== id)];
+    return next.slice(0, 5);
+  });
+}
+
+/** Deterministic Next Action for IdeNextBar / Open IDE. */
+export function computeIdeNextAction(opts: {
+  issueCount: number;
+  needsHealth: boolean;
+  briefDirty: boolean;
+  tuneDirty: boolean;
+  questDirty: boolean;
+}): { label: string; stage: string | null; kind: "stage" | "play" | "none"; detail?: string } {
+  if (opts.issueCount > 0) {
+    return {
+      label: "Fix pack graph",
+      stage: "resolve",
+      kind: "stage",
+      detail: `${opts.issueCount} issue${opts.issueCount === 1 ? "" : "s"}`,
+    };
+  }
+  if (opts.needsHealth) {
+    return { label: "Open Health", stage: "diagnose", kind: "stage", detail: "Crash needs a look" };
+  }
+  if (opts.briefDirty) {
+    return { label: "Finish Brief", stage: "brief", kind: "stage", detail: "Unsaved listing" };
+  }
+  if (opts.tuneDirty) {
+    return { label: "Save Tune", stage: "configs", kind: "stage", detail: "Unsaved configs" };
+  }
+  if (opts.questDirty) {
+    return { label: "Save Quests", stage: "quests", kind: "stage", detail: "Unsaved quests" };
+  }
+  return { label: "Test launch", stage: "test", kind: "play", detail: "Verify the pack" };
+}
 
 /** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */
 export const questChatFocusId = writable<string | null>(null);

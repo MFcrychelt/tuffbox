@@ -2,7 +2,7 @@ pub mod curseforge;
 pub mod local;
 pub mod modrinth;
 
-pub use curseforge::CurseForgeProvider;
+pub use curseforge::{normalize_mod_category, CurseForgeProvider};
 pub use local::LocalJarProvider;
 pub use modrinth::{markdown_to_html, ModrinthCategory, ModrinthProvider};
 

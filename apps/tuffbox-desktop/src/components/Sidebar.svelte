@@ -25,6 +25,8 @@
     sidebarMode,
     sidebarIconsCollapsed,
     projectPath,
+    ideStageRequest,
+    ideSuggestedStage,
   } from "../lib/store";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
@@ -103,6 +105,9 @@
   }
 
   function selectNav(view: View, el?: EventTarget | null) {
+    if (view === "ide") {
+      ideStageRequest.set($ideSuggestedStage || "content");
+    }
     currentView = view;
     if (el instanceof HTMLElement) el.blur();
     scheduleHideRail(320);

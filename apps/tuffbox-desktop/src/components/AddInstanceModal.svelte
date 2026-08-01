@@ -5,7 +5,7 @@
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
-  import { projectPath } from "../lib/store";
+  import { projectPath, libraryTabRequest } from "../lib/store";
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
@@ -37,7 +37,11 @@
   let memoryMode = $state<"auto" | "manual">("auto");
   let recommendedMemoryMb = $state(8192);
   let memoryMb = $state(8192);
-  let memoryMaxMb = $state(16384);
+  /** Hard cap for Create modpack memory slider / presets. */
+  const MEMORY_MAX_MB = 64 * 1024;
+  const MEMORY_MIN_MB = 4 * 1024;
+  const MEMORY_PRESETS_GB = [4, 8, 10, 12, 16, 24, 32, 36, 48, 64] as const;
+  let memoryMaxMb = $state(MEMORY_MAX_MB);
   let jvmArgs = $state("-XX:+UseG1GC");
   let iconSourcePath = $state<string | null>(null);
   let iconPreviewUrl = $state<string | null>(null);
@@ -113,21 +117,13 @@
       try {
         const settings = await invoke<{ defaultMemoryMb?: number }>("get_launcher_settings");
         if (settings?.defaultMemoryMb && settings.defaultMemoryMb >= 1024) {
-          recommendedMemoryMb = settings.defaultMemoryMb;
-          memoryMb = settings.defaultMemoryMb;
+          recommendedMemoryMb = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, settings.defaultMemoryMb));
+          memoryMb = recommendedMemoryMb;
         }
       } catch {
         /* keep defaults */
       }
-      try {
-        // Rough upper bound for the slider from JS (navigator), fallback 16G.
-        const deviceMemGb = (navigator as any).deviceMemory as number | undefined;
-        if (deviceMemGb && deviceMemGb > 0) {
-          memoryMaxMb = Math.max(8192, Math.min(65536, Math.floor(deviceMemGb * 1024 * 0.75)));
-        }
-      } catch {
-        /* keep default max */
-      }
+      memoryMaxMb = MEMORY_MAX_MB;
       const versions = await invoke("get_minecraft_versions");
       mcVersions = versions as { id: string; popular: boolean }[];
       if (!mcVersions.some((v) => v.id === minecraftVersion)) {
@@ -227,6 +223,17 @@
     }
   }
 
+  function goToDiscover() {
+    libraryTabRequest.set("discover");
+    onclose?.();
+    window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
+  }
+
+  function setMemoryPresetGb(gb: number) {
+    memoryMode = "manual";
+    memoryMb = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, gb * 1024));
+  }
+
   function clearIcon() {
     iconSourcePath = null;
     iconPreviewUrl = null;
@@ -304,7 +311,8 @@
     error = "";
     installMessage = "";
     try {
-      const mem = memoryMode === "auto" ? recommendedMemoryMb : memoryMb;
+      const rawMem = memoryMode === "auto" ? recommendedMemoryMb : memoryMb;
+      const mem = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, rawMem));
       const args = jvmArgs
         .split(/\s+/)
         .map((s) => s.trim())
@@ -604,7 +612,7 @@
     <div class="tabs">
       <button class:active={mode === "blank"} onclick={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
       <button class:active={mode === "import"} onclick={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
-      <button class:active={mode === "catalog"} onclick={() => { mode = "catalog"; location = guessLocation(); }}>Browse packs</button>
+      <button type="button" onclick={goToDiscover}>Browse packs</button>
     </div>
 
     <div class="modal-body">
@@ -738,19 +746,29 @@
             >Custom</button>
           </div>
           {#if memoryMode === "manual"}
+            <div class="mem-presets" role="group" aria-label="Memory presets">
+              {#each MEMORY_PRESETS_GB as gb (gb)}
+                <button
+                  type="button"
+                  class="mem-preset"
+                  class:active={memoryMb === gb * 1024}
+                  onclick={() => setMemoryPresetGb(gb)}
+                >{gb} GB</button>
+              {/each}
+            </div>
             <div class="mem-slider">
-              <div class="mem-value">{memoryMb} MB</div>
+              <div class="mem-value">{memoryMb} MB · {(memoryMb / 1024).toFixed(memoryMb % 1024 === 0 ? 0 : 1)} GB</div>
               <input
                 class="mem-range"
                 type="range"
-                min="1024"
+                min={MEMORY_MIN_MB}
                 max={memoryMaxMb}
-                step="256"
+                step="1024"
                 bind:value={memoryMb}
               />
               <div class="mem-scale">
-                <span>1 GB</span>
-                <span>{Math.round(memoryMaxMb / 1024)} GB</span>
+                <span>4 GB</span>
+                <span>64 GB</span>
               </div>
             </div>
           {/if}
@@ -1091,6 +1109,31 @@
     color: var(--accent-primary);
   }
   .mem-slider { display: grid; gap: 8px; margin-top: 8px; }
+  .mem-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .mem-preset {
+    padding: 5px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .mem-preset:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+  }
+  .mem-preset.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-tertiary));
+  }
   .mem-value {
     font-size: 20px;
     font-weight: 800;

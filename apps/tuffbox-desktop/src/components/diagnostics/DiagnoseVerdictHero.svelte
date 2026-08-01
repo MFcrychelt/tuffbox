@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CheckCircle, AlertTriangle, CircleHelp, Wrench, ArrowDownToLine, Lightbulb } from "@lucide/svelte";
+  import { CheckCircle, AlertTriangle, CircleHelp, Wrench, ArrowDownToLine } from "@lucide/svelte";
   import { ideStageRequest } from "../../lib/store";
 
   type MergedRec = {
@@ -36,11 +36,13 @@
     mixinFinding = null,
     sideMismatchFinding = null,
     suspected = [],
+    warningCount = 0,
     onFixDisableMod,
     onApplyTopSuspectUpdate,
     onApplyAiPlan,
     onJumpToFirstError,
     onApplyBisectDisableHalf,
+    onShowWarnings,
   }: {
     sessionOk?: boolean;
     topSuspect?: any;
@@ -64,11 +66,13 @@
     mixinFinding?: any;
     sideMismatchFinding?: any;
     suspected?: any[];
+    warningCount?: number;
     onFixDisableMod?: (modId: string) => void;
     onApplyTopSuspectUpdate?: () => void;
     onApplyAiPlan?: () => void;
     onJumpToFirstError?: () => void;
     onApplyBisectDisableHalf?: () => void;
+    onShowWarnings?: () => void;
   } = $props();
 
   function severityChip(sev: string): string {
@@ -98,7 +102,15 @@
     {#if sessionOk}
       <span class="eyebrow">You're good</span>
       <h1>Last launch looked fine</h1>
-      <p class="dx-verdict-copy">No crash to chase right now. Pack graph warnings below still matter if any show up.</p>
+      <p class="dx-verdict-copy">
+        No crash to chase right now.
+        {#if warningCount > 0}
+          <button type="button" class="linkish" onclick={() => onShowWarnings?.()}>
+            {warningCount} pack warning{warningCount === 1 ? "" : "s"}
+          </button>
+          still worth a look.
+        {/if}
+      </p>
     {:else if topFinding && (!topSuspect || (topFinding.severity === "critical" || topFinding.severity === "error"))}
       <span class="eyebrow">{severityChip(topFinding.severity)}</span>
       <h1>{topFinding.title}</h1>
@@ -108,7 +120,7 @@
       {/if}
       {#if topSuspect}
         <p class="dx-verdict-copy muted-inline">
-          Suspect mod: <code>{topSuspect.id}</code>
+          Suspect: {topSuspect.name || topSuspect.id}
           · {topSuspect.confidence}%
         </p>
       {/if}
@@ -116,8 +128,7 @@
       <span class="eyebrow">Looks like this broke it</span>
       <h1>{heroCulpritLabel || topSuspect.name}</h1>
       <p class="dx-verdict-copy">
-        <code>{topSuspect.id}</code>
-        · {topSuspect.confidence}% confidence
+        {topSuspect.confidence}% confidence
         {#if topSuspect.blameRole}· {topSuspect.blameRole}{/if}
       </p>
       {#if strongestEvidence}
@@ -129,7 +140,7 @@
       <p class="dx-verdict-copy">
         {analysisBusy
           ? "Scanning the log…"
-          : "Hit Re-analyze, or jump to the first error in the log below."}
+          : "Hit Re-analyze, or open Evidence for the raw log."}
       </p>
     {/if}
 
@@ -144,9 +155,6 @@
           <Wrench size={15} />
           {primaryRec.label}
         </button>
-        {#if mergedRecommendations.length > 1}
-          <span class="dx-cta-more">{mergedRecommendations.length - 1} more below</span>
-        {/if}
       {:else if !sessionOk && topSuspect?.knownInManifest}
         <button class="primary" onclick={() => onFixDisableMod?.(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
           {disablingModId === topSuspect.id ? "Disabling…" : `Disable ${topSuspect.name}`}
@@ -159,12 +167,12 @@
           onclick={() => onApplyAiPlan?.()}
           disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
         >
-          {aiApplyBusy ? "Applying…" : "Review & apply AI plan"}
+          {aiApplyBusy ? "Applying…" : "Review AI plan"}
         </button>
       {/if}
       {#if !sessionOk}
         <button class="ghost" type="button" onclick={() => onJumpToFirstError?.()} disabled={!logDisplayText}>
-          <ArrowDownToLine size={15} /> Jump to error
+          <ArrowDownToLine size={15} /> Evidence
         </button>
       {/if}
     </div>
@@ -175,10 +183,10 @@
   <div class="dx-class-cards">
     {#if isHsErr}
       <div class="dx-class-card">
-        <strong>Java native crash (hs_err)</strong>
+        <strong>Java native crash</strong>
         <p>
           {hsErrKind === "oom"
-            ? "JVM ran out of memory (native/heap). Raise -Xmx carefully and check for leaks."
+            ? "JVM ran out of memory. Raise RAM carefully and check for leaks."
             : "JVM fatal error — check Problematic frame and GPU/Java version."}
         </p>
         <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("setup")}>Open Setup</button>
@@ -202,17 +210,13 @@
       <div class="dx-class-card">
         <strong>Mixin conflict</strong>
         <p>{mixinFinding.description}</p>
-        <button type="button" class="ghost mini" onclick={() => onJumpToFirstError?.()}>Open log at mixin</button>
-        {#if suspected.length >= 2}
-          <button type="button" class="ghost mini" onclick={() => onApplyBisectDisableHalf?.()}>Try disable half (bisect)</button>
-        {/if}
+        <button type="button" class="ghost mini" onclick={() => onJumpToFirstError?.()}>Open Evidence</button>
       </div>
     {/if}
     {#if sideMismatchFinding}
       <div class="dx-class-card">
         <strong>Client-only / wrong side</strong>
         <p>{sideMismatchFinding.description}</p>
-        <button type="button" class="ghost mini" onclick={() => ideStageRequest.set("export")}>Server pack checklist</button>
       </div>
     {/if}
     {#if worldCoords}
@@ -224,31 +228,14 @@
   </div>
 {/if}
 
-<!-- Recommended plan (before evidence & log) -->
-{#if !sessionOk && mergedRecommendations.length > 1}
-  <section class="dx-more-actions panel">
-    <h2><Lightbulb size={16} /> Other ways to fix it</h2>
-    <ul class="merged-list compact">
-      {#each mergedRecommendations.slice(1) as rec (rec.id)}
-        <li class="merged-item {rec.source}">
-          <span class="src-tag">{rec.source === "ai" ? "AI" : "Rules"}</span>
-          <div class="merged-body">
-            <strong>{rec.label}</strong>
-            {#if rec.detail}<span>{rec.detail}</span>{/if}
-          </div>
-          <button class="secondary small" type="button" onclick={rec.apply} disabled={aiApplyBusy || applyingHintId !== null}>
-            Do it
-          </button>
-        </li>
-      {/each}
-    </ul>
-  </section>
-{/if}
-
 <style>
-  .panel { padding: 16px; min-width: 0; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-inline { margin: 0; color: var(--text-muted); font-size: 12px; }
   .eyebrow { display: block; margin-bottom: 4px; color: var(--text-muted); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+  .linkish {
+    border: none; background: none; padding: 0;
+    color: var(--accent-primary); font: inherit; font-weight: 700;
+    cursor: pointer; text-decoration: underline;
+  }
   .dx-verdict {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -281,7 +268,6 @@
   .dx-verdict-body { min-width: 0; }
   .dx-verdict-body h1 { margin: 0; color: var(--text-primary); font-size: 20px; line-height: 1.3; }
   .dx-verdict-copy { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
-  .dx-verdict-copy code { font-size: 12px; color: var(--text-muted); }
   .dx-next-step {
     margin: 10px 0 0;
     padding: 10px 12px;
@@ -303,31 +289,6 @@
     word-break: break-word;
   }
   .dx-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
-  .dx-cta-more { color: var(--text-muted); font-size: 12px; }
-  .dx-more-actions { margin-bottom: 14px; }
-  .merged-list.compact { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
-  .merged-item {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 10px;
-    align-items: center;
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-  }
-  .merged-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .merged-body strong { color: var(--text-primary); font-size: 13px; }
-  .merged-body span { color: var(--text-muted); font-size: 12px; }
-  .src-tag {
-    padding: 2px 7px;
-    border-radius: 999px;
-    background: var(--bg-secondary);
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 800;
-  }
-  .merged-item.ai .src-tag { color: var(--accent-primary); background: rgba(27, 217, 106, 0.12); }
   .dx-class-cards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -351,6 +312,5 @@
   .dx-class-card p { margin: 0; color: var(--text-secondary); }
   @media (max-width: 720px) {
     .dx-verdict { grid-template-columns: 1fr; }
-    .merged-item { grid-template-columns: 1fr; }
   }
 </style>

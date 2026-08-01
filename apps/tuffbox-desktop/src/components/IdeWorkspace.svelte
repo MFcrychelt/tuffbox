@@ -17,8 +17,20 @@
     ScrollText,
     Circle,
     Map as MapIcon,
+    ChevronDown,
+    ChevronUp,
   } from "@lucide/svelte";
-  import { projectPath, ideStageRequest, autoHideWorkflowRail, tuneDirty, briefDirty, questDirty } from "../lib/store";
+  import {
+    projectPath,
+    ideStageRequest,
+    autoHideWorkflowRail,
+    tuneDirty,
+    briefDirty,
+    questDirty,
+    requestIdeNextAction,
+    requestIdePlay,
+    pushIdeRecent,
+  } from "../lib/store";
   import { onDestroy, onMount } from "svelte";
   import ProjectSettings from "./ProjectSettings.svelte";
   import Mods from "./Mods.svelte";
@@ -36,6 +48,7 @@
   import ReleaseRoom from "./ReleaseRoom.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import BriefEditor from "./BriefEditor.svelte";
+  import IdeNextBar from "./IdeNextBar.svelte";
 
   type StageId =
     | "brief"
@@ -54,6 +67,8 @@
     | "export"
     | "release";
 
+  type StagePhase = "foundation" | "build" | "create" | "ship";
+
   type Stage = {
     id: StageId;
     label: string;
@@ -61,7 +76,10 @@
     icon: any;
     goal: string;
     outputs: string[];
+    phase: StagePhase;
   };
+
+  const FOUNDATION_KEY = "tuffbox.ide.foundation-expanded";
 
   const stages: Stage[] = [
     {
@@ -71,6 +89,7 @@
       icon: ClipboardList,
       goal: "Shape the storefront listing: icon, summary, markdown description, and live Modrinth/CurseForge card preview.",
       outputs: ["listing card", "summary + icon", "author notes"],
+      phase: "foundation",
     },
     {
       id: "setup",
@@ -79,6 +98,7 @@
       icon: SlidersHorizontal,
       goal: "Choose Minecraft/loader/Java, memory budget and base project settings.",
       outputs: ["manifest", "profiles", "runtime settings"],
+      phase: "foundation",
     },
     {
       id: "content",
@@ -87,6 +107,7 @@
       icon: Package,
       goal: "Add, update and remove mods as managed dependencies, not loose files.",
       outputs: ["mod list", "source metadata", "auto snapshots"],
+      phase: "build",
     },
     {
       id: "quests",
@@ -95,6 +116,7 @@
       icon: ScrollText,
       goal: "Author FTB Quests lines with AI sidebar (20+ quests, lore, tasks/rewards) and edit SNBT visually.",
       outputs: ["quest tree", "AI QuestPlan", "SNBT files", "validation report"],
+      phase: "create",
     },
     {
       id: "recipes",
@@ -103,6 +125,7 @@
       icon: PackageOpen,
       goal: "JEI-style recipe browser: search, Recipes/Uses, KubeJS remove scripts.",
       outputs: ["recipe list", "disable scripts", "ingredient search"],
+      phase: "create",
     },
     {
       id: "world-map",
@@ -111,6 +134,7 @@
       icon: MapIcon,
       goal: "MCA Selector-style chunk map: select, delete, export/import, NBT edit.",
       outputs: ["chunk map", "selection", "export / backup"],
+      phase: "create",
     },
     {
       id: "ore-gen",
@@ -119,6 +143,7 @@
       icon: Mountain,
       goal: "Visualize ore generation heights, vein sizes and toggle worldgen from configs.",
       outputs: ["ore layers", "generation config", "spawn rates"],
+      phase: "create",
     },
     {
       id: "resolve",
@@ -127,6 +152,7 @@
       icon: GitGraph,
       goal: "Inspect dependency graph, missing dependencies, conflicts and side mismatches.",
       outputs: ["diagnostics", "change plan", "lockfile graph"],
+      phase: "build",
     },
     {
       id: "configs",
@@ -135,6 +161,7 @@
       icon: FileCode2,
       goal: "Edit configs, scripts and overrides with rollback-safe saves.",
       outputs: ["configs", "KubeJS/scripts", "tracked changes"],
+      phase: "create",
     },
     {
       id: "history",
@@ -143,6 +170,7 @@
       icon: History,
       goal: "Chronological pack activity: launcher ops, external disk edits, AI fixes.",
       outputs: ["timeline", "delta scan", "AI context"],
+      phase: "build",
     },
     {
       id: "test",
@@ -151,6 +179,7 @@
       icon: PlayCircle,
       goal: "Launch client/server profiles, collect logs and measure startup stability.",
       outputs: ["latest.log", "run history", "performance notes"],
+      phase: "ship",
     },
     {
       id: "diagnose",
@@ -159,6 +188,7 @@
       icon: Stethoscope,
       goal: "Turn errors, crashes and graph diagnostics into clear next actions.",
       outputs: ["suspected mods", "fix hypotheses", "safe plan"],
+      phase: "ship",
     },
     {
       id: "snapshots",
@@ -167,6 +197,7 @@
       icon: Camera,
       goal: "Checkpoint risky edits, compare states and rollback — not the activity feed (see History).",
       outputs: ["snapshots", "diff", "rollback point"],
+      phase: "ship",
     },
     {
       id: "export",
@@ -175,6 +206,7 @@
       icon: UploadCloud,
       goal: "Package the pack into .mrpack, Prism zip, server pack and changelog.",
       outputs: ["artifacts", "server pack", "changelog"],
+      phase: "ship",
     },
     {
       id: "release",
@@ -183,13 +215,81 @@
       icon: Rocket,
       goal: "Prepare release notes, publish draft and track post-release hotfixes.",
       outputs: ["release snapshot", "publish draft", "support checklist"],
+      phase: "ship",
     },
   ];
 
-  let activeStage = $state<StageId>("brief");
+  const PHASE_ORDER: StagePhase[] = ["foundation", "build", "create", "ship"];
+  const PHASE_LABEL: Record<StagePhase, string> = {
+    foundation: "Foundation",
+    build: "Build",
+    create: "Create",
+    ship: "Verify & Ship",
+  };
+
+  /** Stage chords when IDE focused (avoid App Ctrl+1… Home shortcuts). */
+  const STAGE_CHORD: Record<string, StageId> = {
+    "1": "content",
+    "2": "resolve",
+    "3": "history",
+    "4": "test",
+    "5": "diagnose",
+    "6": "snapshots",
+    "7": "configs",
+    "8": "quests",
+    "9": "export",
+    "0": "brief",
+  };
+
+  let activeStage = $state<StageId>("content");
   let leaveConfirmOpen = $state(false);
   let pendingStage = $state<StageId | null>(null);
   let leaveKind = $state<"tune" | "brief" | "quests">("tune");
+  let foundationExpanded = $state(
+    typeof localStorage === "undefined"
+      ? false
+      : localStorage.getItem(FOUNDATION_KEY) === "true",
+  );
+
+  const stagesByPhase = $derived(
+    PHASE_ORDER.map((phase) => ({
+      phase,
+      label: PHASE_LABEL[phase],
+      stages: stages.filter((s) => s.phase === phase),
+    })),
+  );
+
+  const visibleRailPhases = $derived(
+    stagesByPhase.map((group) => ({
+      ...group,
+      stages:
+        group.phase === "foundation" && !foundationExpanded
+          ? group.stages.filter((s) => s.id === activeStage)
+          : group.stages,
+      collapsed: group.phase === "foundation" && !foundationExpanded,
+    })),
+  );
+
+  function toggleFoundation() {
+    foundationExpanded = !foundationExpanded;
+    try {
+      localStorage.setItem(FOUNDATION_KEY, String(foundationExpanded));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function stageIndexInPhase(id: StageId): { phase: StagePhase; index: number; list: Stage[] } {
+    const stage = stages.find((s) => s.id === id)!;
+    const list = stages.filter((s) => s.phase === stage.phase);
+    return { phase: stage.phase, index: list.findIndex((s) => s.id === id), list };
+  }
+
+  function goAdjacentStage(dir: -1 | 1) {
+    const { list, index } = stageIndexInPhase(activeStage);
+    const next = list[index + dir];
+    if (next) goToStage(next.id);
+  }
 
   function goToStage(id: StageId) {
     if (id === activeStage) return;
@@ -212,6 +312,8 @@
       return;
     }
     activeStage = id;
+    const stage = stages.find((s) => s.id === id);
+    if (stage) pushIdeRecent(`ide:${id}`, `IDE · ${stage.label}`);
   }
 
   function confirmLeaveStage() {
@@ -220,8 +322,11 @@
     else if (leaveKind === "brief") briefDirty.set(false);
     else questDirty.set(false);
     if (pendingStage) {
-      activeStage = pendingStage;
+      const id = pendingStage;
+      activeStage = id;
       pendingStage = null;
+      const stage = stages.find((s) => s.id === id);
+      if (stage) pushIdeRecent(`ide:${id}`, `IDE · ${stage.label}`);
     }
   }
 
@@ -284,11 +389,46 @@
       else stopFocusedScanLoop();
     };
     const onSettings = () => void refreshFocusedScanLoop();
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target;
+      if (t instanceof HTMLElement) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        requestIdeNextAction();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "P" || e.key === "p")) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestIdePlay();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && STAGE_CHORD[e.key]) {
+        e.preventDefault();
+        e.stopPropagation();
+        goToStage(STAGE_CHORD[e.key]);
+        return;
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "[") {
+        e.preventDefault();
+        goAdjacentStage(-1);
+        return;
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "]") {
+        e.preventDefault();
+        goAdjacentStage(1);
+      }
+    };
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("tuffbox:history-settings-changed", onSettings);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("tuffbox:history-settings-changed", onSettings);
+      window.removeEventListener("keydown", onKey, true);
     };
   });
 
@@ -343,6 +483,7 @@
 
 <div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
   <section class="stage-shell">
+    <IdeNextBar onGoStage={(s) => goToStage(s as StageId)} />
     <div
       class="stage-content"
       class:fill-stage={
@@ -414,28 +555,57 @@
     onfocusin={revealRail}
     onfocusout={onRailFocusOut}
   >
-    {#each stages as stage (stage.id)}
-      {@const StageIcon = stage.icon}
-      <button
-        class="stage-tab"
-        class:active={activeStage === stage.id}
-        onclick={(e) => {
-          goToStage(stage.id);
-          if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
-          scheduleHideRail(320);
-        }}
-        title={stage.goal}
-        aria-current={activeStage === stage.id ? "step" : undefined}
+    {#each visibleRailPhases as group (group.phase)}
+      {@const showStages =
+        group.phase === "foundation" && !foundationExpanded
+          ? stages.filter((s) => s.phase === "foundation" && s.id === activeStage)
+          : group.stages}
+      <div
+        class="rail-phase"
+        class:active-phase={stages.some((s) => s.phase === group.phase && s.id === activeStage)}
+        data-phase={group.phase}
       >
-        <span class="stage-status" aria-hidden="true">
-          <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
-        </span>
-        <StageIcon size={20} />
-        <span class="stage-text">
-          <strong>{stage.label}</strong>
-          <small>{stage.short}</small>
-        </span>
-      </button>
+        {#if group.phase === "foundation"}
+          <button
+            type="button"
+            class="phase-toggle"
+            title={foundationExpanded ? "Collapse Foundation" : "Expand Brief & Setup"}
+            onclick={toggleFoundation}
+          >
+            {#if foundationExpanded}
+              <ChevronDown size={12} />
+            {:else}
+              <ChevronUp size={12} />
+            {/if}
+            <span>{group.label}</span>
+          </button>
+        {:else}
+          <span class="phase-label">{group.label}</span>
+        {/if}
+        {#each showStages as stage (stage.id)}
+          {@const StageIcon = stage.icon}
+          <button
+            class="stage-tab"
+            class:active={activeStage === stage.id}
+            onclick={(e) => {
+              goToStage(stage.id);
+              if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
+              scheduleHideRail(320);
+            }}
+            title={stage.goal}
+            aria-current={activeStage === stage.id ? "step" : undefined}
+          >
+            <span class="stage-status" aria-hidden="true">
+              <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
+            </span>
+            <StageIcon size={20} />
+            <span class="stage-text">
+              <strong>{stage.label}</strong>
+              <small>{stage.short}</small>
+            </span>
+          </button>
+        {/each}
+      </div>
     {/each}
   </nav>
 </div>
@@ -568,16 +738,51 @@
   .workflow-rail {
     flex: 0 0 auto;
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: stretch;
-    gap: 4px;
+    gap: 0;
     min-width: 0;
-    padding: 8px 12px;
-    overflow: visible;
+    padding: 6px 8px;
+    overflow-x: auto;
     border-top: 1px solid var(--border-color);
     background: var(--bg-secondary);
     z-index: 5;
   }
+  .rail-phase {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 4px;
+    padding: 2px 8px;
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 75%, transparent);
+  }
+  .rail-phase:last-child { border-right: none; }
+  .rail-phase.active-phase {
+    background: color-mix(in srgb, var(--accent-primary) 7%, transparent);
+    border-radius: var(--border-radius-sm);
+  }
+  .phase-label, .phase-toggle {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 48px;
+    padding: 4px 4px;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    align-self: center;
+  }
+  .phase-toggle {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-primary);
+    cursor: pointer;
+  }
+  .phase-toggle:hover { color: var(--text-primary); }
 
   .ide-workspace.auto-hide-rail .workflow-rail {
     position: absolute;

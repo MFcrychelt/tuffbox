@@ -154,8 +154,8 @@
     return copyImageToCanvas(img, 64, 32, sx, sy, sw, sh);
   }
 
-  /** Draw source into dest with aspect-preserving contain (letterbox). */
-  function drawContained(
+  /** Draw source into dest stretched to fill (Minecraft cape faces are filled panels). */
+  function drawFilled(
     ctx: CanvasRenderingContext2D,
     img: CanvasImageSource,
     sx: number,
@@ -168,20 +168,7 @@
     dh: number,
   ) {
     if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
-    const srcAspect = sw / sh;
-    const dstAspect = dw / dh;
-    let ddx = dx;
-    let ddy = dy;
-    let ddw = dw;
-    let ddh = dh;
-    if (srcAspect > dstAspect) {
-      ddh = dw / srcAspect;
-      ddy = dy + (dh - ddh) / 2;
-    } else {
-      ddw = dh * srcAspect;
-      ddx = dx + (dw - ddw) / 2;
-    }
-    ctx.drawImage(img, sx, sy, sw, sh, ddx, ddy, ddw, ddh);
+    ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
   }
 
   /** Classic Minecraft cape UV: front (1,1) 10×16, back (12,1) 10×16. */
@@ -226,10 +213,9 @@
       return scaleSliceTo64x32(img, sx, sy, sw, sh);
     }
 
-    // Full-bleed / portrait cape art — pack into classic UV slots with contain
-    // (letterbox) so 10:16 panels aren't stretched.
+    // Full-bleed / portrait cape art — pack into classic UV face slots.
     return paintCapeUv((ctx, dx, dy, dw, dh) => {
-      drawContained(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
+      drawFilled(ctx, img, sx, sy, sw, sh, dx, dy, dw, dh);
     });
   }
 
@@ -281,10 +267,29 @@
           return;
         }
 
-        // Tall animated strip of native atlas frames.
+        // OptiFine-style animated strip: exactly 64×(32·N), N≥2.
+        // Checked before portrait — 64×320 has aspect 0.2 but is a frame strip.
+        if (w === 64 && h >= 64 && h % 32 === 0) {
+          const frames: HTMLCanvasElement[] = [];
+          const n = Math.min(h / 32, 48);
+          for (let i = 0; i < n; i++) {
+            frames.push(frameToClassicAtlas(img, 0, i * 32, 64, 32));
+          }
+          resolve(frames.length ? frames : []);
+          return;
+        }
+
+        // Single cape-face art (~10:16). Must beat strip heuristics like
+        // "128×256 = 4× (128×64) 2:1 frames" which shift the artwork.
+        if (aspect >= 0.5 && aspect <= 0.9) {
+          resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
+          return;
+        }
+
+        // Tall animated strip of native atlas frames (HD OptiFine cloaks).
         if (h > w) {
           const nativeFh = detectNativeStripFrameHeight(w, h);
-          if (nativeFh !== null) {
+          if (nativeFh !== null && h / nativeFh >= 2) {
             const frames: HTMLCanvasElement[] = [];
             const n = Math.min(Math.floor(h / nativeFh), 48);
             for (let i = 0; i < n; i++) {
@@ -293,21 +298,10 @@
             resolve(frames.length ? frames : []);
             return;
           }
-
-          // Classic 64×N strip of 32px frames.
-          if (w === 64 && h % 32 === 0) {
-            const frames: HTMLCanvasElement[] = [];
-            const n = Math.min(h / 32, 48);
-            for (let i = 0; i < n; i++) {
-              frames.push(frameToClassicAtlas(img, 0, i * 32, 64, 32));
-            }
-            resolve(frames.length ? frames : []);
-            return;
-          }
         }
 
-        // Portrait / full-bleed single cape art → UV slots with contain.
-        if (aspect < 1.2) {
+        // Remaining tall/odd images → UV face pack (safer than false atlas strips).
+        if (aspect < 1.25) {
           resolve([frameToClassicAtlas(img, 0, 0, w, h)]);
           return;
         }
@@ -390,7 +384,7 @@
     void applyTextures();
   });
 
-  // Keep WebGL viewport in sync when home layout switches skin height (400 ↔ 280).
+  // Keep WebGL viewport in sync when width/height props change.
   $effect(() => {
     const w = width;
     const h = height;

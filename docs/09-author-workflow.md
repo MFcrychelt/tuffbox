@@ -297,8 +297,46 @@ Shortcuts / UX:
 6. **Обычный игрок не обязан понимать всё.** Для него есть happy path: Create → Add mods → Resolve → Test → Export.
 7. **Разработчик получает глубину.** Profiles, lockfile, diff, configs, server pack, release notes.
 8. **Знакомые ментальные модели.** Нижний workflow rail — как этапы в NLE (DaVinci Resolve); Brief ≈ Modrinth listing; Content ≈ Prism/Modrinth; Tune ≈ VS Code; Test ≈ terminal runner; Diagnose ≈ вердикт → план. Отдельного Guided/Pro-режима нет: глубина в inspector/details.
-9. **Layout contract (fill-stage).** Приоритетные стадии (Brief, Content, Resolve, Tune, Test, Diagnose, Quests, World) занимают высоту stage: sticky chrome ≤ ~64px, primary canvas (list/editor/graph/log) — остаток. Дублирующие jump-кнопки на History/Resolve/Snapshots не нужны в chrome — они уже на rail.
+9. **Layout contract (fill-stage).** Приоритетные стадии (Brief, Content, Resolve, Tune, Test, Diagnose, Quests, World) занимают высоту stage: sticky chrome ≤ ~64px, primary canvas (list/editor/graph/log) — остаток. Дублирующие jump-кнопки на History/Resolve/Snapshots не нужны в chrome — они уже на rail. Глобальный **IdeNextBar** (Next Action + Play/Health) и command palette — единственные постоянные ускорители вне rail.
 10. **Слабые ПК.** `potato-pc` глушит continuous force/3D; длинные списки и логи виртуализуются; focused scan крутится только на History/Diagnose.
+
+## IDE chrome: фазы, Next Action, shortcuts
+
+### Rail по фазам
+
+Нижний workflow rail сгруппирован в 4 фазы (не отдельные режимы Guided/Pro):
+
+| Фаза | Стадии |
+|------|--------|
+| **Foundation** | Brief, Setup — по умолчанию свёрнуты в overflow (`tuffbox.ide.foundation-expanded`) |
+| **Build** | Content, Resolve, History |
+| **Create** | Quests, Recipes, World, Ores, Tune |
+| **Verify & Ship** | Test, Diagnose, Snapshots, Export, Release |
+
+### Next Action (IdeNextBar)
+
+Детерминированный приоритет:
+
+1. Blocking graph errors → **Fix pack graph** (Resolve)
+2. Crash / needs_fix → **Open Health** (Diagnose)
+3. Dirty Brief / Tune / Quests → сохранить на текущей стадии
+4. Иначе → **Test launch**
+
+После структурных мутаций (Content install, Resolve apply, Health fix, Export) показывается **work trail** strip с 1–2 кнопками продолжения.
+
+Home **Open IDE** открывает suggested stage из Next Action; badge показывает число blocking issues.
+
+### Клавиатура (только focus внутри IDE, кроме Ctrl+K)
+
+| Shortcut | Действие |
+|----------|----------|
+| `Ctrl+K` | Command palette (глобально) |
+| `Ctrl+Enter` | Next Action |
+| `Ctrl+Shift+P` | Play / Test launch |
+| `Ctrl+1…0` | Stage chords: Content, Resolve, History, Test, Health, Snapshots, Tune, Quests, Export, Brief |
+| `[` / `]` | Prev / next stage в текущей фазе |
+
+Stage chords IDE перехватывают capture-phase и не конфликтуют с Home sidebar `Ctrl+1…` когда IDE смонтирован.
 
 ## Каркас в текущем UI
 
@@ -308,10 +346,10 @@ Shortcuts / UX:
 Sidebar → Open IDE → IdeWorkspace
 ```
 
-Внутри IDE уже есть workflow rail:
+Внутри IDE workflow rail сгруппирован по фазам:
 
 ```text
-Brief | Setup | Content | Resolve | Tune | History | Test | Diagnose | Snapshots | Export | Release
+Foundation (Brief|Setup) | Build (Content|Resolve|History) | Create (…) | Verify & Ship (Test|Diagnose|…)
 ```
 
 Реальные подключённые страницы:

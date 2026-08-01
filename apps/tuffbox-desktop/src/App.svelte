@@ -14,18 +14,14 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { toasts } from "./lib/toast";
   import LaunchLogModal from "./components/LaunchLogModal.svelte";
-  import {
-    registerLaunchCrashListener,
-    registerProcessListeners,
-    refreshRunningInstances,
-  } from "./lib/launch";
+  import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances } from "./lib/launch";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
 
   const SWARM_ONBOARD_KEY = "tuffbox.swarm.onboarding.done";
@@ -307,6 +303,11 @@
     };
     window.addEventListener("tuffbox:open-me", onOpenMe);
 
+    const onOpenLibrary = () => {
+      currentView = "library";
+    };
+    window.addEventListener("tuffbox:open-library", onOpenLibrary);
+
     const onShowShortcuts = () => {
       showShortcuts = true;
     };
@@ -384,6 +385,7 @@
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
       window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
+      window.removeEventListener("tuffbox:open-library", onOpenLibrary);
       window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
       window.removeEventListener("resize", onUiScaleResize);
@@ -481,12 +483,67 @@
         currentView = "dashboard";
         newProjectOpen.set(true);
       });
-    } else if (id === "shortcuts") {
+      return;
+    }
+    if (id === "shortcuts") {
       showShortcuts = true;
-    } else if (id === "project-settings") {
+      return;
+    }
+    if (id === "project-settings") {
       ideStageRequest.set("setup");
       currentView = "ide";
-    } else if (id in VIEW_SET) {
+      return;
+    }
+    if (id.startsWith("ide:")) {
+      const stage = id.slice(4);
+      ideStageRequest.set(stage);
+      currentView = "ide";
+      pushIdeRecent(id, `IDE · ${stage}`);
+      return;
+    }
+    if (id === "ide") {
+      ideStageRequest.set($ideSuggestedStage || "content");
+      currentView = "ide";
+      return;
+    }
+    if (id === "action:test-launch") {
+      if ($projectPath) {
+        if (currentView !== "ide") {
+          ideStageRequest.set("test");
+          currentView = "ide";
+        }
+        void launchWithFeedback({ path: $projectPath, profile: "client" });
+      }
+      return;
+    }
+    if (id === "action:next") {
+      if (currentView !== "ide") {
+        ideStageRequest.set($ideSuggestedStage || "content");
+        currentView = "ide";
+      }
+      requestIdeNextAction();
+      return;
+    }
+    if (id === "action:refresh-graph") {
+      ideStageRequest.set("resolve");
+      currentView = "ide";
+      return;
+    }
+    if (id === "action:open-folder") {
+      if ($projectPath) void invoke("open_project_folder", { path: $projectPath });
+      return;
+    }
+    if (id === "action:optimize-pack") {
+      ideStageRequest.set("content");
+      currentView = "ide";
+      return;
+    }
+    if (id === "action:export-mrpack") {
+      ideStageRequest.set("export");
+      currentView = "ide";
+      return;
+    }
+    if (id in VIEW_SET) {
       currentView = id as View;
     }
   }
@@ -603,7 +660,11 @@
     if (e.ctrlKey || e.metaKey) {
       switch (e.key) {
         case "1": currentView = "dashboard"; e.preventDefault(); break;
-        case "2": currentView = "ide"; e.preventDefault(); break;
+        case "2":
+          ideStageRequest.set($ideSuggestedStage || "content");
+          currentView = "ide";
+          e.preventDefault();
+          break;
         case "3": currentView = "mods"; e.preventDefault(); break;
         case "4": currentView = "graph"; e.preventDefault(); break;
         case "5": currentView = "configs"; e.preventDefault(); break;

@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import { Search, ArrowRight, CornerDownLeft } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
+  import { ideRecentCommands } from "../lib/store";
 
   let {
     onclose,
@@ -17,7 +18,7 @@
   let inputEl = $state<HTMLInputElement | undefined>(undefined);
   let selectedIndex = $state(0);
 
-  const allItems: Item[] = [
+  const viewItems: Item[] = [
     { id: "dashboard", label: "Launcher", category: "Views", shortcut: "Ctrl+1" },
     { id: "ide", label: "Open IDE", category: "Views", shortcut: "Ctrl+2" },
     { id: "mods", label: "Mods", category: "Views", shortcut: "Ctrl+3" },
@@ -33,11 +34,47 @@
     { id: "ore-gen", label: "Ore Heights", category: "Views" },
     { id: "recipes", label: "Recipe Browser", category: "Views" },
     { id: "quests", label: "Quest Editor", category: "Views" },
+  ];
+
+  const ideStageItems: Item[] = [
+    { id: "ide:brief", label: "Brief", category: "IDE stages", shortcut: "Ctrl+0" },
+    { id: "ide:setup", label: "Setup", category: "IDE stages" },
+    { id: "ide:content", label: "Content (Mods)", category: "IDE stages", shortcut: "Ctrl+1" },
+    { id: "ide:resolve", label: "Resolve (Graph)", category: "IDE stages", shortcut: "Ctrl+2" },
+    { id: "ide:history", label: "History", category: "IDE stages", shortcut: "Ctrl+3" },
+    { id: "ide:quests", label: "Quests", category: "IDE stages", shortcut: "Ctrl+8" },
+    { id: "ide:recipes", label: "Recipes", category: "IDE stages" },
+    { id: "ide:world-map", label: "World", category: "IDE stages" },
+    { id: "ide:ore-gen", label: "Ores", category: "IDE stages" },
+    { id: "ide:configs", label: "Tune", category: "IDE stages", shortcut: "Ctrl+7" },
+    { id: "ide:test", label: "Test", category: "IDE stages", shortcut: "Ctrl+4" },
+    { id: "ide:diagnose", label: "Diagnose / Health", category: "IDE stages", shortcut: "Ctrl+5" },
+    { id: "ide:snapshots", label: "Snapshots", category: "IDE stages", shortcut: "Ctrl+6" },
+    { id: "ide:export", label: "Export", category: "IDE stages", shortcut: "Ctrl+9" },
+    { id: "ide:release", label: "Release", category: "IDE stages" },
+  ];
+
+  const actionItems: Item[] = [
+    { id: "action:test-launch", label: "Test launch (Play)", category: "Actions", shortcut: "Ctrl+Shift+P" },
+    { id: "action:next", label: "Next Action", category: "Actions", shortcut: "Ctrl+Enter" },
+    { id: "action:refresh-graph", label: "Refresh pack graph", category: "Actions" },
+    { id: "action:open-folder", label: "Open instance folder", category: "Actions" },
+    { id: "action:optimize-pack", label: "Optimize pack (Content)", category: "Actions" },
+    { id: "action:export-mrpack", label: "Export mrpack", category: "Actions" },
     { id: "settings", label: "Settings", category: "Actions" },
     { id: "project-settings", label: "Project Settings", category: "Actions" },
     { id: "new-instance", label: "Create New Instance", category: "Actions" },
     { id: "shortcuts", label: "Keyboard Shortcuts", category: "Actions" },
   ];
+
+  const allItems = $derived.by(() => {
+    const recent: Item[] = ($ideRecentCommands ?? []).map((r) => ({
+      id: r.id,
+      label: r.label,
+      category: "Recent",
+    }));
+    return [...recent, ...viewItems, ...ideStageItems, ...actionItems];
+  });
 
   function groupItems(items: Item[]) {
     const groups: Record<string, Item[]> = {};
@@ -52,7 +89,8 @@
       ? allItems.filter(
           (item) =>
             item.label.toLowerCase().includes(query.toLowerCase()) ||
-            item.category.toLowerCase().includes(query.toLowerCase()),
+            item.category.toLowerCase().includes(query.toLowerCase()) ||
+            item.id.toLowerCase().includes(query.toLowerCase()),
         )
       : allItems,
   );
@@ -109,7 +147,7 @@
         bind:value={query}
         class="cmd-input"
         type="text"
-        placeholder="Search views, actions..."
+        placeholder="Search stages, views, actions..."
         spellcheck="false"
         onkeydown={handleKeydown}
       />
@@ -117,10 +155,10 @@
     </div>
 
     <div class="cmd-results">
-      {#each Object.entries(grouped) as [category, items]}
+      {#each Object.entries(grouped) as [category, items] (category)}
         <div class="cmd-group">
           <div class="cmd-group-label">{category}</div>
-          {#each items as item, i}
+          {#each items as item (item.id)}
             {@const globalIdx = flatList.indexOf(item)}
             <button
               class="cmd-item"
@@ -154,167 +192,120 @@
 
 <style>
   .cmd-backdrop {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
-    display: flex; align-items: flex-start; justify-content: center;
-    padding-top: min(20vh, 160px);
-    z-index: 300; backdrop-filter: blur(8px);
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: min(18vh, 140px);
+    background: color-mix(in srgb, var(--bg-primary) 55%, transparent);
+    backdrop-filter: blur(4px);
   }
-
   .cmd-dialog {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-xl);
-    width: 520px;
-    max-height: 440px;
-    box-shadow: var(--shadow-lg), 0 0 60px rgba(27, 217, 106, 0.08);
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(70vh, 520px);
     display: flex;
     flex-direction: column;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg, 12px);
+    background: var(--bg-secondary);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
     overflow: hidden;
   }
-
   .cmd-input-wrap {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 16px 20px;
+    padding: 12px 14px;
     border-bottom: 1px solid var(--border-color);
   }
-
   .cmd-input-wrap :global(.cmd-search-icon) {
-    color: var(--text-muted);
     flex-shrink: 0;
+    color: var(--text-muted);
   }
-
   .cmd-input {
     flex: 1;
-    background: transparent;
     border: none;
+    background: transparent;
     color: var(--text-primary);
-    font-size: 16px;
-    font-family: inherit;
+    font-size: 15px;
     outline: none;
-    padding: 0;
   }
-
-  .cmd-input::placeholder {
-    color: var(--text-muted);
-  }
-
   .cmd-esc {
-    font-size: 11px;
-    color: var(--text-muted);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
+    font-size: 10px;
     padding: 2px 6px;
-    font-family: inherit;
-    flex-shrink: 0;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
   }
-
   .cmd-results {
-    overflow-y: auto;
     flex: 1;
+    overflow-y: auto;
     padding: 8px;
   }
-
   .cmd-group {
-    margin-bottom: 4px;
+    margin-bottom: 8px;
   }
-
   .cmd-group-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding: 6px 12px 4px;
+    color: var(--text-muted);
+    padding: 4px 8px;
   }
-
   .cmd-item {
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    width: 100%;
-    padding: 10px 12px;
-    background: transparent;
+    gap: 8px;
+    padding: 8px 10px;
     border: none;
-    border-radius: var(--border-radius-sm);
-    color: var(--text-secondary);
-    font-size: 14px;
+    border-radius: var(--border-radius-sm, 6px);
+    background: transparent;
+    color: var(--text-primary);
     cursor: pointer;
     text-align: left;
-    transition: background 0.08s ease;
   }
-
   .cmd-item:hover,
   .cmd-item.selected {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
   }
-
-  .cmd-item.selected {
-    background: rgba(27, 217, 106, 0.1);
-  }
-
   .cmd-item-label {
-    flex: 1;
+    font-size: 13px;
   }
-
   .cmd-item-right {
     display: flex;
     align-items: center;
     gap: 8px;
     color: var(--text-muted);
   }
-
   .cmd-item-right kbd {
-    font-size: 11px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
+    font-size: 10px;
     padding: 1px 5px;
-    font-family: inherit;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
   }
-
-  .cmd-item-right :global(.cmd-item-arrow) {
-    opacity: 0;
-    transition: opacity 0.1s;
-  }
-
-  .cmd-item.selected .cmd-item-right :global(.cmd-item-arrow) {
-    opacity: 1;
-    color: var(--accent-primary);
-  }
-
   .cmd-empty {
-    padding: 32px;
+    padding: 24px;
     text-align: center;
     color: var(--text-muted);
     font-size: 13px;
   }
-
   .cmd-footer {
     display: flex;
-    align-items: center;
     gap: 16px;
-    padding: 10px 20px;
+    padding: 8px 14px;
     border-top: 1px solid var(--border-color);
-    font-size: 12px;
+    font-size: 11px;
     color: var(--text-muted);
   }
-
-  .cmd-footer span {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
   .cmd-footer kbd {
     font-size: 10px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: 3px;
     padding: 1px 4px;
-    font-family: inherit;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
   }
 </style>
