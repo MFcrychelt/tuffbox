@@ -6,6 +6,7 @@
 pub mod action_plan;
 pub mod change_plan;
 pub mod create_mode;
+pub mod create_mode_curation;
 pub mod mod_suggest;
 pub mod modpack_index;
 pub mod crash;

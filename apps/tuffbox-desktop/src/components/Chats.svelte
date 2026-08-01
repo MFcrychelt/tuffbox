@@ -51,11 +51,20 @@
     score: number;
     source: string;
   };
+  type CurationPersist = {
+    memory?: unknown;
+    pillarStatus?: { id: string; label: string; priority: number; covered: boolean; evidenceSlugs?: string[] }[];
+    partial?: boolean;
+    stopReason?: string;
+    launcherScore?: number | null;
+    tier?: string | null;
+  };
   type CreateChatSession = {
     id: string;
     title: string;
     messages: ChatMessage[];
     draft?: PackDraft | null;
+    curation?: CurationPersist | null;
     updatedAt: string;
   };
   type UnifiedSession = {
@@ -77,7 +86,13 @@
   let input = $state("");
   let targetCount = $state(80);
   let busy = $state(false);
-  let busyKind = $state<"" | "plan" | "refine" | "quick" | "build" | "preview" | "install">("");
+  let busyKind = $state<"" | "plan" | "refine" | "rank" | "curate" | "quick" | "build" | "preview" | "install">("");
+  let maxCurateIterations = $state(5);
+  let pillarStatus = $state<{ id: string; label: string; priority: number; covered: boolean; evidenceSlugs?: string[] }[]>([]);
+  let lastCuratePartial = $state(false);
+  let lastCurateStop = $state("");
+  let lastLauncherScore = $state<number | null>(null);
+  let lastCuration = $state<CurationPersist | null>(null);
   let phase = $state("");
   let progressDone = $state(0);
   let progressTotal = $state(0);
@@ -86,6 +101,21 @@
   let lastPath = $state("");
   let draftConfirmOpen = $state(false);
   let draftSelected = $state<Record<string, boolean>>({});
+  let installPreviewItems = $state<
+    {
+      slug: string;
+      projectId: string;
+      name: string;
+      provider?: string;
+      status: string;
+      version?: string | null;
+      fileName?: string | null;
+      hashAlgo?: string | null;
+      hash?: string | null;
+      destPath?: string;
+      error?: string | null;
+    }[]
+  >([]);
   let postInstallTrail = $state(false);
   let lastInstallCount = $state(0);
   let questPendingPlan = $state(false);
@@ -214,6 +244,7 @@
       draft = s.draft ?? null;
       brief = s.draft?.brief ?? brief;
       candidates = [];
+      applyCurationPersist(s.curation);
       if (!sessions.some((x) => x.id === id && x.kind === "create")) {
         await refreshSessions();
       }
@@ -241,6 +272,7 @@
       draft = null;
       brief = null;
       candidates = [];
+      clearCurationPersist();
       questPendingPlan = false;
       input = "";
     } catch (e) {
@@ -272,6 +304,23 @@
     }
   }
 
+  function applyCurationPersist(c: CurationPersist | null | undefined) {
+    lastCuration = c ?? null;
+    pillarStatus = c?.pillarStatus ?? [];
+    lastCuratePartial = Boolean(c?.partial);
+    lastCurateStop = c?.stopReason ?? "";
+    lastLauncherScore =
+      typeof c?.launcherScore === "number" ? c.launcherScore : null;
+  }
+
+  function clearCurationPersist() {
+    lastCuration = null;
+    pillarStatus = [];
+    lastCuratePartial = false;
+    lastCurateStop = "";
+    lastLauncherScore = null;
+  }
+
   async function persistDraft() {
     if (!$projectPath || !activeId || activeKind !== "create") return;
     const session: CreateChatSession = {
@@ -279,6 +328,7 @@
       title: brief?.title || active?.title || "Create Mode",
       messages,
       draft,
+      curation: lastCuration,
       updatedAt: String(Date.now()),
     };
     try {
@@ -630,13 +680,18 @@
 
   function phaseLabel(p: string): string {
     switch (p) {
+      case "intent":
       case "plan":
       case "chat":
-        return "Planning pack";
+        return "Intent";
+      case "catalog":
       case "search":
-        return "Building draft";
+        return "Catalog";
+      case "rank":
+        return "Rank";
+      case "preview":
       case "resolve":
-        return "Previewing";
+        return "Install preview";
       case "install":
         return "Installing";
       default:
@@ -659,7 +714,7 @@
     input = "";
     busy = true;
     busyKind = refine ? "refine" : "plan";
-    phase = "plan";
+    phase = "intent";
     progressDone = 0;
     progressTotal = 0;
     progressCurrent = "Waiting for AI…";
@@ -722,7 +777,7 @@
     input = "";
     busy = true;
     busyKind = "quick";
-    phase = "plan";
+    phase = "intent";
     progressDone = 0;
     progressTotal = 0;
     progressCurrent = "Building brief…";
@@ -757,15 +812,16 @@
       }
       await refreshSessions();
 
-      phase = "search";
+      phase = "catalog";
       progressDone = 0;
       progressTotal = 1;
-      progressCurrent = "Searching Modrinth...";
+      progressCurrent = "Searching catalogs…";
       draft = await invoke<PackDraft>("assemble_pack_draft", {
         path: $projectPath,
         brief: { ...brief, targetCount },
       });
       brief = draft.brief;
+      installPreviewItems = [];
       messages = [
         ...messages,
         {
@@ -802,21 +858,23 @@
     if (!$projectPath || !brief || busy) return;
     busy = true;
     busyKind = "build";
-    phase = "search";
+    phase = "catalog";
     progressDone = 0;
     progressTotal = 1;
-    progressCurrent = "Searching Modrinth...";
+    progressCurrent = "Searching catalogs…";
     try {
       draft = await invoke<PackDraft>("assemble_pack_draft", {
         path: $projectPath,
         brief: { ...brief, targetCount },
       });
       brief = draft.brief;
+      installPreviewItems = [];
+      clearCurationPersist();
       messages = [
         ...messages,
         {
           role: "system",
-          content: `Assembled draft: ${draft.mods.length} mods` +
+          content: `Catalog draft: ${draft.mods.length} mods` +
             (draft.unresolved?.length
               ? ` (${draft.unresolved.length} must-have unresolved)`
               : ""),
@@ -836,35 +894,192 @@
     }
   }
 
+  async function rankWithAi() {
+    if (!$projectPath || !brief || !draft?.mods?.length || busy) return;
+    busy = true;
+    busyKind = "rank";
+    phase = "rank";
+    progressDone = 0;
+    progressTotal = 0;
+    progressCurrent = "Ranking candidates…";
+    try {
+      const res = await invoke<{
+        reply: string;
+        brief: PackBrief;
+        draft: PackDraft;
+        pillarStatus?: typeof pillarStatus;
+        partial?: boolean;
+        stopReason?: string;
+        launcherScore?: number;
+        curation?: CurationPersist;
+      }>("rank_pack_draft", {
+        path: $projectPath,
+        brief: { ...brief, targetCount },
+        draft,
+        note: input.trim() || null,
+      });
+      brief = res.brief;
+      draft = res.draft;
+      applyCurationPersist(
+        res.curation ?? {
+          pillarStatus: res.pillarStatus,
+          partial: res.partial,
+          stopReason: res.stopReason,
+          launcherScore: res.launcherScore,
+        },
+      );
+      installPreviewItems = [];
+      messages = [
+        ...messages,
+        { role: "assistant", content: res.reply },
+        {
+          role: "system",
+          content: `Ranked draft: ${draft.mods.length} mods` +
+            (lastCurateStop ? ` · stop=${lastCurateStop}` : ""),
+        },
+      ];
+      await persistDraft();
+      toasts.success(`Ranked: ${draft.mods.length} mods`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      busy = false;
+      busyKind = "";
+      phase = "";
+      progressCurrent = "";
+      progressDone = 0;
+      progressTotal = 0;
+    }
+  }
+
+  async function curateWithAi() {
+    if (!$projectPath || !brief || !draft?.mods?.length || busy) return;
+    busy = true;
+    busyKind = "curate";
+    phase = "curate";
+    progressDone = 0;
+    progressTotal = maxCurateIterations;
+    progressCurrent = "Curating with pillars + co-occurrence…";
+    lastCuratePartial = false;
+    lastCurateStop = "";
+    lastLauncherScore = null;
+    try {
+      const res = await invoke<{
+        reply: string;
+        brief: PackBrief;
+        draft: PackDraft;
+        pillarStatus?: typeof pillarStatus;
+        partial?: boolean;
+        stopReason?: string;
+        launcherScore?: number;
+        tier?: string;
+        curation?: CurationPersist;
+      }>("curate_pack_loop", {
+        path: $projectPath,
+        brief: { ...brief, targetCount },
+        draft,
+        note: input.trim() || null,
+        userGoal: input.trim() || brief.title || null,
+        maxIterations: maxCurateIterations,
+      });
+      brief = res.brief;
+      draft = res.draft;
+      applyCurationPersist(
+        res.curation ?? {
+          pillarStatus: res.pillarStatus,
+          partial: res.partial,
+          stopReason: res.stopReason,
+          launcherScore: res.launcherScore,
+          tier: res.tier,
+        },
+      );
+      installPreviewItems = [];
+      const unmet = pillarStatus.filter((p) => p.priority === 1 && !p.covered);
+      messages = [
+        ...messages,
+        { role: "assistant", content: res.reply },
+        {
+          role: "system",
+          content:
+            `Curated draft: ${draft.mods.length} mods` +
+            (res.tier ? ` · ${res.tier}` : "") +
+            (lastLauncherScore != null
+              ? ` · score ${lastLauncherScore.toFixed(2)}`
+              : "") +
+            (lastCurateStop ? ` · stop=${lastCurateStop}` : "") +
+            (unmet.length
+              ? `\nGameplay pillars incomplete: ${unmet.map((u) => u.label).join(", ")}`
+              : ""),
+        },
+      ];
+      await persistDraft();
+      if (lastCurateStop === "ai_down") {
+        toasts.warning("AI unavailable — try Quick assemble or check AI settings");
+      } else if (lastCuratePartial) {
+        toasts.info(
+          unmet.length
+            ? `Partial: pillars incomplete (${unmet.map((u) => u.label).join(", ")})`
+            : "Partial curation — review draft before install",
+        );
+      } else {
+        toasts.success(`Curated: ${draft.mods.length} mods`);
+      }
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      busy = false;
+      busyKind = "";
+      phase = "";
+      progressCurrent = "";
+      progressDone = 0;
+      progressTotal = 0;
+    }
+  }
+
+  async function cancelCurate() {
+    try {
+      await invoke("cancel_curate_pack_loop");
+      toasts.info("Stopping curation after current step…");
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
   async function previewDraft() {
     if (!$projectPath || !draft || busy) return;
     busy = true;
     busyKind = "preview";
-    phase = "resolve";
-    progressCurrent = "Resolving versions…";
+    phase = "preview";
+    progressCurrent = "Resolving versions & hashes…";
     progressDone = 0;
     progressTotal = 0;
     try {
       const res = await invoke<{
         checked: number;
         ok: number;
+        skip?: number;
         failures: { slug: string; error: string }[];
+        items?: typeof installPreviewItems;
       }>("preview_pack_draft", {
         path: $projectPath,
         draft,
-        sampleLimit: Math.min(40, draft.mods.length),
+        sampleLimit: Math.min(80, draft.mods.length),
       });
+      installPreviewItems = res.items ?? [];
       const failN = res.failures?.length ?? 0;
+      const skipN = res.skip ?? 0;
       messages = [
         ...messages,
         {
           role: "system",
-          content: `Preview: ${res.ok}/${res.checked} OK` +
-            (failN ? `, ${failN} failed` : ""),
+          content: `Install preview: ${res.ok} ok` +
+            (skipN ? `, ${skipN} already installed` : "") +
+            (failN ? `, ${failN} failed` : "") +
+            ` (of ${res.checked})`,
         },
       ];
       if (failN) toasts.error(`${failN} mods failed preview`);
-      else toasts.success("Preview OK");
+      else toasts.success("Install preview OK");
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -877,10 +1092,31 @@
 
   async function confirmInstall() {
     if (!$projectPath || !draft?.mods?.length || busy) return;
-    // Open DraftConfirmPanel — replace browser confirm.
     draftSelected = Object.fromEntries(
       draft.mods.map((m) => [m.projectId || m.slug, true]),
     );
+    // Refresh install preview before showing confirm (launcher-authored versions/hashes).
+    if (!installPreviewItems.length) {
+      try {
+        busy = true;
+        busyKind = "preview";
+        phase = "preview";
+        progressCurrent = "Resolving versions…";
+        const res = await invoke<{ items?: typeof installPreviewItems }>("preview_pack_draft", {
+          path: $projectPath,
+          draft,
+          sampleLimit: Math.min(80, draft.mods.length),
+        });
+        installPreviewItems = res.items ?? [];
+      } catch {
+        /* still allow confirm without preview rows */
+      } finally {
+        busy = false;
+        busyKind = "";
+        phase = "";
+        progressCurrent = "";
+      }
+    }
     draftConfirmOpen = true;
   }
 
@@ -956,6 +1192,12 @@
       progressTotal = ev.payload.total;
       progressCurrent = ev.payload.current;
     });
+    try {
+      const s = await invoke<{ potatoPc?: boolean }>("get_launcher_settings");
+      if (s?.potatoPc) maxCurateIterations = 3;
+    } catch {
+      /* keep default 5 */
+    }
   });
 
   onDestroy(() => {
@@ -971,6 +1213,7 @@
       draft = null;
       brief = null;
       candidates = [];
+      clearCurationPersist();
       if (p) {
         void refreshSessions().then(() => {
           if (sessions[0]) void selectSession(sessions[0].id, sessions[0].kind);
@@ -986,7 +1229,7 @@
   <div class="chats empty">
     <MessagesSquare size={40} strokeWidth={1.5} />
     <h2>Create Mode</h2>
-    <p>Open an instance to plan a PackBrief and assemble a Modrinth pack draft with AI.</p>
+    <p>Open an instance to plan a PackBrief (Intent → Catalog → Rank → Install preview) with AI.</p>
   </div>
 {:else}
   <div class="chats">
@@ -1078,7 +1321,7 @@
               <p>
                 Example: "Tech + airplanes for NeoForge 1.21.1, ~80 mods, Create required."
                 Plan builds a PackBrief (search JSON + must-haves from hub co-occurrence).
-                Quick assemble builds a Modrinth draft in one step. Install only after you confirm.
+                Quick assemble skips Rank (Intent → Catalog → Confirm). Install only after you confirm.
               </p>
             {/if}
           </div>
@@ -1153,16 +1396,43 @@
           </button>
           <button type="button" class="btn" disabled={busy || !brief} onclick={buildDraft}>
             {#if busyKind === "build"}
-              <span class="spin"><Loader2 size={14} /></span> Building…
+              <span class="spin"><Loader2 size={14} /></span> Catalog…
             {:else}
               <Package size={14} /> Build draft
             {/if}
           </button>
+          <button type="button" class="btn" disabled={busy || !draft?.mods?.length} onclick={() => void rankWithAi()}>
+            {#if busyKind === "rank"}
+              <span class="spin"><Loader2 size={14} /></span> Ranking…
+            {:else}
+              <Sparkles size={14} /> Rank with AI
+            {/if}
+          </button>
+          <label class="curate-iters" title="Curation loop iterations">
+            <span>iters</span>
+            <input
+              type="number"
+              min="1"
+              max="8"
+              bind:value={maxCurateIterations}
+              disabled={busy}
+            />
+          </label>
+          <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={() => void curateWithAi()}>
+            {#if busyKind === "curate"}
+              <span class="spin"><Loader2 size={14} /></span> Curating…
+            {:else}
+              <Sparkles size={14} /> Curate
+            {/if}
+          </button>
+          {#if busyKind === "curate"}
+            <button type="button" class="btn ghost" onclick={() => void cancelCurate()}>Stop</button>
+          {/if}
           <button type="button" class="btn" disabled={busy || !draft?.mods?.length} onclick={previewDraft}>
             {#if busyKind === "preview"}
               <span class="spin"><Loader2 size={14} /></span> Previewing…
             {:else}
-              Preview
+              Install preview
             {/if}
           </button>
           <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={confirmInstall}>
@@ -1170,6 +1440,28 @@
           </button>
           <button type="button" class="btn ghost" onclick={openMods}>Open in Content</button>
         </div>
+        {#if pillarStatus.length}
+          <div class="pillar-checklist" class:partial={lastCuratePartial}>
+            <div class="pillar-head">
+              <strong>Gameplay pillars</strong>
+              {#if lastCurateStop}
+                <span class="stop">{lastCurateStop}</span>
+              {/if}
+            </div>
+            <ul>
+              {#each pillarStatus as p (p.id)}
+                <li class:covered={p.covered} class:priority={p.priority === 1}>
+                  <span class="mark">{p.covered ? "✓" : "○"}</span>
+                  <span class="label">{p.label}</span>
+                  {#if p.priority === 1}<span class="prio">P1</span>{/if}
+                </li>
+              {/each}
+            </ul>
+            {#if lastCuratePartial}
+              <p class="pillar-warn">Not pack-ready until priority-1 pillars are covered.</p>
+            {/if}
+          </div>
+        {/if}
         {#if postInstallTrail}
           <div class="post-trail">
             Installed {lastInstallCount} mods.
@@ -1470,10 +1762,12 @@
         <p>
           Install <strong>{draftConfirmCount}</strong> of {draft.mods.length} mods (+ dependencies) into this instance.
           A snapshot will be created first. Uncheck anything you do not want.
+          Versions and hashes below are resolved by the launcher (not the AI).
         </p>
       </div>
       <div class="draft-confirm-list">
         {#each draft.mods as m (m.projectId || m.slug)}
+          {@const prev = installPreviewItems.find((i) => (i.projectId || i.slug) === (m.projectId || m.slug))}
           <label class="draft-confirm-row">
             <input
               type="checkbox"
@@ -1487,6 +1781,23 @@
               <strong>{m.name}</strong>
               <code>{m.slug}</code>
               <span class="muted">{m.category}</span>
+              {#if prev}
+                <div class="preview-meta">
+                  {#if prev.status === "skip"}
+                    <span class="pill skip">Already installed</span>
+                  {:else if prev.status === "fail"}
+                    <span class="pill fail">{prev.error ?? "No version"}</span>
+                  {:else}
+                    <span class="pill ok">{prev.version ?? "?"}</span>
+                    {#if prev.hashAlgo && prev.hash}
+                      <code class="hash">{prev.hashAlgo}:{prev.hash.slice(0, 12)}…</code>
+                    {/if}
+                    {#if prev.destPath}
+                      <span class="muted dest">{prev.destPath}</span>
+                    {/if}
+                  {/if}
+                </div>
+              {/if}
             </div>
           </label>
         {/each}
@@ -2150,6 +2461,73 @@
     font-size: 12px;
     color: var(--text-secondary, #9aa3b5);
   }
+  .curate-iters {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-secondary, #9aa3b5);
+  }
+  .curate-iters input {
+    width: 44px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color, #2a2f3a);
+    background: var(--bg-tertiary, #1a1f2a);
+    color: inherit;
+  }
+  .pillar-checklist {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #2a2f3a);
+    background: var(--bg-tertiary, #1a1f2a);
+    font-size: 12px;
+  }
+  .pillar-checklist.partial {
+    border-color: color-mix(in srgb, #c9a227 55%, var(--border-color, #2a2f3a));
+  }
+  .pillar-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .pillar-head .stop {
+    opacity: 0.7;
+    font-size: 11px;
+  }
+  .pillar-checklist ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .pillar-checklist li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.75;
+  }
+  .pillar-checklist li.covered {
+    opacity: 1;
+  }
+  .pillar-checklist li .mark {
+    width: 1em;
+    text-align: center;
+  }
+  .pillar-checklist li .prio {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent, #5b8def) 25%, transparent);
+  }
+  .pillar-warn {
+    margin: 8px 0 0;
+    color: #c9a227;
+  }
   .btn.mini { padding: 4px 8px; font-size: 11px; }
   .modal-backdrop {
     position: fixed;
@@ -2191,6 +2569,24 @@
   }
   .draft-confirm-row strong { display: block; font-size: 13px; }
   .draft-confirm-row code { font-size: 11px; color: #7dd3fc; margin-right: 6px; }
+  .preview-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-top: 4px;
+  }
+  .preview-meta .pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 999px;
+  }
+  .preview-meta .pill.ok { background: color-mix(in srgb, var(--accent-primary, #1bd96a) 22%, transparent); color: var(--accent-primary, #1bd96a); }
+  .preview-meta .pill.skip { background: rgba(154, 163, 181, 0.2); color: var(--text-muted, #9aa3b5); }
+  .preview-meta .pill.fail { background: rgba(229, 72, 77, 0.2); color: #ff8b8b; }
+  .preview-meta .hash { font-size: 10px; color: var(--text-muted, #9aa3b5); }
+  .preview-meta .dest { font-size: 10px; color: var(--text-muted, #9aa3b5); }
   .draft-confirm-actions {
     display: flex;
     justify-content: flex-end;

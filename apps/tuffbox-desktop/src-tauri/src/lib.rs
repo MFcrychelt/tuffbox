@@ -8688,6 +8688,7 @@ fn manifest_for_graph(path: &str) -> Result<ProjectManifest, String> {
 /// Fills Modrinth dependency edges and icon URLs in-memory so the graph view
 /// shows real mod-to-mod links. Always refreshes dependency lists from Modrinth
 /// (project id → slug normalized) so edges resolve onto installed mod nodes.
+/// Also backfills provider categories (Modrinth + CurseForge) for graph clustering.
 fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), String> {
     use rayon::prelude::*;
 
@@ -8699,45 +8700,71 @@ fn enrich_manifest_for_graph(manifest: &mut ProjectManifest) -> Result<(), Strin
     };
 
     manifest.mods.par_iter_mut().for_each(|module| {
-        if !matches!(
-            module.source.kind,
-            tuffbox_core::manifest::SourceKind::Modrinth
-        ) {
-            return;
-        }
-        let provider = tuffbox_core::ModrinthProvider::new();
-        let project_id = module
-            .source
-            .project_id
-            .clone()
-            .unwrap_or_else(|| module.id.clone());
+        match module.source.kind {
+            tuffbox_core::manifest::SourceKind::Modrinth => {
+                let provider = tuffbox_core::ModrinthProvider::new();
+                let project_id = module
+                    .source
+                    .project_id
+                    .clone()
+                    .unwrap_or_else(|| module.id.clone());
 
-        let version_id = if let Some(file_id) = module.source.file_id.clone() {
-            Some(file_id)
-        } else if let Ok(versions) = provider.get_versions(&project_id, &query) {
-            versions.into_iter().next().map(|v| v.id)
-        } else {
-            None
-        };
+                let version_id = if let Some(file_id) = module.source.file_id.clone() {
+                    Some(file_id)
+                } else if let Ok(versions) = provider.get_versions(&project_id, &query) {
+                    versions.into_iter().next().map(|v| v.id)
+                } else {
+                    None
+                };
 
-        if let Some(version_id) = version_id {
-            if let Ok(deps) = provider.resolve_dependencies(&version_id) {
-                module.dependencies = deps;
-            }
-        }
-
-        // Fetch the project once to backfill both the icon and the site
-        // categories (Modrinth tags). Categories drive the graph clustering,
-        // so we refresh them even when the icon is already cached.
-        if module.source.icon_url.is_none() || module.source.categories.is_empty() {
-            if let Ok(project) = provider.get_project(&project_id) {
-                if module.source.icon_url.is_none() {
-                    module.source.icon_url = project.icon_url;
+                if let Some(version_id) = version_id {
+                    if let Ok(deps) = provider.resolve_dependencies(&version_id) {
+                        module.dependencies = deps;
+                    }
                 }
-                if !project.categories.is_empty() {
-                    module.source.categories = project.categories;
+
+                // Fetch the project once to backfill both the icon and the site
+                // categories (Modrinth tags). Categories drive the graph clustering,
+                // so we refresh them even when the icon is already cached.
+                if module.source.icon_url.is_none() || module.source.categories.is_empty() {
+                    if let Ok(project) = provider.get_project(&project_id) {
+                        if module.source.icon_url.is_none() {
+                            module.source.icon_url = project.icon_url;
+                        }
+                        if !project.categories.is_empty() {
+                            module.source.categories = project.categories;
+                        }
+                    }
                 }
             }
+            tuffbox_core::manifest::SourceKind::Curseforge => {
+                if !module.source.categories.is_empty() && module.source.icon_url.is_some() {
+                    return;
+                }
+                let Some(project_id_str) = module.source.project_id.as_deref() else {
+                    return;
+                };
+                let Ok(project_id) = project_id_str.parse::<u64>() else {
+                    return;
+                };
+                let provider = tuffbox_core::CurseForgeProvider::new();
+                if !provider.is_configured() {
+                    return;
+                }
+                if let Ok(hit) = provider.get_mod(project_id) {
+                    if module.source.icon_url.is_none() {
+                        module.source.icon_url = hit.icon_url;
+                    }
+                    if module.source.categories.is_empty() && !hit.categories.is_empty() {
+                        module.source.categories = hit
+                            .categories
+                            .iter()
+                            .map(|c| tuffbox_core::normalize_mod_category(c))
+                            .collect();
+                    }
+                }
+            }
+            _ => {}
         }
     });
     Ok(())
@@ -13173,7 +13200,11 @@ pub(crate) fn add_mod_from_curseforge(
             url: Some(download_url),
             path: None,
             icon_url: hit.icon_url,
-            categories: Vec::new(),
+            categories: hit
+                .categories
+                .iter()
+                .map(|c| tuffbox_core::normalize_mod_category(c))
+                .collect(),
         },
         version: file.display_name.clone(),
         file_name: Some(file.file_name),
@@ -14183,6 +14214,9 @@ pub fn run() {
             create_mode_api::create_mode_chat,
             create_mode_api::create_mode_quick_brief,
             create_mode_api::assemble_pack_draft,
+            create_mode_api::rank_pack_draft,
+            create_mode_api::curate_pack_loop,
+            create_mode_api::cancel_curate_pack_loop,
             create_mode_api::preview_pack_draft,
             create_mode_api::install_pack_draft,
             create_mode_api::list_create_chats,

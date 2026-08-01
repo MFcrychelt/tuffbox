@@ -1841,6 +1841,18 @@ pub async fn call_ai_messages(
     messages: &[Value],
     json_mode: bool,
 ) -> Result<Value, String> {
+    call_ai_messages_with_schema(settings, system, messages, json_mode, None).await
+}
+
+/// Like `call_ai_messages`, but Ollama can take a JSON Schema in `format` (Structured Outputs).
+/// OpenAI-compat still uses `response_format: json_object`; callers must validate.
+pub async fn call_ai_messages_with_schema(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+    json_schema: Option<Value>,
+) -> Result<Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(180))
         .build()
@@ -1860,7 +1872,11 @@ pub async fn call_ai_messages(
             "messages": api_messages,
         });
         if json_mode {
-            body["format"] = json!("json");
+            if let Some(schema) = json_schema {
+                body["format"] = schema;
+            } else {
+                body["format"] = json!("json");
+            }
         }
         let response = client
             .post(ollama_chat_url(&settings.endpoint))
@@ -1930,7 +1946,6 @@ pub async fn call_ai_messages(
     if json_mode {
         serde_json::from_str(trimmed)
             .or_else(|_| {
-                // Some models wrap JSON in prose; try extracting outermost object.
                 if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
                     if end > start {
                         return serde_json::from_str(&trimmed[start..=end]);

@@ -221,21 +221,54 @@ Authored export из Diagnostics («Save KB case») — прямой вход в
 
 ## Create Mode (PackBrief → PackDraft)
 
-Sidebar **Chats**: игрок описывает сборку → ИИ (или Quick assemble) предлагает `PackBrief` → лаунчер собирает `PackDraft` поиском по Modrinth (версии выбирает код, не LLM).
+Sidebar **Chats**: игрок описывает сборку → ИИ (или Quick assemble) предлагает `PackBrief` → лаунчер собирает `PackDraft` поиском по каталогам (версии / `file_id` / SHA выбирает **код**, не LLM).
+
+### Фазы пайплайна
+
+```text
+Intent → Catalog → Rank (optional) → Curate loop (pillars + co-occur) → InstallPreview → Confirm → Snapshot → install_pack_draft
+→ Open Content / Resolve
+```
+
+| Фаза | Кто | Контракт / данные |
+|------|-----|-------------------|
+| **Intent** | LLM (или Quick heuristic) | `{ reply, search, brief }` — `search.{loader,version,theme,keywords}` + `brief` (бюджеты `categories[]`, `mustHave[]`, `exclude[]`). Маркетинговые «categories» = `brief.categories[]` + `search.keywords`. |
+| **Catalog** | Launcher HTTP | Modrinth primary + CurseForge fallback/bridge → `PackDraft` / candidate pool (slug, name, desc — **не** jar URL). Progress: `phase=catalog`. |
+| **Rank** | LLM (опционально; Quick без Rank) | Кандидаты обратно в prompt (`CREATE_MODE_REFINE_PROMPT`) → только slugs / mustHave / exclude. Никогда URL / `file_id` / SHA. |
+| **Curate** | Launcher + LLM Reviewer | `curate_pack_loop`: gameplay **pillars** из brief/NL; co-occurrence priors из Supabase (`partners_for_mod` + MPI graph) + local trends; compact cards; verdict JSON; `launcher_score` владеет best; `is_complete` запрещён при unmet priority-1. Stop: `complete` / `stuck` / `pillars_unmet` / `max_iterations`. |
+| **InstallPreview** | Launcher | Resolve совместимых версий + hashes (MR/CF metadata) + dest path + skip-if-installed. |
+| **ConfirmInstall** | User + Launcher | DraftConfirmPanel → `confirmed: true` → snapshot → `install_pack_draft`. |
 
 ```text
 Описание
-→ PackBrief / Quick heuristic
-→ assemble_pack_draft
-→ DraftConfirmPanel (чекбоксы модов)
+→ Intent (PackBrief / Quick)
+→ Catalog (assemble_pack_draft)
+→ Rank with AI (optional) / Curate (recommended)
+→ InstallPreview (preview_pack_draft)
+→ DraftConfirmPanel
 → confirm → snapshot → install_pack_draft
 → Open Content / Resolve
 ```
 
+**Curation invariants**
+
+- Pillars first: QoL/performance-only packs are a failure even without conflicts.
+- Launcher recomputes pillar coverage; LLM `coverage_score` is tie-break only.
+- Role caps: performance+library ≲15%, support ≲20% of `targetCount`.
+- Co-occurrence prior даёт **slugs** для поиска/mustHave — не jar URL / `file_id`.
+- Per-iteration: keyword catalog (cached) → cheap `graph_hints` (duplicate / overload / common deps) → Reviewer.
+- Potato PC (`launcher_settings.potato_pc`): default maxIter=3, 24 cards, no SearchRole LLM, lighter hints, 120s budget.
+- Stop reasons: `complete` | `stuck` | `pillars_unmet` | `max_iterations` | `timeout` | `cancelled` | `empty_pool` | `ai_down`.
+- Cancel: `cancel_curate_pack_loop` (cooperative, between iterations).
+- `rank_pack_draft` = `curate_pack_loop(..., maxIterations=1)` (thin alias).
+- Session persist: `CreateChatSession.curation` restores pillar checklist after reload.
+- Core: `tuffbox_core::create_mode_curation`; command: `curate_pack_loop`.
+
 Жёсткие правила:
 
-- ИИ **не** эмитит ActionPlan и **не** выбирает `file_id`.
+- ИИ **не** эмитит ActionPlan и **не** выбирает `file_id` / jar URL / checksums.
 - Install только после явного Confirm (`confirmed: true`).
+- «Песочница» install = project mods path + provider download + snapshot rollback (отдельный FsScope API не требуется).
 - Creation Marketplace / remote GPU — отдельный Phase D, не этот путь.
 
 ## Ideas (Often installed together)
