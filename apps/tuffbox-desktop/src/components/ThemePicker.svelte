@@ -111,7 +111,7 @@
 
   .mini-ui {
     height: 92px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.08);
   }
