@@ -25,8 +25,7 @@
 
   function badgeFor(id: ThemeId): string | null {
     if (id === "tuffbox-light") return "Light";
-    // Visual hint only — rounded-corners mode still applies to these themes.
-    if (SHARP_THEMES.has(id)) return "Angular";
+    if (SHARP_THEMES.has(id)) return "Sharp";
     return null;
   }
 </script>

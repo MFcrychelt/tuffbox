@@ -25,7 +25,7 @@ export const THEMES: ThemeMeta[] = [
   { id: "aether", label: "Aether", shades: ["#1e0d3c", "#31155f", "#c084fc"] },
   { id: "frost", label: "Frost", shades: ["#0c4c7a", "#0388d2", "#06b6d4"] },
   { id: "pixelato", label: "Pixelato", shades: ["#101010", "#303030", "#4caf50"] },
-  { id: "win95", label: "Win95", shades: ["#008080", "#c0c0c0", "#000080"] },
+  { id: "win95", label: "Win95", shades: ["#a5a5a5", "#c0c0c0", "#000080"] },
 ];
 
 const STORAGE_KEY = "tuffbox-theme";

@@ -87,6 +87,10 @@
   --accent-danger: #fb7185;
   --accent-warning: #fbbf24;
   --border-color: #3a1870;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
   --shadow-sm: 0 1px 2px rgba(20, 0, 40, 0.5);
   --shadow-md: 0 4px 16px rgba(20, 0, 40, 0.55);
   --shadow-lg: 0 14px 40px rgba(20, 0, 40, 0.65);
@@ -108,6 +112,10 @@
   --accent-danger: #fb7185;
   --accent-warning: #fcd34d;
   --border-color: #0284c7;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
   --shadow-sm: 0 1px 2px rgba(0, 30, 60, 0.35);
   --shadow-md: 0 4px 14px rgba(0, 30, 60, 0.4);
   --shadow-lg: 0 14px 36px rgba(0, 30, 60, 0.45);
@@ -129,32 +137,38 @@
   --accent-danger: #ef5350;
   --accent-warning: #ffca28;
   --border-color: #404040;
-  /* Keep UI on a normal sans — Press Start 2P as --font-sans is optically huge at 14px. */
-  --font-base: 13px;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
+  --font-sans: var(--font-minecraft), ui-monospace, monospace;
   --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.6);
   --shadow-md: 0 4px 0 rgba(0, 0, 0, 0.55);
   --shadow-lg: 0 8px 0 rgba(0, 0, 0, 0.5);
 }
 
 [data-theme="win95"] {
-  /* Classic teal desktop + gray window chrome (readable app palette). */
-  --bg-primary: #008080;
+  --bg-primary: #a5a5a5;
   --bg-secondary: #c0c0c0;
   --bg-tertiary: #dfdfdf;
-  --bg-elevated: #ffffff;
-  --bg-hover: #d4d0c8;
-  --bg-active: #a0a0a0;
+  --bg-elevated: #c0c0c0;
+  --bg-hover: #d4d4d4;
+  --bg-active: #808080;
   --text-primary: #000000;
-  --text-secondary: #202020;
-  --text-muted: #555555;
+  --text-secondary: #404040;
+  --text-muted: #808080;
   --accent-primary: #000080;
-  --accent-hover: #0000aa;
+  --accent-hover: #0000c0;
   --accent-secondary: #008080;
   --accent-danger: #800000;
   --accent-warning: #808000;
   --border-color: #808080;
+  --border-radius-sm: 0px;
+  --border-radius-md: 0px;
+  --border-radius-lg: 0px;
+  --border-radius-xl: 0px;
   --shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
-  --shadow-md: inset -2px -2px 0 #808080, inset 2px 2px 0 #dfdfdf;
+  --shadow-md: inset -2px -2px 0 #000, inset 2px 2px 0 #fff;
   --shadow-lg: inset -2px -2px 0 #000, inset 2px 2px 0 #fff, 2px 2px 0 #000;
 }
 
@@ -609,10 +623,10 @@
 }
 
 /* ── Rounded corners mode (Settings → Appearance) ──
-   Must load after theme tokens so it overrides any theme defaults.
-   Applies to every theme, including formerly sharp ones (aether / frost /
-   pixelato / win95). Turn off via data-rounded-corners="off" for square chrome. */
-html[data-rounded-corners="on"] {
+   Must load after theme tokens so it can override themes that force radius: 0.
+   Sharp themes (aether / frost / pixelato / win95) keep radius 0 even when
+   rounded mode is on — their identity depends on square chrome. */
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) {
   --border-radius-sm: 10px;
   --border-radius-md: 14px;
   --border-radius-lg: 18px;
@@ -627,8 +641,8 @@ html[data-rounded-corners="off"] {
 }
 
 /* When rounded mode is on, force common block chrome to use the tokens
-   (covers hardcoded radius leftovers on panels & cards). */
-html[data-rounded-corners="on"] :where(
+   (covers hardcoded radius:0 leftovers on panels & cards). Skip sharp themes. */
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   .panel,
   .card,
   .modal,
@@ -665,7 +679,7 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-lg);
 }
 
-html[data-rounded-corners="on"] :where(
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   button,
   .action-btn,
   .quiet-action,
@@ -679,7 +693,7 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-md);
 }
 
-html[data-rounded-corners="on"] :where(
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   .mr-card,
   .cf-card,
   .mr-page,
@@ -694,8 +708,8 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-lg);
 }
 
-/* Pills / round avatars stay fully round */
-html[data-rounded-corners="on"] :where(
+/* Pills / round avatars stay fully round (except sharp themes) */
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   .chip,
   .cat-chip,
   .mr-tag,
