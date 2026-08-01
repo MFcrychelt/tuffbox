@@ -153,7 +153,7 @@
         </button>
         <button class="ghost" onclick={() => onApplyTopSuspectUpdate?.()} disabled={fixingIdx === -1}>Update</button>
       {/if}
-      {#if !sessionOk && aiAnalysis && aiPlanActions(aiAnalysis).length > 1}
+      {#if !sessionOk && aiAnalysis && aiPlanActions(aiAnalysis).length > 0}
         <button
           class="secondary"
           onclick={() => onApplyAiPlan?.()}

@@ -2,9 +2,11 @@
   import { onDestroy, onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
-  import { Sparkles, RefreshCw, Download, AlertTriangle, ExternalLink } from "@lucide/svelte";
+  import { Sparkles, RefreshCw, Download, AlertTriangle } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
+  import { trapFocus } from "../lib/focusTrap";
 
   let { swarmEnabled = false }: { swarmEnabled?: boolean } = $props();
 
@@ -64,6 +66,20 @@
   let installBusy = $state<string | null>(null);
   let previews = $state<Record<string, Preview | null>>({});
   let lastKey = $state("");
+  let catalogViewResult = $state<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    projectType: string;
+    iconUrl?: string | null;
+    author?: string | null;
+    downloads?: number | null;
+    follows?: number | null;
+    categories?: string[];
+    provider?: string;
+  } | null>(null);
+  let catalogInstalling = $state(false);
 
   const packThemeCategories = $derived(packCategories.filter((c) => c.kind === "modpack"));
 
@@ -183,12 +199,77 @@
     if (packSearchTimer) clearTimeout(packSearchTimer);
   });
 
-  async function openPack(hit: MpiHit) {
-    const url = hit.pageUrl || hit.url;
-    if (!url) {
-      toasts.error("No page URL for this pack");
-      return;
+  function slugFromUrl(url: string): string {
+    const clean = url.replace(/\/$/, "");
+    const parts = clean.split("/");
+    return parts[parts.length - 1] || clean;
+  }
+
+  function openPack(hit: MpiHit) {
+    const links = hit.links ?? {};
+    const mr =
+      links.modrinth ||
+      links.Modrinth ||
+      (hit.pageUrl?.includes("modrinth.com") ? hit.pageUrl : null) ||
+      (hit.url?.includes("modrinth.com") ? hit.url : null);
+    const cf =
+      links.curseforge ||
+      links.CurseForge ||
+      (hit.pageUrl?.includes("curseforge.com") ? hit.pageUrl : null) ||
+      (hit.url?.includes("curseforge.com") ? hit.url : null);
+
+    let provider: "modrinth" | "curseforge" = "modrinth";
+    let id = hit.slug || hit.id;
+    if (cf && !mr) {
+      provider = "curseforge";
+      id = slugFromUrl(cf);
+    } else if (mr) {
+      provider = "modrinth";
+      id = slugFromUrl(mr);
     }
+
+    catalogViewResult = {
+      id,
+      slug: hit.slug || id,
+      name: hit.name,
+      description: hit.description || "",
+      projectType: "modpack",
+      iconUrl: hit.iconUrl ?? null,
+      author: null,
+      downloads: hit.downloads ?? null,
+      follows: null,
+      categories: [],
+      provider,
+    };
+  }
+
+  function openMr(hit: MrHit) {
+    catalogViewResult = {
+      id: hit.id,
+      slug: hit.slug || hit.id,
+      name: hit.name,
+      description: hit.description || "",
+      projectType: hit.projectType || "mod",
+      iconUrl: hit.iconUrl ?? null,
+      author: null,
+      downloads: hit.downloads ?? null,
+      follows: hit.follows ?? null,
+      categories: [],
+      provider: "modrinth",
+    };
+  }
+
+  async function openCatalogExternal() {
+    if (!catalogViewResult) return;
+    const slugOrId = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!slugOrId) return;
+    const isPack = (catalogViewResult.projectType || "").includes("pack");
+    const url =
+      catalogViewResult.provider === "curseforge"
+        ? /^\d+$/.test(slugOrId)
+          ? `https://www.curseforge.com/projects/${slugOrId}`
+          : `https://www.curseforge.com/minecraft/${isPack ? "modpacks" : "mc-mods"}/${slugOrId}`
+        : `https://modrinth.com/${isPack ? "modpack" : "mod"}/${slugOrId}`;
     try {
       await openExternal(url);
     } catch (e) {
@@ -196,12 +277,67 @@
     }
   }
 
-  async function openMr(hit: MrHit) {
-    const url = `https://modrinth.com/mod/${hit.slug || hit.id}`;
+  async function installFromCatalog() {
+    if (!catalogViewResult) return;
+    const id = catalogViewResult.id || catalogViewResult.slug;
+    if (!id) return;
+    const isPack = (catalogViewResult.projectType || "").toLowerCase().includes("pack");
+    catalogInstalling = true;
     try {
-      await openExternal(url);
+      if (isPack) {
+        let targetDir = "";
+        try {
+          const info = await invoke<{ current: string; default: string }>("get_instances_path_info");
+          targetDir = (info.current || info.default || "").replace(/[\\/]+$/, "");
+        } catch {
+          const home = ((await invoke("get_home_dir").catch(() => "")) as string) || "";
+          if (home) targetDir = `${home.replace(/[\\/]+$/, "")}/TuffBox/instances`;
+        }
+        if (!targetDir) {
+          toasts.error("Could not resolve instances folder.");
+          return;
+        }
+        let source: string;
+        if (catalogViewResult.provider === "curseforge") {
+          const files = await invoke<Array<{ id: number; fileName?: string }>>(
+            "get_curseforge_modpack_files",
+            { modId: Number(catalogViewResult.id) || catalogViewResult.id, gameVersion: null },
+          );
+          const fileId = files?.[0]?.id;
+          if (fileId == null) throw new Error("No CurseForge files for this modpack.");
+          source = `cf:${catalogViewResult.id}:${fileId}`;
+        } else {
+          source = await invoke<string>("get_modrinth_pack_download", { projectId: id });
+        }
+        await invoke("install_modpack", {
+          source,
+          targetDir,
+          instanceName: catalogViewResult.name,
+        });
+        toasts.success(`Installed pack ${catalogViewResult.name}`);
+        catalogViewResult = null;
+        return;
+      }
+      if (!$projectPath) {
+        toasts.error("Open a project first to install mods.");
+        return;
+      }
+      if (catalogViewResult.provider === "curseforge") {
+        toasts.info("Use Library → Discover or Content to install CurseForge mods.");
+        return;
+      }
+      await invoke("add_modrinth_mod_with_dependencies", {
+        path: $projectPath,
+        modId: id,
+        side: "both",
+      });
+      toasts.success(`Installed ${catalogViewResult.name}`);
+      catalogViewResult = null;
+      await refresh();
     } catch (e) {
       toasts.error(String(e));
+    } finally {
+      catalogInstalling = false;
     }
   }
 
@@ -310,7 +446,6 @@
               <strong>{hit.name}</strong>
               <small><Download size={11} /> {formatCount(hit.downloads)}</small>
             </div>
-            <ExternalLink size={14} />
           </button>
         {/each}
       </div>
@@ -416,6 +551,33 @@
     </section>
   {/if}
 </div>
+
+{#if catalogViewResult}
+  <div
+    class="catalog-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) catalogViewResult = null;
+    }}
+    onkeydown={() => {}}
+  >
+    <div
+      class="catalog-modal"
+      role="dialog"
+      aria-modal="true"
+      use:trapFocus={{ onEscape: () => (catalogViewResult = null) }}
+    >
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={catalogInstalling}
+        onback={() => (catalogViewResult = null)}
+        oninstall={() => void installFromCatalog()}
+        onopenexternal={() => void openCatalogExternal()}
+      />
+    </div>
+  </div>
+{/if}
 
 <style>
   .creation {
@@ -647,5 +809,24 @@
     to {
       transform: rotate(360deg);
     }
+  }
+  .catalog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .catalog-modal {
+    width: min(920px, 96vw);
+    max-height: min(90vh, 900px);
+    overflow: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 18px;
+    padding: 0;
   }
 </style>

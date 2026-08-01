@@ -3,6 +3,8 @@
 
 [data-theme="tuffbox"] {
   /* alias of :root — kept for explicit selection */
+  --accent-danger: #ef4444;
+  --accent-warning: #f59e0b;
 }
 
 [data-theme="tuffbox-light"],
@@ -19,6 +21,8 @@
   --accent-primary: #0ca84c;
   --accent-hover: #09913f;
   --accent-secondary: #6d3cd6;
+  --accent-danger: #dc2626;
+  --accent-warning: #d97706;
   --border-color: #dee2e6;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
@@ -38,7 +42,12 @@
   --accent-primary: #3e85d0;
   --accent-hover: #2b6bb1;
   --accent-secondary: #8cb6e3;
+  --accent-danger: #f87171;
+  --accent-warning: #fbbf24;
   --border-color: #333947;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
 [data-theme="inferno"] {
@@ -49,12 +58,17 @@
   --bg-hover: #3a2323;
   --bg-active: #4a2d2d;
   --text-primary: #fffaf5;
-  --text-secondary: #ff9678;
-  --text-muted: #dc3c2d;
+  --text-secondary: #e8b4a4;
+  --text-muted: #a87a6e;
   --accent-primary: #ff5722;
   --accent-hover: #f44336;
   --accent-secondary: #ffc107;
+  --accent-danger: #ff6b6b;
+  --accent-warning: #ffb020;
   --border-color: #301c1c;
+  --shadow-sm: 0 1px 2px rgba(40, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(40, 0, 0, 0.55);
+  --shadow-lg: 0 14px 36px rgba(40, 0, 0, 0.6);
 }
 
 [data-theme="aether"] {
@@ -66,15 +80,20 @@
   --bg-active: #5b21b6;
   --text-primary: #ffffff;
   --text-secondary: #e9d5ff;
-  --text-muted: #c084fc;
+  --text-muted: #c4b5fd;
   --accent-primary: #c084fc;
   --accent-hover: #a855f7;
   --accent-secondary: #22c55e;
+  --accent-danger: #fb7185;
+  --accent-warning: #fbbf24;
   --border-color: #3a1870;
   --border-radius-sm: 0px;
   --border-radius-md: 0px;
   --border-radius-lg: 0px;
   --border-radius-xl: 0px;
+  --shadow-sm: 0 1px 2px rgba(20, 0, 40, 0.5);
+  --shadow-md: 0 4px 16px rgba(20, 0, 40, 0.55);
+  --shadow-lg: 0 14px 40px rgba(20, 0, 40, 0.65);
 }
 
 [data-theme="frost"] {
@@ -90,11 +109,16 @@
   --accent-primary: #06b6d4;
   --accent-hover: #0891b2;
   --accent-secondary: #fbbf24;
+  --accent-danger: #fb7185;
+  --accent-warning: #fcd34d;
   --border-color: #0284c7;
   --border-radius-sm: 0px;
   --border-radius-md: 0px;
   --border-radius-lg: 0px;
   --border-radius-xl: 0px;
+  --shadow-sm: 0 1px 2px rgba(0, 30, 60, 0.35);
+  --shadow-md: 0 4px 14px rgba(0, 30, 60, 0.4);
+  --shadow-lg: 0 14px 36px rgba(0, 30, 60, 0.45);
 }
 
 [data-theme="pixelato"] {
@@ -110,12 +134,17 @@
   --accent-primary: #4caf50;
   --accent-hover: #43a047;
   --accent-secondary: #4169e1;
+  --accent-danger: #ef5350;
+  --accent-warning: #ffca28;
   --border-color: #404040;
   --border-radius-sm: 0px;
   --border-radius-md: 0px;
   --border-radius-lg: 0px;
   --border-radius-xl: 0px;
   --font-sans: var(--font-minecraft), ui-monospace, monospace;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 4px 0 rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 8px 0 rgba(0, 0, 0, 0.5);
 }
 
 [data-theme="win95"] {
@@ -131,6 +160,8 @@
   --accent-primary: #000080;
   --accent-hover: #0000c0;
   --accent-secondary: #008080;
+  --accent-danger: #800000;
+  --accent-warning: #808000;
   --border-color: #808080;
   --border-radius-sm: 0px;
   --border-radius-md: 0px;
@@ -138,6 +169,7 @@
   --border-radius-xl: 0px;
   --shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
   --shadow-md: inset -2px -2px 0 #000, inset 2px 2px 0 #fff;
+  --shadow-lg: inset -2px -2px 0 #000, inset 2px 2px 0 #fff, 2px 2px 0 #000;
 }
 
 [data-theme="win95"] button:not(.ghost):not(.secondary) {
@@ -591,8 +623,10 @@
 }
 
 /* ── Rounded corners mode (Settings → Appearance) ──
-   Must load after theme tokens so it can override themes that force radius: 0. */
-html[data-rounded-corners="on"] {
+   Must load after theme tokens so it can override themes that force radius: 0.
+   Sharp themes (aether / frost / pixelato / win95) keep radius 0 even when
+   rounded mode is on — their identity depends on square chrome. */
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) {
   --border-radius-sm: 10px;
   --border-radius-md: 14px;
   --border-radius-lg: 18px;
@@ -607,8 +641,8 @@ html[data-rounded-corners="off"] {
 }
 
 /* When rounded mode is on, force common block chrome to use the tokens
-   (covers hardcoded radius:0 / sharp theme leftovers on panels & cards). */
-html[data-rounded-corners="on"] :where(
+   (covers hardcoded radius:0 leftovers on panels & cards). Skip sharp themes. */
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   .panel,
   .card,
   .modal,
@@ -645,7 +679,7 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-lg);
 }
 
-html[data-rounded-corners="on"] :where(
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   button,
   .action-btn,
   .quiet-action,
@@ -659,7 +693,7 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-md);
 }
 
-html[data-rounded-corners="on"] :where(
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   .mr-card,
   .cf-card,
   .mr-page,
@@ -674,8 +708,8 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-lg);
 }
 
-/* Pills / round avatars stay fully round */
-html[data-rounded-corners="on"] :where(
+/* Pills / round avatars stay fully round (except sharp themes) */
+html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
   .chip,
   .cat-chip,
   .mr-tag,

@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { X, Folder, Loader2, Download, Search, Package } from "@lucide/svelte";
+  import { X, Folder, Loader2, Download, Search, Package, ImagePlus } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
-  import { invoke } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { open as openExternal } from "@tauri-apps/plugin-shell";
   import { projectPath } from "../lib/store";
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
 
   let {
     onclose,
@@ -19,7 +21,7 @@
   // Each "input type" on the home screen is an isolated, self-validating
   // page (PrismLauncher-style: page-per-type) instead of one shared
   // form whose fields leak across modes.
-  type CreateMode = "blank" | "import" | "curseforge";
+  type CreateMode = "blank" | "import" | "catalog";
   let mode: CreateMode = $state("blank");
 
   // --- Blank instance (explicit, typed inputs) ---
@@ -31,11 +33,14 @@
   let loaderVersions = $state<{ id: string; stable: boolean }[]>([]);
   let loadingMc = $state(true);
   let loadingLoader = $state(false);
+  let loaderRequestId = 0;
   let memoryMode = $state<"auto" | "manual">("auto");
   let recommendedMemoryMb = $state(8192);
   let memoryMb = $state(8192);
   let memoryMaxMb = $state(16384);
   let jvmArgs = $state("-XX:+UseG1GC");
+  let iconSourcePath = $state<string | null>(null);
+  let iconPreviewUrl = $state<string | null>(null);
 
   // --- Templates (blank helper) ---
   let templates = $state<any[]>([]);
@@ -46,7 +51,8 @@
   let importName = $state("New Instance");
   let importPath = $state("");
 
-  // --- CurseForge browse ---
+  // --- Catalog browse (Modrinth / CurseForge) ---
+  let catalogProvider = $state<"modrinth" | "curseforge">("modrinth");
   let cfName = $state("New Instance");
   let cfQuery = $state("");
   let cfHits = $state<any[]>([]);
@@ -55,6 +61,20 @@
   let cfFiles = $state<any[]>([]);
   let cfFilesLoading = $state(false);
   let cfFileId = $state<number | null>(null);
+  let catalogViewResult = $state<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    projectType: string;
+    iconUrl?: string | null;
+    author?: string | null;
+    downloads?: number | null;
+    follows?: number | null;
+    categories?: string[];
+    provider?: string;
+  } | null>(null);
+  let catalogInstalling = $state(false);
 
   // --- Shared ---
   let location = $state("");
@@ -132,7 +152,7 @@
 
   function guessLocation(): string {
     const home = (defaultHome ?? "").replace(/[\\/]+$/, "");
-    if (mode === "import" || mode === "curseforge") {
+    if (mode === "import" || mode === "catalog") {
       // Pack install uses this as the parent folder; instance subfolder is created inside.
       return home;
     }
@@ -151,25 +171,65 @@
   }
 
   async function loadLoaderVersions() {
-    if (loadingLoader) return;
     if (loader === "vanilla") {
+      loaderVersions = [];
+      loaderVersion = "";
+      loadingLoader = false;
+      return;
+    }
+    if (!minecraftVersion) {
       loaderVersions = [];
       loaderVersion = "";
       return;
     }
+    const reqId = ++loaderRequestId;
     loadingLoader = true;
     try {
-      loaderVersions = await invoke("get_loader_versions", {
+      const versions = await invoke<{ id: string; stable: boolean }[]>("get_loader_versions", {
         loader,
         minecraftVersion,
       });
-      loaderVersion = loaderVersions.find((v) => v.stable)?.id ?? loaderVersions[0]?.id ?? "";
-    } catch {
+      if (reqId !== loaderRequestId) return;
+      loaderVersions = versions ?? [];
+      loaderVersion =
+        loaderVersions.find((v) => v.stable)?.id ?? loaderVersions[0]?.id ?? "";
+      if (loaderVersions.length === 0) {
+        error = `No ${loader} versions found for Minecraft ${minecraftVersion}.`;
+      } else if (error.startsWith("No ") || error.startsWith("Failed to load")) {
+        error = "";
+      }
+    } catch (e) {
+      if (reqId !== loaderRequestId) return;
       loaderVersions = [];
       loaderVersion = "";
+      error = `Failed to load ${loader} versions: ${e}`;
     } finally {
-      loadingLoader = false;
+      if (reqId === loaderRequestId) loadingLoader = false;
     }
+  }
+
+  async function pickIcon() {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: "Choose pack icon",
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      iconSourcePath = selected;
+      try {
+        iconPreviewUrl = convertFileSrc(selected);
+      } catch {
+        iconPreviewUrl = null;
+      }
+    } catch (e) {
+      error = `Could not choose icon: ${e}`;
+    }
+  }
+
+  function clearIcon() {
+    iconSourcePath = null;
+    iconPreviewUrl = null;
   }
 
   async function selectLocation() {
@@ -222,15 +282,18 @@
   // Name for the current mode drives the default location slug.
   function activeName(): string {
     if (mode === "import") return importName || name;
-    if (mode === "curseforge") return cfName || name;
+    if (mode === "catalog") return cfName || name;
     return name;
   }
 
   // Page-per-type validation: each mode validates only its own inputs.
   const blankValid = $derived(!!minecraftVersion && (loader === "vanilla" || !!loaderVersion));
   const importValid = $derived(!!importPath);
-  const cfValid = $derived(!!cfSelected && cfFileId !== null);
-  const canCreate = $derived(mode === "blank" ? blankValid : mode === "import" ? importValid : cfValid);
+  const cfValid = $derived(
+    catalogProvider === "curseforge"
+      ? !!cfSelected && cfFileId !== null
+      : !!cfSelected,
+  );
 
   async function create() {
     if (!blankValid) {
@@ -255,6 +318,16 @@
         memoryMb: mem,
         jvmArgs: args.length ? args : ["-XX:+UseG1GC"],
       });
+      if (iconSourcePath) {
+        try {
+          await invoke("set_project_listing_icon", {
+            path,
+            sourceFile: iconSourcePath,
+          });
+        } catch (iconErr) {
+          error = `Pack created, but icon failed: ${iconErr}`;
+        }
+      }
       oncreated?.(path as string);
       onclose?.();
     } catch (e) {
@@ -266,7 +339,75 @@
 
   function pickLoader(id: string) {
     loader = id as typeof loader;
-    loadLoaderVersions();
+    void loadLoaderVersions();
+  }
+
+  function openPackInCatalog(hit: any) {
+    const id = String(hit.id ?? "");
+    const slug = String(hit.slug || hit.id || "");
+    if (!id && !slug) return;
+    cfSelected = hit;
+    cfName = hit.name || cfName;
+    catalogViewResult = {
+      id,
+      slug,
+      name: hit.name || slug,
+      description: hit.summary || hit.description || "",
+      projectType: "modpack",
+      iconUrl: hit.iconUrl ?? null,
+      author: hit.authors?.[0] ?? hit.author ?? null,
+      downloads: hit.downloadCount ?? hit.downloads ?? null,
+      follows: hit.follows ?? null,
+      categories: hit.categories ?? [],
+      provider: catalogProvider,
+    };
+    if (catalogProvider === "curseforge") {
+      void selectCfPack(hit);
+    } else {
+      cfFiles = [];
+      cfFileId = null;
+      cfFilesLoading = false;
+    }
+  }
+
+  async function openCatalogExternal() {
+    if (!catalogViewResult) return;
+    const slugOrId = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!slugOrId) return;
+    const url =
+      catalogViewResult.provider === "curseforge"
+        ? /^\d+$/.test(slugOrId)
+          ? `https://www.curseforge.com/projects/${slugOrId}`
+          : `https://www.curseforge.com/minecraft/modpacks/${slugOrId}`
+        : `https://modrinth.com/modpack/${slugOrId}`;
+    try {
+      await openExternal(url);
+    } catch (e) {
+      error = `Could not open link: ${e}`;
+    }
+  }
+
+  async function installFromCatalogView() {
+    if (!catalogViewResult) return;
+    catalogInstalling = true;
+    try {
+      if (catalogViewResult.provider === "curseforge") {
+        if (!cfSelected || cfFileId == null) {
+          await selectCfPack({
+            id: Number(catalogViewResult.id) || catalogViewResult.id,
+            slug: catalogViewResult.slug,
+            name: catalogViewResult.name,
+          });
+        }
+        catalogViewResult = null;
+        await installFromCurseForge();
+      } else {
+        catalogViewResult = null;
+        await installFromModrinth(cfSelected);
+      }
+    } finally {
+      catalogInstalling = false;
+    }
   }
 
   async function installFromFile() {
@@ -298,18 +439,41 @@
     }
   }
 
-  async function searchCurseForge() {
+  async function searchCatalog() {
     cfLoading = true;
     error = "";
+    installMessage = "";
     cfSelected = null;
     cfFiles = [];
     cfFileId = null;
     try {
-      cfHits = await invoke("search_curseforge_modpacks", {
-        query: cfQuery,
-        gameVersion: null,
-        offset: 0,
-      });
+      if (catalogProvider === "curseforge") {
+        cfHits = await invoke("search_curseforge_modpacks", {
+          query: cfQuery,
+          gameVersion: null,
+          offset: 0,
+        });
+      } else {
+        const page = await invoke<{ results: any[]; total: number }>("search_modrinth_mods", {
+          path: "",
+          query: cfQuery.trim(),
+          gameVersion: null,
+          loader: null,
+          category: null,
+          environment: null,
+          license: null,
+          sort: "downloads",
+          contentType: "modpack",
+          page: 1,
+          pageSize: 30,
+        });
+        cfHits = (page.results ?? []).map((r) => ({
+          ...r,
+          summary: r.description,
+          downloadCount: r.downloads,
+          authors: r.author ? [r.author] : [],
+        }));
+      }
       if (cfHits.length === 0) {
         installMessage = "No modpacks found.";
       }
@@ -345,6 +509,38 @@
     cfFileId = v ? Number(v) : null;
   }
 
+  async function installFromModrinth(hit: any) {
+    if (!hit?.id && !hit?.slug) {
+      error = "Select a Modrinth modpack first.";
+      return;
+    }
+    loading = true;
+    error = "";
+    installMessage = "Downloading Modrinth modpack…";
+    try {
+      const targetDir = location.replace(/[\\/]+$/, "") || defaultHome;
+      const projectId = String(hit.id || hit.slug);
+      const source = await invoke<string>("get_modrinth_pack_download", { projectId });
+      const result: any = await invoke("install_modpack", {
+        source,
+        targetDir,
+        instanceName: cfName || hit.name,
+      });
+      const failed = result?.download?.failed?.length ?? 0;
+      if (failed > 0) {
+        error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
+      }
+      oncreated?.(result.path as string);
+      onclose?.();
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      loading = false;
+      installMessage = "";
+      packPhase = "";
+    }
+  }
+
   async function installFromCurseForge() {
     if (!cfValid) {
       error = "Select a modpack file version.";
@@ -375,10 +571,21 @@
     }
   }
 
-  $effect(() => {
-    if (mode === "blank" && (minecraftVersion || loader)) {
-      if (!loadingMc) loadLoaderVersions();
+  async function installFromCatalogFooter() {
+    if (catalogProvider === "modrinth") {
+      await installFromModrinth(cfSelected);
+    } else {
+      await installFromCurseForge();
     }
+  }
+
+  $effect(() => {
+    if (mode !== "blank") return;
+    const mc = minecraftVersion;
+    const ld = loader;
+    if (!mc) return;
+    void ld;
+    void loadLoaderVersions();
   });
 </script>
 
@@ -397,7 +604,7 @@
     <div class="tabs">
       <button class:active={mode === "blank"} onclick={() => { mode = "blank"; location = guessLocation(); }}>Blank</button>
       <button class:active={mode === "import"} onclick={() => { mode = "import"; location = guessLocation(); }}>Import pack</button>
-      <button class:active={mode === "curseforge"} onclick={() => { mode = "curseforge"; location = guessLocation(); }}>CurseForge</button>
+      <button class:active={mode === "catalog"} onclick={() => { mode = "catalog"; location = guessLocation(); }}>Browse packs</button>
     </div>
 
     <div class="modal-body">
@@ -436,10 +643,27 @@
         {/if}
 
         <div class="name-row">
-          <div class="pack-icon" aria-hidden="true">{(name.trim()[0] || "?").toUpperCase()}</div>
+          <button
+            type="button"
+            class="pack-icon"
+            class:has-img={!!iconPreviewUrl}
+            onclick={pickIcon}
+            title="Choose pack icon"
+            aria-label="Choose pack icon"
+          >
+            {#if iconPreviewUrl}
+              <img src={iconPreviewUrl} alt="" />
+            {:else}
+              <span class="pack-icon-letter">{(name.trim()[0] || "?").toUpperCase()}</span>
+              <span class="pack-icon-hint"><ImagePlus size={14} /></span>
+            {/if}
+          </button>
           <div class="field grow">
             <label for="inst-name">Profile name</label>
             <input id="inst-name" bind:value={name} placeholder="Enter pack name" oninput={() => (location = guessLocation())} />
+            {#if iconSourcePath}
+              <button type="button" class="clear-icon" onclick={clearIcon}>Remove icon</button>
+            {/if}
           </div>
         </div>
 
@@ -478,6 +702,8 @@
               <div class="field-loader"><Loader2 size={16} class="spin" /> Loading...</div>
             {:else if loader === "vanilla"}
               <input id="inst-loader-version" value="No loader (Vanilla)" disabled />
+            {:else if loaderVersions.length === 0}
+              <input id="inst-loader-version" value="No versions available" disabled />
             {:else}
               <select id="inst-loader-version" bind:value={loaderVersion}>
                 {#each loaderVersions as v (v.id)}
@@ -549,14 +775,49 @@
            <input id="inst-name-imp" bind:value={importName} oninput={() => (location = guessLocation())} />
          </div>
        {:else}
-         <!-- Page 3: CurseForge browse — name + file selection isolated -->
-         <p class="muted">Browse CurseForge modpacks (same API as PrismLauncher Flame).</p>
+         <!-- Page 3: Modrinth / CurseForge browse — opens CatalogProjectView -->
+         <p class="muted">Search Modrinth or CurseForge modpacks. Click a result for the in-app project page.</p>
+         <div class="loader-chips" role="radiogroup" aria-label="Catalog provider">
+           <button
+             type="button"
+             class="loader-chip"
+             class:active={catalogProvider === "modrinth"}
+             role="radio"
+             aria-checked={catalogProvider === "modrinth"}
+             onclick={() => {
+               catalogProvider = "modrinth";
+               cfHits = [];
+               cfSelected = null;
+               cfFiles = [];
+               cfFileId = null;
+             }}
+           >Modrinth</button>
+           <button
+             type="button"
+             class="loader-chip"
+             class:active={catalogProvider === "curseforge"}
+             role="radio"
+             aria-checked={catalogProvider === "curseforge"}
+             onclick={() => {
+               catalogProvider = "curseforge";
+               cfHits = [];
+               cfSelected = null;
+               cfFiles = [];
+               cfFileId = null;
+             }}
+           >CurseForge</button>
+         </div>
          <div class="search-row">
            <div class="search">
              <Search size={16} />
-             <input aria-label="Search CurseForge modpacks" bind:value={cfQuery} placeholder="Search modpacks…" onkeydown={(e) => e.key === "Enter" && searchCurseForge()} />
+             <input
+               aria-label="Search modpacks"
+               bind:value={cfQuery}
+               placeholder="Search modpacks…"
+               onkeydown={(e) => e.key === "Enter" && searchCatalog()}
+             />
            </div>
-           <button class="secondary" onclick={searchCurseForge} disabled={cfLoading}>
+           <button class="secondary" onclick={searchCatalog} disabled={cfLoading}>
              {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
              Search
            </button>
@@ -564,7 +825,7 @@
          <div class="cf-layout">
            <div class="cf-list">
              {#each cfHits as hit (hit.id)}
-               <button class="cf-row" class:active={cfSelected?.id === hit.id} onclick={() => selectCfPack(hit)}>
+               <button class="cf-row" class:active={cfSelected?.id === hit.id} onclick={() => openPackInCatalog(hit)}>
                  {#if hit.iconUrl}
                    <img src={hit.iconUrl} alt="" />
                  {:else}
@@ -572,7 +833,7 @@
                  {/if}
                  <div>
                    <strong>{hit.name}</strong>
-                   <span>{hit.summary?.slice(0, 100) ?? ""}</span>
+                   <span>{(hit.summary || hit.description || "").slice(0, 100)}</span>
                  </div>
                </button>
              {:else}
@@ -582,22 +843,26 @@
            <div class="cf-detail">
              {#if cfSelected}
                <h3>{cfSelected.name}</h3>
-               {#if cfFilesLoading}
-                 <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
+               {#if catalogProvider === "curseforge"}
+                 {#if cfFilesLoading}
+                   <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
+                 {:else}
+                   <label for="cf-file">Pack version</label>
+                   <select id="cf-file" value={cfFileId ?? ""} onchange={onCfFileChange}>
+                     {#each cfFiles as f (f.id)}
+                       <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
+                     {/each}
+                   </select>
+                 {/if}
                {:else}
-                 <label for="cf-file">Pack version</label>
-                 <select id="cf-file" value={cfFileId ?? ""} onchange={onCfFileChange}>
-                   {#each cfFiles as f (f.id)}
-                     <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
-                   {/each}
-                 </select>
-                 <div class="field" style="margin-top:12px">
-                   <label for="inst-name-cf">Instance name</label>
-                   <input id="inst-name-cf" bind:value={cfName} oninput={() => (location = guessLocation())} />
-                 </div>
+                 <p class="muted compact">Open the project page for details, or install the latest pack below.</p>
                {/if}
+               <div class="field" style="margin-top:12px">
+                 <label for="inst-name-cf">Instance name</label>
+                 <input id="inst-name-cf" bind:value={cfName} oninput={() => (location = guessLocation())} />
+               </div>
              {:else}
-               <div class="muted compact">Select a pack to choose its file version.</div>
+               <div class="muted compact">Select a pack (opens the in-app catalog page).</div>
              {/if}
            </div>
          </div>
@@ -626,13 +891,40 @@
             <Download size={16} /> Install pack
           </LoadingButton>
         {:else}
-          <LoadingButton {loading} disabled={!cfValid} onclick={installFromCurseForge}>
-            <Download size={16} /> Install from CurseForge
+          <LoadingButton {loading} disabled={!cfValid} onclick={installFromCatalogFooter}>
+            <Download size={16} /> Install pack
           </LoadingButton>
         {/if}
       </div>
   </div>
 </div>
+
+{#if catalogViewResult}
+  <div
+    class="modal-backdrop catalog-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) catalogViewResult = null;
+    }}
+    onkeydown={() => {}}
+  >
+    <div
+      class="modal catalog-modal"
+      role="dialog"
+      aria-modal="true"
+      use:trapFocus={{ onEscape: () => (catalogViewResult = null) }}
+    >
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={catalogInstalling || loading}
+        onback={() => (catalogViewResult = null)}
+        oninstall={() => void installFromCatalogView()}
+        onopenexternal={() => void openCatalogExternal()}
+      />
+    </div>
+  </div>
+{/if}
 
 <style>
   .modal-backdrop {
@@ -714,6 +1006,7 @@
     align-items: flex-end;
   }
   .pack-icon {
+    position: relative;
     width: 56px;
     height: 56px;
     border-radius: var(--border-radius-md);
@@ -725,6 +1018,57 @@
     color: #04140a;
     background: linear-gradient(135deg, #1bd96a, #0ea5e9);
     flex-shrink: 0;
+    border: 1px solid transparent;
+    padding: 0;
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .pack-icon:hover {
+    outline: 2px solid rgba(27, 217, 106, 0.45);
+    outline-offset: 1px;
+  }
+  .pack-icon.has-img {
+    background: var(--bg-tertiary);
+  }
+  .pack-icon-letter {
+    line-height: 1;
+  }
+  .pack-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .pack-icon-hint {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .clear-icon {
+    margin-top: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .catalog-backdrop {
+    z-index: 90;
+  }
+  .catalog-modal {
+    width: min(920px, 96vw);
+    max-height: min(90vh, 900px);
+    overflow: auto;
+    padding: 0;
   }
   .loader-chips {
     display: flex;

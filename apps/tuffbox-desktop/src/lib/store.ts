@@ -31,10 +31,35 @@ function createRecentProjects() {
 
   return {
     subscribe,
-    add: (project: RecentProject) => {
+    add: (project: RecentProject, opts?: { reorder?: boolean; replacePath?: string }) => {
+      const reorder = opts?.reorder !== false;
+      const replacePath = opts?.replacePath;
       update((projects) => {
-        const filtered = projects.filter((p) => p.path !== project.path);
-        const next = [project, ...filtered].slice(0, 20);
+        const matchIdx = projects.findIndex(
+          (p) =>
+            p.path === project.path ||
+            (replacePath != null && p.path === replacePath),
+        );
+        let next: RecentProject[];
+        if (!reorder && matchIdx >= 0) {
+          next = projects
+            .map((p, i) => (i === matchIdx ? project : p))
+            .filter((p, i) => i === matchIdx || p.path !== project.path);
+        } else if (!reorder) {
+          const filtered = projects.filter(
+            (p) =>
+              p.path !== project.path &&
+              (replacePath == null || p.path !== replacePath),
+          );
+          next = [...filtered, project].slice(0, 20);
+        } else {
+          const filtered = projects.filter(
+            (p) =>
+              p.path !== project.path &&
+              (replacePath == null || p.path !== replacePath),
+          );
+          next = [project, ...filtered].slice(0, 20);
+        }
         try {
           localStorage.setItem("recentProjects", JSON.stringify(next));
         } catch {}
@@ -139,11 +164,16 @@ export interface LauncherSettings {
   sidebarMode: SidebarMode;
   /** Interface zoom percent (75–150). */
   uiScalePercent: number;
+  /** `auto` follows screen/window size; `manual` locks uiScalePercent. */
+  uiScaleMode: UiScaleMode;
   /** Round corners on panels/cards/buttons everywhere. */
   roundedCorners: boolean;
 }
 
 export type SidebarMode = "full" | "icons" | "autoHide";
+export type UiScaleMode = "auto" | "manual";
+
+export const UI_SCALE_STEPS = [75, 90, 100, 110, 125, 150] as const;
 
 export function normalizeSidebarMode(raw: unknown): SidebarMode {
   if (raw === "icons" || raw === "autoHide" || raw === "full") return raw;
@@ -154,6 +184,55 @@ export function normalizeUiScalePercent(raw: unknown): number {
   const n = typeof raw === "number" ? raw : Number(raw);
   if (!Number.isFinite(n)) return 100;
   return Math.min(150, Math.max(75, Math.round(n)));
+}
+
+export function normalizeUiScaleMode(raw: unknown): UiScaleMode {
+  return raw === "manual" ? "manual" : "auto";
+}
+
+/** Migrate unset mode: preserve non-100% as manual. */
+export function resolveUiScaleMode(settings: {
+  uiScaleMode?: unknown;
+  uiScalePercent?: unknown;
+}): UiScaleMode {
+  const raw = settings.uiScaleMode;
+  if (raw === "auto" || raw === "manual") return raw;
+  return normalizeUiScalePercent(settings.uiScalePercent) !== 100 ? "manual" : "auto";
+}
+
+function snapUiScalePercent(raw: number): number {
+  let best = UI_SCALE_STEPS[0];
+  let bestDist = Math.abs(raw - best);
+  for (const step of UI_SCALE_STEPS) {
+    const d = Math.abs(raw - step);
+    if (d < bestDist) {
+      best = step;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Suggest UI zoom from screen/window size + devicePixelRatio.
+ * Snaps to the same chips used in Settings (75–150).
+ */
+export function suggestUiScalePercent(): number {
+  if (typeof window === "undefined") return 100;
+  const screenW = window.screen?.width || 1920;
+  const innerW = window.innerWidth || screenW;
+  const width = Math.min(screenW, innerW);
+  const dpr = window.devicePixelRatio || 1;
+
+  let suggested = 100;
+  if (width < 1100) suggested = 125;
+  else if (dpr >= 2 && width < 1600) suggested = 110;
+  else if (width < 1280) suggested = 110;
+  else if (width < 1440 && dpr >= 1.5) suggested = 110;
+  else if (width >= 1920 && dpr <= 1) suggested = 100;
+  else suggested = 100;
+
+  return snapUiScalePercent(suggested);
 }
 
 /** Apply Chromium zoom via CSS variable (buttons, cards, modals). */
@@ -172,6 +251,17 @@ export function applyUiScale(percent: unknown) {
     }
   }
   return p;
+}
+
+/** Resolve mode + apply (auto → suggest, manual → stored percent). */
+export function applyUiScaleFromSettings(settings: {
+  uiScaleMode?: unknown;
+  uiScalePercent?: unknown;
+}): number {
+  const mode = resolveUiScaleMode(settings);
+  const pct =
+    mode === "auto" ? suggestUiScalePercent() : normalizeUiScalePercent(settings.uiScalePercent);
+  return applyUiScale(pct);
 }
 
 /**

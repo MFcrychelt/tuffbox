@@ -14,7 +14,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyRoundedCorners, detectWeakHardware, youtubePlayerSession, closeYoutubePlayer, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
   import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -236,7 +236,29 @@
     void refreshRunningInstances();
     const unlistenSoftVerify = registerSoftVerifyListeners();
     // Sync potato + concurrency from persisted launcher settings (best-effort).
+    let launcherSnapshot: LauncherSettings | null = null;
+    let scaleResizeTimer: ReturnType<typeof setTimeout> | undefined;
+    const onUiScaleResize = () => {
+      if (!launcherSnapshot || resolveUiScaleMode(launcherSnapshot) !== "auto") return;
+      clearTimeout(scaleResizeTimer);
+      scaleResizeTimer = setTimeout(() => {
+        if (!launcherSnapshot || resolveUiScaleMode(launcherSnapshot) !== "auto") return;
+        const suggested = suggestUiScalePercent();
+        applyUiScale(suggested);
+        if (launcherSnapshot.uiScalePercent === suggested) return;
+        const next = {
+          ...launcherSnapshot,
+          uiScaleMode: "auto" as const,
+          uiScalePercent: suggested,
+        };
+        launcherSnapshot = next;
+        void api.launcher.save(next).catch(() => {});
+      }, 150);
+    };
+
     void api.launcher.get().then((s) => {
+      const mode = resolveUiScaleMode(s);
+      launcherSnapshot = { ...s, uiScaleMode: mode };
       if (s.potatoPc) {
         localStorage.setItem("tuffbox-reduced-motion", "1");
         document.documentElement.classList.add("potato-pc");
@@ -247,22 +269,36 @@
       }
       autoHideWorkflowRail.set(!!s.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(s.sidebarMode));
-      applyUiScale(s.uiScalePercent);
+      const applied = applyUiScaleFromSettings(launcherSnapshot);
+      launcherSnapshot = { ...launcherSnapshot, uiScalePercent: applied };
+      if (mode === "auto" && s.uiScalePercent !== applied) {
+        void api.launcher
+          .save({ ...launcherSnapshot, uiScaleMode: "auto", uiScalePercent: applied })
+          .catch(() => {});
+      }
       applyRoundedCorners(s.roundedCorners !== false);
       void applyPerfAutoDetect(s);
     }).catch(() => {});
+    window.addEventListener("resize", onUiScaleResize);
     const onOpenGraph = () => {
       currentView = "graph";
     };
     window.addEventListener("tuffbox:open-graph", onOpenGraph);
 
     const onOpenDiagnostics = () => {
-      currentView = "diagnostics";
+      // Prefer IDE Diagnose stage when already in workspace; else standalone Diagnose view.
+      if (currentView === "ide" || currentView === "library" || currentView === "home") {
+        currentView = "ide";
+        ideStageRequest.set("diagnose");
+      } else {
+        currentView = "diagnostics";
+      }
     };
     window.addEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
 
     const onOpenProjectSettings = () => {
-      currentView = "project-settings";
+      ideStageRequest.set("setup");
+      currentView = "ide";
     };
     window.addEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
 
@@ -350,6 +386,8 @@
       window.removeEventListener("tuffbox:open-me", onOpenMe);
       window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
+      window.removeEventListener("resize", onUiScaleResize);
+      clearTimeout(scaleResizeTimer);
       unlistenDistill?.();
       unlistenSoftVerify();
     };
@@ -445,6 +483,9 @@
       });
     } else if (id === "shortcuts") {
       showShortcuts = true;
+    } else if (id === "project-settings") {
+      ideStageRequest.set("setup");
+      currentView = "ide";
     } else if (id in VIEW_SET) {
       currentView = id as View;
     }
@@ -686,10 +727,15 @@
     height: 100%;
   }
   .content.fill-view .view-pane > :global(.mods),
-  .content.fill-view .view-pane > :global(.graph),
   .content.fill-view .view-pane > :global(.library) {
     flex: 1;
     min-height: 0;
     height: 100%;
+  }
+  .content.fill-view .view-pane > :global(.graph) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
   }
 </style>

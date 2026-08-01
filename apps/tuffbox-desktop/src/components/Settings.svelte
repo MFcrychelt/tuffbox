@@ -9,14 +9,17 @@
     MessageCircle, ExternalLink,
   } from "@lucide/svelte";
   import { api } from "../lib/api";
-  import type { PresenceSettings, LauncherSettings, SidebarMode } from "../lib/store";
+  import type { PresenceSettings, LauncherSettings, SidebarMode, UiScaleMode } from "../lib/store";
   import {
     autoHideWorkflowRail,
     sidebarMode,
     normalizeSidebarMode,
-    applyUiScale,
+    applyUiScaleFromSettings,
     applyRoundedCorners,
     normalizeUiScalePercent,
+    resolveUiScaleMode,
+    suggestUiScalePercent,
+    UI_SCALE_STEPS,
   } from "../lib/store";
   import {
     readStoredTheme, commitTheme, type ThemeId,
@@ -150,6 +153,7 @@
     autoHideWorkflowRail: false,
     sidebarMode: "full",
     uiScalePercent: 100,
+    uiScaleMode: "auto",
     roundedCorners: true,
   });
   let launcherSaving = $state(false);
@@ -202,6 +206,10 @@
     launcherErr = "";
     try {
       launcher = await api.launcher.get();
+      launcher = {
+        ...launcher,
+        uiScaleMode: resolveUiScaleMode(launcher),
+      };
       theme = (THEMES_SAFE(launcher.theme) as ThemeId) || readStoredTheme();
       reducedMotion = !!launcher.potatoPc;
       applyPotatoPc(reducedMotion);
@@ -209,7 +217,8 @@
       commitTheme(theme);
       autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
-      applyUiScale(launcher.uiScalePercent);
+      const applied = applyUiScaleFromSettings(launcher);
+      launcher = { ...launcher, uiScalePercent: applied };
       applyRoundedCorners(launcher.roundedCorners !== false);
       syncResModeFromLauncher();
       const info = await api.launcher.runtimePathInfo();
@@ -243,6 +252,18 @@
       }
       if (partial && "uiScalePercent" in partial) {
         next.uiScalePercent = normalizeUiScalePercent(partial.uiScalePercent);
+        if (!("uiScaleMode" in (partial ?? {}))) {
+          next.uiScaleMode = "manual";
+        }
+      }
+      if (partial && "uiScaleMode" in partial) {
+        next.uiScaleMode = resolveUiScaleMode({
+          uiScaleMode: partial.uiScaleMode,
+          uiScalePercent: next.uiScalePercent,
+        });
+        if (next.uiScaleMode === "auto") {
+          next.uiScalePercent = suggestUiScalePercent();
+        }
       }
       launcher = await api.launcher.save(next);
       if (partial && "autoHideWorkflowRail" in partial) {
@@ -251,8 +272,8 @@
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
       }
-      if (partial && "uiScalePercent" in partial) {
-        applyUiScale(launcher.uiScalePercent);
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        applyUiScaleFromSettings(launcher);
       }
       if (partial && "roundedCorners" in partial) {
         applyRoundedCorners(launcher.roundedCorners !== false);
@@ -746,19 +767,34 @@
           <div class="settings-row-text">
             <strong>Interface scale</strong>
             <p>
-              Zoom the whole UI — buttons, sidebar, Content mod cards, dialogs. Useful on high-DPI or
-              small screens.
+              Zoom the whole UI — buttons, sidebar, Content mod cards, dialogs.
+              <strong>Auto</strong> picks a size from your screen and window; pick a percent to lock it.
+            </p>
+            <p class="hint" style="margin-top: 6px;">
+              Suggested for this screen: {suggestUiScalePercent()}%
+              {#if resolveUiScaleMode(launcher) === "auto"}
+                · following window size
+              {/if}
             </p>
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
-              {#each [75, 90, 100, 110, 125, 150] as pct (pct)}
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={resolveUiScaleMode(launcher) === "auto"}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ uiScaleMode: "auto" as UiScaleMode })}
+              >
+                Auto
+              </button>
+              {#each UI_SCALE_STEPS as pct (pct)}
                 <button
                   type="button"
                   class="chip press-effect"
-                  class:active={normalizeUiScalePercent(launcher.uiScalePercent) === pct}
+                  class:active={resolveUiScaleMode(launcher) === "manual" && normalizeUiScalePercent(launcher.uiScalePercent) === pct}
                   disabled={launcherSaving}
-                  onclick={() => void persistLauncher({ uiScalePercent: pct })}
+                  onclick={() => void persistLauncher({ uiScaleMode: "manual" as UiScaleMode, uiScalePercent: pct })}
                 >
                   {pct}%
                 </button>

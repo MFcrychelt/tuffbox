@@ -27,6 +27,7 @@
   import CreationTrends from "./CreationTrends.svelte";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
 
   let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
@@ -199,6 +200,9 @@
   let discoverProvider = $state<DiscoverProvider>("modrinth");
   let downloadDir = $state("");
   let defaultDownloadDir = $state("");
+  let brokenIcons = $state<string[]>([]);
+  let catalogViewResult = $state<DiscoverResult | null>(null);
+  let searchRequestId = 0;
 
   async function loadDownloadDir() {
     try {
@@ -263,7 +267,15 @@
     return `https://modrinth.com/modpack/${slugOrId}`;
   }
 
-  async function openModpackPage(result: DiscoverResult) {
+  function openCatalogInApp(result: DiscoverResult) {
+    catalogViewResult = result;
+  }
+
+  function closeCatalogInApp() {
+    catalogViewResult = null;
+  }
+
+  async function openModpackExternal(result: DiscoverResult) {
     const url = modpackPageUrl(result);
     if (!url) {
       toasts.error("No catalog page for this modpack.");
@@ -273,6 +285,12 @@
       await openExternal(url);
     } catch (e) {
       toasts.error(`Could not open link: ${e}`);
+    }
+  }
+
+  function markIconBroken(key: string) {
+    if (!brokenIcons.includes(key)) {
+      brokenIcons = [...brokenIcons, key];
     }
   }
 
@@ -343,15 +361,18 @@
   }
 
   async function search(_opts?: { reset?: boolean }) {
+    const requestId = ++searchRequestId;
     loadingDiscover = true;
     discoverError = "";
     try {
+      let next: DiscoverResult[];
       if (discoverProvider === "modrinth") {
-        results = await searchModrinth();
+        next = await searchModrinth();
       } else if (discoverProvider === "curseforge") {
-        results = await searchCurseForge();
+        next = await searchCurseForge();
       } else {
         const settled = await Promise.allSettled([searchModrinth(), searchCurseForge()]);
+        if (requestId !== searchRequestId) return;
         const mr = settled[0].status === "fulfilled" ? settled[0].value : [];
         const cf = settled[1].status === "fulfilled" ? settled[1].value : [];
         const errors = settled
@@ -363,19 +384,26 @@
         if (errors.length > 0) {
           discoverError = errors.join("; ");
         }
-        results = interleaveResults(mr, cf);
+        next = interleaveResults(mr, cf);
       }
+      if (requestId !== searchRequestId) return;
+      results = next;
+      brokenIcons = brokenIcons.filter((id) => next.some((r) => resultKey(r) === id));
     } catch (e) {
+      if (requestId !== searchRequestId) return;
       discoverError = String(e);
       results = [];
     } finally {
-      loadingDiscover = false;
+      if (requestId === searchRequestId) {
+        loadingDiscover = false;
+      }
     }
   }
 
   function setDiscoverProvider(provider: DiscoverProvider) {
     if (discoverProvider === provider) return;
     discoverProvider = provider;
+    catalogViewResult = null;
     search();
   }
 
@@ -415,7 +443,6 @@
       const manifestPath = info.manifestPath || res.path;
       recentProjects.add({ path: manifestPath, info: info as any });
       toasts.success(`Added "${result.name}" to ${targetDir}.`);
-      search();
     } catch (e) {
       toasts.error(`Could not add ${result.name}: ${e}`);
     } finally {
@@ -433,6 +460,7 @@
 
   function switchTab(t: Tab) {
     tab = t;
+    if (t !== "discover") catalogViewResult = null;
     if (t === "discover") {
       void loadDownloadDir();
       if (results.length === 0) search();
@@ -532,6 +560,19 @@
     </div>
   {:else if tab === "discover"}
   <div class="tab-scroll">
+    {#if catalogViewResult}
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={adding.has(resultKey(catalogViewResult))}
+        onback={closeCatalogInApp}
+        oninstall={() => {
+          if (catalogViewResult) void addModpack(catalogViewResult);
+        }}
+        onopenexternal={() => {
+          if (catalogViewResult) void openModpackExternal(catalogViewResult);
+        }}
+      />
+    {:else}
     <div class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
         <button
@@ -595,17 +636,31 @@
     {:else}
       <div class="pack-grid tb-stagger">
         {#each results as result, i (resultKey(result))}
-          <div class="pack-card discover-card tb-card" style={`--i: ${i}`}>
+          {@const key = resultKey(result)}
+          {@const showIcon = !!result.iconUrl && !brokenIcons.includes(key)}
+          <div
+            class="pack-card discover-card tb-card"
+            style={`--i: ${Math.min(i, 8)}`}
+            role="button"
+            tabindex="0"
+            onclick={() => openCatalogInApp(result)}
+            onkeydown={(e) => e.key === "Enter" && openCatalogInApp(result)}
+          >
             <div
               class="pack-cover"
-              style={result.iconUrl
-                ? `background: #18181b`
-                : `background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug)})`}
+              style={`background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug || result.id)})`}
             >
-              {#if result.iconUrl}
-                <img class="pack-cover-img tb-cover-media" src={result.iconUrl} alt="" />
+              {#if showIcon}
+                <img
+                  class="pack-cover-img tb-cover-media"
+                  src={result.iconUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  onerror={() => markIconBroken(key)}
+                />
               {:else}
-                <span class="pack-cover-letter tb-cover-media">{result.name[0]}</span>
+                <span class="pack-cover-letter tb-cover-media">{result.name[0]?.toUpperCase() ?? "?"}</span>
               {/if}
             </div>
             <div class="pack-body">
@@ -613,8 +668,11 @@
                 <button
                   type="button"
                   class="pack-name linkish"
-                  title="Open on {result.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
-                  onclick={() => openModpackPage(result)}
+                  title={result.name}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openCatalogInApp(result);
+                  }}
                 >{result.name}</button>
                 {#if discoverProvider === "both"}
                   <span
@@ -635,17 +693,23 @@
                 <button
                   type="button"
                   class="pack-page"
-                  title="Open catalog page"
-                  onclick={() => openModpackPage(result)}
+                  title="Open catalog page in TuffBox"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openCatalogInApp(result);
+                  }}
                 >
                   <ExternalLink size={14} /> Page
                 </button>
                 <button
                   class="pack-add"
-                  disabled={adding.has(resultKey(result))}
-                  onclick={() => addModpack(result)}
+                  disabled={adding.has(key)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    void addModpack(result);
+                  }}
                 >
-                  {#if adding.has(resultKey(result))}
+                  {#if adding.has(key)}
                     <span class="mini-spinner"></span> Adding…
                   {:else}
                     <Plus size={14} /> Add to TuffBox
@@ -656,6 +720,7 @@
           </div>
         {/each}
       </div>
+    {/if}
     {/if}
   </div>
   {:else if tab === "create"}
@@ -912,7 +977,9 @@
 
   .pack-cover {
     position: relative;
-    height: 120px;
+    aspect-ratio: 1;
+    width: 100%;
+    height: auto;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -928,7 +995,7 @@
   .pack-cover-img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .pack-body {

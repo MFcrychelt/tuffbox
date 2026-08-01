@@ -14,12 +14,12 @@ use tuffbox_core::create_mode::{
     load_create_chat as load_create_chat_file, merge_mpi_hints_into_brief, new_chat_id, now_iso,
     parse_create_mode_ai_response, save_create_chat as save_create_chat_file, search_from_brief,
     AssembleOptions, CreateChatMessage, CreateChatSession, LiveCatalogSearch, PackBrief,
-    PackDraft, CREATE_MODE_REFINE_PROMPT, CREATE_MODE_SYSTEM_PROMPT,
+    PackDraft, CREATE_MODE_SYSTEM_PROMPT,
 };
 use tuffbox_core::graph::loader_kind_slug;
 use tuffbox_core::mod_suggest::{
-    enrich_partners_with_descriptions, format_candidates_for_prompt, merge_partner_stats,
-    partners_from_pairs, resolve_seed_mods, soft_boost_partners, CandidateAddon,
+    enrich_partners_with_descriptions, merge_partner_stats, partners_from_pairs, resolve_seed_mods,
+    soft_boost_partners, CandidateAddon,
 };
 use tuffbox_core::modpack_index::{format_tags_for_prompt, MpiModHint, MpiSearchQuery};
 use tuffbox_core::swarm::ModPairStat;
@@ -202,66 +202,9 @@ async fn collect_candidates(
     }
 }
 
-/// Second AI pass: candidates + descriptions → refined PackBrief (not crash ActionPlan).
-async fn refine_pack_brief(
-    message: &str,
-    mut brief: PackBrief,
-    mut search: MpiSearchQuery,
-    candidates: Vec<CandidateAddon>,
-    history: Option<&[CreateChatMessage]>,
-) -> (PackBrief, String, MpiSearchQuery, Vec<CandidateAddon>) {
-    let catalog = format_candidates_for_prompt(&candidates, 30);
-    let tags = format_tags_for_prompt();
-    let system = format!("{CREATE_MODE_REFINE_PROMPT}\n\n{tags}\n\n{catalog}");
-
-    let mut messages: Vec<Value> = Vec::new();
-    if let Some(hist) = history {
-        for m in hist {
-            if m.role == "user" || m.role == "assistant" {
-                messages.push(json!({"role": m.role, "content": m.content}));
-            }
-        }
-    }
-    let brief_json = serde_json::to_string_pretty(&brief).unwrap_or_else(|_| "{}".into());
-    let search_json = serde_json::to_string_pretty(&search).unwrap_or_else(|_| "{}".into());
-    messages.push(json!({
-        "role": "user",
-        "content": format!(
-            "{message}\n\nCurrent PackBrief:\n{brief_json}\n\nCurrent search:\n{search_json}"
-        ),
-    }));
-
-    let settings = crate::integrations::read_settings().ai;
-    let mut reply = String::new();
-
-    if let Ok(raw) = crate::integrations::call_ai_messages(&settings, &system, &messages, true).await
-    {
-        let (r, brief_opt, search_opt) = parse_ai_value(&raw);
-        reply = r;
-        if let Some(b) = brief_opt {
-            brief = b;
-        }
-        if let Some(s) = search_opt {
-            search = s;
-        }
-    }
-
-    let hints = candidates_to_mpi_hints(&candidates);
-    merge_mpi_hints_into_brief(&mut brief, &hints, 8);
-
-    if reply.trim().is_empty() {
-        reply = format!(
-            "Pack brief ready: {} ({} must-have from catalog candidates).",
-            brief.title,
-            brief.must_have.len()
-        );
-    }
-
-    (brief, reply, search, candidates)
-}
-
 #[tauri::command(rename_all = "camelCase")]
 pub async fn create_mode_chat(
+    app: AppHandle,
     path: String,
     chat_id: Option<String>,
     message: String,
@@ -280,20 +223,11 @@ pub async fn create_mode_chat(
     let loader = loader_kind_slug(&manifest.loader.kind).to_string();
     let target = target_count.unwrap_or(80).clamp(40, 120);
 
-    let mut trends_hint = String::new();
-    if let Ok(trends) = crate::swarm_api::get_creation_trends(path.clone(), Some(20)).await {
-        if let Some(hint) = trends.get("promptHint").and_then(|v| v.as_str()) {
-            if !hint.trim().is_empty() && !hint.contains("(no stats yet") {
-                trends_hint = format!(
-                    "\n\nOptional co-occurrence hints (hub/community; never scraped as the user):\n{hint}"
-                );
-            }
-        }
-    }
+    emit_create_progress(&app, "plan", 0, 0, "Calling AI…");
 
     let tags = format_tags_for_prompt();
     let system = format!(
-        "{CREATE_MODE_SYSTEM_PROMPT}\n\n{tags}\n\nProject context: Minecraft {mc}, loader {loader}, preferred targetCount {target}.{trends_hint}\n\nImportant: reply, title, and reasons must use the same language as the latest user message (not Chinese unless the user wrote Chinese)."
+        "{CREATE_MODE_SYSTEM_PROMPT}\n\n{tags}\n\nProject context: Minecraft {mc}, loader {loader}, preferred targetCount {target}.\n\nImportant: reply, title, and reasons must use the same language as the latest user message (not Chinese unless the user wrote Chinese)."
     );
 
     let mut messages: Vec<Value> = Vec::new();
@@ -316,6 +250,7 @@ pub async fn create_mode_chat(
 
     let settings = crate::integrations::read_settings().ai;
     let raw = crate::integrations::call_ai_messages(&settings, &system, &messages, true).await?;
+    emit_create_progress(&app, "plan", 0, 0, "Parsing brief…");
     let raw_str = serde_json::to_string(&raw).unwrap_or_else(|_| "{}".into());
     let parsed = match parse_create_mode_ai_response(&raw_str) {
         Ok(p) => p,
@@ -329,25 +264,46 @@ pub async fn create_mode_chat(
         }
     };
 
-    let brief = parsed
-        .brief
-        .map(|b| ensure_brief_from_manifest(b, &manifest))
-        .ok_or_else(|| "AI returned no PackBrief; use Quick assemble".to_string())?;
+    let used_prompt_fallback = parsed.brief.is_none();
+    let mut brief = match parsed.brief {
+        Some(b) => ensure_brief_from_manifest(b, &manifest),
+        None => ensure_brief_from_manifest(
+            brief_from_prompt(&message, &mc, &loader, target),
+            &manifest,
+        ),
+    };
+    // Prefer AI target when present; otherwise keep UI/clamped target on fallback brief.
+    if used_prompt_fallback {
+        brief.target_count = target;
+    }
     let search = parsed
         .search
         .unwrap_or_else(|| search_from_brief(&brief));
 
+    emit_create_progress(&app, "search", 0, 0, "Collecting Modrinth candidates…");
     let candidates = collect_candidates(&path, &search, &mc, &loader).await;
-    let (brief, reply, search, candidates) = refine_pack_brief(
-        &message,
-        brief,
-        search,
-        candidates,
-        history.as_deref(),
-    )
-    .await;
+    let hints = candidates_to_mpi_hints(&candidates);
+    merge_mpi_hints_into_brief(&mut brief, &hints, 8);
     let brief = ensure_brief_from_manifest(brief, &manifest);
 
+    let mut reply = parsed.reply.trim().to_string();
+    if reply.is_empty() {
+        reply = if used_prompt_fallback {
+            "Built a draft brief from your prompt (AI JSON incomplete).".into()
+        } else {
+            format!(
+                "Pack brief ready: {} ({} must-have from catalog candidates).",
+                brief.title,
+                brief.must_have.len()
+            )
+        };
+    } else if used_prompt_fallback {
+        reply = format!(
+            "{reply}\n\n(Note: AI JSON had no PackBrief — filled from your prompt.)"
+        );
+    }
+
+    emit_create_progress(&app, "plan", 0, 0, "Saving session…");
     let id = chat_id
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(new_chat_id);
@@ -387,6 +343,7 @@ pub async fn create_mode_chat(
 /// Deterministic PackBrief from free text (no LLM) — fallback when AI is unavailable.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn create_mode_quick_brief(
+    app: AppHandle,
     path: String,
     chat_id: Option<String>,
     message: String,
@@ -396,6 +353,8 @@ pub async fn create_mode_quick_brief(
     if message.is_empty() {
         return Err("message is empty".into());
     }
+
+    emit_create_progress(&app, "plan", 0, 0, "Building brief…");
 
     let project_dir = manifest_parent(&path)?;
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -408,6 +367,7 @@ pub async fn create_mode_quick_brief(
         &manifest,
     );
     let search = search_from_brief(&brief);
+    emit_create_progress(&app, "search", 0, 0, "Collecting Modrinth candidates…");
     let candidates = collect_candidates(&path, &search, &mc, &loader).await;
     let hints = candidates_to_mpi_hints(&candidates);
     merge_mpi_hints_into_brief(&mut brief, &hints, 8);
@@ -420,6 +380,7 @@ pub async fn create_mode_quick_brief(
         brief.must_have.len()
     );
 
+    emit_create_progress(&app, "plan", 0, 0, "Saving session…");
     let id = chat_id
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(new_chat_id);

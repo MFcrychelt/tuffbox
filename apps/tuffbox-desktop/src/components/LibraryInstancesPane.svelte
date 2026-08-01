@@ -225,15 +225,18 @@
         path: project.path,
       })) as RecentProject["info"] & { manifestPath?: string };
       const manifestPath = info.manifestPath || project.path;
-      recentProjects.add({ path: manifestPath, info });
+      recentProjects.add(
+        { path: manifestPath, info },
+        {
+          reorder: false,
+          ...(manifestPath !== project.path
+            ? { replacePath: project.path }
+            : {}),
+        },
+      );
       selectedPath = manifestPath;
       projectPath.set(manifestPath);
       projectInfo.set(info);
-      // Remove stale path after selectedPath points at the resolved manifest,
-      // otherwise the "missing from recent" effect can steal the selection.
-      if (manifestPath !== project.path) {
-        recentProjects.remove(project.path);
-      }
       return manifestPath;
     } catch {
       selectedPath = project.path;
@@ -253,7 +256,8 @@
 
   function openEdit(project: RecentProject) {
     void selectInstance(project);
-    currentView = "project-settings";
+    ideStageRequest.set("setup");
+    currentView = "ide";
   }
 
   async function launchInstance(project: RecentProject) {
@@ -962,7 +966,7 @@
                     style={`--i: ${pi}; --jiggle-delay: ${pi * 40}ms`}
                     role="button"
                     tabindex="0"
-                    title="Hold and drag onto another instance to create a folder"
+                    aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
                     in:tileIntro={{ i: pi }}
                     onclick={() => onTileClick(project)}
                     ondblclick={() => !dragging && void launchInstance(project)}
@@ -1013,7 +1017,7 @@
               >
                 {selected.info.name[0]?.toUpperCase() ?? "?"}
               </div>
-              <div class="side-title tb-truncate-2" title={selected.info.name}>{selected.info.name}</div>
+              <div class="side-title" title={selected.info.name}>{selected.info.name}</div>
               <div class="side-meta">
                 {selected.info.minecraftVersion} · {selected.info.loaderKind}
               </div>
@@ -1882,7 +1886,7 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
     white-space: normal;
-    max-width: 90px;
+    max-width: 100%;
   }
   .prism-lib[data-ui="prism"] .group-header {
     font-weight: 600;

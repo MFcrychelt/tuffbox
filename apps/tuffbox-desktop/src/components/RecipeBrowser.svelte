@@ -317,7 +317,7 @@
         }
       }
       await tick();
-      rebuildIndexes(recipes);
+      await loadFullItemCatalog(recipes);
       lastLoadedPath = $projectPath;
       if (!preserveSelection) categoryFilter = "all";
       selectedItem = previousSelection && recipes.some(
@@ -340,7 +340,7 @@
             totalScanned: fallback.totalScanned,
           };
           await tick();
-          rebuildIndexes(recipes);
+          await loadFullItemCatalog(recipes);
           message = `Live JEI disconnected; showing offline recipes. ${String(e)}`;
         } catch (fallbackError) {
           error = String(fallbackError);
@@ -369,7 +369,7 @@
       message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
         (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
     }
-    void tick().then(() => rebuildIndexes(recipes));
+    void tick().then(() => loadFullItemCatalog(recipes));
   }
 
   async function checkRuntimeTransition() {
@@ -653,12 +653,75 @@
     return "smelting";
   }
 
+  function editableCategory(r: ScannedRecipe): "crafting" | "cooking" | "smithing" | "stonecutting" | "other" {
+    const cat = (r.layout?.category || r.category || "").toLowerCase();
+    if (cat === "crafting" || cat === "cooking" || cat === "smithing" || cat === "stonecutting") {
+      return cat;
+    }
+    const hay = `${cat} ${r.recipeType || ""}`.toLowerCase();
+    if ((hay.includes("craft") || hay.includes("workbench")) && !hay.includes("smith")) return "crafting";
+    if (hay.includes("smelt") || hay.includes("blast") || hay.includes("smok") || hay.includes("campfire") || hay.includes("furnace") || hay.includes("cook")) {
+      return "cooking";
+    }
+    if (hay.includes("smith")) return "smithing";
+    if (hay.includes("stonecut") || (hay.includes("cutting") && !hay.includes("wood"))) return "stonecutting";
+    return "other";
+  }
+
+  function firstIngredient(slot: { ingredients?: IngredientDisplay[] } | null | undefined): IngredientDisplay | null {
+    if (!slot?.ingredients?.length) return null;
+    return slot.ingredients[0] ?? null;
+  }
+
+  /** Prefer normalized grid; fall back to JEI runtime slots by position. */
+  function gridFromRecipe(r: ScannedRecipe): (IngredientDisplay | null)[] {
+    const grid = Array(9).fill(null) as (IngredientDisplay | null)[];
+    const hasGrid = (r.layout.grid ?? []).some((s) => !!s);
+    if (hasGrid) {
+      for (let i = 0; i < 9; i++) grid[i] = r.layout.grid[i] ?? null;
+      return grid;
+    }
+    const slots = (r.layout.slots ?? []).filter(
+      (s) => (s.role || "").toLowerCase() !== "output" && (s.ingredients?.length ?? 0) > 0,
+    );
+    if (slots.length === 0) return grid;
+    const xs = slots.map((s) => s.x);
+    const ys = slots.map((s) => s.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    for (const slot of slots) {
+      const col = Math.min(2, Math.round(((slot.x - minX) / spanX) * 2));
+      const row = Math.min(2, Math.round(((slot.y - minY) / spanY) * 2));
+      const idx = row * 3 + col;
+      if (!grid[idx]) grid[idx] = firstIngredient(slot);
+    }
+    // If everything landed in one cell, pack left-to-right.
+    if (grid.filter(Boolean).length <= 1 && slots.length > 1) {
+      for (let i = 0; i < Math.min(9, slots.length); i++) {
+        grid[i] = firstIngredient(slots[i]);
+      }
+    }
+    return grid;
+  }
+
+  function cookingInputFromRecipe(r: ScannedRecipe): IngredientDisplay | null {
+    if (r.layout.grid?.[4]) return r.layout.grid[4];
+    if (r.layout.grid?.find(Boolean)) return r.layout.grid.find(Boolean) ?? null;
+    const slots = (r.layout.slots ?? []).filter((s) => (s.role || "").toLowerCase() !== "output");
+    return firstIngredient(slots[0] ?? null);
+  }
+
   async function openEditRecipe(r: ScannedRecipe) {
-    const cat = r.layout.category;
+    const cat = editableCategory(r);
+    const gridSlots = gridFromRecipe(r);
     if (cat === "crafting") {
       const grid = Array(9).fill(null) as (string | null)[];
       for (let i = 0; i < 9; i++) {
-        grid[i] = ingredientIdForEdit(r.layout.grid[i] ?? null);
+        grid[i] = ingredientIdForEdit(gridSlots[i] ?? null);
       }
       resetEditorDraft();
       editGrid = grid;
@@ -670,7 +733,7 @@
     } else if (cat === "cooking") {
       resetEditorDraft();
       editorKind = cookingKindFromType(r.recipeType);
-      editInput = ingredientIdForEdit(r.layout.grid[4] ?? null);
+      editInput = ingredientIdForEdit(cookingInputFromRecipe(r));
       editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
       editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
       editCookTime = r.layout.cookTime ?? 200;
@@ -679,29 +742,63 @@
     } else if (cat === "smithing") {
       resetEditorDraft();
       editorKind = "smithing";
-      editTemplate = ingredientIdForEdit(r.layout.grid[3] ?? null);
-      editBase = ingredientIdForEdit(r.layout.grid[4] ?? null);
-      editAddition = ingredientIdForEdit(r.layout.grid[5] ?? null);
+      editTemplate = ingredientIdForEdit(gridSlots[3] ?? null);
+      editBase = ingredientIdForEdit(gridSlots[4] ?? null) || ingredientIdForEdit(gridSlots[0] ?? null);
+      editAddition = ingredientIdForEdit(gridSlots[5] ?? null) || ingredientIdForEdit(gridSlots[1] ?? null);
       editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
       editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
       replaceRecipeId = r.id;
     } else if (cat === "stonecutting") {
       resetEditorDraft();
       editorKind = "stonecutting";
-      const inputSlot =
-        r.layout.grid.find((s) => !!s) ?? r.layout.grid[0] ?? r.layout.grid[4] ?? null;
+      const inputSlot = cookingInputFromRecipe(r);
       editInput = ingredientIdForEdit(inputSlot);
       editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
       editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
       replaceRecipeId = r.id;
     } else {
-      message = "This recipe type cannot be edited here yet.";
+      message = "This recipe type cannot be edited here yet — use Replace with crafting.";
       return;
     }
     editorOpen = true;
     paletteMode = "items";
     await ensureTagsLoaded();
-    message = `Editing ${r.id} — Save writes event.remove + new KubeJS recipe.`;
+    scheduleIconPreload([
+      editOutput,
+      editInput,
+      editTemplate,
+      editBase,
+      editAddition,
+      ...editGrid,
+    ]);
+    message = `Editing ${r.id} — Save writes event.remove + new KubeJS recipe (+ datapack JSON).`;
+  }
+
+  async function openReplaceWithCrafting(r: ScannedRecipe) {
+    resetEditorDraft();
+    editorKind = "crafting";
+    editShaped = true;
+    editOutput = ingredientIdForEdit(r.layout.output) || r.outputId || null;
+    editCount = Math.min(64, Math.max(1, r.layout.outputCount || 1));
+    const gridSlots = gridFromRecipe(r);
+    const grid = Array(9).fill(null) as (string | null)[];
+    for (let i = 0; i < 9; i++) {
+      grid[i] = ingredientIdForEdit(gridSlots[i] ?? null);
+    }
+    if (!grid.some(Boolean) && r.inputIds?.length) {
+      for (let i = 0; i < Math.min(9, r.inputIds.length); i++) {
+        const id = r.inputIds[i];
+        if (id && !id.startsWith("#")) grid[i] = id;
+        else if (id) grid[i] = id.startsWith("#") ? id : `#${id}`;
+      }
+    }
+    editGrid = grid;
+    replaceRecipeId = r.id;
+    editorOpen = true;
+    paletteMode = "items";
+    await ensureTagsLoaded();
+    scheduleIconPreload([editOutput, ...editGrid]);
+    message = `Replace ${r.id} with a crafting recipe — Save removes the old id and adds a new craft.`;
   }
 
   function closeEditor() {
@@ -976,6 +1073,36 @@
     catalogReady = true;
   }
 
+  async function loadFullItemCatalog(list: ScannedRecipe[]) {
+    const fromRecipes = buildItemCatalog(list);
+    const map = new Map(fromRecipes.map((i) => [i.id, i]));
+    try {
+      if ($projectPath) {
+        const catalog = await api.recipes.listItemCatalog($projectPath);
+        for (const entry of catalog ?? []) {
+          const existing = map.get(entry.id);
+          if (existing) {
+            if (entry.name && entry.name !== entry.id) existing.name = entry.name;
+          } else {
+            map.set(entry.id, {
+              id: entry.id,
+              name: entry.name || prettifyItem(entry.id),
+              modNs: entry.modNs || itemNamespace(entry.id),
+              recipeCount: 0,
+              useCount: 0,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("listItemCatalog failed", e);
+    }
+    items = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+    itemCategorySets = buildItemCategorySets(list);
+    filteredCounts = buildFilteredCounts(list, categoryFilter, modFilter);
+    catalogReady = true;
+  }
+
   function itemInCategory(itemId: string, category: string): boolean {
     if (category === "all") return true;
     return itemCategorySets.get(itemId)?.has(category) ?? false;
@@ -1006,7 +1133,7 @@
   const filteredItems = $derived(catalogReady
     ? items.filter((i) => {
         if (modFilter !== "all" && i.modNs !== modFilter) return false;
-        if (!itemInCategory(i.id, categoryFilter)) return false;
+        if (!editorOpen && !itemInCategory(i.id, categoryFilter)) return false;
         return matchesJeiSearch(i.id, filter, i.name);
       })
     : []);
@@ -1803,9 +1930,13 @@
               <code class="recipe-id">{currentRecipe.id}</code>
 
               <div class="recipe-actions">
-                {#if ["crafting", "cooking", "smithing", "stonecutting"].includes(currentRecipe.layout.category)}
+                {#if ["crafting", "cooking", "smithing", "stonecutting"].includes(editableCategory(currentRecipe))}
                   <button class="secondary" onclick={() => openEditRecipe(currentRecipe)}>
                     <Pencil size={14} /> Edit
+                  </button>
+                {:else}
+                  <button class="secondary" onclick={() => openReplaceWithCrafting(currentRecipe)}>
+                    <Pencil size={14} /> Replace with crafting
                   </button>
                 {/if}
                 <button class="secondary" onclick={() => copyKubeJS(currentRecipe)}>

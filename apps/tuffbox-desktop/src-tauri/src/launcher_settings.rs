@@ -60,6 +60,10 @@ pub struct LauncherSettings {
     /// UI zoom percent (75–150). Applied as CSS `--ui-scale` on the app shell.
     #[serde(default = "default_ui_scale_percent")]
     pub ui_scale_percent: u32,
+    /// `auto` follows screen/window size; `manual` locks `ui_scale_percent`.
+    /// Empty string = unset (migrated on load: non-100% → manual, else auto).
+    #[serde(default)]
+    pub ui_scale_mode: String,
     /// Round corners on panels/cards/chrome everywhere (CSS `--border-radius-*`).
     #[serde(default = "default_rounded_corners")]
     pub rounded_corners: bool,
@@ -87,6 +91,21 @@ fn default_rounded_corners() -> bool {
     true
 }
 
+fn normalize_ui_scale_mode(settings: &mut LauncherSettings) {
+    let mode = settings.ui_scale_mode.trim().to_ascii_lowercase();
+    settings.ui_scale_mode = match mode.as_str() {
+        "auto" | "manual" => mode,
+        _ => {
+            // Migration: respect an existing manual zoom choice.
+            if settings.ui_scale_percent != 100 {
+                "manual".into()
+            } else {
+                "auto".into()
+            }
+        }
+    };
+}
+
 impl Default for LauncherSettings {
     fn default() -> Self {
         Self {
@@ -107,6 +126,7 @@ impl Default for LauncherSettings {
             auto_hide_workflow_rail: false,
             sidebar_mode: default_sidebar_mode(),
             ui_scale_percent: default_ui_scale_percent(),
+            ui_scale_mode: "auto".into(),
             rounded_corners: default_rounded_corners(),
         }
     }
@@ -122,7 +142,7 @@ fn settings_path() -> PathBuf {
 
 pub fn load_launcher_settings() -> LauncherSettings {
     let path = settings_path();
-    let settings = if path.is_file() {
+    let mut settings = if path.is_file() {
         std::fs::read_to_string(&path)
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -130,6 +150,7 @@ pub fn load_launcher_settings() -> LauncherSettings {
     } else {
         LauncherSettings::default()
     };
+    normalize_ui_scale_mode(&mut settings);
     apply_runtime_side_effects(&settings);
     settings
 }
@@ -139,9 +160,11 @@ pub fn save_launcher_settings(settings: &LauncherSettings) -> Result<(), String>
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    let mut normalized = settings.clone();
+    normalize_ui_scale_mode(&mut normalized);
+    let raw = serde_json::to_string_pretty(&normalized).map_err(|e| e.to_string())?;
     std::fs::write(&path, raw).map_err(|e| e.to_string())?;
-    apply_runtime_side_effects(settings);
+    apply_runtime_side_effects(&normalized);
     Ok(())
 }
 

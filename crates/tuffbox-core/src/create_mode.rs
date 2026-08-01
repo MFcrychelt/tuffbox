@@ -171,6 +171,7 @@ pub struct PackDraft {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateModeAiResponse {
+    #[serde(default)]
     pub reply: String,
     #[serde(default)]
     pub brief: Option<PackBrief>,

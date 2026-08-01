@@ -50,6 +50,7 @@ import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import PromptDialog from "./PromptDialog.svelte";
 import ConfirmDialog from "./ConfirmDialog.svelte";
+import OptimizePackModal from "./OptimizePackModal.svelte";
 import { trapFocus } from "../lib/focusTrap";
 
   type ModRow = {
@@ -830,6 +831,9 @@ import { trapFocus } from "../lib/focusTrap";
       mutating = false;
     }
   }
+
+  // Optimize pack wizard
+  let optimizePackOpen = $state(false);
 
   // Mod recommendations
   let recommendations = $state<any[]>([]);
@@ -2683,6 +2687,15 @@ import { trapFocus } from "../lib/focusTrap";
       </button>
       <button
         class="ghost mini quiet-action"
+        onclick={() => (optimizePackOpen = true)}
+        disabled={!$projectPath || contentFilter !== "mod"}
+        title="Install a curated Fabric opt pack or missing performance mods + safe configs"
+      >
+        <Zap size={14} />
+        Optimize
+      </button>
+      <button
+        class="ghost mini quiet-action"
         onclick={loadRecommendations}
         disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
         title="Suggest optimization mods for this loader, Minecraft version, and pack"
@@ -3829,6 +3842,8 @@ import { trapFocus } from "../lib/focusTrap";
     </div>
   </div>
 {/if}
+
+<OptimizePackModal bind:open={optimizePackOpen} onApplied={() => void load(true)} />
 
 <!-- Ideas: popular companions after Add-mod install -->
 {#if ideasOpen}

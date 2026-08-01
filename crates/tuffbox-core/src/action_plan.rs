@@ -733,7 +733,9 @@ pub fn launcher_action_to_fix_action(action: &LauncherAction) -> Option<FixActio
         "disable_mod" => "disableMod",
         "remove_mod" => "removeMod",
         "reinstall_mod" => "reinstallMod",
-        "update_mod" | "change_mod_version" => "updateMod",
+        // Version-pinned updates are handled by apply_action_plan + commit_single_mod_update.
+        // Bare update_mod (no version) maps to latest-compatible here.
+        "update_mod" => "updateMod",
         "install_mod" => "installDependency",
         _ => return None,
     };

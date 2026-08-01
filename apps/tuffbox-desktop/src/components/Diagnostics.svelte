@@ -215,7 +215,7 @@
         preferLauncherLog = false;
         selectedReportId = data.selectedReport?.summary.id ?? selectedReportId;
       }
-      plan = null;
+      plan = data.fixPlan ?? null;
       detectWrongLoaderMods();
       detectDuplicateModJars();
       if (data.sessionHealthy && preferLatestLog) {

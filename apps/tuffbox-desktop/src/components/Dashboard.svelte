@@ -36,6 +36,7 @@
     isProjectRunning,
     loginTypeLabel,
     formatPlaytime,
+    ideStageRequest,
     type RecentProject,
     type CapeProvider,
     type CapeCatalog,
@@ -371,7 +372,8 @@
   }
 
   function openSettings() {
-    currentView = "project-settings";
+    ideStageRequest.set("setup");
+    currentView = "ide";
   }
 
   function toggleMenu(event: MouseEvent, path: string) {
@@ -457,8 +459,9 @@
         await invoke("open_project_folder", { path: project.path });
         break;
       case "change-version":
-        currentView = "project-settings";
         selectProject(project.path);
+        ideStageRequest.set("setup");
+        currentView = "ide";
         break;
       case "server-pack":
         actionBusy = true;

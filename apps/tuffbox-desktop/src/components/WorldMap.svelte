@@ -277,6 +277,9 @@
     try {
       await loadDimensions();
       map = await api.worlds.map(worldName, dimension, $projectPath);
+      if (mapHasSparseBiomes(map)) {
+        colorMode = "status";
+      }
       try {
         const info = await api.worlds.readInfo(worldName, $projectPath);
         if (typeof info.spawnX === "number" && typeof info.spawnZ === "number") {
@@ -291,12 +294,61 @@
       loading = false;
       // Canvas mounts with {#if map}; wait for layout so viewport has non-zero size.
       await tick();
+      await tick();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       fitView();
       draw();
     } catch (e) {
       map = null;
-      error = String(e);
+      error = errText(e);
       loading = false;
+    }
+  }
+
+  function errText(e: unknown): string {
+    if (typeof e === "string") return e;
+    if (e && typeof e === "object" && "message" in e) {
+      return String((e as { message: unknown }).message);
+    }
+    return String(e);
+  }
+
+  /** True when most present chunks lack biome ids (biome paint would look blank). */
+  function mapHasSparseBiomes(m: WorldMapData): boolean {
+    let present = 0;
+    let unknown = 0;
+    for (const r of m.regions) {
+      for (const cell of r.chunks) {
+        if (!cell.present) continue;
+        present++;
+        if ((cell.biomeId ?? -1) < 0) unknown++;
+      }
+    }
+    if (present === 0) return false;
+    return unknown / present >= 0.5;
+  }
+
+  function statusColor(
+    cell: ChunkCell,
+    minMod: number,
+    maxMod: number,
+    shade: number,
+  ): string {
+    switch (cell.status) {
+      case STATUS_EMPTY: return "#3b4252";
+      case STATUS_PARTIAL: return "#b08968";
+      case STATUS_FULL: {
+        const span = Math.max(1, maxMod - minMod);
+        const t = Math.max(0, Math.min(1, (cell.lastModified - minMod) / span));
+        let r = Math.round(27 + t * 12);
+        let g = Math.round(120 + t * 60);
+        let b = Math.round(70 + t * 60);
+        r = Math.max(0, Math.min(255, Math.round(r * shade)));
+        g = Math.max(0, Math.min(255, Math.round(g * shade)));
+        b = Math.max(0, Math.min(255, Math.round(b * shade)));
+        return `rgb(${r},${g},${b})`;
+      }
+      default: return "#4a8c5a";
     }
   }
 
@@ -401,7 +453,10 @@
     }
     if (mode === "biome") {
       const id = cell.biomeId ?? -1;
-      if (id < 0) return "#1a1c22";
+      if (id < 0) {
+        // Unknown biomes: use status colors so the map stays readable.
+        return statusColor(cell, minMod, maxMod, shade);
+      }
       return biomeCss(id, shade);
     }
     if (mode === "height") {
@@ -411,22 +466,7 @@
       const t = Math.max(0, Math.min(1, (y - minSurf) / span));
       return heatColor(t);
     }
-    switch (cell.status) {
-      case STATUS_EMPTY: return "#3b4252";
-      case STATUS_PARTIAL: return "#b08968";
-      case STATUS_FULL: {
-        const span = Math.max(1, maxMod - minMod);
-        const t = Math.max(0, Math.min(1, (cell.lastModified - minMod) / span));
-        let r = Math.round(27 + t * 12);
-        let g = Math.round(120 + t * 60);
-        let b = Math.round(70 + t * 60);
-        r = Math.max(0, Math.min(255, Math.round(r * shade)));
-        g = Math.max(0, Math.min(255, Math.round(g * shade)));
-        b = Math.max(0, Math.min(255, Math.round(b * shade)));
-        return `rgb(${r},${g},${b})`;
-      }
-      default: return "#4a8c5a";
-    }
+    return statusColor(cell, minMod, maxMod, shade);
   }
 
   function mapSize(): { W: number; H: number } {
@@ -1868,21 +1908,6 @@
   onMount(() => {
     window.addEventListener("keydown", handleKeydown);
     window.addEventListener("resize", onResize);
-    if (typeof ResizeObserver !== "undefined" && viewport) {
-      let sawSize = false;
-      viewportRo = new ResizeObserver(() => {
-        const h = viewport?.clientHeight ?? 0;
-        const w = viewport?.clientWidth ?? 0;
-        if (w < 2 || h < 2) {
-          sawSize = false;
-          return;
-        }
-        if (map && !sawSize) fitView();
-        sawSize = true;
-        draw();
-      });
-      viewportRo.observe(viewport);
-    }
   });
 
   onDestroy(() => {
@@ -1891,6 +1916,33 @@
     viewportRo?.disconnect();
     viewportRo = null;
     clearTimeout(flashTimer);
+  });
+
+  // Attach ResizeObserver when viewport binds (not only first onMount).
+  $effect(() => {
+    const el = viewport;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    viewportRo?.disconnect();
+    let sawSize = false;
+    const ro = new ResizeObserver(() => {
+      const h = el.clientHeight;
+      const w = el.clientWidth;
+      if (w < 2 || h < 2) {
+        sawSize = false;
+        return;
+      }
+      untrack(() => {
+        if (map && !sawSize) fitView();
+        sawSize = true;
+        draw();
+      });
+    });
+    ro.observe(el);
+    viewportRo = ro;
+    return () => {
+      ro.disconnect();
+      if (viewportRo === ro) viewportRo = null;
+    };
   });
 
   $effect(() => {
@@ -2358,15 +2410,15 @@
           Loading map…
         </div>
       {:else if error}
-        {@const noRegions =
-          /^(no region folder for dimension|no region files found)/i.test(error.trim()) ||
-          /not generated yet\)?$/i.test(error.trim())}
+        {@const noRegions = /no region/i.test(error) || /not generated yet/i.test(error)}
         <EmptyState
           icon={MapIcon}
           title={noRegions ? "No map yet" : "Map unavailable"}
           description={noRegions
-            ? "This dimension has no region files. Launch the pack, explore a bit, then refresh. Try Nether/End if you only visited those."
+            ? `${error} Launch the pack, explore a bit, then refresh. Try Nether/End if you only visited those. If .mca files exist, clear the map cache and reload.`
             : error}
+          actionLabel="Clear cache & reload"
+          onaction={() => void clearMapCache()}
         />
       {:else if !loading}
         <EmptyState icon={MapIcon} title="No world selected" description="Open a world to view its 2D map." />

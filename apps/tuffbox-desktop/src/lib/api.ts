@@ -1156,6 +1156,70 @@ export const api = {
       return cmd<Record<string, unknown>>("retry_failed_mod_downloads", { ...pathArg(p), modIds });
     },
     recommend(p?: string) { return cmd<Record<string, unknown>[]>("recommend_mods", pathArg(p)); },
+    listCuratedOptimizePacks(p?: string) {
+      return cmd<{
+        loader: string;
+        minecraftVersion: string;
+        available: boolean;
+        current: { projectId: string; slug?: string | null; name?: string | null } | null;
+        entries: Array<{ minecraftVersion: string; projectId: string; slug?: string | null; name?: string | null }>;
+      }>("list_curated_optimize_packs", pathArg(p));
+    },
+    previewCuratedOptimizePack(p?: string) {
+      return cmd<{
+        pack: { projectId: string; slug: string; name: string; versionId: string; versionNumber?: string };
+        mods: Array<{ slug: string; name: string; projectId: string; alreadyInstalled: boolean; role: string }>;
+        configActions: Record<string, unknown>[];
+        warnings: string[];
+        minecraftVersion: string;
+        loader: string;
+      }>("preview_curated_optimize_pack", pathArg(p));
+    },
+    installCuratedOptimizePack(
+      applyConfigs: boolean,
+      configPlan?: Record<string, unknown> | null,
+      p?: string,
+    ) {
+      return cmd<Record<string, unknown>>("install_curated_optimize_pack", {
+        ...pathArg(p),
+        applyConfigs,
+        configPlan: configPlan ?? null,
+      });
+    },
+    buildOptimizePlan(useAiConfigs: boolean, p?: string) {
+      return cmd<{
+        mode: string;
+        mods: Array<{
+          slug: string;
+          name: string;
+          provider: string;
+          projectId: string;
+          versionId?: string | null;
+          reason: string;
+          risk: string;
+          alreadyInstalled: boolean;
+        }>;
+        plan: Record<string, unknown>;
+        findings: Record<string, unknown>[];
+        warnings: string[];
+        minecraftVersion: string;
+        loader: string;
+        curatedAvailable: boolean;
+      }>("build_optimize_plan", { ...pathArg(p), useAiConfigs });
+    },
+    applyOptimizeCustomPlan(
+      mods: Array<Record<string, unknown>>,
+      applyConfigs: boolean,
+      configPlan: Record<string, unknown> | null,
+      p?: string,
+    ) {
+      return cmd<Record<string, unknown>>("apply_optimize_custom_plan", {
+        ...pathArg(p),
+        mods,
+        applyConfigs,
+        configPlan,
+      });
+    },
     disable(modId: string, p?: string) {
       return cmd<{ id: string; disabled: boolean; fileName?: string }>("disable_project_mod", {
         ...pathArg(p),
@@ -1634,6 +1698,9 @@ export const api = {
     },
     listItemTags(p?: string) {
       return cmd<string[]>("list_item_tags", pathArg(p));
+    },
+    listItemCatalog(p?: string) {
+      return cmd<Array<{ id: string; name: string; modNs: string }>>("list_item_catalog", pathArg(p));
     },
     getTagEntries(tagId: string, p?: string) {
       return cmd<string[]>("get_item_tag_entries", { ...pathArg(p), tagId });

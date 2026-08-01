@@ -77,6 +77,7 @@
   let input = $state("");
   let targetCount = $state(80);
   let busy = $state(false);
+  let busyKind = $state<"" | "plan" | "refine" | "quick" | "build" | "preview" | "install">("");
   let phase = $state("");
   let progressDone = $state(0);
   let progressTotal = $state(0);
@@ -622,11 +623,46 @@
     return text.length > 64 ? `${text.slice(0, 64)}…` : text;
   }
 
+  function clampTargetCount() {
+    const n = Math.round(Number(targetCount));
+    targetCount = Math.min(120, Math.max(40, Number.isFinite(n) ? n : 80));
+  }
+
+  function phaseLabel(p: string): string {
+    switch (p) {
+      case "plan":
+      case "chat":
+        return "Planning pack";
+      case "search":
+        return "Building draft";
+      case "resolve":
+        return "Previewing";
+      case "install":
+        return "Installing";
+      default:
+        return p || "Working";
+    }
+  }
+
+  const progressHeadline = $derived(
+    busy && phase
+      ? `${phaseLabel(phase)}${progressCurrent ? ` — ${progressCurrent}` : "…"}`
+      : "",
+  );
+
   async function sendMessage(refine = false) {
     if (!$projectPath || !input.trim() || busy) return;
+    clampTargetCount();
     const text = input.trim();
+    const historyForApi = [...messages];
+    messages = [...messages, { role: "user", content: text, createdAt: new Date().toISOString() }];
+    input = "";
     busy = true;
-    phase = "chat";
+    busyKind = refine ? "refine" : "plan";
+    phase = "plan";
+    progressDone = 0;
+    progressTotal = 0;
+    progressCurrent = "Waiting for AI…";
     try {
       const res = await invoke<{
         chatId: string;
@@ -641,37 +677,55 @@
           ? `${text}\n\n(Please refine the existing pack brief.)`
           : text,
         targetCount,
-        history: messages,
+        history: historyForApi,
         existingBrief: brief,
       });
       activeId = res.chatId;
       activeKind = "create";
       if (res.brief) brief = res.brief;
       candidates = res.candidates ?? [];
-      input = "";
       if (res.session) {
         messages = res.session.messages ?? [];
       } else {
         messages = [
-          ...messages,
+          ...historyForApi,
           { role: "user", content: text },
           { role: "assistant", content: res.reply },
         ];
       }
       await refreshSessions();
     } catch (e) {
-      toasts.error(`${String(e)} ? try Quick assemble (no AI).`);
+      toasts.error(`${String(e)} — try Quick assemble (no AI).`);
+      messages = [
+        ...messages,
+        {
+          role: "system",
+          content: `Plan failed: ${String(e)}`,
+          createdAt: new Date().toISOString(),
+        },
+      ];
     } finally {
       busy = false;
+      busyKind = "";
       phase = "";
+      progressCurrent = "";
+      progressDone = 0;
+      progressTotal = 0;
     }
   }
 
   async function quickAssemble() {
     const text = input.trim();
     if (!$projectPath || !text || busy) return;
+    const historyForApi = [...messages];
+    messages = [...messages, { role: "user", content: text, createdAt: new Date().toISOString() }];
+    input = "";
     busy = true;
+    busyKind = "quick";
     phase = "plan";
+    progressDone = 0;
+    progressTotal = 0;
+    progressCurrent = "Building brief…";
     try {
       const res = await invoke<{
         chatId: string;
@@ -693,7 +747,7 @@
         messages = res.session.messages ?? [];
       } else {
         messages = [
-          ...messages,
+          ...historyForApi,
           { role: "user", content: text },
           {
             role: "assistant",
@@ -701,7 +755,6 @@
           },
         ];
       }
-      input = "";
       await refreshSessions();
 
       phase = "search";
@@ -727,16 +780,28 @@
       toasts.success(`Draft ready: ${draft.mods.length} mods`);
     } catch (e) {
       toasts.error(String(e));
+      messages = [
+        ...messages,
+        {
+          role: "system",
+          content: `Quick assemble failed: ${String(e)}`,
+          createdAt: new Date().toISOString(),
+        },
+      ];
     } finally {
       busy = false;
+      busyKind = "";
       phase = "";
       progressCurrent = "";
+      progressDone = 0;
+      progressTotal = 0;
     }
   }
 
   async function buildDraft() {
     if (!$projectPath || !brief || busy) return;
     busy = true;
+    busyKind = "build";
     phase = "search";
     progressDone = 0;
     progressTotal = 1;
@@ -763,15 +828,22 @@
       toasts.error(String(e));
     } finally {
       busy = false;
+      busyKind = "";
       phase = "";
       progressCurrent = "";
+      progressDone = 0;
+      progressTotal = 0;
     }
   }
 
   async function previewDraft() {
     if (!$projectPath || !draft || busy) return;
     busy = true;
+    busyKind = "preview";
     phase = "resolve";
+    progressCurrent = "Resolving versions…";
+    progressDone = 0;
+    progressTotal = 0;
     try {
       const res = await invoke<{
         checked: number;
@@ -797,7 +869,9 @@
       toasts.error(String(e));
     } finally {
       busy = false;
+      busyKind = "";
       phase = "";
+      progressCurrent = "";
     }
   }
 
@@ -821,6 +895,7 @@
     const n = mods.length;
     const filteredDraft = { ...draft, mods };
     busy = true;
+    busyKind = "install";
     phase = "install";
     progressDone = 0;
     progressTotal = n;
@@ -851,8 +926,11 @@
       toasts.error(String(e));
     } finally {
       busy = false;
+      busyKind = "";
       phase = "";
       progressCurrent = "";
+      progressDone = 0;
+      progressTotal = 0;
     }
   }
 
@@ -971,9 +1049,17 @@
         {:else}
           <span>Create Mode · {mcLabel} / {loaderLabel}</span>
           <label class="target">
-            Target
-            <input type="range" min="40" max="120" step="5" bind:value={targetCount} disabled={busy} />
-            <strong>{targetCount}</strong>
+            Target mods
+            <input
+              type="number"
+              min="40"
+              max="120"
+              step="1"
+              bind:value={targetCount}
+              disabled={busy}
+              onchange={clampTargetCount}
+              onblur={clampTargetCount}
+            />
           </label>
         {/if}
       </div>
@@ -1003,9 +1089,9 @@
           </div>
         {/each}
         {#if busy && phase}
-          <div class="bubble system progress">
+          <div class="bubble system progress" aria-live="polite">
             <span class="spin"><Loader2 size={14} /></span>
-            {phase}: {progressCurrent || "..."}
+            {progressHeadline}
             {#if progressTotal > 0}
               ({progressDone}/{progressTotal})
             {/if}
@@ -1045,19 +1131,39 @@
         ></textarea>
         <div class="actions">
           <button type="button" class="btn primary" disabled={busy || !input.trim()} onclick={() => sendMessage(false)}>
-            <Send size={14} /> Plan
+            {#if busyKind === "plan"}
+              <span class="spin"><Loader2 size={14} /></span> Planning…
+            {:else}
+              <Send size={14} /> Plan
+            {/if}
           </button>
           <button type="button" class="btn" disabled={busy || !input.trim()} onclick={() => void quickAssemble()}>
-            Quick assemble
+            {#if busyKind === "quick"}
+              <span class="spin"><Loader2 size={14} /></span> Assembling…
+            {:else}
+              Quick assemble
+            {/if}
           </button>
           <button type="button" class="btn" disabled={busy || !brief || !input.trim()} onclick={() => sendMessage(true)}>
-            Refine
+            {#if busyKind === "refine"}
+              <span class="spin"><Loader2 size={14} /></span> Refining…
+            {:else}
+              Refine
+            {/if}
           </button>
           <button type="button" class="btn" disabled={busy || !brief} onclick={buildDraft}>
-            <Package size={14} /> Build draft
+            {#if busyKind === "build"}
+              <span class="spin"><Loader2 size={14} /></span> Building…
+            {:else}
+              <Package size={14} /> Build draft
+            {/if}
           </button>
           <button type="button" class="btn" disabled={busy || !draft?.mods?.length} onclick={previewDraft}>
-            Preview
+            {#if busyKind === "preview"}
+              <span class="spin"><Loader2 size={14} /></span> Previewing…
+            {:else}
+              Preview
+            {/if}
           </button>
           <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={confirmInstall}>
             <CheckCircle2 size={14} /> Confirm install
@@ -1619,7 +1725,14 @@
     font-size: 12px;
   }
   .target input {
-    width: 100px;
+    width: 4.5rem;
+    padding: 4px 6px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color, #2a2f3a);
+    background: var(--bg-primary);
+    color: var(--text-primary, #e8ecf4);
+    font: inherit;
+    font-size: 12px;
   }
   .messages {
     padding: 16px;

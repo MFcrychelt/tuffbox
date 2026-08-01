@@ -1,9 +1,10 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List } from "@lucide/svelte";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List, ExternalLink } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
   import { trapFocus } from "../lib/focusTrap";
   import * as d3 from "d3-force";
   import { onDestroy, onMount, untrack } from "svelte";
@@ -60,6 +61,19 @@
   let graphGeneratedAt = $state<string | null>(null);
   let graphRefreshing = $state(false);
   let refreshError = $state<string | null>(null);
+  let catalogViewResult = $state<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    projectType: string;
+    iconUrl?: string | null;
+    author?: string | null;
+    downloads?: number | null;
+    follows?: number | null;
+    categories?: string[];
+    provider?: string;
+  } | null>(null);
 
   // Dependency preview dialog
   let depPreviewOpen = $state(false);
@@ -81,7 +95,7 @@
   const graphFullscreen = $derived(fullscreenElement === graphCanvasEl);
 
   let showNodeList = $state(true);
-  let changePlanExpanded = $state(false);
+  let changePlanExpanded = $state(true);
   let changePlanSeenKey = "";
   let canvasResizeObserver: ResizeObserver | null = null;
 
@@ -721,6 +735,64 @@
     return map;
   })());
   const selectedMissingDeps = $derived(selectedId ? (missingDepsByMod.get(selectedId) ?? []) : []);
+
+  function catalogResultFromNode(node: GraphNode) {
+    const meta = node.metadata ?? {};
+    const ghost = ghostMeta[node.id];
+    const slug = (meta.slug || node.id.replace(/^mod:/, "").replace(/^__ghost__/, "")).trim();
+    const id = String(meta.project_id || ghost?.projectId || slug).trim();
+    if (!id && !slug) return null;
+    const source = (meta.source || ghost?.source || "modrinth").toLowerCase();
+    return {
+      id: id || slug,
+      slug: slug || id,
+      name: node.label,
+      description: meta.description || ghost?.description || "",
+      projectType: "mod",
+      iconUrl: meta.icon_url || ghost?.iconUrl || null,
+      author: meta.author || null,
+      downloads: null,
+      follows: null,
+      categories: nodeCategories(node),
+      provider: source === "curseforge" ? "curseforge" : "modrinth",
+    };
+  }
+
+  function openSelectedInLauncher() {
+    if (!selected) return;
+    const result = catalogResultFromNode(selected);
+    if (!result) {
+      message = "No catalog page for this node.";
+      return;
+    }
+    catalogViewResult = result;
+  }
+
+  async function openSelectedExternal() {
+    if (!catalogViewResult) return;
+    const slugOrId = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!slugOrId) return;
+    const url =
+      catalogViewResult.provider === "curseforge"
+        ? /^\d+$/.test(slugOrId)
+          ? `https://www.curseforge.com/projects/${slugOrId}`
+          : `https://www.curseforge.com/minecraft/mc-mods/${slugOrId}`
+        : `https://modrinth.com/mod/${slugOrId}`;
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } catch (e) {
+      message = `Could not open link: ${e}`;
+    }
+  }
+
+  async function installSelectedFromCatalog() {
+    if (!catalogViewResult || !$projectPath) return;
+    const id = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!id) return;
+    catalogViewResult = null;
+    await previewModrinthDep(id);
+  }
 
   async function installSelectedMissingDeps() {
     for (const edge of selectedMissingDeps) {
@@ -2053,47 +2125,6 @@
       </div>
     </div>
 
-    {#if changePlanLoading && !changePlan}
-      <section class="change-plan-panel loading">
-        <div class="change-plan-head">
-          <span class="eyebrow">Change plan</span>
-          <strong class="change-plan-summary muted">Resolving dependencies…</strong>
-        </div>
-      </section>
-    {:else if changePlan}
-      <section class="change-plan-panel" class:expanded={changePlanExpanded}>
-        <button
-          type="button"
-          class="change-plan-toggle"
-          onclick={() => (changePlanExpanded = !changePlanExpanded)}
-          aria-expanded={changePlanExpanded}
-        >
-          <div class="change-plan-head">
-            <span class="eyebrow">Change plan</span>
-            <strong class="change-plan-summary">{changePlan.summary}</strong>
-            <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
-              {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
-            </span>
-          </div>
-          <ChevronDown size={16} class={changePlanExpanded ? "rot" : ""} />
-        </button>
-        {#if changePlanExpanded}
-          <div class="change-plan-actions">
-            {#if changePlan.actions?.length}
-              {#each changePlan.actions as action, index (index)}
-                <button class="chip" onclick={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
-                  {formatChangeAction(action)}
-                </button>
-              {/each}
-            {/if}
-            <button class="primary mini" onclick={applyChangePlan} disabled={resolving}>
-              {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
-            </button>
-          </div>
-        {/if}
-      </section>
-    {/if}
-
     <div class="graph-body">
     <section
       bind:this={graphCanvasEl}
@@ -2370,17 +2401,29 @@
       </svg>
     </section>
 
-    <aside class="details">
-        {#if selected}
-          <div class="details-header">
-            <div>
-              <span class="eyebrow">Selected node</span>
+    <aside class="details" aria-label="Selected node">
+        <div class="details-header">
+          <div>
+            <span class="eyebrow">Selected node</span>
+            {#if selected}
               <h2>{selected.label}</h2>
-            </div>
-            <span class="tag">{selected.kind}</span>
+            {:else}
+              <h2 class="details-placeholder">None selected</h2>
+            {/if}
           </div>
+          {#if selected}
+            <span class="tag">{selected.kind}</span>
+          {/if}
+        </div>
 
+        {#if selected}
           <div class="details-actions">
+            {#if catalogResultFromNode(selected)}
+              <button type="button" class="secondary mini details-action-btn" onclick={openSelectedInLauncher}>
+                <ExternalLink size={14} />
+                Open page
+              </button>
+            {/if}
             {#if selected.kind === "Missing"}
               <button class="install-btn" onclick={() => installGhostNode(selected.id)} disabled={resolving}>
                 <Download size={16} />
@@ -2458,6 +2501,60 @@
           </div>
         {/if}
       </aside>
+
+    {#if changePlanLoading && !changePlan}
+      <section class="change-plan-panel loading">
+        <div class="change-plan-head">
+          <span class="eyebrow">Change plan</span>
+          <strong class="change-plan-summary muted">Resolving dependencies…</strong>
+        </div>
+      </section>
+    {:else if changePlan}
+      <section class="change-plan-panel" class:expanded={changePlanExpanded}>
+        <button
+          type="button"
+          class="change-plan-toggle"
+          onclick={() => (changePlanExpanded = !changePlanExpanded)}
+          aria-expanded={changePlanExpanded}
+        >
+          <div class="change-plan-head">
+            <span class="eyebrow">Change plan</span>
+            <strong class="change-plan-summary">{changePlan.summary}</strong>
+            <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
+              {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
+            </span>
+          </div>
+          <ChevronDown size={16} class={changePlanExpanded ? "rot" : ""} />
+        </button>
+        {#if changePlanExpanded}
+          <ul class="change-plan-list">
+            {#if changePlan.actions?.length}
+              {#each changePlan.actions as action, index (index)}
+                <li>
+                  <button
+                    type="button"
+                    class="change-plan-item"
+                    onclick={() => applyAction(index)}
+                    disabled={resolving}
+                    title={formatChangeAction(action)}
+                  >
+                    <span class="change-plan-item-idx">{index + 1}</span>
+                    <span class="change-plan-item-text">{formatChangeAction(action)}</span>
+                  </button>
+                </li>
+              {/each}
+            {:else}
+              <li class="change-plan-empty">No pending actions.</li>
+            {/if}
+          </ul>
+          <div class="change-plan-actions">
+            <button class="primary mini" onclick={applyChangePlan} disabled={resolving}>
+              {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
+            </button>
+          </div>
+        {/if}
+      </section>
+    {/if}
 
     <div class="list-toggle-row">
       <button type="button" class="ghost mini list-toggle-btn" onclick={() => (showNodeList = !showNodeList)}>
@@ -2650,6 +2747,33 @@
   {/if}
 </div>
 
+{#if catalogViewResult}
+  <div
+    class="modal-backdrop catalog-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) catalogViewResult = null;
+    }}
+    onkeydown={() => {}}
+  >
+    <div
+      class="modal catalog-modal"
+      role="dialog"
+      aria-modal="true"
+      use:trapFocus={{ onEscape: () => (catalogViewResult = null) }}
+    >
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={resolving}
+        onback={() => (catalogViewResult = null)}
+        oninstall={() => void installSelectedFromCatalog()}
+        onopenexternal={() => void openSelectedExternal()}
+      />
+    </div>
+  </div>
+{/if}
+
 {#if depPreviewOpen}
   <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} onkeydown={() => {}}>
     <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (depPreviewOpen = false) }}>
@@ -2738,18 +2862,19 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     max-width: none;
     width: 100%;
   }
 
   .graph-body {
-    flex: 1;
+    flex: 0 0 auto;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
-    gap: 8px;
+    overflow: visible;
+    gap: 10px;
   }
 
   .toolbar,
@@ -2856,7 +2981,8 @@
   .change-plan-toggle :global(.rot) {
     transform: rotate(180deg);
   }
-  .change-plan-panel:not(.expanded) .change-plan-actions {
+  .change-plan-panel:not(.expanded) .change-plan-actions,
+  .change-plan-panel:not(.expanded) .change-plan-list {
     display: none;
   }
   .change-plan-summary.muted {
@@ -2872,6 +2998,46 @@
   }
   .change-plan-risk.req { color: #fbbf24; border-color: rgba(251,191,36,.35); }
   .change-plan-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .change-plan-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .change-plan-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .change-plan-item:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+  }
+  .change-plan-item:disabled { opacity: 0.5; cursor: default; }
+  .change-plan-item-idx {
+    flex: 0 0 auto;
+    min-width: 1.5rem;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .change-plan-item-text { flex: 1; min-width: 0; white-space: normal; }
+  .change-plan-empty {
+    padding: 6px 2px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
   .chip {
     max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 5px 10px; font-size: 12px; border-radius: 999px;
@@ -2887,9 +3053,9 @@
 
   .graph-canvas {
     position: relative;
-    flex: 1;
-    min-height: 200px;
-    height: auto;
+    flex: 0 0 auto;
+    height: min(84vh, 720px);
+    min-height: 540px;
     width: 100%;
     min-width: 0;
     display: flex;
@@ -3479,21 +3645,28 @@
   .details {
     flex: 0 0 auto;
     width: 100%;
-    max-height: min(22vh, 180px);
-    min-height: 0;
-    overflow: auto;
+    min-height: 160px;
+    max-height: none;
+    overflow: visible;
     position: static;
   }
 
-  .details:not(:has(.details-header)) {
-    max-height: none;
-    padding: 10px 14px;
+  .details-placeholder {
+    color: var(--text-muted);
+    font-weight: 600;
   }
 
   .details-action-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+
+  .catalog-backdrop .catalog-modal {
+    width: min(920px, 96vw);
+    max-height: min(90vh, 900px);
+    overflow: auto;
+    padding: 0;
   }
 
   .mods-column {
@@ -4177,8 +4350,9 @@
   .muted { color: var(--text-muted); font-size: 13px; }
 
   @media (max-width: 1180px) {
-    .details {
-      max-height: min(28vh, 220px);
+    .graph-canvas {
+      height: min(72vh, 640px);
+      min-height: 420px;
     }
 
     .graph-layout,

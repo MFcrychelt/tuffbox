@@ -16,18 +16,28 @@
     onChange?: (id: ThemeId) => void;
   } = $props();
 
+  const SHARP_THEMES = new Set<ThemeId>(["aether", "frost", "pixelato", "win95"]);
+
   function select(id: ThemeId) {
     commitTheme(id);
     onChange(id);
+  }
+
+  function badgeFor(id: ThemeId): string | null {
+    if (id === "tuffbox-light") return "Light";
+    if (SHARP_THEMES.has(id)) return "Sharp";
+    return null;
   }
 </script>
 
 <div class="theme-grid">
   {#each THEMES as theme (theme.id)}
+    {@const badge = badgeFor(theme.id)}
     <button
       type="button"
       class="theme-swatch"
       class:active={value === theme.id}
+      class:sharp={SHARP_THEMES.has(theme.id)}
       style="background: {theme.shades[0]}"
       onclick={() => select(theme.id)}
       onmouseenter={() => previewTheme(theme.id)}
@@ -51,7 +61,10 @@
           <Check size={14} />
         </div>
       {/if}
-      <span class="label">{theme.label}</span>
+      <span class="label-row">
+        <span class="label">{theme.label}</span>
+        {#if badge}<span class="badge">{badge}</span>{/if}
+      </span>
     </button>
   {/each}
 </div>
@@ -65,8 +78,8 @@
 
   .theme-swatch {
     position: relative;
-    width: 148px;
-    padding: 8px;
+    width: 168px;
+    padding: 10px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     cursor: pointer;
@@ -74,29 +87,47 @@
     text-align: left;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
+    transition:
+      border-color var(--motion-fast, 160ms) ease,
+      box-shadow var(--motion-fast, 160ms) ease,
+      transform var(--motion-fast, 160ms) ease;
+  }
+
+  .theme-swatch.sharp {
+    border-radius: 0;
+  }
+
+  .theme-swatch:hover {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
   }
 
   .theme-swatch.active {
     border-color: var(--accent-primary);
-    box-shadow: 0 0 0 1px var(--accent-primary);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent),
+      var(--shadow-md);
   }
 
   .mini-ui {
-    height: 78px;
-    border-radius: 6px;
+    height: 92px;
+    border-radius: 8px;
     overflow: hidden;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .theme-swatch.sharp .mini-ui {
+    border-radius: 0;
   }
 
   .bar {
-    height: 10px;
+    height: 12px;
     opacity: 0.9;
   }
 
   .body {
     display: flex;
-    height: calc(100% - 10px);
+    height: calc(100% - 12px);
   }
 
   .sidebar {
@@ -106,22 +137,30 @@
 
   .panel {
     flex: 1;
-    padding: 8px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 7px;
   }
 
   .dot {
-    width: 10px;
-    height: 10px;
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
+  }
+
+  .theme-swatch.sharp .dot {
+    border-radius: 0;
   }
 
   .line {
     height: 6px;
     border-radius: 3px;
     width: 80%;
+  }
+
+  .theme-swatch.sharp .line {
+    border-radius: 0;
   }
 
   .line.short {
@@ -133,8 +172,8 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -70%);
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     border-radius: 999px;
     display: flex;
     align-items: center;
@@ -143,14 +182,46 @@
     box-shadow: var(--shadow-md);
   }
 
+  .theme-swatch.sharp .check {
+    border-radius: 0;
+  }
+
+  .label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 2px 2px;
+  }
+
   .label {
     font-size: 12px;
     font-weight: 600;
     color: var(--text-secondary);
-    padding: 0 2px 2px;
+  }
+
+  .badge {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+
+  .theme-swatch.sharp .badge {
+    border-radius: 0;
   }
 
   .theme-swatch.active .label {
     color: var(--text-primary);
+  }
+
+  .theme-swatch.active .badge {
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
   }
 </style>

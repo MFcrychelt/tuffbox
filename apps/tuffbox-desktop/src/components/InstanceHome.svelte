@@ -51,52 +51,104 @@
 
   let tab = $state<Tab>("resourcepacks");
   let loading = $state(false);
-  let packs = $state<PackEntry[]>([]);
+  let resourcePacks = $state<PackEntry[]>([]);
+  let shaderPacks = $state<PackEntry[]>([]);
   let worlds = $state<WorldListItem[]>([]);
   let servers = $state<ServerEntry[]>([]);
   let pings = $state<Record<string, PingResult>>({});
   let modCount = $state<number | null>(null);
   let busyKey = $state<string | null>(null);
+  /** Tabs that already have a successful load — avoid skeleton/collapse on revisit. */
+  let primed = $state<Partial<Record<Tab, boolean>>>({});
+  let loadGen = 0;
 
   let newServerName = $state("");
   let newServerAddress = $state("");
 
-  async function load() {
+  const packs = $derived(tab === "shaderpacks" ? shaderPacks : resourcePacks);
+  const tabPrimed = $derived(!!primed[tab]);
+  const showSkeleton = $derived(
+    loading &&
+      !tabPrimed &&
+      tab !== "mods" &&
+      (tab === "resourcepacks" || tab === "shaderpacks"
+        ? packs.length === 0
+        : tab === "worlds"
+          ? worlds.length === 0
+          : servers.length === 0),
+  );
+
+  async function load(opts?: { force?: boolean }) {
     if (!projectPath) return;
-    loading = true;
+    const t = tab;
+    const force = !!opts?.force;
+    const first = !primed[t];
+    const gen = ++loadGen;
+    // Only flash loading UI on cold tab — keeps panel height stable when switching.
+    if (first || force) loading = true;
     try {
-      if (tab === "resourcepacks" || tab === "shaderpacks") {
-        packs = await api.content.listPacks(tab, projectPath);
-      } else if (tab === "worlds") {
-        worlds = await api.worlds.list(projectPath);
-      } else if (tab === "servers") {
-        servers = await api.servers.list(projectPath);
-      } else if (tab === "mods") {
+      if (t === "resourcepacks" || t === "shaderpacks") {
+        const next = await api.content.listPacks(t, projectPath);
+        if (gen !== loadGen) return;
+        if (t === "shaderpacks") shaderPacks = next;
+        else resourcePacks = next;
+      } else if (t === "worlds") {
+        const next = await api.worlds.list(projectPath);
+        if (gen !== loadGen) return;
+        worlds = next;
+      } else if (t === "servers") {
+        const next = await api.servers.list(projectPath);
+        if (gen !== loadGen) return;
+        servers = next;
+      } else if (t === "mods") {
         try {
           const mods = await api.mods.list(projectPath);
-          modCount = Array.isArray(mods) ? mods.filter((m: any) => !m.contentType || m.contentType === "mod").length : 0;
+          if (gen !== loadGen) return;
+          modCount = Array.isArray(mods)
+            ? mods.filter((m: any) => !m.contentType || m.contentType === "mod").length
+            : 0;
         } catch {
+          if (gen !== loadGen) return;
           modCount = null;
         }
       }
+      if (gen !== loadGen) return;
+      primed = { ...primed, [t]: true };
     } catch (e) {
-      toasts.error(String(e));
+      if (gen === loadGen) toasts.error(String(e));
     } finally {
-      loading = false;
+      if (gen === loadGen) loading = false;
     }
   }
 
+  let lastProjectPath = "";
+
   $effect(() => {
-    if (projectPath && tab) {
-      void load();
+    if (!projectPath) return;
+    if (projectPath !== lastProjectPath) {
+      lastProjectPath = projectPath;
+      resourcePacks = [];
+      shaderPacks = [];
+      worlds = [];
+      servers = [];
+      modCount = null;
+      primed = {};
     }
+    // Depend on tab so switching tabs reloads (from cache when primed).
+    void tab;
+    void load();
   });
 
   async function togglePack(pack: PackEntry) {
     busyKey = pack.fileName;
     try {
-      await api.content.setEnabled(tab === "shaderpacks" ? "shaderpacks" : "resourcepacks", pack.fileName, !pack.enabled, projectPath);
-      await load();
+      await api.content.setEnabled(
+        tab === "shaderpacks" ? "shaderpacks" : "resourcepacks",
+        pack.fileName,
+        !pack.enabled,
+        projectPath,
+      );
+      await load({ force: true });
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -204,7 +256,7 @@
       <Server size={14} /> Servers
     </button>
     <div class="tabs-spacer"></div>
-    <button class="icon-btn" onclick={load} title="Refresh" disabled={loading}>
+    <button class="icon-btn" onclick={() => load({ force: true })} title="Refresh" disabled={loading}>
       <RefreshCw size={14} class={loading ? "spin" : ""} />
     </button>
     <button class="icon-btn" onclick={openFolder} title="Open instance folder">
@@ -212,8 +264,8 @@
     </button>
   </div>
 
-  <div class="panel">
-    {#if loading && packs.length === 0 && worlds.length === 0 && servers.length === 0 && tab !== "mods"}
+  <div class="panel" class:is-loading={loading && tabPrimed}>
+    {#if showSkeleton}
       <div class="list home-skel-stagger" aria-busy="true" aria-hidden="true">
         {#each Array(4) as _, i (i)}
           <div class="row skel-row" style={`--i: ${i}`}>
@@ -226,7 +278,7 @@
         {/each}
       </div>
     {:else if tab === "mods"}
-      <div class="mods-cta" class:tb-anim-fade-in={!loading}>
+      <div class="mods-cta">
         <div>
           {#if loading && modCount == null}
             <strong class="skeleton skeleton-block" style="display:inline-block; width: 28px; height: 18px; vertical-align: middle;"></strong>
@@ -380,8 +432,41 @@
   }
   .icon-btn:hover { color: var(--text-primary); }
 
-  .panel { padding: 12px; min-height: 140px; max-height: 320px; overflow: auto; }
-  .empty { color: var(--text-muted); font-size: 13px; padding: 18px 8px; text-align: center; }
+  .panel {
+    padding: 12px;
+    min-height: 200px;
+    height: 280px;
+    max-height: 280px;
+    overflow: auto;
+    box-sizing: border-box;
+  }
+  .panel.is-loading {
+    opacity: 0.85;
+  }
+  .mods-cta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 100%;
+    padding: 16px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    box-sizing: border-box;
+  }
+  .empty {
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 18px 8px;
+    text-align: center;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+  }
   .empty .hint { font-size: 12px; margin-top: 6px; }
 
   .list { display: flex; flex-direction: column; gap: 6px; }
@@ -410,10 +495,6 @@
   .danger:hover { color: #ef4444; border-color: rgba(239, 68, 68, 0.35); }
   .ghost:hover { color: var(--text-primary); }
 
-  .mods-cta {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 16px; border-radius: var(--border-radius-md); background: var(--bg-primary); border: 1px solid var(--border-color);
-  }
   .mods-cta strong { display: block; font-size: 28px; color: var(--accent-primary); }
   .mods-cta span { color: var(--text-muted); font-size: 12px; }
 

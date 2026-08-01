@@ -168,79 +168,43 @@ fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResul
     let mut datapack_files = 0u32;
     let mut total_scanned = 0u32;
     let mut truncated = false;
+    let mut seen_ids = std::collections::HashSet::new();
 
-    // 1) Mod JARs
-    let mods_dir = project_dir.join("mods");
-    if mods_dir.is_dir() {
-        for entry in std::fs::read_dir(&mods_dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if path.extension().map_or(true, |e| e != "jar") {
-                continue;
-            }
-            jar_count += 1;
-            let mod_source = entry
-                .file_name()
-                .to_string_lossy()
-                .trim_end_matches(".jar")
-                .to_string();
-
-            let file = match std::fs::File::open(&path) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let mut archive = match zip::ZipArchive::new(file) {
-                Ok(a) => a,
-                Err(_) => continue,
-            };
-            let recipe_paths = adapter.recipe_paths(&archive);
-
-            for rpath in recipe_paths {
-                total_scanned += 1;
-                if recipes.len() >= MAX_RECIPES {
-                    truncated = true;
-                    break;
-                }
-                let Ok(mut zip_entry) = archive.by_name(&rpath) else {
-                    continue;
-                };
-                let mut content = String::new();
-                if zip_entry.read_to_string(&mut content).is_err() || content.len() > 128 * 1024 {
-                    continue;
-                }
-                if let Some(scanned) =
-                    try_parse_recipe(adapter, &content, &rpath, &mod_source, &env.mc_version)
-                {
-                    recipes.push(scanned);
-                }
-            }
-            if truncated {
-                break;
-            }
+    let mut push_recipe = |r: ScannedRecipe, recipes: &mut Vec<ScannedRecipe>| -> bool {
+        if recipes.len() >= MAX_RECIPES {
+            return false;
         }
-    }
+        if !seen_ids.insert(r.id.clone()) {
+            // Later sources (mods/vanilla) lose to project overrides already inserted.
+            return true;
+        }
+        recipes.push(r);
+        true
+    };
 
-    // 2) Project datapacks/ + world datapacks
-    if !truncated {
-        for root in datapack_roots(project_dir) {
-            let (added, scanned, files) = scan_filesystem_recipes(
-                adapter,
-                &root,
-                "datapack",
-                &env.mc_version,
-                MAX_RECIPES - recipes.len(),
-            );
-            datapack_files += files;
-            total_scanned += scanned;
-            recipes.extend(added);
-            if recipes.len() >= MAX_RECIPES {
+    // 1) Project datapacks / world datapacks (highest priority)
+    for root in datapack_roots(project_dir) {
+        let (added, scanned, files) = scan_filesystem_recipes(
+            adapter,
+            &root,
+            "datapack",
+            &env.mc_version,
+            MAX_RECIPES.saturating_sub(recipes.len()),
+        );
+        datapack_files += files;
+        total_scanned += scanned;
+        for r in added {
+            if !push_recipe(r, &mut recipes) {
                 truncated = true;
                 break;
             }
         }
+        if truncated {
+            break;
+        }
     }
 
-    // 3) KubeJS generated data
+    // 2) KubeJS data (companion JSON from craft editor lives here)
     if !truncated {
         let kubejs_data = project_dir.join("kubejs").join("data");
         if kubejs_data.is_dir() {
@@ -249,13 +213,76 @@ fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResul
                 &kubejs_data,
                 "kubejs",
                 &env.mc_version,
-                MAX_RECIPES - recipes.len(),
+                MAX_RECIPES.saturating_sub(recipes.len()),
             );
             datapack_files += files;
             total_scanned += scanned;
-            recipes.extend(added);
-            if recipes.len() >= MAX_RECIPES {
-                truncated = true;
+            for r in added {
+                if !push_recipe(r, &mut recipes) {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 3) Mod JARs
+    if !truncated {
+        let mods_dir = project_dir.join("mods");
+        if mods_dir.is_dir() {
+            for entry in std::fs::read_dir(&mods_dir).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                if path.extension().map_or(true, |e| e != "jar") {
+                    continue;
+                }
+                jar_count += 1;
+                let mod_source = entry
+                    .file_name()
+                    .to_string_lossy()
+                    .trim_end_matches(".jar")
+                    .to_string();
+                let (added, scanned) = scan_jar_recipes(
+                    adapter,
+                    &path,
+                    &mod_source,
+                    &env.mc_version,
+                    MAX_RECIPES.saturating_sub(recipes.len()),
+                );
+                total_scanned += scanned;
+                for r in added {
+                    if !push_recipe(r, &mut recipes) {
+                        truncated = true;
+                        break;
+                    }
+                }
+                if truncated {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 4) Vanilla client jar (fill remaining budget)
+    if !truncated {
+        for jar in vanilla_client_jars(&manifest.minecraft.version) {
+            let (added, scanned) = scan_jar_recipes(
+                adapter,
+                &jar,
+                "minecraft",
+                &env.mc_version,
+                MAX_RECIPES.saturating_sub(recipes.len()),
+            );
+            total_scanned += scanned;
+            jar_count += 1;
+            for r in added {
+                if !push_recipe(r, &mut recipes) {
+                    truncated = true;
+                    break;
+                }
+            }
+            if truncated {
+                break;
             }
         }
     }
@@ -279,6 +306,48 @@ fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResul
         truncated,
         total_scanned,
     })
+}
+
+fn scan_jar_recipes(
+    adapter: &dyn crate::adapters::LoaderAdapter,
+    jar_path: &Path,
+    mod_source: &str,
+    mc_version: &McVersion,
+    remaining: usize,
+) -> (Vec<ScannedRecipe>, u32) {
+    let mut recipes = Vec::new();
+    let mut scanned = 0u32;
+    if remaining == 0 {
+        return (recipes, scanned);
+    }
+    let file = match std::fs::File::open(jar_path) {
+        Ok(f) => f,
+        Err(_) => return (recipes, scanned),
+    };
+    let mut archive = match zip::ZipArchive::new(file) {
+        Ok(a) => a,
+        Err(_) => return (recipes, scanned),
+    };
+    let recipe_paths = adapter.recipe_paths(&archive);
+    for rpath in recipe_paths {
+        scanned += 1;
+        if recipes.len() >= remaining {
+            break;
+        }
+        let Ok(mut zip_entry) = archive.by_name(&rpath) else {
+            continue;
+        };
+        let mut content = String::new();
+        if zip_entry.read_to_string(&mut content).is_err() || content.len() > 128 * 1024 {
+            continue;
+        }
+        if let Some(scanned_recipe) =
+            try_parse_recipe(adapter, &content, &rpath, mod_source, mc_version)
+        {
+            recipes.push(scanned_recipe);
+        }
+    }
+    (recipes, scanned)
 }
 
 fn vanilla_client_jars(mc_version: &str) -> Vec<PathBuf> {
@@ -375,6 +444,15 @@ fn scan_filesystem_recipes(
                 rel_str.clone()
             } else if let Some(idx) = rel_str.find("/data/") {
                 rel_str[idx + 1..].to_string()
+            } else if rel_str.contains("/recipe/")
+                || rel_str.contains("/recipes/")
+                || rel_str.starts_with("recipe/")
+                || rel_str.starts_with("recipes/")
+                || (mod_source == "kubejs"
+                    && (rel_str.contains("/recipe") || rel_str.contains("/recipes")))
+            {
+                // kubejs/data is already the data root → tuffbox/recipe/x.json
+                format!("data/{rel_str}")
             } else {
                 format!(
                     "data/datapack/recipes/{}",
@@ -904,12 +982,16 @@ fn append_kubejs_tag_lines(path: &Path, lines: &[String]) -> Result<(), String> 
     std::fs::write(path, existing).map_err(|e| e.to_string())
 }
 
-/// Append recipe lines into kubejs/server_scripts/tuffbox_recipe_adds.js.
+/// Append recipe lines into kubejs/server_scripts/tuffbox_recipe_adds.js
+/// and write a companion datapack JSON under kubejs/data/tuffbox/recipes/
+/// so offline scan sees the recipe immediately.
 pub fn write_kubejs_craft(project_dir: &Path, draft: &CraftDraft) -> Result<String, String> {
     if draft.grid.len() > 9 {
         return Err("grid must have at most 9 slots".into());
     }
     let craft_line = craft_line_from_draft(draft)?;
+    let companion_id = companion_recipe_id(draft);
+    write_companion_recipe_json(project_dir, &companion_id, draft)?;
 
     let dir = project_dir.join("kubejs").join("server_scripts");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -918,10 +1000,11 @@ pub fn write_kubejs_craft(project_dir: &Path, draft: &CraftDraft) -> Result<Stri
     let mut lines = Vec::new();
     if let Some(ref replace_id) = draft.replace_id {
         let id = replace_id.trim();
-        if !id.is_empty() {
+        if !id.is_empty() && id != companion_id {
             lines.push(format!("  event.remove({{ id: '{}' }})", escape_js_single(id)));
         }
     }
+    // Prefer datapack companion for visibility; still emit KubeJS for packs that load scripts.
     lines.push(craft_line);
 
     append_kubejs_recipe_lines(
@@ -930,6 +1013,256 @@ pub fn write_kubejs_craft(project_dir: &Path, draft: &CraftDraft) -> Result<Stri
         &lines,
     )?;
     Ok(path.to_string_lossy().to_string())
+}
+
+fn companion_recipe_id(draft: &CraftDraft) -> String {
+    if let Some(ref rid) = draft.replace_id {
+        let id = rid.trim();
+        if id.starts_with("tuffbox:") {
+            return id.to_string();
+        }
+    }
+    let out = draft.output.trim().replace(':', "_");
+    let kind = resolve_craft_kind(draft);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    kind.hash(&mut hasher);
+    draft.output.hash(&mut hasher);
+    draft.output_count.hash(&mut hasher);
+    draft.shaped.hash(&mut hasher);
+    for slot in &draft.grid {
+        slot.hash(&mut hasher);
+    }
+    draft.input.hash(&mut hasher);
+    draft.template.hash(&mut hasher);
+    draft.base.hash(&mut hasher);
+    draft.addition.hash(&mut hasher);
+    let short = format!("{:x}", hasher.finish());
+    format!("tuffbox:{}_{}", sanitize_recipe_file_stem(&out), &short[..8.min(short.len())])
+}
+
+fn sanitize_recipe_file_stem(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "recipe".into()
+    } else {
+        out
+    }
+}
+
+fn ingredient_json(id: &str) -> serde_json::Value {
+    let id = id.trim();
+    if id.starts_with('#') {
+        serde_json::json!({ "tag": id.trim_start_matches('#') })
+    } else {
+        serde_json::json!({ "item": id })
+    }
+}
+
+fn result_json(output: &str, count: u32) -> serde_json::Value {
+    let count = count.max(1);
+    if count == 1 {
+        serde_json::json!({ "id": output.trim() })
+    } else {
+        serde_json::json!({ "id": output.trim(), "count": count })
+    }
+}
+
+fn write_companion_recipe_json(
+    project_dir: &Path,
+    recipe_id: &str,
+    draft: &CraftDraft,
+) -> Result<(), String> {
+    let path_part = recipe_id
+        .split_once(':')
+        .map(|(_, p)| p)
+        .unwrap_or(recipe_id);
+    let stem = sanitize_recipe_file_stem(path_part);
+    let dir = project_dir
+        .join("kubejs")
+        .join("data")
+        .join("tuffbox")
+        .join("recipe");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{stem}.json"));
+
+    let kind = resolve_craft_kind(draft);
+    let json = match kind.as_str() {
+        "shaped" => {
+            let mut grid = draft.grid.clone();
+            grid.resize(9, None);
+            companion_shaped_json(&grid, &draft.output, draft.output_count)?
+        }
+        "shapeless" => {
+            let mut grid = draft.grid.clone();
+            grid.resize(9, None);
+            companion_shapeless_json(&grid, &draft.output, draft.output_count)?
+        }
+        cooking if cooking_method(cooking).is_some() => {
+            let type_id = match cooking {
+                "smelting" | "smelt" => "minecraft:smelting",
+                "blasting" | "blast" => "minecraft:blasting",
+                "smoking" | "smoke" => "minecraft:smoking",
+                "campfire" | "campfire_cooking" => "minecraft:campfire_cooking",
+                _ => "minecraft:smelting",
+            };
+            let input = draft
+                .input
+                .as_deref()
+                .or_else(|| slot_at(&draft.grid, 4))
+                .or_else(|| slot_at(&draft.grid, 0))
+                .ok_or_else(|| "input ingredient is required".to_string())?;
+            let mut obj = serde_json::json!({
+                "type": type_id,
+                "ingredient": ingredient_json(input),
+                "result": result_json(&draft.output, draft.output_count),
+            });
+            if let Some(xp) = draft.xp {
+                obj["experience"] = serde_json::json!(xp);
+            }
+            if let Some(ticks) = draft.cook_time {
+                obj["cookingtime"] = serde_json::json!(ticks);
+            }
+            obj
+        }
+        "stonecutting" | "stonecutter" => {
+            let input = draft
+                .input
+                .as_deref()
+                .or_else(|| slot_at(&draft.grid, 0))
+                .or_else(|| slot_at(&draft.grid, 4))
+                .ok_or_else(|| "input ingredient is required".to_string())?;
+            serde_json::json!({
+                "type": "minecraft:stonecutting",
+                "ingredient": ingredient_json(input),
+                "result": result_json(&draft.output, draft.output_count),
+            })
+        }
+        "smithing" => {
+            let base = draft
+                .base
+                .as_deref()
+                .or_else(|| slot_at(&draft.grid, 4))
+                .ok_or_else(|| "smithing base is required".to_string())?;
+            let addition = draft
+                .addition
+                .as_deref()
+                .or_else(|| slot_at(&draft.grid, 5))
+                .ok_or_else(|| "smithing addition is required".to_string())?;
+            let template = draft
+                .template
+                .as_deref()
+                .or_else(|| slot_at(&draft.grid, 3))
+                .filter(|s| !s.is_empty());
+            if let Some(t) = template {
+                serde_json::json!({
+                    "type": "minecraft:smithing_transform",
+                    "template": ingredient_json(t),
+                    "base": ingredient_json(base),
+                    "addition": ingredient_json(addition),
+                    "result": result_json(&draft.output, draft.output_count),
+                })
+            } else {
+                serde_json::json!({
+                    "type": "minecraft:smithing",
+                    "base": ingredient_json(base),
+                    "addition": ingredient_json(addition),
+                    "result": result_json(&draft.output, draft.output_count),
+                })
+            }
+        }
+        other => return Err(format!("unsupported recipe kind: {other}")),
+    };
+
+    let pretty = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    std::fs::write(&path, pretty).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn companion_shaped_json(
+    grid: &[Option<String>],
+    output: &str,
+    count: u32,
+) -> Result<serde_json::Value, String> {
+    let mut min_r = 3usize;
+    let mut max_r = 0usize;
+    let mut min_c = 3usize;
+    let mut max_c = 0usize;
+    let mut any = false;
+    for r in 0..3 {
+        for c in 0..3 {
+            if slot_at(grid, r * 3 + c).is_some() {
+                any = true;
+                min_r = min_r.min(r);
+                max_r = max_r.max(r);
+                min_c = min_c.min(c);
+                max_c = max_c.max(c);
+            }
+        }
+    }
+    if !any {
+        return Err("at least one input ingredient is required".into());
+    }
+
+    let keys_chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+    let mut key_map: Vec<(char, String)> = Vec::new();
+    let mut pattern_rows = Vec::new();
+    for r in min_r..=max_r {
+        let mut row = String::new();
+        for c in min_c..=max_c {
+            match slot_at(grid, r * 3 + c) {
+                None => row.push(' '),
+                Some(id) => {
+                    let ch = if let Some((ch, _)) = key_map.iter().find(|(_, existing)| existing == id)
+                    {
+                        *ch
+                    } else {
+                        let ch = keys_chars[key_map.len()];
+                        key_map.push((ch, id.to_string()));
+                        ch
+                    };
+                    row.push(ch);
+                }
+            }
+        }
+        pattern_rows.push(row);
+    }
+
+    let mut key_obj = serde_json::Map::new();
+    for (ch, id) in key_map {
+        key_obj.insert(ch.to_string(), ingredient_json(&id));
+    }
+
+    Ok(serde_json::json!({
+        "type": "minecraft:crafting_shaped",
+        "pattern": pattern_rows,
+        "key": key_obj,
+        "result": result_json(output, count),
+    }))
+}
+
+fn companion_shapeless_json(
+    grid: &[Option<String>],
+    output: &str,
+    count: u32,
+) -> Result<serde_json::Value, String> {
+    let inputs: Vec<&str> = (0..9).filter_map(|i| slot_at(grid, i)).collect();
+    if inputs.is_empty() {
+        return Err("at least one input ingredient is required".into());
+    }
+    let ingredients: Vec<serde_json::Value> = inputs.iter().map(|id| ingredient_json(id)).collect();
+    Ok(serde_json::json!({
+        "type": "minecraft:crafting_shapeless",
+        "ingredients": ingredients,
+        "result": result_json(output, count),
+    }))
 }
 
 /// Append tag add/remove lines into kubejs/server_scripts/tuffbox_tag_edits.js.

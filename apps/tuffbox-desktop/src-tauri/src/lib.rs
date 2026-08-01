@@ -4014,6 +4014,10 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
         "memoryleakfix",
         "smoothboot",
         "entityculling",
+        "sodium-extra",
+        "c2me",
+        "bobby",
+        "starlight",
     ];
     let mut missing_perf = Vec::new();
     for pm in perf_mods {
@@ -4066,6 +4070,419 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
     }
 
     Ok(findings)
+}
+
+/// ── Optimize pack (curated + custom) ───────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OptimizeModOffer {
+    slug: String,
+    name: String,
+    provider: String,
+    project_id: String,
+    version_id: Option<String>,
+    reason: String,
+    risk: String,
+    already_installed: bool,
+}
+
+fn loader_slug_for_manifest(manifest: &ProjectManifest) -> String {
+    tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()
+}
+
+fn is_mod_installed_by_slug(keys: &std::collections::HashSet<String>, slug: &str) -> bool {
+    let aliases = recommendation_aliases(slug);
+    if aliases.is_empty() {
+        has_installed(keys, &[slug])
+    } else {
+        has_installed(keys, &aliases)
+    }
+}
+
+fn resolve_opt_mod_modrinth(
+    slug: &str,
+    name: &str,
+    reason: &str,
+    mc: &str,
+    loader: &str,
+) -> Option<OptimizeModOffer> {
+    let provider = tuffbox_core::ModrinthProvider::new();
+    let project = provider.get_project(slug).ok()?;
+    let query = ProviderSearchQuery {
+        query: None,
+        minecraft_version: Some(mc.to_string()),
+        loader: Some(loader.to_string()),
+        ..Default::default()
+    };
+    let versions = provider.get_versions(&project.id, &query).ok()?;
+    let version = versions.into_iter().next()?;
+    Some(OptimizeModOffer {
+        slug: project.slug.clone(),
+        name: if project.name.is_empty() {
+            name.to_string()
+        } else {
+            project.name
+        },
+        provider: "modrinth".into(),
+        project_id: project.id,
+        version_id: Some(version.id),
+        reason: reason.to_string(),
+        risk: "low".into(),
+        already_installed: false,
+    })
+}
+
+fn resolve_opt_mod_curseforge(
+    slug: &str,
+    name: &str,
+    reason: &str,
+    mc: &str,
+    loader: &str,
+) -> Option<OptimizeModOffer> {
+    let provider = tuffbox_core::CurseForgeProvider::new();
+    let loader_type = tuffbox_core::CurseForgeProvider::mod_loader_type(loader);
+    let page = provider
+        .search_content(
+            tuffbox_core::CurseForgeProvider::class_id_for_project_type("mod"),
+            name,
+            Some(mc),
+            loader_type,
+            0,
+            10,
+            Some(2),
+        )
+        .ok()?;
+    let name_l = name.to_lowercase();
+    let slug_compact = slug.replace('-', "");
+    let hit = page.hits.into_iter().find(|h| {
+        h.slug.eq_ignore_ascii_case(slug)
+            || h.name.to_lowercase().contains(&name_l)
+            || h.slug.to_lowercase().contains(&slug_compact)
+    })?;
+    Some(OptimizeModOffer {
+        slug: hit.slug.clone(),
+        name: hit.name.clone(),
+        provider: "curseforge".into(),
+        project_id: hit.id.to_string(),
+        version_id: None,
+        reason: reason.to_string(),
+        risk: "medium".into(),
+        already_installed: false,
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_curated_optimize_packs(path: String) -> Result<serde_json::Value, String> {
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let loader = loader_slug_for_manifest(&manifest);
+    let mc = manifest.minecraft.version.clone();
+    let current = tuffbox_core::optimize_pack::curated_pack_for(&loader, &mc);
+    let entries = tuffbox_core::optimize_pack::list_curated_pack_entries(&loader);
+    Ok(serde_json::json!({
+        "loader": loader,
+        "minecraftVersion": mc,
+        "available": current.is_some(),
+        "current": current,
+        "entries": entries.into_iter().map(|(ver, r)| serde_json::json!({
+            "minecraftVersion": ver,
+            "projectId": r.project_id,
+            "slug": r.slug,
+            "name": r.name,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn preview_curated_optimize_pack(path: String) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let project_dir = manifest_parent(&path)?;
+        let loader = loader_slug_for_manifest(&manifest);
+        let mc = manifest.minecraft.version.clone();
+        let curated = tuffbox_core::optimize_pack::curated_pack_for(&loader, &mc).ok_or_else(|| {
+            format!("No curated optimize pack for {loader} {mc}. Use Custom mode or publish a pack and update optimize-packs.json.")
+        })?;
+        let id = curated
+            .slug
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| curated.project_id.clone());
+        let provider = tuffbox_core::ModrinthProvider::new();
+        let project = provider.get_project(&id).map_err(|e| {
+            format!(
+                "Curated pack '{id}' not found on Modrinth yet ({e}). Publish the project or fix optimize-packs.json."
+            )
+        })?;
+        let query = ProviderSearchQuery {
+            query: None,
+            minecraft_version: Some(mc.clone()),
+            loader: Some(loader.clone()),
+            ..Default::default()
+        };
+        let versions = provider
+            .get_versions(&project.id, &query)
+            .map_err(|e| e.to_string())?;
+        let version = versions.first().ok_or_else(|| {
+            format!("No Modrinth version of '{}' for {mc}/{loader}", project.slug)
+        })?;
+        let deps = provider
+            .resolve_dependencies(&version.id)
+            .unwrap_or_default();
+        let keys = installed_mod_keys(&manifest);
+        let mut mods = Vec::new();
+        mods.push(serde_json::json!({
+            "slug": project.slug,
+            "name": project.name,
+            "projectId": project.id,
+            "alreadyInstalled": is_mod_installed_by_slug(&keys, &project.slug),
+            "role": "root",
+        }));
+        for dep in deps {
+            let role = match dep.kind {
+                tuffbox_core::manifest::DependencyKind::Requires => "requires",
+                tuffbox_core::manifest::DependencyKind::Optional => "optional",
+                tuffbox_core::manifest::DependencyKind::Conflicts => "conflicts",
+                tuffbox_core::manifest::DependencyKind::BreaksWith => "breaks_with",
+                tuffbox_core::manifest::DependencyKind::Replaces => "replaces",
+            };
+            if role == "conflicts" || role == "breaks_with" {
+                continue;
+            }
+            let slug = dep.target.clone();
+            mods.push(serde_json::json!({
+                "slug": slug,
+                "name": dep.target,
+                "projectId": dep.target,
+                "alreadyInstalled": is_mod_installed_by_slug(&keys, &slug),
+                "role": role,
+            }));
+        }
+        let (cfg_actions, warnings) = tuffbox_core::optimize_pack::build_optimize_config_actions(
+            &project_dir,
+            &manifest,
+            true,
+        );
+        let pack_name = curated
+            .name
+            .clone()
+            .unwrap_or_else(|| project.name.clone());
+        Ok(serde_json::json!({
+            "pack": {
+                "projectId": project.id,
+                "slug": project.slug,
+                "name": pack_name,
+                "versionId": version.id,
+                "versionNumber": version.version_number,
+            },
+            "mods": mods,
+            "configActions": cfg_actions,
+            "warnings": warnings,
+            "minecraftVersion": mc,
+            "loader": loader,
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Install curated pack root + required deps (skips already installed via Modrinth resolver).
+#[tauri::command(rename_all = "camelCase")]
+async fn install_curated_optimize_pack(
+    app: tauri::AppHandle,
+    path: String,
+    apply_configs: bool,
+    config_plan: Option<tuffbox_core::action_plan::ActionPlan>,
+) -> Result<serde_json::Value, String> {
+    let preview = preview_curated_optimize_pack(path.clone()).await?;
+    let pack = preview
+        .get("pack")
+        .cloned()
+        .ok_or_else(|| "preview missing pack".to_string())?;
+    let root_id = pack
+        .get("projectId")
+        .or_else(|| pack.get("slug"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "pack missing projectId".to_string())?
+        .to_string();
+
+    let install = match add_modrinth_mod_with_dependencies(
+        app.clone(),
+        path.clone(),
+        root_id.clone(),
+        "both".into(),
+    )
+    .await
+    {
+        Ok(v) => serde_json::json!({ "ok": true, "installed": v }),
+        Err(e) => serde_json::json!({ "ok": false, "error": e }),
+    };
+
+    let mut config_result = serde_json::json!(null);
+    if apply_configs {
+        let plan = if let Some(plan) = config_plan {
+            plan
+        } else if let Some(actions) = preview.get("configActions").cloned() {
+            tuffbox_core::optimize_pack::config_actions_to_plan(
+                serde_json::from_value(actions).unwrap_or_default(),
+                "Optimize pack (curated) config templates",
+            )
+        } else {
+            tuffbox_core::optimize_pack::config_actions_to_plan(
+                Vec::new(),
+                "Optimize pack (curated) config templates",
+            )
+        };
+        if !plan.actions.is_empty() {
+            config_result = apply_action_plan(
+                app,
+                path,
+                plan,
+                Some(format!("optimize-curated-{root_id}")),
+            )
+            .await?;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "install": install,
+        "config": config_result,
+        "pack": pack,
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn build_optimize_plan(
+    path: String,
+    use_ai_configs: bool,
+) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let project_dir = manifest_parent(&path)?;
+        let loader = loader_slug_for_manifest(&manifest);
+        let mc = manifest.minecraft.version.clone();
+        let keys = installed_mod_keys(&manifest);
+        let candidates = optimization_candidates(&loader);
+
+        let mut offers = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (slug, name, reason, _cat) in candidates {
+            let aliases = aliases_for_candidate(slug);
+            if has_installed(&keys, &aliases) {
+                continue;
+            }
+            if !seen.insert(slug.to_string()) {
+                continue;
+            }
+            if let Some(offer) = resolve_opt_mod_modrinth(slug, name, reason, &mc, &loader) {
+                seen.insert(offer.slug.clone());
+                offers.push(offer);
+                continue;
+            }
+            if let Some(offer) = resolve_opt_mod_curseforge(slug, name, reason, &mc, &loader) {
+                seen.insert(offer.slug.clone());
+                offers.push(offer);
+            }
+        }
+
+        let tokens = tuffbox_core::optimize_pack::inventory_tokens(&manifest);
+        let deny = tuffbox_core::optimize_pack::modernfix_denylist_hit(&tokens);
+        let (cfg_actions, mut warnings) =
+            tuffbox_core::optimize_pack::build_optimize_config_actions(
+                &project_dir,
+                &manifest,
+                deny.is_empty(),
+            );
+
+        // Optional AI refine of configs only (best-effort / advisory in v1).
+        if use_ai_configs {
+            warnings.push(
+                "AI config refine requested — using deterministic templates; AI merge is advisory-only in v1."
+                    .into(),
+            );
+        }
+
+        let findings = audit_performance(path)?;
+        let plan = tuffbox_core::optimize_pack::config_actions_to_plan(
+            cfg_actions,
+            "Optimize pack custom: safe client/performance config patches",
+        );
+
+        Ok(serde_json::json!({
+            "mode": "custom",
+            "mods": offers,
+            "plan": plan,
+            "findings": findings,
+            "warnings": warnings,
+            "minecraftVersion": mc,
+            "loader": loader,
+            "curatedAvailable": tuffbox_core::optimize_pack::curated_pack_for(&loader, &mc).is_some(),
+        }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn apply_optimize_custom_plan(
+    app: tauri::AppHandle,
+    path: String,
+    mods: Vec<OptimizeModOffer>,
+    apply_configs: bool,
+    config_plan: Option<tuffbox_core::action_plan::ActionPlan>,
+) -> Result<serde_json::Value, String> {
+    let mut installed = Vec::new();
+    let mut errors = Vec::new();
+
+    for offer in mods {
+        if offer.already_installed {
+            continue;
+        }
+        if offer.provider == "modrinth" {
+            match add_modrinth_mod_with_dependencies(
+                app.clone(),
+                path.clone(),
+                offer.project_id.clone(),
+                "both".into(),
+            )
+            .await
+            {
+                Ok(msgs) => installed.extend(msgs),
+                Err(e) => errors.push(format!("{}: {e}", offer.slug)),
+            }
+        } else if offer.provider == "curseforge" {
+            match add_curseforge_mod(
+                app.clone(),
+                path.clone(),
+                offer.project_id.clone(),
+                "both".into(),
+            )
+            .await
+            {
+                Ok(()) => installed.push(format!("Installed {} (curseforge)", offer.slug)),
+                Err(e) => errors.push(format!("{} (CF): {e}", offer.slug)),
+            }
+        }
+    }
+
+    let mut config_result = serde_json::json!(null);
+    if apply_configs {
+        if let Some(plan) = config_plan {
+            if !plan.actions.is_empty() {
+                match apply_action_plan(app, path, plan, Some("optimize-custom".into())).await {
+                    Ok(v) => config_result = v,
+                    Err(e) => errors.push(format!("configs: {e}")),
+                }
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "installed": installed,
+        "errors": errors,
+        "config": config_result,
+        "ok": errors.is_empty(),
+    }))
 }
 
 /// Sodium config checks: (filename, fn(&content, &mut findings))
@@ -5625,18 +6042,38 @@ async fn apply_action_plan(
             }
             continue;
         }
-        if action.op == "change_mod_version" {
+
+        // Version-pinned update: resolve target, download jar, then save manifest.
+        // Plain `update_mod` without version still goes through update-to-latest below.
+        let version_pin = action
+            .version
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        if action.op == "change_mod_version"
+            || (action.op == "update_mod" && version_pin.is_some())
+        {
             let mod_id = action
                 .mod_id
                 .clone()
+                .or_else(|| action.project_id.clone())
                 .unwrap_or_default();
-            let version = action.version.clone().unwrap_or_default();
+            let version = version_pin.unwrap_or("").to_string();
             if mod_id.is_empty() || version.is_empty() {
                 errors.push("change_mod_version requires modId and version".into());
                 continue;
             }
             let mut manifest =
                 ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+            let old_mod = match manifest.mods.iter().find(|m| {
+                m.id == mod_id || m.source.project_id.as_deref() == Some(mod_id.as_str())
+            }) {
+                Some(m) => m.clone(),
+                None => {
+                    errors.push(format!("mod {mod_id} not found in project"));
+                    continue;
+                }
+            };
             match update_mod_from_modrinth(
                 &manifest_path,
                 &mut manifest,
@@ -5644,13 +6081,24 @@ async fn apply_action_plan(
                 Some(version.as_str()),
             ) {
                 Ok(()) => {
-                    save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
-                    applied.push(format!("changed {mod_id} to {version}"));
+                    match commit_single_mod_update(
+                        &app,
+                        &manifest_path,
+                        &mut manifest,
+                        &old_mod,
+                        false,
+                    ) {
+                        Ok(_) => {
+                            applied.push(format!("changed {mod_id} to {version}"));
+                        }
+                        Err(e) => errors.push(e),
+                    }
                 }
                 Err(e) => errors.push(e.to_string()),
             }
             continue;
         }
+
         if let Some(fix) = tuffbox_core::action_plan::launcher_action_to_fix_action(action) {
             match apply_fix_action(app.clone(), path_str.clone(), fix).await {
                 Ok(msg) => applied.push(msg),
@@ -5659,6 +6107,22 @@ async fn apply_action_plan(
         } else {
             errors.push(format!("cannot map op '{}' to a fix action", action.op));
         }
+    }
+
+    // Soft-verify / distill need a pending fix marker even when apply used ActionPlan path.
+    if !applied.is_empty() {
+        let explanation = if plan.human_explanation.trim().is_empty() {
+            format!("Applied ActionPlan: {}", applied.join("; "))
+        } else {
+            plan.human_explanation.clone()
+        };
+        let _ = swarm_api::record_user_fix_attempt(
+            &manifest_path,
+            plan.source.as_deref().unwrap_or("ai_action_plan"),
+            &explanation,
+            plan.actions.clone(),
+            fingerprint_key.as_deref(),
+        );
     }
 
     // Record co-occurrence after successful crash-fix apply (local + optional Supabase).
@@ -5914,6 +6378,7 @@ fn recommendation_aliases(slug: &str) -> Vec<&'static str> {
         "embeddium" => vec!["embeddium", "rubidium", "sodium", "magnesium"],
         "rubidium" => vec!["rubidium", "embeddium", "sodium", "magnesium"],
         "sodium" => vec!["sodium", "embeddium", "rubidium", "magnesium"],
+        "sodium-extra" => vec!["sodium-extra"],
         "iris" => vec!["iris", "oculus"],
         "oculus" => vec!["oculus", "iris"],
         "emi" => vec!["emi", "roughly-enough-items", "jei", "rei"],
@@ -5921,6 +6386,9 @@ fn recommendation_aliases(slug: &str) -> Vec<&'static str> {
         "modernfix" => vec!["modernfix", "modernfix-mvus"],
         "lithium" => vec!["lithium", "radium", "canary"],
         "radium" => vec!["radium", "lithium", "canary"],
+        "c2me" | "c2me-fabric" => vec!["c2me", "c2me-fabric", "c2me-opts"],
+        "bobby" => vec!["bobby"],
+        "starlight" => vec!["starlight"],
         "fabric-api" | "fabric_api" => vec!["fabric-api", "fabric_api"],
         _ => Vec::new(),
     }
@@ -5940,11 +6408,15 @@ fn optimization_candidates(loader: &str) -> Vec<RecCandidate> {
     match loader {
         "fabric" | "quilt" => vec![
             ("sodium", "Sodium", "Modern rendering engine — large FPS gains", "optimization"),
+            ("sodium-extra", "Sodium Extra", "Extra Sodium graphics/quality toggles", "optimization"),
             ("lithium", "Lithium", "General game-logic / tick optimizations", "optimization"),
             ("ferrite-core", "FerriteCore", "Lowers memory usage of game state", "optimization"),
             ("immediatelyfast", "ImmediatelyFast", "Faster immediate-mode rendering", "optimization"),
             ("modernfix", "ModernFix", "Performance and launch-time bugfixes", "optimization"),
             ("entityculling", "Entity Culling", "Skip rendering of occluded entities", "optimization"),
+            ("c2me", "C2ME", "Threaded chunk generation / loading", "optimization"),
+            ("bobby", "Bobby", "Client-side chunk cache beyond server view distance", "optimization"),
+            ("starlight", "Starlight", "Faster lighting engine", "optimization"),
             ("iris", "Iris", "Shader loader built for Sodium", "optimization"),
             ("indium", "Indium", "Fabric Rendering API bridge for Sodium", "optimization"),
             ("krypton", "Krypton", "Network stack optimizations", "optimization"),
@@ -6857,19 +7329,49 @@ fn save_quest_chapter(
 pub(crate) fn collect_catalog_item_ids(
     manifest_path: &std::path::Path,
 ) -> Result<std::collections::HashSet<String>, String> {
-    let scan = tuffbox_core::recipe_scan::scan_project_recipes(manifest_path)?;
-    let mut set = std::collections::HashSet::new();
-    for r in scan.recipes {
-        if !r.output_id.is_empty() && !r.output_id.starts_with('#') {
-            set.insert(r.output_id);
-        }
-        for id in r.input_ids {
-            if !id.is_empty() && !id.starts_with('#') {
-                set.insert(id);
+    let mut extra = Vec::new();
+    if let Ok(scan) = tuffbox_core::recipe_scan::scan_project_recipes(manifest_path) {
+        for r in scan.recipes {
+            if !r.output_id.is_empty() && !r.output_id.starts_with('#') {
+                extra.push(r.output_id);
+            }
+            for id in r.input_ids {
+                if !id.is_empty() && !id.starts_with('#') {
+                    extra.push(id);
+                }
             }
         }
     }
-    Ok(set)
+    let items = tuffbox_core::item_catalog::build_item_catalog_for_manifest(manifest_path, extra)?;
+    Ok(items.into_iter().map(|e| e.id).collect())
+}
+
+/// Full vanilla+mod item catalog for Recipes / quest pickers.
+#[tauri::command(rename_all = "camelCase")]
+async fn list_item_catalog(path: String) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || {
+        let manifest_path = PathBuf::from(&path);
+        // Recipe-derived ids are merged on the UI side after scan; jar models cover the rest.
+        let items = tuffbox_core::item_catalog::build_item_catalog_for_manifest(
+            &manifest_path,
+            Vec::<String>::new(),
+        )?;
+        items
+            .into_iter()
+            .map(|e| serde_json::to_value(e).map_err(|err| err.to_string()))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// List item ids from the recipe catalog (for quest item pickers).
+#[tauri::command(rename_all = "camelCase")]
+fn list_quest_item_catalog(path: String) -> Result<Vec<String>, String> {
+    let set = collect_catalog_item_ids(Path::new(&path))?;
+    let mut ids: Vec<String> = set.into_iter().collect();
+    ids.sort();
+    Ok(ids)
 }
 
 /// Validate quest book integrity (missing deps, empty tasks, cycles, reachability, items).
@@ -7045,15 +7547,6 @@ fn save_quest_chapter_groups(
     )
     .map_err(|e| e.to_string())?;
     Ok(serde_json::json!({ "relativePath": rel }))
-}
-
-/// List item ids from the recipe catalog (for quest item pickers).
-#[tauri::command(rename_all = "camelCase")]
-fn list_quest_item_catalog(path: String) -> Result<Vec<String>, String> {
-    let set = collect_catalog_item_ids(Path::new(&path))?;
-    let mut ids: Vec<String> = set.into_iter().collect();
-    ids.sort();
-    Ok(ids)
 }
 
 /// List FTB Quests team progress files under saves/*/ftbquests/.
@@ -10492,7 +10985,7 @@ async fn search_curseforge_modpacks(
             return Err("CurseForge API key is not configured".to_string());
         }
         let hits = provider
-            .search_modpacks(&query, game_version.as_deref(), offset.unwrap_or(0), 20)
+            .search_modpacks(&query, game_version.as_deref(), offset.unwrap_or(0), 30)
             .map_err(|e| e.to_string())?
             .hits;
         Ok(hits
@@ -13783,6 +14276,7 @@ pub fn run() {
             scan_mod_recipes,
             get_item_icon,
             get_item_icons_batch,
+            list_item_catalog,
             get_recipe_runtime_status,
             get_recipe_runtime_snapshot,
             write_kubejs_recipe_removes,
@@ -13867,6 +14361,11 @@ pub fn run() {
             export_project_report,
             batch_export_all,
             audit_performance,
+            list_curated_optimize_packs,
+            preview_curated_optimize_pack,
+            install_curated_optimize_pack,
+            build_optimize_plan,
+            apply_optimize_custom_plan,
             scan_ore_generation,
             detect_duplicate_items,
             generate_unify_config,

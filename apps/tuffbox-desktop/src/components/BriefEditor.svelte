@@ -914,7 +914,7 @@
   .top-split {
     flex-shrink: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+    grid-template-columns: minmax(0, 1fr) minmax(440px, 560px);
     gap: 14px;
     align-items: start;
   }
@@ -947,51 +947,56 @@
 
   .listing-preview-compact :global(.mr-card),
   .listing-preview-compact :global(.cf-card) {
-    gap: 10px;
-    padding: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px;
   }
 
   .listing-preview-compact :global(.mr-icon) {
-    width: 64px;
-    height: 64px;
+    width: 80px;
+    height: 80px;
   }
 
   .listing-preview-compact :global(.cf-icon) {
-    width: 72px;
-    height: 72px;
+    width: 80px;
+    height: 80px;
   }
 
   .listing-preview-compact :global(.mr-title-line h3),
   .listing-preview-compact :global(.cf-body h3) {
-    font-size: 14px;
+    font-size: 15px;
   }
 
   .listing-preview-compact :global(.mr-summary),
   .listing-preview-compact :global(.cf-summary) {
     font-size: 12px;
-    line-height: 1.35;
+    line-height: 1.4;
   }
 
   .listing-preview-compact :global(.mr-center),
   .listing-preview-compact :global(.cf-body) {
-    gap: 4px;
+    gap: 6px;
+    min-width: 0;
   }
 
   .listing-preview-compact :global(.mr-actions) {
-    gap: 4px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
   }
 
   .listing-preview-compact :global(.mr-dl-btn.card-dl) {
-    height: 26px;
+    height: 28px;
     font-size: 12px;
-    padding: 0 10px;
+    padding: 0 12px;
   }
 
   .listing-preview-compact :global(.card-summary) {
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
   }
-
   .identity-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

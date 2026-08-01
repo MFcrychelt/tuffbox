@@ -318,7 +318,7 @@ Brief | Setup | Content | Resolve | Tune | History | Test | Diagnose | Snapshots
 
 - Brief → storefront `manifest.listing` + collapsed Author notes (`manifest.brief`);
 - Setup → ProjectSettings;
-- Content → Mods (Import/Resync, CF+MR bulk, wrong-loader, Ideas «Often together», Resolve/History trails);
+- Content → Mods (Import/Resync, CF+MR bulk, wrong-loader, **Optimize pack** curated/custom, Ideas «Often together», Resolve/History trails);
 - Resolve → Graph;
 - Tune → ConfigEditor (roots + search jump + format/lint + snippets + snapshot trail);
 - History → ChangeHistory (chrono timeline, delta scan, AI context);
@@ -331,5 +331,23 @@ Brief | Setup | Content | Resolve | Tune | History | Test | Diagnose | Snapshots
 Skeleton pages:
 
 - больше нет полностью пустых workflow pages; публикация в Modrinth/GitHub пока будущий этап.
+
+## Authoring curated Optimize packs (Fabric)
+
+1. Publish a Modrinth **mod** project whose **required** dependencies are the full opt-mod set for one Minecraft version (do not ship a whole `.mrpack` that replaces the user’s instance).
+2. Add/update a row in [`crates/tuffbox-core/data/optimize-packs.json`](../crates/tuffbox-core/data/optimize-packs.json):
+
+```json
+"fabric": {
+  "1.21.1": {
+    "projectId": "<modrinth-id-or-slug>",
+    "slug": "tuffbox-opt-1-21-1",
+    "name": "TuffBox Opt Fabric 1.21.1"
+  }
+}
+```
+
+3. Key = exact `manifest.minecraft.version`. Optional override for local tests: env `TUFFBOX_OPT_PACKS` → path to a JSON file with the same shape.
+4. Quilt falls back to the Fabric map when no quilt-specific entry exists.
 
 Следующая задача — углублять реальные сервисы: inline diff, server pack builder, Modrinth draft publishing, crash parser и change plan preview.
