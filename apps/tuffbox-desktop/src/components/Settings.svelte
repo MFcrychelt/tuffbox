@@ -133,6 +133,14 @@
   let discordMessage = $state("");
   let discordError = $state("");
   let aiModalOpen = $state(false);
+  let savingGemini = $state(false);
+
+  const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai";
+  const GEMINI_DEFAULT_MODEL = "gemini-flash-latest";
+
+  const isGeminiEndpoint = $derived(
+    aiEndpoint.includes("generativelanguage.googleapis.com") || aiEndpoint.includes("/v1beta/openai"),
+  );
 
   // Launcher settings
   let launcher = $state<LauncherSettings>({
@@ -533,6 +541,59 @@
       integrationsError = String(e);
     } finally {
       testingProvider = null;
+    }
+  }
+
+  /** Switch AI to Gemini OpenAI-compat + save API key (for quick testing). */
+  async function useGeminiForTesting() {
+    savingGemini = true;
+    integrationsError = "";
+    integrationsMessage = "";
+    try {
+      const model =
+        aiModel.trim().toLowerCase().includes("gemini") && aiModel.trim()
+          ? aiModel.trim()
+          : GEMINI_DEFAULT_MODEL;
+      aiProvider = "openai-compatible";
+      aiEndpoint = GEMINI_ENDPOINT;
+      aiModel = model;
+      await ipc("save_integration_settings", {
+        settings: {
+          githubRepository: githubRepository.trim(),
+          ai: {
+            provider: "openai-compatible",
+            endpoint: GEMINI_ENDPOINT,
+            model,
+            diagnoseMode,
+            crashKbEndpoint: crashKbEndpoint.trim(),
+            ollamaBinaryPath: ollamaBinaryPath.trim(),
+            ollamaModelsPath: ollamaModelsPath.trim(),
+          },
+          swarm: {
+            enabled: swarmEnabled,
+            onboardingDone: true,
+            sharePromptsEnabled: swarmSharePrompts,
+            supabaseUrl: swarmSupabaseUrl.trim(),
+            hubUrl: swarmHubUrl.trim(),
+            p2pEnabled: swarmP2pEnabled,
+            p2pControlUrl: swarmP2pControlUrl.trim() || "http://127.0.0.1:8790",
+          },
+        },
+      });
+      if (aiApiKeyDraft.trim()) {
+        await ipc("set_integration_secret", { kind: "ai", value: aiApiKeyDraft.trim() });
+        aiApiKeyDraft = "";
+      } else if (!aiApiKeySet) {
+        integrationsError = "Enter a Gemini API key first (Google AI Studio).";
+        await loadIntegrations();
+        return;
+      }
+      integrationsMessage = `Gemini ready · model ${model}`;
+      await loadIntegrations();
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      savingGemini = false;
     }
   }
 
@@ -1317,7 +1378,15 @@
             <div class="provider-head">
               <strong>AI</strong>
               <span class:ok={aiProvider === "ollama" || aiApiKeySet}>
-                {aiProvider === "ollama" ? "Ollama" : aiApiKeySet ? "API key set" : "API (no key)"}
+                {aiProvider === "ollama"
+                  ? "Ollama"
+                  : isGeminiEndpoint
+                    ? aiApiKeySet
+                      ? "Gemini · key set"
+                      : "Gemini · no key"
+                    : aiApiKeySet
+                      ? "API key set"
+                      : "API (no key)"}
               </span>
             </div>
             <p class="hint">
@@ -1329,11 +1398,61 @@
                 · Models: <code>{ollamaModelsPath || "default"}</code>
               {/if}
             </p>
+
+            <label>
+              Gemini model
+              <input
+                bind:value={aiModel}
+                placeholder={GEMINI_DEFAULT_MODEL}
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              <KeyRound size={12} /> Gemini API key
+              <input
+                type="password"
+                bind:value={aiApiKeyDraft}
+                placeholder={aiApiKeySet ? "•••••••• (enter new to replace)" : "AIza… from Google AI Studio"}
+                autocomplete="new-password"
+              />
+            </label>
+            <p class="hint">
+              Uses Google’s OpenAI-compatible endpoint
+              (<code>…/v1beta/openai</code>). Same key as
+              <code>X-goog-api-key</code> / AI Studio.
+            </p>
+
             <div class="row-actions">
-              <button type="button" class="secondary mini" onclick={() => (aiModalOpen = true)}>
-                <Bot size={14} /> Configure AI connection…
+              <button
+                type="button"
+                class="secondary mini"
+                onclick={useGeminiForTesting}
+                disabled={savingGemini || !!savingSecret}
+              >
+                {savingGemini ? "Saving…" : "Use Gemini"}
               </button>
-              <button class="ghost mini" onclick={() => testProvider("ai")} disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}>
+              <button
+                class="ghost mini"
+                onclick={() => saveSecret("ai", aiApiKeyDraft)}
+                disabled={!!savingSecret || !aiApiKeyDraft.trim()}
+              >
+                {savingSecret === "ai" ? "Saving…" : "Save key only"}
+              </button>
+              <button
+                class="ghost mini"
+                onclick={() => clearSecret("ai")}
+                disabled={!aiApiKeySet || !!clearingSecret}
+              >
+                {clearingSecret === "ai" ? "Clearing…" : "Clear key"}
+              </button>
+              <button type="button" class="ghost mini" onclick={() => (aiModalOpen = true)}>
+                <Bot size={14} /> More…
+              </button>
+              <button
+                class="ghost mini"
+                onclick={() => testProvider("ai")}
+                disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}
+              >
                 {testingProvider === "ai" ? "Testing…" : "Test AI"}
               </button>
             </div>

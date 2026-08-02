@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { Play, Stethoscope, ArrowRight, X, AlertTriangle } from "@lucide/svelte";
+  import { Stethoscope, ArrowRight, X, AlertTriangle } from "@lucide/svelte";
   import { launchWithFeedback } from "../lib/launch";
   import {
     projectPath,
@@ -40,7 +40,6 @@
 
   $effect(() => {
     if (next.stage) ideSuggestedStage.set(next.stage);
-    else if (next.kind === "play") ideSuggestedStage.set("test");
   });
 
   async function refreshIssues() {
@@ -92,10 +91,6 @@
   }
 
   function runNext() {
-    if (next.kind === "play") {
-      void runPlay();
-      return;
-    }
     if (next.stage) go(next.stage);
   }
 
@@ -161,10 +156,6 @@
   </div>
 
   <div class="ide-next-actions">
-    <button type="button" class="ghost" onclick={runPlay} disabled={!$projectPath || launching} title="Test launch (Ctrl+Shift+P)">
-      <Play size={14} />
-      {launching ? "…" : "Play"}
-    </button>
     <button type="button" class="ghost" onclick={() => go("diagnose")} title="Health check">
       <Stethoscope size={14} />
       Health

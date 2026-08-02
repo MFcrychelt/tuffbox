@@ -58,7 +58,7 @@
     suggestedModelNotes?: Record<string, string>;
   };
 
-  type PresetId = "ollama" | "openai" | "openrouter" | "hermes" | "custom";
+  type PresetId = "ollama" | "gemini" | "openai" | "openrouter" | "hermes" | "custom";
 
   const PRESETS: {
     id: PresetId;
@@ -77,6 +77,15 @@
       model: "",
       needsKey: false,
       hint: "Local models via Ollama. TuffBox detects your install — you choose which model to download.",
+    },
+    {
+      id: "gemini",
+      label: "Gemini",
+      provider: "openai-compatible",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
+      model: "gemini-flash-latest",
+      needsKey: true,
+      hint: "Google Gemini via OpenAI-compatible Chat Completions. Paste an API key from Google AI Studio.",
     },
     {
       id: "openai",
@@ -183,6 +192,7 @@
   function detectPreset(p: AiProvider, ep: string): PresetId {
     const e = ep.trim().replace(/\/$/, "");
     if (p === "ollama" || e.includes("11434")) return "ollama";
+    if (e.includes("generativelanguage.googleapis.com") || e.includes("/v1beta/openai")) return "gemini";
     if (e.includes("api.openai.com")) return "openai";
     if (e.includes("openrouter.ai")) return "openrouter";
     if (p === "openai-compatible") return e ? "hermes" : "custom";
@@ -523,7 +533,7 @@
           <Bot size={18} />
           <div>
             <strong>AI connection</strong>
-            <small>Ollama or OpenAI-compatible API (Hermes-style)</small>
+            <small>Ollama, Gemini, or OpenAI-compatible API</small>
           </div>
         </div>
         <button class="icon" onclick={close} aria-label="Close"><X size={16} /></button>
@@ -564,7 +574,7 @@
           Endpoint
           <input
             bind:value={endpoint}
-            placeholder={provider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1"}
+            placeholder={provider === "ollama" ? "http://127.0.0.1:11434" : preset === "gemini" ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1"}
             autocomplete="off"
           />
         </label>
@@ -700,17 +710,17 @@
         {:else}
           <label>
             Model
-            <input bind:value={model} placeholder="gpt-4o-mini" autocomplete="off" />
+            <input bind:value={model} placeholder={preset === "gemini" ? "gemini-flash-latest" : "gpt-4o-mini"} autocomplete="off" />
           </label>
         {/if}
 
         {#if provider === "openai-compatible"}
           <label>
-            <span class="lab"><KeyRound size={12} /> API key {apiKeySet ? "(saved)" : "(optional for local)"}</span>
+            <span class="lab"><KeyRound size={12} /> API key {apiKeySet ? "(saved)" : preset === "gemini" ? "(required)" : "(optional for local)"}</span>
             <input
               type="password"
               bind:value={apiKeyDraft}
-              placeholder={apiKeySet ? "•••••••• (enter new to replace)" : "sk-… or leave empty for local servers"}
+              placeholder={apiKeySet ? "•••••••• (enter new to replace)" : preset === "gemini" ? "AIza… Google AI Studio key" : "sk-… or leave empty for local servers"}
               autocomplete="new-password"
             />
           </label>

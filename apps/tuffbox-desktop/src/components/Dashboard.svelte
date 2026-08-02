@@ -1297,31 +1297,34 @@
     max-width: 100%;
     position: sticky;
     top: 20px;
+    align-self: start;
+  }
+
+  /* Instances under skin: side column scrolls so long lists stay usable. */
+  .main-layout[data-layout="yt-main"] .home-side {
     max-height: calc(100vh - 40px);
     overflow-y: auto;
-    align-self: start;
   }
 
   /*
    * yt-under-skin: skin + YouTube share the sticky column.
-   * Bound the column to the viewport so the feed under the skin can scroll
-   * into view on short screens (page scroll alone won't reveal it while sticky).
+   * One scrollbar only — on `.skin-rail-youtube`. Do not scroll `.home-side`
+   * (that nested a second bar on top of the page + feed).
    */
   .main-layout[data-layout="yt-under-skin"] .home-side {
     max-height: calc(100vh - 40px);
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .skin-rail-youtube {
     min-width: 0;
     flex: 1 1 auto;
-    /* Floor so at least one card peeks; parent scrolls if skin alone is taller. */
-    min-height: min(200px, 35vh);
+    min-height: min(160px, 28vh);
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
+    overscroll-behavior: contain;
   }
 
   .main-layout[data-layout="yt-under-skin"] .skin-rail-youtube {

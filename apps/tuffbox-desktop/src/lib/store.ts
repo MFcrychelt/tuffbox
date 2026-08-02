@@ -488,7 +488,7 @@ export function computeIdeNextAction(opts: {
   briefDirty: boolean;
   tuneDirty: boolean;
   questDirty: boolean;
-}): { label: string; stage: string | null; kind: "stage" | "play" | "none"; detail?: string } {
+}): { label: string; stage: string | null; kind: "stage" | "none"; detail?: string } {
   if (opts.issueCount > 0) {
     return {
       label: "Fix pack graph",
@@ -509,7 +509,7 @@ export function computeIdeNextAction(opts: {
   if (opts.questDirty) {
     return { label: "Save Quests", stage: "quests", kind: "stage", detail: "Unsaved quests" };
   }
-  return { label: "Test launch", stage: "test", kind: "play", detail: "Verify the pack" };
+  return { label: "Open Launch", stage: "test", kind: "stage", detail: "Verify the pack in Test" };
 }
 
 /** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */

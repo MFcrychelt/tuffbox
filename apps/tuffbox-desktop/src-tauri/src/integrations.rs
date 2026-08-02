@@ -906,7 +906,10 @@ fn openai_chat_url(endpoint: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');
     if endpoint.ends_with("/chat/completions") {
         endpoint.to_string()
-    } else if endpoint.ends_with("/v1") {
+    } else if endpoint.ends_with("/v1")
+        // Gemini OpenAI-compat base: …/v1beta/openai (+ optional trailing slash trimmed)
+        || endpoint.ends_with("/openai")
+    {
         format!("{endpoint}/chat/completions")
     } else {
         format!("{endpoint}/v1/chat/completions")
@@ -2306,6 +2309,14 @@ mod tests {
         assert_eq!(
             openai_chat_url("http://localhost:1234/v1"),
             "http://localhost:1234/v1/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url("https://generativelanguage.googleapis.com/v1beta/openai"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url("https://generativelanguage.googleapis.com/v1beta/openai/"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
         );
         assert_eq!(
             ollama_chat_url("http://127.0.0.1:11434"),
