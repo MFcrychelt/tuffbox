@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::integrations;
 
 static NODE_CHILD: Lazy<Mutex<Option<Child>>> = Lazy::new(|| Mutex::new(None));
-/// Ephemeral bearer for the node we spawned (process memory only).
+/// Bearer for the node we spawned or re-attached to (process memory + persisted file).
 static CONTROL_TOKEN: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
 fn control_token() -> Option<String> {
@@ -21,6 +21,12 @@ fn control_token() -> Option<String> {
 fn set_control_token(token: String) {
     if let Ok(mut g) = CONTROL_TOKEN.lock() {
         *g = Some(token);
+    }
+}
+
+fn clear_control_token() {
+    if let Ok(mut g) = CONTROL_TOKEN.lock() {
+        *g = None;
     }
 }
 
@@ -39,6 +45,40 @@ pub fn auth_token_for_base(base: &str) -> Option<String> {
     }
 }
 
+fn p2p_token_path() -> PathBuf {
+    dirs::data_dir()
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("swarm")
+        .join("p2p_control_token")
+}
+
+fn load_persisted_token() -> Option<String> {
+    let path = p2p_token_path();
+    let raw = std::fs::read_to_string(path).ok()?;
+    let token = raw.trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn persist_token(token: &str) -> Result<(), String> {
+    let path = p2p_token_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&path, token.as_bytes()).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
 fn new_ephemeral_token() -> String {
     let mut hasher = Sha256::new();
     hasher.update(
@@ -52,7 +92,7 @@ fn new_ephemeral_token() -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Ordered capsule HTTP bases: P2P control (if healthy) then hub/KB fallback.
+/// Ordered capsule HTTP bases: P2P control (if authorized) then hub/KB fallback.
 pub async fn capsule_transport_bases() -> Vec<String> {
     let swarm = integrations::swarm_settings();
     let mut bases = Vec::new();
@@ -60,7 +100,7 @@ pub async fn capsule_transport_bases() -> Vec<String> {
         let control = swarm.p2p_control_url.trim().trim_end_matches('/').to_string();
         if !control.is_empty() {
             let _ = ensure_node_running(&control).await;
-            if p2p_healthy(&control).await {
+            if p2p_authorized(&control).await {
                 bases.push(control);
             }
         }
@@ -90,11 +130,53 @@ pub async fn p2p_healthy(control_base: &str) -> bool {
     }
 }
 
+/// True only when we hold a bearer that the control plane accepts.
+pub async fn p2p_authorized(control_base: &str) -> bool {
+    let Some(token) = control_token() else {
+        return false;
+    };
+    if !p2p_healthy(control_base).await {
+        return false;
+    }
+    let url = format!("{}/v1/node/status", control_base.trim_end_matches('/'));
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    else {
+        return false;
+    };
+    match client
+        .get(&url)
+        .bearer_auth(&token)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => true,
+        _ => false,
+    }
+}
+
 pub async fn ensure_node_running(control_base: &str) -> Result<(), String> {
-    if p2p_healthy(control_base).await {
-        // Attached to an already-running node — API calls need a matching token.
+    // Restore persisted token before any attach decision (fail closed without ownership).
+    if control_token().is_none() {
+        if let Some(token) = load_persisted_token() {
+            set_control_token(token);
+        }
+    }
+
+    if p2p_authorized(control_base).await {
         return Ok(());
     }
+
+    // Healthy listener we cannot authorize → refuse hijack attach.
+    if p2p_healthy(control_base).await {
+        clear_control_token();
+        return Err(
+            "p2p control is listening but our control token was rejected — refuse attach (fail closed)"
+                .into(),
+        );
+    }
+
     {
         let mut guard = NODE_CHILD
             .lock()
@@ -104,9 +186,7 @@ pub async fn ensure_node_running(control_base: &str) -> Result<(), String> {
                 Ok(None) => {}
                 _ => {
                     *guard = None;
-                    if let Ok(mut t) = CONTROL_TOKEN.lock() {
-                        *t = None;
-                    }
+                    clear_control_token();
                 }
             }
         }
@@ -122,14 +202,15 @@ pub async fn ensure_node_running(control_base: &str) -> Result<(), String> {
 
             let token = new_ephemeral_token();
             set_control_token(token.clone());
+            persist_token(&token)?;
 
             let mut cmd = Command::new(&bin);
+            // Pass token via env (not CLI) so it is not visible in process listings.
             cmd.arg("--control")
                 .arg(control)
-                .arg("--control-token")
-                .arg(&token)
                 .arg("--listen")
                 .arg("/ip4/0.0.0.0/tcp/0")
+                .env("TUFFSWARM_CONTROL_TOKEN", &token)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
@@ -148,11 +229,11 @@ pub async fn ensure_node_running(control_base: &str) -> Result<(), String> {
 
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(250)).await;
-        if p2p_healthy(control_base).await {
+        if p2p_authorized(control_base).await {
             return Ok(());
         }
     }
-    Err("tuffswarm-node did not become healthy in time".into())
+    Err("tuffswarm-node did not become healthy/authorized in time".into())
 }
 
 fn find_node_binary() -> Option<PathBuf> {
@@ -229,18 +310,21 @@ pub async fn get_p2p_node_status() -> Result<Value, String> {
         return Ok(serde_json::json!({
             "enabled": false,
             "healthy": false,
+            "authorized": false,
             "controlUrl": swarm.p2p_control_url,
         }));
     }
     let base = swarm.p2p_control_url.trim().trim_end_matches('/').to_string();
     let healthy = p2p_healthy(&base).await;
+    let authorized = p2p_authorized(&base).await;
     let mut status = serde_json::json!({
         "enabled": true,
         "healthy": healthy,
+        "authorized": authorized,
         "controlUrl": base,
         "tokenPresent": control_token().is_some(),
     });
-    if healthy {
+    if authorized {
         let url = format!("{base}/v1/node/status");
         if let Ok(client) = reqwest::Client::builder()
             .timeout(Duration::from_secs(3))

@@ -1309,6 +1309,8 @@ pub async fn exchange_authorization_code(
 #[serde(rename_all = "camelCase")]
 pub struct LoginResult {
     pub profile: McProfile,
+    /// Never returned to the webview — tokens stay in the OS keyring.
+    #[serde(skip_serializing)]
     pub mc_access_token: String,
 }
 

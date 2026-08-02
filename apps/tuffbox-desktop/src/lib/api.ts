@@ -2084,13 +2084,13 @@ export const api = {
   // ── Minecraft Auth ───────────────────────────────────────────────
   mcAuth: {
     startDeviceCode() { return cmd<DeviceCodeInfo>("mc_start_device_code"); },
-    pollDeviceCode() { return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_poll_device_code"); },
+    pollDeviceCode() { return cmd<{ profile: McProfile }>("mc_poll_device_code"); },
     getMicrosoftLoginUrl() { return cmd<string>("mc_get_microsoft_login_url"); },
     loginWithAuthUrl(urlOrCode: string) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_login_with_auth_url", { urlOrCode });
+      return cmd<{ profile: McProfile }>("mc_login_with_auth_url", { urlOrCode });
     },
     offlineLogin(username: string, skinSource: SkinSource) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_offline_login", { username, skinSource });
+      return cmd<{ profile: McProfile }>("mc_offline_login", { username, skinSource });
     },
     getAuthStatus() { return cmd<AuthState>("mc_get_auth_status"); },
     logout() { return cmd<AuthState>("mc_logout"); },
@@ -2114,7 +2114,7 @@ export const api = {
     getSkinBase64(url: string) { return cmd<string>("mc_get_skin_base64", { url }); },
     listYggdrasilPresets() { return cmd<YggdrasilPreset[]>("mc_list_yggdrasil_presets"); },
     yggdrasilLogin(username: string, password: string, authority: string) {
-      return cmd<{ profile: McProfile; mcAccessToken: string }>("mc_yggdrasil_login", {
+      return cmd<{ profile: McProfile }>("mc_yggdrasil_login", {
         username,
         password,
         authority,
