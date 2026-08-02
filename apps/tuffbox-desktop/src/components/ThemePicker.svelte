@@ -109,7 +109,7 @@
   }
 
   .theme-swatch.minimal .mini-ui {
-    border-radius: 12px;
+    border-radius: var(--border-radius-md);
   }
 
   .theme-swatch:hover {

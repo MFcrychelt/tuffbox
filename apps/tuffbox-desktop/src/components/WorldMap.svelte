@@ -2949,7 +2949,7 @@
   }
   .tools-tabs button {
     padding: 6px 4px;
-    border-radius: 8px;
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
