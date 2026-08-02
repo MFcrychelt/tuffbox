@@ -149,21 +149,22 @@
         <button
           class="primary"
           type="button"
-          onclick={primaryRec.apply}
+          onclick={() => primaryRec?.apply()}
           disabled={aiApplyBusy || applyingHintId !== null}
         >
           <Wrench size={15} />
           {primaryRec.label}
         </button>
       {:else if !sessionOk && topSuspect?.knownInManifest}
-        <button class="primary" onclick={() => onFixDisableMod?.(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
+        <button class="primary" type="button" onclick={() => onFixDisableMod?.(topSuspect.id)} disabled={disablingModId === topSuspect.id}>
           {disablingModId === topSuspect.id ? "Disabling…" : `Disable ${topSuspect.name}`}
         </button>
-        <button class="ghost" onclick={() => onApplyTopSuspectUpdate?.()} disabled={fixingIdx === -1}>Update</button>
+        <button class="ghost" type="button" onclick={() => onApplyTopSuspectUpdate?.()} disabled={fixingIdx === -1}>Update</button>
       {/if}
       {#if !sessionOk && aiAnalysis && aiPlanActions(aiAnalysis).length > 0}
         <button
           class="secondary"
+          type="button"
           onclick={() => onApplyAiPlan?.()}
           disabled={aiApplyBusy || (aiAnalysis.validation && aiAnalysis.validation.ok === false)}
         >
@@ -289,6 +290,7 @@
     word-break: break-word;
   }
   .dx-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+  .dx-cta button:disabled { opacity: 0.55; cursor: not-allowed; }
   .dx-class-cards {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

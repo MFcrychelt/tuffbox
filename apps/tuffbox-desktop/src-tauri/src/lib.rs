@@ -7181,7 +7181,12 @@ fn write_server_properties_file(
 #[tauri::command(rename_all = "camelCase")]
 async fn scan_mod_recipes(path: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
-        let result = tuffbox_core::recipe_scan::scan_project_recipes(Path::new(&path))?;
+        let manifest_path = resolve_manifest_path(&path)?;
+        let jar_roots = catalog_vanilla_jar_roots();
+        let result = tuffbox_core::recipe_scan::scan_project_recipes_with_vanilla_roots(
+            &manifest_path,
+            &jar_roots,
+        )?;
         serde_json::to_value(result).map_err(|e| e.to_string())
     })
     .await
@@ -7397,7 +7402,11 @@ pub(crate) fn collect_catalog_item_ids(
     manifest_path: &std::path::Path,
 ) -> Result<std::collections::HashSet<String>, String> {
     let mut extra = Vec::new();
-    if let Ok(scan) = tuffbox_core::recipe_scan::scan_project_recipes(manifest_path) {
+    let jar_roots = catalog_vanilla_jar_roots();
+    if let Ok(scan) = tuffbox_core::recipe_scan::scan_project_recipes_with_vanilla_roots(
+        manifest_path,
+        &jar_roots,
+    ) {
         for r in scan.recipes {
             if !r.output_id.is_empty() && !r.output_id.starts_with('#') {
                 extra.push(r.output_id);
@@ -7409,9 +7418,11 @@ pub(crate) fn collect_catalog_item_ids(
             }
         }
     }
-    let jar_roots = catalog_vanilla_jar_roots();
-    let items =
-        tuffbox_core::item_catalog::build_item_catalog_for_manifest(manifest_path, extra, &jar_roots)?;
+    let items = tuffbox_core::item_catalog::build_item_catalog_for_manifest(
+        manifest_path,
+        extra,
+        &jar_roots,
+    )?;
     Ok(items.into_iter().map(|e| e.id).collect())
 }
 
@@ -12101,6 +12112,15 @@ fn share_log_mclogs(
             p
         }
         Some(name) => {
+            // Basename-only: reject path separators / traversal before join.
+            if name.contains("..")
+                || name.contains('/')
+                || name.contains('\\')
+                || name.contains('\0')
+                || Path::new(name).file_name().and_then(|f| f.to_str()) != Some(name)
+            {
+                return Err("invalid log name".into());
+            }
             let candidate = if name.starts_with("crash-") || name.ends_with(".txt") {
                 crashes_dir.join(name)
             } else {
@@ -12109,7 +12129,22 @@ fn share_log_mclogs(
             if !candidate.exists() {
                 return Err(format!("log not found: {name}"));
             }
-            candidate
+            let canonical_project =
+                std::fs::canonicalize(&project_dir).map_err(|e| e.to_string())?;
+            let resolved = std::fs::canonicalize(&candidate).map_err(|e| e.to_string())?;
+            if !resolved.starts_with(&canonical_project) {
+                return Err("log path escapes project directory".into());
+            }
+            let under_logs = resolved.starts_with(
+                std::fs::canonicalize(&logs_dir).unwrap_or_else(|_| logs_dir.clone()),
+            );
+            let under_crashes = resolved.starts_with(
+                std::fs::canonicalize(&crashes_dir).unwrap_or_else(|_| crashes_dir.clone()),
+            );
+            if !under_logs && !under_crashes {
+                return Err("log path must be under logs/ or crash-reports/".into());
+            }
+            resolved
         }
         None => pick_shareable_crash_log(&logs_dir, &crashes_dir)
             .ok_or_else(|| "no crash report or latest.log found to share".to_string())?,

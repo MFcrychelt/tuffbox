@@ -76,7 +76,6 @@
 
   let recipes = $state<ScannedRecipe[]>([]);
   let items = $state<ItemEntry[]>([]);
-  let itemCategorySets = $state(new Map<string, Set<string>>());
   let catalogReady = $state(false);
   let scanMeta = $state<Omit<RecipeScanResult, "recipes"> | null>(null);
   let loading = $state(false);
@@ -1024,24 +1023,6 @@
     return "other";
   }
 
-  function buildItemCategorySets(list: ScannedRecipe[]): Map<string, Set<string>> {
-    const map = new Map<string, Set<string>>();
-    const touch = (id: string, category: string) => {
-      if (!id || id === "unknown:unknown") return;
-      let set = map.get(id);
-      if (!set) {
-        set = new Set();
-        map.set(id, set);
-      }
-      set.add(category);
-    };
-    for (const recipe of list) {
-      touch(recipe.outputId, recipe.category);
-      for (const inp of recipe.inputIds) touch(inp, recipe.category);
-    }
-    return map;
-  }
-
   function buildFilteredCounts(
     list: ScannedRecipe[],
     category: string,
@@ -1068,7 +1049,6 @@
 
   function rebuildIndexes(list: ScannedRecipe[]) {
     items = buildItemCatalog(list);
-    itemCategorySets = buildItemCategorySets(list);
     catalogReady = true;
   }
 
@@ -1097,13 +1077,7 @@
       console.warn("listItemCatalog failed", e);
     }
     items = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
-    itemCategorySets = buildItemCategorySets(list);
     catalogReady = true;
-  }
-
-  function itemInCategory(itemId: string, category: string): boolean {
-    if (category === "all") return true;
-    return itemCategorySets.get(itemId)?.has(category) ?? false;
   }
 
   function focusCountForItem(item: ItemEntry): number {
@@ -1127,7 +1101,6 @@
   const filteredItems = $derived(catalogReady
     ? items.filter((i) => {
         if (modFilter !== "all" && i.modNs !== modFilter) return false;
-        if (!editorOpen && !itemInCategory(i.id, categoryFilter)) return false;
         return matchesJeiSearch(i.id, filter, i.name);
       })
     : []);

@@ -5,6 +5,7 @@
   import { launchWithFeedback } from "../lib/launch";
   import { toasts } from "../lib/toast";
   import { trapFocus } from "../lib/focusTrap";
+  import { portal } from "../lib/portal";
   import { get } from "svelte/store";
 
   let {
@@ -311,6 +312,7 @@
     class="modal-backdrop"
     role="button"
     tabindex="-1"
+    use:portal
     onclick={(e) => e.target === e.currentTarget && close()}
     onkeydown={() => {}}
   >
@@ -328,7 +330,7 @@
             Custom resolves missing whitelist mods (Modrinth → CurseForge).
           </p>
         </div>
-        <button class="icon-btn" onclick={close} aria-label="Close"><X size={18} /></button>
+        <button class="icon-btn" type="button" onclick={close} aria-label="Close"><X size={18} /></button>
       </div>
 
       <div class="mode-tabs" role="tablist">
@@ -355,6 +357,7 @@
         </button>
       </div>
 
+      <div class="opt-body">
       {#if loading}
         <div class="opt-status"><Loader2 size={16} class="spin" /> Loading plan…</div>
       {:else if error}
@@ -379,7 +382,7 @@
 
       {#if warnings.length}
         <ul class="opt-warnings">
-          {#each warnings as w}
+          {#each warnings as w (w)}
             <li>{w}</li>
           {/each}
         </ul>
@@ -480,8 +483,9 @@
         <input type="checkbox" bind:checked={applyConfigs} disabled={applying} />
         Apply safe config templates after installing mods
       </label>
+      </div>
 
-      <div class="dep-dialog-footer opt-footer">
+      <div class="opt-footer">
         <button class="ghost" type="button" onclick={close} disabled={applying}>Close</button>
         {#if doneMessage}
           <button class="secondary" type="button" onclick={testLaunch} disabled={applying}>
@@ -505,15 +509,93 @@
 {/if}
 
 <style>
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(10px);
+  }
+
   .optimize-dialog {
     width: min(640px, 100%);
-    max-height: 88vh;
+    max-height: min(88vh, calc(100vh - 32px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 18px 20px 16px;
+    border-radius: var(--border-radius-lg, 16px);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    box-shadow: 0 30px 100px rgba(0, 0, 0, 0.45);
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-shrink: 0;
+  }
+
+  .modal-header h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 4px;
+    font-size: 18px;
+  }
+
+  .modal-header p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .icon-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    flex-shrink: 0;
+    background: transparent;
+    color: var(--text-muted);
+  }
+
+  .icon-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+  }
+
+  .opt-body {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-right: 2px;
+  }
+
+  .opt-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
   }
   .mode-tabs {
     display: flex;
     gap: 6px;
     margin: 0 0 12px;
+    flex-shrink: 0;
   }
   .mode-tabs button {
     flex: 1;
@@ -663,9 +745,6 @@
   .opt-findings ul {
     margin: 6px 0 0;
     padding-left: 18px;
-  }
-  .opt-footer {
-    margin-top: 8px;
   }
   :global(.spin) {
     animation: opt-spin 0.8s linear infinite;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { launchWithFeedback } from "../lib/launch";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     Stethoscope,
     Play,
@@ -831,7 +831,7 @@
     } else if (joined.includes("latest.log") || joined.includes("/logs/")) {
       await chooseLatestLog();
     }
-    setTimeout(() => jumpToFirstError(), 250);
+    setTimeout(() => void openEvidence(), 250);
   }
 
   async function runAiExplain(opts: { quiet?: boolean } = {}) {
@@ -1624,15 +1624,19 @@
   /// Applies a specific fix action (used for per-mod buttons on a hint).
   async function applyHintFixAction(hint: DiagnosisHint, action: FixAction) {
     if (!$projectPath) return;
+    const normalized = normalizeFixAction(action);
     applyingHintId = hint.id;
     error = null;
     message = null;
     try {
       const summary: string = await invoke("apply_fix_action", {
         path: $projectPath,
-        action,
+        action: normalized,
       });
       message = summary || `Applied fix: ${hint.title}`;
+      verifyPrompt = true;
+      showApplyTrail = true;
+      requestIdeIssuesRefresh();
       await load(true);
     } catch (e) {
       error = String(e);
@@ -1756,6 +1760,42 @@
     logViewerRef?.scrollToLine(line);
   }
 
+  /** Wait for DiagnoseLogViewer to mount after switching to the Evidence tab. */
+  async function scrollLogToLineWhenReady(line: number, maxAttempts = 10): Promise<boolean> {
+    for (let i = 0; i < maxAttempts; i++) {
+      if (logViewerRef) {
+        logViewerRef.scrollToLine(line);
+        return true;
+      }
+      await tick();
+    }
+    return false;
+  }
+
+  function fixActionModId(action: { modId?: string | null; mod_id?: string | null }): string | null {
+    const id = action.modId ?? action.mod_id ?? null;
+    return id ? String(id) : null;
+  }
+
+  function normalizeFixAction(action: FixAction | ProblemFixAction): FixAction {
+    return {
+      kind: action.kind,
+      label: action.label,
+      modId: fixActionModId(action),
+    };
+  }
+
+  /** Switch to Evidence and scroll once the log viewer is mounted. */
+  async function openEvidence(opts?: { line?: number }) {
+    mainTab = "evidence";
+    await tick();
+    if (opts?.line != null && opts.line > 0) {
+      await scrollLogToLineWhenReady(Math.max(0, opts.line - 1));
+      return;
+    }
+    await jumpToFirstErrorAsync();
+  }
+
   const LOG_ERROR_RE = /\b(FATAL|ERROR|SEVERE)\b|Exception|Caused by:|Crash Report/i;
   let activeErrorHit = $state(-1);
 
@@ -1777,9 +1817,27 @@
     message = `Error ${activeErrorHit + 1}/${errorHits.length} · line ${idx + 1}`;
   }
 
-  /** Jump to first / next ERROR line in the log (alias kept for older markup). */
+  async function jumpToNextErrorAsync() {
+    if (!errorHits.length) {
+      message = "No ERROR/FATAL/Exception lines found in this log view.";
+      return;
+    }
+    activeErrorHit = ((activeErrorHit + 1) % errorHits.length + errorHits.length) % errorHits.length;
+    const idx = errorHits[activeErrorHit];
+    if (await scrollLogToLineWhenReady(idx)) {
+      message = `Error ${activeErrorHit + 1}/${errorHits.length} · line ${idx + 1}`;
+    }
+  }
+
+  /** Jump to first ERROR line in the log (resets cycle). */
   function jumpToFirstError() {
+    activeErrorHit = -1;
     jumpToNextError();
+  }
+
+  async function jumpToFirstErrorAsync() {
+    activeErrorHit = -1;
+    await jumpToNextErrorAsync();
   }
 
   async function copyCurrentLog() {
@@ -1855,12 +1913,9 @@
       return;
     }
     if (kind === "openEvidence") {
-      mainTab = "evidence";
-      if (problem.evidence?.line) {
-        queueMicrotask(() => scrollLogToLine(Math.max(0, (problem.evidence!.line ?? 1) - 1)));
-      } else {
-        jumpToFirstError();
-      }
+      void openEvidence(
+        problem.evidence?.line ? { line: problem.evidence.line } : undefined,
+      );
       return;
     }
     if (kind === "reviewAiPlan") {
@@ -1890,6 +1945,35 @@
         ideStageRequest.set("resolve");
       } finally {
         applyingProblemId = null;
+      }
+      return;
+    }
+    if (kind === "installDependency") {
+      const modId = fixActionModId(action);
+      if (!modId) {
+        error = "Install action is missing a mod id.";
+        return;
+      }
+      applyingProblemId = problem.id;
+      applyingHintId = problem.id;
+      error = null;
+      try {
+        await invoke("apply_fix_action", {
+          path: $projectPath,
+          action: { kind: "installDependency", label: action.label, modId },
+        });
+        message = `Installed ${modId}. Snapshot saved — Test launch to verify.`;
+        verifyPrompt = true;
+        showApplyTrail = true;
+        requestIdeIssuesRefresh();
+        await load(true);
+        void detectWrongLoaderMods();
+        void detectDuplicateModJars();
+      } catch (e) {
+        error = String(e);
+      } finally {
+        applyingProblemId = null;
+        applyingHintId = null;
       }
       return;
     }
@@ -1984,9 +2068,10 @@
     applyingHintId = problem.id;
     error = null;
     try {
+      const normalized = normalizeFixAction(action);
       await invoke("apply_fix_action", {
         path: $projectPath,
-        action: { kind: action.kind, label: action.label, modId: action.modId },
+        action: normalized,
       });
       message = `Applied: ${action.label}. Snapshot saved — Test launch to verify.`;
       verifyPrompt = true;
@@ -2001,12 +2086,7 @@
   }
 
   function onProblemWhy(problem: Problem) {
-    mainTab = "evidence";
-    if (problem.evidence?.line) {
-      queueMicrotask(() => scrollLogToLine(Math.max(0, (problem.evidence!.line ?? 1) - 1)));
-    } else {
-      jumpToFirstError();
-    }
+    void openEvidence(problem.evidence?.line ? { line: problem.evidence.line } : undefined);
   }
 
   function scrollToPackWarnings() {
@@ -2243,7 +2323,7 @@
         onFixDisableMod={fixDisableMod}
         onApplyTopSuspectUpdate={applyTopSuspectUpdate}
         onApplyAiPlan={applyAiPlan}
-        onJumpToFirstError={() => { mainTab = "evidence"; jumpToFirstError(); }}
+        onJumpToFirstError={() => void openEvidence()}
         onApplyBisectDisableHalf={applyBisectDisableHalf}
         warningCount={unifiedProblems.filter((p) => p.severity === "warning" || p.severity === "info").length}
         onShowWarnings={scrollToPackWarnings}
@@ -2325,7 +2405,7 @@
         sourceHint={sourceLabel}
         onJumpLine={(ln) => {
           const n = Number(ln) || 0;
-          if (n <= 0) jumpToFirstError();
+          if (n <= 0) void openEvidence();
           else scrollLogToLine(Math.max(0, n - 1));
         }}
         onDisableMod={fixDisableMod}
@@ -2442,7 +2522,7 @@
           memoryHint={null}
           cascadingBanner={null}
           sourceHint=""
-          onJumpLine={() => { mainTab = "evidence"; jumpToFirstError(); }}
+          onJumpLine={() => void openEvidence()}
           onDisableMod={fixDisableMod}
           onUpdateMod={async (id) => {
             if (!id) return;

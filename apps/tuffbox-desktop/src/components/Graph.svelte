@@ -1919,8 +1919,8 @@
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
-  // graph view: Ctrl/Meta+wheel zooms (toward the cursor), plain wheel scrolls
-  // the page, drag empty space to pan, double-click / button to reset.
+  // graph view: wheel zooms (toward the cursor), drag empty space to pan,
+  // double-click / button to reset.
   let viewportEl: SVGSVGElement;
   let viewX = $state(0);
   let viewY = $state(0);
@@ -1973,8 +1973,6 @@
   }
 
   function handleWheel(event: WheelEvent) {
-    // Plain wheel scrolls the Graph page; Ctrl/Meta+wheel zooms the canvas.
-    if (!(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
     const nextScale = Math.min(8, Math.max(0.15, viewScale / zoomFactor));

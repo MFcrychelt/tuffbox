@@ -12,6 +12,7 @@
   } from "@lucide/svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
+  import { sanitizeHtml } from "../lib/sanitizeHtml";
 
   let {
     result,
@@ -220,7 +221,7 @@
   {:else if tab === "overview"}
     <section class="overview">
       {#if detail.descriptionHtml}
-        <div class="html-body">{@html detail.descriptionHtml}</div>
+        <div class="html-body">{@html sanitizeHtml(detail.descriptionHtml)}</div>
       {:else}
         <p class="plain">{detail.description || "No description."}</p>
       {/if}

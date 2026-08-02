@@ -10,6 +10,11 @@ use zip::ZipArchive;
 
 use crate::manifest::ProjectManifest;
 
+/// Cached catalogs with very few entries usually mean the vanilla client jar was missing.
+const MIN_TRUSTED_CATALOG_ITEMS: usize = 64;
+
+const CATALOG_CACHE_VERSION: &str = "item-catalog-v3";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogItemEntry {
@@ -38,13 +43,15 @@ pub fn build_item_catalog(
     let cache_path = project_dir
         .join(".tuffbox")
         .join("cache")
-        .join("item-catalog-v2.json");
+        .join(format!("{CATALOG_CACHE_VERSION}.json"));
 
     let mut by_id: BTreeMap<String, CatalogItemEntry> = BTreeMap::new();
 
     if let Ok(raw) = std::fs::read_to_string(&cache_path) {
         if let Ok(cached) = serde_json::from_str::<CatalogCache>(&raw) {
-            if cached.fingerprint == fingerprint && !cached.items.is_empty() {
+            if cached.fingerprint == fingerprint
+                && catalog_cache_is_trustworthy(&cached.items, &jars)
+            {
                 by_id = cached
                     .items
                     .into_iter()
@@ -116,6 +123,37 @@ pub fn build_item_catalog_for_manifest(
     )
 }
 
+fn catalog_cache_is_trustworthy(items: &[CatalogItemEntry], jars: &[PathBuf]) -> bool {
+    if items.is_empty() {
+        return false;
+    }
+    if jars.is_empty() {
+        return true;
+    }
+    items.len() >= MIN_TRUSTED_CATALOG_ITEMS
+}
+
+/// Built-in launcher directories searched for an installed vanilla client jar.
+pub fn default_vanilla_jar_roots() -> Vec<PathBuf> {
+    default_vanilla_roots()
+}
+
+/// Merge TuffBox runtime / launcher paths with the built-in vanilla jar search roots.
+pub fn merge_vanilla_jar_roots(extra_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = default_vanilla_roots();
+    for root in extra_roots {
+        if !roots.iter().any(|existing| existing == root) {
+            roots.push(root.clone());
+        }
+    }
+    roots
+}
+
+/// Resolve installed vanilla `{version}/{version}.jar` paths for a Minecraft version id or alias.
+pub fn resolve_vanilla_client_jars(mc_version: &str, extra_roots: &[PathBuf]) -> Vec<PathBuf> {
+    vanilla_client_jars(mc_version, extra_roots)
+}
+
 fn catalog_jar_sources(
     project_dir: &Path,
     mc_version: &str,
@@ -156,19 +194,27 @@ fn default_vanilla_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn vanilla_client_jars(mc_version: &str, extra_roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut jars = Vec::new();
-    let mut roots = default_vanilla_roots();
-    for root in extra_roots {
-        if !roots.iter().any(|existing| existing == root) {
-            roots.push(root.clone());
+fn resolve_mc_version_for_jars(mc_version: &str, roots: &[PathBuf]) -> String {
+    for root in roots {
+        if let Ok(resolved) =
+            crate::versions::resolve_minecraft_version_alias_offline(mc_version, root)
+        {
+            return resolved;
         }
     }
+    crate::versions::resolve_minecraft_version_alias(mc_version)
+        .unwrap_or_else(|_| mc_version.to_string())
+}
+
+fn vanilla_client_jars(mc_version: &str, extra_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut jars = Vec::new();
+    let roots = merge_vanilla_jar_roots(extra_roots);
+    let resolved = resolve_mc_version_for_jars(mc_version, &roots);
     for root in roots {
         let jar = root
             .join("versions")
-            .join(mc_version)
-            .join(format!("{mc_version}.jar"));
+            .join(&resolved)
+            .join(format!("{resolved}.jar"));
         if jar.is_file() && !jars.iter().any(|p| p == &jar) {
             jars.push(jar);
         }
@@ -178,7 +224,7 @@ fn vanilla_client_jars(mc_version: &str, extra_roots: &[PathBuf]) -> Vec<PathBuf
 
 fn catalog_fingerprint(mc_version: &str, jars: &[PathBuf]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"item-catalog-v2");
+    hasher.update(CATALOG_CACHE_VERSION.as_bytes());
     hasher.update(mc_version.as_bytes());
     for jar in jars {
         hasher.update(jar.to_string_lossy().as_bytes());
@@ -382,5 +428,26 @@ mod tests {
             lang_key_to_item_id("item.mod.sub.item"),
             Some("mod:sub/item".into())
         );
+    }
+
+    #[test]
+    fn rejects_tiny_catalog_cache_when_jars_present() {
+        let items = vec![CatalogItemEntry {
+            id: "mod:christmas_chest".into(),
+            name: "Christmas Chest".into(),
+            mod_ns: "mod".into(),
+        }];
+        let jars = vec![PathBuf::from("/tmp/vanilla.jar")];
+        assert!(!catalog_cache_is_trustworthy(&items, &jars));
+    }
+
+    #[test]
+    fn accepts_empty_jar_list_with_any_items() {
+        let items = vec![CatalogItemEntry {
+            id: "mod:christmas_chest".into(),
+            name: "Christmas Chest".into(),
+            mod_ns: "mod".into(),
+        }];
+        assert!(catalog_cache_is_trustworthy(&items, &[]));
     }
 }

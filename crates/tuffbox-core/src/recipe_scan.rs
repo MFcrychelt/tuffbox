@@ -43,7 +43,7 @@ fn recipe_scan_cache_path(project_dir: &Path) -> PathBuf {
     project_dir
         .join(".tuffbox")
         .join("cache")
-        .join("recipe-scan-v2.json")
+        .join("recipe-scan-v3.json")
 }
 
 fn hash_path_entry(hasher: &mut DefaultHasher, path: &Path) {
@@ -77,8 +77,14 @@ fn hash_json_tree(hasher: &mut DefaultHasher, root: &Path) {
     }
 }
 
-fn recipe_scan_fingerprint(manifest_path: &Path, project_dir: &Path) -> String {
+fn recipe_scan_fingerprint(
+    manifest_path: &Path,
+    project_dir: &Path,
+    mc_version: &str,
+    extra_vanilla_roots: &[PathBuf],
+) -> String {
     let mut hasher = DefaultHasher::new();
+    "recipe-scan-v3".hash(&mut hasher);
     hash_path_entry(&mut hasher, manifest_path);
 
     let mods_dir = project_dir.join("mods");
@@ -107,14 +113,31 @@ fn recipe_scan_fingerprint(manifest_path: &Path, project_dir: &Path) -> String {
         }
     }
 
+    for jar in crate::item_catalog::resolve_vanilla_client_jars(mc_version, extra_vanilla_roots) {
+        hash_path_entry(&mut hasher, &jar);
+    }
+
     format!("{:016x}", hasher.finish())
 }
 
 pub fn scan_project_recipes(manifest_path: &Path) -> Result<RecipeScanResult, String> {
+    scan_project_recipes_with_vanilla_roots(manifest_path, &[])
+}
+
+pub fn scan_project_recipes_with_vanilla_roots(
+    manifest_path: &Path,
+    extra_vanilla_roots: &[PathBuf],
+) -> Result<RecipeScanResult, String> {
     let project_dir = manifest_path
         .parent()
         .ok_or_else(|| "manifest has no parent".to_string())?;
-    let fingerprint = recipe_scan_fingerprint(manifest_path, project_dir);
+    let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    let fingerprint = recipe_scan_fingerprint(
+        manifest_path,
+        project_dir,
+        &manifest.minecraft.version,
+        extra_vanilla_roots,
+    );
     let cache_path = recipe_scan_cache_path(project_dir);
 
     if let Ok(raw) = std::fs::read_to_string(&cache_path) {
@@ -125,7 +148,7 @@ pub fn scan_project_recipes(manifest_path: &Path) -> Result<RecipeScanResult, St
         }
     }
 
-    let result = scan_project_recipes_uncached(manifest_path)?;
+    let result = scan_project_recipes_uncached(manifest_path, extra_vanilla_roots)?;
 
     if let Some(parent) = cache_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -140,7 +163,10 @@ pub fn scan_project_recipes(manifest_path: &Path) -> Result<RecipeScanResult, St
     Ok(result)
 }
 
-fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResult, String> {
+fn scan_project_recipes_uncached(
+    manifest_path: &Path,
+    extra_vanilla_roots: &[PathBuf],
+) -> Result<RecipeScanResult, String> {
     let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
     let project_dir = manifest_path
         .parent()
@@ -265,7 +291,10 @@ fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResul
 
     // 4) Vanilla client jar (fill remaining budget)
     if !truncated {
-        for jar in vanilla_client_jars(&manifest.minecraft.version) {
+        for jar in crate::item_catalog::resolve_vanilla_client_jars(
+            &manifest.minecraft.version,
+            extra_vanilla_roots,
+        ) {
             let (added, scanned) = scan_jar_recipes(
                 adapter,
                 &jar,
@@ -290,7 +319,10 @@ fn scan_project_recipes_uncached(manifest_path: &Path) -> Result<RecipeScanResul
     recipes.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Expand #tag ingredients into concrete item alts for icon cycling.
-    let extra_jars = vanilla_client_jars(&manifest.minecraft.version);
+    let extra_jars = crate::item_catalog::resolve_vanilla_client_jars(
+        &manifest.minecraft.version,
+        extra_vanilla_roots,
+    );
     let tags = TagIndex::build(project_dir, loader, &extra_jars);
     for recipe in &mut recipes {
         expand_layout_tags(&mut recipe.layout, &tags);
@@ -348,32 +380,6 @@ fn scan_jar_recipes(
         }
     }
     (recipes, scanned)
-}
-
-fn vanilla_client_jars(mc_version: &str) -> Vec<PathBuf> {
-    let mut jars = Vec::new();
-    let mut roots = Vec::new();
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        roots.push(PathBuf::from(appdata).join("TuffBox"));
-        roots.push(PathBuf::from(std::env::var_os("APPDATA").unwrap()).join(".minecraft"));
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(&home).join(".local/share/TuffBox"));
-        roots.push(PathBuf::from(home).join(".minecraft"));
-    }
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        roots.push(PathBuf::from(local).join("TuffBox"));
-    }
-    for root in roots {
-        let jar = root
-            .join("versions")
-            .join(mc_version)
-            .join(format!("{mc_version}.jar"));
-        if jar.is_file() && !jars.iter().any(|p| p == &jar) {
-            jars.push(jar);
-        }
-    }
-    jars
 }
 
 fn datapack_roots(project_dir: &Path) -> Vec<PathBuf> {

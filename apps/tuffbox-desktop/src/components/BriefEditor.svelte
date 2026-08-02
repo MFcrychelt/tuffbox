@@ -6,6 +6,7 @@
   import { markdown } from "@codemirror/lang-markdown";
   import { oneDark } from "@codemirror/theme-one-dark";
   import { marked } from "marked";
+  import { sanitizeHtml } from "../lib/sanitizeHtml";
   import {
     Bold,
     Italic,
@@ -469,7 +470,7 @@
       },
     );
     try {
-      return marked.parse(rewritten) as string;
+      return sanitizeHtml(marked.parse(rewritten) as string);
     } catch {
       return "<p>Preview failed.</p>";
     }

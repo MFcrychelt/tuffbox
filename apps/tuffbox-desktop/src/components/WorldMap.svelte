@@ -666,12 +666,30 @@
     ctx.restore();
   }
 
-  function screenToWorld(clientX: number, clientY: number): { x: number; y: number } | null {
+  /**
+   * Map viewport pointer → canvas CSS-pixel space.
+   * Under `html { zoom }`, `clientX`/`getBoundingClientRect` are visual while
+   * `clientWidth` / pan / 2d drawing use layout CSS px — mix them and selection shifts.
+   */
+  function pointerToCanvasCss(clientX: number, clientY: number): { x: number; y: number } | null {
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
+    const rw = rect.width || 1;
+    const rh = rect.height || 1;
+    const sx = canvas.clientWidth / rw;
+    const sy = canvas.clientHeight / rh;
     return {
-      x: (clientX - rect.left - panX) / zoom,
-      y: (clientY - rect.top - panY) / zoom,
+      x: (clientX - rect.left) * sx,
+      y: (clientY - rect.top) * sy,
+    };
+  }
+
+  function screenToWorld(clientX: number, clientY: number): { x: number; y: number } | null {
+    const p = pointerToCanvasCss(clientX, clientY);
+    if (!p) return null;
+    return {
+      x: (p.x - panX) / zoom,
+      y: (p.y - panY) / zoom,
     };
   }
 
@@ -749,10 +767,13 @@
     }
 
     if (panning && panLast) {
-      panX += evt.clientX - panLast.x;
-      panY += evt.clientY - panLast.y;
-      panLast = { x: evt.clientX, y: evt.clientY };
-      draw();
+      const p = pointerToCanvasCss(evt.clientX, evt.clientY);
+      if (p) {
+        panX += p.x - panLast.x;
+        panY += p.y - panLast.y;
+        panLast = p;
+        draw();
+      }
       return;
     }
 
@@ -863,7 +884,7 @@
     if (evt.button === 1 || tool === "pan" || (evt.button === 0 && evt.altKey)) {
       evt.preventDefault();
       panning = true;
-      panLast = { x: evt.clientX, y: evt.clientY };
+      panLast = pointerToCanvasCss(evt.clientX, evt.clientY);
       return;
     }
     if (tool !== "box" && tool !== "radius") return;
@@ -1002,9 +1023,10 @@
   function onWheel(evt: WheelEvent) {
     evt.preventDefault();
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = evt.clientX - rect.left;
-    const my = evt.clientY - rect.top;
+    const p = pointerToCanvasCss(evt.clientX, evt.clientY);
+    if (!p) return;
+    const mx = p.x;
+    const my = p.y;
     const beforeX = (mx - panX) / zoom;
     const beforeY = (my - panY) / zoom;
     const factor = evt.deltaY < 0 ? 1.12 : 1 / 1.12;
@@ -1826,9 +1848,26 @@
 
   function isEditableTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false;
+    if (target.isContentEditable) return true;
     const tag = target.tagName;
-    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return true;
-    return target.isContentEditable;
+    if (tag === "TEXTAREA" || tag === "SELECT") return true;
+    if (tag === "INPUT") {
+      const type = ((target as HTMLInputElement).type || "text").toLowerCase();
+      // Number/checkbox fields (paste ΔX/ΔZ etc.) must not block chunk Ctrl+C/V.
+      if (
+        type === "number" ||
+        type === "range" ||
+        type === "checkbox" ||
+        type === "radio" ||
+        type === "button" ||
+        type === "submit" ||
+        type === "reset"
+      ) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   function focusMapViewport() {
@@ -1836,13 +1875,21 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (isEditableTarget(e.target)) return;
     const ctrl = e.ctrlKey || e.metaKey;
-    if (ctrl && e.code === "KeyC") { e.preventDefault(); void copySelected(); }
-    else if (ctrl && e.code === "KeyX") { e.preventDefault(); void cutSelected(); }
-    else if (ctrl && e.code === "KeyV") { e.preventDefault(); void pasteFromClipboard(); }
-    else if (ctrl && e.code === "KeyA") { e.preventDefault(); selectAll(); }
-    else if (e.key === "Enter" && tool === "poly") { e.preventDefault(); applyPolySelection(); }
+    // Chunk clipboard always wins over generic editable handling when not typing text.
+    if (ctrl && (e.code === "KeyC" || e.code === "KeyX" || e.code === "KeyV" || e.code === "KeyA")) {
+      if (!isEditableTarget(e.target)) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.code === "KeyC") void copySelected();
+        else if (e.code === "KeyX") void cutSelected();
+        else if (e.code === "KeyV") void pasteFromClipboard();
+        else selectAll();
+        return;
+      }
+    }
+    if (isEditableTarget(e.target)) return;
+    if (e.key === "Enter" && tool === "poly") { e.preventDefault(); applyPolySelection(); }
     else if (e.key === "Escape") {
       if (gotoOpen) { gotoOpen = false; return; }
       if (fromWorldOpen) { fromWorldOpen = false; return; }

@@ -9,6 +9,7 @@
     Monitor,
     Tag,
   } from "@lucide/svelte";
+  import { sanitizeHtml } from "../lib/sanitizeHtml";
 
   let {
     style = "modrinth",
@@ -37,6 +38,8 @@
     variant?: "card" | "page";
     author?: string | null;
   } = $props();
+
+  const safeBodyHtml = $derived(bodyHtml ? sanitizeHtml(bodyHtml) : null);
 
   const catChips = $derived(categories.filter(Boolean).slice(0, 8));
   const loaderLabel = $derived((loaderKind || "").replace(/_/g, " "));
@@ -91,8 +94,8 @@
         </div>
       {/if}
       <div class="mr-page-body prose">
-        {#if bodyHtml}
-          {@html bodyHtml}
+        {#if safeBodyHtml}
+          {@html safeBodyHtml}
         {:else}
           <p class="muted">Long description preview appears here.</p>
         {/if}
@@ -185,8 +188,8 @@
         </div>
       {/if}
       <div class="cf-page-body prose">
-        {#if bodyHtml}
-          {@html bodyHtml}
+        {#if safeBodyHtml}
+          {@html safeBodyHtml}
         {:else}
           <p class="muted">Long description preview appears here.</p>
         {/if}

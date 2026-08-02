@@ -4447,13 +4447,21 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .ideas-dialog {
     max-width: 420px;
+    max-height: min(85vh, 640px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
   .ideas-list {
     display: grid;
     gap: 8px;
     padding: 4px 0 12px;
-    max-height: 280px;
+    min-height: 0;
+    flex: 1;
+    max-height: min(50vh, 360px);
     overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
   .ideas-row {
     display: flex;
@@ -6367,11 +6375,53 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
 
-  .recs-panel { margin-bottom: 16px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.02); }
-  .recs-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
-  .recs-header h3 { display: flex; align-items: center; gap: 8px; color: var(--accent-secondary); margin: 0; font-size: 14px; }
-  .recs-list { display: grid; gap: 6px; }
-  .recs-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .recs-panel {
+    margin-bottom: 12px;
+    padding: 14px;
+    border: 1px solid rgba(139, 92, 246, 0.25);
+    border-radius: var(--border-radius-lg);
+    background: rgba(139, 92, 246, 0.02);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    /* Keep Suggestions scrollable so Content chrome does not eat the mod list. */
+    max-height: min(42vh, 380px);
+  }
+  .recs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+  }
+  .recs-header h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--accent-secondary);
+    margin: 0;
+    font-size: 14px;
+  }
+  .recs-list {
+    display: grid;
+    gap: 6px;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding-right: 4px;
+  }
+  .recs-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+  }
   .recs-main { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
   .recs-main span { color: var(--text-muted); font-size: 11px; }

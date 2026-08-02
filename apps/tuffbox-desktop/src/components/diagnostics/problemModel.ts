@@ -228,8 +228,17 @@ export type BuildProblemsInput = {
   } | null;
 };
 
+function normalizeFixAction(a: FixAction | { kind: string; label: string; modId?: string | null; mod_id?: string | null }): FixAction {
+  const modId = a.modId ?? (a as { mod_id?: string | null }).mod_id ?? null;
+  return {
+    kind: a.kind,
+    label: a.label,
+    modId: modId ? String(modId) : null,
+  };
+}
+
 function actionsFromHint(h: HintLike): FixAction[] {
-  const base = h.fixes?.length ? [...h.fixes] : h.fix ? [h.fix] : [];
+  const base = (h.fixes?.length ? [...h.fixes] : h.fix ? [h.fix] : []).map(normalizeFixAction);
 
   // Missing-dep crash hint: always expose one Install button per related mod id.
   if (h.id === "missing-dependency" && (h.relatedMods?.length ?? 0) > 0) {
@@ -406,7 +415,7 @@ export function buildUnifiedProblems(input: BuildProblemsInput): Problem[] {
 
   for (const f of input.findings ?? []) {
     const code = String(f.code ?? f.title ?? "finding");
-    const actions = f.fixes?.length ? f.fixes : [];
+    const actions = (f.fixes?.length ? f.fixes : []).map(normalizeFixAction);
     const steps = f.autoFix ? [f.autoFix] : undefined;
     rows.push({
       id: `rules:${code}`,
