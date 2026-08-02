@@ -29,8 +29,18 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
 
-  /* Interface scale (Settings → Appearance). Chromium `zoom` on .app-shell. */
+  /* Interface scale (Settings → Appearance). Applied as CSS zoom on <html>
+     so fixed overlays, pointer hit-tests, and layout share one coordinate space.
+     (Zoom only on .app-shell used to offset Library menus / folder drag.) */
   --ui-scale: 1;
+}
+
+/* Fill the viewport after html zoom shrinks/enlarges CSS pixels. */
+html[data-ui-scaled="1"],
+html[data-ui-scaled="1"] body,
+html[data-ui-scaled="1"] #app {
+  width: calc(100vw / var(--ui-scale, 1));
+  height: calc(100vh / var(--ui-scale, 1));
 }
 
 @font-face {

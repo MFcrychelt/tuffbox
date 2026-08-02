@@ -1424,30 +1424,59 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
     }
 
     if kinds.contains(&CrashSignalKind::MissingDependency) {
-        let names: Vec<String> = suspects.iter().map(|s| s.id.clone()).collect();
+        // Prefer ids explicitly marked missing in loader text ("… (sodium), which is missing").
+        // Fall back to suspects that are not already in the pack manifest.
+        let mut missing_ids: Vec<String> = Vec::new();
+        for signal in signals.iter().filter(|s| s.kind == CrashSignalKind::MissingDependency) {
+            for id in extract_missing_dependency_ids(&signal.text) {
+                if !missing_ids.iter().any(|x| x == &id) {
+                    missing_ids.push(id);
+                }
+            }
+        }
+        if missing_ids.is_empty() {
+            for s in suspects.iter().filter(|s| !s.known_in_manifest) {
+                if !missing_ids.iter().any(|x| x == &s.id) {
+                    missing_ids.push(s.id.clone());
+                }
+            }
+        }
+        if missing_ids.is_empty() {
+            for s in suspects {
+                if !missing_ids.iter().any(|x| x == &s.id) {
+                    missing_ids.push(s.id.clone());
+                }
+            }
+        }
+
+        let fixes: Vec<FixAction> = missing_ids
+            .iter()
+            .map(|id| FixAction {
+                kind: "installDependency".into(),
+                label: format!("Install {id}"),
+                mod_id: Some(id.clone()),
+            })
+            .collect();
+
         push(DiagnosisHint {
             id: "missing-dependency".into(),
-            title: "Missing mod dependency".into(),
+            title: if missing_ids.len() > 1 {
+                format!("{} missing mod dependencies", missing_ids.len())
+            } else {
+                "Missing mod dependency".into()
+            },
             severity: "high".into(),
             detail: "One or more mods require another mod that is not installed (or could not be \
                 loaded). The loader reports it as a ModResolutionException / missing dependency."
                 .into(),
             steps: vec![
-                "Install the missing dependency mod for the same Minecraft + loader version.".into(),
+                "Install each missing dependency for the same Minecraft + loader version.".into(),
                 "If the dependency is present, it may be the wrong version — update it.".into(),
                 "For JIJ (jar-in-jar) dependencies, update the parent mod.".into(),
             ],
-            related_mods: names.clone(),
-            fix: if names.is_empty() {
-                None
-            } else {
-                Some(FixAction {
-                    kind: "installDependency".into(),
-                    label: "Try to install missing dependencies".into(),
-                    mod_id: names.into_iter().next(),
-                })
-            },
-            fixes: vec![],
+            related_mods: missing_ids.clone(),
+            fix: fixes.first().cloned(),
+            fixes,
         });
     }
 
@@ -2551,6 +2580,50 @@ fn confidence_for_kind(kind: CrashSignalKind) -> u8 {
     }
 }
 
+/// Extract mod ids that the loader says are missing, e.g.
+/// `Mod 'Lithium' (lithium) requires ... of mod 'Sodium' (sodium), which is missing!`
+fn extract_missing_dependency_ids(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in text.lines() {
+        let lower = line.to_lowercase();
+        if let Some(idx) = lower.find("which is missing") {
+            let before = &line[..idx];
+            if let Some(open) = before.rfind('(') {
+                if let Some(close) = before[open..].find(')') {
+                    let id = normalize_token(&before[open + 1..open + close]);
+                    if !id.is_empty() && !is_noise_token(&id) && id.len() >= 2 {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        // `requires missing dependency mod:foo` / `missing dependency mod:bar`
+        for marker in ["missing dependency mod:", "missing dependency mod "] {
+            let mut search = lower.as_str();
+            while let Some(pos) = search.find(marker) {
+                let after = &search[pos + marker.len()..];
+                let raw = after
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    .next()
+                    .unwrap_or("");
+                let id = normalize_token(raw);
+                if !id.is_empty() && !is_noise_token(&id) {
+                    ids.push(id);
+                }
+                search = &after[raw.len().min(after.len())..];
+            }
+        }
+    }
+    ids.retain(|id| !is_noise_token(id));
+    let mut uniq = Vec::new();
+    for id in ids {
+        if !uniq.iter().any(|x| x == &id) {
+            uniq.push(id);
+        }
+    }
+    uniq
+}
+
 fn extract_quoted_mod_ids(line: &str) -> Vec<String> {
     let lower = line.to_lowercase();
     let mut ids = Vec::new();
@@ -3356,6 +3429,24 @@ mod tests {
         assert_eq!(signals[0].kind, CrashSignalKind::MissingDependency);
         assert!(suspects.iter().any(|s| s.id == "lithium"));
         assert!(suspects.iter().any(|s| s.id == "sodium"));
+
+        let missing = extract_missing_dependency_ids(text);
+        assert_eq!(missing, vec!["sodium".to_string()]);
+
+        let hints = build_hints(&signals, &suspects);
+        let hint = hints
+            .iter()
+            .find(|h| h.id == "missing-dependency")
+            .expect("missing-dependency hint");
+        assert!(
+            hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("sodium")),
+            "expected per-mod Install for sodium, got {:?}",
+            hint.fixes
+        );
+        assert!(
+            !hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("lithium")),
+            "requester lithium must not get an Install button"
+        );
     }
 
     #[test]

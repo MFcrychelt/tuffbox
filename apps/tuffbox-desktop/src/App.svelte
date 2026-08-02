@@ -383,13 +383,30 @@
         markSwarmOnboardLocallyDone();
       }
       try {
-        const lastPath = await api.session.getLastOpened();
-        if (lastPath) {
-          const info = await api.project.validate(lastPath);
-          const manifestPath = info.manifestPath || lastPath;
-          recentProjects.add({ path: manifestPath, info: info as any });
-          projectPath.set(manifestPath);
-          projectInfo.set(info as any);
+        // Desktop shortcut / CLI: `--launch <manifest>` opens the instance and starts the client.
+        const pendingLaunch = await api.files.takePendingLaunch();
+        if (pendingLaunch) {
+          try {
+            const info = await api.project.validate(pendingLaunch);
+            const manifestPath = info.manifestPath || pendingLaunch;
+            recentProjects.add({ path: manifestPath, info: info as any });
+            projectPath.set(manifestPath);
+            projectInfo.set(info as any);
+            void api.session.setLastOpened(manifestPath).catch(() => {});
+            currentView = "library";
+            void launchWithFeedback({ path: manifestPath, profile: "client" });
+          } catch (e) {
+            toasts.error(`Could not launch from shortcut: ${e}`);
+          }
+        } else {
+          const lastPath = await api.session.getLastOpened();
+          if (lastPath) {
+            const info = await api.project.validate(lastPath);
+            const manifestPath = info.manifestPath || lastPath;
+            recentProjects.add({ path: manifestPath, info: info as any });
+            projectPath.set(manifestPath);
+            projectInfo.set(info as any);
+          }
         }
       } catch {
         // no last project — that's fine
@@ -757,13 +774,7 @@
     background: var(--bg-primary);
     color: var(--text-primary);
     pointer-events: auto;
-    /* UI scale applied via JS (see applyUiScale) — CSS zoom here broke
-       hit-testing in some WebView/embed previews even at scale=1. */
-  }
-  .app-shell[data-ui-scaled="1"] {
-    width: calc(100vw / var(--ui-scale, 1));
-    height: calc(100vh / var(--ui-scale, 1));
-    zoom: var(--ui-scale, 1);
+    /* UI scale: zoom on <html> via applyUiScale — not on this shell. */
   }
 
   .main {
@@ -860,6 +871,7 @@
     min-height: 0;
     height: 100%;
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .content.fill-view .view-pane > :global(.snapshots) {
     flex: 1;

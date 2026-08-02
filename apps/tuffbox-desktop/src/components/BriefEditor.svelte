@@ -868,7 +868,9 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
   }
 
   .page-header {
@@ -1020,22 +1022,22 @@
   }
 
   .description-panel {
-    flex: 1;
     min-height: 220px;
     width: 100%;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    flex-shrink: 0;
   }
 
   .description-panel .md-split {
-    flex: 1;
-    min-height: 200px;
+    min-height: 240px;
+    height: clamp(240px, 36vh, 400px);
   }
 
   .description-panel .cm-wrap,
   .description-panel .md-preview {
-    min-height: 200px;
+    min-height: 0;
+    height: 100%;
   }
 
   .brief-below {
@@ -1043,8 +1045,6 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 38vh;
-    overflow: auto;
     padding-top: 2px;
   }
 
@@ -1187,7 +1187,7 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
-    min-height: 180px;
+    min-height: 0;
   }
 
   .md-split.edit-only,
@@ -1199,12 +1199,12 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
     overflow: hidden;
-    min-height: 180px;
+    min-height: 0;
+    height: 100%;
   }
 
   .cm-wrap :global(.cm-editor) {
     height: 100%;
-    min-height: 180px;
   }
 
   .md-preview {
@@ -1212,7 +1212,8 @@
     border-radius: var(--border-radius-sm);
     padding: 12px;
     background: var(--bg-tertiary);
-    min-height: 180px;
+    min-height: 0;
+    height: 100%;
     overflow: auto;
   }
 
@@ -1359,10 +1360,6 @@
   }
 
   @media (max-width: 1100px) {
-    .main-body {
-      overflow: auto;
-    }
-
     .top-split {
       grid-template-columns: 1fr;
     }
@@ -1392,10 +1389,6 @@
 
     .description-panel {
       min-height: 280px;
-    }
-
-    .brief-below {
-      max-height: none;
     }
   }
 </style>

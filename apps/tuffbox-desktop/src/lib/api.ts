@@ -2069,6 +2069,10 @@ export const api = {
     createDesktopShortcut(p?: string) {
       return cmd<string>("create_project_desktop_shortcut", pathArg(p));
     },
+    /** One-shot path from process `--launch` / `--open` (desktop shortcut). */
+    takePendingLaunch() {
+      return cmd<string | null>("take_pending_launch_project");
+    },
   },
 
   // ── Localization ──────────────────────────────────────────────────

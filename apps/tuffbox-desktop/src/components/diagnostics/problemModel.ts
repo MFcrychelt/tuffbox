@@ -229,9 +229,62 @@ export type BuildProblemsInput = {
 };
 
 function actionsFromHint(h: HintLike): FixAction[] {
-  if (h.fixes?.length) return h.fixes;
-  if (h.fix) return [h.fix];
-  return [];
+  const base = h.fixes?.length ? [...h.fixes] : h.fix ? [h.fix] : [];
+
+  // Missing-dep crash hint: always expose one Install button per related mod id.
+  if (h.id === "missing-dependency" && (h.relatedMods?.length ?? 0) > 0) {
+    const seen = new Set(
+      base
+        .filter(isInstallAction)
+        .map((a) => a.modId)
+        .filter((id): id is string => !!id),
+    );
+    const perMod: FixAction[] = [];
+    for (const mid of h.relatedMods ?? []) {
+      const id = String(mid || "").trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      perMod.push({ kind: "installDependency", label: `Install ${id}`, modId: id });
+    }
+
+    // Prefer concrete per-mod installs; drop vague bulk-only primary.
+    const other = base.filter(
+      (a) =>
+        !isInstallAction(a) ||
+        (a.modId &&
+          seen.has(a.modId) &&
+          !/try to install missing dependencies/i.test(a.label)),
+    );
+    const installs = [
+      ...perMod,
+      ...base.filter(
+        (a) =>
+          isInstallAction(a) &&
+          !!a.modId &&
+          !/try to install missing dependencies/i.test(a.label),
+      ),
+    ];
+    const uniq: FixAction[] = [];
+    const installSeen = new Set<string>();
+    for (const a of installs) {
+      const key = a.modId || a.label;
+      if (installSeen.has(key)) continue;
+      installSeen.add(key);
+      uniq.push(a);
+    }
+    const rest = other.filter((a) => !isInstallAction(a));
+    return [...uniq, ...rest];
+  }
+
+  return base;
+}
+
+function isInstallAction(a: FixAction): boolean {
+  return (
+    a.kind === "installDependency" ||
+    a.kind === "installAllMissing" ||
+    a.kind === "installMissingForMod"
+  );
 }
 
 /** Normalize graph NodeId JSON (`"mod:foo"` or `{ "0": "mod:foo" }`) to a bare slug. */
@@ -425,6 +478,11 @@ export function buildUnifiedProblems(input: BuildProblemsInput): Problem[] {
       modIds: uniqueMissing,
       actions: [
         { kind: "installAllMissing", label: `Install all ${uniqueMissing.length}`, modId: null },
+        ...uniqueMissing.map((mid) => ({
+          kind: "installDependency" as const,
+          label: `Install ${mid}`,
+          modId: mid,
+        })),
         { kind: "openResolve", label: "Open Resolve", modId: null },
       ],
       risk: "safe",

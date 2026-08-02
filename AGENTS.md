@@ -63,3 +63,18 @@ ECC и engram комплементарны: engram — для явных арх�
 | Cosmetics / CSL / Me Appearance | [`docs/14-cosmetics.md`](docs/14-cosmetics.md) |
 
 Перед работой по P2P / swarm / PoUW агент **MUST** прочитать `docs/13-tuffswarm-network.md` (agent checklist внутри).
+
+## Desktop UI — border-radius tokens (CI-enforced)
+
+В `apps/tuffbox-desktop` **не хардкодь** `border-radius` значениями из шкалы токенов. CI гоняет `scripts/check-border-radius.mjs`.
+
+| Hardcoded (запрещено) | Используй |
+|-----------------------|-----------|
+| `border-radius: 8px` | `var(--border-radius-sm)` |
+| `border-radius: 12px` | `var(--border-radius-md)` |
+| `border-radius: 16px` | `var(--border-radius-lg)` |
+| `border-radius: 24px` | `var(--border-radius-xl)` |
+
+Почему: токены реагируют на toggle **Rounded corners** и на темы; литералы `8/12/16/24px` остаются круглыми, когда режим/тема требуют квадрат.
+
+Допустимо: мелкий декор (`2px`/`3px`/`4px`) и промежуточные размеры вне шкалы (`10px`/`14px`/`18px`/`20px`/`999px`). Проверка: `node apps/tuffbox-desktop/scripts/check-border-radius.mjs`.

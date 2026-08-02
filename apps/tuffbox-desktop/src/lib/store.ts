@@ -175,6 +175,9 @@ export type UiScaleMode = "auto" | "manual";
 
 export const UI_SCALE_STEPS = [75, 90, 100, 110, 125, 150] as const;
 
+/** Live applied UI zoom percent — App binds `data-ui-scaled` / zoom from this. */
+export const uiScalePercentLive = writable(100);
+
 export function normalizeSidebarMode(raw: unknown): SidebarMode {
   if (raw === "icons" || raw === "autoHide" || raw === "full") return raw;
   return "full";
@@ -216,39 +219,81 @@ function snapUiScalePercent(raw: number): number {
 /**
  * Suggest UI zoom from screen/window size + devicePixelRatio.
  * Snaps to the same chips used in Settings (75–150).
+ *
+ * Tuned for laptop panels (1366×768, 1440×900, 1600×900) that feel cramped at 100%.
  */
 export function suggestUiScalePercent(): number {
   if (typeof window === "undefined") return 100;
-  const screenW = window.screen?.width || 1920;
+  const screenW = window.screen?.availWidth || window.screen?.width || 1920;
+  const screenH = window.screen?.availHeight || window.screen?.height || 1080;
   const innerW = window.innerWidth || screenW;
+  const innerH = window.innerHeight || screenH;
+  // Tighter of screen vs window — a small window on a big monitor still needs denser UI.
   const width = Math.min(screenW, innerW);
+  const height = Math.min(screenH, innerH);
   const dpr = window.devicePixelRatio || 1;
+  const shortSide = Math.min(width, height);
 
   let suggested = 100;
-  if (width < 1100) suggested = 125;
-  else if (dpr >= 2 && width < 1600) suggested = 110;
-  else if (width < 1280) suggested = 110;
-  else if (width < 1440 && dpr >= 1.5) suggested = 110;
-  else if (width >= 1920 && dpr <= 1) suggested = 100;
+  // Tiny / phone-like or very short height
+  if (width < 1100 || height < 720 || shortSide < 700) suggested = 125;
+  // Classic laptops: 1366×768, 1400×900, 1440×900, 1600×900
+  else if (width <= 1440 || height <= 900) suggested = 110;
+  else if (dpr >= 2 && width < 1800) suggested = 110;
+  else if (width < 1600 && height < 1000) suggested = 110;
+  else if (width >= 1920 && height >= 1080 && dpr <= 1) suggested = 100;
   else suggested = 100;
 
   return snapUiScalePercent(suggested);
 }
 
-/** Apply Chromium zoom via CSS variable (buttons, cards, modals). */
+/** Current CSS zoom factor from `--ui-scale` (1 = 100%). */
+export function getUiScale(): number {
+  if (typeof document === "undefined") return 1;
+  const el = document.documentElement as HTMLElement & { currentCSSZoom?: number };
+  if (typeof el.currentCSSZoom === "number" && el.currentCSSZoom > 0) {
+    return el.currentCSSZoom;
+  }
+  const raw = getComputedStyle(el).getPropertyValue("--ui-scale").trim();
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Map viewport (clientX/Y) → CSS `position: fixed` left/top.
+ * Zoom lives on `html`, so Chromium uses one coordinate frame — return as-is.
+ * Kept for callers / WebKit edge cases that report visual px vs layout px.
+ */
+export function viewportToShellFixed(clientX: number, clientY: number): { x: number; y: number } {
+  return { x: clientX, y: clientY };
+}
+
+/** Apply Chromium zoom on <html> so fixed menus, drag, and hit-tests share one coord space. */
 export function applyUiScale(percent: unknown) {
   const p = normalizeUiScalePercent(percent);
-  if (typeof document === "undefined") return p;
+  if (typeof document === "undefined") {
+    uiScalePercentLive.set(p);
+    return p;
+  }
   const scale = p / 100;
-  document.documentElement.style.setProperty("--ui-scale", String(scale));
+  const root = document.documentElement;
+  root.style.setProperty("--ui-scale", String(scale));
+  uiScalePercentLive.set(p);
+
+  // Zoom on html (not .app-shell): shell-only zoom desyncs clientX from
+  // getBoundingClientRect / fixed overlays and breaks Library drag + context menus.
+  if (p === 100) {
+    root.removeAttribute("data-ui-scaled");
+    root.style.removeProperty("zoom");
+  } else {
+    root.setAttribute("data-ui-scaled", "1");
+    root.style.zoom = String(scale);
+  }
+
+  // Clear legacy shell zoom from older sessions / HMR.
   const shell = document.querySelector(".app-shell");
   if (shell instanceof HTMLElement) {
-    // Avoid CSS zoom at 100% — it desyncs click hit-testing in some embeds.
-    if (p === 100) {
-      shell.removeAttribute("data-ui-scaled");
-    } else {
-      shell.setAttribute("data-ui-scaled", "1");
-    }
+    shell.removeAttribute("data-ui-scaled");
   }
   return p;
 }

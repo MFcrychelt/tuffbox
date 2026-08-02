@@ -48,6 +48,15 @@
     onDisableWrongJar?: (fileName: string) => void;
     onRemoveWrongJar?: (fileName: string) => void;
   } = $props();
+
+  function missingModIdFromDiag(d: Diagnostic): string {
+    const to = d.relatedNodes?.[1];
+    if (typeof to === "string") return to.replace(/^mod:/i, "").trim();
+    if (to && typeof to === "object" && to !== null && "0" in to) {
+      return String((to as { 0: unknown })[0] ?? "").replace(/^mod:/i, "").trim();
+    }
+    return (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1] || "";
+  }
 </script>
 
 <!-- 4. Evidence (secondary) -->
@@ -75,7 +84,7 @@
             </div>
             <div class="diag-actions">
               {#if /MISSING|DEPEND/i.test(d.code + d.message)}
-                {@const mid = (d.message.match(/['"`]?([a-z0-9_-]{3,})['"`]?\s*$/i) || [])[1]}
+                {@const mid = missingModIdFromDiag(d)}
                 {#if mid}
                   <button class="secondary small" onclick={() => onFixMissingDependency?.({ modId: mid, idx })} disabled={fixingIdx === idx}>
                     Install {mid}

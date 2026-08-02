@@ -77,9 +77,24 @@
 </section>
 
 {#snippet card(p: Problem)}
-  {@const primary = p.actions[0]}
-  {@const secondaryLimit = p.category === "dependency" ? 6 : 3}
-  {@const secondary = p.actions.slice(1, secondaryLimit)}
+  {@const installActs = p.actions.filter(
+    (a) =>
+      a.kind === "installDependency" ||
+      a.kind === "installAllMissing" ||
+      a.kind === "installMissingForMod",
+  )}
+  {@const otherActs = p.actions.filter(
+    (a) =>
+      a.kind !== "installDependency" &&
+      a.kind !== "installAllMissing" &&
+      a.kind !== "installMissingForMod",
+  )}
+  {@const primary =
+    installActs.find((a) => a.kind === "installAllMissing" || a.kind === "installMissingForMod") ??
+    installActs[0] ??
+    otherActs[0]}
+  {@const secondaryInstalls = installActs.filter((a) => a !== primary)}
+  {@const secondaryOther = otherActs.filter((a) => a !== primary).slice(0, 4)}
   <li class="dx-card sev-{p.severity}" class:busy={applyingId === p.id}>
     <div class="dx-card-top">
       <span class="sev-chip">{severityChip(p.severity)}</span>
@@ -117,7 +132,7 @@
           {applyingId === p.id ? "Applying…" : primary.label}
         </button>
       {/if}
-      {#each secondary as act (act.kind + act.label)}
+      {#each secondaryOther as act (act.kind + act.label + (act.modId ?? ""))}
         <button
           type="button"
           class="ghost"
@@ -136,6 +151,20 @@
         </button>
       {/if}
     </div>
+    {#if secondaryInstalls.length > 0}
+      <div class="dx-install-grid">
+        {#each secondaryInstalls as act (act.kind + act.label + (act.modId ?? ""))}
+          <button
+            type="button"
+            class="install-chip"
+            disabled={applyingId === p.id}
+            onclick={() => onApply?.(p, act)}
+          >
+            {act.label}
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if primary}
       <p class="risk" class:destructive={p.risk === "destructive"}>{riskLabel(p.risk)}</p>
     {/if}
@@ -220,6 +249,29 @@
     gap: 8px;
     margin-top: 12px;
     align-items: center;
+  }
+  .dx-install-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .install-chip {
+    padding: 5px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid rgba(27, 217, 106, 0.35);
+    background: rgba(27, 217, 106, 0.08);
+    color: var(--accent-primary);
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .install-chip:hover:not(:disabled) {
+    background: rgba(27, 217, 106, 0.16);
+  }
+  .install-chip:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
   .dx-card-actions .primary {
     display: inline-flex;

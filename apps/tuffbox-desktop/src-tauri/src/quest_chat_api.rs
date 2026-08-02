@@ -20,7 +20,10 @@ fn project_dir(path: &str) -> Result<PathBuf, String> {
 }
 
 fn collect_items(path: &str) -> Vec<String> {
-    crate::collect_catalog_item_ids(&PathBuf::from(path))
+    let Ok(manifest_path) = crate::resolve_manifest_path(path) else {
+        return Vec::new();
+    };
+    crate::collect_catalog_item_ids(&manifest_path)
         .unwrap_or_default()
         .into_iter()
         .take(120)

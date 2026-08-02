@@ -18,12 +18,22 @@
   let error = $state("");
   let catalog = $state<string[]>([]);
   let icons = $state<Record<string, string | null>>({});
-  let loaded = $state(false);
+  let loadedForPath = $state<string | null>(null);
 
   let filtered = $derived(filterCatalog(catalog, query).slice(0, 120));
 
   $effect(() => {
-    if (open && !loaded && $projectPath) {
+    const path = $projectPath;
+    if (!path) return;
+    if (loadedForPath !== null && path !== loadedForPath) {
+      loadedForPath = null;
+      catalog = [];
+      error = "";
+    }
+  });
+
+  $effect(() => {
+    if (open && $projectPath && loadedForPath !== $projectPath) {
       void loadCatalog();
     }
   });
@@ -35,15 +45,22 @@
   });
 
   async function loadCatalog() {
+    const path = $projectPath;
+    if (!path) return;
     loading = true;
     error = "";
     try {
-      catalog = await api.quests.itemCatalog($projectPath!);
-      loaded = true;
+      const entries = await api.recipes.listItemCatalog(path);
+      catalog = (entries ?? []).map((entry) => entry.id).sort();
+      if (catalog.length === 0) {
+        const fallback = await api.quests.itemCatalog(path);
+        catalog = (fallback ?? []).slice().sort();
+      }
+      loadedForPath = path;
     } catch (e) {
       error = String(e);
       try {
-        const scan = await api.recipes.scan($projectPath!);
+        const scan = await api.recipes.scan(path);
         const set = new Set<string>();
         for (const r of scan.recipes ?? []) {
           if (r.outputId && !r.outputId.startsWith("#")) set.add(r.outputId);
@@ -52,8 +69,8 @@
           }
         }
         catalog = [...set].sort();
-        loaded = true;
-        error = "";
+        loadedForPath = path;
+        error = catalog.length ? "" : String(e);
       } catch (e2) {
         error = String(e2);
       }

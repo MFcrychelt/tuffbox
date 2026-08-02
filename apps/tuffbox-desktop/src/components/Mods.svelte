@@ -3182,20 +3182,7 @@ import { trapFocus } from "../lib/focusTrap";
     onkeydown={() => {}}
   >
     <div class="modal add-mods-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => { if (catalogViewResult) closeCatalogInApp(); else addOpen = false; } }}>
-      {#if catalogViewResult}
-        <div class="modal-body catalog-body">
-          <CatalogProjectView
-            result={catalogViewResult}
-            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
-            loaderKind={$projectInfo?.loaderKind ?? null}
-            installed={isInstalled(catalogViewResult)}
-            installing={mutating && pendingInstall?.id === catalogViewResult.id}
-            onback={closeCatalogInApp}
-            oninstall={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
-            onopenexternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
-          />
-        </div>
-      {:else}
+      <div class="add-mods-browse" class:behind-catalog={!!catalogViewResult} aria-hidden={!!catalogViewResult}>
       <div class="modal-header">
         <div>
           <h2>Add {catalogProvider === "both" ? "" : (catalogProvider === "curseforge" ? "CurseForge " : "Modrinth ")}{contentFilter}</h2>
@@ -3716,6 +3703,20 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
         </div>
       {/if}
+      </div>
+      {#if catalogViewResult}
+        <div class="add-mods-catalog-layer">
+          <CatalogProjectView
+            result={catalogViewResult}
+            minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+            loaderKind={$projectInfo?.loaderKind ?? null}
+            installed={isInstalled(catalogViewResult)}
+            installing={mutating && pendingInstall?.id === catalogViewResult.id}
+            onback={closeCatalogInApp}
+            oninstall={() => { if (catalogViewResult) void startInstallPlan(catalogViewResult); }}
+            onopenexternal={() => { if (catalogViewResult) void openProjectPage(catalogViewResult); }}
+          />
+        </div>
       {/if}
     </div>
   </div>
@@ -4095,6 +4096,25 @@ import { trapFocus } from "../lib/focusTrap";
     min-height: 0;
     overflow: auto;
     scrollbar-gutter: stable;
+    /* Gap between installed cards and the vertical scrollbar */
+    padding-right: 10px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--bg-elevated) transparent;
+  }
+
+  .mods-list::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .mods-list::-webkit-scrollbar-thumb {
+    background: var(--bg-elevated);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  .mods-list::-webkit-scrollbar-track {
+    background: transparent;
   }
 
   .content-hero {
@@ -5251,6 +5271,7 @@ import { trapFocus } from "../lib/focusTrap";
 
   /* Add content browser: near-fullscreen so the dimmed backdrop is a thin frame. */
   .modal.add-mods-modal {
+    position: relative;
     width: calc(100vw - 12px);
     height: calc(100vh - 12px);
     max-width: none;
@@ -5260,6 +5281,31 @@ import { trapFocus } from "../lib/focusTrap";
     overflow: hidden;
     padding: 16px 18px 14px;
     border-radius: 14px;
+  }
+
+  .add-mods-browse {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .add-mods-browse.behind-catalog {
+    pointer-events: none;
+  }
+
+  .add-mods-catalog-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    padding: inherit;
+    border-radius: inherit;
+    background: var(--bg-primary);
   }
 
   .modal.add-mods-modal .modal-header {
@@ -5475,7 +5521,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 12px;
     /* Keep thin scrollbar from covering card edges */
     scrollbar-gutter: stable;
-    padding-right: 2px;
+    padding-right: 10px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
   }

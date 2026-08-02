@@ -558,7 +558,7 @@
   }
 
   async function installMissingDependencies() {
-    if (!$projectPath || missingEdges.length === 0) return;
+    if (!$projectPath || !hasMissingSpotlight) return;
     resolving = true;
     error = null;
     message = null;
@@ -1189,6 +1189,16 @@
     }
     return out;
   })());
+  const missingSpotlightIds = $derived((() => {
+    const ids = new Set<string>();
+    for (const edge of missingEdges) {
+      ids.add(edge.from);
+      ids.add(edge.to);
+    }
+    for (const n of ghostNodes) ids.add(n.id);
+    return ids;
+  })());
+  const hasMissingSpotlight = $derived(missingSpotlightIds.size > 0);
   const displayNodes = $derived([
     ...nodes.filter((n) => n.kind === "Mod"),
     ...platformNodes,
@@ -1383,7 +1393,7 @@
       return conflictEdges.some((e) => e.from === nodeId || e.to === nodeId);
     }
     if (kind === "Missing") return true;
-    return missingEdges.some((e) => e.from === nodeId || e.to === nodeId);
+    return missingSpotlightIds.has(nodeId);
   }
 
   function edgeInHighlight(from: string, to: string, _kind: string, _danger: boolean): boolean {
@@ -1393,7 +1403,10 @@
         (e) => (e.from === from && e.to === to) || (e.from === to && e.to === from),
       );
     }
-    return missingEdges.some((e) => e.from === from && e.to === to);
+    return (
+      missingEdges.some((e) => e.from === from && e.to === to) ||
+      (missingSpotlightIds.has(from) && missingSpotlightIds.has(to))
+    );
   }
 
   let canvasWidth = $state(1600);
@@ -1906,8 +1919,8 @@
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
-  // graph view: scroll to zoom (toward the cursor), drag empty space to
-  // pan, double-click / button to reset.
+  // graph view: Ctrl/Meta+wheel zooms (toward the cursor), plain wheel scrolls
+  // the page, drag empty space to pan, double-click / button to reset.
   let viewportEl: SVGSVGElement;
   let viewX = $state(0);
   let viewY = $state(0);
@@ -1960,6 +1973,8 @@
   }
 
   function handleWheel(event: WheelEvent) {
+    // Plain wheel scrolls the Graph page; Ctrl/Meta+wheel zooms the canvas.
+    if (!(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
     const nextScale = Math.min(8, Math.max(0.15, viewScale / zoomFactor));
@@ -2259,7 +2274,7 @@
       <span>Dependency graph</span>
     </div>
     <div class="toolbar-actions">
-      <button class="secondary" onclick={installMissingDependencies} disabled={!$projectPath || resolving || missingEdges.length === 0}>
+      <button class="secondary" onclick={installMissingDependencies} disabled={!$projectPath || resolving || !hasMissingSpotlight}>
         <Workflow size={16} />
         {resolving ? "Resolving..." : "Auto-install dependencies"}
       </button>
@@ -2299,8 +2314,23 @@
         <span class="stat-value">{displayEdges.length}</span>
         <span class="stat-label">Dependencies</span>
       </div>
-      <div class="stat-card" class:danger={missingEdges.length > 0}>
-        <span class="stat-value">{missingEdges.length}</span>
+      <div
+        class="stat-card"
+        class:danger={hasMissingSpotlight}
+        class:clickable={hasMissingSpotlight}
+        role={hasMissingSpotlight ? "button" : undefined}
+        tabindex={hasMissingSpotlight ? 0 : undefined}
+        onclick={() => hasMissingSpotlight && toggleHighlight("missing")}
+        onkeydown={(e) => {
+          if (!hasMissingSpotlight) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleHighlight("missing");
+          }
+        }}
+        title={hasMissingSpotlight ? "Spotlight missing dependencies" : undefined}
+      >
+        <span class="stat-value">{Math.max(missingEdges.length, ghostNodes.length)}</span>
         <span class="stat-label">Missing</span>
       </div>
       <div class="stat-card" class:danger={conflictInsights.length > 0}>
@@ -2344,7 +2374,7 @@
         <button
           class="ghost mini edge-toggle hl-btn missing"
           class:active={highlightMode === "missing"}
-          disabled={missingEdges.length === 0}
+          disabled={!hasMissingSpotlight}
           onclick={() => toggleHighlight("missing")}
           title="Spotlight missing dependencies (high contrast)"
         >
@@ -2623,7 +2653,7 @@
               {#if selectedMissingDeps.length > 0}
                 <button class="install-btn" onclick={installSelectedMissingDeps} disabled={resolving}>
                   <Download size={16} />
-                  {resolving ? "Installing..." : `Install ${selectedMissingDeps.length} missing`}
+                  {resolving ? "Installing..." : `Install all ${selectedMissingDeps.length} missing`}
                 </button>
               {/if}
               <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
@@ -2661,7 +2691,11 @@
             <div class="relations">
               {#each selectedEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
                 {@const otherId = edge.from === selectedId ? edge.to : edge.from}
-                {@const isMissingDep = edge.kind === "Requires" && !nodeById(otherId)}
+                {@const otherNode = nodeById(otherId) ?? ghostNodes.find((n) => n.id === otherId) ?? null}
+                {@const isMissingDep =
+                  edge.kind === "Requires" &&
+                  edge.from === selectedId &&
+                  (!otherNode || otherNode.kind === "Missing")}
                 <div class="relation" class:incoming={edge.to === selectedId}>
                   <span class="relation-kind">{edge.kind}</span>
                   <span class="relation-text">
@@ -2804,23 +2838,42 @@
                     <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
                   </div>
                   {#if missingDeps.length > 0}
-                    <button
-                      class="card-install-btn"
-                      type="button"
-                      title="Install {missingDeps.length} missing dependencies"
-                      onclick={(e) => {
-                        e.stopPropagation();
-                        void (async () => {
-                          for (const edge of missingDeps) {
-                            await installSingleMissingDep(edge);
-                          }
-                        })();
-                      }}
-                      disabled={resolving}
-                    >
-                      <Download size={14} strokeWidth={2.25} />
-                      <span>Install</span>
-                    </button>
+                    <div class="card-missing-list">
+                      {#each missingDeps as edge (edge.to)}
+                        <button
+                          class="card-install-btn"
+                          type="button"
+                          title="Install {resolveNodeLabel(edge.to)}"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void installSingleMissingDep(edge);
+                          }}
+                          disabled={resolving}
+                        >
+                          <Download size={14} strokeWidth={2.25} />
+                          <span>Install {resolveNodeLabel(edge.to)}</span>
+                        </button>
+                      {/each}
+                      {#if missingDeps.length > 1}
+                        <button
+                          class="card-install-btn all"
+                          type="button"
+                          title="Install all {missingDeps.length} missing dependencies"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void (async () => {
+                              for (const edge of missingDeps) {
+                                await installSingleMissingDep(edge);
+                              }
+                            })();
+                          }}
+                          disabled={resolving}
+                        >
+                          <Download size={14} strokeWidth={2.25} />
+                          <span>Install all ({missingDeps.length})</span>
+                        </button>
+                      {/if}
+                    </div>
                   {/if}
                   <span class="card-remove" role="button" tabindex="0" title="Remove mod" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") void removeConflictNode(node.id); } }>
                     <X size={14} />
@@ -3241,8 +3294,8 @@
   .graph-canvas {
     position: relative;
     flex: 0 0 auto;
-    height: min(84vh, 720px);
-    min-height: 540px;
+    height: min(62vh, 560px);
+    min-height: 360px;
     width: 100%;
     min-width: 0;
     display: flex;
@@ -3783,6 +3836,13 @@
     background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), var(--bg-secondary));
   }
 
+  .stat-card.clickable {
+    cursor: pointer;
+  }
+  .stat-card.clickable:hover {
+    border-color: rgba(27, 217, 106, 0.55);
+  }
+
   .stat-value {
     font-size: 28px;
     font-weight: 800;
@@ -3946,6 +4006,7 @@
   .node-card.compact {
     margin-bottom: 0;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
   }
@@ -4055,6 +4116,18 @@
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
+  }
+  .card-missing-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 100%;
+    width: 100%;
+    margin-top: 4px;
+  }
+  .card-install-btn.all {
+    border-color: rgba(27, 217, 106, 0.7);
+    background: rgba(27, 217, 106, 0.22);
   }
   .card-install-btn :global(svg) {
     fill: none !important;

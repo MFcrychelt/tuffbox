@@ -7188,14 +7188,9 @@ async fn scan_mod_recipes(path: String) -> Result<serde_json::Value, String> {
     .map_err(|e| e.to_string())?
 }
 
-fn recipe_icon_extra_jars(manifest_path: &Path) -> Result<(PathBuf, Vec<PathBuf>), String> {
-    let project_dir = manifest_path
-        .parent()
-        .ok_or_else(|| "manifest path has no parent".to_string())?;
-    let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
-    let mut extra_jars = Vec::new();
-    let version = &manifest.minecraft.version;
-    let mut roots = Vec::new();
+/// Launcher + fallback directories searched for the installed vanilla client jar.
+fn catalog_vanilla_jar_roots() -> Vec<PathBuf> {
+    let mut roots = vec![launcher_settings::resolve_runtime_path()];
     if let Some(data) = dirs::data_dir() {
         roots.push(data.join("TuffBox"));
     }
@@ -7204,9 +7199,25 @@ fn recipe_icon_extra_jars(manifest_path: &Path) -> Result<(PathBuf, Vec<PathBuf>
         roots.push(PathBuf::from(appdata).join(".minecraft"));
     }
     if let Some(home) = std::env::var_os("HOME") {
-        roots.push(PathBuf::from(&home).join(".minecraft"));
+        roots.push(PathBuf::from(&home).join(".local/share/TuffBox"));
+        roots.push(PathBuf::from(home).join(".minecraft"));
     }
-    for root in roots {
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(PathBuf::from(local).join("TuffBox"));
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn recipe_icon_extra_jars(manifest_path: &Path) -> Result<(PathBuf, Vec<PathBuf>), String> {
+    let project_dir = manifest_path
+        .parent()
+        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    let version = &manifest.minecraft.version;
+    let mut extra_jars = Vec::new();
+    for root in catalog_vanilla_jar_roots() {
         let client_jar = root
             .join("versions")
             .join(version)
@@ -7398,7 +7409,9 @@ pub(crate) fn collect_catalog_item_ids(
             }
         }
     }
-    let items = tuffbox_core::item_catalog::build_item_catalog_for_manifest(manifest_path, extra)?;
+    let jar_roots = catalog_vanilla_jar_roots();
+    let items =
+        tuffbox_core::item_catalog::build_item_catalog_for_manifest(manifest_path, extra, &jar_roots)?;
     Ok(items.into_iter().map(|e| e.id).collect())
 }
 
@@ -7406,11 +7419,13 @@ pub(crate) fn collect_catalog_item_ids(
 #[tauri::command(rename_all = "camelCase")]
 async fn list_item_catalog(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
-        let manifest_path = PathBuf::from(&path);
+        let manifest_path = resolve_manifest_path(&path)?;
+        let jar_roots = catalog_vanilla_jar_roots();
         // Recipe-derived ids are merged on the UI side after scan; jar models cover the rest.
         let items = tuffbox_core::item_catalog::build_item_catalog_for_manifest(
             &manifest_path,
             Vec::<String>::new(),
+            &jar_roots,
         )?;
         items
             .into_iter()
@@ -7424,7 +7439,8 @@ async fn list_item_catalog(path: String) -> Result<Vec<serde_json::Value>, Strin
 /// List item ids from the recipe catalog (for quest item pickers).
 #[tauri::command(rename_all = "camelCase")]
 fn list_quest_item_catalog(path: String) -> Result<Vec<String>, String> {
-    let set = collect_catalog_item_ids(Path::new(&path))?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let set = collect_catalog_item_ids(&manifest_path)?;
     let mut ids: Vec<String> = set.into_iter().collect();
     ids.sort();
     Ok(ids)
@@ -11526,43 +11542,188 @@ fn open_project_folder(app: tauri::AppHandle, path: String) -> Result<(), String
     app.shell().open(dir, None).map_err(|e| e.to_string())
 }
 
+static PENDING_LAUNCH_PROJECT: Lazy<Mutex<Option<String>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn parse_launch_cli_args() {
+    let args: Vec<String> = std::env::args().collect();
+    let mut pending: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        let a = args[i].as_str();
+        if a == "--launch" || a == "--open" {
+            if let Some(path) = args.get(i + 1) {
+                pending = Some(path.clone());
+                i += 2;
+                continue;
+            }
+        } else if let Some(rest) = a.strip_prefix("--launch=") {
+            pending = Some(rest.to_string());
+        } else if let Some(rest) = a.strip_prefix("--open=") {
+            pending = Some(rest.to_string());
+        } else if a.ends_with(".tuffbox.json") || a.ends_with("tuffbox.json") {
+            // Allow dropping a manifest onto the exe / associating the file type.
+            pending = Some(a.to_string());
+        }
+        i += 1;
+    }
+    if let Some(path) = pending {
+        if let Ok(resolved) = resolve_manifest_path(&path) {
+            if let Ok(mut slot) = PENDING_LAUNCH_PROJECT.lock() {
+                *slot = Some(resolved.to_string_lossy().to_string());
+            }
+        } else if let Ok(mut slot) = PENDING_LAUNCH_PROJECT.lock() {
+            *slot = Some(path);
+        }
+    }
+}
+
+/// Pop one-shot `--launch` / `--open` path from process start (frontend auto-launches).
+#[tauri::command(rename_all = "camelCase")]
+fn take_pending_launch_project() -> Option<String> {
+    PENDING_LAUNCH_PROJECT.lock().ok().and_then(|mut g| g.take())
+}
+
+fn ps_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn create_project_desktop_shortcut(path: String) -> Result<String, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let project_dir = manifest_parent(&path)?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let desktop = dirs::desktop_dir().ok_or_else(|| "desktop folder was not found".to_string())?;
     let safe_name: String = manifest
         .project
         .name
         .chars()
         .map(|ch| {
-            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' | '\n' | '\r') {
                 '_'
             } else {
                 ch
             }
         })
-        .collect();
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let safe_name = if safe_name.is_empty() {
+        "Instance".to_string()
+    } else {
+        safe_name
+    };
+
+    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+    let exe_dir = exe
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let manifest_str = manifest_path.to_string_lossy().to_string();
+    let args = format!("--launch \"{manifest_str}\"");
 
     #[cfg(target_os = "windows")]
     {
-        let shortcut = desktop.join(format!("TuffBox - {safe_name}.url"));
-        let target = project_dir.to_string_lossy().replace('\\', "/");
-        let contents = format!("[InternetShortcut]\r\nURL=file:///{target}\r\nIconIndex=0\r\n");
-        std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
+        let shortcut = desktop.join(format!("TuffBox - {safe_name}.lnk"));
+        let script = format!(
+            "$ws = New-Object -ComObject WScript.Shell; \
+             $s = $ws.CreateShortcut({lnk}); \
+             $s.TargetPath = {exe}; \
+             $s.Arguments = {args}; \
+             $s.WorkingDirectory = {cwd}; \
+             $s.WindowStyle = 1; \
+             $s.Description = {desc}; \
+             $s.Save();",
+            lnk = ps_quote(&shortcut.to_string_lossy()),
+            exe = ps_quote(&exe.to_string_lossy()),
+            args = ps_quote(&args),
+            cwd = ps_quote(&exe_dir.to_string_lossy()),
+            desc = ps_quote(&format!("Launch {} with TuffBox", manifest.project.name)),
+        );
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
+            .output()
+            .map_err(|e| format!("powershell failed: {e}"))?;
+        if !output.status.success() || !shortcut.is_file() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let bat = desktop.join(format!("TuffBox - {safe_name}.bat"));
+            let bat_body = format!(
+                "@echo off\r\nstart \"\" \"{}\" --launch \"{}\"\r\n",
+                exe.to_string_lossy().replace('"', ""),
+                manifest_str.replace('"', ""),
+            );
+            std::fs::write(&bat, &bat_body).map_err(|e| e.to_string())?;
+            if !output.status.success() && !stderr.trim().is_empty() {
+                return Ok(format!(
+                    "{} (wrote .bat; .lnk error: {})",
+                    bat.to_string_lossy(),
+                    stderr.trim()
+                ));
+            }
+            return Ok(bat.to_string_lossy().to_string());
+        }
         return Ok(shortcut.to_string_lossy().to_string());
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        let shortcut = desktop.join(format!("TuffBox - {safe_name}.desktop"));
-        let target = project_dir.to_string_lossy();
+        let shortcut = desktop.join(format!("TuffBox - {safe_name}.command"));
         let contents = format!(
-            "[Desktop Entry]\nType=Link\nName=TuffBox - {safe_name}\nURL=file://{target}\n"
+            "#!/bin/bash\nexec {} --launch {}\n",
+            shell_escape(&exe.to_string_lossy()),
+            shell_escape(&manifest_str),
         );
         std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&shortcut)
+                .map_err(|e| e.to_string())?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&shortcut, perms).map_err(|e| e.to_string())?;
+        }
+        return Ok(shortcut.to_string_lossy().to_string());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let shortcut = desktop.join(format!("TuffBox - {safe_name}.desktop"));
+        let contents = format!(
+            "[Desktop Entry]\nType=Application\nName=TuffBox - {safe_name}\nExec={exe} --launch {manifest}\nTerminal=false\nCategories=Game;\n",
+            exe = shell_escape(&exe.to_string_lossy()),
+            manifest = shell_escape(&manifest_str),
+        );
+        std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&shortcut)
+                .map_err(|e| e.to_string())?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&shortcut, perms).map_err(|e| e.to_string())?;
+        }
         Ok(shortcut.to_string_lossy().to_string())
     }
+}
+
+#[cfg(unix)]
+fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".into();
+    }
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '='))
+    {
+        return s.to_string();
+    }
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[tauri::command]
@@ -14198,6 +14359,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            parse_launch_cli_args();
             let _ = launcher_settings::load_launcher_settings();
             use tauri::Manager;
             if let Ok(resources) = app.path().resource_dir() {
@@ -14519,6 +14681,7 @@ pub fn run() {
             has_crashed,
             open_project_folder,
             create_project_desktop_shortcut,
+            take_pending_launch_project,
             delete_project,
             create_logs_zip,
             clone_project,

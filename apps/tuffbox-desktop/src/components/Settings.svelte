@@ -266,6 +266,7 @@
     launcherSaving = true;
     launcherErr = "";
     launcherMsg = "";
+    const prev = launcher;
     try {
       const next: LauncherSettings = { ...launcher, ...partial };
       if (partial?.theme) {
@@ -288,15 +289,38 @@
           next.uiScalePercent = suggestUiScalePercent();
         }
       }
-      launcher = await api.launcher.save(next);
+      // Optimistic: chips + zoom update before disk round-trip.
+      launcher = next;
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        const applied = applyUiScaleFromSettings(next);
+        launcher = { ...launcher, uiScalePercent: applied };
+        next.uiScalePercent = applied;
+      }
+      if (partial && "autoHideWorkflowRail" in partial) {
+        autoHideWorkflowRail.set(!!next.autoHideWorkflowRail);
+      }
+      if (partial && "sidebarMode" in partial) {
+        sidebarMode.set(normalizeSidebarMode(next.sidebarMode));
+      }
+      if (partial && "roundedCorners" in partial) {
+        applyRoundedCorners(next.roundedCorners !== false);
+      }
+
+      const saved = await api.launcher.save(next);
+      launcher = {
+        ...saved,
+        uiScaleMode: resolveUiScaleMode(saved),
+        uiScalePercent: normalizeUiScalePercent(saved.uiScalePercent),
+      };
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        const applied = applyUiScaleFromSettings(launcher);
+        launcher = { ...launcher, uiScalePercent: applied };
+      }
       if (partial && "autoHideWorkflowRail" in partial) {
         autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
       }
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
-      }
-      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
-        applyUiScaleFromSettings(launcher);
       }
       if (partial && "roundedCorners" in partial) {
         applyRoundedCorners(launcher.roundedCorners !== false);
@@ -305,6 +329,10 @@
       launcherMsg = "Saved.";
       setTimeout(() => (launcherMsg = ""), 1600);
     } catch (e) {
+      launcher = prev;
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        applyUiScaleFromSettings(prev);
+      }
       launcherErr = String(e);
     } finally {
       launcherSaving = false;

@@ -55,6 +55,7 @@
     folderFromDrop,
     type GroupMap,
   } from "../lib/libraryGroups";
+  import { portal } from "../lib/portal";
   import PromptDialog from "./PromptDialog.svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
 
@@ -257,9 +258,8 @@
   }
 
   function openEdit(project: RecentProject) {
-    void selectInstance(project);
-    ideStageRequest.set("setup");
-    currentView = "ide";
+    // Edit = open the pack in IDE Content (mods), not Setup.
+    openInIde(project);
   }
 
   async function launchInstance(project: RecentProject) {
@@ -350,22 +350,30 @@
   function hitTestDrop(clientX: number, clientY: number) {
     dropTargetPath = null;
     dropTargetGroup = null;
-    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
-    if (!el || !dragSource) return;
-    const tile = el.closest?.(".inst-tile") as HTMLElement | null;
-    if (tile) {
+    if (!dragSource) return;
+
+    // Prefer rect hit-testing over elementFromPoint — CSS `zoom` on `.app-shell`
+    // can desync the latter from the visual cursor in Chromium/Electron.
+    const tiles = document.querySelectorAll<HTMLElement>(".prism-lib .inst-tile[data-path]");
+    for (const tile of tiles) {
+      const r = tile.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
       const path = tile.dataset.path ?? null;
       if (path && path !== dragSource.path) {
         dropTargetPath = path;
         return;
       }
     }
-    const header = el.closest?.(".group-header") as HTMLElement | null;
-    if (header) {
+
+    const headers = document.querySelectorAll<HTMLElement>(".prism-lib .group-header[data-group]");
+    for (const header of headers) {
+      const r = header.getBoundingClientRect();
+      if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
       const name = header.dataset.group ?? null;
       if (name && name !== getGroup(groupMap, dragSource.path)) {
         dropTargetGroup = name;
       }
+      return;
     }
   }
 
@@ -484,6 +492,7 @@
     const pad = 8;
     const menuW = 230;
     const menuH = 420;
+    // Zoom is on <html> — clientX/Y and position:fixed share one frame.
     let x = e.clientX;
     let y = e.clientY;
     if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
@@ -700,7 +709,7 @@
         actionBusy = true;
         try {
           const path = await api.files.createDesktopShortcut(project.path);
-          toasts.success(`Shortcut created: ${path}`);
+          toasts.success(`Desktop shortcut created — double-click to launch: ${path}`);
         } catch (e) {
           toasts.error(String(e));
         } finally {
@@ -1150,7 +1159,8 @@
 {#if dragGhost}
   <div
     class="drag-ghost"
-    style={`left:${dragGhost.x}px; top:${dragGhost.y}px; background: linear-gradient(135deg, ${dragGhost.colorA}, ${dragGhost.colorB})`}
+    use:portal
+    style={`position:fixed; left:${dragGhost.x}px; top:${dragGhost.y}px; z-index:10000; background: linear-gradient(135deg, ${dragGhost.colorA}, ${dragGhost.colorB})`}
     aria-hidden="true"
   >
     <span class="ghost-letter">{dragGhost.letter}</span>
@@ -1160,7 +1170,12 @@
 
 {#if ctxMenu}
   {@const menuProject = ctxMenu.project}
-  <div class="pack-ctx-menu" style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px`} role="menu">
+  <div
+    class="pack-ctx-menu"
+    use:portal
+    style={`position:fixed; left:${ctxMenu.x}px; top:${ctxMenu.y}px; z-index:10000`}
+    role="menu"
+  >
     <button type="button" role="menuitem" onclick={() => void runAction("launch", menuProject)} disabled={actionBusy}>
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
@@ -1219,7 +1234,13 @@
 {/if}
 
 {#if showGroupPrompt && groupTarget}
-  <div class="group-dialog-backdrop" role="presentation" onclick={() => { showGroupPrompt = false; groupTarget = null; }}>
+  <div
+    class="group-dialog-backdrop"
+    use:portal
+    style="position:fixed; inset:0; z-index:10000;"
+    role="presentation"
+    onclick={() => { showGroupPrompt = false; groupTarget = null; }}
+  >
     <div
       class="group-dialog"
       role="dialog"

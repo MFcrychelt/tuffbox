@@ -859,6 +859,7 @@
   }
 
   function onDown(evt: MouseEvent) {
+    focusMapViewport();
     if (evt.button === 1 || tool === "pan" || (evt.button === 0 && evt.altKey)) {
       evt.preventDefault();
       panning = true;
@@ -1468,10 +1469,14 @@
   }
 
   async function copySelected(): Promise<boolean> {
-    if (!map || selection.size === 0 || !$projectPath || !worldName) return false;
+    const path = get(projectPath);
+    if (!map || selection.size === 0 || !path || !worldName) {
+      if (selection.size === 0) flash("Select chunks to copy (box/click tools, then Ctrl+C)");
+      return false;
+    }
     error = null;
     try {
-      const clip = await api.worlds.copyChunks(worldName, selectionPayload(), dimension, $projectPath);
+      const clip = await api.worlds.copyChunks(worldName, selectionPayload(), dimension, path);
       setWorldMapClipboard(clip, worldName, dimension);
       pasteOffsetX = 0;
       pasteOffsetZ = 0;
@@ -1515,14 +1520,19 @@
   }
 
   async function pasteFromClipboard() {
-    if (!$worldMapClipboard || !$projectPath || !worldName) return;
+    const clipState = get(worldMapClipboard);
+    const path = get(projectPath);
+    if (!clipState || !path || !worldName) {
+      if (!clipState) flash("Clipboard empty — copy chunks first (Ctrl+C)");
+      return;
+    }
     if (
-      $worldMapClipboard.sourceDimension &&
-      $worldMapClipboard.sourceDimension !== dimension
+      clipState.sourceDimension &&
+      clipState.sourceDimension !== dimension
     ) {
       if (
         !confirm(
-          `Clipboard is from dimension “${$worldMapClipboard.sourceDimension}”, current is “${dimension}”. Paste anyway?`,
+          `Clipboard is from dimension “${clipState.sourceDimension}”, current is “${dimension}”. Paste anyway?`,
         )
       ) {
         return;
@@ -1533,17 +1543,17 @@
     try {
       const pasted = await api.worlds.pasteChunks(
         worldName,
-        $worldMapClipboard.clipboard,
+        clipState.clipboard,
         Number(pasteOffsetX) || 0,
         Number(pasteOffsetZ) || 0,
         dimension,
-        $projectPath,
+        path,
         importOverwrite,
       );
       await load();
       const from =
-        $worldMapClipboard.sourceWorld !== worldName
-          ? ` from ${$worldMapClipboard.sourceWorld}`
+        clipState.sourceWorld !== worldName
+          ? ` from ${clipState.sourceWorld}`
           : "";
       flash(`Pasted ${pasted} chunks${from} (offset ${pasteOffsetX}, ${pasteOffsetZ})`);
       fromWorldBannerDismissed = true;
@@ -1814,14 +1824,24 @@
     }
   }
 
+  function isEditableTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return true;
+    return target.isContentEditable;
+  }
+
+  function focusMapViewport() {
+    viewport?.focus({ preventScroll: true });
+  }
+
   function handleKeydown(e: KeyboardEvent) {
-    const tag = (e.target as HTMLElement)?.tagName;
-    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    if (isEditableTarget(e.target)) return;
     const ctrl = e.ctrlKey || e.metaKey;
-    if (ctrl && e.key === "c") { e.preventDefault(); copySelected(); }
-    else if (ctrl && e.key === "x") { e.preventDefault(); cutSelected(); }
-    else if (ctrl && e.key === "v") { e.preventDefault(); pasteFromClipboard(); }
-    else if (ctrl && e.key === "a") { e.preventDefault(); selectAll(); }
+    if (ctrl && e.code === "KeyC") { e.preventDefault(); void copySelected(); }
+    else if (ctrl && e.code === "KeyX") { e.preventDefault(); void cutSelected(); }
+    else if (ctrl && e.code === "KeyV") { e.preventDefault(); void pasteFromClipboard(); }
+    else if (ctrl && e.code === "KeyA") { e.preventDefault(); selectAll(); }
     else if (e.key === "Enter" && tool === "poly") { e.preventDefault(); applyPolySelection(); }
     else if (e.key === "Escape") {
       if (gotoOpen) { gotoOpen = false; return; }
@@ -1931,13 +1951,19 @@
 
   let viewportRo: ResizeObserver | null = null;
 
+  // Capture phase so chunk clipboard shortcuts work even when a child stops bubbling
+  // (e.g. modal backdrop) and before Tauri/webview default handling.
+  $effect(() => {
+    const onKey = (e: KeyboardEvent) => handleKeydown(e);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  });
+
   onMount(() => {
-    window.addEventListener("keydown", handleKeydown);
     window.addEventListener("resize", onResize);
   });
 
   onDestroy(() => {
-    window.removeEventListener("keydown", handleKeydown);
     window.removeEventListener("resize", onResize);
     viewportRo?.disconnect();
     viewportRo = null;
@@ -2024,6 +2050,23 @@
         <button type="button" class="ghost tool-ico" onclick={() => zoomBy(1 / 1.2)} title="Zoom out"><ZoomOut size={14} /></button>
         <button type="button" class="ghost tool-lbl" onclick={() => { fitView(); draw(); }} title="Fit (0)">Fit</button>
         <button type="button" class="ghost tool-lbl" onclick={openGoto} title="Go to… (G)"><Crosshair size={14} /><span>Go</span></button>
+      </div>
+      <span class="mca-sep" aria-hidden="true"></span>
+      <div class="tool-group compact tool-segment" role="toolbar" aria-label="Chunk clipboard">
+        <button
+          type="button"
+          class="ghost tool-ico"
+          onclick={() => void copySelected()}
+          disabled={selection.size === 0 || !$projectPath || !worldName}
+          title="Copy selection (Ctrl+C)"
+        ><Copy size={14} /></button>
+        <button
+          type="button"
+          class="ghost tool-ico"
+          onclick={() => void pasteFromClipboard()}
+          disabled={!$worldMapClipboard || !$projectPath || !worldName}
+          title="Paste clipboard (Ctrl+V)"
+        ><Clipboard size={14} /></button>
       </div>
       <div class="tool-group compact grow-end view-toggles">
         <label class="toggle tight" title="Region borders"><input type="checkbox" bind:checked={showRegions} onchange={draw} /><span>R</span></label>
@@ -2357,7 +2400,14 @@
       </div>
     {/if}
 
-    <div class="map-scroll" bind:this={viewport}>
+    <div
+      class="map-scroll"
+      bind:this={viewport}
+      tabindex="-1"
+      role="application"
+      aria-label="World chunk map"
+      onpointerdown={focusMapViewport}
+    >
       {#if map}
         <canvas
           bind:this={canvas}
@@ -3585,7 +3635,12 @@
     height: auto;
     border: none;
     border-radius: 0;
+    outline: none;
     background: color-mix(in srgb, var(--bg-primary) 90%, #000 10%);
+  }
+  .map-scroll:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    outline-offset: -2px;
   }
 
   canvas {
