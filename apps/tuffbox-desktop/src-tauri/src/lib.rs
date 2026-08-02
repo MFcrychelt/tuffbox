@@ -390,11 +390,42 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                 }
 
                 let file_name = entry.file_name().to_string_lossy().to_string();
-                if manifest
+                if let Some(idx) = manifest
                     .mods
                     .iter()
-                    .any(|m| m.file_name.as_deref() == Some(&*file_name))
+                    .position(|m| m.file_name.as_deref() == Some(file_name.as_str()))
                 {
+                    // Re-canonicalize Local drop-ins that were previously keyed by
+                    // filename stem so Requires edges and the change plan resolve.
+                    if manifest.mods[idx].source.kind == SourceKind::Local {
+                        if let Ok(scan) = tuffbox_core::scan_mod_jar(&entry.path()) {
+                            if let Some(mod_id) = scan
+                                .mod_id
+                                .as_ref()
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                            {
+                                let id_taken = manifest
+                                    .mods
+                                    .iter()
+                                    .enumerate()
+                                    .any(|(i, m)| i != idx && m.id == mod_id);
+                                if !id_taken && manifest.mods[idx].id != mod_id {
+                                    manifest.mods[idx].id = mod_id.clone();
+                                    if manifest.mods[idx].name.ends_with(".jar")
+                                        || manifest.mods[idx].name == file_name
+                                    {
+                                        manifest.mods[idx].name = mod_id;
+                                    }
+                                    any_changes = true;
+                                }
+                            }
+                            if manifest.mods[idx].authors.is_empty() && !scan.authors.is_empty() {
+                                manifest.mods[idx].authors = scan.authors;
+                                any_changes = true;
+                            }
+                        }
+                    }
                     continue;
                 }
 
@@ -474,13 +505,36 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     continue;
                 }
 
-                let local_side = tuffbox_core::scan_mod_jar(&entry.path())
+                let scan = tuffbox_core::scan_mod_jar(&entry.path()).ok();
+                let local_side = scan
+                    .as_ref()
                     .map(|r| r.side)
                     .unwrap_or(tuffbox_core::manifest::Side::Unknown);
-                let id = file_name.trim_end_matches(&format!(".{}", ext)).to_string();
+                // Prefer fabric/quilt/forge mod id so Requires edges match other mods'
+                // dependency targets (filename stems like meteor-client-0.5.8 do not).
+                let id = scan
+                    .as_ref()
+                    .and_then(|r| r.mod_id.as_ref())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| {
+                        file_name
+                            .trim_end_matches(&format!(".{}", ext))
+                            .to_string()
+                    });
+                let name = scan
+                    .as_ref()
+                    .and_then(|r| r.mod_id.as_ref())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| file_name.clone());
+                // Avoid colliding with an already-tracked Modrinth/CF mod of the same id.
+                if manifest.mods.iter().any(|m| m.id == id) {
+                    continue;
+                }
                 manifest.mods.push(tuffbox_core::manifest::ModSpec {
                     id,
-                    name: file_name.clone(),
+                    name,
                     version: "unknown".to_string(),
                     side: local_side,
                     source: tuffbox_core::manifest::ModSource {
@@ -500,9 +554,7 @@ async fn sync_mods_folder(path: String) -> Result<Vec<serde_json::Value>, String
                     dependencies: vec![],
                     status: vec![],
                     content_type: default_content_type,
-                    authors: tuffbox_core::scan_mod_jar(&entry.path())
-                        .map(|r| r.authors)
-                        .unwrap_or_default(),
+                    authors: scan.map(|r| r.authors).unwrap_or_default(),
                     option: None,
                 });
                 any_changes = true;
@@ -2271,10 +2323,14 @@ async fn get_mod_versions(
                 .cmp(a.date_published.as_deref().unwrap_or(""))
         });
 
+        let mc_filter = minecraft_version.trim();
         let mut rows: Vec<serde_json::Value> = versions
             .into_iter()
             .map(|v| {
-                let mc_ok = v.game_versions.iter().any(|gv| gv == &minecraft_version);
+                // Empty MC filter = "any version" (callers that omit instance
+                // context must not mark every row incompatible).
+                let mc_ok = mc_filter.is_empty()
+                    || v.game_versions.iter().any(|gv| gv == mc_filter);
                 let loader_ok = match &loader_slug {
                     Some(loader) => v
                         .loaders
@@ -8046,15 +8102,17 @@ fn paste_world_chunks(
     offset_x: Option<i32>,
     offset_z: Option<i32>,
     dimension: Option<String>,
+    overwrite: Option<bool>,
 ) -> Result<usize, String> {
     let project_dir = manifest_parent(&path)?;
     let world_dir = project_dir.join("saves").join(&world_name);
-    tuffbox_core::region::paste_world_chunks(
+    tuffbox_core::region::paste_world_chunks_ex(
         &world_dir,
         &clipboard,
         offset_x.unwrap_or(0),
         offset_z.unwrap_or(0),
         dimension.as_deref(),
+        overwrite.unwrap_or(true),
     )
     .map_err(|e| format!("Failed to paste chunks: {}", e))
 }

@@ -412,6 +412,9 @@ export function closeLaunchLog() {
 /** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
 export const ideStageRequest = writable<string | null>(null);
 
+/** Live IDE stage while IdeWorkspace is mounted (for left-nav active highlight). */
+export const ideActiveStage = writable<string | null>(null);
+
 /** Suggested IDE stage when opening from Home (updated by IdeNextBar / diagnostics refresh). */
 export const ideSuggestedStage = writable<string>("content");
 
@@ -538,6 +541,18 @@ export const autoHideWorkflowRail = writable(false);
 
 /** Live mirror of launcherSettings.sidebarMode. */
 export const sidebarMode = writable<SidebarMode>("full");
+
+/** Latest launcher settings — updated when Settings persists (keeps App auto-scale in sync). */
+export const launcherSettingsLive = writable<LauncherSettings | null>(null);
+
+export function notifyLauncherSettingsChanged(settings: LauncherSettings) {
+  launcherSettingsLive.set(settings);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("tuffbox:launcher-settings", { detail: settings }),
+    );
+  }
+}
 
 /** Icons mode only: true = labels hidden (icon rail). Persisted in localStorage. */
 function createSidebarIconsCollapsed() {

@@ -85,7 +85,7 @@
       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
       model: "gemini-flash-latest",
       needsKey: true,
-      hint: "Google Gemini via OpenAI-compatible Chat Completions. Paste an API key from Google AI Studio.",
+      hint: "Google Gemini via native generateContent API (same key as AI Studio / X-goog-api-key). Model e.g. gemini-flash-latest or gemini-2.0-flash.",
     },
     {
       id: "openai",

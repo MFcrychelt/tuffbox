@@ -60,10 +60,8 @@
 
   let {
     currentView = $bindable(),
-    uiMode = "classic",
   }: {
     currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world";
-    uiMode?: "classic" | "prism";
   } = $props();
 
   const LONG_PRESS_MS = 420;
@@ -216,8 +214,11 @@
     ensureStats($recentProjects.map((p) => p.path));
   });
 
-  async function selectInstance(project: RecentProject): Promise<string> {
-    closeMenus();
+  async function selectInstance(
+    project: RecentProject,
+    opts?: { keepMenus?: boolean },
+  ): Promise<string> {
+    if (!opts?.keepMenus) closeMenus();
     selectingPath = true;
     // Optimistic select so tiles feel clickable even while validate runs.
     selectedPath = project.path;
@@ -480,7 +481,6 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    selectInstance(project);
     const pad = 8;
     const menuW = 230;
     const menuH = 420;
@@ -488,6 +488,7 @@
     let y = e.clientY;
     if (x + menuW > window.innerWidth - pad) x = window.innerWidth - menuW - pad;
     if (y + menuH > window.innerHeight - pad) y = window.innerHeight - menuH - pad;
+    void selectInstance(project, { keepMenus: true });
     ctxMenu = { x: Math.max(pad, x), y: Math.max(pad, y), project };
   }
 
@@ -821,7 +822,7 @@
   });
 </script>
 
-<div class="prism-lib lib-motion" class:drag-mode={dragging} data-ui={uiMode}>
+<div class="prism-lib lib-motion" class:drag-mode={dragging}>
   <div class="prism-toolbar lib-toolbar-enter">
     <div class="tb-left">
       <div class="tb-add-wrap">
@@ -1004,7 +1005,6 @@
                     </div>
                     <span
                       class="inst-name"
-                      class:tb-truncate={uiMode !== "prism"}
                       title={project.info.name}
                     >{project.info.name}</span>
                   </div>
@@ -1014,6 +1014,23 @@
           </section>
         {/each}
       {/if}
+      <div class="lib-footer" aria-live="polite">
+        <span>
+          {#if selected}
+            Minecraft {selected.info.minecraftVersion} · {selected.info.loaderKind}
+            {#if projectStats[selected.path]?.playtime}
+              · {formatPlaytime(projectStats[selected.path].playtime)} played
+            {/if}
+          {:else}
+            —
+          {/if}
+        </span>
+        <span>
+          Total playtime: {formatPlaytime(
+            Object.values(projectStats).reduce((s, p) => s + (p?.playtime ?? 0), 0),
+          )}
+        </span>
+      </div>
     </div>
 
     <aside class="prism-side lib-side-enter" aria-label="Instance actions">
@@ -1128,47 +1145,6 @@
       {/if}
     </aside>
   </div>
-
-  <div class="prism-status">
-    {#if uiMode === "prism"}
-      <div class="status-row">
-        <span>TuffBox</span>
-        <span></span>
-      </div>
-      <div class="status-row">
-        <span>
-          {#if selected}
-            Minecraft {selected.info.minecraftVersion} · {selected.info.loaderKind}
-            {#if projectStats[selected.path]?.playtime}
-              · playtime {formatPlaytime(projectStats[selected.path].playtime)}
-            {/if}
-          {:else}
-            —
-          {/if}
-        </span>
-        <span>
-          Total playtime: {formatPlaytime(
-            Object.values(projectStats).reduce((s, p) => s + (p?.playtime ?? 0), 0),
-          )}
-        </span>
-      </div>
-    {:else}
-      <span>
-        {#if selected}
-          Minecraft {selected.info.minecraftVersion}
-        {:else}
-          —
-        {/if}
-      </span>
-      <span>
-        {#if selected}
-          Total playtime: {formatPlaytime(projectStats[selected.path]?.playtime ?? 0)}
-        {:else}
-          Total playtime: —
-        {/if}
-      </span>
-    {/if}
-  </div>
 </div>
 
 {#if dragGhost}
@@ -1248,6 +1224,7 @@
       class="group-dialog"
       role="dialog"
       aria-labelledby="group-dlg-title"
+      tabindex="-1"
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => e.stopPropagation()}
     >
@@ -1279,22 +1256,14 @@
     flex: 1;
     min-height: 0;
     height: 100%;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    background: var(--bg-secondary);
+    border: none;
+    border-radius: 0;
+    background: transparent;
     overflow: hidden;
     position: relative;
   }
   .prism-lib.lib-motion::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(ellipse 80% 40% at 20% -10%, rgba(27, 217, 106, 0.08), transparent 55%),
-      radial-gradient(ellipse 60% 30% at 100% 0%, rgba(139, 92, 246, 0.06), transparent 50%);
-    opacity: 0;
-    animation: lib-ambient-in var(--motion-enter) var(--ease-out) 80ms both;
+    display: none;
   }
 
   .lib-toolbar-enter {
@@ -1309,7 +1278,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 8px 10px;
+    padding: 4px 8px;
     border-bottom: 1px solid var(--border-color);
     background: var(--bg-tertiary);
     flex-wrap: wrap;
@@ -1436,10 +1405,22 @@
   }
 
   .prism-grid-pane {
-    padding: 12px 14px 16px;
+    padding: 8px 10px 12px;
     overflow: auto;
     min-height: 0;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .lib-footer {
+    margin-top: auto;
+    padding-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-muted);
   }
   .drag-hint {
     margin: 0 0 10px;
@@ -1639,6 +1620,12 @@
     color: var(--text-primary);
     max-width: 100%;
     line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    white-space: normal;
     transition: color var(--motion-fast) var(--ease-out);
   }
   .inst-tile.drop-target .inst-name { color: var(--accent-primary); }
@@ -1773,185 +1760,10 @@
     font-size: 13px;
   }
 
-  .prism-status {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 12px;
-    border-top: 1px solid var(--border-color);
-    background: var(--bg-elevated, #141820);
-    font-size: 11px;
-    color: var(--text-muted);
-    animation: lib-status-in var(--motion-enter) var(--ease-spring) 100ms both;
-  }
-  .status-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    width: 100%;
-  }
   .side-sep {
-    display: none;
-  }
-
-  /* —— Prism UI mode overrides —— */
-  .prism-lib[data-ui="prism"] {
-    flex: 1;
-    min-height: 0;
-    height: 100%;
-    border: none;
-    border-radius: 0;
-    background: transparent;
-  }
-  .prism-lib[data-ui="prism"].lib-motion::before {
-    display: none;
-  }
-  .prism-lib[data-ui="prism"] .prism-toolbar {
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-    padding: 4px 8px;
-  }
-  .prism-lib[data-ui="prism"] .tb-btn {
-    border-radius: 4px;
-    padding: 5px 8px;
-    font-weight: 500;
-  }
-  .prism-lib[data-ui="prism"] .tb-btn.primary {
-    background: transparent;
-    border-color: transparent;
-    color: var(--text-primary);
-  }
-  .prism-lib[data-ui="prism"] .tb-btn.primary:hover {
-    background: var(--bg-hover);
-    box-shadow: none;
-  }
-  .prism-lib[data-ui="prism"] .tb-account {
-    border-radius: 4px;
-  }
-  .prism-lib[data-ui="prism"] .prism-body {
-    flex: 1;
-    min-height: 0;
-    grid-template-columns: 1fr 200px;
-  }
-  .prism-lib[data-ui="prism"] .prism-grid-pane {
-    padding: 8px 10px 12px;
-    min-height: 0;
-  }
-  .prism-lib[data-ui="prism"] .inst-grid {
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-    gap: 6px 4px;
-  }
-  .prism-lib[data-ui="prism"] .inst-tile {
-    padding: 6px 4px 8px;
-    border-radius: 2px;
-    gap: 6px;
-  }
-  .prism-lib[data-ui="prism"] .inst-tile:hover {
-    background: rgba(255, 255, 255, 0.04);
-    transform: none;
-  }
-  .prism-lib[data-ui="prism"] .inst-tile:hover .inst-icon {
-    transform: none;
-    box-shadow: none;
-  }
-  .prism-lib[data-ui="prism"] .inst-tile.selected {
-    background: transparent;
-    border-color: transparent;
-    box-shadow: none;
-  }
-  .prism-lib[data-ui="prism"] .inst-tile.selected .inst-icon {
-    animation: none;
-    background: #5a9e36 !important;
-    box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.25);
-  }
-  .prism-lib[data-ui="prism"] .inst-tile.selected .inst-name {
-    background: rgba(90, 158, 54, 0.35);
-    border-radius: 2px;
-    padding: 1px 4px;
-  }
-  .prism-lib[data-ui="prism"] .inst-tile.running .inst-icon {
-    animation: none;
-    box-shadow: 0 0 0 2px var(--accent-primary);
-  }
-  .prism-lib[data-ui="prism"] .inst-icon {
-    width: 56px;
-    height: 56px;
-    border-radius: 6px;
-    font-size: 22px;
-  }
-  .prism-lib[data-ui="prism"] .hold-ring {
-    width: 64px;
-    height: 64px;
-    margin-left: -32px;
-    top: 4px;
-    border-radius: var(--border-radius-sm);
-  }
-  .prism-lib[data-ui="prism"] .inst-name {
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 1.25;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-    white-space: normal;
-    max-width: 100%;
-  }
-  .prism-lib[data-ui="prism"] .group-header {
-    font-weight: 600;
-    font-size: 12px;
-  }
-  .prism-lib[data-ui="prism"] .group-header:hover {
-    transform: none;
-  }
-  .prism-lib[data-ui="prism"] .prism-side {
-    padding: 10px 8px;
-    background: var(--bg-secondary);
-  }
-  .prism-lib[data-ui="prism"] .side-icon {
-    width: 72px;
-    height: 72px;
-    border-radius: 50%;
-    box-shadow: none;
-    animation: none;
-  }
-  .prism-lib[data-ui="prism"] .side-title,
-  .prism-lib[data-ui="prism"] .side-meta {
-    animation: none;
-  }
-  .prism-lib[data-ui="prism"] .side-btn {
-    border-radius: 2px;
-    font-weight: 500;
-    padding: 6px 8px;
-    animation: none;
-  }
-  .prism-lib[data-ui="prism"] .side-btn:hover:not(:disabled) {
-    transform: none;
-    background: var(--bg-hover);
-  }
-  .prism-lib[data-ui="prism"] .side-btn.launch {
-    background: transparent;
-    color: var(--accent-primary);
-    border: none;
-  }
-  .prism-lib[data-ui="prism"] .side-btn.launch:hover:not(:disabled) {
-    background: var(--bg-hover);
-  }
-  .prism-lib[data-ui="prism"] .side-actions .side-btn {
-    animation: none;
-  }
-  .prism-lib[data-ui="prism"] .side-sep {
-    display: block;
     height: 1px;
     margin: 4px 2px;
     background: var(--border-color);
-  }
-  .prism-lib[data-ui="prism"] .prism-status {
-    flex-direction: column;
-    gap: 2px;
-    padding: 4px 10px;
-    animation: none;
   }
 
   .empty-state {
@@ -1982,7 +1794,7 @@
 
   .pack-ctx-menu {
     position: fixed;
-    z-index: 90;
+    z-index: 200;
     min-width: 210px;
     padding: 6px;
     border-radius: 10px;
@@ -2227,8 +2039,7 @@
   :global(.potato-pc) .side-icon,
   :global(.potato-pc) .side-title,
   :global(.potato-pc) .side-meta,
-  :global(.potato-pc) .side-actions .side-btn,
-  :global(.potato-pc) .prism-status {
+  :global(.potato-pc) .side-actions .side-btn {
     animation: none !important;
   }
   :global(.potato-pc) .inst-tile:hover,
@@ -2254,7 +2065,6 @@
     .side-title,
     .side-meta,
     .side-actions .side-btn,
-    .prism-status,
     .hold-ring {
       animation: none !important;
     }

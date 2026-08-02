@@ -17,6 +17,7 @@
     Shuffle,
     Search,
     X,
+    MoreHorizontal,
   } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, questChatFocusId } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -119,6 +120,15 @@
   let postInstallTrail = $state(false);
   let lastInstallCount = $state(0);
   let questPendingPlan = $state(false);
+  let moreMenuOpen = $state(false);
+
+  type ContextualNext = "" | "build" | "rank" | "curate";
+  const contextualNext = $derived.by((): ContextualNext => {
+    if (isQuestChat || !brief) return "";
+    if (!draft?.mods?.length) return "build";
+    if (!lastCuration) return "rank";
+    return "curate";
+  });
 
   // Alternatives popover (per-mod swap suggestions).
   let altForKey = $state<string | null>(null);
@@ -1373,72 +1383,105 @@
           }}
         ></textarea>
         <div class="actions">
-          <button type="button" class="btn primary" disabled={busy || !input.trim()} onclick={() => sendMessage(false)}>
+          <button type="button" class="btn primary" disabled={busy || !input.trim()} onclick={() => sendMessage(false)} title="Enter">
             {#if busyKind === "plan"}
               <span class="spin"><Loader2 size={14} /></span> Planning…
             {:else}
               <Send size={14} /> Plan
             {/if}
           </button>
-          <button type="button" class="btn" disabled={busy || !input.trim()} onclick={() => void quickAssemble()}>
-            {#if busyKind === "quick"}
-              <span class="spin"><Loader2 size={14} /></span> Assembling…
-            {:else}
-              Quick assemble
-            {/if}
-          </button>
-          <button type="button" class="btn" disabled={busy || !brief || !input.trim()} onclick={() => sendMessage(true)}>
-            {#if busyKind === "refine"}
-              <span class="spin"><Loader2 size={14} /></span> Refining…
-            {:else}
-              Refine
-            {/if}
-          </button>
-          <button type="button" class="btn" disabled={busy || !brief} onclick={buildDraft}>
-            {#if busyKind === "build"}
-              <span class="spin"><Loader2 size={14} /></span> Catalog…
-            {:else}
-              <Package size={14} /> Build draft
-            {/if}
-          </button>
-          <button type="button" class="btn" disabled={busy || !draft?.mods?.length} onclick={() => void rankWithAi()}>
-            {#if busyKind === "rank"}
-              <span class="spin"><Loader2 size={14} /></span> Ranking…
-            {:else}
-              <Sparkles size={14} /> Rank with AI
-            {/if}
-          </button>
-          <label class="curate-iters" title="Curation loop iterations">
-            <span>iters</span>
-            <input
-              type="number"
-              min="1"
-              max="8"
-              bind:value={maxCurateIterations}
-              disabled={busy}
-            />
-          </label>
-          <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={() => void curateWithAi()}>
-            {#if busyKind === "curate"}
-              <span class="spin"><Loader2 size={14} /></span> Curating…
-            {:else}
-              <Sparkles size={14} /> Curate
-            {/if}
-          </button>
+
+          {#if contextualNext === "build"}
+            <button type="button" class="btn accent" disabled={busy || !brief} onclick={buildDraft}>
+              {#if busyKind === "build"}
+                <span class="spin"><Loader2 size={14} /></span> Catalog…
+              {:else}
+                <Package size={14} /> Build draft
+              {/if}
+            </button>
+          {:else if contextualNext === "rank"}
+            <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={() => void rankWithAi()}>
+              {#if busyKind === "rank"}
+                <span class="spin"><Loader2 size={14} /></span> Ranking…
+              {:else}
+                <Sparkles size={14} /> Rank
+              {/if}
+            </button>
+          {:else if contextualNext === "curate"}
+            <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={() => void curateWithAi()}>
+              {#if busyKind === "curate"}
+                <span class="spin"><Loader2 size={14} /></span> Curating…
+              {:else}
+                <Sparkles size={14} /> Curate
+              {/if}
+            </button>
+          {/if}
+
+          {#if draft?.mods?.length}
+            <button type="button" class="btn accent install-confirm" disabled={busy} onclick={confirmInstall}>
+              <CheckCircle2 size={14} /> Confirm install
+            </button>
+          {/if}
+
           {#if busyKind === "curate"}
             <button type="button" class="btn ghost" onclick={() => void cancelCurate()}>Stop</button>
           {/if}
-          <button type="button" class="btn" disabled={busy || !draft?.mods?.length} onclick={previewDraft}>
-            {#if busyKind === "preview"}
-              <span class="spin"><Loader2 size={14} /></span> Previewing…
-            {:else}
-              Install preview
+
+          <div class="more-wrap">
+            <button
+              type="button"
+              class="btn ghost more-toggle"
+              disabled={busy && busyKind !== "curate"}
+              aria-expanded={moreMenuOpen}
+              onclick={() => (moreMenuOpen = !moreMenuOpen)}
+            >
+              <MoreHorizontal size={14} /> More
+            </button>
+            {#if moreMenuOpen}
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="more-backdrop" onclick={() => (moreMenuOpen = false)} onkeydown={() => {}}></div>
+              <div class="more-menu" role="menu">
+                <button type="button" class="more-item" disabled={busy || !input.trim()} onclick={() => { moreMenuOpen = false; void quickAssemble(); }}>
+                  {#if busyKind === "quick"}<span class="spin"><Loader2 size={13} /></span>{/if}
+                  Quick assemble
+                </button>
+                <button type="button" class="more-item" disabled={busy || !brief || !input.trim()} onclick={() => { moreMenuOpen = false; sendMessage(true); }}>
+                  {#if busyKind === "refine"}<span class="spin"><Loader2 size={13} /></span>{/if}
+                  Refine
+                </button>
+                {#if contextualNext !== "rank"}
+                  <button type="button" class="more-item" disabled={busy || !draft?.mods?.length} onclick={() => { moreMenuOpen = false; void rankWithAi(); }}>
+                    {#if busyKind === "rank"}<span class="spin"><Loader2 size={13} /></span>{/if}
+                    Rank with AI
+                  </button>
+                {/if}
+                {#if contextualNext !== "curate"}
+                  <div class="more-curate-row">
+                    <button type="button" class="more-item flex" disabled={busy || !draft?.mods?.length} onclick={() => { moreMenuOpen = false; void curateWithAi(); }}>
+                      {#if busyKind === "curate"}<span class="spin"><Loader2 size={13} /></span>{/if}
+                      Curate
+                    </button>
+                    <label class="curate-iters compact" title="Curation loop iterations">
+                      <span>iters</span>
+                      <input type="number" min="1" max="8" bind:value={maxCurateIterations} disabled={busy} onclick={(e) => e.stopPropagation()} />
+                    </label>
+                  </div>
+                {:else}
+                  <label class="more-item curate-iters inline" title="Curation loop iterations">
+                    <span>Curate iters</span>
+                    <input type="number" min="1" max="8" bind:value={maxCurateIterations} disabled={busy} />
+                  </label>
+                {/if}
+                <button type="button" class="more-item" disabled={busy || !draft?.mods?.length} onclick={() => { moreMenuOpen = false; previewDraft(); }}>
+                  {#if busyKind === "preview"}<span class="spin"><Loader2 size={13} /></span>{/if}
+                  Install preview
+                </button>
+                <button type="button" class="more-item" onclick={() => { moreMenuOpen = false; openMods(); }}>
+                  Open in Content
+                </button>
+              </div>
             {/if}
-          </button>
-          <button type="button" class="btn accent" disabled={busy || !draft?.mods?.length} onclick={confirmInstall}>
-            <CheckCircle2 size={14} /> Confirm install
-          </button>
-          <button type="button" class="btn ghost" onclick={openMods}>Open in Content</button>
+          </div>
         </div>
         {#if pillarStatus.length}
           <div class="pillar-checklist" class:partial={lastCuratePartial}>
@@ -1463,8 +1506,8 @@
           </div>
         {/if}
         {#if postInstallTrail}
-          <div class="post-trail">
-            Installed {lastInstallCount} mods.
+          <div class="post-trail compact">
+            <span>Installed {lastInstallCount} mods</span>
             <button type="button" class="btn ghost mini" onclick={openMods}><Package size={12} /> Content</button>
             <button type="button" class="btn ghost mini" onclick={openResolve}><GitGraph size={12} /> Resolve</button>
           </div>
@@ -1825,11 +1868,10 @@
     display: grid;
     grid-template-columns: 200px minmax(0, 1fr) 280px;
     gap: 0;
-    height: calc(100vh - 88px);
-    min-height: 420px;
+    /* Fill the fill-view pane — avoid 100vh (fights header / UI scale). */
+    height: 100%;
+    min-height: 0;
     background: var(--bg-secondary);
-    border: 1px solid var(--border-color, #2a2f3a);
-    border-radius: var(--border-radius-md);
     overflow: hidden;
   }
   .chats.empty {
@@ -1929,6 +1971,7 @@
     flex: 1;
     overflow: auto;
     min-height: 0;
+    scrollbar-gutter: stable;
   }
   .session-row {
     display: flex;
@@ -2119,6 +2162,77 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    align-items: center;
+  }
+  .more-wrap {
+    position: relative;
+    margin-left: auto;
+  }
+  .more-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+  .more-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 4px);
+    z-index: 50;
+    min-width: 180px;
+    background: var(--bg-secondary, #151922);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .more-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary, #e8ecf4);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .more-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+  .more-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .more-item.flex {
+    flex: 1;
+  }
+  .more-curate-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .curate-iters.compact {
+    padding: 0 6px 0 0;
+    flex-shrink: 0;
+  }
+  .curate-iters.inline {
+    justify-content: space-between;
+    cursor: default;
+  }
+  .curate-iters.inline input {
+    width: 44px;
+  }
+  .post-trail.compact {
+    margin-top: 4px;
+    padding: 4px 0 0;
+    font-size: 11px;
+    gap: 4px;
   }
   .btn {
     display: inline-flex;
@@ -2457,7 +2571,6 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 6px;
-    margin-top: 8px;
     font-size: 12px;
     color: var(--text-secondary, #9aa3b5);
   }
@@ -2596,7 +2709,9 @@
   @media (max-width: 1100px) {
     .chats {
       grid-template-columns: 1fr;
-      height: auto;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      height: 100%;
+      min-height: 0;
     }
     .sessions,
     .draft {

@@ -29,11 +29,14 @@ impl Resolver {
         graph: &DependencyGraph,
         diagnostics: &[Diagnostic],
     ) -> Option<ChangePlan> {
+        // One InstallMod per unique slug — several mods may require the same dep.
+        let mut seen = HashSet::new();
         let missing_deps: Vec<String> = diagnostics
             .iter()
             .filter(|d| d.severity == DiagnosticSeverity::Error && d.code == "MISSING_DEPENDENCY")
             .filter_map(|d| d.related_nodes.last())
             .filter_map(|id| id.0.strip_prefix("mod:").map(|s| s.to_string()))
+            .filter(|slug| seen.insert(slug.clone()))
             .collect();
 
         if !missing_deps.is_empty() {
@@ -253,6 +256,41 @@ mod tests {
         assert!(
             diagnostics.is_empty(),
             "expected no diagnostics, got {diagnostics:#?}"
+        );
+    }
+
+    #[test]
+    fn change_plan_dedupes_repeated_missing_slugs() {
+        use crate::diagnostics::{Diagnostic, DiagnosticSeverity};
+        use crate::graph::NodeId;
+
+        let diagnostics = vec![
+            Diagnostic::error(
+                "MISSING_DEPENDENCY",
+                "a requires missing dependency mod:meteor-client",
+                vec![NodeId::module("a"), NodeId::module("meteor-client")],
+            ),
+            Diagnostic::error(
+                "MISSING_DEPENDENCY",
+                "b requires missing dependency mod:meteor-client",
+                vec![NodeId::module("b"), NodeId::module("meteor-client")],
+            ),
+            Diagnostic::error(
+                "MISSING_DEPENDENCY",
+                "c requires missing dependency mod:nuit",
+                vec![NodeId::module("c"), NodeId::module("nuit")],
+            ),
+        ];
+        assert!(diagnostics
+            .iter()
+            .all(|d| d.severity == DiagnosticSeverity::Error));
+
+        let graph = DependencyGraph::default();
+        let plan = Resolver::create_fix_plan(&graph, &diagnostics).expect("plan");
+        assert_eq!(plan.actions.len(), 2, "duplicate meteor-client must collapse");
+        assert_eq!(
+            plan.summary,
+            "Install 2 missing dependencies"
         );
     }
 }

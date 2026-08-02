@@ -87,10 +87,7 @@
   --accent-danger: #fb7185;
   --accent-warning: #fbbf24;
   --border-color: #3a1870;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
+  /* Radius comes from data-rounded-corners — do not bake 0 here. */
   --shadow-sm: 0 1px 2px rgba(20, 0, 40, 0.5);
   --shadow-md: 0 4px 16px rgba(20, 0, 40, 0.55);
   --shadow-lg: 0 14px 40px rgba(20, 0, 40, 0.65);
@@ -112,10 +109,6 @@
   --accent-danger: #fb7185;
   --accent-warning: #fcd34d;
   --border-color: #0284c7;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
   --shadow-sm: 0 1px 2px rgba(0, 30, 60, 0.35);
   --shadow-md: 0 4px 14px rgba(0, 30, 60, 0.4);
   --shadow-lg: 0 14px 36px rgba(0, 30, 60, 0.45);
@@ -137,10 +130,6 @@
   --accent-danger: #ef5350;
   --accent-warning: #ffca28;
   --border-color: #404040;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
   --font-sans: var(--font-minecraft), ui-monospace, monospace;
   --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.6);
   --shadow-md: 0 4px 0 rgba(0, 0, 0, 0.55);
@@ -163,10 +152,6 @@
   --accent-danger: #800000;
   --accent-warning: #808000;
   --border-color: #808080;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
   --shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
   --shadow-md: inset -2px -2px 0 #000, inset 2px 2px 0 #fff;
   --shadow-lg: inset -2px -2px 0 #000, inset 2px 2px 0 #fff, 2px 2px 0 #000;
@@ -177,6 +162,156 @@
   border: 2px solid;
   border-color: #dfdfdf #000 #000 #dfdfdf;
   background: #c0c0c0;
+}
+
+/* ── Apple / macOS–inspired minimal palettes (gradient accent pairs) ──
+   Deep base + vivid accent; soft radii; quiet borders; ambient shadow. */
+
+[data-theme="solar"] {
+  --bg-primary: #1a1200;
+  --bg-secondary: #22180a;
+  --bg-tertiary: #2c1f0c;
+  --bg-elevated: #362714;
+  --bg-hover: #423018;
+  --bg-active: #523c1e;
+  --text-primary: #fff8e8;
+  --text-secondary: #e8d4a8;
+  --text-muted: #a89068;
+  --accent-primary: #ffc500;
+  --accent-hover: #e6b100;
+  --accent-secondary: #ffb020;
+  --accent-danger: #ff6b4a;
+  --accent-warning: #ffc500;
+  --border-color: rgba(255, 197, 0, 0.14);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(26, 18, 0, 0.45);
+  --shadow-md: 0 8px 24px rgba(26, 18, 0, 0.5), 0 0 0 1px rgba(255, 197, 0, 0.06);
+  --shadow-lg: 0 20px 48px rgba(26, 18, 0, 0.55), 0 0 40px rgba(255, 197, 0, 0.06);
+}
+
+[data-theme="fern"] {
+  --bg-primary: #001a08;
+  --bg-secondary: #052210;
+  --bg-tertiary: #0a2c16;
+  --bg-elevated: #0f361c;
+  --bg-hover: #144224;
+  --bg-active: #1a5230;
+  --text-primary: #e8fff0;
+  --text-secondary: #a8e0bc;
+  --text-muted: #5a9a70;
+  --accent-primary: #00c85a;
+  --accent-hover: #00b050;
+  --accent-secondary: #34d399;
+  --accent-danger: #f87171;
+  --accent-warning: #fbbf24;
+  --border-color: rgba(0, 200, 90, 0.14);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(0, 26, 8, 0.45);
+  --shadow-md: 0 8px 24px rgba(0, 26, 8, 0.5), 0 0 0 1px rgba(0, 200, 90, 0.06);
+  --shadow-lg: 0 20px 48px rgba(0, 26, 8, 0.55), 0 0 40px rgba(0, 200, 90, 0.06);
+}
+
+[data-theme="blaze"] {
+  --bg-primary: #1a0000;
+  --bg-secondary: #240606;
+  --bg-tertiary: #2e0c0c;
+  --bg-elevated: #3a1212;
+  --bg-hover: #4a1818;
+  --bg-active: #5c2020;
+  --text-primary: #fff5f5;
+  --text-secondary: #f0b4b4;
+  --text-muted: #a86a6a;
+  --accent-primary: #ff2d2d;
+  --accent-hover: #e62020;
+  --accent-secondary: #ff6b6b;
+  --accent-danger: #ff2d2d;
+  --accent-warning: #ffb020;
+  --border-color: rgba(255, 45, 45, 0.16);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(26, 0, 0, 0.5);
+  --shadow-md: 0 8px 24px rgba(26, 0, 0, 0.55), 0 0 0 1px rgba(255, 45, 45, 0.08);
+  --shadow-lg: 0 20px 48px rgba(26, 0, 0, 0.6), 0 0 40px rgba(255, 45, 45, 0.08);
+}
+
+[data-theme="dusk"] {
+  --bg-primary: #200310;
+  --bg-secondary: #2c0818;
+  --bg-tertiary: #3a0e22;
+  --bg-elevated: #48142c;
+  --bg-hover: #5a1a38;
+  --bg-active: #6e2248;
+  --text-primary: #fff5f8;
+  --text-secondary: #f0c0d0;
+  --text-muted: #b07890;
+  --accent-primary: #ff6b9c;
+  --accent-hover: #f05588;
+  --accent-secondary: #ff9ec0;
+  --accent-danger: #ff4d6d;
+  --accent-warning: #ffb020;
+  --border-color: rgba(255, 107, 156, 0.16);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(32, 3, 16, 0.5);
+  --shadow-md: 0 8px 24px rgba(32, 3, 16, 0.55), 0 0 0 1px rgba(255, 107, 156, 0.08);
+  --shadow-lg: 0 20px 48px rgba(32, 3, 16, 0.6), 0 0 40px rgba(255, 107, 156, 0.08);
+}
+
+[data-theme="glacier"] {
+  --bg-primary: #001020;
+  --bg-secondary: #061828;
+  --bg-tertiary: #0c2234;
+  --bg-elevated: #122c40;
+  --bg-hover: #1a384c;
+  --bg-active: #24485c;
+  --text-primary: #f0faff;
+  --text-secondary: #b8dcec;
+  --text-muted: #6a98b0;
+  --accent-primary: #a8e6ff;
+  --accent-hover: #8ed8f5;
+  --accent-secondary: #5ec8f0;
+  --accent-danger: #fb7185;
+  --accent-warning: #fcd34d;
+  --border-color: rgba(168, 230, 255, 0.14);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(0, 16, 32, 0.5);
+  --shadow-md: 0 8px 24px rgba(0, 16, 32, 0.55), 0 0 0 1px rgba(168, 230, 255, 0.06);
+  --shadow-lg: 0 20px 48px rgba(0, 16, 32, 0.6), 0 0 40px rgba(168, 230, 255, 0.06);
+}
+
+/* Subtle gradient wash on chrome — macOS depth without clutter */
+[data-theme="solar"] .sidebar,
+[data-theme="fern"] .sidebar,
+[data-theme="blaze"] .sidebar,
+[data-theme="dusk"] .sidebar,
+[data-theme="glacier"] .sidebar {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 6%, var(--bg-secondary)) 0%, var(--bg-secondary) 48%);
+  border-right-color: var(--border-color);
+  backdrop-filter: blur(20px);
+}
+
+[data-theme="solar"] .header,
+[data-theme="fern"] .header,
+[data-theme="blaze"] .header,
+[data-theme="dusk"] .header,
+[data-theme="glacier"] .header {
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(16px);
+  border-bottom-color: var(--border-color);
 }
 
 [data-theme="win95"] button:not(.ghost):not(.secondary):active {
@@ -623,17 +758,17 @@
 }
 
 /* ── Rounded corners mode (Settings → Appearance) ──
-   Must load after theme tokens so it can override themes that force radius: 0.
-   Sharp themes (aether / frost / pixelato / win95) keep radius 0 even when
-   rounded mode is on — their identity depends on square chrome. */
-html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) {
+   Must load after theme tokens. Uses data-rounded-corners only —
+   never list theme ids. Attribute selector specificity beats
+   [data-theme="…"] token blocks that bake radius: 0 (aether/frost/…). */
+html[data-rounded-corners="on"][data-theme] {
   --border-radius-sm: 10px;
   --border-radius-md: 14px;
   --border-radius-lg: 18px;
   --border-radius-xl: 28px;
 }
 
-html[data-rounded-corners="off"] {
+html[data-rounded-corners="off"][data-theme] {
   --border-radius-sm: 0px;
   --border-radius-md: 0px;
   --border-radius-lg: 0px;
@@ -641,8 +776,8 @@ html[data-rounded-corners="off"] {
 }
 
 /* When rounded mode is on, force common block chrome to use the tokens
-   (covers hardcoded radius:0 leftovers on panels & cards). Skip sharp themes. */
-html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
+   (covers hardcoded radius leftovers on panels & cards). */
+html[data-rounded-corners="on"][data-theme] :where(
   .panel,
   .card,
   .modal,
@@ -679,7 +814,7 @@ html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="fros
   border-radius: var(--border-radius-lg);
 }
 
-html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
+html[data-rounded-corners="on"][data-theme] :where(
   button,
   .action-btn,
   .quiet-action,
@@ -693,7 +828,7 @@ html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="fros
   border-radius: var(--border-radius-md);
 }
 
-html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
+html[data-rounded-corners="on"][data-theme] :where(
   .mr-card,
   .cf-card,
   .mr-page,
@@ -708,8 +843,8 @@ html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="fros
   border-radius: var(--border-radius-lg);
 }
 
-/* Pills / round avatars stay fully round (except sharp themes) */
-html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="frost"]):not([data-theme="pixelato"]):not([data-theme="win95"]) :where(
+/* Pills / round avatars stay fully round */
+html[data-rounded-corners="on"][data-theme] :where(
   .chip,
   .cat-chip,
   .mr-tag,
@@ -720,7 +855,7 @@ html[data-rounded-corners="on"]:not([data-theme="aether"]):not([data-theme="fros
   border-radius: 999px;
 }
 
-html[data-rounded-corners="off"] :where(
+html[data-rounded-corners="off"][data-theme] :where(
   .panel,
   .card,
   .modal,

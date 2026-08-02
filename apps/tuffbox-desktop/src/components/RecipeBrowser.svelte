@@ -74,61 +74,60 @@
     { id: "tags", label: "Tags" },
   ];
 
-  let recipes: ScannedRecipe[] = [];
-  let items: ItemEntry[] = [];
-  let itemCategorySets = $state(new Map<string, Set<string>>())
-  let filteredCounts = $state(new Map<string, ItemFocusCounts>())
+  let recipes = $state<ScannedRecipe[]>([]);
+  let items = $state<ItemEntry[]>([]);
+  let itemCategorySets = $state(new Map<string, Set<string>>());
   let catalogReady = $state(false);
-  let scanMeta: Omit<RecipeScanResult, "recipes"> | null = null;
+  let scanMeta = $state<Omit<RecipeScanResult, "recipes"> | null>(null);
   let loading = $state(false);
-  let error: string | null = null;
-  let message: string | null = null;
-  let filter = "";
-  let categoryFilter = "all";
-  let modFilter = "all";
-  let focusMode: FocusMode = "recipes";
-  let selectedItem = "";
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let filter = $state("");
+  let categoryFilter = $state("all");
+  let modFilter = $state("all");
+  let focusMode = $state<FocusMode>("recipes");
+  let selectedItem = $state("");
   let recipeIndex = $state(0);
   let itemPage = $state(0);
-  let lastLoadedPath: string | null = null;
-  let bookmarks: string[] = [];
-  let historyStack: string[] = [];
+  let lastLoadedPath = $state<string | null>(null);
+  let bookmarks = $state<string[]>([]);
+  let historyStack = $state<string[]>([]);
   let showBookmarks = $state(true);
   let showHelp = $state(false);
   let cycleTick = $state(0);
   let cycleTimer: ReturnType<typeof setInterval> | null = null;
-  let pendingRemoves = $state(new Set<string>())
-  let recipeSource: "offline" | "runtime" = "offline";
-  let runtimeStatus: RecipeRuntimeStatus | null = null;
-  let runtimeCategories: RuntimeRecipeCategory[] = [];
+  let pendingRemoves = $state(new Set<string>());
+  let recipeSource = $state<"offline" | "runtime">("offline");
+  let runtimeStatus = $state<RecipeRuntimeStatus | null>(null);
+  let runtimeCategories = $state<RuntimeRecipeCategory[]>([]);
   let runtimePoller: ReturnType<typeof setInterval> | null = null;
 
   let editorOpen = $state(false);
-  let editorKind: EditorKind = "crafting";
-  let editGrid: (string | null)[] = Array(9).fill(null);
-  let editOutput: string | null = null;
+  let editorKind = $state<EditorKind>("crafting");
+  let editGrid = $state<(string | null)[]>(Array(9).fill(null));
+  let editOutput = $state<string | null>(null);
   let editCount = $state(1);
   let editShaped = $state(true);
-  let editInput: string | null = null;
+  let editInput = $state<string | null>(null);
   let editXp = $state(0);
   let editCookTime = $state(200);
-  let editTemplate: string | null = null;
-  let editBase: string | null = null;
-  let editAddition: string | null = null;
-  let replaceRecipeId: string | null = null;
+  let editTemplate = $state<string | null>(null);
+  let editBase = $state<string | null>(null);
+  let editAddition = $state<string | null>(null);
+  let replaceRecipeId = $state<string | null>(null);
   let editorSaving = $state(false);
   let paletteMode = $state<PaletteMode>("items");
-  let knownTags: string[] = [];
+  let knownTags = $state<string[]>([]);
   let tagsLoading = $state(false);
-  let editTagId = "";
-  let tagMembers: string[] = [];
-  let tagAdd: string[] = [];
-  let tagRemove: string[] = [];
+  let editTagId = $state("");
+  let tagMembers = $state<string[]>([]);
+  let tagAdd = $state<string[]>([]);
+  let tagRemove = $state<string[]>([]);
   let tagRemoveAll = $state(false);
   let tagLoadingMembers = $state(false);
 
   type IconState = "loading" | "missing" | string;
-  let iconCache: Record<string, IconState> = {};
+  let iconCache = $state<Record<string, IconState>>({});
   const iconInFlight = new Set<string>();
   let iconPreloadQueue: string[] = [];
   let iconPreloadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -326,7 +325,7 @@
       recipeIndex = 0;
       itemPage = 0;
       if (!preserveSelection) historyStack = [];
-    } catch (e) {
+      } catch (e) {
       if (preferLive && runtimeStatus?.connected) {
         try {
           const fallback = await api.recipes.scan($projectPath);
@@ -341,6 +340,7 @@
           };
           await tick();
           await loadFullItemCatalog(recipes);
+          lastLoadedPath = $projectPath;
           message = `Live JEI disconnected; showing offline recipes. ${String(e)}`;
         } catch (fallbackError) {
           error = String(fallbackError);
@@ -1069,7 +1069,6 @@
   function rebuildIndexes(list: ScannedRecipe[]) {
     items = buildItemCatalog(list);
     itemCategorySets = buildItemCategorySets(list);
-    filteredCounts = buildFilteredCounts(list, categoryFilter, modFilter);
     catalogReady = true;
   }
 
@@ -1099,7 +1098,6 @@
     }
     items = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
     itemCategorySets = buildItemCategorySets(list);
-    filteredCounts = buildFilteredCounts(list, categoryFilter, modFilter);
     catalogReady = true;
   }
 
@@ -1124,11 +1122,7 @@
     if (recipeIndex < activeRecipes.length - 1) recipeIndex++;
   }
 
-  $effect(() => {
-    if (recipes.length && categoryFilter && modFilter) {
-        filteredCounts = buildFilteredCounts(recipes, categoryFilter, modFilter);
-      }
-  });
+  const filteredCounts = $derived(buildFilteredCounts(recipes, categoryFilter, modFilter));
   const modNamespaces = $derived(["all", ...new Set(items.map((i) => i.modNs).filter(Boolean))].sort());
   const filteredItems = $derived(catalogReady
     ? items.filter((i) => {
@@ -1270,7 +1264,7 @@
       {/if}
     </div>
     <select bind:value={modFilter} class="mod-select" title="Filter by mod namespace">
-      {#each modNamespaces as ns}
+      {#each modNamespaces as ns (ns)}
         <option value={ns}>{ns === "all" ? "All mods" : ns}</option>
       {/each}
     </select>
@@ -1307,7 +1301,7 @@
     <div class="jei-body" class:with-bookmarks={showBookmarks}>
       <!-- Category tabs (JEI left rail) -->
       <nav class="cat-rail" aria-label="Recipe categories">
-        {#each categories as cat}
+        {#each categories as cat (cat)}
           <button
             type="button"
             class="cat-tab"
@@ -1365,7 +1359,7 @@
 
             {#if !replaceRecipeId}
               <div class="editor-kind-row">
-                {#each EDITOR_KINDS as k}
+                {#each EDITOR_KINDS as k (k.id)}
                   <button
                     type="button"
                     class="mode-btn"
@@ -1421,7 +1415,7 @@
                     title={editOutput ? `${editOutput}\nShift+click: stack count` : "Drop output item"}
                     ondragover={onDragOverSlot}
                     ondrop={onDropOutput}
-                    oncontextmenu={(e) => { e.preventDefault(); { editOutput = null; editCount = 1;; } }}
+                    oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
                     onclick={onOutputClick}
                   >
                     {#if editOutput && iconSrc(editOutput)}
@@ -1479,7 +1473,7 @@
                     title={editOutput ? `${editOutput}\nShift+click: stack` : "Drop output"}
                     ondragover={onDragOverSlot}
                     ondrop={onDropOutput}
-                    oncontextmenu={(e) => { e.preventDefault(); { editOutput = null; editCount = 1;; } }}
+                    oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
                     onclick={onOutputClick}
                   >
                     {#if editOutput && iconSrc(editOutput)}
@@ -1501,7 +1495,7 @@
                     { key: "template", label: "Template", val: editTemplate },
                     { key: "base", label: "Base", val: editBase },
                     { key: "addition", label: "Addition", val: editAddition },
-                  ] as slot, i}
+                  ] as slot, i (slot.key)}
                     <button
                       type="button"
                       class="mc-slot large"
@@ -1542,7 +1536,7 @@
                     style="--hue: {itemHue(editOutput ?? '')}"
                     ondragover={onDragOverSlot}
                     ondrop={onDropOutput}
-                    oncontextmenu={(e) => { e.preventDefault(); { editOutput = null; editCount = 1;; } }}
+                    oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
                     onclick={onOutputClick}
                   >
                     {#if editOutput && iconSrc(editOutput)}
@@ -1583,7 +1577,7 @@
                       <span class="muted"> — empty</span>
                     {:else}
                       <div class="tag-chip-row">
-                        {#each tagAdd as id}
+                        {#each tagAdd as id (id)}
                           <button type="button" class="tag-chip add" title={id} onclick={() => removePendingAdd(id)}>
                             + {id} ×
                           </button>
@@ -1594,7 +1588,7 @@
                   <div class="tag-members">
                     <div class="overlay-h">Current members {tagLoadingMembers ? "…" : `(${tagMembers.length})`}</div>
                     <div class="tag-chip-row">
-                      {#each tagMembers as id}
+                      {#each tagMembers as id (id)}
                         <button
                           type="button"
                           class="tag-chip"
@@ -1635,7 +1629,7 @@
           <div class="gui-empty">
             <div class="mc-panel preview">
               <div class="craft-grid dim">
-                {#each Array(9) as _}
+                {#each Array(9) as _, i (i)}
                   <div class="mc-slot"></div>
                 {/each}
               </div>
@@ -1719,7 +1713,7 @@
                     class="runtime-layout"
                     style={`--runtime-width:${Math.max(120, liveCategory?.width ?? 160)}px;--runtime-height:${Math.max(70, liveCategory?.height ?? 90)}px`}
                   >
-                    {#each currentRecipe.layout.slots as slot}
+                    {#each currentRecipe.layout.slots as slot, si (si)}
                       {@const ingredient = runtimeSlotIngredient(slot)}
                       <button
                         class="mc-slot runtime-slot"
@@ -1746,7 +1740,7 @@
                   {#if liveCategory?.stations?.length}
                     <div class="stations">
                       <span>Stations</span>
-                      {#each liveCategory.stations as station}
+                      {#each liveCategory.stations as station (station.id)}
                         <button
                           class="mc-slot mini"
                           title={station.tooltip?.join("\n") || station.name || station.id}
@@ -1850,7 +1844,7 @@
                   </div>
                 {:else if currentRecipe.layout.category === "smithing"}
                   <div class="panel-body smith">
-                    {#each [0, 1, 2] as i}
+                    {#each [0, 1, 2] as i (i)}
                       {@const slot = currentRecipe.layout.grid[3 + i]}
                       <button
                         class="mc-slot large"
@@ -1887,7 +1881,7 @@
                 {:else}
                   <div class="panel-body cook">
                     <div class="craft-grid loose">
-                      {#each currentRecipe.layout.grid.filter(Boolean) as slot}
+                      {#each currentRecipe.layout.grid.filter(Boolean) as slot, idx (resolveSlot(slot)?.id ?? idx)}
                         {@const resolved = resolveSlot(slot)}
                         <button
                           class="mc-slot"
@@ -2130,6 +2124,7 @@
     flex-direction: column;
     gap: 10px;
     min-height: 0;
+    overflow: hidden;
   }
   .jei.busy { opacity: 0.92; }
 
@@ -2249,7 +2244,7 @@
   .jei-gui {
     background: var(--bg-secondary); border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg); padding: 14px 16px;
-    display: flex; flex-direction: column; min-height: 0;
+    display: flex; flex-direction: column; min-height: 0; overflow: hidden;
   }
   .gui-empty {
     flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;

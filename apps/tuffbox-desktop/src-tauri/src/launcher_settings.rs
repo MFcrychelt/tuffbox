@@ -14,6 +14,7 @@ pub struct GameResolution {
 #[serde(rename_all = "camelCase")]
 pub struct LauncherSettings {
     /// Theme id: tuffbox | tuffbox-light | carbon | inferno | aether | frost | pixelato | win95
+    /// | solar | fern | blaze | dusk | glacier
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]

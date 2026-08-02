@@ -20,6 +20,7 @@
     resolveUiScaleMode,
     suggestUiScalePercent,
     UI_SCALE_STEPS,
+    notifyLauncherSettingsChanged,
   } from "../lib/store";
   import {
     readStoredTheme, commitTheme, type ThemeId,
@@ -241,7 +242,21 @@
   }
 
   function THEMES_SAFE(id: string): string {
-    const ok = ["tuffbox", "tuffbox-light", "carbon", "inferno", "aether", "frost", "pixelato", "win95"];
+    const ok = [
+      "tuffbox",
+      "tuffbox-light",
+      "carbon",
+      "inferno",
+      "aether",
+      "frost",
+      "pixelato",
+      "win95",
+      "solar",
+      "fern",
+      "blaze",
+      "dusk",
+      "glacier",
+    ];
     if (id === "dark") return "tuffbox";
     if (id === "light") return "tuffbox-light";
     return ok.includes(id) ? id : "tuffbox";
@@ -286,6 +301,7 @@
       if (partial && "roundedCorners" in partial) {
         applyRoundedCorners(launcher.roundedCorners !== false);
       }
+      notifyLauncherSettingsChanged(launcher);
       launcherMsg = "Saved.";
       setTimeout(() => (launcherMsg = ""), 1600);
     } catch (e) {
@@ -839,7 +855,7 @@
             </p>
           </div>
           <div class="settings-row-control">
-            <div class="chip-row tight">
+            <div class="chip-row scale-chips">
               <button
                 type="button"
                 class="chip press-effect"
@@ -847,7 +863,11 @@
                 disabled={launcherSaving}
                 onclick={() => void persistLauncher({ uiScaleMode: "auto" as UiScaleMode })}
               >
-                Auto
+                {#if resolveUiScaleMode(launcher) === "auto"}
+                  Auto · {normalizeUiScalePercent(launcher.uiScalePercent)}%
+                {:else}
+                  Auto
+                {/if}
               </button>
               {#each UI_SCALE_STEPS as pct (pct)}
                 <button
@@ -1390,12 +1410,9 @@
               </span>
             </div>
             <p class="hint">
-              Provider: <code>{aiProvider}</code>
-              · Endpoint: <code>{aiEndpoint || "—"}</code>
-              · Model: <code>{aiModel || "—"}</code>
+              <code>{aiProvider}</code> · <code>{aiModel || "—"}</code>
               {#if aiProvider === "ollama"}
-                · Path: <code>{ollamaBinaryPath || "auto"}</code>
-                · Models: <code>{ollamaModelsPath || "default"}</code>
+                · models <code>{ollamaModelsPath || "default"}</code>
               {/if}
             </p>
 
@@ -1416,11 +1433,7 @@
                 autocomplete="new-password"
               />
             </label>
-            <p class="hint">
-              Uses Google’s OpenAI-compatible endpoint
-              (<code>…/v1beta/openai</code>). Same key as
-              <code>X-goog-api-key</code> / AI Studio.
-            </p>
+            <p class="hint">Gemini key from AI Studio — routed via OpenAI-compat endpoint.</p>
 
             <div class="row-actions">
               <button
@@ -1464,11 +1477,7 @@
               <strong><Network size={14} /> TuffSwarm</strong>
               <span class:ok={swarmEnabled}>{swarmEnabled ? "enabled" : "off"}</span>
             </div>
-            <p class="hint">
-              Shares crash→fix capsules (fingerprint + solution + actions — not raw logs).
-              Community backend (Supabase) is built in — users only need to enable the network.
-              Optional: custom hub / P2P for self-hosting.
-            </p>
+            <p class="hint">Share crash fix capsules (signatures + plans, not raw logs). Built-in community backend — enable to join.</p>
             <label class="check-row">
               <input
                 type="checkbox"
@@ -2019,8 +2028,33 @@
     border-radius: 4px;
   }
 
-  .integrations { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-  .provider-block { display: grid; gap: 10px; padding: 14px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .integrations {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+    gap: 14px;
+  }
+  .provider-block {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    min-width: 0;
+  }
+  .provider-block label {
+    min-width: 0;
+  }
+  .provider-block input,
+  .provider-block select {
+    min-width: 0;
+  }
+  .provider-block .hint,
+  .provider-block .hint code,
+  .provider-block code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
   .provider-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .provider-head strong { color: var(--text-primary); }
   .provider-head span { font-size: 11px; color: var(--text-muted); font-weight: 700; }
@@ -2040,10 +2074,25 @@
     cursor: pointer;
     font-weight: 500;
   }
+  .integrations .check-row,
+  .card .check-row {
+    flex-direction: row;
+    align-items: center;
+  }
   .check-row input {
     accent-color: var(--accent-primary);
     width: auto;
     flex-shrink: 0;
+    margin: 0;
+  }
+  .chip-row.scale-chips {
+    margin-bottom: 0;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .chip-row.scale-chips .chip {
+    padding: 6px 11px;
+    font-size: 11px;
   }
   .test-ok { color: var(--accent-primary); font-size: 11px; }
   .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }

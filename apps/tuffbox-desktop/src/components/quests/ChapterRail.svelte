@@ -234,7 +234,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 10px 8px;
+    padding: 6px 8px;
     border-bottom: 1px solid var(--ftbq-border, #3a3a42);
     background: rgba(0, 0, 0, 0.15);
   }

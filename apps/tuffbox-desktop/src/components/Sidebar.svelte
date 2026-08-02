@@ -27,10 +27,23 @@
     projectPath,
     ideStageRequest,
     ideSuggestedStage,
+    ideActiveStage,
   } from "../lib/store";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
   let { currentView = $bindable() }: { currentView: View } = $props();
+
+  /** Left-nav shortcuts into the IDE workflow (keeps the bottom stage rail available). */
+  const VIEW_TO_IDE_STAGE: Partial<Record<View, string>> = {
+    mods: "content",
+    graph: "resolve",
+    configs: "configs",
+    diagnostics: "diagnose",
+    snapshots: "snapshots",
+    world: "world-map",
+    recipes: "recipes",
+    quests: "quests",
+  };
 
   const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string; needsProject?: boolean }[] = [
     { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
@@ -50,6 +63,33 @@
   ];
 
   const hasProject = $derived(!!$projectPath);
+  const ideStageNavIds = Object.keys(VIEW_TO_IDE_STAGE) as View[];
+
+  function isNavActive(id: View): boolean {
+    if (currentView === "ide") {
+      const stage = $ideActiveStage;
+      if (id === "ide") {
+        return !stage || !ideStageNavIds.some((v) => VIEW_TO_IDE_STAGE[v] === stage);
+      }
+      return VIEW_TO_IDE_STAGE[id] === stage;
+    }
+    return currentView === id;
+  }
+
+  function selectNav(view: View, el?: EventTarget | null) {
+    if (view === "ide") {
+      ideStageRequest.set($ideSuggestedStage || "content");
+      currentView = "ide";
+    } else if (VIEW_TO_IDE_STAGE[view]) {
+      ideStageRequest.set(VIEW_TO_IDE_STAGE[view]!);
+      currentView = "ide";
+    } else {
+      currentView = view;
+    }
+    if (el instanceof HTMLElement) el.blur();
+    scheduleHideRail(320);
+  }
+
   let navEl: HTMLElement | null = $state(null);
   let bottomEl: HTMLElement | null = $state(null);
   let indicatorY = $state(0);
@@ -104,15 +144,6 @@
     scheduleHideRail();
   }
 
-  function selectNav(view: View, el?: EventTarget | null) {
-    if (view === "ide") {
-      ideStageRequest.set($ideSuggestedStage || "content");
-    }
-    currentView = view;
-    if (el instanceof HTMLElement) el.blur();
-    scheduleHideRail(320);
-  }
-
   $effect(() => {
     if (!autoHide) {
       railRevealed = false;
@@ -143,6 +174,7 @@
     iconsCollapsed;
     railRevealed;
     $sidebarMode;
+    $ideActiveStage;
     void syncIndicator();
   });
 </script>
@@ -205,7 +237,7 @@
         {@const NavIcon = item.icon}
         <button
           class="nav-item tb-icon-hover"
-          class:active={currentView === item.id}
+          class:active={isNavActive(item.id)}
           class:featured={item.featured}
           disabled={item.needsProject && !hasProject}
           onclick={(e) => {

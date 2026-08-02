@@ -16,7 +16,12 @@
     onChange?: (id: ThemeId) => void;
   } = $props();
 
-  const SHARP_THEMES = new Set<ThemeId>(["aether", "frost", "pixelato", "win95"]);
+  const SHARP_THEMES = new Set(
+    THEMES.filter((t) => t.badge === "Sharp").map((t) => t.id),
+  );
+  const MINIMAL_THEMES = new Set(
+    THEMES.filter((t) => t.badge === "Minimal").map((t) => t.id),
+  );
 
   function select(id: ThemeId) {
     commitTheme(id);
@@ -24,9 +29,7 @@
   }
 
   function badgeFor(id: ThemeId): string | null {
-    if (id === "tuffbox-light") return "Light";
-    if (SHARP_THEMES.has(id)) return "Sharp";
-    return null;
+    return THEMES.find((t) => t.id === id)?.badge ?? null;
   }
 </script>
 
@@ -38,7 +41,10 @@
       class="theme-swatch"
       class:active={value === theme.id}
       class:sharp={SHARP_THEMES.has(theme.id)}
-      style="background: {theme.shades[0]}"
+      class:minimal={MINIMAL_THEMES.has(theme.id)}
+      style={MINIMAL_THEMES.has(theme.id)
+        ? `background: linear-gradient(160deg, ${theme.shades[0]} 0%, ${theme.shades[1]} 42%, ${theme.shades[2]} 100%)`
+        : `background: ${theme.shades[0]}`}
       onclick={() => select(theme.id)}
       onmouseenter={() => previewTheme(theme.id)}
       onmouseleave={() => restoreCommittedTheme()}
@@ -96,6 +102,14 @@
 
   .theme-swatch.sharp {
     border-radius: 0;
+  }
+
+  .theme-swatch.minimal {
+    border-radius: 18px;
+  }
+
+  .theme-swatch.minimal .mini-ui {
+    border-radius: 12px;
   }
 
   .theme-swatch:hover {

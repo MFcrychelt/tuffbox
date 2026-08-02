@@ -897,9 +897,165 @@ fn api_error(service: &str, status: reqwest::StatusCode, body: &Value) -> String
     let message = body
         .get("message")
         .or_else(|| body.get("description"))
+        .or_else(|| body.pointer("/error/message"))
         .and_then(Value::as_str)
-        .unwrap_or("request rejected");
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Gemini OpenAI-compat sometimes returns `[{ "error": { "message": "…" } }]`
+            body.as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|item| item.pointer("/error/message"))
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            let raw = body.to_string();
+            if raw == "null" || raw.is_empty() {
+                "request rejected".to_string()
+            } else {
+                raw.chars().take(280).collect()
+            }
+        });
     format!("{service} returned {status}: {message}")
+}
+
+fn is_gemini_endpoint(endpoint: &str) -> bool {
+    let e = endpoint.to_ascii_lowercase();
+    e.contains("generativelanguage.googleapis.com") || e.contains("/v1beta/openai")
+}
+
+fn gemini_model_id(model: &str) -> String {
+    model
+        .trim()
+        .trim_start_matches("models/")
+        .trim()
+        .to_string()
+}
+
+fn gemini_generate_url(model: &str) -> String {
+    format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        gemini_model_id(model)
+    )
+}
+
+/// Native Gemini `generateContent` (more reliable than experimental OpenAI-compat for JSON).
+async fn call_gemini_generate_content(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+) -> Result<String, String> {
+    if api_key.trim().is_empty() {
+        return Err("Gemini API key is not set — paste it in Settings → Integrations → AI".into());
+    }
+    if gemini_model_id(model).is_empty() {
+        return Err("Gemini model is empty — set e.g. gemini-2.0-flash or gemini-flash-latest".into());
+    }
+
+    let mut contents: Vec<Value> = Vec::new();
+    for m in messages {
+        let role = m.get("role").and_then(Value::as_str).unwrap_or("user");
+        let text = m
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if text.trim().is_empty() {
+            continue;
+        }
+        if role == "system" {
+            // Already passed via systemInstruction; skip duplicates in contents.
+            continue;
+        }
+        let gemini_role = if role == "assistant" { "model" } else { "user" };
+        // Gemini requires alternating user/model; merge consecutive same-role turns.
+        if let Some(last) = contents.last_mut() {
+            if last.get("role").and_then(Value::as_str) == Some(gemini_role) {
+                if let Some(parts) = last.get_mut("parts").and_then(Value::as_array_mut) {
+                    if let Some(part) = parts.first_mut() {
+                        if let Some(existing) = part.get("text").and_then(Value::as_str) {
+                            part["text"] = json!(format!("{existing}\n\n{text}"));
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        contents.push(json!({
+            "role": gemini_role,
+            "parts": [{ "text": text }]
+        }));
+    }
+    if contents.is_empty() {
+        return Err("Gemini request has no user messages".into());
+    }
+    // First turn must be user.
+    if contents
+        .first()
+        .and_then(|c| c.get("role"))
+        .and_then(Value::as_str)
+        != Some("user")
+    {
+        contents.insert(
+            0,
+            json!({ "role": "user", "parts": [{ "text": "(continue)" }] }),
+        );
+    }
+
+    let mut body = json!({ "contents": contents });
+    if !system.trim().is_empty() {
+        body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
+    }
+    let mut gen = json!({ "temperature": 0.3 });
+    if json_mode {
+        // Mime-type only — full JSON Schema with null unions often 400s on Gemini.
+        gen["responseMimeType"] = json!("application/json");
+    }
+    body["generationConfig"] = gen;
+
+    let response = client
+        .post(gemini_generate_url(model))
+        .header(USER_AGENT, APP_USER_AGENT)
+        .header("x-goog-api-key", api_key.trim())
+        .header(ACCEPT, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {e}"))?;
+    let status = response.status();
+    let body_text = response.text().await.map_err(|e| e.to_string())?;
+    let parsed: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+        json!({ "error": body_text.chars().take(500).collect::<String>() })
+    });
+    if !status.is_success() {
+        return Err(api_error("Gemini", status, &parsed));
+    }
+
+    // Prefer candidates[0].content.parts[*].text
+    if let Some(parts) = parsed
+        .pointer("/candidates/0/content/parts")
+        .and_then(Value::as_array)
+    {
+        let mut text = String::new();
+        for part in parts {
+            if let Some(t) = part.get("text").and_then(Value::as_str) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(t);
+            }
+        }
+        if !text.trim().is_empty() {
+            return Ok(text);
+        }
+    }
+    Err(format!(
+        "Gemini response missing candidates[0].content.parts[].text: {}",
+        body_text.chars().take(240).collect::<String>()
+    ))
 }
 
 fn openai_chat_url(endpoint: &str) -> String {
@@ -1900,6 +2056,19 @@ pub async fn call_ai_messages_with_schema(
             .and_then(Value::as_str)
             .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
             .to_string()
+    } else if is_gemini_endpoint(&settings.endpoint)
+        || settings.model.to_ascii_lowercase().contains("gemini")
+    {
+        let token = secret("ai").ok().unwrap_or_default();
+        call_gemini_generate_content(
+            &client,
+            &token,
+            &settings.model,
+            system,
+            messages,
+            json_mode,
+        )
+        .await?
     } else {
         let token = secret("ai").ok();
         let mut payload = json!({
@@ -2028,6 +2197,17 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
             .and_then(Value::as_str)
             .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
             .to_string()
+    } else if is_gemini_endpoint(&settings.endpoint)
+        || settings.model.to_ascii_lowercase().contains("gemini")
+    {
+        let token = secret("ai").ok().unwrap_or_default();
+        let system = format!(
+            "{}\n\n{}",
+            tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT,
+            tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT
+        );
+        let msgs = vec![json!({"role": "user", "content": prompt})];
+        call_gemini_generate_content(&client, &token, &settings.model, &system, &msgs, true).await?
     } else {
         // OpenAI-compatible / Hermes-style: API key optional for local endpoints.
         let token = secret("ai").ok();
@@ -2322,6 +2502,23 @@ mod tests {
             ollama_chat_url("http://127.0.0.1:11434"),
             "http://127.0.0.1:11434/api/chat"
         );
+        assert_eq!(
+            gemini_generate_url("gemini-flash-latest"),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+        );
+        assert_eq!(gemini_model_id("models/gemini-2.0-flash"), "gemini-2.0-flash");
+        assert!(is_gemini_endpoint(
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        ));
+    }
+
+    #[test]
+    fn api_error_reads_nested_gemini_message() {
+        let body = json!({
+            "error": { "code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT" }
+        });
+        let msg = api_error("Gemini", reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(msg.contains("invalid argument"), "{msg}");
     }
 
     #[test]

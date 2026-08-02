@@ -78,7 +78,8 @@
 
 {#snippet card(p: Problem)}
   {@const primary = p.actions[0]}
-  {@const secondary = p.actions.slice(1, 3)}
+  {@const secondaryLimit = p.category === "dependency" ? 6 : 3}
+  {@const secondary = p.actions.slice(1, secondaryLimit)}
   <li class="dx-card sev-{p.severity}" class:busy={applyingId === p.id}>
     <div class="dx-card-top">
       <span class="sev-chip">{severityChip(p.severity)}</span>

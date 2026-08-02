@@ -92,6 +92,7 @@
     align-items: center;
     gap: 12px;
     padding: 10px 14px;
+    margin-bottom: 14px;
     border-radius: var(--border-radius-md);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);

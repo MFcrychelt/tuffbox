@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List, ExternalLink } from "@lucide/svelte";
-  import { projectPath, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
+  import { projectPath, projectInfo, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import { trapFocus } from "../lib/focusTrap";
@@ -394,7 +394,11 @@
   }
 
   function edgeDanger(edge: GraphEdge) {
-    if (edge.kind === "Conflicts" || edge.kind === "BreaksWith") return true;
+    if (edge.kind === "Conflicts" || edge.kind === "BreaksWith") {
+      const from = nodeById(edge.from);
+      const to = nodeById(edge.to);
+      return !!from && !!to && from.kind === "Mod" && to.kind === "Mod";
+    }
     return edge.kind === "Requires" && !nodeById(edge.to);
   }
 
@@ -761,9 +765,18 @@
     const meta = node.metadata ?? {};
     const ghost = ghostMeta[node.id];
     const slug = (meta.slug || node.id.replace(/^mod:/, "").replace(/^__ghost__/, "")).trim();
-    const id = String(meta.project_id || ghost?.projectId || slug).trim();
+    const projectId = String(meta.project_id || ghost?.projectId || "").trim();
+    const id = (projectId || slug).trim();
     if (!id && !slug) return null;
     const source = (meta.source || ghost?.source || "modrinth").toLowerCase();
+    // Local jars still open via Modrinth/CF when we know a project id or slug;
+    // never send provider "local" to the catalog API.
+    const provider =
+      source === "curseforge"
+        ? "curseforge"
+        : source === "modrinth" || source === "local" || source === "direct"
+          ? "modrinth"
+          : "modrinth";
     return {
       id: id || slug,
       slug: slug || id,
@@ -775,7 +788,7 @@
       downloads: null,
       follows: null,
       categories: nodeCategories(node),
-      provider: source === "curseforge" ? "curseforge" : "modrinth",
+      provider,
     };
   }
 
@@ -821,11 +834,20 @@
     }
   }
 
-  const conflictEdges = $derived(displayEdges.filter(
-    (edge) => ["Conflicts", "BreaksWith"].includes(edge.kind)
-      && nodeById(edge.from)?.kind !== "Missing"
-      && nodeById(edge.to)?.kind !== "Missing"
-  ));
+  const conflictEdges = $derived(displayEdges.filter((edge) => {
+    if (!["Conflicts", "BreaksWith"].includes(edge.kind)) return false;
+    const from = nodeById(edge.from);
+    const to = nodeById(edge.to);
+    // Both ends must be installed mods. Declaring "incompatible with X" when X
+    // isn't in the pack is metadata, not a real conflict (undefined !== "Missing"
+    // used to let those through and recommend removing the installed mod).
+    return (
+      !!from &&
+      !!to &&
+      from.kind === "Mod" &&
+      to.kind === "Mod"
+    );
+  }));
 
   /** Deduped conflict pairs with a recommended removal target. */
   const conflictInsights = $derived((() => {
@@ -916,6 +938,12 @@
   /// Clusters mirror Modrinth's official mod category taxonomy (1:1).
   /// Keyword `matches` is only a fallback when provider categories are missing.
   const MOD_GROUPS: ModGroup[] = [
+    {
+      key: "local",
+      label: "Local",
+      color: "rgba(148,163,184,0.55)",
+      matches: () => false,
+    },
     {
       key: "adventure",
       label: "Adventure",
@@ -1358,10 +1386,12 @@
     return missingEdges.some((e) => e.from === nodeId || e.to === nodeId);
   }
 
-  function edgeInHighlight(from: string, to: string, kind: string, danger: boolean): boolean {
+  function edgeInHighlight(from: string, to: string, _kind: string, _danger: boolean): boolean {
     if (!highlightMode) return true;
     if (highlightMode === "conflicts") {
-      return danger || ["Conflicts", "BreaksWith"].includes(kind);
+      return conflictEdges.some(
+        (e) => (e.from === from && e.to === to) || (e.from === to && e.to === from),
+      );
     }
     return missingEdges.some((e) => e.from === from && e.to === to);
   }
@@ -1464,6 +1494,7 @@
 
   /// Content-specific tags beat catch-alls (utility / library).
   const GROUP_PRIORITY = [
+    "local",
     "cursed",
     "rendering",
     "worldgen",
@@ -1493,6 +1524,10 @@
     const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
     const text = `${slug} ${label}`;
     const cats = nodeCategories(node);
+
+    if ((node.metadata?.source ?? "").toLowerCase() === "local") {
+      return MOD_GROUPS.find((g) => g.key === "local")!;
+    }
 
     const decorGroup = MOD_GROUPS.find((g) => g.key === "decor")!;
     const renderingGroup = MOD_GROUPS.find((g) => g.key === "rendering")!;
@@ -1535,7 +1570,7 @@
   }
 
   // Bump when layout algorithm parameters change so cached graphs re-seed.
-  const LAYOUT_VERSION = "v5-modrinth-taxonomy";
+  const LAYOUT_VERSION = "v6-local-cluster";
 
   const layoutKey = $derived([
     LAYOUT_VERSION,
@@ -2914,6 +2949,8 @@
     >
       <CatalogProjectView
         result={catalogViewResult}
+        minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+        loaderKind={$projectInfo?.loaderKind ?? null}
         installing={resolving}
         onback={() => (catalogViewResult = null)}
         oninstall={() => void installSelectedFromCatalog()}
@@ -3015,6 +3052,7 @@
     overflow-y: auto;
     max-width: none;
     width: 100%;
+    scrollbar-gutter: stable;
   }
 
   .graph-body {
@@ -3812,10 +3850,22 @@
   }
 
   .catalog-backdrop .catalog-modal {
-    width: min(920px, 96vw);
-    max-height: min(90vh, 900px);
+    /* Match Mods "Add" browser: near-fullscreen so the catalog page is readable. */
+    width: calc(100vw - 12px);
+    height: calc(100vh - 12px);
+    max-width: none;
+    max-height: calc(100vh - 12px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 16px 18px 14px;
+    border-radius: 14px;
+  }
+
+  .catalog-backdrop .catalog-modal :global(.catalog-page) {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
-    padding: 0;
   }
 
   .mods-column {

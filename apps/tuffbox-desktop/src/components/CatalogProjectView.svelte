@@ -207,7 +207,9 @@
   <div class="tabs" role="tablist">
     <button type="button" class:active={tab === "overview"} onclick={() => (tab = "overview")}>Overview</button>
     <button type="button" class:active={tab === "versions"} onclick={() => (tab = "versions")}>
-      Versions{#if versions.length} ({compatibleVersions.length}){/if}
+      Versions{#if versions.length}
+        ({compatibleVersions.length}{#if compatibleVersions.length !== versions.length}/{versions.length}{/if})
+      {/if}
     </button>
   </div>
 

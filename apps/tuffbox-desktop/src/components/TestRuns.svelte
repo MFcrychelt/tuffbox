@@ -1213,9 +1213,9 @@
   .preset { display: inline-flex; align-items: center; gap: 8px; }
   .preset.primary { background: rgba(27, 217, 106, 0.18); border-color: rgba(27, 217, 106, 0.45); color: var(--accent-primary); font-weight: 700; }
   .log-panel {
-    /* Fill free space when collapsibles are closed; never shrink when they open below. */
-    flex: 1 0 min(70vh, 640px);
-    min-height: min(70vh, 640px);
+    /* Fill free space; allow shrink so the stage scroll chain never clips the log. */
+    flex: 1 1 auto;
+    min-height: min(240px, 40vh);
     display: flex;
     flex-direction: column;
     overflow: hidden;

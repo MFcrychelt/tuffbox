@@ -23,41 +23,41 @@
     }
   }
 
-  let chapters: QuestChapter[] = [];
-  let chapterGroups: QuestChapterGroup[] = [];
-  let bookTitle: string | null = null;
-  let bookSubtitle: string | null = null;
-  let bookSettings: Record<string, unknown> = {};
-  let rewardTables: QuestRewardTable[] = [];
+  let chapters = $state<QuestChapter[]>([]);
+  let chapterGroups = $state<QuestChapterGroup[]>([]);
+  let bookTitle = $state<string | null>(null);
+  let bookSubtitle = $state<string | null>(null);
+  let bookSettings = $state<Record<string, unknown>>({});
+  let rewardTables = $state<QuestRewardTable[]>([]);
   let rewardTablesDirty = $state(false);
   let bookDirty = $state(false);
   let groupsDirty = $state(false);
   let loading = $state(false);
   let saving = $state(false);
-  let error: string | null = null;
-  let message: string | null = null;
-  let selectedChapter = "";
-  let selectedQuest: QuestData | null = null;
-  let validationIssues: QuestValidationIssue[] = [];
-  let dirtyChapters = $state(new Set<string>())
-  let lastLoadedPath: string | null = null;
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let selectedChapter = $state("");
+  let selectedQuest = $state<QuestData | null>(null);
+  let validationIssues = $state<QuestValidationIssue[]>([]);
+  let dirtyChapters = $state(new Set<string>());
+  let lastLoadedPath = $state<string | null>(null);
   let fitToken = $state(0);
-  let questSearch = "";
+  let questSearch = $state("");
   let showBookPanel = $state(false);
   let showGroupsPanel = $state(false);
   let showTablesPanel = $state(false);
+  let bookMenuOpen = $state(false);
   let issuesOpen = $state(false);
   let progressOpen = $state(false);
 
   // Phase C — player progress overlay (read-only)
-  let progressTeams: QuestProgressTeamRef[] = [];
-  let progressKey = ""; // relativePath
+  let progressTeams = $state<QuestProgressTeamRef[]>([]);
+  let progressKey = $state(""); // relativePath
   let progressOverlay = $state(false);
   let progressSnap = $state<QuestProgressSnapshot | null>(null);
   let progressLoading = $state(false);
 
-  let aiSidebarOpen = $state(readAiSidebarPref())
-
+  let aiSidebarOpen = $state(readAiSidebarPref());
   function setAiSidebar(open: boolean) {
     aiSidebarOpen = open;
     try {
@@ -156,8 +156,7 @@
     try {
       const result = await api.quests.saveChapter(ch, ch.sourceFile, $projectPath);
       ch.sourceFile = result.relativePath;
-      dirtyChapters.delete(chapterId);
-      dirtyChapters = dirtyChapters;
+      dirtyChapters = new Set([...dirtyChapters].filter((id) => id !== chapterId));
       chapters = [...chapters];
       message = `Saved ${result.questCount} quests → ${result.relativePath}`;
       validationIssues = await api.quests.validate($projectPath);
@@ -182,8 +181,7 @@
   }
 
   function markDirty(chapterId: string) {
-    dirtyChapters.add(chapterId);
-    dirtyChapters = dirtyChapters;
+    dirtyChapters = new Set([...dirtyChapters, chapterId]);
     chapters = [...chapters];
   }
 
@@ -341,9 +339,10 @@
     if ((b.chapterGroups?.length ?? 0) > 0) {
       groupsDirty = true;
     }
-    const dirty = new Set(dirtyChapters);
-    for (const id of result.touchedChapterIds ?? []) dirty.add(id);
-    dirtyChapters = dirty;
+    dirtyChapters = new Set([
+      ...dirtyChapters,
+      ...(result.touchedChapterIds ?? []),
+    ]);
     if (chapters.length && !chapters.some((c) => c.id === selectedChapter)) {
       selectedChapter = chapters[0].id;
     }
@@ -415,8 +414,7 @@
       return;
     }
     chapters = chapters.filter((c) => c.id !== id);
-    dirtyChapters.delete(id);
-    dirtyChapters = dirtyChapters;
+    dirtyChapters = new Set([...dirtyChapters].filter((x) => x !== id));
     if (selectedChapter === id) {
       selectedChapter = chapters[0]?.id ?? "";
       selectedQuest = null;
@@ -532,22 +530,65 @@
         <button
           type="button"
           class="ghost"
-          class:active={showBookPanel}
-          class:has-dirty={bookDirty}
-          title="Book settings (data.snbt)"
+          class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel}
+          class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty}
+          title="Book, groups, reward tables"
           onclick={() => {
-            showBookPanel = !showBookPanel;
-            showGroupsPanel = false;
-            showTablesPanel = false;
+            bookMenuOpen = !bookMenuOpen;
+            if (!bookMenuOpen) {
+              showBookPanel = false;
+              showGroupsPanel = false;
+              showTablesPanel = false;
+            }
           }}
         >
-          Book{#if bookDirty}<span class="dot-mini">●</span>{/if}
+          Book{#if bookDirty || groupsDirty || rewardTablesDirty}<span class="dot-mini">●</span>{/if}
         </button>
+        {#if bookMenuOpen && $projectPath}
+          <div class="book-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showBookPanel}
+              onclick={() => {
+                showBookPanel = true;
+                showGroupsPanel = false;
+                showTablesPanel = false;
+              }}
+            >
+              Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showGroupsPanel}
+              onclick={() => {
+                showGroupsPanel = true;
+                showBookPanel = false;
+                showTablesPanel = false;
+              }}
+            >
+              Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showTablesPanel}
+              onclick={() => {
+                showTablesPanel = true;
+                showBookPanel = false;
+                showGroupsPanel = false;
+              }}
+            >
+              Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
+            </button>
+          </div>
+        {/if}
         {#if showBookPanel && $projectPath}
           <div class="drawer">
             <div class="drawer-h">
               <strong>Book (data.snbt)</strong>
-              <button type="button" class="ghost ico" onclick={() => (showBookPanel = false)}
+              <button type="button" class="ghost ico" onclick={() => { showBookPanel = false; bookMenuOpen = false; }}
                 ><X size={14} /></button
               >
             </div>
@@ -575,28 +616,12 @@
             >
           </div>
         {/if}
-      </div>
-      <div class="tb-pop">
-        <button
-          type="button"
-          class="ghost"
-          class:active={showGroupsPanel}
-          class:has-dirty={groupsDirty}
-          title="Chapter groups"
-          onclick={() => {
-            showGroupsPanel = !showGroupsPanel;
-            showBookPanel = false;
-            showTablesPanel = false;
-          }}
-        >
-          Groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
-        </button>
         {#if showGroupsPanel && $projectPath}
           <div class="drawer drawer-wide">
             <div class="drawer-h">
               <strong>Chapter groups</strong>
               <button type="button" class="ghost" onclick={addChapterGroup}>+ Group</button>
-              <button type="button" class="ghost ico" onclick={() => (showGroupsPanel = false)}
+              <button type="button" class="ghost ico" onclick={() => { showGroupsPanel = false; bookMenuOpen = false; }}
                 ><X size={14} /></button
               >
             </div>
@@ -615,27 +640,11 @@
             >
           </div>
         {/if}
-      </div>
-      <div class="tb-pop">
-        <button
-          type="button"
-          class="ghost"
-          class:active={showTablesPanel}
-          class:has-dirty={rewardTablesDirty}
-          title="Reward tables"
-          onclick={() => {
-            showTablesPanel = !showTablesPanel;
-            showBookPanel = false;
-            showGroupsPanel = false;
-          }}
-        >
-          Tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
-        </button>
         {#if showTablesPanel && $projectPath}
           <div class="drawer drawer-tables">
             <div class="drawer-h">
               <strong>Reward tables</strong>
-              <button type="button" class="ghost ico" onclick={() => (showTablesPanel = false)}
+              <button type="button" class="ghost ico" onclick={() => { showTablesPanel = false; bookMenuOpen = false; }}
                 ><X size={14} /></button
               >
             </div>
@@ -645,7 +654,7 @@
               {saving}
               onChange={() => {
                 rewardTablesDirty = true;
-                rewardTables = rewardTables;
+                rewardTables = [...rewardTables];
               }}
               onSave={saveRewardTable}
               onCreate={createRewardTable}
@@ -766,10 +775,9 @@
   {:else if chapters.length === 0}
     <div class="empty">
       <ScrollText size={40} />
-      <h3>No FTB Quests chapters found</h3>
-      <p>Place <code>.snbt</code> files in <code>config/ftbquests/quests/chapters/</code></p>
-      <p class="hint">TuffBox parses SNBT on disk — no Minecraft needed.</p>
-      <button type="button" onclick={createChapter}><span>+</span> Create first chapter</button>
+      <h3>Start a quest line</h3>
+      <p>Create a chapter, add quests on the canvas, then Save all to write SNBT.</p>
+      <button type="button" class="empty-cta" onclick={createChapter}><span>+</span> Create first chapter</button>
     </div>
   {:else}
     <div class="qe-body-row">
@@ -939,6 +947,42 @@
   .tb-pop {
     position: relative;
   }
+  .book-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 45;
+    min-width: 180px;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--ftbq-bg-panel, #212126);
+    border: 1px solid var(--ftbq-border, #3a3a42);
+    border-radius: 2px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  }
+  .book-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 2px;
+    background: transparent;
+    color: var(--ftbq-text, #e8e8ea);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .book-menu button:hover,
+  .book-menu button.active {
+    background: rgba(61, 184, 168, 0.12);
+    color: var(--ftbq-accent-teal, #3db8a8);
+  }
   .dot-mini {
     color: var(--ftbq-quest-started, #f2c94c);
     margin-left: 4px;
@@ -1072,9 +1116,11 @@
   }
   .qe-tb {
     justify-content: space-between;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
     flex-shrink: 0;
-    padding: 8px 12px;
+    padding: 6px 10px;
+    min-height: 40px;
+    max-height: 48px;
     background: var(--ftbq-bg-panel, #212126);
     border: 1px solid var(--ftbq-border, #3a3a42);
     border-radius: 2px;
@@ -1171,7 +1217,7 @@
   }
   .empty {
     color: var(--ftbq-text-muted, #9a9aa0);
-    padding: 80px;
+    padding: 48px 32px;
     text-align: center;
     background: var(--ftbq-bg-panel, #212126);
     border: 1px solid var(--ftbq-border, #3a3a42);
@@ -1181,6 +1227,30 @@
     align-items: center;
     gap: 12px;
   }
+  .empty h3 {
+    margin: 0;
+    color: var(--ftbq-title-gold, #f2c94c);
+    font-size: 16px;
+  }
+  .empty p {
+    margin: 0;
+    max-width: 360px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .empty-cta {
+    margin-top: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    border-radius: 2px;
+    background: rgba(61, 184, 168, 0.14);
+    color: var(--ftbq-accent-teal, #3db8a8);
+    font-weight: 700;
+    cursor: pointer;
+  }
   .hint {
     font-size: 11px;
   }
@@ -1188,7 +1258,7 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 200px 1fr;
+    grid-template-columns: 180px 1fr;
     gap: 0;
     border: 1px solid var(--ftbq-border, #3a3a42);
     border-radius: 2px;

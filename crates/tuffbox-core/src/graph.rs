@@ -105,12 +105,31 @@ impl DependencyGraph {
         // Canonicalize dependency targets onto installed mod ids.
         // Modrinth deps may use either project ids (AANobbMI) or slugs (sodium);
         // installed mods use slug as `id` and store the project id on source.
+        // Local jars may still carry filename ids (meteor-client-0.5.8) until
+        // jar enrichment rewrites them — versioned-slug matching covers that.
         let mut target_aliases: HashMap<String, String> = HashMap::new();
+        let installed_ids: Vec<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
         for module in &manifest.mods {
             target_aliases.insert(module.id.clone(), module.id.clone());
+            target_aliases
+                .entry(normalize_mod_key(&module.id))
+                .or_insert_with(|| module.id.clone());
             if let Some(pid) = &module.source.project_id {
                 target_aliases.insert(pid.clone(), module.id.clone());
             }
+        }
+        // fabric.mod.json often depends on `fabric`; Fabric API's id is `fabric-api`
+        // (or a versioned local filename like fabric-api-0.100.0+1.21.jar).
+        let fabric_api_id = installed_ids.iter().find(|id| {
+            normalize_mod_key(id) == "fabric-api" || looks_like_versioned_slug(id, "fabric-api")
+        });
+        if let Some(id) = fabric_api_id {
+            target_aliases
+                .entry("fabric-api".into())
+                .or_insert_with(|| id.clone());
+            target_aliases
+                .entry("fabric".into())
+                .or_insert_with(|| id.clone());
         }
 
         let minecraft_id = NodeId::minecraft(&manifest.minecraft.version);
@@ -181,7 +200,7 @@ impl DependencyGraph {
             let mut metadata = HashMap::new();
             metadata.insert(
                 "source".to_string(),
-                format!("{:?}", module.source.kind).to_lowercase(),
+                module.source.kind.as_str().to_string(),
             );
             if let Some(project_id) = &module.source.project_id {
                 metadata.insert("project_id".to_string(), project_id.clone());
@@ -251,7 +270,8 @@ impl DependencyGraph {
             }
 
             for dep in &module.dependencies {
-                let resolved_target = resolve_dependency_target(&dep.target, &target_aliases);
+                let resolved_target =
+                    resolve_dependency_target(&dep.target, &target_aliases, &installed_ids);
                 // Skip self-edges (a mod declaring itself as a dependency).
                 if resolved_target == module.id {
                     continue;
@@ -264,6 +284,24 @@ impl DependencyGraph {
                     reason: dep.reason.clone(),
                 });
             }
+        }
+
+        // Conflicts / BreaksWith only apply when the other mod is actually
+        // installed. LambDynamicLights declaring "incompatible with ryoamiclights"
+        // must not surface as a conflict when ryoamiclights isn't in the pack.
+        {
+            let installed_mods: HashSet<NodeId> = graph
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Mod)
+                .map(|n| n.id.clone())
+                .collect();
+            graph.edges.retain(|edge| {
+                if !matches!(edge.kind, EdgeKind::Conflicts | EdgeKind::BreaksWith) {
+                    return true;
+                }
+                installed_mods.contains(&edge.from) && installed_mods.contains(&edge.to)
+            });
         }
 
         // Missing dependencies are real graph nodes rather than a UI-only
@@ -361,12 +399,45 @@ impl DependencyGraph {
     }
 }
 
+fn normalize_mod_key(id: &str) -> String {
+    id.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+/// True when `id` is `slug` or a versioned filename like `meteor-client-0.5.8`.
+/// Rejects soft prefixes (`sodium` ↛ `sodium-extra`).
+fn looks_like_versioned_slug(id: &str, slug: &str) -> bool {
+    let n = normalize_mod_key(id);
+    let s = normalize_mod_key(slug);
+    if n == s {
+        return true;
+    }
+    match n.strip_prefix(&format!("{s}-")) {
+        Some(rest) => rest.chars().next().is_some_and(|c| c.is_ascii_digit()),
+        None => false,
+    }
+}
+
 /// Map a Modrinth project id or slug onto the installed mod id when possible.
-fn resolve_dependency_target(target: &str, aliases: &HashMap<String, String>) -> String {
-    aliases
-        .get(target)
-        .cloned()
-        .unwrap_or_else(|| target.to_string())
+fn resolve_dependency_target(
+    target: &str,
+    aliases: &HashMap<String, String>,
+    installed_ids: &[String],
+) -> String {
+    if let Some(mapped) = aliases.get(target) {
+        return mapped.clone();
+    }
+    let normalized = normalize_mod_key(target);
+    if let Some(mapped) = aliases.get(&normalized) {
+        return mapped.clone();
+    }
+    let matches: Vec<&String> = installed_ids
+        .iter()
+        .filter(|id| looks_like_versioned_slug(id, target))
+        .collect();
+    if matches.len() == 1 {
+        return matches[0].clone();
+    }
+    target.to_string()
 }
 
 #[cfg(test)]
@@ -413,6 +484,80 @@ mod tests {
     }
 
     #[test]
+    fn conflict_edges_only_when_both_mods_installed() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.21.1" },
+          "loader": { "type": "fabric", "version": "0.16.0" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "lambdynamiclights",
+              "name": "LambDynamicLights - Dynamic Lights",
+              "source": { "type": "modrinth", "projectId": "yBW8D80W" },
+              "version": "4.0.0",
+              "side": "client",
+              "dependencies": [
+                { "type": "conflicts", "target": "ryoamiclights" },
+                { "type": "conflicts", "target": "sodium-dynamic-lights" }
+              ]
+            }
+          ]
+        }"#;
+        let manifest: ProjectManifest = serde_json::from_str(raw).unwrap();
+        let graph = DependencyGraph::from_manifest(&manifest);
+        let conflicts: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|e| matches!(e.kind, EdgeKind::Conflicts | EdgeKind::BreaksWith))
+            .collect();
+        assert!(
+            conflicts.is_empty(),
+            "incompatible-with declarations must not become conflicts when the other mod is absent: {conflicts:?}"
+        );
+
+        let raw_both = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.21.1" },
+          "loader": { "type": "fabric", "version": "0.16.0" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "lambdynamiclights",
+              "name": "LambDynamicLights",
+              "source": { "type": "modrinth", "projectId": "yBW8D80W" },
+              "version": "4.0.0",
+              "side": "client",
+              "dependencies": [
+                { "type": "conflicts", "target": "ryoamiclights" }
+              ]
+            },
+            {
+              "id": "ryoamiclights",
+              "name": "RyoamicLights",
+              "source": { "type": "modrinth", "projectId": "svc" },
+              "version": "1.0.0",
+              "side": "client",
+              "dependencies": []
+            }
+          ]
+        }"#;
+        let graph_both = DependencyGraph::from_manifest(&serde_json::from_str(raw_both).unwrap());
+        let conflicts_both: Vec<_> = graph_both
+            .edges
+            .iter()
+            .filter(|e| matches!(e.kind, EdgeKind::Conflicts | EdgeKind::BreaksWith))
+            .collect();
+        assert_eq!(
+            conflicts_both.len(),
+            1,
+            "real both-installed conflict should remain: {conflicts_both:?}"
+        );
+    }
+
+    #[test]
     fn missing_nodes_only_for_required_deps_not_optional() {
         let raw = r#"{
           "schemaVersion": "0.1.0",
@@ -451,6 +596,90 @@ mod tests {
             !missing.iter().any(|id| *id == "mod:sodium" || *id == "mod:iris"),
             "optional deps must not become Missing nodes: {missing:?}"
         );
+    }
+
+    #[test]
+    fn resolves_versioned_local_filename_onto_dep_slug() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.21.1" },
+          "loader": { "type": "fabric", "version": "0.16.0" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "baritone",
+              "name": "Baritone",
+              "source": { "type": "modrinth", "projectId": "baritone" },
+              "version": "1.0.0",
+              "side": "client",
+              "dependencies": [{ "type": "requires", "target": "meteor-client" }]
+            },
+            {
+              "id": "meteor-client-0.5.8",
+              "name": "meteor-client-0.5.8.jar",
+              "source": { "type": "local", "path": "mods/meteor-client-0.5.8.jar" },
+              "version": "unknown",
+              "side": "client",
+              "dependencies": []
+            }
+          ]
+        }"#;
+        let graph = DependencyGraph::from_manifest(&serde_json::from_str(raw).unwrap());
+        let edge = graph
+            .edges
+            .iter()
+            .find(|e| e.from.0 == "mod:baritone" && e.kind == EdgeKind::Requires)
+            .expect("requires edge");
+        assert_eq!(edge.to.0, "mod:meteor-client-0.5.8");
+        assert!(
+            !graph.nodes.iter().any(|n| n.kind == NodeKind::Missing),
+            "local versioned jar must satisfy meteor-client"
+        );
+        assert_eq!(
+            graph
+                .node(&NodeId::module("meteor-client-0.5.8"))
+                .and_then(|n| n.metadata.get("source"))
+                .map(String::as_str),
+            Some("local")
+        );
+    }
+
+    #[test]
+    fn resolves_fabric_dep_onto_fabric_api() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.21.1" },
+          "loader": { "type": "fabric", "version": "0.16.0" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "demo",
+              "name": "Demo",
+              "source": { "type": "modrinth", "projectId": "demo" },
+              "version": "1.0.0",
+              "side": "both",
+              "dependencies": [{ "type": "requires", "target": "fabric" }]
+            },
+            {
+              "id": "fabric-api",
+              "name": "Fabric API",
+              "source": { "type": "modrinth", "projectId": "P7dR8mSH" },
+              "version": "0.100.0",
+              "side": "both",
+              "dependencies": []
+            }
+          ]
+        }"#;
+        let graph = DependencyGraph::from_manifest(&serde_json::from_str(raw).unwrap());
+        let edge = graph
+            .edges
+            .iter()
+            .find(|e| e.from.0 == "mod:demo" && e.kind == EdgeKind::Requires)
+            .expect("requires edge");
+        assert_eq!(edge.to.0, "mod:fabric-api");
+        assert!(!graph.nodes.iter().any(|n| n.kind == NodeKind::Missing));
     }
 }
 

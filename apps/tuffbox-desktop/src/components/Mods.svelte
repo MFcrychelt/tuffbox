@@ -1179,26 +1179,11 @@ import { trapFocus } from "../lib/focusTrap";
 
   // Ideas: after Add-mod install, offer popular co-occurring companions (user can decline).
   const IDEAS_STORAGE_KEY = "tuffbox.mods.ideas";
-  const HERO_STORAGE_KEY = "tuffbox.mods.hero-expanded";
   let ideasEnabled = $state(
     typeof localStorage === "undefined"
       ? true
       : localStorage.getItem(IDEAS_STORAGE_KEY) !== "false",
   );
-  let heroExpanded = $state(
-    typeof localStorage === "undefined"
-      ? false
-      : localStorage.getItem(HERO_STORAGE_KEY) === "true",
-  );
-
-  function toggleHeroExpanded() {
-    heroExpanded = !heroExpanded;
-    try {
-      localStorage.setItem(HERO_STORAGE_KEY, String(heroExpanded));
-    } catch {
-      /* ignore */
-    }
-  }
 
   type IdeaOffer = {
     slug: string;
@@ -2542,14 +2527,6 @@ import { trapFocus } from "../lib/focusTrap";
               : "Mods",
   );
 
-  const heroBlurb = $derived(
-    isSavedViewFilter(contentFilter)
-      ? "Browse and install mods from this saved list."
-      : contentFilter === "favorites"
-        ? "Your starred Modrinth projects for this instance."
-        : `Installed ${contentNoun}, updates, and add-from-catalog search.`,
-  );
-
   const tabCounts = $derived({
     mod: mods.filter((m) => (m.contentType ?? "mod") === "mod").length,
     resourcepack: mods.filter((m) => m.contentType === "resourcepack").length,
@@ -2563,47 +2540,37 @@ import { trapFocus } from "../lib/focusTrap";
 
 <div class="mods fade-slide-in">
   <div class="mods-chrome">
-  <header class="content-hero" class:collapsed={!heroExpanded}>
-    <button type="button" class="content-hero-toggle" onclick={toggleHeroExpanded} aria-expanded={heroExpanded}>
-      <div class="content-hero-copy">
-        <div class="content-kicker"><Package size={14} /> Content</div>
-        <h1>{heroTitle}</h1>
-        {#if heroExpanded}
-          <p>{heroBlurb}</p>
-        {/if}
+  <header class="content-hero">
+    <div class="content-hero-copy">
+      <div class="content-kicker"><Package size={14} /> Content</div>
+      <h1>{heroTitle}</h1>
+    </div>
+    <div class="content-hero-stats">
+      <div class="stat-pill">
+        <strong>{filtered.length}</strong>
+        <span>shown</span>
       </div>
-      <span class="hero-chevron" class:rotated={heroExpanded} aria-hidden="true">
-        <ChevronDown size={18} />
-      </span>
-    </button>
-    {#if heroExpanded}
-      <div class="content-hero-stats">
-        <div class="stat-pill">
-          <strong>{filtered.length}</strong>
-          <span>shown</span>
-        </div>
-        <div class="stat-pill accent" class:pulse={updateList.length > 0}>
-          <strong>{updateList.length}</strong>
-          <span>updates</span>
-        </div>
-        <div class="stat-pill">
-          <strong>{counts.all}</strong>
-          <span>total</span>
-        </div>
-        {#if wrongLoaderHits.length > 0}
-          <div class="stat-pill warn">
-            <strong>{wrongLoaderHits.length}</strong>
-            <span>wrong loader</span>
-          </div>
-        {/if}
-        {#if duplicateJarGroups.length > 0}
-          <div class="stat-pill warn">
-            <strong>{duplicateJarGroups.length}</strong>
-            <span>dup groups</span>
-          </div>
-        {/if}
+      <div class="stat-pill accent" class:pulse={updateList.length > 0}>
+        <strong>{updateList.length}</strong>
+        <span>updates</span>
       </div>
-    {/if}
+      <div class="stat-pill">
+        <strong>{counts.all}</strong>
+        <span>total</span>
+      </div>
+      {#if wrongLoaderHits.length > 0}
+        <div class="stat-pill warn">
+          <strong>{wrongLoaderHits.length}</strong>
+          <span>wrong loader</span>
+        </div>
+      {/if}
+      {#if duplicateJarGroups.length > 0}
+        <div class="stat-pill warn">
+          <strong>{duplicateJarGroups.length}</strong>
+          <span>dup groups</span>
+        </div>
+      {/if}
+    </div>
   </header>
 
   {#if duplicateJarGroups.length > 0}
@@ -2797,7 +2764,7 @@ import { trapFocus } from "../lib/focusTrap";
     </div>
     <div class="toolbar-search-cluster">
       <div class="search toolbar-search">
-        <span class="search-glyph"><Search size={16} /></span>
+        <span class="search-glyph"><Search size={18} /></span>
         <input bind:value={filter} placeholder={searchPlaceholder} />
       </div>
       <button class="primary-action" onclick={openAddModal} disabled={!$projectPath || mutating}>
@@ -3237,24 +3204,6 @@ import { trapFocus } from "../lib/focusTrap";
               ? "Search is filtered by the current Minecraft version and loader."
               : "Search is filtered by the current Minecraft version."}
           </p>
-          <div class="provider-toggle" role="group" aria-label="Catalog provider">
-            <button
-              type="button"
-              class:active={catalogProvider === "modrinth"}
-              onclick={() => setCatalogProvider("modrinth")}
-            >Modrinth</button>
-            <button
-              type="button"
-              class:active={catalogProvider === "curseforge"}
-              onclick={() => setCatalogProvider("curseforge")}
-            >CurseForge</button>
-            <button
-              type="button"
-              class:active={catalogProvider === "both"}
-              onclick={() => setCatalogProvider("both")}
-              title="Search both catalogs at once"
-            >Both</button>
-          </div>
         </div>
         <button class="icon-btn" onclick={() => (addOpen = false)}><X size={18} /></button>
       </div>
@@ -3269,6 +3218,24 @@ import { trapFocus } from "../lib/focusTrap";
           {#each listTabNames as listName (listName)}
             <button class:active={contentFilter === `list:${listName}`} onclick={() => switchContentFilter(`list:${listName}`)}>{listName}</button>
           {/each}
+        </div>
+        <div class="provider-toggle" role="group" aria-label="Catalog provider">
+          <button
+            type="button"
+            class:active={catalogProvider === "modrinth"}
+            onclick={() => setCatalogProvider("modrinth")}
+          >Modrinth</button>
+          <button
+            type="button"
+            class:active={catalogProvider === "curseforge"}
+            onclick={() => setCatalogProvider("curseforge")}
+          >CurseForge</button>
+          <button
+            type="button"
+            class:active={catalogProvider === "both"}
+            onclick={() => setCatalogProvider("both")}
+            title="Search both catalogs at once"
+          >Both</button>
         </div>
       </div>
       <div class="browser-topbar modal-topbar">
@@ -4127,76 +4094,25 @@ import { trapFocus } from "../lib/focusTrap";
     flex: 1;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
   }
 
   .content-hero {
     display: flex;
     justify-content: space-between;
-    align-items: flex-end;
-    gap: 24px;
+    align-items: center;
+    gap: 16px;
     margin-bottom: 12px;
-    padding: 16px 18px;
+    padding: 10px 14px 10px 16px;
     border-radius: var(--border-radius-xl, 16px);
     border: 1px solid var(--border-color);
     background: var(--bg-secondary);
     overflow: hidden;
-    transition: padding 0.2s ease;
   }
 
-  .content-hero.collapsed {
-    align-items: center;
-    padding: 12px 16px 12px 20px;
-  }
-
-  .content-hero-toggle {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
+  .content-hero-copy {
     flex: 1;
     min-width: 0;
-    margin: 0;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .content-hero.collapsed .content-hero-toggle {
-    align-items: center;
-  }
-
-  .content-hero.collapsed .content-kicker {
-    margin-bottom: 2px;
-  }
-
-  .content-hero.collapsed h1 {
-    margin: 0;
-    font-size: 18px;
-  }
-
-  .hero-chevron {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    margin-top: 4px;
-    color: var(--text-muted);
-    transition: transform 0.2s ease;
-  }
-
-  .content-hero.collapsed .hero-chevron {
-    margin-top: 0;
-  }
-
-  .hero-chevron.rotated {
-    transform: rotate(180deg);
-  }
-
-  .hero-chevron :global(svg) {
-    color: var(--text-muted);
   }
 
   .conflicts-jars {
@@ -4297,34 +4213,28 @@ import { trapFocus } from "../lib/focusTrap";
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    margin-bottom: 8px;
+    margin-bottom: 2px;
   }
 
   .content-hero h1 {
-    margin: 0 0 4px;
-    font-size: 20px;
+    margin: 0;
+    font-size: 18px;
     font-weight: 800;
     letter-spacing: -0.02em;
     color: var(--text-primary);
   }
 
-  .content-hero-copy p {
-    margin: 0;
-    color: var(--text-secondary);
-    font-size: 14px;
-    max-width: 420px;
-    line-height: 1.45;
-  }
-
   .content-hero-stats {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-shrink: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .stat-pill {
-    min-width: 72px;
-    padding: 10px 14px;
+    min-width: 64px;
+    padding: 6px 12px;
     border-radius: var(--border-radius-md, 10px);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -4333,13 +4243,14 @@ import { trapFocus } from "../lib/focusTrap";
 
   .stat-pill strong {
     display: block;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 800;
+    line-height: 1.15;
     color: var(--text-primary);
   }
 
   .stat-pill span {
-    font-size: 11px;
+    font-size: 10px;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -4394,40 +4305,47 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     flex-wrap: wrap;
     margin-bottom: 10px;
   }
 
   .filters-search-row .quick-filters {
     margin-bottom: 0;
+    flex-shrink: 0;
   }
 
   .toolbar-search-cluster {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     margin-left: auto;
-    flex-shrink: 0;
+    flex: 1 1 420px;
+    min-width: min(100%, 320px);
   }
 
   .toolbar-search {
-    flex: 0 1 320px;
-    min-width: 200px;
-    max-width: 360px;
+    flex: 1 1 auto;
+    min-width: 240px;
+    max-width: none;
     position: relative;
+  }
+
+  .toolbar-search .search-glyph {
+    left: 14px;
   }
 
   .toolbar-search input {
     width: 100%;
-    min-height: 38px;
+    min-height: 46px;
     box-sizing: border-box;
-    padding: 8px 12px 8px 38px;
+    padding: 10px 14px 10px 44px;
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-md);
+    border-radius: var(--border-radius-lg, 12px);
     background: var(--bg-elevated);
     color: var(--text-primary);
     font: inherit;
+    font-size: 15px;
   }
 
   .toolbar-search input::placeholder {
@@ -4442,9 +4360,11 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .toolbar-search-cluster .primary-action {
-    padding: 8px 14px;
-    font-size: 13px;
+    padding: 11px 16px;
+    font-size: 14px;
+    min-height: 46px;
     white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .quiet-action {
@@ -5356,6 +5276,7 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 12px;
     flex-wrap: wrap;
     padding: 0 0 10px;
@@ -5367,6 +5288,12 @@ import { trapFocus } from "../lib/focusTrap";
     flex: 1 1 auto;
     min-width: 0;
     padding: 0;
+  }
+
+  .modal.add-mods-modal .modal-tabs-row .provider-toggle {
+    margin-top: 0;
+    margin-left: auto;
+    flex-shrink: 0;
   }
 
   .modal.add-mods-modal .browser-topbar.modal-topbar {

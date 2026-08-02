@@ -234,17 +234,47 @@ function actionsFromHint(h: HintLike): FixAction[] {
   return [];
 }
 
+/** Normalize graph NodeId JSON (`"mod:foo"` or `{ "0": "mod:foo" }`) to a bare slug. */
+export function modSlugFromNode(node: unknown): string | null {
+  if (node == null) return null;
+  let raw = "";
+  if (typeof node === "string") raw = node;
+  else if (typeof node === "object" && node !== null && "0" in (node as object)) {
+    raw = String((node as { 0: unknown })[0] ?? "");
+  } else {
+    raw = String(node);
+  }
+  const s = raw.trim();
+  if (!s) return null;
+  return s.replace(/^mod:/i, "").trim() || null;
+}
+
+function parseMissingDependency(g: GraphDiagLike): {
+  requester: string | null;
+  missing: string | null;
+  requesterLabel: string;
+} {
+  const requester = modSlugFromNode(g.relatedNodes?.[0] ?? null);
+  let missing = modSlugFromNode(g.relatedNodes?.[1] ?? null);
+  const msg = g.message ?? "";
+  if (!missing) {
+    const m = msg.match(/missing dependency\s+mod:([a-z0-9_-]+)/i);
+    missing = m?.[1] ?? null;
+  }
+  const labelMatch = msg.match(/^(.+?)\s+requires missing dependency/i);
+  const requesterLabel = (labelMatch?.[1] ?? requester ?? "A mod").trim();
+  return { requester, missing, requesterLabel };
+}
+
 function graphActions(g: GraphDiagLike): FixAction[] {
   const code = String(g.code ?? "").toUpperCase();
-  const msg = g.message ?? "";
   if (code.includes("MISSING")) {
-    const m = msg.match(/mod:([a-z0-9_-]+)/i);
-    const id = m?.[1] ?? null;
+    const { missing } = parseMissingDependency(g);
     return [
       {
         kind: "installDependency",
-        label: id ? `Install ${id}` : "Install missing dependency",
-        modId: id,
+        label: missing ? `Install ${missing}` : "Install missing dependency",
+        modId: missing,
       },
       { kind: "openResolve", label: "Open Resolve", modId: null },
     ];
@@ -348,41 +378,99 @@ export function buildUnifiedProblems(input: BuildProblemsInput): Problem[] {
     else otherGraph.push(g);
   }
 
-  if (missingGraph.length > 1) {
-    const actions: FixAction[] = [
-      { kind: "installAllMissing", label: `Install ${missingGraph.length} missing`, modId: null },
-      { kind: "openResolve", label: "Open Resolve", modId: null },
-    ];
+  // Group missing deps by the mod that requires them so Health shows
+  // "Sodium needs fabric-api, indium" with Install-all-for-this-mod.
+  type MissingGroup = {
+    requester: string | null;
+    requesterLabel: string;
+    missing: string[];
+    messages: string[];
+    severity: string;
+  };
+  const missingByRequester = new Map<string, MissingGroup>();
+  for (const g of missingGraph) {
+    const parsed = parseMissingDependency(g);
+    if (!parsed.missing) continue;
+    const key = parsed.requester ?? `__anon__:${parsed.requesterLabel}`;
+    let group = missingByRequester.get(key);
+    if (!group) {
+      group = {
+        requester: parsed.requester,
+        requesterLabel: parsed.requesterLabel,
+        missing: [],
+        messages: [],
+        severity: g.severity,
+      };
+      missingByRequester.set(key, group);
+    }
+    if (!group.missing.includes(parsed.missing)) group.missing.push(parsed.missing);
+    group.messages.push(g.message);
+  }
+
+  const missingGroups = [...missingByRequester.values()];
+  const uniqueMissing = [...new Set(missingGroups.flatMap((g) => g.missing))];
+
+  if (uniqueMissing.length > 1) {
     rows.push({
       id: "graph:missing-batch",
       severity: "error",
       category: "dependency",
-      title: `${missingGraph.length} missing dependencies`,
-      summary: missingGraph.map((g) => g.message).slice(0, 3).join(" · "),
+      title: `${uniqueMissing.length} missing dependencies`,
+      summary: missingGroups
+        .map((g) => `${g.requesterLabel} → ${g.missing.join(", ")}`)
+        .slice(0, 4)
+        .join(" · "),
       source: "graph",
       code: "MISSING_DEPENDENCY",
-      modIds: [],
+      modIds: uniqueMissing,
+      actions: [
+        { kind: "installAllMissing", label: `Install all ${uniqueMissing.length}`, modId: null },
+        { kind: "openResolve", label: "Open Resolve", modId: null },
+      ],
+      risk: "safe",
+      layer: "pack",
+    });
+  }
+
+  for (const group of missingGroups) {
+    const missingList = group.missing.join(", ");
+    const title =
+      group.missing.length === 1
+        ? `${group.requesterLabel} needs ${group.missing[0]}`
+        : `${group.requesterLabel} needs ${group.missing.length} dependencies`;
+    const actions: FixAction[] = [];
+    if (group.requester && group.missing.length > 1) {
+      actions.push({
+        kind: "installMissingForMod",
+        label: `Install deps for ${group.requesterLabel}`,
+        modId: group.requester,
+      });
+    }
+    for (const mid of group.missing) {
+      actions.push({
+        kind: "installDependency",
+        label: `Install ${mid}`,
+        modId: mid,
+      });
+    }
+    actions.push({ kind: "openResolve", label: "Open Resolve", modId: null });
+
+    rows.push({
+      id: `graph:missing:${group.requester ?? group.requesterLabel}:${missingList}`,
+      severity: normalizeSeverity(group.severity),
+      category: "dependency",
+      title,
+      summary:
+        group.missing.length === 1
+          ? group.messages[0] ?? `${group.requesterLabel} requires ${group.missing[0]}`
+          : `Missing: ${missingList}`,
+      source: "graph",
+      code: "MISSING_DEPENDENCY",
+      modIds: [group.requester, ...group.missing].filter((x): x is string => !!x),
       actions,
       risk: "safe",
       layer: "pack",
     });
-  } else {
-    for (const g of missingGraph) {
-      const actions = graphActions(g);
-      rows.push({
-        id: `graph:${g.code}:${g.message}`,
-        severity: normalizeSeverity(g.severity),
-        category: "dependency",
-        title: humanizeDiagnosticCode(g.code),
-        summary: g.message,
-        source: "graph",
-        code: g.code,
-        modIds: [],
-        actions,
-        risk: riskForActions(actions),
-        layer: "pack",
-      });
-    }
   }
 
   for (const g of otherGraph) {

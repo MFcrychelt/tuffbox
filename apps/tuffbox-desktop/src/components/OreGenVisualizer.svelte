@@ -23,11 +23,12 @@
   let selectedOre = $state<string | null>(null);
   let lastOreScanPath = $state<string | null>(null);
 
-  // Y-level constants: world goes from -64 to 320
   const WORLD_MIN = -64;
   const WORLD_MAX = 320;
   const CANVAS_HEIGHT = 520;
-  const CANVAS_WIDTH = 260;
+  const BAR_SLOT = 28;
+  const CHART_PAD_LEFT = 60;
+  const CHART_PAD_RIGHT = 20;
 
   function yToCanvas(y: number): number {
     const ratio = (y - WORLD_MIN) / (WORLD_MAX - WORLD_MIN);
@@ -36,17 +37,26 @@
 
   async function scan() {
     if (!$projectPath) return;
+    const path = $projectPath;
     loading = true;
     error = null;
     try {
-      ores = await invoke("scan_ore_generation", { path: $projectPath });
-      lastOreScanPath = $projectPath;
+      ores = await invoke("scan_ore_generation", { path });
     } catch (e) {
       error = String(e);
+      ores = [];
     } finally {
+      lastOreScanPath = path;
       loading = false;
     }
   }
+
+  $effect(() => {
+    const path = $projectPath;
+    if (!path) return;
+    if (lastOreScanPath === path) return;
+    void scan();
+  });
 
   function parseHeight(val: any): number | null {
     if (!val || !Array.isArray(val) || val.length < 2) return null;
@@ -70,6 +80,9 @@
     };
   }));
 
+  const chartWidth = $derived(
+    Math.max(260, oreBars.length * BAR_SLOT + CHART_PAD_LEFT + CHART_PAD_RIGHT),
+  );
   const oreColors: Record<string, string> = {
     coal: "#2d2d2d",
     iron: "#d4a373",
@@ -132,22 +145,28 @@
   {#if !$projectPath}
     <EmptyState icon={Mountain} title="No project selected" description="Open a project to scan ore generation." />
   {:else if oreBars.length === 0}
-    <EmptyState icon={Database} title="No ore data" description="Click Refresh to scan ore generation from configs." />
+    <EmptyState
+      icon={Database}
+      title={loading ? "Scanning ore configs…" : "No ore data"}
+      description={loading ? "Reading generation settings from configs." : "Scan configs to chart ore height ranges."}
+      actionLabel={loading ? "" : "Scan ores"}
+      onaction={scan}
+    />
   {:else}
     <div class="layout">
       <div class="chart-shell">
-        <svg viewBox="0 0 {CANVAS_WIDTH + 80} {CANVAS_HEIGHT + 40}" class="ore-chart">
+        <svg viewBox="0 0 {chartWidth} {CANVAS_HEIGHT + 40}" class="ore-chart" width={chartWidth}>
           <line x1="60" y1="10" x2="60" y2={CANVAS_HEIGHT + 10} stroke="rgba(255,255,255,.12)" stroke-width="1" />
-          {#each [320, 256, 192, 128, 64, 0, -64] as y}
+          {#each [320, 256, 192, 128, 64, 0, -64] as y (y)}
             {@const cy = yToCanvas(y) + 10}
             <text x="54" y={cy + 4} text-anchor="end" fill="#6b7280" font-size="10">{y}</text>
-            <line x1="58" y1={cy} x2={CANVAS_WIDTH + 60} y2={cy} stroke="rgba(255,255,255,.04)" stroke-width="1" />
+            <line x1="58" y1={cy} x2={chartWidth - 20} y2={cy} stroke="rgba(255,255,255,.04)" stroke-width="1" />
           {/each}
 
           <text x="5" y="15" fill="#6b7280" font-size="9">Y</text>
 
-          {#each oreBars as ore, idx}
-            {@const barX = 68 + idx * 24}
+          {#each oreBars as ore, idx (ore.resource + ore.configFile)}
+            {@const barX = 68 + idx * BAR_SLOT}
             {@const topY = yToCanvas(Math.min(ore.maxY, WORLD_MAX)) + 10}
             {@const botY = yToCanvas(Math.max(ore.minY, WORLD_MIN)) + 10}
             {@const barH = Math.max(2, botY - topY)}
@@ -166,7 +185,7 @@
 
       <div class="ore-list">
         <h3>Detected ores ({oreBars.length})</h3>
-        {#each oreBars as ore}
+        {#each oreBars as ore (ore.resource + ore.configFile)}
           <button class="ore-row" class:selected={selectedOre === ore.resource} onclick={() => (selectedOre = selectedOre === ore.resource ? null : ore.resource)}>
             <span class="ore-dot" style="background:{colorFor(ore.resource)}"></span>
             <div class="ore-detail">

@@ -124,6 +124,8 @@ body,
 #app {
   height: 100%;
   width: 100%;
+  /* One scroll owner: panes inside .app-shell — never the document. */
+  overflow: hidden;
 }
 
 body {
@@ -286,13 +288,18 @@ textarea:focus {
   border-color: var(--accent-primary);
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-hover) var(--bg-elevated, rgba(255, 255, 255, 0.04));
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
 }
 
 ::-webkit-scrollbar-thumb {

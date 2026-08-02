@@ -1893,6 +1893,69 @@
       }
       return;
     }
+    if (kind === "installMissingForMod" && action.modId) {
+      applyingProblemId = problem.id;
+      error = null;
+      try {
+        const requester = action.modId;
+        const missingIds = [
+          ...new Set(
+            (diagnosis?.graphDiagnostics ?? [])
+              .filter((d) => String(d.code ?? "").toUpperCase().includes("MISSING"))
+              .filter((d) => {
+                const from = d.relatedNodes?.[0];
+                const slug =
+                  typeof from === "string"
+                    ? from.replace(/^mod:/i, "")
+                    : from && typeof from === "object" && "0" in from
+                      ? String((from as { 0: unknown })[0] ?? "").replace(/^mod:/i, "")
+                      : "";
+                return slug === requester;
+              })
+              .map((d) => {
+                const to = d.relatedNodes?.[1];
+                if (typeof to === "string") return to.replace(/^mod:/i, "");
+                if (to && typeof to === "object" && "0" in to) {
+                  return String((to as { 0: unknown })[0] ?? "").replace(/^mod:/i, "");
+                }
+                const m = String(d.message ?? "").match(/missing dependency\s+mod:([a-z0-9_-]+)/i);
+                return m?.[1] ?? "";
+              })
+              .filter(Boolean),
+          ),
+        ];
+        if (missingIds.length === 0) {
+          // Fall back to modIds on the problem card (skip requester itself).
+          for (const mid of problem.modIds) {
+            if (mid !== requester) missingIds.push(mid);
+          }
+        }
+        if (missingIds.length === 0) {
+          message = "No missing dependencies found for this mod.";
+          return;
+        }
+        let installed = 0;
+        for (const mid of missingIds) {
+          await invoke("apply_fix_action", {
+            path: $projectPath,
+            action: { kind: "installDependency", label: `Install ${mid}`, modId: mid },
+          });
+          installed += 1;
+        }
+        message = `Installed ${installed} dep(s) for ${requester}. Snapshot saved — Test launch to verify.`;
+        verifyPrompt = true;
+        showApplyTrail = true;
+        requestIdeIssuesRefresh();
+        await load(true);
+        void detectWrongLoaderMods();
+        void detectDuplicateModJars();
+      } catch (e) {
+        error = String(e);
+      } finally {
+        applyingProblemId = null;
+      }
+      return;
+    }
     if (kind === "removeWrongJar" && action.modId) {
       await removeWrongJar(action.modId);
       verifyPrompt = true;
@@ -2153,37 +2216,39 @@
       onScrollToWarnings={scrollToPackWarnings}
     />
 
-    <DiagnoseVerdictHero
-      sessionOk={sessionOk}
-      topSuspect={topSuspect}
-      topFinding={topFinding}
-      heroCulpritLabel={heroCulpritLabel}
-      strongestEvidence={strongestEvidence}
-      analysisBusy={analysisBusy}
-      primaryRec={primaryRec}
-      mergedRecommendations={[]}
-      aiApplyBusy={aiApplyBusy}
-      applyingHintId={applyingHintId}
-      disablingModId={disablingModId}
-      fixingIdx={fixingIdx}
-      aiAnalysis={aiAnalysis}
-      logDisplayText={logDisplayText}
-      isHsErr={isHsErr}
-      hsErrKind={hsErrKind}
-      memoryHint={null}
-      worldCoords={null}
-      cascadingFinding={null}
-      mixinFinding={null}
-      sideMismatchFinding={null}
-      suspected={suspected}
-      onFixDisableMod={fixDisableMod}
-      onApplyTopSuspectUpdate={applyTopSuspectUpdate}
-      onApplyAiPlan={applyAiPlan}
-      onJumpToFirstError={() => { mainTab = "evidence"; jumpToFirstError(); }}
-      onApplyBisectDisableHalf={applyBisectDisableHalf}
-      warningCount={unifiedProblems.filter((p) => p.severity === "warning" || p.severity === "info").length}
-      onShowWarnings={scrollToPackWarnings}
-    />
+    {#if !sessionOk}
+      <DiagnoseVerdictHero
+        sessionOk={sessionOk}
+        topSuspect={topSuspect}
+        topFinding={topFinding}
+        heroCulpritLabel={heroCulpritLabel}
+        strongestEvidence={strongestEvidence}
+        analysisBusy={analysisBusy}
+        primaryRec={primaryRec}
+        mergedRecommendations={[]}
+        aiApplyBusy={aiApplyBusy}
+        applyingHintId={applyingHintId}
+        disablingModId={disablingModId}
+        fixingIdx={fixingIdx}
+        aiAnalysis={aiAnalysis}
+        logDisplayText={logDisplayText}
+        isHsErr={isHsErr}
+        hsErrKind={hsErrKind}
+        memoryHint={null}
+        worldCoords={null}
+        cascadingFinding={null}
+        mixinFinding={null}
+        sideMismatchFinding={null}
+        suspected={suspected}
+        onFixDisableMod={fixDisableMod}
+        onApplyTopSuspectUpdate={applyTopSuspectUpdate}
+        onApplyAiPlan={applyAiPlan}
+        onJumpToFirstError={() => { mainTab = "evidence"; jumpToFirstError(); }}
+        onApplyBisectDisableHalf={applyBisectDisableHalf}
+        warningCount={unifiedProblems.filter((p) => p.severity === "warning" || p.severity === "info").length}
+        onShowWarnings={scrollToPackWarnings}
+      />
+    {/if}
 
     {#if !diagnosis.reports.some((r) => r.id.startsWith("crash-reports/")) && !problemsBlocking && !sessionOk}
       <div class="dx-empty-sources panel">
@@ -2499,6 +2564,7 @@
     flex: 1;
     min-height: 0;
     overflow: auto;
+    scrollbar-gutter: stable;
   }
   .toolbar, .actions, .title, .primary-actions, .panel-header, .suspect-head, .meta, .plan-meta { display: flex; align-items: center; }
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 10px; flex-wrap: wrap; }

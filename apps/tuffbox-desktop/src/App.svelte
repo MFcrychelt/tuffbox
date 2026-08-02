@@ -14,7 +14,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
   import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -252,6 +252,21 @@
       }, 150);
     };
 
+    const onLauncherSettings = (ev: Event) => {
+      const detail = (ev as CustomEvent<LauncherSettings>).detail;
+      if (!detail || typeof detail !== "object") return;
+      const mode = resolveUiScaleMode(detail);
+      launcherSnapshot = { ...detail, uiScaleMode: mode };
+      if (mode === "auto") {
+        const suggested = suggestUiScalePercent();
+        applyUiScale(suggested);
+        launcherSnapshot = { ...launcherSnapshot, uiScalePercent: suggested };
+      } else {
+        applyUiScaleFromSettings(launcherSnapshot);
+      }
+    };
+    window.addEventListener("tuffbox:launcher-settings", onLauncherSettings);
+
     void api.launcher.get().then((s) => {
       const mode = resolveUiScaleMode(s);
       launcherSnapshot = { ...s, uiScaleMode: mode };
@@ -273,6 +288,7 @@
           .catch(() => {});
       }
       applyRoundedCorners(s.roundedCorners !== false);
+      launcherSettingsLive.set(launcherSnapshot);
       void applyPerfAutoDetect(s);
     }).catch(() => {});
     window.addEventListener("resize", onUiScaleResize);
@@ -388,6 +404,7 @@
       window.removeEventListener("tuffbox:open-library", onOpenLibrary);
       window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
+      window.removeEventListener("tuffbox:launcher-settings", onLauncherSettings);
       window.removeEventListener("resize", onUiScaleResize);
       clearTimeout(scaleResizeTimer);
       unlistenDistill?.();
@@ -556,7 +573,17 @@
     <main
       class="content"
       class:ide-view={currentView === "ide"}
-      class:fill-view={currentView === "world" || currentView === "configs" || currentView === "quests" || currentView === "mods" || currentView === "graph" || currentView === "library"}
+      class:fill-view={
+        currentView === "world" ||
+        currentView === "configs" ||
+        currentView === "quests" ||
+        currentView === "mods" ||
+        currentView === "graph" ||
+        currentView === "library" ||
+        currentView === "chats" ||
+        currentView === "diagnostics" ||
+        currentView === "snapshots"
+      }
       bind:this={contentEl}
     >
       {#key currentView}
@@ -665,12 +692,36 @@
           currentView = "ide";
           e.preventDefault();
           break;
-        case "3": currentView = "mods"; e.preventDefault(); break;
-        case "4": currentView = "graph"; e.preventDefault(); break;
-        case "5": currentView = "configs"; e.preventDefault(); break;
-        case "6": currentView = "diagnostics"; e.preventDefault(); break;
-        case "7": currentView = "snapshots"; e.preventDefault(); break;
-        case "8": currentView = "world"; e.preventDefault(); break;
+        case "3":
+          ideStageRequest.set("content");
+          currentView = "ide";
+          e.preventDefault();
+          break;
+        case "4":
+          ideStageRequest.set("resolve");
+          currentView = "ide";
+          e.preventDefault();
+          break;
+        case "5":
+          ideStageRequest.set("configs");
+          currentView = "ide";
+          e.preventDefault();
+          break;
+        case "6":
+          ideStageRequest.set("diagnose");
+          currentView = "ide";
+          e.preventDefault();
+          break;
+        case "7":
+          ideStageRequest.set("snapshots");
+          currentView = "ide";
+          e.preventDefault();
+          break;
+        case "8":
+          ideStageRequest.set("world-map");
+          currentView = "ide";
+          e.preventDefault();
+          break;
       }
       return;
     }
@@ -730,6 +781,7 @@
     overflow: auto;
     padding: 24px 32px;
     position: relative;
+    scrollbar-gutter: stable;
   }
 
   .content.ide-view {
@@ -766,6 +818,9 @@
     flex-direction: column;
     padding: 16px 20px;
   }
+  .content.fill-view:has(:global(.library)) {
+    padding: 0 16px 12px;
+  }
   .content.fill-view .view-pane {
     flex: 1;
     min-height: 0;
@@ -788,12 +843,25 @@
     height: 100%;
   }
   .content.fill-view .view-pane > :global(.mods),
-  .content.fill-view .view-pane > :global(.library) {
+  .content.fill-view .view-pane > :global(.library),
+  .content.fill-view .view-pane > :global(.diagnostics),
+  .content.fill-view .view-pane > :global(.chats) {
     flex: 1;
     min-height: 0;
     height: 100%;
   }
+  .content.fill-view .view-pane > :global(.diagnostics) {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
   .content.fill-view .view-pane > :global(.graph) {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    overflow-y: auto;
+  }
+  .content.fill-view .view-pane > :global(.snapshots) {
     flex: 1;
     min-height: 0;
     height: 100%;

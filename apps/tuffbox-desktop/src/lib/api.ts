@@ -1491,6 +1491,7 @@ export const api = {
       offsetZ?: number,
       dimension?: string,
       p?: string,
+      overwrite?: boolean,
     ) {
       return cmd<number>("paste_world_chunks", {
         ...pathArg(p),
@@ -1499,6 +1500,7 @@ export const api = {
         offsetX: offsetX ?? 0,
         offsetZ: offsetZ ?? 0,
         dimension: dimension ?? "overworld",
+        overwrite: overwrite ?? true,
       });
     },
     purge(worldName: string, dimension?: string, p?: string) {

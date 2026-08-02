@@ -16,33 +16,33 @@
   } from "../lib/api";
   import { historyFocusSnapshotId, ideStageRequest, projectPath } from "../lib/store";
 
-  let snapshots: Snapshot[] = [];
+  let snapshots = $state<Snapshot[]>([]);
   let loading = $state(false);
-  let newName = "";
-  let error: string | null = null;
-  let message: string | null = null;
-  let projectDir: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let fromId = "";
-  let toId = "";
+  let newName = $state("");
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let projectDir = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let fromId = $state("");
+  let toId = $state("");
   let diff = $state<SnapshotDiff | null>(null);
-  let selectedDiffPath = "";
-  let fileDiff: SnapshotFileDiff | null = null;
+  let selectedDiffPath = $state("");
+  let fileDiff = $state<SnapshotFileDiff | null>(null);
   let diffLoading = $state(false);
 
-  let selectedId = "";
-  let detail: SnapshotDetail | null = null;
+  let selectedId = $state("");
+  let detail = $state<SnapshotDetail | null>(null);
   let detailLoading = $state(false);
-  let search = "";
+  let search = $state("");
   let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
   let backupsOpen = $state(false);
   let compareOpen = $state(false);
 
   let confirmOpen = $state(false);
-  let confirmTitle = "";
-  let confirmMessage = "";
+  let confirmTitle = $state("");
+  let confirmMessage = $state("");
   let confirmDanger = $state(false);
-  let confirmAction: (() => void) | null = null;
+  let confirmAction = $state<(() => void) | null>(null);
 
   function showConfirm(title: string, message: string, action: () => void, danger = false) {
     confirmTitle = title;
@@ -58,12 +58,12 @@
     confirmAction = null;
   }
 
-  let manifestDiff: ManifestSnapshotDiff | null = null;
+  let manifestDiff = $state<ManifestSnapshotDiff | null>(null);
   let manifestDiffLoading = $state(false);
 
-  let backups: BackupEntry[] = [];
+  let backups = $state<BackupEntry[]>([]);
   let backupLoading = $state(false);
-  let backupName = "";
+  let backupName = $state("");
 
   async function ensureProjectDir() {
     if (!$projectPath) return null;
@@ -701,8 +701,17 @@
 </div>
 
 <style>
-  .snapshots { max-width: none; width: 100%; display: flex; flex-direction: column; gap: 14px; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .snapshots {
+    max-width: none;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
+  }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
   .title, .actions, .row-meta, .detail-sub, .detail-actions, .backup-create, .search, .collapse-toggle {
     display: flex; align-items: center; gap: 10px;
   }
@@ -720,11 +729,17 @@
   .chips button { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-muted); padding: 6px 12px; font-size: 12px; transform: none; }
   .chips button.active { color: var(--text-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
 
-  .master-detail { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 14px; min-height: 420px; }
+  .master-detail {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
+  }
   .list-pane, .detail-pane, .compare-panel, .diff-panel, .inline-diff-shell, .backup-section, .collapsible {
     background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);
   }
-  .list-pane { overflow: auto; max-height: 70vh; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .list-pane { overflow: auto; min-height: 0; max-height: none; padding: 8px; display: flex; flex-direction: column; gap: 6px; scrollbar-gutter: stable; }
   .row { width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
   .row:hover, .row.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
   .row-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
@@ -734,7 +749,7 @@
   .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
 
-  .detail-pane { padding: 18px; overflow: auto; max-height: 70vh; display: flex; flex-direction: column; gap: 14px; }
+  .detail-pane { padding: 18px; overflow: auto; min-height: 0; max-height: none; display: flex; flex-direction: column; gap: 14px; scrollbar-gutter: stable; }
   .detail-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
   .detail-header h2 { margin: 0 0 6px; font-size: 18px; }
   .detail-actions { flex-wrap: wrap; }

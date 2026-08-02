@@ -1300,31 +1300,31 @@
     align-self: start;
   }
 
-  /* Instances under skin: side column scrolls so long lists stay usable. */
+  /* Instances under skin: side column scrolls so long lists stay usable.
+     Bound to the content scrollport (not raw 100vh) so it doesn't fight page scroll. */
   .main-layout[data-layout="yt-main"] .home-side {
-    max-height: calc(100vh - 40px);
+    max-height: calc(100dvh - 96px);
     overflow-y: auto;
   }
 
   /*
-   * yt-under-skin: skin + YouTube share the sticky column.
-   * One scrollbar only — on `.skin-rail-youtube`. Do not scroll `.home-side`
-   * (that nested a second bar on top of the page + feed).
+   * yt-under-skin: one scrollbar on the whole side column (skin + feed).
+   * Scrolling moves the skin away so more videos fill the space.
+   * Feed itself is natural height — no nested scrollbar.
    */
   .main-layout[data-layout="yt-under-skin"] .home-side {
-    max-height: calc(100vh - 40px);
-    overflow: hidden;
-  }
-
-  .skin-rail-youtube {
-    min-width: 0;
-    flex: 1 1 auto;
-    min-height: min(160px, 28vh);
+    max-height: calc(100dvh - 96px);
     overflow-x: hidden;
     overflow-y: auto;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
     overscroll-behavior: contain;
+  }
+
+  .skin-rail-youtube {
+    min-width: 0;
+    flex-shrink: 0;
+    overflow: visible;
   }
 
   .main-layout[data-layout="yt-under-skin"] .skin-rail-youtube {

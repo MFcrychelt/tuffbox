@@ -4,11 +4,6 @@
     Download,
     RefreshCw,
     Database,
-    HardDrive,
-    Clock,
-    MapPin,
-    Swords,
-    Shield,
     PanelLeftClose,
     PanelLeftOpen,
     Clipboard,
@@ -28,6 +23,19 @@
   let detailLoading = $state(false);
   let backupMsg = $state<string | null>(null);
   let railOpen = $state(true);
+
+  const worldMetaTitle = $derived(
+    !worldDetail || !selectedWorld
+      ? (selectedWorld ?? "")
+      : [
+          `Seed ${worldDetail.seed}`,
+          gameTypeLabel(worldDetail.gameType),
+          difficultyLabel(worldDetail.difficulty),
+          worldDetail.sizeFormatted,
+          formatTime(worldDetail.time || 0),
+          `Spawn ${worldDetail.spawnX}, ${worldDetail.spawnY}, ${worldDetail.spawnZ}`,
+        ].join(" · "),
+  );
 
   async function loadWorlds() {
     const p = $projectPath;
@@ -50,6 +58,7 @@
     const p = $projectPath;
     if (!p) return;
     selectedWorld = name;
+    railOpen = false;
     worldDetail = null;
     detailLoading = true;
     try {
@@ -184,17 +193,8 @@
     {#if selectedWorld}
       <div class="compact-bar">
         <div class="compact-left">
-          <strong class="world-title">{selectedWorld}</strong>
-          {#if worldDetail}
-            <span class="meta-pill" title="Seed"><MapPin size={10} /> {worldDetail.seed}</span>
-            <span class="meta-pill"><Swords size={10} /> {gameTypeLabel(worldDetail.gameType)}</span>
-            <span class="meta-pill"><Shield size={10} /> {difficultyLabel(worldDetail.difficulty)}</span>
-            <span class="meta-pill"><HardDrive size={10} /> {worldDetail.sizeFormatted}</span>
-            <span class="meta-pill"><Clock size={10} /> {formatTime(worldDetail.time || 0)}</span>
-            <span class="meta-pill" title="Spawn">
-              <MapPin size={10} /> {worldDetail.spawnX}, {worldDetail.spawnY}, {worldDetail.spawnZ}
-            </span>
-          {:else if detailLoading}
+          <strong class="world-title" title={worldMetaTitle}>{selectedWorld}</strong>
+          {#if detailLoading}
             <span class="meta-muted"><RefreshCw size={11} class="spin" /> Loading…</span>
           {/if}
         </div>
@@ -367,11 +367,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 7px 12px;
+    padding: 5px 12px;
     border-bottom: 1px solid var(--border-color);
     background: color-mix(in srgb, var(--bg-secondary) 96%, var(--bg-primary) 4%);
     flex-shrink: 0;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 36px;
   }
   .compact-left {
     display: flex;

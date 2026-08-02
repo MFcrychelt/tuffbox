@@ -21,6 +21,7 @@
   import {
     projectPath,
     ideStageRequest,
+    ideActiveStage,
     autoHideWorkflowRail,
     tuneDirty,
     briefDirty,
@@ -268,12 +269,17 @@
   }
 
   $effect(() => {
+    ideActiveStage.set(activeStage);
+  });
+
+  $effect(() => {
     if ($ideStageRequest) {
         const req = $ideStageRequest;
         ideStageRequest.set(null);
         if (stages.some((s) => s.id === req)) {
           goToStage(req as StageId);
         }
+        revealRailFromNavigation();
       }
   });
 
@@ -316,6 +322,7 @@
   });
 
   onMount(() => {
+    revealRailFromNavigation();
     const onVis = () => {
       if (document.visibilityState === "visible") void refreshFocusedScanLoop();
       else stopFocusedScanLoop();
@@ -342,16 +349,19 @@
         e.preventDefault();
         e.stopPropagation();
         goToStage(STAGE_CHORD[e.key]);
+        revealRailFromNavigation();
         return;
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "[") {
         e.preventDefault();
         goAdjacentStage(-1);
+        revealRailFromNavigation();
         return;
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "]") {
         e.preventDefault();
         goAdjacentStage(1);
+        revealRailFromNavigation();
       }
     };
     document.addEventListener("visibilitychange", onVis);
@@ -368,6 +378,8 @@
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
   /** Grace before hide — enough to move from hotzone onto the rail. */
   const RAIL_HIDE_MS = 280;
+  /** Keep the rail visible longer after left-nav / stage jumps so it feels opened. */
+  const RAIL_NAV_HOLD_MS = 2800;
 
   function clearRailHideTimer() {
     if (railHideTimer) {
@@ -380,6 +392,14 @@
     if (!$autoHideWorkflowRail) return;
     clearRailHideTimer();
     railRevealed = true;
+  }
+
+  /** Programmatic open (sidebar / shortcuts) — show rail, then auto-hide after a beat. */
+  function revealRailFromNavigation() {
+    if (!$autoHideWorkflowRail) return;
+    clearRailHideTimer();
+    railRevealed = true;
+    scheduleHideRail(RAIL_NAV_HOLD_MS);
   }
 
   function scheduleHideRail(delay = RAIL_HIDE_MS) {
@@ -410,12 +430,16 @@
   onDestroy(() => {
     stopFocusedScanLoop();
     clearRailHideTimer();
+    ideActiveStage.set(null);
   });
 </script>
 
 <div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
   <section class="stage-shell">
-    <IdeNextBar onGoStage={(s) => goToStage(s as StageId)} />
+    <IdeNextBar onGoStage={(s) => {
+      goToStage(s as StageId);
+      revealRailFromNavigation();
+    }} />
     <div
       class="stage-content"
       class:fill-stage={
@@ -426,7 +450,9 @@
         activeStage === "content" ||
         activeStage === "resolve" ||
         activeStage === "test" ||
-        activeStage === "diagnose"
+        activeStage === "diagnose" ||
+        activeStage === "recipes" ||
+        activeStage === "snapshots"
       }
     >
       {#if activeStage === "brief"}
@@ -575,6 +601,7 @@
   }
 
   .stage-content.fill-stage {
+    /* One scroll owner = child; avoid outer scrollbar over edge-to-edge content. */
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -610,7 +637,9 @@
   .stage-content.fill-stage > :global(.mods),
   .stage-content.fill-stage > :global(.graph),
   .stage-content.fill-stage > :global(.test-runs),
-  .stage-content.fill-stage > :global(.diagnostics) {
+  .stage-content.fill-stage > :global(.diagnostics),
+  .stage-content.fill-stage > :global(.jei),
+  .stage-content.fill-stage > :global(.snapshots) {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -621,20 +650,21 @@
 
   .stage-content.fill-stage > :global(.mods),
   .stage-content.fill-stage > :global(.test-runs),
-  .stage-content.fill-stage > :global(.diagnostics) {
+  .stage-content.fill-stage > :global(.diagnostics),
+  .stage-content.fill-stage > :global(.jei) {
     display: flex;
     flex-direction: column;
     padding: 12px 16px;
     overflow: hidden;
   }
 
-  /* Graph scrolls on its root (long category lists); don't clip it. */
-  .stage-content.fill-stage > :global(.graph) {
+  /* Graph + Snapshots: child panes own scroll; don't double-scroll the stage wrapper. */
+  .stage-content.fill-stage > :global(.graph),
+  .stage-content.fill-stage > :global(.snapshots) {
     display: flex;
     flex-direction: column;
     padding: 12px 16px;
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .rail-hotzone {
