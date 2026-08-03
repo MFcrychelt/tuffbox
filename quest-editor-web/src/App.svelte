@@ -5,6 +5,8 @@
   import { createSelectionState, selectSingle, toggleSelect, addToSelection, selectAll, clearSelection, type SelectionState } from "./lib/selection";
   import { createSearchState, searchQuests, nextResult, prevResult, type SearchState } from "./lib/search";
   import { loadTheme, saveTheme, toggleTheme, getThemeVars, type Theme } from "./lib/theme";
+  import { layoutTree, layoutGrid, layoutCircle, applyLayout } from "./lib/layout";
+  import ShortcutsModal from "./components/ui/ShortcutsModal.svelte";
   import ChapterRail from "./components/quests/ChapterRail.svelte";
   import QuestCanvas from "./components/quests/QuestCanvas.svelte";
   import QuestInspector from "./components/quests/QuestInspector.svelte";
@@ -38,6 +40,9 @@
 
   // Clipboard for copy/paste
   let clipboard = $state<QuestData[]>([]);
+
+  // Shortcuts modal
+  let showShortcuts = $state(false);
 
   // Load from localStorage on mount
   $effect(() => {
@@ -480,6 +485,10 @@
           e.preventDefault();
           search = { ...search, isOpen: !search.isOpen };
           return;
+        case "/":
+          e.preventDefault();
+          showShortcuts = !showShortcuts;
+          return;
         case "0":
           e.preventDefault();
           fitToken += 1;
@@ -547,6 +556,31 @@
 
   function updateSearch(query: string) {
     search = { ...search, query, results: searchQuests(query, chapters), selectedIndex: 0 };
+  }
+
+  function applyAutoLayout(mode: "tree" | "grid" | "circle") {
+    if (!selectedChapter) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch || ch.quests.length === 0) return;
+
+    let positions: Map<string, { x: number; y: number }>;
+    switch (mode) {
+      case "tree":
+        positions = layoutTree(ch.quests);
+        break;
+      case "grid":
+        positions = layoutGrid(ch.quests);
+        break;
+      case "circle":
+        positions = layoutCircle(ch.quests);
+        break;
+    }
+
+    ch.quests = applyLayout(ch.quests, positions);
+    markDirty(selectedChapter);
+    fitToken += 1;
+    message = `Applied ${mode} layout to ${ch.quests.length} quests`;
   }
 
   function clearAll() {
@@ -630,6 +664,11 @@
       <button type="button" class="btn ghost" onclick={handleUndo} disabled={!canUndo(history)} title="Undo (Ctrl+Z)">↩</button>
       <button type="button" class="btn ghost" onclick={handleRedo} disabled={!canRedo(history)} title="Redo (Ctrl+Shift+Z)">↪</button>
       <button type="button" class="btn ghost" onclick={createChapter}>+ Chapter</button>
+      <div class="layout-group">
+        <button type="button" class="btn ghost" onclick={() => applyAutoLayout("tree")} title="Tree layout">Tree</button>
+        <button type="button" class="btn ghost" onclick={() => applyAutoLayout("grid")} title="Grid layout">Grid</button>
+        <button type="button" class="btn ghost" onclick={() => applyAutoLayout("circle")} title="Circle layout">Circle</button>
+      </div>
       <button type="button" class="btn ghost" onclick={exportAll} disabled={chapters.length === 0}>Export All</button>
       <button type="button" class="btn ghost" onclick={() => theme = toggleTheme(theme)} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
       <button type="button" class="btn danger" onclick={clearAll} disabled={chapters.length === 0}>Clear</button>
@@ -751,6 +790,7 @@
             <p><kbd>Ctrl+V</kbd> Paste</p>
             <p><kbd>Ctrl+A</kbd> Select all</p>
             <p><kbd>Ctrl+F</kbd> Search</p>
+            <p><kbd>Ctrl+/</kbd> All shortcuts</p>
             <p><kbd>Del</kbd> Delete selected</p>
             <p><kbd>Arrows</kbd> Nudge</p>
           </div>
@@ -758,6 +798,8 @@
       {/if}
     </div>
   {/if}
+
+  <ShortcutsModal isOpen={showShortcuts} onClose={() => showShortcuts = false} />
 </div>
 
 <style>
@@ -840,6 +882,13 @@
   .btn.danger { color: var(--danger); }
   .btn.danger:hover { border-color: var(--danger); background: rgba(248,113,113,0.1); }
   .file-label { display: inline-flex; align-items: center; cursor: pointer; }
+  .layout-group {
+    display: flex;
+    gap: 2px;
+    padding: 0 4px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
 
   .notice {
     padding: 8px 16px;

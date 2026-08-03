@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import type { QuestData, QuestValidationIssue } from "../../lib/store";
+  import Minimap from "./Minimap.svelte";
 
   let {
     quests,
@@ -53,6 +54,8 @@
 
   let unit = $derived(BASE * zoom);
   let issueIds = $derived(new Set(issues.map((i) => i.questId)));
+  let viewportWidth = $state(800);
+  let viewportHeight = $state(600);
 
   $effect(() => {
     if (fitToken !== lastFitToken && quests) {
@@ -73,6 +76,24 @@
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKeyUp);
+
+    // Track viewport dimensions
+    if (viewport) {
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          viewportWidth = entry.contentRect.width;
+          viewportHeight = entry.contentRect.height;
+        }
+      });
+      ro.observe(viewport);
+      void refit();
+      return () => {
+        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("keyup", onKeyUp);
+        ro.disconnect();
+      };
+    }
+
     void refit();
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -408,6 +429,18 @@
       <div class="empty-hint">{emptyHint}</div>
     {/if}
   </div>
+
+  {#if quests.length > 0}
+    <Minimap
+      {quests}
+      {zoom}
+      {panX}
+      {panY}
+      {viewportWidth}
+      {viewportHeight}
+      base={BASE}
+    />
+  {/if}
 </div>
 
 <style>
