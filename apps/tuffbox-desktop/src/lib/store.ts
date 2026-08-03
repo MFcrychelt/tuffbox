@@ -123,6 +123,8 @@ export interface AccountEntry {
   addedAt: number;
   /** Yggdrasil / authlib-injector API root (Ely.by, LittleSkin, custom). */
   authority?: string | null;
+  /** Microsoft OAuth backend for token refresh (`azure` | `live`). */
+  msOauthBackend?: "azure" | "live" | null;
 }
 
 export interface YggdrasilPreset {

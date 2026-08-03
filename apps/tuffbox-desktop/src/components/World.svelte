@@ -7,6 +7,7 @@
     PanelLeftClose,
     PanelLeftOpen,
     Clipboard,
+    Map,
   } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { api } from "../lib/api";
@@ -22,6 +23,8 @@
   let worldDetail = $state<WorldDetail | null>(null);
   let detailLoading = $state(false);
   let backupMsg = $state<string | null>(null);
+  let mcaMsg = $state<string | null>(null);
+  let mcaOpening = $state(false);
   let railOpen = $state(true);
 
   const worldMetaTitle = $derived(
@@ -81,6 +84,23 @@
       setTimeout(() => (backupMsg = null), 3000);
     } catch {
       backupMsg = null;
+    }
+  }
+
+  async function openMcaSelector() {
+    const p = $projectPath;
+    if (!selectedWorld || !p || mcaOpening) return;
+    mcaOpening = true;
+    mcaMsg = null;
+    error = null;
+    try {
+      await api.worlds.openMcaSelector(selectedWorld, p);
+      mcaMsg = "MCA Selector запущен — File → Open Recent";
+      setTimeout(() => (mcaMsg = null), 5000);
+    } catch (e) {
+      error = String(e);
+    } finally {
+      mcaOpening = false;
     }
   }
 
@@ -224,6 +244,22 @@
             </span>
           {/if}
           {#if backupMsg}<span class="backup-msg">{backupMsg}</span>{/if}
+          {#if mcaMsg}<span class="backup-msg">{mcaMsg}</span>{/if}
+          <button
+            class="mca-open"
+            type="button"
+            disabled={mcaOpening}
+            onclick={openMcaSelector}
+            title="Открыть оригинальный MCA Selector с этим миром"
+          >
+            {#if mcaOpening}
+              <RefreshCw size={13} class="spin" />
+              Скачивание…
+            {:else}
+              <Map size={13} />
+              Открыть редактор карт мира
+            {/if}
+          </button>
           <button class="ghost" type="button" onclick={backupWorld} title="Backup this world">
             <Download size={13} /> Backup
           </button>
@@ -449,6 +485,30 @@
     align-items: center;
     gap: 5px;
     font-size: 12px;
+  }
+
+  .mca-open {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-tertiary));
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+  }
+  .mca-open:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 28%, var(--bg-tertiary));
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--border-color));
+  }
+  .mca-open:disabled {
+    opacity: 0.65;
+    cursor: wait;
   }
 
   .map-stage {

@@ -8,7 +8,7 @@
 
   let { onclose }: { onclose?: () => void } = $props();
 
-  let mode = $state<"select" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form">("select");
+  let mode = $state<"select" | "microsoft-webview" | "microsoft-code" | "microsoft-polling" | "microsoft-url" | "offline-form" | "yggdrasil-form">("select");
   let deviceCode = $state<{ userCode: string; verificationUri: string; interval?: number } | null>(null);
   let polling = $state(false);
   let errorMsg = $state("");
@@ -54,6 +54,39 @@
   }
 
   async function startMicrosoftLogin() {
+    clearPollTimer();
+    polling = false;
+    mode = "microsoft-webview";
+    errorMsg = "";
+    loggingIn = true;
+    try {
+      const result = await api.mcAuth.startMicrosoftWebviewAuth();
+      const state = await api.mcAuth.getAuthStatus();
+      authState.set(state);
+      if (result.profile.uuid) {
+        try {
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {
+          skinPath.set(null);
+        }
+      }
+      toasts.success(`Logged in as ${result.profile.name}`);
+      mode = "select";
+      setTimeout(() => onclose?.(), 600);
+    } catch (e) {
+      const msg = String(e);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        errorMsg = msg;
+      } else {
+        errorMsg = "";
+      }
+      mode = "select";
+    } finally {
+      loggingIn = false;
+    }
+  }
+
+  async function startDeviceCodeLogin() {
     mode = "microsoft-code";
     errorMsg = "";
     try {
@@ -314,6 +347,7 @@
         <h3>
           {#if mode === "offline-form"}Offline Login
           {:else if mode === "yggdrasil-form"}Yggdrasil Login
+          {:else if mode === "microsoft-webview"}Microsoft Login
           {:else if mode === "microsoft-polling"}Microsoft Login
           {:else if mode === "microsoft-url"}Microsoft Login (URL)
           {:else}Sign In{/if}
@@ -366,24 +400,13 @@
         {/if}
 
         <div class="login-options">
-          <button class="login-option" onclick={startMicrosoftLogin}>
+          <button class="login-option" onclick={startMicrosoftLogin} disabled={loggingIn}>
             <div class="option-icon ms">
               <Globe size={20} />
             </div>
             <div class="option-info">
               <span class="option-title">Microsoft / Mojang</span>
-              <span class="option-desc">Device code — online play, skins, Realms, capes</span>
-            </div>
-            <Check size={16} class="option-arrow" />
-          </button>
-
-          <button class="login-option" onclick={openMicrosoftUrlLogin}>
-            <div class="option-icon ms-url">
-              <Globe size={20} />
-            </div>
-            <div class="option-info">
-              <span class="option-title">Microsoft via URL</span>
-              <span class="option-desc">Browser login, then paste the redirect URL</span>
+              <span class="option-desc">Sign in in a popup — online play, skins, Realms, capes</span>
             </div>
             <Check size={16} class="option-arrow" />
           </button>
@@ -411,11 +434,34 @@
           </button>
         </div>
 
+        <div class="ms-other">
+          <span class="ms-other-label">Other Microsoft methods</span>
+          <button class="link-btn" type="button" onclick={startDeviceCodeLogin}>Device code</button>
+          <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>Paste redirect URL</button>
+        </div>
+
         {#if errorMsg}
           <div class="error-msg">{errorMsg}</div>
         {/if}
 
         <p class="hint">Offline mode fetches skins from Ely.by, TLauncher, or Mojang. Capes can be shown from OptiFine / TLauncher / Mojang.</p>
+
+      {:else if mode === "microsoft-webview"}
+        <div class="code-content">
+          <div class="polling-indicator">
+            <Loader2 size={16} class="spin" />
+            <span>Complete sign-in in the popup window…</span>
+          </div>
+          <p class="instruction">
+            A Microsoft login window opened. After you sign in it will close automatically.
+          </p>
+          {#if errorMsg}
+            <div class="error-msg">{errorMsg}</div>
+          {/if}
+          <button class="link-btn" type="button" onclick={() => { mode = "select"; errorMsg = ""; }}>
+            Back
+          </button>
+        </div>
 
       {:else if mode === "microsoft-polling" && deviceCode}
         <div class="code-content">
@@ -436,6 +482,9 @@
           <button class="link-btn" type="button" onclick={openMicrosoftUrlLogin}>
             Prefer paste URL instead?
           </button>
+          <button class="link-btn" type="button" onclick={startMicrosoftLogin}>
+            Use popup window instead?
+          </button>
           {#if errorMsg}
             <div class="error-msg">{errorMsg}</div>
           {/if}
@@ -445,7 +494,7 @@
         <form class="offline-form" onsubmit={(e) => { e.preventDefault(); submitMicrosoftUrlLogin(); }}>
           <p class="instruction url-steps">
             1. Sign in in the browser window<br />
-            2. When you land on a blank / “nativeclient” page, copy the full address from the address bar<br />
+            2. When you land on a blank / “oauth20_desktop” page, copy the full address from the address bar<br />
             3. Paste it below
           </p>
           <button class="secondary-btn" type="button" onclick={reopenMicrosoftAuthorize} disabled={loggingIn}>
@@ -456,7 +505,7 @@
             <textarea
               bind:value={authUrlPaste}
               rows={3}
-              placeholder="https://login.microsoftonline.com/common/oauth2/nativeclient?code=..."
+              placeholder="https://login.live.com/oauth20_desktop.srf?code=..."
               disabled={loggingIn}
             ></textarea>
           </label>
@@ -665,6 +714,20 @@
   }
 
   .login-options { display: flex; flex-direction: column; gap: 10px; }
+  .ms-other {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    margin-top: 10px;
+    justify-content: center;
+  }
+  .ms-other-label {
+    width: 100%;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
 
   .login-option {
     display: flex; align-items: center; gap: 14px; padding: 14px 16px;

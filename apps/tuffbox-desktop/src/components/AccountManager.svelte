@@ -136,37 +136,20 @@
     busy = true;
     errorMsg = "";
     try {
-      const info = await api.mcAuth.startDeviceCode();
-      try {
-        const { open } = await import("@tauri-apps/plugin-shell");
-        await open(info.verificationUri);
-      } catch {}
-
-      const deadline = Date.now() + 15 * 60 * 1000;
-      while (Date.now() < deadline) {
+      const result = await api.mcAuth.startMicrosoftWebviewAuth();
+      await loadAccounts();
+      if (result.profile.uuid) {
         try {
-          const result = await api.mcAuth.pollDeviceCode();
-          await loadAccounts();
-          if (result.profile.uuid) {
-            try {
-              skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
-            } catch {}
-          }
-          toasts.success(`Added ${result.profile.name}`);
-          mode = "list";
-          return;
-        } catch (e) {
-          const msg = String(e);
-          if (msg.includes("authorization_pending") || msg.includes("slow_down")) {
-            await new Promise((r) => setTimeout(r, 3500));
-            continue;
-          }
-          throw e;
-        }
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {}
       }
-      errorMsg = "Login timed out";
+      toasts.success(`Added ${result.profile.name}`);
+      mode = "list";
     } catch (e) {
-      errorMsg = String(e);
+      const msg = String(e);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        errorMsg = msg;
+      }
     } finally {
       busy = false;
     }
@@ -345,7 +328,7 @@
             <div class="option-icon ms"><Globe size={20} /></div>
             <div class="option-info">
               <span class="option-title">Microsoft Account</span>
-              <span class="option-desc">Online play, skins, Realms</span>
+              <span class="option-desc">Sign in in a popup — online play, skins, Realms</span>
             </div>
           </button>
 

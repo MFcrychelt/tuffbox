@@ -2,6 +2,8 @@
 node_modules/
 fix_mods.py
 patch_mods.sh
+*.pyc
+__pycache__/
 
 # Agent / MCP scratch (may contain project IDs and SQL payloads)
 tmp_mpi_chunks/

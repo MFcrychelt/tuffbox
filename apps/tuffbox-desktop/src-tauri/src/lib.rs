@@ -5,6 +5,7 @@ mod integrations;
 mod launcher_presence;
 mod launcher_settings;
 mod listing_api;
+mod mca_selector;
 mod pack_events;
 mod presence;
 mod quest_chat_api;
@@ -14596,6 +14597,7 @@ pub fn run() {
             list_quest_progress_teams,
             load_quest_progress,
             list_worlds,
+            mca_selector::open_mca_selector,
             list_content_packs,
             set_content_pack_enabled,
             list_mc_servers,
@@ -14754,6 +14756,7 @@ pub fn run() {
             auth::mc_poll_device_code,
             auth::mc_get_microsoft_login_url,
             auth::mc_login_with_auth_url,
+            auth::mc_start_microsoft_webview_auth,
             auth::mc_get_auth_status,
             auth::mc_logout,
             auth::mc_refresh_profile,

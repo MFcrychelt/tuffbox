@@ -1452,6 +1452,10 @@ export const api = {
     list(p?: string) { return cmd<WorldListItem[]>("list_worlds", pathArg(p)); },
     readInfo(worldName: string, p?: string) { return cmd<WorldDetail>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
+    /** Download/cache Querz MCA Selector and open it for this world (File → Open Recent). */
+    openMcaSelector(worldName: string, p?: string) {
+      return cmd<void>("open_mca_selector", { ...pathArg(p), worldName });
+    },
     dimensions(worldName: string, p?: string) {
       return cmd<string[]>("list_world_dimensions", { ...pathArg(p), worldName });
     },
@@ -2088,6 +2092,9 @@ export const api = {
     getMicrosoftLoginUrl() { return cmd<string>("mc_get_microsoft_login_url"); },
     loginWithAuthUrl(urlOrCode: string) {
       return cmd<{ profile: McProfile }>("mc_login_with_auth_url", { urlOrCode });
+    },
+    startMicrosoftWebviewAuth() {
+      return cmd<{ profile: McProfile }>("mc_start_microsoft_webview_auth");
     },
     offlineLogin(username: string, skinSource: SkinSource) {
       return cmd<{ profile: McProfile }>("mc_offline_login", { username, skinSource });
