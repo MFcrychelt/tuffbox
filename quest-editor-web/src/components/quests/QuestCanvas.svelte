@@ -5,6 +5,7 @@
   let {
     quests,
     selectedId = null,
+    selectedIds = new Set(),
     issues,
     emptyHint = "Double-click to add a quest",
     onSelect,
@@ -15,9 +16,10 @@
   }: {
     quests: QuestData[];
     selectedId?: string | null;
+    selectedIds?: Set<string>;
     issues: QuestValidationIssue[];
     emptyHint?: string;
-    onSelect: (q: QuestData | null) => void;
+    onSelect: (q: QuestData | null, e?: MouseEvent) => void;
     onMove: (q: QuestData, x: number, y: number) => void;
     onAddAt: (x: number, y: number) => void;
     onLink: (fromId: string, toDepId: string) => void;
@@ -33,7 +35,7 @@
   let panX = $state(0);
   let panY = $state(0);
 
-  let mode = $state<"idle" | "pan" | "drag" | "link">("idle");
+  let mode = $state<"idle" | "pan" | "drag" | "link" | "marquee">("idle");
   let panLast = $state<{ x: number; y: number } | null>(null);
   let dragQuest = $state<QuestData | null>(null);
   let dragMoved = $state(false);
@@ -43,6 +45,11 @@
   let linkCursor = $state<{ x: number; y: number } | null>(null);
   let spaceDown = $state(false);
   let lastFitToken = $state(-1);
+
+  // Marquee state
+  let marqueeStart = $state<{ x: number; y: number } | null>(null);
+  let marqueeEnd = $state<{ x: number; y: number } | null>(null);
+  let marqueeIds = $state<Set<string>>(new Set());
 
   let unit = $derived(BASE * zoom);
   let issueIds = $derived(new Set(issues.map((i) => i.questId)));
@@ -101,6 +108,13 @@
     return {
       x: (clientX - rect.left - panX) / unit,
       y: (clientY - rect.top - panY) / unit,
+    };
+  }
+
+  function worldToScreen(wx: number, wy: number) {
+    return {
+      x: wx * unit + panX,
+      y: wy * unit + panY,
     };
   }
 
@@ -165,7 +179,7 @@
         mode = "link";
         linkFrom = hit;
         linkCursor = clientToWorld(e.clientX, e.clientY);
-        onSelect(hit);
+        onSelect(hit, e);
         viewport.setPointerCapture(e.pointerId);
         e.preventDefault();
         return;
@@ -175,7 +189,18 @@
       dragMoved = false;
       const w = clientToWorld(e.clientX, e.clientY);
       dragOffset = { x: w.x - hit.x, y: w.y - hit.y };
-      onSelect(hit);
+      onSelect(hit, e);
+      viewport.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+
+    // Marquee selection on empty space
+    if (e.button === 0 && !hit && !e.shiftKey) {
+      mode = "marquee";
+      const w = clientToWorld(e.clientX, e.clientY);
+      marqueeStart = w;
+      marqueeEnd = w;
+      marqueeIds = new Set();
       viewport.setPointerCapture(e.pointerId);
       e.preventDefault();
     }
@@ -199,6 +224,22 @@
     if (mode === "link" && linkFrom) {
       linkCursor = clientToWorld(e.clientX, e.clientY);
     }
+    if (mode === "marquee" && marqueeStart) {
+      marqueeEnd = clientToWorld(e.clientX, e.clientY);
+      // Calculate which quests are in the marquee
+      const x1 = Math.min(marqueeStart.x, marqueeEnd.x);
+      const x2 = Math.max(marqueeStart.x, marqueeEnd.x);
+      const y1 = Math.min(marqueeStart.y, marqueeEnd.y);
+      const y2 = Math.max(marqueeStart.y, marqueeEnd.y);
+
+      const newIds = new Set<string>();
+      for (const q of quests) {
+        if (q.x >= x1 && q.x <= x2 && q.y >= y1 && q.y <= y2) {
+          newIds.add(q.id);
+        }
+      }
+      marqueeIds = newIds;
+    }
   }
 
   function onPointerUp(e: PointerEvent) {
@@ -208,6 +249,20 @@
     if (mode === "link" && linkFrom) {
       const hit = questAt(e.clientX, e.clientY);
       if (hit && hit.id !== linkFrom.id) onLink(linkFrom.id, hit.id);
+    }
+    if (mode === "marquee" && marqueeStart) {
+      // Select all quests in marquee
+      if (marqueeIds.size > 0) {
+        for (const id of marqueeIds) {
+          const q = quests.find((q) => q.id === id);
+          if (q) onSelect(q, e);
+        }
+      } else {
+        onSelect(null);
+      }
+      marqueeStart = null;
+      marqueeEnd = null;
+      marqueeIds = new Set();
     }
     mode = "idle";
     panLast = null;
@@ -260,6 +315,15 @@
     if (s && s !== "none") return s;
     return "rsquare";
   }
+
+  function marqueeRect() {
+    if (!marqueeStart || !marqueeEnd) return null;
+    const x1 = Math.min(marqueeStart.x, marqueeEnd.x) * unit + panX;
+    const y1 = Math.min(marqueeStart.y, marqueeEnd.y) * unit + panY;
+    const x2 = Math.max(marqueeStart.x, marqueeEnd.x) * unit + panX;
+    const y2 = Math.max(marqueeStart.y, marqueeEnd.y) * unit + panY;
+    return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+  }
 </script>
 
 <div class="canvas-wrap">
@@ -275,13 +339,14 @@
         onAddAt(snap(w.x), snap(w.y));
       }}
     >+ Add</button>
-    <span class="hint">Drag · Space pan · Wheel zoom · Shift+drag link · Dbl-click add</span>
+    <span class="hint">Drag · Space pan · Wheel zoom · Shift+drag link · Dbl-click add · Marquee select</span>
   </div>
 
   <div
     class="viewport"
     class:panning={mode === "pan" || spaceDown}
     class:linking={mode === "link"}
+    class:marquee={mode === "marquee"}
     bind:this={viewport}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
@@ -317,7 +382,7 @@
       {@const p = screenPos(q)}
       <div
         class="node-wrap"
-        class:sel={selectedId === q.id}
+        class:sel={selectedId === q.id || selectedIds.has(q.id)}
         class:issue={issueIds.has(q.id)}
         style="left:{p.left}px; top:{p.top}px; width:{p.size}px;"
         title={q.title}
@@ -332,6 +397,13 @@
       </div>
     {/each}
 
+    {#if marqueeRect()}
+      <div
+        class="marquee-rect"
+        style="left:{marqueeRect()!.x}px; top:{marqueeRect()!.y}px; width:{marqueeRect()!.width}px; height:{marqueeRect()!.height}px;"
+      ></div>
+    {/if}
+
     {#if quests.length === 0}
       <div class="empty-hint">{emptyHint}</div>
     {/if}
@@ -343,7 +415,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: #2b2b30;
+    background: var(--bg-tertiary);
     overflow: hidden;
   }
   .canvas-toolbar {
@@ -351,8 +423,8 @@
     align-items: center;
     gap: 6px;
     padding: 5px 8px;
-    border-bottom: 1px solid #3a3a42;
-    background: #212126;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
     flex-shrink: 0;
   }
   .tb {
@@ -361,33 +433,34 @@
     gap: 4px;
     padding: 4px 10px;
     border-radius: 2px;
-    border: 1px solid #3a3a42;
+    border: 1px solid var(--border);
     background: rgba(0,0,0,0.25);
-    color: #e8e8e8;
+    color: var(--text-primary);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
   }
-  .tb:hover { border-color: #3db8a8; background: rgba(61,184,168,0.12); }
-  .hint { margin-left: auto; font-size: 9px; color: #9a9aa0; }
+  .tb:hover { border-color: var(--accent); background: rgba(61,184,168,0.12); }
+  .hint { margin-left: auto; font-size: 9px; color: var(--text-muted); }
   .viewport {
     position: relative;
     flex: 1;
     overflow: hidden;
     cursor: default;
-    background-color: #2b2b30;
+    background-color: var(--bg-canvas);
     background-image:
-      repeating-linear-gradient(0deg, transparent, transparent 15px, rgba(255,255,255,0.03) 15px, rgba(255,255,255,0.03) 16px),
-      repeating-linear-gradient(90deg, transparent, transparent 15px, rgba(255,255,255,0.03) 15px, rgba(255,255,255,0.03) 16px);
+      repeating-linear-gradient(0deg, transparent, transparent 15px, var(--grid-line) 15px, var(--grid-line) 16px),
+      repeating-linear-gradient(90deg, transparent, transparent 15px, var(--grid-line) 15px, var(--grid-line) 16px);
     touch-action: none;
     user-select: none;
   }
   .viewport.panning { cursor: grabbing; }
   .viewport.linking { cursor: crosshair; }
+  .viewport.marquee { cursor: crosshair; }
   .edges { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
   .dep { stroke: #5c8a9e; stroke-width: 3; stroke-linecap: round; }
-  .dep.broken { stroke: #f2c94c; stroke-dasharray: 6 4; stroke-width: 2.5; }
-  .dep.link-preview { stroke: #3db8a8; stroke-dasharray: 6 4; stroke-width: 2.5; opacity: 0.85; }
+  .dep.broken { stroke: var(--warning); stroke-dasharray: 6 4; stroke-width: 2.5; }
+  .dep.link-preview { stroke: var(--accent); stroke-dasharray: 6 4; stroke-width: 2.5; opacity: 0.85; }
   .node-wrap {
     position: absolute;
     z-index: 2;
@@ -398,15 +471,15 @@
     pointer-events: none;
     cursor: grab;
   }
-  .node-wrap.sel .node-icon { outline: 2px solid #55c95a; outline-offset: 1px; }
-  .node-wrap.issue .node-icon { border-color: #f2c94c; }
+  .node-wrap.sel .node-icon { outline: 2px solid var(--node-selected); outline-offset: 1px; }
+  .node-wrap.issue .node-icon { border-color: var(--warning); }
   .node-icon {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    border: 2px solid #ffffff;
+    border: 2px solid var(--node-border);
     background: transparent;
     box-shadow: 0 1px 3px rgba(0,0,0,0.4);
   }
@@ -420,13 +493,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #18181c;
+    background: var(--node-bg);
     box-shadow: inset 0 2px 6px rgba(0,0,0,0.5);
   }
   .node-face.shape-diamond { border-radius: 0; clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%); }
   .node-face.shape-hexagon { clip-path: polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%); }
   .node-face.shape-pentagon { clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%); }
-  .glyph { color: #e8e8e8; font-weight: 800; }
+  .glyph { color: var(--text-primary); font-weight: 800; }
   .node-label {
     font-size: clamp(8px, 10px, 11px);
     line-height: 1.15;
@@ -436,18 +509,25 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #9a9aa0;
+    color: var(--text-muted);
     pointer-events: none;
     text-shadow: 0 1px 2px rgba(0,0,0,0.8);
   }
-  .node-wrap.sel .node-label { color: #e8e8e8; }
+  .node-wrap.sel .node-label { color: var(--text-primary); }
   .opt {
     position: absolute;
     top: -3px;
     right: -3px;
     font-size: 9px;
-    color: #f2c94c;
+    color: var(--warning);
     font-weight: 900;
+  }
+  .marquee-rect {
+    position: absolute;
+    border: 1px solid var(--accent);
+    background: rgba(61, 184, 168, 0.1);
+    pointer-events: none;
+    z-index: 10;
   }
   .empty-hint {
     position: absolute;
@@ -455,7 +535,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #9a9aa0;
+    color: var(--text-muted);
     font-size: 12px;
     pointer-events: none;
   }

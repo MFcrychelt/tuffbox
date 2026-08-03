@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { QuestChapter, QuestChapterGroup, QuestData, QuestValidationIssue, QuestBook } from "./lib/store";
   import { loadQuestBookFromSnbt, exportChapterSnbt, validateQuestBook, saveToStorage, loadFromStorage, clearStorage } from "./lib/store";
+  import { createHistoryState, pushSnapshot, undo as historyUndo, redo as historyRedo, canUndo, canRedo, clearHistory } from "./lib/history";
+  import { createSelectionState, selectSingle, toggleSelect, addToSelection, selectAll, clearSelection, type SelectionState } from "./lib/selection";
+  import { createSearchState, searchQuests, nextResult, prevResult, type SearchState } from "./lib/search";
+  import { loadTheme, saveTheme, toggleTheme, getThemeVars, type Theme } from "./lib/theme";
   import ChapterRail from "./components/quests/ChapterRail.svelte";
   import QuestCanvas from "./components/quests/QuestCanvas.svelte";
   import QuestInspector from "./components/quests/QuestInspector.svelte";
@@ -18,6 +22,23 @@
   let snbtFiles = $state<Map<string, string>>(new Map());
   let showImportHelp = $state(false);
 
+  // History state
+  let history = $state(createHistoryState());
+  let lastHistoryChapter = $state("");
+
+  // Selection state
+  let selection = $state<SelectionState>(createSelectionState());
+
+  // Search state
+  let search = $state<SearchState>(createSearchState());
+
+  // Theme state
+  let theme = $state<Theme>(loadTheme());
+  let themeVars = $derived(getThemeVars(theme));
+
+  // Clipboard for copy/paste
+  let clipboard = $state<QuestData[]>([]);
+
   // Load from localStorage on mount
   $effect(() => {
     const saved = loadFromStorage();
@@ -27,6 +48,8 @@
       bookTitle = saved.title ?? null;
       if (chapters.length > 0) selectedChapter = chapters[0].id;
       validationIssues = validateQuestBook({ chapters, chapterGroups });
+      // Push initial state to history
+      history = pushSnapshot(history, chapters, chapterGroups, selectedChapter);
     }
   });
 
@@ -46,13 +69,20 @@
     chapters = [...chapters];
   }
 
+  function pushHistory() {
+    history = pushSnapshot(history, chapters, chapterGroups, selectedChapter);
+    lastHistoryChapter = selectedChapter;
+  }
+
   function selectChapter(id: string) {
     selectedChapter = id;
     selectedQuest = null;
+    selection = clearSelection();
     fitToken += 1;
   }
 
   function createChapter() {
+    pushHistory();
     const n: QuestChapter = {
       id: `chapter_${Date.now().toString(16)}`,
       title: `Chapter ${chapters.length + 1}`,
@@ -68,6 +98,7 @@
 
   function addQuestAt(x: number, y: number) {
     if (!selectedChapter) return;
+    pushHistory();
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
     const newQ: QuestData = {
@@ -86,9 +117,11 @@
     ch.quests = [...ch.quests, newQ];
     markDirty(selectedChapter);
     selectedQuest = newQ;
+    selection = selectSingle(selection, newQ.id);
   }
 
   function removeQuest(q: QuestData) {
+    pushHistory();
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
     ch.quests = ch.quests.filter((x) => x.id !== q.id);
@@ -97,6 +130,21 @@
     }
     markDirty(selectedChapter);
     if (selectedQuest?.id === q.id) selectedQuest = null;
+    selection = clearSelection();
+  }
+
+  function removeSelectedQuests() {
+    if (selection.selectedIds.size === 0) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    ch.quests = ch.quests.filter((x) => !selection.selectedIds.has(x.id));
+    for (const other of ch.quests) {
+      other.dependencies = other.dependencies.filter((d) => !selection.selectedIds.has(d));
+    }
+    markDirty(selectedChapter);
+    selectedQuest = null;
+    selection = clearSelection();
   }
 
   function moveQuest(q: QuestData, x: number, y: number) {
@@ -104,6 +152,24 @@
     q.y = y;
     markDirty(selectedChapter);
     if (selectedQuest?.id === q.id) selectedQuest = q;
+  }
+
+  function moveSelectedQuests(dx: number, dy: number) {
+    if (selection.selectedIds.size === 0) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    for (const q of ch.quests) {
+      if (selection.selectedIds.has(q.id)) {
+        q.x += dx;
+        q.y += dy;
+      }
+    }
+    markDirty(selectedChapter);
+    // Update selectedQuest if it's in the selection
+    if (selectedQuest && selection.selectedIds.has(selectedQuest.id)) {
+      selectedQuest = { ...selectedQuest };
+    }
   }
 
   function wouldCycle(questId: string, depId: string, list: QuestData[]): boolean {
@@ -130,6 +196,7 @@
       error = "Dependency would create a cycle";
       return;
     }
+    pushHistory();
     error = null;
     q.dependencies = [...q.dependencies, depId];
     markDirty(selectedChapter);
@@ -137,6 +204,7 @@
   }
 
   function removeDep(q: QuestData, depId: string) {
+    pushHistory();
     q.dependencies = q.dependencies.filter((d) => d !== depId);
     markDirty(selectedChapter);
     selectedQuest = q;
@@ -149,6 +217,7 @@
   }
 
   function deleteChapter(id: string) {
+    pushHistory();
     chapters = chapters.filter((c) => c.id !== id);
     dirtyChapters = new Set([...dirtyChapters].filter((x) => x !== id));
     if (selectedChapter === id) {
@@ -162,6 +231,7 @@
     if (idx < 0) return;
     const j = idx + dir;
     if (j < 0 || j >= chapters.length) return;
+    pushHistory();
     const next = [...chapters];
     [next[idx], next[j]] = [next[j]!, next[idx]!];
     next.forEach((c, i) => {
@@ -169,6 +239,15 @@
       markDirty(c.id);
     });
     chapters = next;
+  }
+
+  function renameChapter(id: string, title: string) {
+    pushHistory();
+    const ch = chapters.find((c) => c.id === id);
+    if (ch) {
+      ch.title = title;
+      markDirty(id);
+    }
   }
 
   function exportAll() {
@@ -228,6 +307,7 @@
         return;
       }
       snbtFiles = fileMap;
+      pushHistory();
       const book = loadQuestBookFromSnbt(fileMap);
       if (book.chapters.length === 0) {
         error = "Could not parse any chapters from dropped files";
@@ -285,22 +365,202 @@
     showImportHelp = false;
   }
 
-  function handleKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-      e.preventDefault();
-      exportAll();
+  function handleUndo() {
+    const result = historyUndo(history, chapters, chapterGroups, selectedChapter);
+    if (result.snapshot) {
+      history = result.state;
+      chapters = JSON.parse(result.snapshot.chapters);
+      chapterGroups = JSON.parse(result.snapshot.chapterGroups);
+      selectedChapter = result.snapshot.selectedChapter;
+      selectedQuest = null;
+      selection = clearSelection();
+      validationIssues = validateQuestBook({ chapters, chapterGroups });
     }
+  }
+
+  function handleRedo() {
+    const result = historyRedo(history, chapters, chapterGroups, selectedChapter);
+    if (result.snapshot) {
+      history = result.state;
+      chapters = JSON.parse(result.snapshot.chapters);
+      chapterGroups = JSON.parse(result.snapshot.chapterGroups);
+      selectedChapter = result.snapshot.selectedChapter;
+      selectedQuest = null;
+      selection = clearSelection();
+      validationIssues = validateQuestBook({ chapters, chapterGroups });
+    }
+  }
+
+  function handleCopy() {
+    if (selection.selectedIds.size === 0) return;
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+    clipboard = ch.quests.filter((q) => selection.selectedIds.has(q.id));
+    message = `Copied ${clipboard.length} quest(s)`;
+  }
+
+  function handlePaste() {
+    if (clipboard.length === 0) return;
+    pushHistory();
+    const ch = chapters.find((c) => c.id === selectedChapter);
+    if (!ch) return;
+
+    const newIds = new Map<string, string>();
+    const newQuests: QuestData[] = [];
+
+    for (const q of clipboard) {
+      const newId = crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
+      newIds.set(q.id, newId);
+      newQuests.push({
+        ...q,
+        id: newId,
+        x: q.x + 1,
+        y: q.y + 1,
+        dependencies: q.dependencies.map((d) => newIds.get(d) ?? d),
+      });
+    }
+
+    ch.quests = [...ch.quests, ...newQuests];
+    markDirty(selectedChapter);
+    selection = selectAll(newQuests.map((q) => q.id));
+    message = `Pasted ${newQuests.length} quest(s)`;
+  }
+
+  function handleSelectAll() {
+    const ids = chapterQuests.map((q) => q.id);
+    selection = selectAll(ids);
+  }
+
+  function handleDelete() {
+    removeSelectedQuests();
+  }
+
+  function handleKeyDown(e: KeyboardEvent) {
+    const target = e.target as HTMLElement;
+    const isInput = target?.closest?.("input,textarea,select");
+
+    // Ctrl/Cmd shortcuts
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key.toLowerCase()) {
+        case "z":
+          e.preventDefault();
+          if (e.shiftKey) {
+            handleRedo();
+          } else {
+            handleUndo();
+          }
+          return;
+        case "y":
+          e.preventDefault();
+          handleRedo();
+          return;
+        case "c":
+          if (!isInput) {
+            e.preventDefault();
+            handleCopy();
+          }
+          return;
+        case "v":
+          if (!isInput) {
+            e.preventDefault();
+            handlePaste();
+          }
+          return;
+        case "a":
+          if (!isInput) {
+            e.preventDefault();
+            handleSelectAll();
+          }
+          return;
+        case "s":
+          e.preventDefault();
+          exportAll();
+          return;
+        case "f":
+          e.preventDefault();
+          search = { ...search, isOpen: !search.isOpen };
+          return;
+        case "0":
+          e.preventDefault();
+          fitToken += 1;
+          return;
+      }
+    }
+
+    // Escape
+    if (e.key === "Escape") {
+      if (search.isOpen) {
+        search = { ...search, isOpen: false };
+      } else {
+        selection = clearSelection();
+        selectedQuest = null;
+      }
+      return;
+    }
+
+    // Delete/Backspace
+    if (e.key === "Delete" || e.key === "Backspace") {
+      if (!isInput) {
+        e.preventDefault();
+        handleDelete();
+      }
+      return;
+    }
+
+    // Arrow keys for nudging
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      if (!isInput && selection.selectedIds.size > 0) {
+        e.preventDefault();
+        const step = e.shiftKey ? 5 : 1;
+        switch (e.key) {
+          case "ArrowUp": moveSelectedQuests(0, -step); break;
+          case "ArrowDown": moveSelectedQuests(0, step); break;
+          case "ArrowLeft": moveSelectedQuests(-step, 0); break;
+          case "ArrowRight": moveSelectedQuests(step, 0); break;
+        }
+      }
+    }
+  }
+
+  function handleSearchKeyDown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      if (e.shiftKey) {
+        search = prevResult(search);
+      } else {
+        search = nextResult(search);
+      }
+      // Navigate to result
+      const result = search.results[search.selectedIndex];
+      if (result) {
+        if (result.chapterId !== selectedChapter) {
+          selectChapter(result.chapterId);
+        }
+        selectedQuest = result.quest;
+        selection = selectSingle(selection, result.quest.id);
+        fitToken += 1;
+      }
+    }
+    if (e.key === "Escape") {
+      search = { ...search, isOpen: false };
+    }
+  }
+
+  function updateSearch(query: string) {
+    search = { ...search, query, results: searchQuests(query, chapters), selectedIndex: 0 };
   }
 
   function clearAll() {
     if (!confirm("Clear all chapters? This cannot be undone.")) return;
+    pushHistory();
     chapters = [];
     chapterGroups = [];
     bookTitle = null;
     selectedChapter = "";
     selectedQuest = null;
     dirtyChapters = new Set();
+    selection = clearSelection();
     clearStorage();
+    history = clearHistory();
     message = "Cleared";
   }
 
@@ -318,6 +578,7 @@
         fileMap.set(file.name, reader.result as string);
         pending--;
         if (pending === 0) {
+          pushHistory();
           const book = loadQuestBookFromSnbt(fileMap);
           if (book.chapters.length > 0) {
             chapters = book.chapters;
@@ -339,10 +600,11 @@
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeyDown} />
 
 <div
   class="app"
+  style={Object.entries(themeVars).map(([k, v]) => `${k}:${v}`).join(';')}
   ondrop={handleDrop}
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
@@ -365,8 +627,11 @@
       {/if}
     </div>
     <div class="toolbar-right">
+      <button type="button" class="btn ghost" onclick={handleUndo} disabled={!canUndo(history)} title="Undo (Ctrl+Z)">↩</button>
+      <button type="button" class="btn ghost" onclick={handleRedo} disabled={!canRedo(history)} title="Redo (Ctrl+Shift+Z)">↪</button>
       <button type="button" class="btn ghost" onclick={createChapter}>+ Chapter</button>
       <button type="button" class="btn ghost" onclick={exportAll} disabled={chapters.length === 0}>Export All</button>
+      <button type="button" class="btn ghost" onclick={() => theme = toggleTheme(theme)} title="Toggle theme">{theme === 'dark' ? '☀' : '☾'}</button>
       <button type="button" class="btn danger" onclick={clearAll} disabled={chapters.length === 0}>Clear</button>
     </div>
   </header>
@@ -381,6 +646,27 @@
   {#if showImportHelp}
     <div class="drop-overlay">
       <div class="drop-hint">Drop .snbt files or folders here</div>
+    </div>
+  {/if}
+
+  {#if search.isOpen}
+    <div class="search-panel">
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Search quests..."
+        value={search.query}
+        oninput={(e) => updateSearch((e.target as HTMLInputElement).value)}
+        onkeydown={handleSearchKeyDown}
+      />
+      <span class="search-count">
+        {#if search.results.length > 0}
+          {search.selectedIndex + 1} / {search.results.length}
+        {:else}
+          {search.query ? 'No results' : 'Type to search'}
+        {/if}
+      </span>
+      <button type="button" class="btn ghost" onclick={() => search = { ...search, isOpen: false }}>✕</button>
     </div>
   {/if}
 
@@ -410,15 +696,31 @@
         onDelete={deleteChapter}
         onMove={moveChapter}
         onExport={exportChapter}
+        onRename={renameChapter}
       />
       <div class="canvas-area">
         <QuestCanvas
           quests={chapterQuests}
           selectedId={selectedQuest?.id ?? null}
+          selectedIds={selection.selectedIds}
           issues={validationIssues}
           {fitToken}
           emptyHint="Double-click to add a quest"
-          onSelect={(q) => (selectedQuest = q)}
+          onSelect={(q, e) => {
+            if (!q) {
+              selection = clearSelection();
+              selectedQuest = null;
+              return;
+            }
+            if (e?.shiftKey) {
+              selection = toggleSelect(selection, q.id);
+            } else if (e?.ctrlKey || e?.metaKey) {
+              selection = addToSelection(selection, q.id);
+            } else {
+              selection = selectSingle(selection, q.id);
+            }
+            selectedQuest = q;
+          }}
           onMove={moveQuest}
           onAddAt={addQuestAt}
           onLink={linkQuests}
@@ -438,7 +740,20 @@
         <div class="chapter-info">
           <h3>{selectedChapterObj.title}</h3>
           <p>{selectedChapterObj.quests.length} quests</p>
+          {#if selection.selectedIds.size > 0}
+            <p class="hint">{selection.selectedIds.size} selected</p>
+          {/if}
           <p class="hint">Double-click canvas to add quest</p>
+          <div class="shortcuts">
+            <p><kbd>Ctrl+Z</kbd> Undo</p>
+            <p><kbd>Ctrl+Shift+Z</kbd> Redo</p>
+            <p><kbd>Ctrl+C</kbd> Copy</p>
+            <p><kbd>Ctrl+V</kbd> Paste</p>
+            <p><kbd>Ctrl+A</kbd> Select all</p>
+            <p><kbd>Ctrl+F</kbd> Search</p>
+            <p><kbd>Del</kbd> Delete selected</p>
+            <p><kbd>Arrows</kbd> Nudge</p>
+          </div>
         </div>
       {/if}
     </div>
@@ -449,30 +764,30 @@
   :global(*) { box-sizing: border-box; margin: 0; padding: 0; }
   :global(body) {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #1a1a1e;
-    color: #e8e8e8;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     overflow: hidden;
     height: 100vh;
   }
   :global(button) { cursor: pointer; border-radius: 2px; font-weight: 600; }
   :global(input), :global(select), :global(textarea) {
     border-radius: 2px;
-    border: 1px solid #3a3a42;
-    background: #1a1a1e;
-    color: #e8e8e8;
+    border: 1px solid var(--border);
+    background: var(--bg-primary);
+    color: var(--text-primary);
     padding: 6px 8px;
     font-size: 12px;
   }
   :global(input:focus), :global(select:focus), :global(textarea:focus) {
     outline: none;
-    border-color: #3db8a8;
+    border-color: var(--accent);
   }
 
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    background: #1a1a1e;
+    background: var(--bg-primary);
     position: relative;
   }
   .toolbar {
@@ -480,8 +795,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 16px;
-    background: #212126;
-    border-bottom: 1px solid #3a3a42;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     gap: 12px;
     z-index: 10;
@@ -492,38 +807,38 @@
   .logo {
     font-size: 14px;
     font-weight: 800;
-    color: #f2c94c;
+    color: var(--accent);
     letter-spacing: 0.02em;
   }
   .book-title {
     font-size: 12px;
-    color: #9a9aa0;
+    color: var(--text-muted);
   }
-  .stat { font-size: 11px; color: #9a9aa0; }
-  .stat.warn { color: #fbbf24; }
+  .stat { font-size: 11px; color: var(--text-muted); }
+  .stat.warn { color: var(--warning); }
   .dirty {
     font-size: 10px;
-    color: #f2c94c;
+    color: var(--warning);
     padding: 2px 8px;
-    background: rgba(242, 201, 76, 0.12);
-    border: 1px solid rgba(242, 201, 76, 0.25);
+    background: rgba(251, 191, 36, 0.12);
+    border: 1px solid rgba(251, 191, 36, 0.25);
     border-radius: 2px;
   }
   .btn {
     padding: 6px 12px;
-    border: 1px solid #3a3a42;
+    border: 1px solid var(--border);
     background: rgba(0,0,0,0.25);
-    color: #e8e8e8;
+    color: var(--text-primary);
     font-size: 12px;
     font-weight: 600;
     border-radius: 2px;
   }
-  .btn:hover:not(:disabled) { border-color: #3db8a8; background: rgba(61,184,168,0.12); }
+  .btn:hover:not(:disabled) { border-color: var(--accent); background: rgba(61,184,168,0.12); }
   .btn:disabled { opacity: 0.4; cursor: default; }
-  .btn.primary { border-color: #55c95a; background: rgba(85,201,90,0.18); color: #55c95a; }
+  .btn.primary { border-color: var(--success); background: rgba(85,201,90,0.18); color: var(--success); }
   .btn.primary:hover { background: rgba(85,201,90,0.28); }
-  .btn.danger { color: #f87171; }
-  .btn.danger:hover { border-color: #f87171; background: rgba(248,113,113,0.1); }
+  .btn.danger { color: var(--danger); }
+  .btn.danger:hover { border-color: var(--danger); background: rgba(248,113,113,0.1); }
   .file-label { display: inline-flex; align-items: center; cursor: pointer; }
 
   .notice {
@@ -533,13 +848,13 @@
     flex-shrink: 0;
   }
   .notice.error { background: rgba(239,68,68,0.1); color: #fecaca; border-bottom: 1px solid rgba(239,68,68,0.3); }
-  .notice.success { background: rgba(85,201,90,0.1); color: #55c95a; border-bottom: 1px solid rgba(85,201,90,0.3); }
+  .notice.success { background: rgba(85,201,90,0.1); color: var(--success); border-bottom: 1px solid rgba(85,201,90,0.3); }
 
   .drop-overlay {
     position: absolute;
     inset: 0;
     background: rgba(61,184,168,0.15);
-    border: 3px dashed #3db8a8;
+    border: 3px dashed var(--accent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -549,10 +864,30 @@
   .drop-hint {
     font-size: 18px;
     font-weight: 700;
-    color: #3db8a8;
+    color: var(--accent);
     padding: 24px 48px;
     background: rgba(26,26,30,0.9);
     border-radius: 8px;
+  }
+
+  .search-panel {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .search-input {
+    flex: 1;
+    max-width: 300px;
+    padding: 6px 12px;
+  }
+  .search-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 60px;
   }
 
   .empty {
@@ -562,10 +897,10 @@
     align-items: center;
     justify-content: center;
     gap: 12px;
-    color: #9a9aa0;
+    color: var(--text-muted);
   }
-  .empty-icon { font-size: 48px; color: #f2c94c; }
-  .empty h2 { font-size: 20px; color: #f2c94c; }
+  .empty-icon { font-size: 48px; color: var(--accent); }
+  .empty h2 { font-size: 20px; color: var(--accent); }
   .empty p { font-size: 13px; max-width: 400px; text-align: center; line-height: 1.5; }
   .empty code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 3px; }
   .empty-actions { display: flex; gap: 12px; margin-top: 8px; }
@@ -584,14 +919,35 @@
   }
   .chapter-info {
     width: 260px;
-    background: #212126;
-    border-left: 1px solid #3a3a42;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
     padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  .chapter-info h3 { font-size: 14px; color: #f2c94c; }
-  .chapter-info p { font-size: 12px; color: #9a9aa0; }
-  .hint { font-size: 11px; color: #9a9aa0; }
+  .chapter-info h3 { font-size: 14px; color: var(--accent); }
+  .chapter-info p { font-size: 12px; color: var(--text-muted); }
+  .hint { font-size: 11px; color: var(--text-muted); }
+
+  .shortcuts {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .shortcuts p {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .shortcuts kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: monospace;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    margin-right: 4px;
+  }
 </style>

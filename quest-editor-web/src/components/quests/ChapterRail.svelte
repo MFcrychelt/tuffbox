@@ -12,6 +12,7 @@
     onDelete,
     onMove,
     onExport,
+    onRename,
   }: {
     chapters: QuestChapter[];
     chapterGroups?: QuestChapterGroup[];
@@ -23,6 +24,7 @@
     onDelete: (id: string) => void;
     onMove: (id: string, dir: -1 | 1) => void;
     onExport: (id: string) => void;
+    onRename: (id: string, title: string) => void;
   } = $props();
 
   let editingId = $state<string | null>(null);
@@ -44,8 +46,7 @@
   function commitTitle(ch: QuestChapter, value: string) {
     const next = value.trim();
     if (next && next !== ch.title) {
-      ch.title = next;
-      onDirty(ch.id);
+      onRename(ch.id, next);
     }
     editingId = null;
   }
@@ -103,8 +104,8 @@
     width: 200px;
     display: flex;
     flex-direction: column;
-    background: #212126;
-    border-right: 1px solid #3a3a42;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
     flex-shrink: 0;
   }
   .rail-h {
@@ -112,14 +113,14 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 10px;
-    border-bottom: 1px solid #3a3a42;
+    border-bottom: 1px solid var(--border);
     background: rgba(0,0,0,0.15);
   }
   .rail-h h3 {
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #9a9aa0;
+    color: var(--text-muted);
     font-weight: 700;
   }
   .ico {
@@ -128,14 +129,14 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 1px solid #3a3a42;
+    border: 1px solid var(--border);
     background: rgba(0,0,0,0.25);
-    color: #9a9aa0;
+    color: var(--text-muted);
     border-radius: 2px;
     font-size: 14px;
     cursor: pointer;
   }
-  .ico:hover { color: #e8e8e8; border-color: #3db8a8; }
+  .ico:hover { color: var(--text-primary); border-color: var(--accent); }
   .rail-list {
     flex: 1;
     overflow: auto;
@@ -146,7 +147,7 @@
     align-items: stretch;
     border-left: 3px solid transparent;
   }
-  .ch-wrap.sel { background: rgba(85,201,90,0.12); border-left-color: #55c95a; }
+  .ch-wrap.sel { background: rgba(85,201,90,0.12); border-left-color: var(--success); }
   .ch-wrap.dirty:not(.sel) { border-left-color: rgba(242,201,76,0.4); }
   .ch-row {
     flex: 1;
@@ -156,7 +157,7 @@
     padding: 6px 8px;
     border: none;
     background: transparent;
-    color: #e8e8e8;
+    color: var(--text-primary);
     text-align: left;
     cursor: pointer;
     min-width: 0;
@@ -167,16 +168,16 @@
     height: 22px;
     flex-shrink: 0;
     border-radius: 2px;
-    background: #18181c;
-    border: 2px solid #3a3a42;
+    background: var(--node-bg);
+    border: 2px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 10px;
     font-weight: 800;
-    color: #e8e8e8;
+    color: var(--text-primary);
   }
-  .ch-wrap.sel .glyph { border-color: #55c95a; }
+  .ch-wrap.sel .glyph { border-color: var(--success); }
   .ch-text {
     display: grid;
     gap: 1px;
@@ -189,14 +190,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .ch-text span { font-size: 9px; color: #9a9aa0; }
+  .ch-text span { font-size: 9px; color: var(--text-muted); }
   .title-edit {
     font-size: 12px;
     font-weight: 600;
     padding: 2px 4px;
     width: 100%;
   }
-  .dot { color: #f2c94c; font-size: 10px; }
+  .dot { color: var(--warning); font-size: 10px; }
   .ch-actions {
     display: flex;
     flex-direction: column;
@@ -214,12 +215,12 @@
     justify-content: center;
     border: none;
     background: transparent;
-    color: #9a9aa0;
+    color: var(--text-muted);
     font-size: 10px;
     cursor: pointer;
     border-radius: 2px;
     padding: 0;
   }
-  .ico-sm:hover { color: #e8e8e8; background: rgba(255,255,255,0.08); }
-  .ico-sm.danger:hover { color: #f87171; }
+  .ico-sm:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }
+  .ico-sm.danger:hover { color: var(--danger); }
 </style>

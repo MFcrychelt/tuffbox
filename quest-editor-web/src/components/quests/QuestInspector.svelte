@@ -174,8 +174,8 @@
 <style>
   .insp {
     width: 280px;
-    background: #212126;
-    border-left: 1px solid #3a3a42;
+    background: var(--bg-secondary);
+    border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     overflow: auto;
@@ -186,13 +186,13 @@
     justify-content: space-between;
     align-items: center;
     padding: 10px 12px;
-    border-bottom: 1px solid #3a3a42;
+    border-bottom: 1px solid var(--border);
     background: rgba(0,0,0,0.2);
   }
   .insp-h h3 {
     font-size: 14px;
     font-weight: 700;
-    color: #f2c94c;
+    color: var(--accent);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -200,10 +200,10 @@
   .qid {
     display: block;
     font-size: 9px;
-    color: #9a9aa0;
+    color: var(--text-muted);
     padding: 4px 12px 8px;
     word-break: break-all;
-    border-bottom: 1px solid #3a3a42;
+    border-bottom: 1px solid var(--border);
   }
   .val-warn {
     padding: 8px 10px;
@@ -224,7 +224,7 @@
     display: grid;
     gap: 4px;
     font-size: 10px;
-    color: #9a9aa0;
+    color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
@@ -238,20 +238,20 @@
     align-items: center;
     gap: 8px;
     text-transform: none;
-    color: #e8e8e8;
+    color: var(--text-primary);
   }
   .xy { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   .adv-tog {
     background: transparent;
     border: none;
-    color: #9a9aa0;
+    color: var(--text-muted);
     font-size: 11px;
     text-align: left;
     padding: 6px 12px;
     cursor: pointer;
-    border-top: 1px solid #3a3a42;
+    border-top: 1px solid var(--border);
   }
-  .adv-tog:hover { color: #e8e8e8; }
+  .adv-tog:hover { color: var(--text-primary); }
   .flags { padding-top: 0; }
   h4 {
     margin: 0;
@@ -259,10 +259,10 @@
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: #3db8a8;
+    color: var(--accent);
     background: rgba(0,0,0,0.15);
-    border-top: 1px solid #3a3a42;
-    border-bottom: 1px solid #3a3a42;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
     font-weight: 700;
   }
   .deps {
@@ -279,17 +279,17 @@
     background: rgba(92,138,158,0.15);
     border: 1px solid rgba(92,138,158,0.35);
     font-size: 11px;
-    color: #e8e8e8;
+    color: var(--text-primary);
     border-radius: 2px;
   }
   .dep-rm {
     border: none;
     background: transparent;
-    color: #9a9aa0;
+    color: var(--text-muted);
     cursor: pointer;
     padding: 0;
   }
-  .dep-rm:hover { color: #f87171; }
+  .dep-rm:hover { color: var(--danger); }
   .dep-add {
     display: flex;
     gap: 6px;
@@ -302,19 +302,19 @@
   .add-btn {
     font-size: 11px;
     padding: 4px 10px;
-    border: 1px solid #3a3a42;
+    border: 1px solid var(--border);
     background: rgba(0,0,0,0.25);
-    color: #e8e8e8;
+    color: var(--text-primary);
     border-radius: 2px;
   }
-  .add-btn:hover:not(:disabled) { border-color: #3db8a8; }
+  .add-btn:hover:not(:disabled) { border-color: var(--accent); }
   .add-btn:disabled { opacity: 0.4; }
   .ico {
     border: none;
     background: transparent;
-    color: #9a9aa0;
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 16px;
   }
-  .ico.danger:hover { color: #f87171; }
+  .ico.danger:hover { color: var(--danger); }
 </style>
