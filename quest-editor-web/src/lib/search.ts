@@ -9,7 +9,7 @@ export interface SearchResult {
   quest: QuestData;
   chapterId: string;
   chapterTitle: string;
-  matchField: "title" | "id" | "description";
+  matchField: "title" | "subtitle" | "id" | "description";
   matchText: string;
 }
 
@@ -48,6 +48,18 @@ export function searchQuests(
           chapterTitle: ch.title,
           matchField: "title",
           matchText: q.title,
+        });
+        continue;
+      }
+
+      // Search by subtitle
+      if (q.subtitle && q.subtitle.toLowerCase().includes(lower)) {
+        results.push({
+          quest: q,
+          chapterId: ch.id,
+          chapterTitle: ch.title,
+          matchField: "subtitle",
+          matchText: q.subtitle,
         });
         continue;
       }

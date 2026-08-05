@@ -10,6 +10,9 @@
   import ChapterRail from "./components/quests/ChapterRail.svelte";
   import QuestCanvas from "./components/quests/QuestCanvas.svelte";
   import QuestInspector from "./components/quests/QuestInspector.svelte";
+  import BatchEditor from "./components/quests/BatchEditor.svelte";
+  import ColorManager from "./components/quests/ColorManager.svelte";
+  import RawSnbtView from "./components/quests/RawSnbtView.svelte";
 
   let chapters = $state<QuestChapter[]>([]);
   let chapterGroups = $state<QuestChapterGroup[]>([]);
@@ -43,6 +46,9 @@
 
   // Shortcuts modal
   let showShortcuts = $state(false);
+
+  // Panel tab state (for when no quest is selected)
+  let panelTab = $state<"info" | "batch" | "colors" | "raw">("info");
 
   // Load from localStorage on mount
   $effect(() => {
@@ -598,6 +604,15 @@
     message = "Cleared";
   }
 
+  function handleQuestUpdate(chapterId: string, updatedQuest: QuestData) {
+    pushHistory();
+    const ch = chapters.find((c) => c.id === chapterId);
+    if (!ch) return;
+    ch.quests = ch.quests.map((q) => q.id === updatedQuest.id ? updatedQuest : q);
+    markDirty(chapterId);
+    if (selectedQuest?.id === updatedQuest.id) selectedQuest = updatedQuest;
+  }
+
   function handleFileImport(e: Event) {
     const input = e.target as HTMLInputElement;
     const files = input.files;
@@ -763,6 +778,7 @@
           onMove={moveQuest}
           onAddAt={addQuestAt}
           onLink={linkQuests}
+          onSelectMultiple={(ids) => { selection = selectAll(ids); }}
         />
       </div>
       {#if selectedQuest}
@@ -776,23 +792,52 @@
           onRemoveDep={(id) => { if (selectedQuest) removeDep(selectedQuest, id); }}
         />
       {:else if selectedChapterObj}
-        <div class="chapter-info">
-          <h3>{selectedChapterObj.title}</h3>
-          <p>{selectedChapterObj.quests.length} quests</p>
-          {#if selection.selectedIds.size > 0}
-            <p class="hint">{selection.selectedIds.size} selected</p>
-          {/if}
-          <p class="hint">Double-click canvas to add quest</p>
-          <div class="shortcuts">
-            <p><kbd>Ctrl+Z</kbd> Undo</p>
-            <p><kbd>Ctrl+Shift+Z</kbd> Redo</p>
-            <p><kbd>Ctrl+C</kbd> Copy</p>
-            <p><kbd>Ctrl+V</kbd> Paste</p>
-            <p><kbd>Ctrl+A</kbd> Select all</p>
-            <p><kbd>Ctrl+F</kbd> Search</p>
-            <p><kbd>Ctrl+/</kbd> All shortcuts</p>
-            <p><kbd>Del</kbd> Delete selected</p>
-            <p><kbd>Arrows</kbd> Nudge</p>
+        <div class="side-panel">
+          <div class="panel-tabs">
+            <button type="button" class="tab" class:active={panelTab === "info"}
+              onclick={() => panelTab = "info"}>Info</button>
+            <button type="button" class="tab" class:active={panelTab === "batch"}
+              onclick={() => panelTab = "batch"}>Batch</button>
+            <button type="button" class="tab" class:active={panelTab === "colors"}
+              onclick={() => panelTab = "colors"}>Colors</button>
+            <button type="button" class="tab" class:active={panelTab === "raw"}
+              onclick={() => panelTab = "raw"}>Raw</button>
+          </div>
+          <div class="panel-content">
+            {#if panelTab === "info"}
+              <div class="chapter-info">
+                <h3>{selectedChapterObj.title}</h3>
+                <p>{selectedChapterObj.quests.length} quests</p>
+                {#if selection.selectedIds.size > 0}
+                  <p class="hint">{selection.selectedIds.size} selected</p>
+                {/if}
+                <p class="hint">Double-click canvas to add quest</p>
+                <div class="shortcuts">
+                  <p><kbd>Ctrl+Z</kbd> Undo</p>
+                  <p><kbd>Ctrl+Shift+Z</kbd> Redo</p>
+                  <p><kbd>Ctrl+C</kbd> Copy</p>
+                  <p><kbd>Ctrl+V</kbd> Paste</p>
+                  <p><kbd>Ctrl+A</kbd> Select all</p>
+                  <p><kbd>Ctrl+F</kbd> Search</p>
+                  <p><kbd>Ctrl+/</kbd> All shortcuts</p>
+                  <p><kbd>Del</kbd> Delete selected</p>
+                  <p><kbd>Arrows</kbd> Nudge</p>
+                </div>
+              </div>
+            {:else if panelTab === "batch"}
+              <BatchEditor
+                {chapters}
+                onQuestUpdate={handleQuestUpdate}
+                onExportChapter={exportChapter}
+              />
+            {:else if panelTab === "colors"}
+              <ColorManager
+                {chapters}
+                onQuestUpdate={handleQuestUpdate}
+              />
+            {:else if panelTab === "raw"}
+              <RawSnbtView chapter={selectedChapterObj} />
+            {/if}
           </div>
         </div>
       {/if}
@@ -966,10 +1011,43 @@
     display: flex;
     flex-direction: column;
   }
-  .chapter-info {
-    width: 260px;
+  .side-panel {
+    width: 320px;
     background: var(--bg-secondary);
     border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .panel-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tab {
+    flex: 1;
+    padding: 8px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .tab:hover { color: var(--text-primary); }
+  .tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .panel-content {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .chapter-info {
     padding: 16px;
     display: flex;
     flex-direction: column;

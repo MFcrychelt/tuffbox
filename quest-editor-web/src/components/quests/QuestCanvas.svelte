@@ -13,6 +13,7 @@
     onMove,
     onAddAt,
     onLink,
+    onSelectMultiple,
     fitToken = 0,
   }: {
     quests: QuestData[];
@@ -24,6 +25,7 @@
     onMove: (q: QuestData, x: number, y: number) => void;
     onAddAt: (x: number, y: number) => void;
     onLink: (fromId: string, toDepId: string) => void;
+    onSelectMultiple: (ids: string[]) => void;
     fitToken?: number;
   } = $props();
 
@@ -274,10 +276,7 @@
     if (mode === "marquee" && marqueeStart) {
       // Select all quests in marquee
       if (marqueeIds.size > 0) {
-        for (const id of marqueeIds) {
-          const q = quests.find((q) => q.id === id);
-          if (q) onSelect(q, e);
-        }
+        onSelectMultiple(Array.from(marqueeIds));
       } else {
         onSelect(null);
       }
