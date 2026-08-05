@@ -1,6 +1,7 @@
 mod auth;
 mod cosmetics_local;
 mod create_mode_api;
+mod helpers;
 mod integrations;
 mod launcher_presence;
 mod launcher_settings;
@@ -12,6 +13,7 @@ mod quest_chat_api;
 mod swarm_api;
 mod swarm_node;
 mod task_progress_api;
+mod types;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -31,187 +33,7 @@ use tauri::Emitter;
 /// cannot overwrite an in-flight Update All / single update.
 static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectSummary {
-    id: String,
-    name: String,
-    version: String,
-    minecraft_version: String,
-    loader_kind: String,
-    loader_version: String,
-    java_path: Option<String>,
-    memory_mb: u32,
-    jvm_args: Vec<String>,
-    player_name: String,
-    /// Canonical manifest file path (may differ from the path passed in).
-    manifest_path: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ConfigFileSummary {
-    path: String,
-    name: String,
-    extension: String,
-    size: u64,
-    modified: Option<u64>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SchemaStatus {
-    current: String,
-    detected: String,
-    needs_migration: bool,
-    supported: Vec<String>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileSummary {
-    id: String,
-    name: String,
-    side: String,
-    memory_mb: Option<u32>,
-    jvm_args: Vec<String>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProjectChangeEntry {
-    id: String,
-    snapshot_id: String,
-    operation: String,
-    reason: String,
-    created_at: String,
-    path: String,
-    category: String,
-    kind: String,
-    preview: String,
-    diff: String,
-    can_open: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    tags: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    crash_fingerprint_key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    plan_source: Option<String>,
-    #[serde(default)]
-    actor: String,
-    #[serde(default)]
-    op: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryFileContent {
-    path: String,
-    content: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HistorySettings {
-    tracked: std::collections::HashMap<String, bool>,
-    /// When true, IdeWorkspace debounces scan_project_changes while IDE is focused.
-    #[serde(default)]
-    focused_scan: bool,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ModInstallDependent {
-    id: String,
-    slug: String,
-    name: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ModInstallPreview {
-    project_id: String,
-    slug: String,
-    name: String,
-    version: String,
-    file_name: Option<String>,
-    side: String,
-    dependencies: Vec<tuffbox_core::ModDependencySpec>,
-    /// Top-N Modrinth projects that require this one (search facet; may be empty).
-    #[serde(default)]
-    dependents: Vec<ModInstallDependent>,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct TestRunRecord {
-    id: String,
-    profile: String,
-    started_at: String,
-    status: String,
-    log_path: String,
-    duration_seconds: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    verdict_reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    captured_paths: Vec<String>,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReleaseSnapshotResult {
-    snapshot: tuffbox_core::Snapshot,
-    changelog_path: String,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct ReleaseArtifactRecord {
-    id: String,
-    kind: String,
-    path: String,
-    created_at: String,
-    file_count: usize,
-    override_count: usize,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReleaseDraftResult {
-    draft_path: String,
-    metadata_path: String,
-    artifact_count: usize,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotFileDiff {
-    path: String,
-    from_exists: bool,
-    to_exists: bool,
-    text: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotChangedFile {
-    path: String,
-    category: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SnapshotDetail {
-    snapshot: tuffbox_core::Snapshot,
-    /// Resolved human-readable action lines (meta or synthesized).
-    actions_summary: Vec<String>,
-    related_events: Vec<pack_events::PackEvent>,
-    plan_actions: Vec<tuffbox_core::action_plan::LauncherAction>,
-    human_explanation: Option<String>,
-    changed_files: Vec<SnapshotChangedFile>,
-    /// True when rollback only restores manifest/lockfile (empty changed_files).
-    manifest_only: bool,
-}
+use types::*;
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_project_schema_status(path: String) -> Result<SchemaStatus, String> {
@@ -937,13 +759,6 @@ async fn list_mods(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || list_mods_impl(&path))
         .await
         .map_err(|e| e.to_string())?
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PagedCatalog {
-    results: Vec<serde_json::Value>,
-    total: u32,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1685,16 +1500,6 @@ async fn get_modrinth_pack_download(project_id: String) -> Result<String, String
 /// `ratings` stores per-mod star ratings (0–5).
 /// Stored as JSON under `.tuffbox/` so it survives restarts without
 /// polluting the manifest.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ModUserState {
-    #[serde(default)]
-    favorites: std::collections::HashMap<String, bool>,
-    #[serde(default)]
-    lists: std::collections::HashMap<String, Vec<String>>,
-    #[serde(default)]
-    ratings: std::collections::HashMap<String, u8>,
-}
 
 fn mod_user_state_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".tuffbox").join("mods_user_state.json")
@@ -3268,12 +3073,6 @@ fn read_config_file(path: String, relative_path: String) -> Result<String, Strin
     std::fs::read_to_string(target).map_err(|e| e.to_string())
 }
 
-#[derive(Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WriteConfigResult {
-    snapshot_id: String,
-}
-
 #[tauri::command(rename_all = "camelCase")]
 fn write_config_file(
     path: String,
@@ -3409,24 +3208,6 @@ fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Valu
 }
 
 /// ── Launch statistics (like NitroLaunch stats plugin) ──────────
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
-struct LaunchStats {
-    #[serde(default)]
-    launches: u64,
-    #[serde(default)]
-    crashes: u64,
-    #[serde(default)]
-    last_launch: Option<String>,
-    #[serde(default)]
-    total_playtime_seconds: u64,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
-struct ProjectStats {
-    #[serde(default)]
-    instances: std::collections::HashMap<String, LaunchStats>,
-}
 
 fn stats_path(project_dir: &std::path::Path) -> std::path::PathBuf {
     project_dir.join(".tuffbox").join("stats.json")
@@ -4130,19 +3911,6 @@ fn audit_performance(path: String) -> Result<Vec<serde_json::Value>, String> {
 }
 
 /// ── Optimize pack (curated + custom) ───────────────────────────────
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OptimizeModOffer {
-    slug: String,
-    name: String,
-    provider: String,
-    project_id: String,
-    version_id: Option<String>,
-    reason: String,
-    risk: String,
-    already_installed: bool,
-}
 
 fn loader_slug_for_manifest(manifest: &ProjectManifest) -> String {
     tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()
@@ -5178,21 +4946,6 @@ fn compare_modpacks(path_a: String, path_b: String) -> Result<serde_json::Value,
 
 /// ── Backup system (like NitroLaunch backup plugin) ──────────────
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct BackupIndex {
-    backups: Vec<BackupEntry>,
-    max_count: u32,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-struct BackupEntry {
-    id: String,
-    name: String,
-    created_at: String,
-    size_bytes: u64,
-    manifest_snapshot: bool,
-}
-
 fn backup_dir(project_dir: &Path) -> PathBuf {
     project_dir.join(".tuffbox").join("backups")
 }
@@ -6225,17 +5978,6 @@ fn apply_launcher_edit_config(
     }
     std::fs::write(&target, new_content).map_err(|e| e.to_string())?;
     Ok(format!("edited config {relative}"))
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CrashAiFeedbackPayload {
-    helped: bool,
-    fingerprint_key: Option<String>,
-    human_explanation: Option<String>,
-    suspected_mods: Option<Vec<String>>,
-    recommended_actions: Option<Vec<tuffbox_core::ai_explanation::AiAction>>,
-    report_id: Option<String>,
 }
 
 /// Record Helped/Wrong feedback into the project crash knowledge base.
@@ -8075,13 +7817,6 @@ fn list_world_dimensions(path: String, world_name: String) -> Result<Vec<String>
 }
 
 /// A region coordinate paired with the local chunk indices (0..1024) to clear.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChunkSelection {
-    region_x: i32,
-    region_z: i32,
-    indices: Vec<usize>,
-}
 
 /// Deletes selected chunks from a world's region files, mirroring mcaselector.
 /// Each selection maps a region coordinate to the local chunk indices to clear.
@@ -10925,17 +10660,6 @@ fn clear_discord_presence() -> Result<(), String> {
     presence::clear_activity()
 }
 
-/// Context captured at launch time, used to analyze a crash when the JVM
-/// exits with a non-zero code.
-struct CrashExitCtx {
-    log_path: PathBuf,
-    mc_version: String,
-    java_version: String,
-    loader_kind: String,
-    loader_version: String,
-    game_dir: PathBuf,
-}
-
 /// Read the installed mod JAR names from a game directory (best-effort).
 fn read_installed_mods(game_dir: &PathBuf) -> Vec<String> {
     std::fs::read_dir(game_dir.join("mods"))
@@ -12323,15 +12047,6 @@ fn update_project_settings(
 }
 
 /// ── Pinning & session state persisted to .tuffbox/data.json ─────────
-
-#[derive(Debug, serde::Serialize, serde::Deserialize, Default)]
-#[allow(dead_code)]
-struct LauncherDataState {
-    #[serde(default)]
-    pinned: std::collections::HashSet<String>,
-    #[serde(default)]
-    last_opened: Option<String>,
-}
 
 #[allow(dead_code)]
 fn launcher_data_path(project_dir: &Path) -> PathBuf {
@@ -13977,26 +13692,6 @@ fn kill_running_instance(instance_id: String) -> Result<String, String> {
     Ok(format!("Killed {n} process(es) for {instance_id}"))
 }
 
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InstanceLiveStats {
-    pid: u32,
-    profile: String,
-    started_at: u64,
-    cpu_percent: f32,
-    memory_mb: u64,
-    virtual_memory_mb: u64,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LiveDebugStats {
-    host_cpu_percent: f32,
-    host_memory_used_mb: u64,
-    host_memory_total_mb: u64,
-    instance: Option<InstanceLiveStats>,
-}
-
 /// Cached sysinfo sampler so successive polls get real CPU deltas (no sleep).
 fn live_sys() -> std::sync::MutexGuard<'static, sysinfo::System> {
     static SYS: once_cell::sync::Lazy<std::sync::Mutex<sysinfo::System>> =
@@ -14095,28 +13790,6 @@ fn download_project_mods(
                 .unwrap_or_default()
         });
     tuffbox_core::ensure_project_mods_downloaded(manifest, &instance_dir)
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ModDownloadProgressPayload {
-    id: String,
-    name: String,
-    downloaded: u64,
-    total: u64,
-    percent: u32,
-    status: String,
-}
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ModUpdateProgressPayload {
-    phase: String,
-    message: String,
-    current: usize,
-    total: usize,
-    percent: u32,
-    mod_id: Option<String>,
 }
 
 fn emit_mod_update_progress(
