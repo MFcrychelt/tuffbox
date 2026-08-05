@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { QuestData, QuestValidationIssue } from "../../lib/store";
+  import type { QuestData, QuestTask, QuestReward, QuestValidationIssue } from "../../lib/store";
 
   let {
     quest,
@@ -24,6 +24,8 @@
   let depPick = $state("");
   let descText = $state("");
   let showAdvanced = $state(false);
+  let showTasks = $state(true);
+  let showRewards = $state(true);
 
   let depOptions = $derived(buildDepOptions(chapterQuests, quest));
   let myIssues = $derived(issues.filter((i) => i.questId === quest.id));
@@ -76,6 +78,32 @@
   function triVal(v: boolean | null | undefined): string {
     return v === true ? "true" : v === false ? "false" : "";
   }
+
+  function taskTypeLabel(type: string): string {
+    const labels: Record<string, string> = {
+      checkmark: "Checkmark",
+      counter: "Counter",
+      resource: "Resource",
+      location: "Location",
+      recipe: "Recipe",
+      item: "Item",
+      fluid: "Fluid",
+      experience: "Experience",
+      priority: "Priority",
+      score: "Score",
+    };
+    return labels[type] ?? type;
+  }
+
+  function rewardTypeLabel(type: string): string {
+    const labels: Record<string, string> = {
+      command: "Command",
+      item: "Item",
+      xp: "XP",
+      luck: "Loot",
+    };
+    return labels[type] ?? type;
+  }
 </script>
 
 <aside class="insp">
@@ -96,6 +124,7 @@
   <div class="fields">
     <label>Title <input bind:value={quest.title} oninput={onDirty} /></label>
     <label>Subtitle <input bind:value={quest.subtitle} oninput={onDirty} placeholder="Optional" /></label>
+    <label>Icon <input bind:value={quest.icon} oninput={onDirty} placeholder="minecraft:stone" /></label>
     <label>
       Description
       <textarea
@@ -151,6 +180,45 @@
     </div>
   {/if}
 
+  <!-- Tasks -->
+  <button type="button" class="adv-tog" onclick={() => (showTasks = !showTasks)}>
+    {showTasks ? "▾" : "▸"} Tasks ({quest.tasks?.length ?? 0})
+  </button>
+  {#if showTasks}
+    <div class="task-reward-list">
+      {#if quest.tasks?.length}
+        {#each quest.tasks as task (task.id)}
+          <div class="tr-item">
+            <span class="tr-type">{taskTypeLabel(task.type)}</span>
+            <span class="tr-title">{task.title ?? task.id}</span>
+          </div>
+        {/each}
+      {:else}
+        <div class="tr-empty">No tasks</div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Rewards -->
+  <button type="button" class="adv-tog" onclick={() => (showRewards = !showRewards)}>
+    {showRewards ? "▾" : "▸"} Rewards ({quest.rewards?.length ?? 0})
+  </button>
+  {#if showRewards}
+    <div class="task-reward-list">
+      {#if quest.rewards?.length}
+        {#each quest.rewards as reward (reward.id)}
+          <div class="tr-item">
+            <span class="tr-type">{rewardTypeLabel(reward.type)}</span>
+            <span class="tr-title">{reward.title ?? reward.id}</span>
+          </div>
+        {/each}
+      {:else}
+        <div class="tr-empty">No rewards</div>
+      {/if}
+    </div>
+  {/if}
+
+  <!-- Dependencies -->
   <h4>Dependencies</h4>
   <div class="deps">
     {#each quest.dependencies as dep}
@@ -173,7 +241,7 @@
 
 <style>
   .insp {
-    width: 280px;
+    width: 320px;
     background: var(--bg-secondary);
     border-left: 1px solid var(--border);
     display: flex;
@@ -317,4 +385,39 @@
     font-size: 16px;
   }
   .ico.danger:hover { color: var(--danger); }
+
+  /* Tasks/Rewards list */
+  .task-reward-list {
+    padding: 4px 12px 8px;
+  }
+  .tr-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 2px;
+    margin-bottom: 2px;
+  }
+  .tr-item:hover { background: rgba(255,255,255,0.04); }
+  .tr-type {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    min-width: 60px;
+  }
+  .tr-title {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tr-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 4px 8px;
+    font-style: italic;
+  }
 </style>
