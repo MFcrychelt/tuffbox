@@ -18,7 +18,7 @@ pub(crate) static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 // ── Path resolution ──────────────────────────────────────────────
 
-fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
+pub(crate) fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
     let dir = PathBuf::from(project_dir);
     let mut manifests = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
@@ -186,6 +186,28 @@ pub(crate) fn safe_project_file(project_dir: &Path, relative_path: &str) -> Resu
         return Err("path escapes project directory".to_string());
     }
     Ok(target)
+}
+
+pub(crate) fn is_editable_config_path(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str(),
+        "json"
+            | "json5"
+            | "toml"
+            | "properties"
+            | "cfg"
+            | "conf"
+            | "txt"
+            | "js"
+            | "zs"
+            | "yaml"
+            | "yml"
+            | "md"
+    )
 }
 
 pub(crate) fn validate_relative_snapshot_path(relative_path: &str) -> Result<PathBuf, String> {

@@ -21,7 +21,7 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 use tuffbox_core::{
     ContentProvider, DependencyGraph, ModSource, ModSpec, PackBrief, ProjectManifest,
-    ProviderFileInfo, ProviderSearchQuery, Resolver, Side, Snapshot, SnapshotStore, SourceKind,
+    ProviderFileInfo, ProviderSearchQuery, Resolver, Side, SnapshotStore, SourceKind,
     TuffboxLockfile,
 };
 use tuffbox_core::crash::FixAction;
@@ -34,6 +34,17 @@ use tauri::Emitter;
 static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 use types::*;
+
+pub(crate) use helpers::{
+    auto_snapshot, auto_snapshot_detailed, auto_snapshot_with_changed_files,
+    backup_dir, copy_dir_recursive,
+    find_manifest_in_project_dir, is_editable_config_path,
+    load_backup_index, load_launcher_data, load_stats,
+    manifest_parent, resolve_manifest_path, safe_project_file,
+    save_backup_index, save_manifest, save_stats, save_launcher_data,
+    slugify_project_name,
+    unified_text_diff, read_small_text_file, validate_relative_snapshot_path,
+};
 
 #[tauri::command(rename_all = "camelCase")]
 fn get_project_schema_status(path: String) -> Result<SchemaStatus, String> {
@@ -3209,30 +3220,6 @@ fn search_in_configs(path: String, query: String) -> Result<Vec<serde_json::Valu
 
 /// ── Launch statistics (like NitroLaunch stats plugin) ──────────
 
-fn stats_path(project_dir: &std::path::Path) -> std::path::PathBuf {
-    project_dir.join(".tuffbox").join("stats.json")
-}
-
-fn load_stats(project_dir: &std::path::Path) -> ProjectStats {
-    let p = stats_path(project_dir);
-    std::fs::read_to_string(&p)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-fn save_stats(project_dir: &std::path::Path, stats: &ProjectStats) -> Result<(), String> {
-    let p = stats_path(project_dir);
-    if let Some(par) = p.parent() {
-        std::fs::create_dir_all(par).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(
-        &p,
-        serde_json::to_string_pretty(stats).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
-}
-
 /// Records a launch event in the project stats.
 #[tauri::command(rename_all = "camelCase")]
 fn record_launch(path: String) -> Result<(), String> {
@@ -4945,31 +4932,6 @@ fn compare_modpacks(path_a: String, path_b: String) -> Result<serde_json::Value,
 }
 
 /// ── Backup system (like NitroLaunch backup plugin) ──────────────
-
-fn backup_dir(project_dir: &Path) -> PathBuf {
-    project_dir.join(".tuffbox").join("backups")
-}
-
-fn load_backup_index(project_dir: &Path) -> BackupIndex {
-    let p = backup_dir(project_dir).join("index.json");
-    std::fs::read_to_string(&p)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(BackupIndex {
-            backups: vec![],
-            max_count: 20,
-        })
-}
-
-fn save_backup_index(project_dir: &Path, idx: &BackupIndex) -> Result<(), String> {
-    let d = backup_dir(project_dir);
-    std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-    std::fs::write(
-        d.join("index.json"),
-        serde_json::to_string_pretty(idx).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())
-}
 
 /// Creates a full backup of the project (mods, configs, resourcepacks,
 /// shaderpacks, manifest + lockfile) as a zip archive.
@@ -11449,19 +11411,6 @@ fn create_project_desktop_shortcut(path: String) -> Result<String, String> {
     }
 }
 
-#[cfg(unix)]
-fn shell_escape(s: &str) -> String {
-    if s.is_empty() {
-        return "''".into();
-    }
-    if s.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '='))
-    {
-        return s.to_string();
-    }
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 #[tauri::command]
 fn delete_project(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
@@ -11522,35 +11471,6 @@ fn clone_project(path: String, new_name: String) -> Result<String, String> {
     save_manifest(&target_manifest, &manifest).map_err(|e| e.to_string())?;
 
     Ok(target_manifest.to_string_lossy().to_string())
-}
-
-fn slugify_project_name(name: &str) -> String {
-    let slug: String = name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect();
-    let slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        "cloned-project".to_string()
-    } else {
-        slug
-    }
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let dest = dst.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&path, &dest)?;
-        } else {
-            std::fs::copy(&path, &dest)?;
-        }
-    }
-    Ok(())
 }
 
 /// Re-syncs a project's content folders against the manifest: re-downloads
@@ -12048,30 +11968,6 @@ fn update_project_settings(
 
 /// ── Pinning & session state persisted to .tuffbox/data.json ─────────
 
-#[allow(dead_code)]
-fn launcher_data_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(".tuffbox").join("launcher-data.json")
-}
-
-#[allow(dead_code)]
-fn load_launcher_data(project_dir: &Path) -> LauncherDataState {
-    let path = launcher_data_path(project_dir);
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-#[allow(dead_code)]
-fn save_launcher_data(project_dir: &Path, state: &LauncherDataState) -> Result<(), String> {
-    let path = launcher_data_path(project_dir);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())
-}
-
 #[tauri::command(rename_all = "camelCase")]
 fn pin_project(path: String, pin: bool) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
@@ -12208,87 +12104,6 @@ fn create_instance(
     Ok(path.to_string_lossy().to_string())
 }
 
-fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {
-    let dir = PathBuf::from(project_dir);
-    let mut manifests = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.ends_with(".tuffbox.json"))
-            .unwrap_or(false)
-        {
-            manifests.push(path);
-        }
-    }
-
-    if manifests.is_empty() {
-        return Err(format!(
-            "project manifest not found in project directory: {}",
-            dir.display()
-        ));
-    }
-
-    if manifests.len() == 1 {
-        return Ok(manifests.remove(0));
-    }
-
-    let state = load_launcher_data(&dir);
-    if let Some(ref last_opened) = state.last_opened {
-        let preferred = PathBuf::from(last_opened);
-        if manifests.iter().any(|path| path == &preferred) {
-            return Ok(preferred);
-        }
-    }
-
-    let default = dir.join("project.tuffbox.json");
-    if default.exists() {
-        return Ok(default);
-    }
-
-    manifests.sort();
-    Ok(manifests[0].clone())
-}
-
-/// Resolve a project directory or manifest path to the canonical `.tuffbox.json` file.
-/// If the given manifest path does not exist, scans the parent folder for any manifest.
-pub(crate) fn resolve_manifest_path(path: &str) -> Result<PathBuf, String> {
-    let path_buf = PathBuf::from(path);
-
-    if path_buf.is_dir() {
-        return find_manifest_in_project_dir(path);
-    }
-
-    if path_buf.is_file() {
-        return Ok(path_buf);
-    }
-
-    if let Some(parent) = path_buf.parent() {
-        if parent.is_dir() {
-            if let Ok(found) = find_manifest_in_project_dir(&parent.to_string_lossy()) {
-                return Ok(found);
-            }
-        }
-    }
-
-    Err(format!(
-        "project manifest not found: {}",
-        path_buf.display()
-    ))
-}
-
-pub(crate) fn manifest_parent(path: &str) -> Result<PathBuf, String> {
-    // Resolve directory / stale manifest names first; otherwise a project-dir
-    // path yields the wrong parent and worlds/map look in ../saves.
-    let resolved = resolve_manifest_path(path)?;
-    resolved
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "manifest has no parent directory".to_string())
-}
-
 fn collect_tracked_project_files(
     project_dir: &Path,
     dir: &Path,
@@ -12369,130 +12184,6 @@ fn collect_config_files(
         });
     }
     Ok(())
-}
-
-fn safe_project_file(project_dir: &Path, relative_path: &str) -> Result<PathBuf, String> {
-    let relative = PathBuf::from(relative_path);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err("invalid project-relative path".to_string());
-    }
-    if !is_editable_config_path(&relative) {
-        return Err("unsupported config file type".to_string());
-    }
-    let target = project_dir.join(relative);
-    let canonical_project = std::fs::canonicalize(project_dir).map_err(|e| e.to_string())?;
-    let canonical_target = std::fs::canonicalize(&target).map_err(|e| e.to_string())?;
-    if !canonical_target.starts_with(&canonical_project) {
-        return Err("file is outside project directory".to_string());
-    }
-    Ok(canonical_target)
-}
-
-fn is_editable_config_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase()
-            .as_str(),
-        "json"
-            | "json5"
-            | "toml"
-            | "properties"
-            | "cfg"
-            | "conf"
-            | "txt"
-            | "js"
-            | "zs"
-            | "yaml"
-            | "yml"
-            | "md"
-    )
-}
-
-fn validate_relative_snapshot_path(relative_path: &str) -> Result<PathBuf, String> {
-    let relative = PathBuf::from(relative_path);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err("invalid snapshot-relative path".to_string());
-    }
-    Ok(relative)
-}
-
-fn read_small_text_file(path: &Path) -> Result<String, String> {
-    if !path.is_file() {
-        return Ok(String::new());
-    }
-    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
-    if metadata.len() > 512 * 1024 {
-        return Ok(format!(
-            "# File is too large for inline diff: {} bytes\n",
-            metadata.len()
-        ));
-    }
-    std::fs::read_to_string(path)
-        .map_err(|_| "# Binary or non-UTF8 file; inline diff unavailable.\n".to_string())
-}
-
-fn unified_text_diff(before: &str, after: &str) -> String {
-    if before == after {
-        return "No content changes.".to_string();
-    }
-    let before_lines: Vec<&str> = before.lines().collect();
-    let after_lines: Vec<&str> = after.lines().collect();
-    let mut table = vec![vec![0usize; after_lines.len() + 1]; before_lines.len() + 1];
-    for i in (0..before_lines.len()).rev() {
-        for j in (0..after_lines.len()).rev() {
-            table[i][j] = if before_lines[i] == after_lines[j] {
-                table[i + 1][j + 1] + 1
-            } else {
-                table[i + 1][j].max(table[i][j + 1])
-            };
-        }
-    }
-
-    let mut out = String::new();
-    let mut i = 0;
-    let mut j = 0;
-    while i < before_lines.len() && j < after_lines.len() {
-        if before_lines[i] == after_lines[j] {
-            out.push_str("  ");
-            out.push_str(before_lines[i]);
-            out.push('\n');
-            i += 1;
-            j += 1;
-        } else if table[i + 1][j] >= table[i][j + 1] {
-            out.push_str("- ");
-            out.push_str(before_lines[i]);
-            out.push('\n');
-            i += 1;
-        } else {
-            out.push_str("+ ");
-            out.push_str(after_lines[j]);
-            out.push('\n');
-            j += 1;
-        }
-    }
-    while i < before_lines.len() {
-        out.push_str("- ");
-        out.push_str(before_lines[i]);
-        out.push('\n');
-        i += 1;
-    }
-    while j < after_lines.len() {
-        out.push_str("+ ");
-        out.push_str(after_lines[j]);
-        out.push('\n');
-        j += 1;
-    }
-    out
 }
 
 fn mod_change_entries(
@@ -13421,85 +13112,6 @@ fn infer_project_side(project: Option<&tuffbox_core::ProjectInfo>) -> Side {
         return Side::Unknown;
     };
     Side::from_modrinth(project.client_side.as_deref(), project.server_side.as_deref())
-}
-
-pub(crate) fn auto_snapshot(manifest_path: &Path, operation: &str) -> anyhow::Result<Snapshot> {
-    auto_snapshot_detailed(manifest_path, operation, &[], &[])
-}
-
-fn auto_snapshot_with_changed_files(
-    manifest_path: &Path,
-    operation: &str,
-    changed_files: &[PathBuf],
-) -> anyhow::Result<Snapshot> {
-    auto_snapshot_detailed(manifest_path, operation, changed_files, &[])
-}
-
-fn auto_snapshot_detailed(
-    manifest_path: &Path,
-    operation: &str,
-    changed_files: &[PathBuf],
-    actions_summary: &[String],
-) -> anyhow::Result<Snapshot> {
-    let project_dir = manifest_path.parent().ok_or_else(|| {
-        anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display())
-    })?;
-    let lockfile_path = manifest_path.with_extension("lock.json");
-    let lockfile_path = if lockfile_path.exists() {
-        Some(lockfile_path)
-    } else {
-        None
-    };
-    let store = SnapshotStore::new(project_dir);
-    let name = format!("auto-before-{operation}");
-    let reason = format!("Auto snapshot before {operation}");
-    let summary: Vec<String> = if actions_summary.is_empty() {
-        vec![format!("Safety point before {operation}")]
-    } else {
-        actions_summary.to_vec()
-    };
-    let actor = pack_events::actor_for_operation(operation).to_string();
-    let meta = tuffbox_core::SnapshotMeta {
-        operation: operation.to_string(),
-        actions_summary: summary,
-        actor: Some(actor),
-        ..Default::default()
-    };
-    let snapshot = store.create_with_meta(
-        &name,
-        &reason,
-        manifest_path,
-        lockfile_path.as_ref(),
-        changed_files,
-        meta,
-    )?;
-    let _ = pack_events::append_from_snapshot(
-        project_dir,
-        operation,
-        &snapshot.id,
-        changed_files,
-        &reason,
-    );
-    Ok(snapshot)
-}
-
-pub(crate) fn save_manifest(path: &Path, manifest: &ProjectManifest) -> anyhow::Result<()> {
-    let json = serde_json::to_string_pretty(manifest)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent: {}", path.display()))?;
-    std::fs::create_dir_all(parent)?;
-    let mut staged = tempfile::Builder::new()
-        .prefix(".tuffbox-manifest-")
-        .suffix(".tmp")
-        .tempfile_in(parent)?;
-    staged.write_all(json.as_bytes())?;
-    staged.flush()?;
-    staged.as_file().sync_all()?;
-    staged
-        .persist(path)
-        .map_err(|error| anyhow::Error::new(error.error))?;
-    Ok(())
 }
 
 /// Downloads every manifest-declared entry that isn't already present with
