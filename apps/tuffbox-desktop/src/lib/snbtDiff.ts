@@ -7,6 +7,15 @@ export interface DiffLine {
   text: string;
 }
 
+export interface SnbtDiffFile {
+  id: string;
+  label: string;
+  leftText: string;
+  rightText: string;
+  leftLabel?: string;
+  rightLabel?: string;
+}
+
 function normalizeNewlines(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }

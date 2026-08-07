@@ -3,6 +3,7 @@
     SvelteFlow,
     Background,
     Controls,
+    MiniMap,
     BackgroundVariant,
     useSvelteFlow,
     type Node,
@@ -65,6 +66,26 @@
 
   let nodes = $state<Node[]>([]);
   let edges = $state<Edge[]>([]);
+
+  /** MiniMap cannot resolve CSS custom properties — use computed hex. */
+  function cssColor(name: string, fallback: string): string {
+    if (typeof document === "undefined") return fallback;
+    const el = document.querySelector(".qe.ftbq") ?? document.documentElement;
+    const v = getComputedStyle(el).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  function miniNodeColor(n: Node): string {
+    if (n.id.startsWith("ext:")) return cssColor("--ftbq-quest-locked", "#6b6b6b");
+    if (issueIds.has(n.id)) return cssColor("--ftbq-quest-started", "#f2c94c");
+    if (progressOverlay) {
+      const st = progressStatuses[n.id];
+      if (st === "completed") return cssColor("--ftbq-quest-completed", "#55c95a");
+      if (st === "locked") return cssColor("--ftbq-quest-locked", "#6b6b6b");
+      if (st === "started") return cssColor("--ftbq-quest-started", "#f2c94c");
+    }
+    return cssColor("--ftbq-node-fill", "#18181c");
+  }
 
   $effect(() => {
     if (quests && $projectPath) {
@@ -179,7 +200,7 @@
             progressStatuses[depId] === "completed");
 
         let style =
-          "stroke: #5c8a9e; stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
+          "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
         if (!targetExists || external) {
           style =
             "stroke: var(--ftbq-quest-started, #f2c94c); stroke-width: 2.5; stroke-dasharray: 6 4; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));";
@@ -320,7 +341,8 @@
       fitViewOptions={{ padding: 0.2 }}
       defaultEdgeOptions={{
         type: "step",
-        style: "stroke: #5c8a9e; stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));",
+        style:
+          "stroke: var(--ftbq-line, #5c8a9e); stroke-width: 3; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.6));",
       }}
     >
       <Background
@@ -330,6 +352,9 @@
         patternColor="rgba(255,255,255,0.07)"
       />
       <Controls />
+      {#if quests.length > 0}
+        <MiniMap nodeColor={miniNodeColor} pannable zoomable />
+      {/if}
     </SvelteFlow>
     <div class="vignette" aria-hidden="true"></div>
   </div>
@@ -423,7 +448,16 @@
     stroke-width: 3;
   }
   :global(.svelte-flow__edge:hover path) {
-    stroke: #7fb3c8;
+    stroke: var(--ftbq-line-hover, #7fb3c8);
+  }
+  :global(.svelte-flow__minimap) {
+    background: var(--ftbq-bg-panel, #212126);
+    border: 1px solid var(--ftbq-frame, #101014);
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 4px 10px rgba(0, 0, 0, 0.45);
   }
   :global(.svelte-flow__controls) {
     border: 1px solid #101014;

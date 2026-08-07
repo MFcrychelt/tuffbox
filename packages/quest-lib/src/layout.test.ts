@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { layoutTree, _topologicalLayersForTest, applyLayout } from "./layout";
-import type { QuestData } from "./store";
+import type { QuestData } from "./types";
 
 function q(id: string, deps: string[] = []): QuestData {
   return {
     id,
     title: id,
+    description: [],
     x: 0,
     y: 0,
     dependencies: deps,

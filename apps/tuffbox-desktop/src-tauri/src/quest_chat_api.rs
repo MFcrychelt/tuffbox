@@ -12,7 +12,7 @@ use tuffbox_core::{
     new_quest_chat_id, now_iso, parse_quest_plan, pin_target_chapter, save_quest_chat,
     stitch_extend_plan, stitch_lore_into_plan, try_heuristic_quest_plan, AnchorQuest,
     ExistingChapter, ExistingGroup, QuestAuthorContext, QuestChatMessage, QuestChatSession,
-    QuestPlan, QuestPlanMergeResult, QUEST_LORE_SYSTEM_PROMPT, QUEST_OUTLINE_SYSTEM_PROMPT,
+    AiTokenUsage, QuestPlan, QuestPlanMergeResult, QUEST_LORE_SYSTEM_PROMPT, QUEST_OUTLINE_SYSTEM_PROMPT,
     QUEST_PLAN_SYSTEM_PROMPT,
 };
 
@@ -49,6 +49,14 @@ struct QuestAiProgressEvent {
     n: Option<usize>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestAiTokenEvent {
+    chat_id: String,
+    text: String,
+    phase: String,
+}
+
 struct ProgressSink<'a> {
     app: Option<&'a AppHandle>,
     chat_id: String,
@@ -65,6 +73,22 @@ impl ProgressSink<'_> {
                     phase: phase.to_string(),
                     i,
                     n,
+                },
+            );
+        }
+    }
+
+    fn emit_token(&self, phase: &str, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(app) = self.app {
+            let _ = app.emit(
+                "quest-ai-token",
+                QuestAiTokenEvent {
+                    chat_id: self.chat_id.clone(),
+                    text: text.to_string(),
+                    phase: phase.to_string(),
                 },
             );
         }
@@ -110,6 +134,62 @@ fn author_ctx(
     book: &tuffbox_core::unified::QuestBook,
     pack_hint: Option<String>,
 ) -> QuestAuthorContext {
+    let mut lore: Vec<(String, String, String)> = Vec::new();
+    let mut lore_chars = 0usize;
+    const LORE_CHAR_BUDGET: usize = 3500;
+    for c in &book.chapters {
+        for q in &c.quests {
+            if lore.len() >= 24 || lore_chars >= LORE_CHAR_BUDGET {
+                break;
+            }
+            let desc = q
+                .description
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" / ");
+            if desc.is_empty() {
+                continue;
+            }
+            let truncated = if desc.len() > 180 {
+                format!("{}…", &desc[..180])
+            } else {
+                desc
+            };
+            lore_chars += truncated.len();
+            lore.push((q.id.clone(), q.title.clone(), truncated));
+        }
+    }
+
+    let resolved_hint = pack_hint.or_else(|| {
+        let manifest_path = crate::resolve_manifest_path(path).ok()?;
+        let manifest = tuffbox_core::ProjectManifest::load_from_path(&manifest_path).ok()?;
+        let brief = manifest.brief?;
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(title) = &book.title {
+            parts.push(title.clone());
+        }
+        if !brief.goal.is_empty() {
+            parts.push(format!("Goal: {}", brief.goal));
+        }
+        if !brief.target_audience.is_empty() {
+            parts.push(format!("Audience: {}", brief.target_audience));
+        }
+        if !brief.gameplay_pillars.is_empty() {
+            parts.push(format!("Pillars: {}", brief.gameplay_pillars.join(", ")));
+        }
+        if !brief.constraints.is_empty() {
+            parts.push(format!("Constraints: {}", brief.constraints.join(", ")));
+        }
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(" | "))
+        }
+    });
+
     QuestAuthorContext {
         existing_chapters: book
             .chapters
@@ -129,7 +209,7 @@ fn author_ctx(
             })
             .collect(),
         sample_items: collect_items(path),
-        pack_hint: pack_hint.or_else(|| book.title.clone()),
+        pack_hint: resolved_hint,
         existing_quests: book
             .chapters
             .iter()
@@ -140,6 +220,7 @@ fn author_ctx(
             })
             .take(60)
             .collect(),
+        existing_quest_lore: lore,
         anchor_quest: None,
         target_chapter: None,
     }
@@ -149,7 +230,7 @@ async fn ai_json(
     system: &str,
     user: &str,
     history: &[QuestChatMessage],
-) -> Result<serde_json::Value, String> {
+) -> Result<(serde_json::Value, Option<AiTokenUsage>), String> {
     let settings = integrations::get_integration_status().settings;
     let mut messages = Vec::new();
     for m in history.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev() {
@@ -161,7 +242,37 @@ async fn ai_json(
         }
     }
     messages.push(serde_json::json!({"role": "user", "content": user}));
-    integrations::call_ai_messages(&settings.ai, system, &messages, true).await
+    integrations::call_ai_messages_with_usage(&settings.ai, system, &messages, true, None).await
+}
+
+async fn ai_json_stream(
+    system: &str,
+    user: &str,
+    history: &[QuestChatMessage],
+    progress: &ProgressSink<'_>,
+    phase: &str,
+) -> Result<(serde_json::Value, Option<AiTokenUsage>), String> {
+    let settings = integrations::get_integration_status().settings;
+    let mut messages = Vec::new();
+    for m in history.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev() {
+        if m.role == "user" || m.role == "assistant" {
+            messages.push(serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            }));
+        }
+    }
+    messages.push(serde_json::json!({"role": "user", "content": user}));
+    integrations::call_ai_messages_stream(&settings.ai, system, &messages, true, |delta| {
+        progress.emit_token(phase, delta);
+    })
+    .await
+}
+
+fn merge_usage(into: &mut AiTokenUsage, extra: Option<AiTokenUsage>) {
+    if let Some(u) = extra {
+        into.merge_in(&u);
+    }
 }
 
 fn value_to_raw(value: serde_json::Value) -> String {
@@ -177,15 +288,27 @@ async fn ai_quest_plan(
     system: &str,
     user: &str,
     history: &[QuestChatMessage],
+    progress: Option<&ProgressSink<'_>>,
+    usage_acc: &mut AiTokenUsage,
 ) -> Result<QuestPlan, String> {
-    let value = ai_json(system, user, history).await?;
+    let (value, usage) = if let Some(p) = progress {
+        ai_json_stream(system, user, history, p, "outline").await?
+    } else {
+        ai_json(system, user, history).await?
+    };
+    merge_usage(usage_acc, usage);
     match parse_quest_plan(&value_to_raw(value)) {
         Ok(plan) => Ok(plan),
         Err(first_err) => {
             let repair = format!(
                 "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\nReturn ONLY one JSON object matching schemaVersion 1 (chapters with quests, tasks, rewards). No markdown fences."
             );
-            let value2 = ai_json(system, &repair, &[]).await?;
+            let (value2, usage2) = if let Some(p) = progress {
+                ai_json_stream(system, &repair, &[], p, "outline").await?
+            } else {
+                ai_json(system, &repair, &[]).await?
+            };
+            merge_usage(usage_acc, usage2);
             parse_quest_plan(&value_to_raw(value2))
                 .map_err(|e| format!("Invalid QuestPlan JSON after retry: {e}"))
         }
@@ -204,8 +327,9 @@ pub async fn run_generate_quest_line(
     anchor_quest_id: Option<&str>,
     target_chapter_id: Option<&str>,
     progress: ProgressSink<'_>,
-) -> Result<(QuestPlan, Vec<String>), String> {
+) -> Result<(QuestPlan, Vec<String>, AiTokenUsage), String> {
     let mut log = Vec::new();
+    let mut usage_acc = AiTokenUsage::default();
     let intent = intent.unwrap_or("generate");
     let mut ctx = author_ctx(path, book, None);
     let target = detect_target_quest_count(prompt);
@@ -266,7 +390,14 @@ pub async fn run_generate_quest_line(
     let mut plan = if intent == "branch" {
         progress.push(&mut log, "outline", "Outline: AI branch…");
         let user = build_branch_user_message(prompt, &ctx, target);
-        ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
+        ai_quest_plan(
+            QUEST_OUTLINE_SYSTEM_PROMPT,
+            &user,
+            history,
+            Some(&progress),
+            &mut usage_acc,
+        )
+        .await?
     } else if !force_ai && intent == "generate" {
         if let Some(p) = try_heuristic_quest_plan(prompt) {
             progress.push(&mut log, "outline", "Outline: offline heuristic");
@@ -274,7 +405,14 @@ pub async fn run_generate_quest_line(
         } else {
             progress.push(&mut log, "outline", "Outline: AI…");
             let user = build_outline_user_message(prompt, &ctx, target);
-            ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
+            ai_quest_plan(
+                QUEST_OUTLINE_SYSTEM_PROMPT,
+                &user,
+                history,
+                Some(&progress),
+                &mut usage_acc,
+            )
+            .await?
         }
     } else if intent == "generate" || intent == "extend" {
         progress.push(
@@ -296,7 +434,14 @@ pub async fn run_generate_quest_line(
         } else {
             build_outline_user_message(prompt, &ctx, target)
         };
-        ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
+        ai_quest_plan(
+            QUEST_OUTLINE_SYSTEM_PROMPT,
+            &user,
+            history,
+            Some(&progress),
+            &mut usage_acc,
+        )
+        .await?
     } else {
         return Err(format!("unknown intent: {intent}"));
     };
@@ -358,7 +503,8 @@ pub async fn run_generate_quest_line(
         );
         let user = build_lore_user_message(&plan, chunk);
         match ai_json(QUEST_LORE_SYSTEM_PROMPT, &user, &[]).await {
-            Ok(value) => {
+            Ok((value, usage)) => {
+                merge_usage(&mut usage_acc, usage);
                 match stitch_lore_into_plan(&mut plan, &value_to_raw(value)) {
                     Ok(n) => progress.push(
                         &mut log,
@@ -405,7 +551,7 @@ pub async fn run_generate_quest_line(
             format!("Generated quest line (~{target} quests) from author request.");
     }
 
-    Ok((plan, log))
+    Ok((plan, log, usage_acc))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -414,6 +560,8 @@ pub struct QuestChatTurnResult {
     pub session: QuestChatSession,
     pub merge: QuestPlanMergeResult,
     pub progress_log: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AiTokenUsage>,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -509,15 +657,17 @@ pub async fn quest_chat_turn(
         created_at: Some(now_iso()),
         plan: None,
         progress_log: None,
+        usage: None,
     });
 
+    let mut usage_acc = AiTokenUsage::default();
     let (mut plan, log) = if intent_s == "lore" {
         let mut base = session
             .pending_plan
             .clone()
             .ok_or_else(|| "No pending plan to regenerate lore".to_string())?;
         let mut lore_log = Vec::new();
-        log_lore_only(&path, &mut base, &mut lore_log, &progress).await?;
+        log_lore_only(&path, &mut base, &mut lore_log, &progress, &mut usage_acc).await?;
         fill_template_lore(&mut base);
         if auto_layout_plan(&mut base) {
             progress.push(&mut lore_log, "layout", "Layout: DAG auto-layout applied");
@@ -527,7 +677,7 @@ pub async fn quest_chat_turn(
         progress.push(&mut lore_log, "done", "Lore-only regenerate done");
         (base, lore_log)
     } else {
-        run_generate_quest_line(
+        let (plan, log, usage) = run_generate_quest_line(
             &path,
             &message,
             &book,
@@ -539,7 +689,9 @@ pub async fn quest_chat_turn(
             target_chapter_id.as_deref(),
             progress,
         )
-        .await?
+        .await?;
+        usage_acc = usage;
+        (plan, log)
     };
 
     // Prefer full system prompt validation path
@@ -569,12 +721,18 @@ pub async fn quest_chat_turn(
         plan.human_explanation,
         log.join(" · ")
     );
+    let usage = if usage_acc.is_empty() {
+        None
+    } else {
+        Some(usage_acc.clone())
+    };
     session.messages.push(QuestChatMessage {
         role: "assistant".into(),
         content: assistant_text,
         created_at: Some(now_iso()),
         plan: Some(plan),
         progress_log: Some(log.clone()),
+        usage: usage.clone(),
     });
     session.updated_at = now_iso();
     save_quest_chat(&project_dir, &session)?;
@@ -583,6 +741,7 @@ pub async fn quest_chat_turn(
         session,
         merge,
         progress_log: log,
+        usage,
     })
 }
 
@@ -591,6 +750,7 @@ async fn log_lore_only(
     plan: &mut QuestPlan,
     log: &mut Vec<String>,
     progress: &ProgressSink<'_>,
+    usage_acc: &mut AiTokenUsage,
 ) -> Result<(), String> {
     let indices: Vec<(usize, usize)> = plan
         .chapters
@@ -606,7 +766,8 @@ async fn log_lore_only(
         progress.push_n(log, "lore", format!("Lore {i}/{total}…"), i, total);
         let user = build_lore_user_message(plan, chunk);
         match ai_json(QUEST_LORE_SYSTEM_PROMPT, &user, &[]).await {
-            Ok(value) => {
+            Ok((value, usage)) => {
+                merge_usage(usage_acc, usage);
                 let _ = stitch_lore_into_plan(plan, &value_to_raw(value));
                 progress.push(log, "lore", "Lore chunk ok");
             }
@@ -634,7 +795,7 @@ pub async fn generate_quest_line(
         app: None,
         chat_id: String::new(),
     };
-    let (plan, log) = run_generate_quest_line(
+    let (plan, log, _usage) = run_generate_quest_line(
         &path,
         &prompt,
         &book,

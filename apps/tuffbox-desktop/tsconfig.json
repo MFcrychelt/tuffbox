@@ -8,13 +8,15 @@
     "allowJs": true,
     "checkJs": true,
     "isolatedModules": true,
+    "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "$lib/*": ["src/lib/*"]
+      "$lib/*": ["src/lib/*"],
+      "@tuffbox/quest-lib": ["../../packages/quest-lib/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte"]

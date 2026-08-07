@@ -35,7 +35,7 @@
     downloads: number;
     provider?: string;
   };
-  type PackBrief = {
+  type CreateModeBrief = {
     title: string;
     mcVersion: string;
     loader: string;
@@ -44,7 +44,7 @@
     categories: { id: string; query: string; count: number; reason: string }[];
     exclude: string[];
   };
-  type PackDraft = { brief: PackBrief; mods: PackDraftMod[]; unresolved: string[] };
+  type PackDraft = { brief: CreateModeBrief; mods: PackDraftMod[]; unresolved: string[] };
   type CandidateAddon = {
     slug: string;
     name: string;
@@ -81,7 +81,7 @@
   let activeId = $state<string | null>(null);
   let activeKind = $state<"create" | "quest">("create");
   let messages = $state<ChatMessage[]>([]);
-  let brief = $state<PackBrief | null>(null);
+  let brief = $state<CreateModeBrief | null>(null);
   let draft = $state<PackDraft | null>(null);
   let candidates = $state<CandidateAddon[]>([]);
   let input = $state("");
@@ -357,7 +357,7 @@
     return m.projectId || m.slug;
   }
 
-  function ensureBrief(): PackBrief {
+  function ensureBrief(): CreateModeBrief {
     if (!brief) {
       brief = {
         title: "Custom pack",
@@ -732,7 +732,7 @@
       const res = await invoke<{
         chatId: string;
         reply: string;
-        brief?: PackBrief | null;
+        brief?: CreateModeBrief | null;
         candidates?: CandidateAddon[];
         session?: CreateChatSession;
       }>("create_mode_chat", {
@@ -795,7 +795,7 @@
       const res = await invoke<{
         chatId: string;
         reply?: string;
-        brief: PackBrief;
+        brief: CreateModeBrief;
         candidates?: CandidateAddon[];
         session?: CreateChatSession;
       }>("create_mode_quick_brief", {
@@ -915,7 +915,7 @@
     try {
       const res = await invoke<{
         reply: string;
-        brief: PackBrief;
+        brief: CreateModeBrief;
         draft: PackDraft;
         pillarStatus?: typeof pillarStatus;
         partial?: boolean;
@@ -976,7 +976,7 @@
     try {
       const res = await invoke<{
         reply: string;
-        brief: PackBrief;
+        brief: CreateModeBrief;
         draft: PackDraft;
         pillarStatus?: typeof pillarStatus;
         partial?: boolean;
@@ -1239,7 +1239,7 @@
   <div class="chats empty">
     <MessagesSquare size={40} strokeWidth={1.5} />
     <h2>Create Mode</h2>
-    <p>Open an instance to plan a PackBrief (Intent → Catalog → Rank → Install preview) with AI.</p>
+    <p>Open an instance to plan a CreateModeBrief (Intent → Catalog → Rank → Install preview) with AI.</p>
   </div>
 {:else}
   <div class="chats">
@@ -1330,7 +1330,7 @@
               <h3>Describe the pack you want</h3>
               <p>
                 Example: "Tech + airplanes for NeoForge 1.21.1, ~80 mods, Create required."
-                Plan builds a PackBrief (search JSON + must-haves from hub co-occurrence).
+                Plan builds a CreateModeBrief (search JSON + must-haves from hub co-occurrence).
                 Quick assemble skips Rank (Intent → Catalog → Confirm). Install only after you confirm.
               </p>
             {/if}

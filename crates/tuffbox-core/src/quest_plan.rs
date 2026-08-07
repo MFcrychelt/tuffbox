@@ -116,6 +116,8 @@ pub struct QuestAuthorContext {
     pub pack_hint: Option<String>,
     /// Quests already in the book (id, title) — lets the model reference them as dependencies by title.
     pub existing_quests: Vec<(String, String)>,
+    /// Existing lore snippets (id, title, truncated description) for continuity.
+    pub existing_quest_lore: Vec<(String, String, String)>,
     /// Selected quest to branch from (intent `branch`).
     pub anchor_quest: Option<AnchorQuest>,
     /// Current editor chapter — outline should upsert here unless multi-chapter is requested.
@@ -179,6 +181,20 @@ pub fn build_quest_author_user_message(request: &str, ctx: &QuestAuthorContext) 
             p.push_str(" (id: ");
             p.push_str(id);
             p.push_str(")\n");
+        }
+    }
+    if !ctx.existing_quest_lore.is_empty() {
+        p.push_str(
+            "\nExisting quest lore (match tone/continuity; do not rewrite these quests unless asked):\n",
+        );
+        for (id, title, lore) in ctx.existing_quest_lore.iter().take(24) {
+            p.push_str("- ");
+            p.push_str(title);
+            p.push_str(" (id: ");
+            p.push_str(id);
+            p.push_str("): ");
+            p.push_str(lore);
+            p.push('\n');
         }
     }
     if let Some(anchor) = &ctx.anchor_quest {
@@ -2063,9 +2079,15 @@ pub fn build_outline_user_message(
             );
         }
     }
-    p.push_str(
-        "Include dependency chains (and light branches). Leave description empty or 1 stub line.\n",
-    );
+    if ctx.existing_quest_lore.is_empty() {
+        p.push_str(
+            "Include dependency chains (and light branches). Leave description empty or 1 stub line.\n",
+        );
+    } else {
+        p.push_str(
+            "Include dependency chains (and light branches). Prefer continuity with Existing quest lore; leave new description empty or 1 stub line (lore pass will expand).\n",
+        );
+    }
     p
 }
 
@@ -2094,7 +2116,7 @@ pub fn build_branch_user_message(request: &str, ctx: &QuestAuthorContext, target
             .unwrap_or_default()
     ));
     p.push_str(
-        "Subsequent branch quests should chain from each other (dependency chain). Leave description empty or 1 stub line.\n",
+        "Subsequent branch quests should chain from each other (dependency chain). Leave description empty or 1 stub line (prefer continuity with Existing quest lore when present).\n",
     );
     p
 }

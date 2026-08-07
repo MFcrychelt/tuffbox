@@ -14,7 +14,7 @@ use tuffbox_core::create_mode::{
     list_create_chats as list_create_chat_files, load_create_chat as load_create_chat_file,
     merge_mpi_hints_into_brief, new_chat_id, now_iso, parse_create_mode_ai_response,
     save_create_chat as save_create_chat_file, search_from_brief, validate_pack_brief,
-    AssembleOptions, CreateChatMessage, CreateChatSession, LiveCatalogSearch, PackBrief, PackDraft,
+    AssembleOptions, CreateChatMessage, CreateChatSession, CreateModeBrief, LiveCatalogSearch, PackDraft,
     CREATE_MODE_SYSTEM_PROMPT,
 };
 use tuffbox_core::graph::loader_kind_slug;
@@ -54,7 +54,7 @@ fn emit_create_progress(
     );
 }
 
-fn ensure_brief_from_manifest(mut brief: PackBrief, manifest: &ProjectManifest) -> PackBrief {
+fn ensure_brief_from_manifest(mut brief: CreateModeBrief, manifest: &ProjectManifest) -> CreateModeBrief {
     if brief.mc_version.trim().is_empty() {
         brief.mc_version = manifest.minecraft.version.clone();
     }
@@ -65,7 +65,7 @@ fn ensure_brief_from_manifest(mut brief: PackBrief, manifest: &ProjectManifest) 
 }
 
 /// Pull reply / brief / search from an AI JSON value.
-fn parse_ai_value(raw: &Value) -> (String, Option<PackBrief>, Option<MpiSearchQuery>) {
+fn parse_ai_value(raw: &Value) -> (String, Option<CreateModeBrief>, Option<MpiSearchQuery>) {
     let reply = raw
         .get("reply")
         .and_then(|v| v.as_str())
@@ -74,10 +74,10 @@ fn parse_ai_value(raw: &Value) -> (String, Option<PackBrief>, Option<MpiSearchQu
     let brief = raw
         .get("brief")
         .cloned()
-        .and_then(|v| serde_json::from_value::<PackBrief>(v).ok())
+        .and_then(|v| serde_json::from_value::<CreateModeBrief>(v).ok())
         .or_else(|| {
             if raw.get("title").is_some() {
-                serde_json::from_value::<PackBrief>(raw.clone()).ok()
+                serde_json::from_value::<CreateModeBrief>(raw.clone()).ok()
             } else {
                 None
             }
@@ -104,7 +104,7 @@ fn candidates_to_mpi_hints(candidates: &[CandidateAddon]) -> Vec<MpiModHint> {
         .collect()
 }
 
-/// Seed mods + hub/Supabase co-occurrence partners → catalog candidates for PackBrief refine.
+/// Seed mods + hub/Supabase co-occurrence partners → catalog candidates for CreateModeBrief refine.
 /// Prefer hub GET /v1/mods/cooccurrence (via get_creation_trends) so clients never hit MPI.
 async fn collect_candidates(
     path: &str,
@@ -211,7 +211,7 @@ pub async fn create_mode_chat(
     message: String,
     target_count: Option<u32>,
     history: Option<Vec<CreateChatMessage>>,
-    existing_brief: Option<PackBrief>,
+    existing_brief: Option<CreateModeBrief>,
 ) -> Result<Value, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
@@ -243,7 +243,7 @@ pub async fn create_mode_chat(
     if let Some(brief) = &existing_brief {
         if let Ok(s) = serde_json::to_string_pretty(brief) {
             user_content = format!(
-                "{user_content}\n\nCurrent PackBrief (refine this if appropriate):\n{s}"
+                "{user_content}\n\nCurrent CreateModeBrief (refine this if appropriate):\n{s}"
             );
         }
     }
@@ -289,7 +289,7 @@ pub async fn create_mode_chat(
     if let Err(ve) = validate_pack_brief(&brief) {
         emit_create_progress(&app, "intent", 0, 0, "Repairing brief…");
         let repair_user = format!(
-            "Your previous PackBrief failed validation: {ve}\nFix and return a complete Create Mode JSON (reply + search + brief). User request was:\n{message}"
+            "Your previous CreateModeBrief failed validation: {ve}\nFix and return a complete Create Mode JSON (reply + search + brief). User request was:\n{message}"
         );
         let repair_msgs = vec![json!({"role": "user", "content": repair_user})];
         if let Ok(repaired) = crate::integrations::call_ai_messages_with_schema(
@@ -343,7 +343,7 @@ pub async fn create_mode_chat(
         };
     } else if used_prompt_fallback {
         reply = format!(
-            "{reply}\n\n(Note: AI JSON had no PackBrief — filled from your prompt.)"
+            "{reply}\n\n(Note: AI JSON had no CreateModeBrief — filled from your prompt.)"
         );
     }
 
@@ -385,7 +385,7 @@ pub async fn create_mode_chat(
     }))
 }
 
-/// Deterministic PackBrief from free text (no LLM) — fallback when AI is unavailable.
+/// Deterministic CreateModeBrief from free text (no LLM) — fallback when AI is unavailable.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn create_mode_quick_brief(
     app: AppHandle,
@@ -468,7 +468,7 @@ pub async fn create_mode_quick_brief(
 pub async fn assemble_pack_draft(
     app: AppHandle,
     path: String,
-    brief: PackBrief,
+    brief: CreateModeBrief,
 ) -> Result<PackDraft, String> {
     tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -571,7 +571,7 @@ async fn fetch_curation_priors(
 
 fn reassemble_draft_blocking(
     path: &str,
-    brief: PackBrief,
+    brief: CreateModeBrief,
     app: &AppHandle,
 ) -> Result<PackDraft, String> {
     let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
@@ -675,7 +675,7 @@ pub fn cancel_curate_pack_loop() -> Result<(), String> {
 pub async fn curate_pack_loop(
     app: AppHandle,
     path: String,
-    brief: PackBrief,
+    brief: CreateModeBrief,
     draft: PackDraft,
     note: Option<String>,
     user_goal: Option<String>,
@@ -1192,7 +1192,7 @@ pub async fn curate_pack_loop(
 pub async fn rank_pack_draft(
     app: AppHandle,
     path: String,
-    brief: PackBrief,
+    brief: CreateModeBrief,
     draft: PackDraft,
     note: Option<String>,
 ) -> Result<Value, String> {
@@ -1210,7 +1210,7 @@ pub async fn rank_pack_draft(
     if let Some(obj) = out.as_object_mut() {
         if !obj.contains_key("search") {
             if let Some(brief) = obj.get("brief").cloned() {
-                if let Ok(b) = serde_json::from_value::<PackBrief>(brief) {
+                if let Ok(b) = serde_json::from_value::<CreateModeBrief>(brief) {
                     obj.insert(
                         "search".into(),
                         serde_json::to_value(search_from_brief(&b)).unwrap_or(json!({})),

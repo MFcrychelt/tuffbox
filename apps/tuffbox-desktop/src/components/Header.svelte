@@ -57,6 +57,13 @@
     me: "Me",
   };
 
+  /** Inside an instance the pack name IS the page heading. */
+  const pageTitle = $derived(
+    currentView === "dashboard" && $projectInfo
+      ? $projectInfo.name
+      : (titles[currentView] ?? ""),
+  );
+
   function prefersReducedMotion(): boolean {
     if (typeof document === "undefined") return true;
     if (document.documentElement.classList.contains("potato-pc")) return true;
@@ -85,18 +92,14 @@
 
 <header class="header">
   <div class="left">
-    {#key currentView}
+    {#key currentView + ($projectInfo?.name ?? "")}
       <div class="title-swap" in:titleIntro>
         <div class="breadcrumb">
           <span class="crumb">TuffBox</span>
           <ChevronRight size={14} class="separator" />
           <span class="crumb active">{titles[currentView]}</span>
-          {#if $projectInfo}
-            <ChevronRight size={14} class="separator" />
-            <span class="crumb instance">{$projectInfo.name}</span>
-          {/if}
         </div>
-        <h1 class="page-title">{titles[currentView]}</h1>
+        <h1 class="page-title">{pageTitle}</h1>
       </div>
     {/key}
   </div>
@@ -176,15 +179,16 @@
     color: var(--text-secondary);
   }
 
-  .crumb.instance {
-    color: var(--accent-primary);
-    font-weight: 700;
-  }
-
   .page-title {
-    font-size: 20px;
+    font-size: 24px;
     font-weight: 800;
+    letter-spacing: -0.3px;
+    line-height: 1.15;
     margin: 0;
+    max-width: 52vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .right {

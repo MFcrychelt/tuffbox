@@ -19,6 +19,7 @@
     Clock,
     Users,
     ShieldAlert,
+    Gamepad2,
   } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import { invoke } from "@tauri-apps/api/core";
@@ -493,12 +494,7 @@
           </button>
 
           <div class="hero-main">
-            {#if selectedProject}
-              <div class="project-quick-info">
-                <span class="project-name">{selectedProject.info.name}</span>
-                <span class="project-version">{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
-              </div>
-            {:else}
+            {#if !selectedProject}
               <div class="project-quick-info">
                 <span class="project-name muted">No instance selected</span>
                 <span class="project-hint">Pick an instance in the left rail or create a new one</span>
@@ -568,6 +564,10 @@
         {#if selectedProject}
           <div class="hero-right">
             <div class="instance-stats">
+              <div class="stat version-stat" title="Minecraft version · loader">
+                <Gamepad2 size={14} />
+                <span>{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
+              </div>
               <div class="stat">
                 <HardDrive size={14} />
                 <span>{instanceSizes[selectedProject.path] || "..."}</span>
@@ -1160,7 +1160,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 32px;
+    padding: 24px 32px;
     background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
@@ -1265,10 +1265,9 @@
     color: var(--text-muted);
   }
 
-  .project-version {
-    font-size: 12px;
-    line-height: 1.35;
-    color: var(--text-muted);
+  .version-stat {
+    color: var(--text-secondary);
+    font-weight: 600;
     text-transform: capitalize;
   }
 

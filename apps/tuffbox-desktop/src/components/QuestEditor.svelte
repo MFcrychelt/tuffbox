@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type QuestChapter, type QuestChapterGroup, type QuestData, type QuestValidationIssue, type QuestProgressTeamRef, type QuestProgressSnapshot, type QuestProgressStatus, type QuestPlanMergeResult, stripLocaleOverlay, chapterToSnbtJson } from "../lib/api";
-  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map as MapIcon, Eye, Sparkles, X, Undo2, Redo2, Keyboard } from "@lucide/svelte";
+  import { ScrollText, RefreshCw, Save, AlertTriangle, CheckCircle2, Map as MapIcon, Sparkles, X, Undo2, Redo2, Keyboard } from "@lucide/svelte";
   import { onDestroy } from "svelte";
   import { projectPath, questDirty, questChatFocusId } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
@@ -16,10 +16,13 @@
   import RawSnbtView from "./quests/RawSnbtView.svelte";
   import SnbtDiffModal from "./quests/SnbtDiffModal.svelte";
   import LocalePanel from "./quests/LocalePanel.svelte";
+  import BookSettingsPanel from "./quests/BookSettingsPanel.svelte";
+  import ChapterGroupsPanel from "./quests/ChapterGroupsPanel.svelte";
+  import ProgressPanel from "./quests/ProgressPanel.svelte";
   import ShortcutsModal from "./ui/ShortcutsModal.svelte";
   import { wouldCreateQuestCycle } from "./quests/deps";
   import type { QuestRewardTable } from "../lib/api";
-  import { snbtTextsEqual } from "../lib/snbtDiff";
+  import { snbtTextsEqual, type SnbtDiffFile } from "../lib/snbtDiff";
   import {
     applyLocaleOverlay,
     clearLocaleTitles,
@@ -63,20 +66,6 @@
   import { stripCodes } from "../lib/mcformat";
   import { validateQuestBook } from "../lib/questValidate";
   import { applyLayout, positionsForMode, type LayoutMode } from "../lib/questLayout";
-
-  const BOOK_BOOL_KEYS = [
-    "pause_game",
-    "show_lock_icons",
-    "hide_offline",
-    "drop_loot_crates",
-    "disable_gui",
-    "disable_toast",
-    "disable_cheating",
-    "default_consume_items",
-  ] as const;
-  const BOOK_STRING_KEYS = ["default_quest_shape", "theme", "progression_mode"] as const;
-  const BOOK_NUMBER_KEYS = ["default_quest_size"] as const;
-  const BOOK_CURATED = new Set<string>([...BOOK_BOOL_KEYS, ...BOOK_STRING_KEYS, ...BOOK_NUMBER_KEYS]);
 
   function asLocaleMaps(
     raw: Record<string, Record<string, string | string[] | unknown>> | undefined,
@@ -159,6 +148,7 @@
   let snbtDiffRightLabel = $state("Editor");
   let snbtDiffLeft = $state("");
   let snbtDiffRight = $state("");
+  let snbtDiffFiles = $state<SnbtDiffFile[] | null>(null);
   let snbtDiffConfirmLabel = $state("Save");
   let snbtDiffResolver: ((ok: boolean) => void) | null = null;
 
@@ -276,56 +266,6 @@
     }
   }
 
-  function bookBool(key: string): boolean {
-    const v = bookSettings[key];
-    return v === true || v === 1 || v === "1" || v === "true";
-  }
-
-  function setBookBool(key: string, value: boolean) {
-    pushHistory();
-    bookSettings = { ...bookSettings, [key]: value };
-    bookDirty = true;
-  }
-
-  function bookString(key: string): string {
-    const v = bookSettings[key];
-    return typeof v === "string" ? v : v == null ? "" : String(v);
-  }
-
-  function setBookString(key: string, value: string) {
-    pushHistory();
-    bookSettings = { ...bookSettings, [key]: value };
-    bookDirty = true;
-  }
-
-  function bookNumber(key: string): string {
-    const v = bookSettings[key];
-    return typeof v === "number" ? String(v) : v == null || v === "" ? "" : String(v);
-  }
-
-  function setBookNumber(key: string, raw: string) {
-    pushHistory();
-    const next = { ...bookSettings };
-    if (raw.trim() === "") delete next[key];
-    else {
-      const n = Number(raw);
-      next[key] = Number.isFinite(n) ? n : raw;
-    }
-    bookSettings = next;
-    bookDirty = true;
-  }
-
-  function removeBookSetting(key: string) {
-    pushHistory();
-    const next = { ...bookSettings };
-    delete next[key];
-    bookSettings = next;
-    bookDirty = true;
-  }
-
-  const bookExtraEntries = $derived(
-    Object.entries(bookSettings).filter(([k]) => !BOOK_CURATED.has(k)),
-  );
   const availableLocales = $derived(localeCodes(locales));
 
   function requestReload() {
@@ -448,7 +388,6 @@
   }
 
   const progressStatuses = $derived((progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>);
-  const progressTeamLabel = $derived(progressTeams.find((t) => t.relativePath === progressKey));
 
   function markDirty(chapterId: string) {
     dirtyChapters = new Set([...dirtyChapters, chapterId]);
@@ -543,15 +482,17 @@
     title: string;
     leftLabel?: string;
     rightLabel?: string;
-    leftText: string;
-    rightText: string;
+    leftText?: string;
+    rightText?: string;
+    files?: SnbtDiffFile[] | null;
     confirmLabel?: string;
   }): Promise<boolean> {
     snbtDiffTitle = opts.title;
     snbtDiffLeftLabel = opts.leftLabel ?? "Disk";
     snbtDiffRightLabel = opts.rightLabel ?? "Editor";
-    snbtDiffLeft = opts.leftText;
-    snbtDiffRight = opts.rightText;
+    snbtDiffLeft = opts.leftText ?? "";
+    snbtDiffRight = opts.rightText ?? "";
+    snbtDiffFiles = opts.files ?? null;
     snbtDiffConfirmLabel = opts.confirmLabel ?? "Save";
     snbtDiffOpen = true;
     return await new Promise<boolean>((resolve) => {
@@ -561,6 +502,7 @@
 
   function closeSnbtDiff(ok: boolean) {
     snbtDiffOpen = false;
+    snbtDiffFiles = null;
     const r = snbtDiffResolver;
     snbtDiffResolver = null;
     r?.(ok);
@@ -573,6 +515,31 @@
     const sep = projectDir.includes("\\") ? "\\" : "/";
     const filePath = `${projectDir.replace(/[/\\]+$/, "")}${sep}${relativePath.replace(/^[/\\]+/, "").replace(/[/\\]/g, sep)}`;
     return { relativePath: relativePath.replace(/\\/g, "/"), filePath };
+  }
+
+  /** Disk vs editor SNBT for a chapter; null if no disk file or identical. */
+  async function buildChapterSnbtDiff(
+    ch: QuestChapter,
+    projectDir: string,
+  ): Promise<SnbtDiffFile | null> {
+    const { relativePath, filePath } = chapterFilePath(ch, projectDir);
+    let diskText: string;
+    try {
+      diskText = await api.quests.readChapterText(filePath);
+    } catch {
+      return null;
+    }
+    const payload = stripLocaleOverlay(chapterToSnbtJson(ch));
+    const editorText = await api.quests.previewChapterSnbt(JSON.stringify(payload));
+    if (snbtTextsEqual(diskText, editorText)) return null;
+    return {
+      id: ch.id,
+      label: ch.title || relativePath,
+      leftText: diskText,
+      rightText: editorText,
+      leftLabel: relativePath,
+      rightLabel: "Editor (about to write)",
+    };
   }
 
   async function saveChapter(
@@ -589,35 +556,23 @@
       await saveLocaleIfNeeded();
       const projectDir = await api.project.getDir($projectPath);
       const { relativePath, filePath } = chapterFilePath(ch, projectDir);
-      // Locale text lives in lang/*.snbt — never hardcode it back into the chapter file.
       const payload = stripLocaleOverlay(chapterToSnbtJson(ch));
       const jsonPayload = JSON.stringify(payload);
 
       if (!opts?.skipDiff) {
-        let diskText: string | null = null;
-        try {
-          diskText = await api.quests.readChapterText(filePath);
-        } catch {
-          diskText = null;
-        }
-        if (diskText != null) {
-          const editorText = await api.quests.previewChapterSnbt(jsonPayload);
-          if (!snbtTextsEqual(diskText, editorText)) {
-            saving = false;
-            const ok = await promptSnbtDiff({
-              title: `Save chapter “${ch.title || ch.id}”?`,
-              leftLabel: relativePath,
-              rightLabel: "Editor (about to write)",
-              leftText: diskText,
-              rightText: editorText,
-              confirmLabel: "Write SNBT",
-            });
-            if (!ok) {
-              message = "Save cancelled";
-              return "cancelled";
-            }
-            saving = true;
+        const diff = await buildChapterSnbtDiff(ch, projectDir);
+        if (diff) {
+          saving = false;
+          const ok = await promptSnbtDiff({
+            title: `Save chapter “${ch.title || ch.id}”?`,
+            files: [diff],
+            confirmLabel: "Write SNBT",
+          });
+          if (!ok) {
+            message = "Save cancelled";
+            return "cancelled";
           }
+          saving = true;
         }
       }
 
@@ -662,9 +617,36 @@
         : "");
     if (!window.confirm(summary)) return;
 
-    for (const id of [...dirtyChapters]) {
-      const result = await saveChapter(id);
-      if (result === "cancelled") break;
+    const dirtyIds = [...dirtyChapters];
+    if (dirtyIds.length > 0 && $projectPath) {
+      const projectDir = await api.project.getDir($projectPath);
+      const diffs: SnbtDiffFile[] = [];
+      for (const id of dirtyIds) {
+        const ch = chapters.find((c) => c.id === id);
+        if (!ch) continue;
+        try {
+          const d = await buildChapterSnbtDiff(ch, projectDir);
+          if (d) diffs.push(d);
+        } catch (e) {
+          error = String(e);
+          return;
+        }
+      }
+      if (diffs.length > 0) {
+        const ok = await promptSnbtDiff({
+          title: `Save ${diffs.length} chapter file(s)?`,
+          files: diffs,
+          confirmLabel: "Write all SNBT",
+        });
+        if (!ok) {
+          message = "Save cancelled";
+          return;
+        }
+      }
+      for (const id of dirtyIds) {
+        const result = await saveChapter(id, { skipDiff: true });
+        if (result === "error") break;
+      }
     }
     if (rewardTablesDirty) {
       for (const t of rewardTables) {
@@ -707,10 +689,16 @@
       }
       await promptSnbtDiff({
         title: `Diff vs disk — ${ch.title || ch.id}`,
-        leftLabel: relativePath,
-        rightLabel: "Editor",
-        leftText: diskText,
-        rightText: editorText,
+        files: [
+          {
+            id: ch.id,
+            label: ch.title || relativePath,
+            leftText: diskText,
+            rightText: editorText,
+            leftLabel: relativePath,
+            rightLabel: "Editor",
+          },
+        ],
         confirmLabel: "Close",
       });
     } catch (e) {
@@ -1574,122 +1562,54 @@
           </div>
         {/if}
         {#if showBookPanel && $projectPath}
-          <div class="drawer drawer-wide">
-            <div class="drawer-h">
-              <strong>Book (data.snbt)</strong>
-              <button type="button" class="ghost ico" onclick={() => { showBookPanel = false; bookMenuOpen = false; }}
-                ><X size={14} /></button
-              >
-            </div>
-            <label
-              >Title<input
-                value={bookTitle ?? ""}
-                oninput={(e) => {
-                  if (!bookDirty) pushHistory();
-                  bookTitle = inputVal(e);
-                  bookDirty = true;
-                }}
-              /></label
-            >
-            <label
-              >Subtitle<input
-                value={bookSubtitle ?? ""}
-                oninput={(e) => {
-                  if (!bookDirty) pushHistory();
-                  bookSubtitle = inputVal(e);
-                  bookDirty = true;
-                }}
-              /></label
-            >
-            <div class="book-flags">
-              {#each BOOK_BOOL_KEYS as key (key)}
-                <label class="book-check">
-                  <input
-                    type="checkbox"
-                    checked={bookBool(key)}
-                    onchange={(e) => setBookBool(key, (e.currentTarget as HTMLInputElement).checked)}
-                  />
-                  {key}
-                </label>
-              {/each}
-            </div>
-            {#each BOOK_STRING_KEYS as key (key)}
-              <label
-                >{key}<input
-                  value={bookString(key)}
-                  oninput={(e) => setBookString(key, inputVal(e))}
-                /></label
-              >
-            {/each}
-            <label
-              >default_quest_size<input
-                type="number"
-                step="0.25"
-                min="0"
-                value={bookNumber("default_quest_size")}
-                oninput={(e) => setBookNumber("default_quest_size", inputVal(e))}
-                placeholder="optional"
-              /></label
-            >
-            {#if bookExtraEntries.length > 0}
-              <p class="drawer-hint">Other data.snbt keys</p>
-              {#each bookExtraEntries as [k, v] (k)}
-                <div class="group-row book-extra">
-                  <code>{k}</code>
-                  <span class="extra-val">{typeof v === "string" ? v : JSON.stringify(v)}</span>
-                  <button type="button" class="ghost" onclick={() => removeBookSetting(k)}>Remove</button>
-                </div>
-              {/each}
-            {/if}
-            <p class="drawer-hint">Included in Save all · or save here</p>
-            <button type="button" onclick={saveBookData} disabled={saving || !bookDirty}
-              >Save book</button
-            >
-          </div>
+          <BookSettingsPanel
+            {bookTitle}
+            {bookSubtitle}
+            {bookSettings}
+            {bookDirty}
+            {saving}
+            onclose={() => {
+              showBookPanel = false;
+              bookMenuOpen = false;
+            }}
+            onsave={() => void saveBookData()}
+            onpushhistory={pushHistory}
+            ontitlechange={(v) => {
+              bookTitle = v;
+              bookDirty = true;
+            }}
+            onsubtitlechange={(v) => {
+              bookSubtitle = v;
+              bookDirty = true;
+            }}
+            onsetsettings={(next) => {
+              bookSettings = next;
+              bookDirty = true;
+            }}
+          />
         {/if}
         {#if showGroupsPanel && $projectPath}
-          <div class="drawer drawer-wide">
-            <div class="drawer-h">
-              <strong>Chapter groups</strong>
-              <button type="button" class="ghost" onclick={addChapterGroup}>+ Group</button>
-              <button type="button" class="ghost ico" onclick={() => { showGroupsPanel = false; bookMenuOpen = false; }}
-                ><X size={14} /></button
-              >
-            </div>
-            {#each chapterGroups as g, gi (g.id)}
-              <div class="group-row">
-                <code>{g.id}</code>
-                <input
-                  bind:value={g.title}
-                  oninput={() => {
-                    g.titleFromSnbt = true;
-                    groupsDirty = true;
-                  }}
-                />
-                <button
-                  type="button"
-                  class="ghost"
-                  disabled={gi === 0}
-                  title="Move up"
-                  onclick={() => moveChapterGroup(g.id, -1)}>↑</button
-                >
-                <button
-                  type="button"
-                  class="ghost"
-                  disabled={gi === chapterGroups.length - 1}
-                  title="Move down"
-                  onclick={() => moveChapterGroup(g.id, 1)}>↓</button
-                >
-                <button type="button" class="ghost" onclick={() => removeChapterGroup(g.id)}
-                  >Remove</button
-                >
-              </div>
-            {/each}
-            <p class="drawer-hint">Included in Save all</p>
-            <button type="button" onclick={saveGroups} disabled={saving || !groupsDirty}
-              >Save groups</button
-            >
-          </div>
+          <ChapterGroupsPanel
+            {chapterGroups}
+            {groupsDirty}
+            {saving}
+            onclose={() => {
+              showGroupsPanel = false;
+              bookMenuOpen = false;
+            }}
+            onsave={() => void saveGroups()}
+            onadd={addChapterGroup}
+            onremove={removeChapterGroup}
+            onmove={moveChapterGroup}
+            ontitlechange={(id, title) => {
+              const g = chapterGroups.find((x) => x.id === id);
+              if (!g) return;
+              g.title = title;
+              g.titleFromSnbt = true;
+              groupsDirty = true;
+              chapterGroups = [...chapterGroups];
+            }}
+          />
         {/if}
         {#if showTablesPanel && $projectPath}
           <div class="drawer drawer-tables">
@@ -1840,92 +1760,23 @@
         >
       {/if}
     </div>
-    <details class="prog-details" bind:open={progressOpen}>
-      <summary><Eye size={14} /> Progress</summary>
-      <div class="prog-bar">
-        <div class="prog-modes">
-          <button
-            type="button"
-            class="ghost"
-            class:sel={progressMode === "save"}
-            onclick={() => void enterSaveMode()}
-            >Save overlay</button
-          >
-          <button
-            type="button"
-            class="ghost"
-            class:sel={progressMode === "simulate"}
-            onclick={() => void enterSimulateMode()}
-            >Simulate</button
-          >
-        </div>
-        <label class="prog-toggle">
-          <input
-            type="checkbox"
-            bind:checked={progressOverlay}
-            disabled={!progressSnap}
-            title="Show progress on canvas"
-          />
-          Overlay
-        </label>
-        {#if progressMode === "save"}
-          <select
-            bind:value={progressKey}
-            onchange={loadProgress}
-            disabled={progressLoading || progressTeams.length === 0}
-          >
-            <option value="">
-              {progressTeams.length === 0
-                ? "No saves/*/ftbquests progress"
-                : "Select team / player…"}
-            </option>
-            {#each progressTeams as t (t.relativePath)}
-              <option value={t.relativePath}>{t.world} — {t.name}</option>
-            {/each}
-          </select>
-          <button
-            type="button"
-            class="ghost"
-            disabled={progressLoading || !progressKey}
-            onclick={loadProgress}
-            title="Reload progress"
-          >
-            <RefreshCw size={14} class={progressLoading ? "spin" : ""} />
-          </button>
-        {:else}
-          <span class="prog-sim-hint"
-            >Click quests on canvas to toggle complete ({simCompleted.length})</span
-          >
-          <button
-            type="button"
-            class="ghost"
-            disabled={progressLoading || !progressKey}
-            onclick={() => void seedSimulateFromTeam()}
-            title="Copy completed quests from selected save team"
-            >Seed from team</button
-          >
-          <button
-            type="button"
-            class="ghost"
-            disabled={simBusy}
-            onclick={() => void resetSimulate()}
-            >Reset</button
-          >
-          <button
-            type="button"
-            class="ghost"
-            disabled={simBusy}
-            onclick={() => void refreshSimulate()}
-            title="Reclassify"
-          >
-            <RefreshCw size={14} class={simBusy ? "spin" : ""} />
-          </button>
-        {/if}
-        {#if progressMode === "save" && progressTeamLabel}
-          <code class="prog-path">{progressTeamLabel.relativePath}</code>
-        {/if}
-      </div>
-    </details>
+    <ProgressPanel
+      bind:open={progressOpen}
+      {progressMode}
+      bind:progressOverlay
+      {progressSnap}
+      {progressTeams}
+      bind:progressKey
+      {progressLoading}
+      {simCompleted}
+      {simBusy}
+      onentersave={() => void enterSaveMode()}
+      onentersimulate={() => void enterSimulateMode()}
+      onloadprogress={() => void loadProgress()}
+      onseed={() => void seedSimulateFromTeam()}
+      onreset={() => void resetSimulate()}
+      onrefreshsim={() => void refreshSimulate()}
+    />
   {/if}
 
   {#if error}<div class="notice error"><AlertTriangle size={14} /> {error}</div>{/if}
@@ -2177,6 +2028,7 @@
   rightLabel={snbtDiffRightLabel}
   leftText={snbtDiffLeft}
   rightText={snbtDiffRight}
+  files={snbtDiffFiles}
   confirmLabel={snbtDiffConfirmLabel}
   onConfirm={() => closeSnbtDiff(true)}
   onCancel={() => closeSnbtDiff(false)}
@@ -2196,6 +2048,7 @@
     --ftbq-quest-started: #f2c94c;
     --ftbq-quest-completed: #55c95a;
     --ftbq-line: #5c8a9e;
+    --ftbq-line-hover: #7fb3c8;
     --ftbq-line-done: #55c95a;
     --ftbq-accent-teal: #3db8a8;
     --ftbq-accent-green: #55c95a;
@@ -2302,32 +2155,6 @@
     font-size: 11px;
     padding: 4px 6px;
   }
-  .book-flags {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 160px;
-    overflow: auto;
-    padding: 4px 0;
-  }
-  .book-check {
-    display: flex !important;
-    flex-direction: row !important;
-    align-items: center;
-    gap: 8px;
-    font-size: 11px;
-    text-transform: none;
-    color: var(--ftbq-text, #e8e8e8);
-    letter-spacing: 0;
-  }
-  .book-extra .extra-val {
-    flex: 1;
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .book-menu {
     position: absolute;
     top: calc(100% + 4px);
@@ -2406,34 +2233,6 @@
   .drawer-h strong {
     flex: 1;
   }
-  .drawer label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
-  .drawer input {
-    background: #141419;
-    border: 1px solid #0c0c0f;
-    color: inherit;
-    border-radius: 3px;
-    padding: 6px 8px;
-    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
-  }
-  .drawer-hint {
-    margin: 0;
-    font-size: 11px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
-  .group-row {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .group-row input {
-    flex: 1;
-  }
   .issues-wrap {
     position: relative;
   }
@@ -2487,28 +2286,6 @@
   .issue-row:hover {
     background: rgba(61, 184, 168, 0.1);
   }
-  .prog-details {
-    flex-shrink: 0;
-    margin: 0 12px 8px;
-    border: 1px solid var(--ftbq-frame, #101014);
-    border-radius: 3px;
-    background: var(--ftbq-bg-panel, #212126);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-    padding: 0 8px;
-  }
-  .prog-details summary {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    padding: 6px 4px;
-    font-size: 12px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    list-style: none;
-  }
-  .prog-details summary::-webkit-details-marker {
-    display: none;
-  }
   .qe-tb {
     justify-content: space-between;
     margin-bottom: 4px;
@@ -2551,53 +2328,6 @@
   }
   .prog-stat {
     color: var(--ftbq-quest-completed, #55c95a);
-  }
-  .prog-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-    padding: 6px 10px;
-    border-radius: 3px;
-    border: 1px solid var(--ftbq-frame, #101014);
-    background: var(--ftbq-bg-panel, #212126);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-size: 11px;
-    flex-shrink: 0;
-  }
-  .prog-modes {
-    display: inline-flex;
-    gap: 4px;
-  }
-  .prog-modes .ghost.sel {
-    color: var(--ftbq-accent-teal, #3db8a8);
-    border-color: rgba(61, 184, 168, 0.45);
-    background: rgba(61, 184, 168, 0.1);
-  }
-  .prog-sim-hint {
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
-  .prog-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    cursor: pointer;
-  }
-  .prog-bar select {
-    min-width: 200px;
-    max-width: 360px;
-    font-size: 12px;
-  }
-  .prog-path {
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 280px;
   }
   .dirty-badge {
     font-size: 10px;

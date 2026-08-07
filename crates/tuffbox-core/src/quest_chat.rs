@@ -5,6 +5,44 @@ use std::path::{Path, PathBuf};
 
 use crate::quest_plan::QuestPlan;
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTokenUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u32>,
+}
+
+impl AiTokenUsage {
+    pub fn is_empty(&self) -> bool {
+        self.prompt_tokens.is_none()
+            && self.completion_tokens.is_none()
+            && self.total_tokens.is_none()
+    }
+
+    pub fn merge_in(&mut self, other: &AiTokenUsage) {
+        self.prompt_tokens = sum_opt(self.prompt_tokens, other.prompt_tokens);
+        self.completion_tokens = sum_opt(self.completion_tokens, other.completion_tokens);
+        self.total_tokens = sum_opt(self.total_tokens, other.total_tokens);
+        if self.total_tokens.is_none() {
+            if let (Some(p), Some(c)) = (self.prompt_tokens, self.completion_tokens) {
+                self.total_tokens = Some(p.saturating_add(c));
+            }
+        }
+    }
+}
+
+fn sum_opt(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (Some(x), Some(y)) => Some(x.saturating_add(y)),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestChatMessage {
@@ -17,6 +55,8 @@ pub struct QuestChatMessage {
     pub plan: Option<QuestPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_log: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<AiTokenUsage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

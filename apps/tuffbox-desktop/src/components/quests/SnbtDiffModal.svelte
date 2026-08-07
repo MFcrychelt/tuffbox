@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { unifiedDiffLines, type DiffLine } from "../../lib/snbtDiff";
+  import { unifiedDiffLines, type DiffLine, type SnbtDiffFile } from "../../lib/snbtDiff";
   import { trapFocus } from "../../lib/focusTrap";
 
   let {
@@ -9,6 +9,7 @@
     rightLabel = "Editor",
     leftText = "",
     rightText = "",
+    files = null as SnbtDiffFile[] | null,
     confirmLabel = "Save",
     onConfirm,
     onCancel,
@@ -19,14 +20,37 @@
     rightLabel?: string;
     leftText?: string;
     rightText?: string;
+    files?: SnbtDiffFile[] | null;
     confirmLabel?: string;
     onConfirm?: () => void;
     onCancel?: () => void;
   } = $props();
 
+  let activeIndex = $state(0);
+
+  $effect(() => {
+    if (open) activeIndex = 0;
+  });
+
+  let fileList = $derived.by<SnbtDiffFile[]>(() => {
+    if (files && files.length > 0) return files;
+    return [
+      {
+        id: "_single",
+        label: leftLabel || "file",
+        leftText,
+        rightText,
+        leftLabel,
+        rightLabel,
+      },
+    ];
+  });
+
+  let active = $derived(fileList[Math.min(activeIndex, fileList.length - 1)] ?? fileList[0]!);
+
   let lines = $derived.by<DiffLine[]>(() => {
-    if (!open) return [];
-    return unifiedDiffLines(leftText, rightText);
+    if (!open || !active) return [];
+    return unifiedDiffLines(active.leftText, active.rightText);
   });
 
   let stats = $derived.by(() => {
@@ -37,6 +61,18 @@
       else if (l.kind === "del") removed++;
     }
     return { added, removed };
+  });
+
+  let totalStats = $derived.by(() => {
+    let added = 0;
+    let removed = 0;
+    for (const f of fileList) {
+      for (const l of unifiedDiffLines(f.leftText, f.rightText)) {
+        if (l.kind === "add") added++;
+        else if (l.kind === "del") removed++;
+      }
+    }
+    return { added, removed, files: fileList.length };
   });
 
   function lineClass(kind: DiffLine["kind"]): string {
@@ -62,6 +98,7 @@
   >
     <div
       class="modal snbt-diff-modal"
+      class:multi={fileList.length > 1}
       role="dialog"
       aria-modal="true"
       aria-labelledby="snbt-diff-title"
@@ -71,17 +108,41 @@
         <div>
           <h2 id="snbt-diff-title">{title}</h2>
           <p>
-            {leftLabel} → {rightLabel}
-            · +{stats.added} / −{stats.removed}
+            {#if fileList.length > 1}
+              {totalStats.files} files · +{totalStats.added} / −{totalStats.removed}
+              {#if active}
+                · viewing {active.leftLabel ?? "Disk"} → {active.rightLabel ?? "Editor"}
+                (+{stats.added}/−{stats.removed})
+              {/if}
+            {:else}
+              {active?.leftLabel ?? leftLabel} → {active?.rightLabel ?? rightLabel}
+              · +{stats.added} / −{stats.removed}
+            {/if}
           </p>
         </div>
         <button class="icon-btn" type="button" onclick={() => onCancel?.()} aria-label="Close">×</button>
       </div>
-      <pre class="diff-body"><code
-        >{#each lines as line, i (`${i}-${line.kind}-${line.text.slice(0, 24)}`)}<span
-            class={lineClass(line.kind)}>{prefix(line.kind)}{line.text}
+      <div class="diff-shell">
+        {#if fileList.length > 1}
+          <aside class="file-list">
+            {#each fileList as f, i (f.id)}
+              <button
+                type="button"
+                class="file-btn"
+                class:active={i === activeIndex}
+                onclick={() => (activeIndex = i)}
+              >
+                {f.label}
+              </button>
+            {/each}
+          </aside>
+        {/if}
+        <pre class="diff-body"><code
+          >{#each lines as line, i (`${i}-${line.kind}-${line.text.slice(0, 24)}`)}<span
+              class={lineClass(line.kind)}>{prefix(line.kind)}{line.text}
 </span>{/each}</code
-      ></pre>
+        ></pre>
+      </div>
       <div class="modal-actions">
         <button class="ghost" type="button" onclick={() => onCancel?.()}>Cancel</button>
         <button class="primary" type="button" onclick={() => onConfirm?.()}>{confirmLabel}</button>
@@ -113,6 +174,9 @@
     padding: 16px;
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
   }
+  .snbt-diff-modal.multi {
+    width: min(1100px, 96vw);
+  }
   .modal-header {
     display: flex;
     justify-content: space-between;
@@ -138,8 +202,42 @@
     cursor: pointer;
     padding: 2px 6px;
   }
+  .diff-shell {
+    display: flex;
+    gap: 10px;
+    min-height: 0;
+    flex: 1;
+  }
+  .file-list {
+    width: 200px;
+    flex-shrink: 0;
+    overflow: auto;
+    max-height: 58vh;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-right: 1px solid var(--border-color, #3a3a42);
+    padding-right: 8px;
+  }
+  .file-btn {
+    text-align: left;
+    padding: 7px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-secondary, #c4c4c8);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .file-btn:hover,
+  .file-btn.active {
+    background: var(--bg-tertiary, #212126);
+    border-color: rgba(61, 184, 168, 0.35);
+    color: var(--text-primary, #e8e8e8);
+  }
   .diff-body {
     flex: 1;
+    min-width: 0;
     min-height: 200px;
     max-height: 58vh;
     overflow: auto;

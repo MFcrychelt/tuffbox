@@ -45,6 +45,7 @@
   } = $props();
 
   let depPick = $state("");
+  let depFilter = $state("");
   let descText = $state("");
   let extraKey = $state("");
   let extraVal = $state("");
@@ -54,6 +55,15 @@
   let cmpDesc = $state("");
 
   let depOptions = $derived(buildDepOptions(chapters, chapterQuests, quest));
+  let filteredDepOptions = $derived.by(() => {
+    const q = depFilter.trim().toLowerCase();
+    if (!q) return depOptions;
+    return depOptions.filter(
+      (o) =>
+        o.label.toLowerCase().includes(q) ||
+        o.id.toLowerCase().includes(q),
+    );
+  });
   let myIssues = $derived(issues.filter((i) => i.questId === quest.id));
   let showCompare = $derived(
     !!compareLocale &&
@@ -62,8 +72,38 @@
       availableLocales.length > 1,
   );
 
+  function normalizeDescLines(text: string): string[] {
+    const lines = text
+      .split("\n")
+      .map((s) => s.trimEnd())
+      .filter((s, i, arr) => s.length > 0 || i < arr.length - 1);
+    while (lines.length && lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  }
+
+  function commitDescriptionTo(target: QuestData, text: string): boolean {
+    const lines = normalizeDescLines(text);
+    const prev = (target.description ?? []).join("\n");
+    const next = lines.join("\n");
+    if (prev === next) return false;
+    target.description = lines;
+    target.descriptionFromSnbt = true;
+    onDirty();
+    return true;
+  }
+
+  function commitDescription() {
+    commitDescriptionTo(quest, descText);
+  }
+
+  /** Flush pending description when leaving a quest (deselect / switch) before resync. */
   $effect(() => {
-    descText = (quest.description ?? []).join("\n");
+    const target = quest;
+    void target.id;
+    descText = (target.description ?? []).join("\n");
+    return () => {
+      commitDescriptionTo(target, descText);
+    };
   });
 
   $effect(() => {
@@ -79,6 +119,20 @@
     cmpTitle = localeValueAsString(map, `quest.${id}.title`);
     cmpSubtitle = localeValueAsString(map, `quest.${id}.quest_subtitle`);
     cmpDesc = localeValueAsString(map, `quest.${id}.quest_desc`);
+    return () => {
+      if (!code || !map) return;
+      const lines = normalizeDescLines(cmpDesc);
+      const key = `quest.${id}.quest_desc`;
+      const prev = localeValueAsString(map, key);
+      if (prev === lines.join("\n")) return;
+      const next: LocaleMap = { ...map };
+      for (const [k, v] of Object.entries(next)) {
+        if (Array.isArray(v)) next[k] = [...v];
+      }
+      next[key] = lines;
+      onCompareMapChange?.(code, next);
+      onCompareDirty?.(code);
+    };
   });
 
   function patchCompare(mutator: (map: LocaleMap) => void) {
@@ -93,11 +147,7 @@
   }
 
   function commitCompareDesc() {
-    const lines = cmpDesc
-      .split("\n")
-      .map((s) => s.trimEnd())
-      .filter((s, i, arr) => s.length > 0 || i < arr.length - 1);
-    while (lines.length && lines[lines.length - 1] === "") lines.pop();
+    const lines = normalizeDescLines(cmpDesc);
     patchCompare((map) => {
       map[`quest.${quest.id}.quest_desc`] = lines;
     });
@@ -166,18 +216,19 @@
     if (!depPick) return;
     onAddDep(depPick);
     depPick = "";
+    depFilter = "";
   }
 
-  function commitDescription() {
-    quest.description = descText
-      .split("\n")
-      .map((s) => s.trimEnd())
-      .filter((s, i, arr) => s.length > 0 || i < arr.length - 1);
-    while (quest.description.length && quest.description[quest.description.length - 1] === "") {
-      quest.description.pop();
+  function applyDepFromFilter() {
+    if (depPick) {
+      applyDep();
+      return;
     }
-    quest.descriptionFromSnbt = true;
-    onDirty();
+    const first = filteredDepOptions[0];
+    if (!first) return;
+    onAddDep(first.id);
+    depPick = "";
+    depFilter = "";
   }
 
   function wrapFmt(code: string) {
@@ -314,6 +365,7 @@
               value={descText}
               oninput={(e) => (descText = textareaVal(e))}
               onchange={commitDescription}
+              onblur={commitDescription}
               placeholder="One line per paragraph"
             ></textarea>
           </label>
@@ -344,6 +396,7 @@
               rows="4"
               bind:value={cmpDesc}
               onchange={commitCompareDesc}
+              onblur={commitCompareDesc}
               placeholder="Compare locale description"
             ></textarea>
           </label>
@@ -384,6 +437,7 @@
           value={descText}
           oninput={(e) => (descText = textareaVal(e))}
           onchange={commitDescription}
+          onblur={commitDescription}
           placeholder="One line per paragraph · & codes · JSON text lines ok"
         ></textarea>
         <small class="fmt-hint">Lines starting with {"{"} or [ are treated as raw JSON text by FTB Quests.</small>
@@ -527,13 +581,30 @@
     {/each}
   </div>
   <div class="dep-add">
-    <select bind:value={depPick}>
-      <option value="">Add dependency…</option>
-      {#each depOptions as o (o.id)}
+    <input
+      type="search"
+      class="dep-filter"
+      placeholder="Filter dependencies…"
+      bind:value={depFilter}
+      onkeydown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          applyDepFromFilter();
+        }
+      }}
+    />
+    <select bind:value={depPick} size={Math.min(8, Math.max(3, filteredDepOptions.length + 1))}>
+      <option value="">Add dependency… ({filteredDepOptions.length})</option>
+      {#each filteredDepOptions as o (o.id)}
         <option value={o.id}>{o.label}</option>
       {/each}
     </select>
-    <button type="button" class="add-btn" disabled={!depPick} onclick={applyDep}>Add</button>
+    <button
+      type="button"
+      class="add-btn"
+      disabled={!depPick && filteredDepOptions.length === 0}
+      onclick={applyDepFromFilter}>Add</button
+    >
   </div>
 </aside>
 
@@ -739,16 +810,29 @@
   }
   .dep-add {
     display: flex;
+    flex-direction: column;
     gap: 6px;
     padding: 0 12px 12px;
   }
+  .dep-filter {
+    width: 100%;
+    font-size: 11px;
+    padding: 5px 7px;
+    background: #141419;
+    border: 1px solid #0c0c0f;
+    color: var(--ftbq-text, #e8e8e8);
+    border-radius: 3px;
+  }
   .dep-add select {
-    flex: 1;
+    width: 100%;
     font-size: 11px;
     background: #141419;
     border: 1px solid #0c0c0f;
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
+  }
+  .dep-add .add-btn {
+    align-self: flex-end;
   }
   .add-btn {
     font-size: 11px;

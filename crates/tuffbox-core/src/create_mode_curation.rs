@@ -3,7 +3,7 @@
 //!
 //! AI never picks jar URLs / file_id / checksums — only search intent and keep/reject slugs.
 
-use crate::create_mode::{PackBrief, PackDraft, PackDraftMod};
+use crate::create_mode::{CreateModeBrief, PackDraft, PackDraftMod};
 use crate::swarm_supabase::PartnerStat;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -403,7 +403,7 @@ fn is_utility_noise(token: &str) -> bool {
 }
 
 /// Extract 3–7 gameplay pillars from brief + free-text goal. Deterministic, no LLM.
-pub fn extract_pillars_from_brief(brief: &PackBrief, user_goal: &str) -> Vec<GameplayPillar> {
+pub fn extract_pillars_from_brief(brief: &CreateModeBrief, user_goal: &str) -> Vec<GameplayPillar> {
     let mut hay = String::new();
     hay.push_str(user_goal);
     hay.push(' ');
@@ -1074,10 +1074,10 @@ pub fn min_keep_for_complete(target_count: u32) -> usize {
 
 /// Push keep slugs into mustHave; merge reject into exclude.
 pub fn apply_verdict_to_brief(
-    brief: &PackBrief,
+    brief: &CreateModeBrief,
     verdict: &CurationVerdict,
     partner_boosts: &[CooccurPartner],
-) -> PackBrief {
+) -> CreateModeBrief {
     let mut brief = brief.clone();
     let mut exclude: HashSet<String> = brief
         .exclude
@@ -1671,10 +1671,10 @@ pub fn parse_curation_search(raw: &str) -> Result<CurationSearchQuery, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create_mode::{CategoryBudget, MustHaveSpec, PackBrief, PackDraft, PackDraftMod};
+    use crate::create_mode::{CategoryBudget, CreateModeBrief, MustHaveSpec, PackDraft, PackDraftMod};
 
-    fn sample_brief() -> PackBrief {
-        PackBrief {
+    fn sample_brief() -> CreateModeBrief {
+        CreateModeBrief {
             title: "Industrial flight pack".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),

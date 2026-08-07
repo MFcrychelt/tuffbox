@@ -7268,8 +7268,31 @@ async fn generate_quest_plan_via_ai(
             })
             .collect(),
         sample_items,
-        pack_hint: book.title.clone(),
+        pack_hint: book.title.clone().or_else(|| {
+            let mp = resolve_manifest_path(path).ok()?;
+            let m = tuffbox_core::ProjectManifest::load_from_path(&mp).ok()?;
+            let b = m.brief?;
+            let mut parts: Vec<String> = Vec::new();
+            if !b.goal.is_empty() {
+                parts.push(format!("Goal: {}", b.goal));
+            }
+            if !b.target_audience.is_empty() {
+                parts.push(format!("Audience: {}", b.target_audience));
+            }
+            if !b.gameplay_pillars.is_empty() {
+                parts.push(format!("Pillars: {}", b.gameplay_pillars.join(", ")));
+            }
+            if !b.constraints.is_empty() {
+                parts.push(format!("Constraints: {}", b.constraints.join(", ")));
+            }
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(" | "))
+            }
+        }),
         existing_quests: Vec::new(),
+        existing_quest_lore: Vec::new(),
         anchor_quest: None,
         target_chapter: None,
     };

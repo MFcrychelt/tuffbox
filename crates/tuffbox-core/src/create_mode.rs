@@ -1,4 +1,4 @@
-//! Create Mode: AI proposes a PackBrief; PackAssembler fills 50–100 mods via Modrinth search.
+//! Create Mode: AI proposes a CreateModeBrief; PackAssembler fills 50–100 mods via Modrinth search.
 
 use crate::provider::{
     ContentProvider, ModrinthProvider, ProjectInfo, ProviderSearchQuery, SearchPage,
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub const CREATE_MODE_SYSTEM_PROMPT: &str = r#"You are TuffBox Create Mode — a Minecraft modpack planner.
-Your job is to turn the user's brief into (1) a machine search intent and (2) a PackBrief JSON plan for searching Modrinth.
+Your job is to turn the user's brief into (1) a machine search intent and (2) a CreateModeBrief JSON plan for searching Modrinth.
 Never invent Modrinth project IDs or claim specific mods are installed. Use search queries only.
 Do not output ActionPlan crash JSON.
 
@@ -47,13 +47,13 @@ Rules:
   across refinements unless the user explicitly asks to unlock/remove/re-include them.
 "#;
 
-pub const CREATE_MODE_REFINE_PROMPT: &str = r#"You are refining a Create Mode PackBrief for the TuffBox launcher.
+pub const CREATE_MODE_REFINE_PROMPT: &str = r#"You are refining a Create Mode CreateModeBrief for the TuffBox launcher.
 You are given catalog candidates (name + short description + Modrinth slug) from Modrinth + community co-occurrence
 (seeded from Modpack Index on the hub — never scraped from the user's IP).
 Pick mods that match the user intent (e.g. airplanes/flight → Create Aeronautics) and put them in mustHave.
 Always include the industrial/theme base mod when relevant (e.g. Create).
 
-Do NOT output crash ActionPlan JSON. Create Mode uses PackBrief + PackDraft only.
+Do NOT output crash ActionPlan JSON. Create Mode uses CreateModeBrief + PackDraft only.
 
 Return a single JSON object:
 {
@@ -104,7 +104,7 @@ pub struct CategoryBudget {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct PackBrief {
+pub struct CreateModeBrief {
     pub title: String,
     pub mc_version: String,
     pub loader: String,
@@ -162,7 +162,7 @@ fn pack_draft_mod_from_project(p: ProjectInfo, reason: String, category: String)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PackDraft {
-    pub brief: PackBrief,
+    pub brief: CreateModeBrief,
     pub mods: Vec<PackDraftMod>,
     #[serde(default)]
     pub unresolved: Vec<String>,
@@ -174,7 +174,7 @@ pub struct CreateModeAiResponse {
     #[serde(default)]
     pub reply: String,
     #[serde(default)]
-    pub brief: Option<PackBrief>,
+    pub brief: Option<CreateModeBrief>,
     /// Machine search intent for Modpack Index / catalogs (step 1).
     #[serde(default)]
     pub search: Option<crate::modpack_index::MpiSearchQuery>,
@@ -208,20 +208,20 @@ pub struct CreateChatSession {
 /// Progress callback for assemble/install phases.
 pub type ProgressFn = Box<dyn FnMut(&str, usize, usize, &str) + Send>;
 
-pub fn parse_pack_brief(raw: &str) -> Result<PackBrief, String> {
+pub fn parse_pack_brief(raw: &str) -> Result<CreateModeBrief, String> {
     let trimmed = strip_json_fences(raw);
-    // Accept either bare PackBrief or { brief: ... } / CreateModeAiResponse.
-    if let Ok(brief) = serde_json::from_str::<PackBrief>(trimmed) {
+    // Accept either bare CreateModeBrief or { brief: ... } / CreateModeAiResponse.
+    if let Ok(brief) = serde_json::from_str::<CreateModeBrief>(trimmed) {
         return Ok(normalize_brief(brief));
     }
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
         if let Some(b) = v.get("brief") {
-            let brief: PackBrief =
+            let brief: CreateModeBrief =
                 serde_json::from_value(b.clone()).map_err(|e| format!("invalid brief: {e}"))?;
             return Ok(normalize_brief(brief));
         }
     }
-    Err("could not parse PackBrief JSON".into())
+    Err("could not parse CreateModeBrief JSON".into())
 }
 
 pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, String> {
@@ -252,8 +252,8 @@ pub fn parse_create_mode_ai_response(raw: &str) -> Result<CreateModeAiResponse, 
     Err("AI response was not valid Create Mode JSON".into())
 }
 
-/// Build a coarse MpiSearchQuery from an existing PackBrief (no LLM).
-pub fn search_from_brief(brief: &PackBrief) -> crate::modpack_index::MpiSearchQuery {
+/// Build a coarse MpiSearchQuery from an existing CreateModeBrief (no LLM).
+pub fn search_from_brief(brief: &CreateModeBrief) -> crate::modpack_index::MpiSearchQuery {
     let mut keywords: Vec<String> = brief
         .must_have
         .iter()
@@ -292,7 +292,7 @@ pub fn search_from_brief(brief: &PackBrief) -> crate::modpack_index::MpiSearchQu
 
 /// Merge Modpack Index hints into mustHave (skip duplicates).
 pub fn merge_mpi_hints_into_brief(
-    brief: &mut PackBrief,
+    brief: &mut CreateModeBrief,
     hints: &[crate::modpack_index::MpiModHint],
     max_extra: usize,
 ) {
@@ -347,7 +347,7 @@ fn strip_json_fences(raw: &str) -> &str {
     s.trim_end_matches("```").trim()
 }
 
-fn normalize_brief(mut brief: PackBrief) -> PackBrief {
+fn normalize_brief(mut brief: CreateModeBrief) -> CreateModeBrief {
     brief.loader = brief.loader.trim().to_ascii_lowercase();
     brief.target_count = brief.target_count.clamp(40, 120);
     if brief.categories.is_empty() {
@@ -397,9 +397,9 @@ fn normalize_brief(mut brief: PackBrief) -> PackBrief {
 }
 
 /// Strict Intent-phase validation after normalize. Call before Catalog assemble.
-pub fn validate_pack_brief(brief: &PackBrief) -> Result<(), String> {
+pub fn validate_pack_brief(brief: &CreateModeBrief) -> Result<(), String> {
     if brief.title.trim().is_empty() {
-        return Err("PackBrief.title is empty".into());
+        return Err("CreateModeBrief.title is empty".into());
     }
     let loader = brief.loader.trim().to_ascii_lowercase();
     if !matches!(
@@ -407,12 +407,12 @@ pub fn validate_pack_brief(brief: &PackBrief) -> Result<(), String> {
         "fabric" | "forge" | "neoforge" | "quilt" | "vanilla"
     ) {
         return Err(format!(
-            "PackBrief.loader must be fabric|forge|neoforge|quilt (got '{loader}')"
+            "CreateModeBrief.loader must be fabric|forge|neoforge|quilt (got '{loader}')"
         ));
     }
     let ver = brief.mc_version.trim();
     if ver.is_empty() {
-        return Err("PackBrief.mcVersion is empty".into());
+        return Err("CreateModeBrief.mcVersion is empty".into());
     }
     // Coarse Minecraft version: 1.20, 1.20.1, 1.21.4-pre…
     let ver_ok = ver
@@ -422,15 +422,15 @@ pub fn validate_pack_brief(brief: &PackBrief) -> Result<(), String> {
         && ver.contains('.');
     if !ver_ok {
         return Err(format!(
-            "PackBrief.mcVersion looks invalid: '{ver}' (expected e.g. 1.20.1)"
+            "CreateModeBrief.mcVersion looks invalid: '{ver}' (expected e.g. 1.20.1)"
         ));
     }
     if brief.must_have.is_empty() && brief.categories.is_empty() {
-        return Err("PackBrief needs mustHave and/or categories".into());
+        return Err("CreateModeBrief needs mustHave and/or categories".into());
     }
     if !(40..=120).contains(&brief.target_count) {
         return Err(format!(
-            "PackBrief.targetCount out of range: {}",
+            "CreateModeBrief.targetCount out of range: {}",
             brief.target_count
         ));
     }
@@ -565,13 +565,13 @@ const KNOWN_MUST_HAVE: &[&str] = &[
     "forge config",
 ];
 
-/// Build a PackBrief without an LLM: default category budgets + must-haves from known names / quotes.
+/// Build a CreateModeBrief without an LLM: default category budgets + must-haves from known names / quotes.
 pub fn brief_from_prompt(
     prompt: &str,
     mc_version: &str,
     loader: &str,
     target_count: u32,
-) -> PackBrief {
+) -> CreateModeBrief {
     let prompt = prompt.trim();
     let target = target_count.clamp(40, 120);
     let title = {
@@ -584,7 +584,7 @@ pub fn brief_from_prompt(
         }
     };
     let must_have = extract_must_haves(prompt);
-    normalize_brief(PackBrief {
+    normalize_brief(CreateModeBrief {
         title,
         mc_version: mc_version.trim().to_string(),
         loader: loader.trim().to_ascii_lowercase(),
@@ -891,14 +891,14 @@ impl ModSearch for LiveCatalogSearch {
 }
 
 pub struct AssembleOptions<'a> {
-    pub brief: &'a PackBrief,
+    pub brief: &'a CreateModeBrief,
     pub installed_ids: HashSet<String>,
     pub max_pages_per_category: u32,
     pub page_size: u32,
     pub on_progress: Option<&'a mut dyn FnMut(&str, usize, usize, &str)>,
 }
 
-fn base_query(brief: &PackBrief, query: Option<String>, category: Option<String>) -> ProviderSearchQuery {
+fn base_query(brief: &CreateModeBrief, query: Option<String>, category: Option<String>) -> ProviderSearchQuery {
     ProviderSearchQuery {
         query,
         minecraft_version: Some(brief.mc_version.clone()),
@@ -1556,7 +1556,7 @@ mod tests {
 
     #[test]
     fn validate_pack_brief_rejects_bad_loader_and_version() {
-        let ok = PackBrief {
+        let ok = CreateModeBrief {
             title: "Industrial".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1663,7 +1663,7 @@ mod tests {
             projects: vec![hits[0].clone()],
         };
 
-        let brief = PackBrief {
+        let brief = CreateModeBrief {
             title: "Test".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1705,7 +1705,7 @@ mod tests {
 
     #[test]
     fn must_have_picks_best_name_match() {
-        let brief = PackBrief {
+        let brief = CreateModeBrief {
             title: "T".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1795,7 +1795,7 @@ mod tests {
             ],
             projects: vec![],
         };
-        let brief = PackBrief {
+        let brief = CreateModeBrief {
             title: "T".into(),
             mc_version: "1.20.1".into(),
             loader: "fabric".into(),
@@ -1849,7 +1849,7 @@ mod tests {
     #[test]
     fn empty_draft_install_guard() {
         let draft = PackDraft {
-            brief: PackBrief {
+            brief: CreateModeBrief {
                 title: "x".into(),
                 mc_version: "1.20.1".into(),
                 loader: "fabric".into(),

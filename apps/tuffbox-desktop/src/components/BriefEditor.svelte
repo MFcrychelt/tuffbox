@@ -5,6 +5,8 @@
   import CodeMirror from "svelte-codemirror-editor";
   import { markdown } from "@codemirror/lang-markdown";
   import { oneDark } from "@codemirror/theme-one-dark";
+  import { EditorView } from "@codemirror/view";
+  import PromptDialog from "./PromptDialog.svelte";
   import { marked } from "marked";
   import { sanitizeHtml } from "../lib/sanitizeHtml";
   import {
@@ -55,6 +57,11 @@
   let renderedHtml = $state("");
   let mdDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   const MD_DEBOUNCE_MS = 200;
+
+  let cmView: EditorView | null = $state(null);
+
+  let showGalleryUrlPrompt = $state(false);
+  let galleryUrlMode = $state<"gallery" | "insert">("gallery");
 
   let modrinthCategories = $state<Array<{ name: string; header: string; icon: string }>>([]);
   let categoriesLoading = $state(false);
@@ -328,12 +335,16 @@
 
   async function addGalleryUrl() {
     if (!$projectPath) return;
-    const url = window.prompt("Image URL");
-    if (!url?.trim()) return;
+    galleryUrlMode = "gallery";
+    showGalleryUrlPrompt = true;
+  }
+
+  async function addGalleryUrlDirect(url: string) {
+    if (!$projectPath) return;
     try {
       await flushForm();
       const listing = await api.project.addListingGalleryImage(
-        { url: url.trim() },
+        { url },
         $projectPath,
       );
       applyIconGallery(listing);
@@ -374,27 +385,81 @@
     return null;
   }
 
+  function insertAtCursor(insert: string, selectPlaceholder = true) {
+    if (!cmView) {
+      bodyMarkdown = bodyMarkdown + insert;
+      markDirty();
+      return;
+    }
+    const pos = cmView.state.selection.main.head;
+    const selected = cmView.state.sliceDoc(
+      cmView.state.selection.main.from,
+      cmView.state.selection.main.to,
+    );
+    const needsSelect = selectPlaceholder && !selected;
+    const text = needsSelect ? "text" : selected;
+    let finalInsert = insert.replace("{sel}", text);
+    let from = pos;
+    let to = pos;
+    if (selected) {
+      from = cmView.state.selection.main.from;
+      to = cmView.state.selection.main.to;
+    }
+    cmView.dispatch({
+      changes: { from, to, insert: finalInsert },
+      selection: { anchor: from + finalInsert.length },
+    });
+    bodyMarkdown = cmView.state.doc.toString();
+    markDirty();
+  }
+
   function insertAround(before: string, after = before) {
-    const sel = window.getSelection()?.toString() ?? "";
-    bodyMarkdown = `${bodyMarkdown}${before}${sel || "text"}${after}`;
+    if (!cmView) {
+      bodyMarkdown = bodyMarkdown + before + "text" + after;
+      markDirty();
+      return;
+    }
+    const { from, to } = cmView.state.selection.main;
+    const selected = cmView.state.sliceDoc(from, to);
+    if (selected) {
+      cmView.dispatch({
+        changes: { from, to, insert: before + selected + after },
+        selection: { anchor: from + before.length + selected.length + after.length },
+      });
+    } else {
+      const placeholder = "text";
+      const insert = before + placeholder + after;
+      cmView.dispatch({
+        changes: { from, insert },
+        selection: { anchor: from + before.length, head: from + before.length + placeholder.length },
+      });
+    }
+    bodyMarkdown = cmView.state.doc.toString();
     markDirty();
   }
 
   function insertHeading() {
-    bodyMarkdown = `${bodyMarkdown}${bodyMarkdown.endsWith("\n") || !bodyMarkdown ? "" : "\n"}## Heading\n`;
-    markDirty();
+    const prefix = bodyMarkdown.endsWith("\n") || !bodyMarkdown ? "" : "\n";
+    insertAtCursor(prefix + "## Heading\n", false);
   }
 
   function insertLink() {
-    bodyMarkdown = `${bodyMarkdown}[label](https://example.com)`;
-    markDirty();
+    insertAtCursor("[label](https://example.com)", false);
   }
 
   async function insertImageUrl() {
-    const url = window.prompt("Image URL to insert");
-    if (!url?.trim()) return;
-    bodyMarkdown = `${bodyMarkdown}\n![image](${url.trim()})\n`;
-    markDirty();
+    galleryUrlMode = "insert";
+    showGalleryUrlPrompt = true;
+  }
+
+  function onGalleryUrlConfirm(url: string) {
+    showGalleryUrlPrompt = false;
+    if (!url.trim()) return;
+    if (galleryUrlMode === "gallery") {
+      void addGalleryUrlDirect(url.trim());
+    } else {
+      insertAtCursor(`\n![image](${url.trim()})\n`, false);
+    }
   }
 
   async function insertLocalImage() {
@@ -414,8 +479,7 @@
       applyIconGallery(listing);
       const last = listing.gallery[listing.gallery.length - 1];
       if (last?.path) {
-        bodyMarkdown = `${bodyMarkdown}\n![image](${last.path})\n`;
-        dirty = true;
+        insertAtCursor(`\n![image](${last.path})\n`, false);
       }
       await refreshAssets();
     } catch (e) {
@@ -427,8 +491,7 @@
     const src = item.path || item.url;
     if (!src) return;
     const alt = item.caption?.trim() || "image";
-    bodyMarkdown = `${bodyMarkdown}\n![${alt}](${src})\n`;
-    markDirty();
+    insertAtCursor(`\n![${alt}](${src})\n`, false);
   }
 
   async function copySummary() {
@@ -478,6 +541,8 @@
 
   async function handlePaste(e: ClipboardEvent) {
     if (!$projectPath) return;
+    const target = e.target as HTMLElement;
+    if (!target.closest?.(".cm-wrap")) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
@@ -523,6 +588,37 @@
       lastPath = null;
       dirty = false;
     }
+  });
+
+  function handleBeforeUnload(e: BeforeUnloadEvent) {
+    if (dirty) {
+      e.preventDefault();
+    }
+  }
+
+  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  const AUTO_SAVE_MS = 5000;
+
+  function scheduleAutoSave() {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    if (!dirty || !$projectPath) return;
+    autoSaveTimer = setTimeout(async () => {
+      if (dirty && $projectPath && !saving) {
+        await saveAll();
+      }
+    }, AUTO_SAVE_MS);
+  }
+
+  $effect(() => {
+    if (dirty) scheduleAutoSave();
+    return () => {
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    };
+  });
+
+  $effect(() => {
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   });
 
   onDestroy(() => {
@@ -715,6 +811,7 @@
                 lang={markdown()}
                 theme={oneDark}
                 on:change={onBodyChange}
+                on:ready={(e) => (cmView = e.detail)}
               />
             </div>
           {/if}
@@ -778,8 +875,10 @@
           {/if}
         </section>
 
-        <details class="panel author-notes">
-          <summary>Author notes (planning)</summary>
+        <section class="panel author-notes">
+          <div class="panel-head">
+            <h3>Author notes (planning)</h3>
+          </div>
           <div class="brief-grid">
             <label
               >Pack goal<textarea bind:value={briefGoal} oninput={markDirty} rows="3"></textarea
@@ -821,7 +920,7 @@
               ></label
             >
           </div>
-        </details>
+        </section>
 
         <details class="panel extras-panel">
           <summary>More · copy, folder, workflow</summary>
@@ -851,6 +950,16 @@
     </div>
   {/if}
 </div>
+
+{#if showGalleryUrlPrompt}
+  <PromptDialog
+    title={galleryUrlMode === "gallery" ? "Add gallery image URL" : "Insert image URL"}
+    message={galleryUrlMode === "gallery" ? "Paste an image URL to add to the gallery." : "Paste an image URL to insert into the description."}
+    confirmLabel={galleryUrlMode === "gallery" ? "Add to gallery" : "Insert"}
+    onconfirm={onGalleryUrlConfirm}
+    oncancel={() => (showGalleryUrlPrompt = false)}
+  />
+{/if}
 
 <style>
   .brief-editor {
@@ -1273,7 +1382,7 @@
     color: #f87171;
   }
 
-  .author-notes summary,
+  .author-notes .panel-head h3,
   .extras-panel summary {
     cursor: pointer;
     font-weight: 700;

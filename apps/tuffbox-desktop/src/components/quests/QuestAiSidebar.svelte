@@ -16,6 +16,7 @@
     type QuestChatSession,
     type QuestData,
     type QuestPlanMergeResult,
+    type AiTokenUsage,
   } from "../../lib/api";
   import { projectPath, questChatFocusId } from "../../lib/store";
   import QuestPlanReview from "./QuestPlanReview.svelte";
@@ -27,6 +28,12 @@
     phase: string;
     i?: number;
     n?: number;
+  };
+
+  type QuestAiTokenPayload = {
+    chatId: string;
+    text: string;
+    phase: string;
   };
 
   let {
@@ -58,28 +65,101 @@
   let aiReadyHint = $state("");
   let merge = $state<QuestPlanMergeResult | null>(null);
   let progressLog = $state<string[]>([]);
+  let streamDraft = $state("");
   let loreWarning = $state("");
   /** Active intent for the next send: "generate" | "extend" | "lore" | "branch". */
   let pendingIntent = $state<"generate" | "extend" | "lore" | "branch">("generate");
   let unlistenProgress: UnlistenFn | undefined;
-  const EXAMPLE_CHIPS = [
-    {
-      label: "24-quest line",
-      text: "линейка на 24 квеста: early game → nether, с описаниями и наградами",
-    },
-    {
-      label: "3 chapters",
-      text: "3 chapters: early / mid / late progression with about 18 quests total",
-    },
-    {
-      label: "Create early game",
-      text: "Create a 16-quest chapter for Create mod early progression with lore and XP rewards",
-    },
-    {
-      label: "Numbered list",
-      text: "глава 1: начало — 1. добудь 10 дерева, 2. накопай 20 булыги — награда 10 палок",
-    },
-  ];
+  let unlistenTokens: UnlistenFn | undefined;
+  type ExampleChip = { label: string; text: string };
+
+  function uiLang(): "ru" | "en" {
+    const t = (typeof navigator !== "undefined" ? navigator.language : "en").toLowerCase();
+    return t.startsWith("ru") ? "ru" : "en";
+  }
+
+  const EXAMPLE_CHIPS_BY_LANG: Record<"en" | "ru", ExampleChip[]> = {
+    en: [
+      {
+        label: "24-quest line",
+        text: "24-quest line: early game → nether, with descriptions and rewards",
+      },
+      {
+        label: "3 chapters",
+        text: "3 chapters: early / mid / late progression with about 18 quests total",
+      },
+      {
+        label: "Create early game",
+        text: "Create a 16-quest chapter for Create mod early progression with lore and XP rewards",
+      },
+      {
+        label: "Numbered list",
+        text: "chapter 1: start — 1. gather 10 wood, 2. mine 20 cobblestone — reward 10 sticks",
+      },
+    ],
+    ru: [
+      {
+        label: "Линейка 24 квеста",
+        text: "линейка на 24 квеста: early game → nether, с описаниями и наградами",
+      },
+      {
+        label: "3 главы",
+        text: "3 главы: early / mid / late прогрессия, около 18 квестов всего",
+      },
+      {
+        label: "Create early game",
+        text: "глава Create early game на 16 квестов с лором и XP наградами",
+      },
+      {
+        label: "Нумерованный список",
+        text: "глава 1: начало — 1. добудь 10 дерева, 2. накопай 20 булыги — награда 10 палок",
+      },
+    ],
+  };
+
+  let exampleChips = $derived(EXAMPLE_CHIPS_BY_LANG[uiLang()]);
+  let lastUsage = $state<AiTokenUsage | null>(null);
+
+  function formatTokens(n: number | null | undefined): string {
+    if (n == null || !Number.isFinite(n)) return "—";
+    if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`;
+    return String(n);
+  }
+
+  function formatUsage(u: AiTokenUsage | null | undefined): string | null {
+    if (!u) return null;
+    const pin = u.promptTokens;
+    const cout = u.completionTokens;
+    const tot = u.totalTokens ?? (pin != null && cout != null ? pin + cout : null);
+    if (pin == null && cout == null && tot == null) return null;
+    const parts: string[] = [];
+    if (pin != null) parts.push(`${formatTokens(pin)} in`);
+    if (cout != null) parts.push(`${formatTokens(cout)} out`);
+    if (tot != null && (pin == null || cout == null)) parts.push(`${formatTokens(tot)} tot`);
+    // Rough OpenAI-class mid-tier estimate ($/1M); local Ollama shows tokens only when cost ~0.
+    let costHint = "";
+    if (pin != null || cout != null) {
+      const usd = ((pin ?? 0) * 0.15 + (cout ?? 0) * 0.6) / 1_000_000;
+      if (usd >= 0.0001) costHint = ` · ~$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(3)}`;
+    }
+    return parts.join(" · ") + costHint;
+  }
+
+  let sessionUsageLabel = $derived.by(() => {
+    const msgs = session?.messages ?? [];
+    const acc: AiTokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let any = false;
+    for (const m of msgs) {
+      const u = m.usage;
+      if (!u) continue;
+      any = true;
+      if (u.promptTokens != null) acc.promptTokens = (acc.promptTokens ?? 0) + u.promptTokens;
+      if (u.completionTokens != null)
+        acc.completionTokens = (acc.completionTokens ?? 0) + u.completionTokens;
+      if (u.totalTokens != null) acc.totalTokens = (acc.totalTokens ?? 0) + u.totalTokens;
+    }
+    return any ? formatUsage(acc) : null;
+  });
 
   function useChip(text: string) {
     input = text;
@@ -123,6 +203,7 @@
       session = await api.quests.loadChat(id, $projectPath);
       merge = null;
       progressLog = [];
+      streamDraft = "";
     } catch (e) {
       error = String(e);
     }
@@ -135,6 +216,7 @@
       activeId = session.id;
       merge = null;
       progressLog = [];
+      streamDraft = "";
       await refreshList();
     } catch (e) {
       error = String(e);
@@ -177,6 +259,7 @@
     error = "";
     loreWarning = "";
     progressLog = ["Starting…"];
+    streamDraft = "";
     try {
       if (showJson && rawJson.trim()) {
         merge = await api.quests.parseAndMergePlan(rawJson, $projectPath);
@@ -216,6 +299,7 @@
         activeId = result.session.id;
         merge = result.merge;
         progressLog = result.progressLog ?? progressLog;
+        lastUsage = result.usage ?? result.session.messages.at(-1)?.usage ?? null;
         const logJoined = progressLog.join("\n");
         if (/offline heuristic/i.test(logJoined)) {
           loreWarning = "Used offline heuristic (no LLM). Enable Force AI for full generation.";
@@ -239,6 +323,7 @@
       }
     } finally {
       busy = false;
+      streamDraft = "";
     }
   }
 
@@ -281,13 +366,26 @@
       // Accept when no session yet, or chat matches active (incl. after assign).
       if (activeId != null && payload.chatId !== activeId) return;
       appendProgressLine(payload.line);
+      // Clear live draft when a phase completes / advances past outline streaming.
+      if (payload.phase && payload.phase !== "outline") {
+        streamDraft = "";
+      }
     }).then((unlisten) => {
       unlistenProgress = unlisten;
+    });
+    void listen<QuestAiTokenPayload>("quest-ai-token", (event) => {
+      const payload = event.payload;
+      if (!busy) return;
+      if (activeId != null && payload.chatId !== activeId) return;
+      streamDraft += payload.text;
+    }).then((unlisten) => {
+      unlistenTokens = unlisten;
     });
   });
 
   onDestroy(() => {
     unlistenProgress?.();
+    unlistenTokens?.();
   });
 
   $effect(() => {
@@ -307,6 +405,9 @@
   <div class="qai-h">
     <Sparkles size={16} />
     <strong>Quest AI</strong>
+    {#if sessionUsageLabel}
+      <span class="usage-pill" title="Session token usage (estimate)">{sessionUsageLabel}</span>
+    {/if}
     <button type="button" class="ghost ico" title="Close" onclick={() => onclose?.()}>
       <PanelRightClose size={16} />
     </button>
@@ -356,7 +457,7 @@
           </p>
         {/if}
         <div class="chips">
-          {#each EXAMPLE_CHIPS as chip (chip.label)}
+          {#each exampleChips as chip (chip.label)}
             <button type="button" class="chip" onclick={() => useChip(chip.text)}>{chip.label}</button>
           {/each}
         </div>
@@ -372,16 +473,25 @@
               <ul>{#each m.progressLog as p, pi (`p-${pi}`)}<li>{p}</li>{/each}</ul>
             </details>
           {/if}
+          {#if formatUsage(m.usage)}
+            <div class="msg-usage">{formatUsage(m.usage)}</div>
+          {/if}
         </div>
       {/each}
     {/if}
   </div>
 
-  {#if busy && progressLog.length}
+  {#if busy && (progressLog.length || streamDraft)}
     <div class="live-prog">
       <Loader2 size={14} class="spin" />
-      {progressLog[progressLog.length - 1]}
+      {progressLog.length ? progressLog[progressLog.length - 1] : "Streaming…"}
     </div>
+    {#if streamDraft}
+      <pre class="stream-draft">{streamDraft}</pre>
+    {/if}
+  {/if}
+  {#if !busy && lastUsage && formatUsage(lastUsage)}
+    <div class="live-prog usage-last">Last turn: {formatUsage(lastUsage)}</div>
   {/if}
 
   {#if error}<div class="err">{error}</div>{/if}
@@ -505,6 +615,25 @@
   }
   .qai-h .ico {
     margin-left: auto;
+  }
+  .usage-pill,
+  .msg-usage,
+  .usage-last {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+  .msg-usage {
+    margin-top: 4px;
+    max-width: none;
+  }
+  .usage-last {
+    max-width: none;
+    padding: 4px 10px 8px;
   }
 
   .anchor-banner {
@@ -694,6 +823,20 @@
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+  .stream-draft {
+    margin: 0 10px 8px;
+    max-height: 140px;
+    overflow: auto;
+    padding: 8px;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid #101014;
+    border-radius: var(--border-radius-sm);
   }
   .err {
     color: #f87171;

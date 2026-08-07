@@ -286,12 +286,19 @@ export interface QuestPlanRewardTable {
   emptyWeight?: number;
 }
 
+export interface AiTokenUsage {
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  totalTokens?: number | null;
+}
+
 export interface QuestChatMessage {
   role: string;
   content: string;
   createdAt?: string | null;
   plan?: QuestPlan | null;
   progressLog?: string[] | null;
+  usage?: AiTokenUsage | null;
 }
 
 export interface QuestChatSession {
@@ -306,6 +313,7 @@ export interface QuestChatTurnResult {
   session: QuestChatSession;
   merge: QuestPlanMergeResult;
   progressLog: string[];
+  usage?: AiTokenUsage | null;
 }
 
 export interface QuestPlanChapter {
@@ -491,6 +499,16 @@ export interface PackBrief {
   constraints: string[];
   releaseTargets: string[];
   notes: string;
+}
+
+export interface CreateModeBrief {
+  title: string;
+  mcVersion: string;
+  loader: string;
+  targetCount: number;
+  mustHave: Array<{ name: string; reason: string; facet?: string | null }>;
+  categories: Array<{ name: string; budget: number; facet?: string | null }>;
+  exclude: string[];
 }
 
 export interface ListingGalleryItem {
