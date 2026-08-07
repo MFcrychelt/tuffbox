@@ -10334,6 +10334,10 @@ fn build_and_spawn(
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
         });
+    let progress = tuffbox_core::mc_install::InstallProgress {
+        log_path: console_log.clone(),
+    };
+
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
             LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&console_log)
@@ -10344,17 +10348,20 @@ fn build_and_spawn(
         // — using e.g. Java 21 for Forge 1.20.1 (which needs Java 17)
         // fails deep inside Forge's bootstrap launcher with a confusing
         // module-system error instead of launching at all.
-        TestLauncher::find_java_for_minecraft(&manifest.minecraft.version).map_err(|e| {
+        // If nothing is installed, download the latest GraalVM Community JDK.
+        tuffbox_core::jre::ensure_java_for_minecraft_with_log(
+            &manifest.minecraft.version,
+            |line| progress.log(line),
+        )
+        .map_err(|e| {
             let kind = match e {
-                tuffbox_core::launcher::LauncherError::JavaNotFound => LaunchErrorKind::JavaMissing,
+                tuffbox_core::jre::JreError::NotFound
+                | tuffbox_core::jre::JreError::Download(_)
+                | tuffbox_core::jre::JreError::Install(_) => LaunchErrorKind::JavaMissing,
                 _ => LaunchErrorKind::Install,
             };
             LaunchErrorInfo::new(kind, e.to_string()).with_log(&console_log)
         })?
-    };
-
-    let progress = tuffbox_core::mc_install::InstallProgress {
-        log_path: console_log.clone(),
     };
 
     progress.log(&format!("# Java: {} (major {})", java.path, java.major));
@@ -11566,6 +11573,16 @@ async fn get_loader_versions(
 #[tauri::command(rename_all = "camelCase")]
 async fn find_java_runtimes() -> Result<Vec<tuffbox_core::jre::JavaRuntime>, String> {
     tokio::task::spawn_blocking(|| tuffbox_core::jre::find_all_runtimes())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Download the latest GraalVM Community JDK into the managed runtime folder
+/// when no Java is installed (or force-refresh via ensure).
+#[tauri::command(rename_all = "camelCase")]
+async fn ensure_java_runtime() -> Result<tuffbox_core::jre::JavaRuntime, String> {
+    tokio::task::spawn_blocking(|| tuffbox_core::jre::ensure_java())
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
@@ -13766,6 +13783,10 @@ pub fn run() {
             use tauri::Manager;
             if let Ok(resources) = app.path().resource_dir() {
                 std::env::set_var("TUFFBOX_JEI_BRIDGE_DIR", resources.join("jei-bridge"));
+                std::env::set_var(
+                    "TUFFBOX_MCA_SELECTOR_DIR",
+                    resources.join("mca-selector"),
+                );
             }
             // Size the window to the current screen resolution: 95% of the
             // monitor's width and 94% of its height, so it adapts to whatever
@@ -14112,6 +14133,7 @@ pub fn run() {
             get_loader_versions,
             create_instance,
             find_java_runtimes,
+            ensure_java_runtime,
             get_java_version,
             get_default_java_version,
             get_launch_log,

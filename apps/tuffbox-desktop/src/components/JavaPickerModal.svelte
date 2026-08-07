@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { X, Search, Loader2, FolderOpen, Check } from "@lucide/svelte";
+  import { X, Search, Loader2, FolderOpen, Check, Download } from "@lucide/svelte";
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { trapFocus } from "../lib/focusTrap";
+
+  type JavaRuntime = { path: string; version: string; major: number };
 
   let {
     current,
@@ -15,8 +17,9 @@
     onselected?: (path: string) => void;
   } = $props();
 
-  let runtimes = $state<{ path: string; version: string; major: number }[]>([]);
+  let runtimes = $state<JavaRuntime[]>([]);
   let loading = $state(true);
+  let installing = $state(false);
   let error = $state("");
 
   onMount(async () => {
@@ -38,6 +41,22 @@
     });
     if (selected && typeof selected === "string") {
       onselected?.(selected);
+    }
+  }
+
+  async function downloadGraalVm() {
+    if (installing) return;
+    installing = true;
+    error = "";
+    try {
+      const runtime = await invoke<JavaRuntime>("ensure_java_runtime");
+      runtimes = await invoke<JavaRuntime[]>("find_java_runtimes");
+      runtimes.sort((a, b) => b.major - a.major);
+      onselected?.(runtime.path);
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      installing = false;
     }
   }
 
@@ -64,9 +83,18 @@
       {/if}
 
       <div class="actions-row">
-        <button class="ghost" onclick={browse}>
+        <button class="ghost" onclick={browse} disabled={installing}>
           <FolderOpen size={16} />
           Browse manually
+        </button>
+        <button class="secondary" onclick={downloadGraalVm} disabled={installing}>
+          {#if installing}
+            <Loader2 size={16} class="spin" />
+            Downloading GraalVM…
+          {:else}
+            <Download size={16} />
+            Download GraalVM
+          {/if}
         </button>
       </div>
 
@@ -76,10 +104,12 @@
           Scanning for Java installations...
         </div>
       {:else if runtimes.length === 0}
-        <div class="empty">No Java installations found.</div>
+        <div class="empty">
+          No Java installations found. Download GraalVM to install a managed runtime.
+        </div>
       {:else}
         <div class="runtimes">
-          {#each runtimes as runtime}
+          {#each runtimes as runtime (runtime.path)}
             <button
               class="runtime"
               class:active={runtime.path === current}

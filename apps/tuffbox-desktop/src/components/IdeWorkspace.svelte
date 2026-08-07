@@ -658,8 +658,17 @@
     overflow: hidden;
   }
 
-  /* Graph + Snapshots: child panes own scroll; don't double-scroll the stage wrapper. */
-  .stage-content.fill-stage > :global(.graph),
+  /* Graph: long lists under the canvas — this root owns vertical scroll.
+     Snapshots keep overflow:hidden (internal panes scroll). */
+  .stage-content.fill-stage > :global(.graph) {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   .stage-content.fill-stage > :global(.snapshots) {
     display: flex;
     flex-direction: column;

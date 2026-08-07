@@ -987,47 +987,6 @@
 
         <div class="settings-row">
           <div class="settings-row-text">
-            <strong>Left sidebar</strong>
-            <p>
-              Full labels, icon rail with a collapse button, or auto-hide until you hover the left
-              edge of the window.
-            </p>
-          </div>
-          <div class="settings-row-control">
-            <div class="chip-row tight">
-              <button
-                type="button"
-                class="chip press-effect"
-                class:active={normalizeSidebarMode(launcher.sidebarMode) === "full"}
-                disabled={launcherSaving}
-                onclick={() => void persistLauncher({ sidebarMode: "full" })}
-              >
-                Expanded
-              </button>
-              <button
-                type="button"
-                class="chip press-effect"
-                class:active={normalizeSidebarMode(launcher.sidebarMode) === "icons"}
-                disabled={launcherSaving}
-                onclick={() => void persistLauncher({ sidebarMode: "icons" })}
-              >
-                Icons toggle
-              </button>
-              <button
-                type="button"
-                class="chip press-effect"
-                class:active={normalizeSidebarMode(launcher.sidebarMode) === "autoHide"}
-                disabled={launcherSaving}
-                onclick={() => void persistLauncher({ sidebarMode: "autoHide" })}
-              >
-                Auto-hide
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-row">
-          <div class="settings-row-text">
             <strong>Concurrent downloads</strong>
             <p>How many files to fetch in parallel when installing mods or updating the instance.</p>
           </div>

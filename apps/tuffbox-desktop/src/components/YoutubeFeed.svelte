@@ -492,11 +492,12 @@
     touch-action: pan-y;
   }
 
-  /* Grid: card mosaic for YouTube-main home layout. */
+  /* Grid: card mosaic — the home feed now owns the freed instances space,
+     so cards run larger and stretch to the available width. */
   .grid .feed-row {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 14px 12px;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 18px 16px;
     overflow: visible;
     padding-bottom: 0;
     touch-action: auto;

@@ -4,6 +4,10 @@
 //! (`missing mode` → exit). GUI launch therefore uses no `--world` flag; instead
 //! we seed `%LOCALAPPDATA%/mcaselector/settings.json` so the world appears under
 //! File → Open Recent and Open World starts in the pack's `saves/` folder.
+//!
+//! The JAR + OpenJFX libs are bundled with the launcher (`mca-selector/` resources).
+//! No network download is required at runtime. When the host JRE lacks JavaFX
+//! (e.g. GraalVM), we pass `--module-path` to the bundled OpenJFX `lib` folder.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -13,13 +17,11 @@ use std::process::{Command, Stdio};
 
 const MCA_VERSION: &str = "2.8";
 const MCA_JAR_NAME: &str = "mcaselector-2.8.jar";
-const MCA_JAR_URL: &str =
-    "https://github.com/Querz/mcaselector/releases/download/2.8/mcaselector-2.8.jar";
-/// GitHub release asset digest for mcaselector-2.8.jar.
+/// GitHub release asset digest for mcaselector-2.8.jar (integrity check only).
 const MCA_JAR_SHA256: &str = "64505f39edf9c9b5d47e666981f81e3c3a889d4f122b3065af7e269f48e53423";
 const MIN_JAVA_MAJOR: u32 = 21;
 
-/// Tauri entry: ensure JAR is cached, patch MCA Selector settings, spawn the GUI.
+/// Tauri entry: resolve bundled JAR + JavaFX, patch settings, spawn the GUI.
 #[tauri::command]
 pub fn open_mca_selector(path: String, world_name: String) -> Result<(), String> {
     let project_dir = crate::manifest_parent(&path)?;
@@ -33,14 +35,20 @@ pub fn open_mca_selector(path: String, world_name: String) -> Result<(), String>
         ));
     }
 
-    let jar = ensure_mca_jar()?;
+    let jar = resolve_mca_jar()?;
     let java = resolve_java_for_mca()?;
-    ensure_javafx(&java)?;
+    let javafx_lib = resolve_javafx_lib(&java)?;
     seed_mca_settings(&saves_dir, &world_dir)?;
 
     let mut cmd = Command::new(&java);
-    cmd.arg("-Xmx4G")
-        .arg("-jar")
+    cmd.arg("-Xmx4G");
+    if let Some(ref fx) = javafx_lib {
+        cmd.arg("--module-path")
+            .arg(fx)
+            .arg("--add-modules")
+            .arg("ALL-MODULE-PATH");
+    }
+    cmd.arg("-jar")
         .arg(&jar)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -77,6 +85,63 @@ fn tools_cache_dir() -> Result<PathBuf, String> {
     Ok(root)
 }
 
+/// Candidate roots that may contain `mcaselector-2.8.jar` and/or `javafx-lib/`.
+fn bundled_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(dir) = std::env::var("TUFFBOX_MCA_SELECTOR_DIR") {
+        let p = PathBuf::from(dir);
+        if p.is_dir() {
+            roots.push(p);
+        }
+    }
+
+    // Packaged / tauri-dev resources: …/mca-selector/
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            for rel in [
+                PathBuf::from("mca-selector"),
+                PathBuf::from("resources").join("mca-selector"),
+                PathBuf::from("../Resources/mca-selector"),
+            ] {
+                let p = exe_dir.join(rel);
+                if p.is_dir() {
+                    roots.push(p);
+                }
+            }
+        }
+    }
+
+    // Dev checkout: bridges/mca-selector/prebuilt next to the repo.
+    for ancestor in [
+        std::env::current_dir().ok(),
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf())),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let mut dir = ancestor;
+        for _ in 0..8 {
+            let candidate = dir.join("bridges").join("mca-selector").join("prebuilt");
+            if candidate.is_dir() {
+                roots.push(candidate);
+                break;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+
+    if let Ok(cache) = tools_cache_dir() {
+        roots.push(cache);
+    }
+
+    roots
+}
+
 fn sha256_file(path: &Path) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let digest = Sha256::digest(&bytes);
@@ -90,46 +155,64 @@ fn jar_ok(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
-fn ensure_mca_jar() -> Result<PathBuf, String> {
-    let dir = tools_cache_dir()?;
-    let jar = dir.join(MCA_JAR_NAME);
-    if jar_ok(&jar) {
-        return Ok(jar);
+fn resolve_mca_jar() -> Result<PathBuf, String> {
+    for root in bundled_roots() {
+        let jar = root.join(MCA_JAR_NAME);
+        if jar_ok(&jar) {
+            return Ok(jar);
+        }
+        // Accept a present jar even if checksum file drifted (dev copies).
+        if jar.is_file() && jar.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) {
+            return Ok(jar);
+        }
     }
 
-    // Atomic-ish download into a sibling temp file, then rename.
-    let partial = dir.join(format!("{MCA_JAR_NAME}.partial"));
-    let _ = fs::remove_file(&partial);
+    Err(format!(
+        "Bundled MCA Selector {MCA_VERSION} not found. Expected `{MCA_JAR_NAME}` under \
+         TUFFBOX_MCA_SELECTOR_DIR, app resources/mca-selector, or bridges/mca-selector/prebuilt. \
+         Run bridges/mca-selector/fetch-prebuilt.ps1 to populate the prebuilt folder."
+    ))
+}
 
-    tuffbox_core::mc_install::download_with_sha1(MCA_JAR_URL, &partial, None).map_err(|e| {
-        format!(
-            "failed to download MCA Selector {MCA_VERSION} from GitHub: {e}"
-        )
-    })?;
+fn javafx_lib_looks_valid(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        name.contains("javafx.base") || name.contains("javafx-base")
+    })
+}
 
-    let got = sha256_file(&partial)?;
-    if !got.eq_ignore_ascii_case(MCA_JAR_SHA256) {
-        let _ = fs::remove_file(&partial);
-        return Err(format!(
-            "MCA Selector JAR checksum mismatch (expected {MCA_JAR_SHA256}, got {got})"
-        ));
+/// Returns `Some(module_path)` when we must inject OpenJFX; `None` if Java already has it.
+fn resolve_javafx_lib(java_path: &str) -> Result<Option<PathBuf>, String> {
+    if java_has_javafx(java_path) {
+        return Ok(None);
     }
 
-    if let Err(e) = fs::rename(&partial, &jar) {
-        fs::copy(&partial, &jar).map_err(|copy_err| {
-            format!("install MCA Selector jar: rename {e}; copy {copy_err}")
-        })?;
-        let _ = fs::remove_file(&partial);
+    for root in bundled_roots() {
+        for rel in ["javafx-lib", "javafx/lib", "lib"] {
+            let candidate = root.join(rel);
+            if javafx_lib_looks_valid(&candidate) {
+                return Ok(Some(candidate));
+            }
+        }
     }
 
-    if !jar_ok(&jar) {
-        return Err("MCA Selector JAR failed verification after download".into());
-    }
-
-    Ok(jar)
+    Err(format!(
+        "Java at '{java_path}' has no JavaFX modules, and no bundled OpenJFX was found. \
+         Populate bridges/mca-selector/prebuilt/javafx-lib (see fetch-prebuilt.ps1) or install \
+         a JRE with JavaFX (Azul Zulu JRE-FX)."
+    ))
 }
 
 fn resolve_java_for_mca() -> Result<String, String> {
+    // Prefer any already-installed Java 21+ (with or without JavaFX —
+    // bundled OpenJFX covers the latter). If nothing is on the machine,
+    // download the latest GraalVM Community JDK into the managed folder.
     let runtimes = tuffbox_core::jre::find_all_runtimes()
         .map_err(|e| format!("scan Java runtimes: {e}"))?;
     let candidates: Vec<_> = runtimes
@@ -137,35 +220,23 @@ fn resolve_java_for_mca() -> Result<String, String> {
         .filter(|r| r.major >= MIN_JAVA_MAJOR)
         .collect();
 
-    // Prefer a runtime that already has JavaFX modules.
     for rt in &candidates {
         if java_has_javafx(&rt.path) {
             return Ok(rt.path.clone());
         }
     }
-
     if let Some(rt) = candidates.first() {
         return Ok(rt.path.clone());
     }
 
-    Err(format!(
-        "MCA Selector requires Java {MIN_JAVA_MAJOR}+ with JavaFX. \
-         Install Azul Zulu JRE-FX (https://www.azul.com/downloads/?package=jdk-fx) \
-         or the official MCA Selector setup \
-         (https://github.com/Querz/mcaselector/releases/download/{MCA_VERSION}/mcaselector-{MCA_VERSION}-setup.exe)."
-    ))
-}
-
-fn ensure_javafx(java_path: &str) -> Result<(), String> {
-    if java_has_javafx(java_path) {
-        return Ok(());
+    let installed = tuffbox_core::jre::ensure_java().map_err(|e| e.to_string())?;
+    if installed.major < MIN_JAVA_MAJOR {
+        return Err(format!(
+            "MCA Selector requires Java {MIN_JAVA_MAJOR}+, but managed runtime is Java {}",
+            installed.major
+        ));
     }
-    Err(format!(
-        "Java at '{java_path}' has no JavaFX modules. MCA Selector's GUI needs JavaFX. \
-         Install Azul Zulu JRE-FX (https://www.azul.com/downloads/?package=jdk-fx) \
-         or the official Windows setup \
-         (https://github.com/Querz/mcaselector/releases/download/{MCA_VERSION}/mcaselector-{MCA_VERSION}-setup.exe)."
-    ))
+    Ok(installed.path)
 }
 
 fn java_has_javafx(java_path: &str) -> bool {
@@ -322,9 +393,7 @@ fn seed_mca_settings(saves_dir: &Path, world_dir: &Path) -> Result<(), String> {
         map.retain(|_, v| {
             v.get("recentWorld")
                 .and_then(|x| x.as_str())
-                .map(|p| {
-                    !paths_equal(Path::new(p), world_dir)
-                })
+                .map(|p| !paths_equal(Path::new(p), world_dir))
                 .unwrap_or(true)
         });
         // Cap at 16 like MCA Selector.

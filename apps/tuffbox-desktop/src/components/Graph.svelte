@@ -1973,6 +1973,11 @@
   }
 
   function handleWheel(event: WheelEvent) {
+    // Plain wheel scrolls the tab (details / node list below the canvas).
+    // Ctrl/Meta+wheel (or fullscreen) zooms the graph — Obsidian-style.
+    if (!(event.ctrlKey || event.metaKey) && !graphFullscreen) {
+      return;
+    }
     event.preventDefault();
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
     const nextScale = Math.min(8, Math.max(0.15, viewScale / zoomFactor));
@@ -2347,8 +2352,8 @@
       aria-label="Dependency graph canvas"
     >
       <div class="canvas-controls">
-        <button class="ghost mini" onclick={() => zoomBy(1.25)} title="Zoom in">+</button>
-        <button class="ghost mini" onclick={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
+        <button class="ghost mini" onclick={() => zoomBy(1.25)} title="Zoom in (Ctrl+scroll)">+</button>
+        <button class="ghost mini" onclick={() => zoomBy(1 / 1.25)} title="Zoom out (Ctrl+scroll)">−</button>
         <button class="ghost mini" onclick={resetView} title="Fit graph to view">⤢</button>
         <button
           class="ghost mini edge-toggle"
@@ -3097,6 +3102,7 @@
   .graph {
     display: flex;
     flex-direction: column;
+    flex: 1;
     height: 100%;
     min-height: 0;
     overflow-x: hidden;
@@ -3104,6 +3110,7 @@
     max-width: none;
     width: 100%;
     scrollbar-gutter: stable;
+    overscroll-behavior: contain;
   }
 
   .graph-body {

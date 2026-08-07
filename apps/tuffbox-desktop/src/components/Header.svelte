@@ -1,20 +1,17 @@
 <script lang="ts">
-  import { Play, Square, FolderOpen, ChevronRight, Terminal } from "@lucide/svelte";
+  import { FolderOpen, ChevronRight, Terminal } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { onMount, onDestroy } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, isLaunching, openLaunchLog, runningInstances, isProjectRunning } from "../lib/store";
-  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import { projectPath, projectInfo, openLaunchLog } from "../lib/store";
 
   let { currentView }: { currentView: string } = $props();
 
   let onlineCount = $state(0);
   let onlineOk = $state(false);
   let onlineTimer: ReturnType<typeof setInterval> | null = null;
-
-  const projectRunning = $derived(isProjectRunning($projectPath, $runningInstances));
 
   async function refreshOnline() {
     try {
@@ -84,12 +81,6 @@
       projectInfo.set(info as any);
     }
   }
-
-  async function launch() {
-    const path = $projectPath;
-    if (!path) return;
-    await launchWithFeedback({ path, profile: "client" });
-  }
 </script>
 
 <header class="header">
@@ -100,6 +91,10 @@
           <span class="crumb">TuffBox</span>
           <ChevronRight size={14} class="separator" />
           <span class="crumb active">{titles[currentView]}</span>
+          {#if $projectInfo}
+            <ChevronRight size={14} class="separator" />
+            <span class="crumb instance">{$projectInfo.name}</span>
+          {/if}
         </div>
         <h1 class="page-title">{titles[currentView]}</h1>
       </div>
@@ -121,16 +116,6 @@
       <span class="online-hint">{onlineOk ? "online" : isTauri() ? "offline" : "preview"}</span>
     </div>
 
-    {#if $projectInfo}
-      <div class="project-chip">
-        <span class="project-name">{$projectInfo.name}</span>
-        <span class="project-meta"
-          >{$projectInfo.minecraftVersion} · {$projectInfo.loaderKind}
-          {$projectInfo.loaderVersion}</span
-        >
-      </div>
-    {/if}
-
     <button class="secondary" onclick={selectProject}>
       <FolderOpen size={16} />
       {$projectPath ? "Switch" : "Open"}
@@ -145,27 +130,6 @@
       <Terminal size={16} />
       Logs
     </button>
-
-    {#if $isLaunching}
-      <button class="launch-btn" disabled>
-        <span class="spinner"></span>
-        <span>Launching…</span>
-      </button>
-    {:else if projectRunning}
-      <button
-        class="launch-btn stop"
-        disabled={!$projectPath}
-        onclick={() => $projectPath && killWithFeedback($projectPath)}
-      >
-        <Square size={16} fill="currentColor" />
-        <span>Stop</span>
-      </button>
-    {:else}
-      <button class="launch-btn" onclick={launch} disabled={!$projectPath}>
-        <Play size={16} fill="currentColor" />
-        <span>Launch</span>
-      </button>
-    {/if}
   </div>
 </header>
 
@@ -210,6 +174,11 @@
 
   .crumb.active {
     color: var(--text-secondary);
+  }
+
+  .crumb.instance {
+    color: var(--accent-primary);
+    font-weight: 700;
   }
 
   .page-title {
@@ -261,25 +230,6 @@
     letter-spacing: 0.02em;
   }
 
-  .project-chip {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    padding-right: 12px;
-    border-right: 1px solid var(--border-color);
-  }
-
-  .project-name {
-    font-weight: 700;
-    font-size: 14px;
-  }
-
-  .project-meta {
-    font-size: 12px;
-    color: var(--text-muted);
-    text-transform: capitalize;
-  }
-
   button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -288,26 +238,5 @@
   button:disabled:hover {
     transform: none;
     background: inherit;
-  }
-
-  .launch-btn {
-    min-width: 100px;
-  }
-
-  .launch-btn.stop {
-    background: var(--accent-danger, #ef4444);
-  }
-
-  .spinner {
-    width: 16px;
-    height: 16px;
-    border: 2px solid rgba(0, 0, 0, 0.2);
-    border-top-color: #000;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
   }
 </style>

@@ -8,6 +8,8 @@
     PanelLeftOpen,
     Clipboard,
     Map,
+    Eye,
+    Layers,
   } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { api } from "../lib/api";
@@ -15,6 +17,8 @@
   import WorldMap from "./WorldMap.svelte";
   import EmptyState from "./EmptyState.svelte";
   import { worldMapClipboard, clearWorldMapClipboard } from "../lib/worldMapClipboard";
+
+  type MapMode = null | "builtin" | "mca";
 
   let worlds = $state<WorldListItem[]>([]);
   let loading = $state(false);
@@ -26,6 +30,7 @@
   let mcaMsg = $state<string | null>(null);
   let mcaOpening = $state(false);
   let railOpen = $state(true);
+  let mapMode = $state<MapMode>(null);
 
   const worldMetaTitle = $derived(
     !worldDetail || !selectedWorld
@@ -39,6 +44,14 @@
           `Spawn ${worldDetail.spawnX}, ${worldDetail.spawnY}, ${worldDetail.spawnZ}`,
         ].join(" · "),
   );
+
+  const modeLabel = $derived(
+    mapMode === "builtin" ? "Built-in viewer" : mapMode === "mca" ? "MCA Selector" : "Choose mode",
+  );
+
+  function setMapMode(mode: MapMode) {
+    mapMode = mode;
+  }
 
   async function loadWorlds() {
     const p = $projectPath;
@@ -64,6 +77,8 @@
     railOpen = false;
     worldDetail = null;
     detailLoading = true;
+    // Always offer the chooser when opening / switching worlds.
+    mapMode = null;
     try {
       worldDetail = await api.worlds.readInfo(name, p);
       error = null;
@@ -95,13 +110,30 @@
     error = null;
     try {
       await api.worlds.openMcaSelector(selectedWorld, p);
-      mcaMsg = "MCA Selector запущен — File → Open Recent";
+      mcaMsg = "MCA Selector launched — File → Open Recent";
       setTimeout(() => (mcaMsg = null), 5000);
     } catch (e) {
       error = String(e);
     } finally {
       mcaOpening = false;
     }
+  }
+
+  function chooseBuiltin() {
+    setMapMode("builtin");
+  }
+
+  async function chooseMca() {
+    setMapMode("mca");
+    await openMcaSelector();
+  }
+
+  function changeMode() {
+    mapMode = null;
+  }
+
+  function useBuiltinFromMca() {
+    setMapMode("builtin");
   }
 
   function gameTypeLabel(t: string | number): string {
@@ -217,6 +249,9 @@
           {#if detailLoading}
             <span class="meta-muted"><RefreshCw size={11} class="spin" /> Loading…</span>
           {/if}
+          {#if mapMode}
+            <span class="meta-pill mode-pill" title="Current world map mode">{modeLabel}</span>
+          {/if}
         </div>
         <div class="compact-right">
           {#if $worldMapClipboard}
@@ -245,21 +280,17 @@
           {/if}
           {#if backupMsg}<span class="backup-msg">{backupMsg}</span>{/if}
           {#if mcaMsg}<span class="backup-msg">{mcaMsg}</span>{/if}
-          <button
-            class="mca-open"
-            type="button"
-            disabled={mcaOpening}
-            onclick={openMcaSelector}
-            title="Открыть оригинальный MCA Selector с этим миром"
-          >
-            {#if mcaOpening}
-              <RefreshCw size={13} class="spin" />
-              Скачивание…
-            {:else}
-              <Map size={13} />
-              Открыть редактор карт мира
-            {/if}
-          </button>
+          {#if mapMode}
+            <button
+              class="mode-change"
+              type="button"
+              onclick={changeMode}
+              title="Choose how to open the world map"
+            >
+              <Layers size={12} />
+              Change mode
+            </button>
+          {/if}
           <button class="ghost" type="button" onclick={backupWorld} title="Backup this world">
             <Download size={13} /> Backup
           </button>
@@ -267,7 +298,71 @@
       </div>
 
       <div class="map-stage">
-        <WorldMap worldName={selectedWorld} layout="dock" />
+        {#if mapMode === null}
+          <div class="mode-chooser" role="dialog" aria-labelledby="map-mode-title">
+            <div class="mode-chooser-inner">
+              <h2 id="map-mode-title" class="mode-chooser-title">How do you want to open the world map?</h2>
+              <div class="mode-cards">
+                <button type="button" class="mode-card" onclick={chooseBuiltin}>
+                  <span class="mode-card-icon"><Eye size={22} /></span>
+                  <span class="mode-card-title">Built-in viewer</span>
+                  <span class="mode-card-sub">View-only map inside TuffBox</span>
+                </button>
+                <button
+                  type="button"
+                  class="mode-card"
+                  disabled={mcaOpening}
+                  onclick={chooseMca}
+                >
+                  <span class="mode-card-icon"><Map size={22} /></span>
+                  <span class="mode-card-title">MCA Selector</span>
+                  <span class="mode-card-sub">Full Querz editor (bundled, no download)</span>
+                  {#if mcaOpening}
+                    <span class="mode-card-busy">
+                      <RefreshCw size={12} class="spin" /> Opening…
+                    </span>
+                  {/if}
+                </button>
+              </div>
+            </div>
+          </div>
+        {:else if mapMode === "builtin"}
+          <WorldMap worldName={selectedWorld} layout="dock" readOnly={true} />
+        {:else}
+          <div class="mca-status-panel">
+            <div class="mca-status-card">
+              <Map size={28} />
+              <h3>MCA Selector launched</h3>
+              <p>
+                The bundled Querz MCA Selector should be open with this world.
+                If it isn’t focused, use <strong>File → Open Recent</strong> in MCA Selector.
+              </p>
+              {#if mcaOpening}
+                <p class="mca-status-busy"><RefreshCw size={13} class="spin" /> Opening…</p>
+              {/if}
+              <div class="mca-status-actions">
+                <button
+                  type="button"
+                  class="mca-relaunch"
+                  disabled={mcaOpening}
+                  onclick={openMcaSelector}
+                >
+                  {#if mcaOpening}
+                    <RefreshCw size={13} class="spin" /> Opening…
+                  {:else}
+                    <Map size={13} /> Open MCA Selector again
+                  {/if}
+                </button>
+                <button type="button" class="ghost" onclick={useBuiltinFromMca}>
+                  <Eye size={13} /> Use built-in viewer
+                </button>
+                <button type="button" class="ghost" onclick={changeMode}>
+                  Choose again
+                </button>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
     {:else}
       <EmptyState
@@ -439,6 +534,12 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .mode-pill {
+    max-width: 160px;
+    color: var(--accent-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-tertiary));
+  }
   .meta-muted {
     display: inline-flex;
     align-items: center;
@@ -487,28 +588,25 @@
     font-size: 12px;
   }
 
-  .mca-open {
+  .mode-change {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 12px;
+    gap: 5px;
+    font-size: 11px;
     font-weight: 600;
-    padding: 5px 10px;
+    padding: 4px 8px;
     border-radius: var(--border-radius-sm);
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
-    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-tertiary));
-    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
     cursor: pointer;
     white-space: nowrap;
-    transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+    transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
   }
-  .mca-open:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-primary) 28%, var(--bg-tertiary));
-    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--border-color));
-  }
-  .mca-open:disabled {
-    opacity: 0.65;
-    cursor: wait;
+  .mode-change:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, var(--border-color));
   }
 
   .map-stage {
@@ -516,11 +614,167 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    position: relative;
   }
   .map-stage > :global(.world-map) {
     flex: 1;
     min-height: 0;
     min-width: 0;
+  }
+
+  .mode-chooser {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background:
+      radial-gradient(ellipse 70% 50% at 50% 40%, color-mix(in srgb, var(--accent-primary) 8%, transparent), transparent 70%),
+      var(--bg-primary);
+  }
+  .mode-chooser-inner {
+    width: min(560px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .mode-chooser-title {
+    margin: 0;
+    text-align: center;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+  .mode-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  @media (max-width: 560px) {
+    .mode-cards { grid-template-columns: 1fr; }
+  }
+  .mode-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    text-align: left;
+    padding: 18px 16px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-primary) 8%);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  }
+  .mode-card:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-secondary));
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    transform: translateY(-1px);
+  }
+  .mode-card:disabled {
+    opacity: 0.7;
+    cursor: wait;
+  }
+  .mode-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--border-radius-md);
+    background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-color));
+    color: var(--accent-primary);
+    margin-bottom: 4px;
+  }
+  .mode-card-title {
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .mode-card-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.35;
+  }
+  .mode-card-busy {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--accent-primary);
+  }
+
+  .mca-status-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--bg-primary);
+  }
+  .mca-status-card {
+    width: min(420px, 100%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    text-align: center;
+    padding: 28px 24px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: color-mix(in srgb, var(--bg-secondary) 94%, var(--bg-primary) 6%);
+    color: var(--text-secondary);
+  }
+  .mca-status-card h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .mca-status-card p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-muted);
+  }
+  .mca-status-busy {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent-primary) !important;
+  }
+  .mca-status-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 8px;
+  }
+  .mca-relaunch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-tertiary));
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .mca-relaunch:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 28%, var(--bg-tertiary));
+  }
+  .mca-relaunch:disabled {
+    opacity: 0.65;
+    cursor: wait;
   }
 
   .err-banner {

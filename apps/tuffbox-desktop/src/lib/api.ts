@@ -1605,7 +1605,7 @@ export const api = {
     list(p?: string) { return cmd<WorldListItem[]>("list_worlds", pathArg(p)); },
     readInfo(worldName: string, p?: string) { return cmd<WorldDetail>("read_world_info", { ...pathArg(p), worldName }); },
     backup(worldName: string, p?: string) { return cmd<string>("backup_world", { ...pathArg(p), worldName }); },
-    /** Download/cache Querz MCA Selector and open it for this world (File → Open Recent). */
+    /** Open bundled Querz MCA Selector for this world (File → Open Recent). No download. */
     openMcaSelector(worldName: string, p?: string) {
       return cmd<void>("open_mca_selector", { ...pathArg(p), worldName });
     },
@@ -2258,6 +2258,8 @@ export const api = {
     getMinecraftVersions() { return cmd<MinecraftVersion[]>("get_minecraft_versions"); },
     getLoaderVersions(loader: string, minecraftVersion: string) { return cmd<LoaderVersion[]>("get_loader_versions", { loader, minecraftVersion }); },
     findJavaRuntimes() { return cmd<JavaRuntime[]>("find_java_runtimes"); },
+    /** Download latest GraalVM Community JDK if no Java is found (or return existing). */
+    ensureJavaRuntime() { return cmd<JavaRuntime>("ensure_java_runtime"); },
     getJavaVersion(path: string) { return cmd<string>("get_java_version", { path }); },
     getDefaultJavaVersion() { return cmd<string>("get_default_java_version"); },
     getKeyboardShortcuts() { return cmd<KeyboardShortcut[]>("get_keyboard_shortcuts"); },

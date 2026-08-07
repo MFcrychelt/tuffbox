@@ -33,7 +33,15 @@
   type ColorMode = "status" | "date" | "inhabited" | "biome" | "height";
   type Tool = "pan" | "click" | "box" | "radius" | "region" | "poly";
 
-  let { worldName = "", layout = "top" }: { worldName?: string; layout?: "top" | "dock" } = $props();
+  let {
+    worldName = "",
+    layout = "top",
+    readOnly = false,
+  }: {
+    worldName?: string;
+    layout?: "top" | "dock";
+    readOnly?: boolean;
+  } = $props();
 
   let map = $state<WorldMapData | null>(null);
   let filtersOpen = $state(false);
@@ -41,6 +49,12 @@
   let regionRailOpen = $state(false);
   type ToolsTab = "select" | "edit" | "export" | "filters";
   let toolsTab = $state<ToolsTab>("edit");
+
+  $effect(() => {
+    if (readOnly && (toolsTab === "edit" || toolsTab === "export")) {
+      toolsTab = "select";
+    }
+  });
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -223,6 +237,7 @@
 
   const showClipBanner = $derived(
     layout === "dock" &&
+    !readOnly &&
     crossWorldClip &&
     !fromWorldBannerDismissed &&
     !fromWorldOpen &&
@@ -1312,6 +1327,7 @@
   }
 
   async function importFromFolder() {
+    if (readOnly) return;
     if (!map || !$projectPath || !worldName) return;
     error = null;
     try {
@@ -1394,6 +1410,7 @@
   }
 
   async function swapTwoSelected() {
+    if (readOnly) return;
     if (!map || selection.size !== 2 || !$projectPath || !worldName) return;
     const keys = Array.from(selection);
     const parseKey = (key: string) => {
@@ -1429,6 +1446,7 @@
   }
 
   async function deleteSelected() {
+    if (readOnly) return;
     if (!map || selection.size === 0 || !$projectPath || !worldName) return;
     const n = selection.size;
     if (
@@ -1453,6 +1471,7 @@
   }
 
   async function purgeRegions() {
+    if (readOnly) return;
     if (!$projectPath || !worldName) return;
     if (!confirm(`Purge/compact region files in ${dimLabel(dimension)}?\n\nRemoves empty sectors after deletes and deletes empty .mca files (region + entities + poi).`)) {
       return;
@@ -1520,6 +1539,7 @@
   }
 
   async function cutSelected() {
+    if (readOnly) return;
     if (!map || selection.size === 0 || !$projectPath || !worldName) return;
     const beforeAt = get(worldMapClipboard)?.copiedAt ?? null;
     const ok = await copySelected();
@@ -1542,6 +1562,7 @@
   }
 
   async function pasteFromClipboard() {
+    if (readOnly) return;
     const clipState = get(worldMapClipboard);
     const path = get(projectPath);
     if (!clipState || !path || !worldName) {
@@ -1592,6 +1613,7 @@
   }
 
   async function openFromWorld() {
+    if (readOnly) return;
     if (!$projectPath) return;
     fromWorldLoading = true;
     fromWorldOpen = true;
@@ -1628,6 +1650,7 @@
   }
 
   async function fromWorldCopyOnly() {
+    if (readOnly) return;
     if (!map || selection.size === 0 || !$projectPath || !fromWorldName) {
       flash("Select chunks on the map first");
       return;
@@ -1656,6 +1679,7 @@
   }
 
   async function fromWorldReplaceSelection() {
+    if (readOnly) return;
     if (!map || selection.size === 0 || !$projectPath || !worldName || !fromWorldName) {
       flash("Select target chunks first");
       return;
@@ -1699,6 +1723,7 @@
 
   /** Import entire source dimension (or into current selection) via folder import. */
   async function fromWorldImportFolder() {
+    if (readOnly) return;
     if (!map || !$projectPath || !worldName || !fromWorldName) return;
     const intoSel = importIntoSelection && selection.size > 0;
     const msg = intoSel
@@ -1736,6 +1761,7 @@
   }
 
   function openChunkEditor() {
+    if (readOnly) return;
     if (selection.size !== 1) return;
     const key = Array.from(selection)[0];
     const parts = key.split(":");
@@ -1824,6 +1850,7 @@
   }
 
   async function applyNbtChange() {
+    if (readOnly) return;
     if (!map || selection.size === 0 || !$projectPath || !worldName) return;
     const change = buildNbtChange();
     const n = selection.size;
@@ -1881,10 +1908,13 @@
       if (!isEditableTarget(e.target)) {
         e.preventDefault();
         e.stopPropagation();
-        if (e.code === "KeyC") void copySelected();
-        else if (e.code === "KeyX") void cutSelected();
-        else if (e.code === "KeyV") void pasteFromClipboard();
-        else selectAll();
+        if (e.code === "KeyC") {
+          if (!readOnly) void copySelected();
+        } else if (e.code === "KeyX") {
+          if (!readOnly) void cutSelected();
+        } else if (e.code === "KeyV") {
+          if (!readOnly) void pasteFromClipboard();
+        } else selectAll();
         return;
       }
     }
@@ -1897,13 +1927,13 @@
       if (polyPoints.length > 0) { polyPoints = []; draw(); return; }
       clearSelection();
     }
-    else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }
+    else if ((e.key === "Delete" || e.key === "Backspace") && !readOnly) { e.preventDefault(); deleteSelected(); }
     else if (e.key === "+" || e.key === "=") zoomBy(1.15);
     else if (e.key === "-") zoomBy(1 / 1.15);
     else if (e.key === "0") { fitView(); draw(); }
     else if (e.key === "n" || e.key === "N") { e.preventDefault(); cycleColorMode(); }
     else if (e.key === "g" || e.key === "G") { e.preventDefault(); openGoto(); }
-    else if (e.key === "f" || e.key === "F") {
+    else if ((e.key === "f" || e.key === "F") && !readOnly) {
       e.preventDefault();
       openFromWorld();
     }
@@ -2074,6 +2104,9 @@
           <option value={d}>{dimLabel(d)}</option>
         {/each}
       </select>
+      {#if readOnly}
+        <span class="view-only-badge" title="Map is view-only — mutations disabled">View only</span>
+      {/if}
       <span class="mca-sep" aria-hidden="true"></span>
       <div class="tool-group compact tool-segment" role="toolbar" aria-label="Selection tools">
         <button type="button" class="ghost tool-ico" class:active={tool === "pan"} onclick={() => (tool = "pan")} title="Pan"><Minimize2 size={14} /></button>
@@ -2098,23 +2131,25 @@
         <button type="button" class="ghost tool-lbl" onclick={() => { fitView(); draw(); }} title="Fit (0)">Fit</button>
         <button type="button" class="ghost tool-lbl" onclick={openGoto} title="Go to… (G)"><Crosshair size={14} /><span>Go</span></button>
       </div>
-      <span class="mca-sep" aria-hidden="true"></span>
-      <div class="tool-group compact tool-segment" role="toolbar" aria-label="Chunk clipboard">
-        <button
-          type="button"
-          class="ghost tool-ico"
-          onclick={() => void copySelected()}
-          disabled={selection.size === 0 || !$projectPath || !worldName}
-          title="Copy selection (Ctrl+C)"
-        ><Copy size={14} /></button>
-        <button
-          type="button"
-          class="ghost tool-ico"
-          onclick={() => void pasteFromClipboard()}
-          disabled={!$worldMapClipboard || !$projectPath || !worldName}
-          title="Paste clipboard (Ctrl+V)"
-        ><Clipboard size={14} /></button>
-      </div>
+      {#if !readOnly}
+        <span class="mca-sep" aria-hidden="true"></span>
+        <div class="tool-group compact tool-segment" role="toolbar" aria-label="Chunk clipboard">
+          <button
+            type="button"
+            class="ghost tool-ico"
+            onclick={() => void copySelected()}
+            disabled={selection.size === 0 || !$projectPath || !worldName}
+            title="Copy selection (Ctrl+C)"
+          ><Copy size={14} /></button>
+          <button
+            type="button"
+            class="ghost tool-ico"
+            onclick={() => void pasteFromClipboard()}
+            disabled={!$worldMapClipboard || !$projectPath || !worldName}
+            title="Paste clipboard (Ctrl+V)"
+          ><Clipboard size={14} /></button>
+        </div>
+      {/if}
       <div class="tool-group compact grow-end view-toggles">
         <label class="toggle tight" title="Region borders"><input type="checkbox" bind:checked={showRegions} onchange={draw} /><span>R</span></label>
         <label class="toggle tight" title="Chunk grid"><input type="checkbox" bind:checked={showChunkGrid} onchange={draw} /><span>G</span></label>
@@ -2164,8 +2199,10 @@
       </div>
       <div class="tools-tabs" role="tablist">
         <button type="button" role="tab" class:active={toolsTab === "select"} aria-selected={toolsTab === "select"} onclick={() => (toolsTab = "select")}>Select</button>
-        <button type="button" role="tab" class:active={toolsTab === "edit"} aria-selected={toolsTab === "edit"} onclick={() => (toolsTab = "edit")}>Edit</button>
-        <button type="button" role="tab" class:active={toolsTab === "export"} aria-selected={toolsTab === "export"} onclick={() => (toolsTab = "export")}>Export</button>
+        {#if !readOnly}
+          <button type="button" role="tab" class:active={toolsTab === "edit"} aria-selected={toolsTab === "edit"} onclick={() => (toolsTab = "edit")}>Edit</button>
+          <button type="button" role="tab" class:active={toolsTab === "export"} aria-selected={toolsTab === "export"} onclick={() => (toolsTab = "export")}>Export</button>
+        {/if}
         <button type="button" role="tab" class:active={toolsTab === "filters"} aria-selected={toolsTab === "filters"} onclick={() => { toolsTab = "filters"; filtersOpen = true; }}>Filters</button>
       </div>
 
@@ -2194,7 +2231,7 @@
           </label>
           <p class="hint">Poly: click vertices, Enter or double-click to apply (Shift = subtract).</p>
         </div>
-      {:else if toolsTab === "edit"}
+      {:else if toolsTab === "edit" && !readOnly}
         <div class="tools-tab-body">
           <div class="tool-group">
             <button class="ghost" onclick={copySelected} disabled={selection.size === 0 || !$projectPath || !worldName} title="Copy (Ctrl+C)">
@@ -2237,7 +2274,7 @@
             <label class="field-row"><span>secs</span><input class="num wide" type="text" bind:value={importSections} placeholder="all / :-4" /></label>
           </div>
         </div>
-      {:else if toolsTab === "export"}
+      {:else if toolsTab === "export" && !readOnly}
         <div class="tools-tab-body">
           <div class="tool-group">
             <button class="ghost" onclick={exportSelectedFolder} disabled={selection.size === 0} title="Export selected chunks to folder">
@@ -2322,32 +2359,34 @@
             {#if filterActive}<span class="filttag">filter active</span>{/if}
           </div>
           <div class="nbt-bar stacked">
-            <button class="mini" onclick={() => (nbtPanelOpen = !nbtPanelOpen)} title="Toggle NBT changer">
-              <Wrench size={12} /> NBT Changer
-            </button>
-            {#if nbtPanelOpen}
-              <span>inhabited</span>
-              <input class="num" type="text" bind:value={chgInhabited} placeholder="ticks" />
-              <span>status</span>
-              <input class="num wide" type="text" bind:value={chgStatus} placeholder="e.g. full" />
-              <span>dataVersion</span>
-              <input class="num" type="text" bind:value={chgDataVersion} placeholder="dv" />
-              <span>light</span>
-              <input class="num" type="text" bind:value={chgLightPopulated} placeholder="0/1" />
-              <span>biome</span>
-              <input class="num wide" type="text" bind:value={chgBiome} placeholder="plains" />
-              <span>del secs</span>
-              <input class="num wide" type="text" bind:value={chgDeleteSections} placeholder="all / :-4" />
-              <span>replace</span>
-              <input class="num wide" type="text" bind:value={chgReplaceBlocks} placeholder="stone=deepslate" />
-              <span>del structs</span>
-              <input class="num wide" type="text" bind:value={chgDeleteStructureRefs} placeholder="names" />
-              <label class="chk"><input type="checkbox" bind:checked={chgPreventRetrogen} /> no retrogen</label>
-              <label class="chk"><input type="checkbox" bind:checked={chgForceBlend} /> force blend</label>
-              <label class="chk"><input type="checkbox" bind:checked={chgDeleteEntities} /> del ents</label>
-              <label class="chk"><input type="checkbox" bind:checked={chgFixStatus} /> fix status</label>
-              <label class="chk"><input type="checkbox" bind:checked={chgForce} /> force</label>
-              <button class="mini" onclick={applyNbtChange} disabled={selection.size === 0}><Wrench size={12} /> NBT Change</button>
+            {#if !readOnly}
+              <button class="mini" onclick={() => (nbtPanelOpen = !nbtPanelOpen)} title="Toggle NBT changer">
+                <Wrench size={12} /> NBT Changer
+              </button>
+              {#if nbtPanelOpen}
+                <span>inhabited</span>
+                <input class="num" type="text" bind:value={chgInhabited} placeholder="ticks" />
+                <span>status</span>
+                <input class="num wide" type="text" bind:value={chgStatus} placeholder="e.g. full" />
+                <span>dataVersion</span>
+                <input class="num" type="text" bind:value={chgDataVersion} placeholder="dv" />
+                <span>light</span>
+                <input class="num" type="text" bind:value={chgLightPopulated} placeholder="0/1" />
+                <span>biome</span>
+                <input class="num wide" type="text" bind:value={chgBiome} placeholder="plains" />
+                <span>del secs</span>
+                <input class="num wide" type="text" bind:value={chgDeleteSections} placeholder="all / :-4" />
+                <span>replace</span>
+                <input class="num wide" type="text" bind:value={chgReplaceBlocks} placeholder="stone=deepslate" />
+                <span>del structs</span>
+                <input class="num wide" type="text" bind:value={chgDeleteStructureRefs} placeholder="names" />
+                <label class="chk"><input type="checkbox" bind:checked={chgPreventRetrogen} /> no retrogen</label>
+                <label class="chk"><input type="checkbox" bind:checked={chgForceBlend} /> force blend</label>
+                <label class="chk"><input type="checkbox" bind:checked={chgDeleteEntities} /> del ents</label>
+                <label class="chk"><input type="checkbox" bind:checked={chgFixStatus} /> fix status</label>
+                <label class="chk"><input type="checkbox" bind:checked={chgForce} /> force</label>
+                <button class="mini" onclick={applyNbtChange} disabled={selection.size === 0}><Wrench size={12} /> NBT Change</button>
+              {/if}
             {/if}
           </div>
         </div>
@@ -2388,13 +2427,15 @@
           <button class="ghost" onclick={invertSelection} disabled={!map}><CheckSquare size={14} /> Invert</button>
           <button class="ghost" onclick={clearSelection} disabled={selection.size === 0}><XSquare size={14} /> Clear</button>
         </div>
-        <div class="tool-group">
-          <button class="ghost" onclick={copySelected} disabled={selection.size === 0 || !$projectPath || !worldName}><Copy size={14} /> Copy</button>
-          <button class="ghost" onclick={cutSelected} disabled={selection.size === 0 || !$projectPath || !worldName}><Scissors size={14} /> Cut</button>
-          <button class="ghost" onclick={pasteFromClipboard} disabled={!$worldMapClipboard || !$projectPath || !worldName}><Clipboard size={14} /> Paste</button>
-          <button class="ghost" onclick={openFromWorld} disabled={!map}><Globe2 size={14} /> From world…</button>
-          <button class="ghost danger" onclick={deleteSelected} disabled={selection.size === 0 || !$projectPath || !worldName}><Trash2 size={14} /> Delete</button>
-        </div>
+        {#if !readOnly}
+          <div class="tool-group">
+            <button class="ghost" onclick={copySelected} disabled={selection.size === 0 || !$projectPath || !worldName}><Copy size={14} /> Copy</button>
+            <button class="ghost" onclick={cutSelected} disabled={selection.size === 0 || !$projectPath || !worldName}><Scissors size={14} /> Cut</button>
+            <button class="ghost" onclick={pasteFromClipboard} disabled={!$worldMapClipboard || !$projectPath || !worldName}><Clipboard size={14} /> Paste</button>
+            <button class="ghost" onclick={openFromWorld} disabled={!map}><Globe2 size={14} /> From world…</button>
+            <button class="ghost danger" onclick={deleteSelected} disabled={selection.size === 0 || !$projectPath || !worldName}><Trash2 size={14} /> Delete</button>
+          </div>
+        {/if}
         <div class="tool-group">
           <button class="ghost" onclick={exportPng}><Download size={14} /> PNG</button>
           <button class="ghost" onclick={load} disabled={loading}><RefreshCw size={14} class={loading ? "spin" : ""} /></button>
@@ -2407,9 +2448,11 @@
         <span>to</span>
         <input type="date" bind:value={filterTo} />
         <button class="mini" onclick={selectByDate} disabled={!map || (!filterFrom && !filterTo)}>Select by date</button>
-        <label class="chk" title="Overwrite existing chunks on paste/import">
-          <input type="checkbox" bind:checked={importOverwrite} /> overwrite
-        </label>
+        {#if !readOnly}
+          <label class="chk" title="Overwrite existing chunks on paste/import">
+            <input type="checkbox" bind:checked={importOverwrite} /> overwrite
+          </label>
+        {/if}
       </div>
     {/if}
   </aside>
@@ -2795,6 +2838,21 @@
     padding: 4px 8px;
     font-size: 12px;
     height: 28px;
+  }
+  .view-only-badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-tertiary) 80%, var(--accent-primary) 20%);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-color));
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .mca-topbar .tool-group.compact {
     flex-direction: row;

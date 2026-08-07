@@ -21,9 +21,7 @@
     ShieldAlert,
   } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
-  import { confirm } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
-  import { open } from "@tauri-apps/plugin-shell";
   import {
     recentProjects,
     projectPath,
@@ -45,7 +43,6 @@
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
-  import { copyText } from "../lib/clipboard";
   import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
   import {
     fetchCrashFixBanner,
@@ -53,53 +50,14 @@
   } from "../lib/softVerify";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
-  import PromptDialog from "./PromptDialog.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import InstanceHome from "./InstanceHome.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
-  import DashboardInstancesSection from "./DashboardInstancesSection.svelte";
 
   let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world" } = $props();
 
-  /** Home layout: 1 classic | 2 yt main + instances under skin | 3 yt under skin | 4 hide yt */
-  type HomeLayout = "classic" | "yt-main" | "yt-under-skin" | "yt-hidden";
-  const HOME_LAYOUT_KEY = "tuffbox-home-layout";
-  const HOME_LAYOUT_OPTIONS: { id: HomeLayout; label: string }[] = [
-    { id: "classic", label: "YouTube then instances" },
-    { id: "yt-main", label: "YouTube main · instances under skin" },
-    { id: "yt-under-skin", label: "Instances main · YouTube under skin" },
-    { id: "yt-hidden", label: "Hide YouTube" },
-  ];
-
-  function loadHomeLayout(): HomeLayout {
-    try {
-      const v = localStorage.getItem(HOME_LAYOUT_KEY);
-      if (v === "classic" || v === "yt-main" || v === "yt-under-skin" || v === "yt-hidden") {
-        return v;
-      }
-    } catch {}
-    return "classic";
-  }
-
-  let homeLayout = $state<HomeLayout>(loadHomeLayout());
   let authReady = $state(false);
-
-  function setHomeLayout(next: HomeLayout) {
-    homeLayout = next;
-    try {
-      localStorage.setItem(HOME_LAYOUT_KEY, next);
-    } catch {}
-  }
-
-  function onHomeLayoutChange(e: Event) {
-    const el = e.currentTarget;
-    if (!(el instanceof HTMLSelectElement)) return;
-    const v = el.value;
-    if (HOME_LAYOUT_OPTIONS.some((o) => o.id === v)) {
-      setHomeLayout(v as HomeLayout);
-    }
-  }
 
   type ProjectStatBrief = { playtime: number; lastLaunch: string | null };
   let projectStats = $state<Record<string, ProjectStatBrief>>({});
@@ -132,28 +90,9 @@
     ensureStats($recentProjects.map((p) => p.path));
   });
 
-  /** Last launched first; unknown lastLaunch keeps relative store order. */
-  const sortedProjects = $derived([...$recentProjects].sort((a, b) => {
-    const la = projectStats[a.path]?.lastLaunch;
-    const lb = projectStats[b.path]?.lastLaunch;
-    if (la && lb) return lb.localeCompare(la);
-    if (la && !lb) return -1;
-    if (!la && lb) return 1;
-    return 0;
-  }));
-
   let selectedPath = $state<string | null>($projectPath);
-  let activeMenuPath = $state<string | null>(null);
-  /** Fixed-position coords for the instance actions menu (viewport space). */
-  let menuPos = $state<{ top: number; left: number } | null>(null);
   let showLoginModal = $state(false);
   let showAccountManager = $state(false);
-  let showWorldPrompt = $state(false);
-  let worldPromptOptions = $state<string[]>([]);
-  let worldPromptTarget = $state<RecentProject | null>(null);
-  let showClonePrompt = $state(false);
-  let clonePromptName = $state("");
-  let cloneTarget = $state<RecentProject | null>(null);
   let capeCatalog = $state<CapeCatalog | null>(null);
   let capeBusy = $state(false);
   let mojangCapeMenuOpen = $state(false);
@@ -168,6 +107,12 @@
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
   const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
+
+  // The sidebar rail switches instances through the global store — mirror it here.
+  $effect(() => {
+    const p = $projectPath;
+    if (p && p !== selectedPath) selectedPath = p;
+  });
   const skinUrl = $derived($authState.profile?.skinUrl ?? null);
   const capeUrl = $derived($authState.profile?.capeUrl ?? null);
   const accountKey = $derived($authState.activeAccountUuid ?? $authState.profile?.uuid ?? "");
@@ -357,7 +302,6 @@
   }
 
   async function selectProject(path: string) {
-    activeMenuPath = null;
     try {
       await loadProject(path);
     } catch {
@@ -389,78 +333,6 @@
     currentView = "ide";
   }
 
-  function toggleMenu(event: MouseEvent, path: string) {
-    event.stopPropagation();
-    if (activeMenuPath === path) {
-      activeMenuPath = null;
-      menuPos = null;
-      return;
-    }
-    activeMenuPath = path;
-    const anchor = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const menuW = 200;
-    const menuH = 420;
-    const pad = 8;
-    const left = Math.max(
-      pad,
-      Math.min(anchor.right - menuW, window.innerWidth - menuW - pad),
-    );
-    const spaceBelow = window.innerHeight - anchor.bottom - pad;
-    const spaceAbove = anchor.top - pad;
-    let openUp = spaceBelow < 260 || (anchor.bottom > window.innerHeight * 0.55 && spaceAbove > 160);
-    // Prefer above when a downward menu would cover the "Add instance" tile.
-    const addEl = document.querySelector(".projects-section .add-tile");
-    if (addEl instanceof HTMLElement && spaceAbove > 100) {
-      const addRect = addEl.getBoundingClientRect();
-      const menuBottomIfDown = anchor.bottom + 4 + Math.min(menuH, Math.max(spaceBelow, 0));
-      if (addRect.top < menuBottomIfDown && addRect.bottom > anchor.bottom - 4) {
-        openUp = true;
-      }
-    }
-    let top: number;
-    if (openUp) {
-      top = Math.max(pad, anchor.top - Math.min(menuH, spaceAbove) - 4);
-    } else {
-      top = Math.min(anchor.bottom + 4, window.innerHeight - pad - 80);
-    }
-    menuPos = { top, left };
-  }
-
-  function closeMenu() {
-    activeMenuPath = null;
-    menuPos = null;
-  }
-
-  let pinnedPaths = $state<Record<string, boolean>>({});
-  let actionBusy = $state(false);
-
-  async function togglePin(event: MouseEvent, projectPath: string) {
-    event.stopPropagation();
-    const isPinned = !pinnedPaths[projectPath];
-    pinnedPaths[projectPath] = isPinned;
-    pinnedPaths = { ...pinnedPaths };
-    try {
-      await api.session.pin(isPinned, projectPath);
-    } catch {}
-  }
-
-  function ensurePins(paths: string[]) {
-    let changed = false;
-    // Snapshot keys first so sync Proxy writes don't re-enter this $effect.
-    const known = new Set(Object.keys(pinnedPaths));
-    for (const path of paths) {
-      if (known.has(path)) continue;
-      known.add(path);
-      pinnedPaths[path] = false;
-      changed = true;
-      api.session.isPinned(path).then((pinned) => {
-        pinnedPaths[path] = pinned;
-        pinnedPaths = { ...pinnedPaths };
-      }).catch(() => {});
-    }
-    if (changed) pinnedPaths = { ...pinnedPaths };
-  }
-
   let instanceSizes = $state<Record<string, string>>({});
   let loadingSizes = $state<Record<string, boolean>>({});
   const sizeRequested = new Set<string>();
@@ -487,146 +359,8 @@
   }
 
   $effect(() => {
-    ensurePins($recentProjects.map((p) => p.path));
-  });
-  $effect(() => {
     ensureSizes($recentProjects.map((p) => p.path));
   });
-
-  async function handleAction(action: string, project: RecentProject) {
-    activeMenuPath = null;
-    menuPos = null;
-    switch (action) {
-      case "open-folder":
-        await invoke("open_project_folder", { path: project.path });
-        break;
-      case "change-version":
-        selectProject(project.path);
-        ideStageRequest.set("setup");
-        currentView = "ide";
-        break;
-      case "server-pack":
-        actionBusy = true;
-        try {
-          await invoke("export_server_pack", { path: project.path, targetPath: null });
-          toasts.success(`Server pack exported.`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "links":
-        actionBusy = true;
-        try {
-          const config: any = await invoke("get_publish_config", { path: project.path });
-          const links: string[] = [];
-          if (config?.modrinthProjectId) links.push(`https://modrinth.com/modpack/${config.modrinthProjectId}`);
-          if (config?.curseforgeProjectId) links.push(`https://www.curseforge.com/minecraft/modpacks/${config.curseforgeProjectId}`);
-          if (config?.githubRepository) links.push(`https://github.com/${config.githubRepository}/releases`);
-          if (links.length === 0) toasts.info("No publish links yet.", 5000);
-          else { await open(links[0]); toasts.success(`Opened ${links[0]}`); }
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "worlds":
-        actionBusy = true;
-        try {
-          const worlds: any[] = await invoke("list_worlds", { path: project.path });
-          if (worlds.length === 0) toasts.info("No worlds found.");
-          else { toasts.info(`${worlds.length} world(s) found.`, 5000); }
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "backup-world":
-        actionBusy = true;
-        try {
-          const worlds: any[] = await invoke("list_worlds", { path: project.path });
-          if (worlds.length === 0) { toasts.info("No worlds to backup."); break; }
-          worldPromptOptions = worlds.map((w: any) => w.name);
-          worldPromptTarget = project;
-          showWorldPrompt = true;
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "logs-zip":
-        actionBusy = true;
-        try {
-          await invoke("create_logs_zip", { path: project.path });
-          toasts.success(`Logs archive created.`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "copy-link":
-        try {
-          const dir = await api.project.getDir(project.path);
-          await copyText(dir);
-          toasts.success("Instance folder path copied");
-        } catch (e) {
-          toasts.error(String(e));
-        }
-        break;
-      case "clone":
-        clonePromptName = `${project.info.name} copy`;
-        cloneTarget = project;
-        showClonePrompt = true;
-        break;
-      case "share":
-        actionBusy = true;
-        try {
-          const exported: any = await api.export.modrinthPack(null, project.path);
-          try {
-            await copyText(exported.path);
-            toasts.success(`Exported .mrpack — path copied: ${exported.path}`);
-          } catch {
-            toasts.success(`Exported .mrpack: ${exported.path}`);
-          }
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "cleanup":
-        actionBusy = true;
-        try {
-          const result: any = await invoke("cleanup_project", { path: project.path });
-          toasts.success(`Cleaned ${result.count} files.`);
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "repair":
-        actionBusy = true;
-        try {
-          const report: any = await invoke("repair_project", { path: project.path });
-          const downloaded = report.downloaded?.length ?? 0;
-          const failed = report.failed?.length ?? 0;
-          toasts.success(
-            downloaded === 0 && failed === 0
-              ? "All mod files present and valid."
-              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`
-          );
-        } catch (e) { toasts.error(String(e)); }
-        finally { actionBusy = false; }
-        break;
-      case "remove":
-        recentProjects.remove(project.path);
-        if (selectedPath === project.path) {
-          selectedPath = $recentProjects[0]?.path ?? null;
-          projectPath.set(selectedPath);
-          projectInfo.set($recentProjects[0]?.info ?? null);
-        }
-        break;
-      case "delete": {
-        const ok = await confirm(`Delete "${project.info.name}"?`, { title: "Delete", kind: "warning" });
-        if (!ok) break;
-        try {
-          await invoke("delete_project", { path: project.path });
-          recentProjects.remove(project.path);
-          if (selectedPath === project.path) {
-            selectedPath = $recentProjects[0]?.path ?? null;
-            projectPath.set(selectedPath);
-            projectInfo.set($recentProjects[0]?.info ?? null);
-          }
-        } catch (e) { toasts.error(String(e)); }
-        break;
-      }
-    }
-  }
 
   async function handleLogout() {
     try {
@@ -648,35 +382,6 @@
     }
   }
 
-  function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    return colors[Math.abs(hash) % colors.length];
-  }
-
-  async function confirmBackupWorld(worldName: string) {
-    showWorldPrompt = false;
-    if (!worldPromptTarget) return;
-    try {
-      await invoke("backup_world", { path: worldPromptTarget.path, worldName });
-      toasts.success(`World "${worldName}" backed up.`);
-    } catch (e) { toasts.error(String(e)); }
-  }
-
-  async function confirmClone(newName: string) {
-    showClonePrompt = false;
-    if (!cloneTarget || !newName.trim()) return;
-    actionBusy = true;
-    try {
-      const clonedPath = await invoke<string>("clone_project", { path: cloneTarget.path, newName: newName.trim() });
-      const info = await invoke("validate_project", { path: clonedPath }) as import("../lib/api").ProjectSummary;
-      const manifestPath = info.manifestPath || clonedPath;
-      recentProjects.add({ path: manifestPath, info: info as any });
-      toasts.success(`Cloned to: ${manifestPath}`);
-    } catch (e) { toasts.error(String(e)); }
-    finally { actionBusy = false; }
-  }
   function openIdeStage(stage: string) {
     ideStageRequest.set(stage);
     currentView = "ide";
@@ -709,8 +414,6 @@
     void refreshIdeIssueBadge();
   });
 </script>
-
-<svelte:window onclick={closeMenu} />
 
 <div class="home fade-slide-in">
   <!-- Top bar: Quick actions left, Avatar right -->
@@ -766,7 +469,7 @@
     </div>
   </div>
 
-  <div class="main-layout" data-layout={homeLayout}>
+  <div class="main-layout">
     <div class="home-main">
       <!-- Hero: Play button + project info -->
       <section class="hero">
@@ -798,7 +501,7 @@
             {:else}
               <div class="project-quick-info">
                 <span class="project-name muted">No instance selected</span>
-                <span class="project-hint">Select an instance below or create a new one</span>
+                <span class="project-hint">Pick an instance in the left rail or create a new one</span>
               </div>
             {/if}
 
@@ -892,30 +595,7 @@
         />
       {/if}
 
-      {#if homeLayout !== "yt-hidden" && homeLayout !== "yt-under-skin"}
-        <YoutubeFeed variant={homeLayout === "yt-main" ? "grid" : "row"} />
-      {/if}
-
-      {#if homeLayout !== "yt-main"}
-        <DashboardInstancesSection
-          {homeLayout}
-          {sortedProjects}
-          {selectedPath}
-          {instanceSizes}
-          {loadingSizes}
-          {projectStats}
-          {pinnedPaths}
-          {activeMenuPath}
-          {menuPos}
-          homeLayoutOptions={HOME_LAYOUT_OPTIONS}
-          onHomeLayoutChange={onHomeLayoutChange}
-          {selectProject}
-          {toggleMenu}
-          {togglePin}
-          {handleAction}
-          {gradientFrom}
-        />
-      {/if}
+      <YoutubeFeed variant="grid" />
     </div>
 
     <aside class="home-side">
@@ -1099,33 +779,6 @@
           </div>
         {/if}
       </div>
-      {#if homeLayout === "yt-under-skin"}
-        <div class="skin-rail-youtube">
-          <YoutubeFeed variant="rail" />
-        </div>
-      {/if}
-
-      {#if homeLayout === "yt-main"}
-        <DashboardInstancesSection
-          {homeLayout}
-          {sortedProjects}
-          {selectedPath}
-          {instanceSizes}
-          {loadingSizes}
-          {projectStats}
-          {pinnedPaths}
-          {activeMenuPath}
-          {menuPos}
-          homeLayoutOptions={HOME_LAYOUT_OPTIONS}
-          onHomeLayoutChange={onHomeLayoutChange}
-          {selectProject}
-          {toggleMenu}
-          {togglePin}
-          {handleAction}
-          {gradientFrom}
-          sideColumn={true}
-        />
-      {/if}
     </aside>
   </div>
 </div>
@@ -1142,31 +795,6 @@
   <AddInstanceModal
     onclose={() => (newProjectOpen.set(false))}
     oncreated={(path) => loadProject(path)}
-  />
-{/if}
-
-{#if showWorldPrompt}
-  <PromptDialog
-    title="Backup World"
-    message="Select a world to back up."
-    mode="select"
-    options={worldPromptOptions}
-    defaultValue={worldPromptOptions[0]}
-    confirmLabel="Backup"
-    onconfirm={(v) => confirmBackupWorld(v)}
-    oncancel={() => (showWorldPrompt = false)}
-  />
-{/if}
-
-{#if showClonePrompt}
-  <PromptDialog
-    title="Clone Instance"
-    message="Enter a name for the cloned instance."
-    mode="text"
-    defaultValue={clonePromptName}
-    confirmLabel="Clone"
-    onconfirm={(v) => confirmClone(v)}
-    oncancel={() => (showClonePrompt = false)}
   />
 {/if}
 
@@ -1298,37 +926,6 @@
     position: sticky;
     top: 20px;
     align-self: start;
-  }
-
-  /* Instances under skin: side column scrolls so long lists stay usable.
-     Bound to the content scrollport (not raw 100vh) so it doesn't fight page scroll. */
-  .main-layout[data-layout="yt-main"] .home-side {
-    max-height: calc(100dvh - 96px);
-    overflow-y: auto;
-  }
-
-  /*
-   * yt-under-skin: one scrollbar on the whole side column (skin + feed).
-   * Scrolling moves the skin away so more videos fill the space.
-   * Feed itself is natural height — no nested scrollbar.
-   */
-  .main-layout[data-layout="yt-under-skin"] .home-side {
-    max-height: calc(100dvh - 96px);
-    overflow-x: hidden;
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: var(--bg-elevated) transparent;
-    overscroll-behavior: contain;
-  }
-
-  .skin-rail-youtube {
-    min-width: 0;
-    flex-shrink: 0;
-    overflow: visible;
-  }
-
-  .main-layout[data-layout="yt-under-skin"] .skin-rail-youtube {
-    padding-top: 0;
   }
 
   .skin-panel {

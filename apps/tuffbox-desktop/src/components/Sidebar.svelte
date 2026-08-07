@@ -1,110 +1,34 @@
 <script lang="ts">
-  import {
-    LayoutDashboard,
-    Package,
-    GitGraph,
-    Globe,
-    Stethoscope,
-    History,
-    Vote,
-    Workflow,
-    Settings,
-    Plus,
-    Library,
-    User,
-    MessagesSquare,
-    PanelLeftClose,
-    PanelLeftOpen,
-    FolderCog,
-    CookingPot,
-    ScrollText,
-  } from "@lucide/svelte";
-  import { onDestroy, tick } from "svelte";
+  import { Home, Workflow, Plus, Settings, User } from "@lucide/svelte";
   import {
     newProjectOpen,
-    sidebarMode,
-    sidebarIconsCollapsed,
     projectPath,
+    projectInfo,
+    recentProjects,
     ideStageRequest,
     ideSuggestedStage,
-    ideActiveStage,
   } from "../lib/store";
+  import { api } from "../lib/api";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
   let { currentView = $bindable() }: { currentView: View } = $props();
 
-  /** Left-nav shortcuts into the IDE workflow (keeps the bottom stage rail available). */
-  const VIEW_TO_IDE_STAGE: Partial<Record<View, string>> = {
-    mods: "content",
-    graph: "resolve",
-    configs: "configs",
-    diagnostics: "diagnose",
-    snapshots: "snapshots",
-    world: "world-map",
-    recipes: "recipes",
-    quests: "quests",
-  };
-
-  const items: { id: View; label: string; icon: any; featured?: boolean; shortcut?: string; needsProject?: boolean }[] = [
-    { id: "dashboard", label: "Launcher", icon: LayoutDashboard, shortcut: "Ctrl+1" },
-    { id: "me", label: "Me", icon: User },
-    { id: "ide", label: "Open IDE", icon: Workflow, featured: true, shortcut: "Ctrl+2" },
-    { id: "mods", label: "Mods", icon: Package, shortcut: "Ctrl+3" },
-    { id: "graph", label: "Graph", icon: GitGraph, shortcut: "Ctrl+4" },
-    { id: "configs", label: "Configs", icon: FolderCog, shortcut: "Ctrl+5", needsProject: true },
-    { id: "recipes", label: "Recipes", icon: CookingPot, needsProject: true },
-    { id: "quests", label: "Quests", icon: ScrollText, needsProject: true },
-    { id: "world", label: "World map", icon: Globe, shortcut: "Ctrl+8" },
-    { id: "library", label: "Library", icon: Library },
-    { id: "chats", label: "Chats", icon: MessagesSquare },
-    { id: "diagnostics", label: "Diagnostics", icon: Stethoscope, shortcut: "Ctrl+6" },
-    { id: "crash-votes", label: "Crash Votes", icon: Vote },
-    { id: "snapshots", label: "Snapshots", icon: History, shortcut: "Ctrl+7" },
-  ];
-
-  const hasProject = $derived(!!$projectPath);
-  const ideStageNavIds = Object.keys(VIEW_TO_IDE_STAGE) as View[];
-
-  function isNavActive(id: View): boolean {
-    if (currentView === "ide") {
-      const stage = $ideActiveStage;
-      if (id === "ide") {
-        return !stage || !ideStageNavIds.some((v) => VIEW_TO_IDE_STAGE[v] === stage);
-      }
-      return VIEW_TO_IDE_STAGE[id] === stage;
-    }
-    return currentView === id;
+  /** Same name-hash gradient the instance tiles use, so rail avatars match pack identity. */
+  function gradientFrom(name: string) {
+    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return colors[Math.abs(hash) % colors.length];
   }
 
-  function selectNav(view: View, el?: EventTarget | null) {
-    if (view === "ide") {
-      ideStageRequest.set($ideSuggestedStage || "content");
-      currentView = "ide";
-    } else if (VIEW_TO_IDE_STAGE[view]) {
-      ideStageRequest.set(VIEW_TO_IDE_STAGE[view]!);
-      currentView = "ide";
-    } else {
-      currentView = view;
-    }
-    if (el instanceof HTMLElement) el.blur();
-    scheduleHideRail(320);
+  function openHome() {
+    currentView = "dashboard";
   }
 
-  let navEl: HTMLElement | null = $state(null);
-  let bottomEl: HTMLElement | null = $state(null);
-  let indicatorY = $state(0);
-  let indicatorH = $state(42);
-  let indicatorReady = $state(false);
-  let indicatorInBottom = $state(false);
-
-  let railRevealed = $state(false);
-  let railHideTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Grace before hide — enough to move from hotzone onto the panel. */
-  const RAIL_HIDE_MS = 280;
-
-  const autoHide = $derived($sidebarMode === "autoHide");
-  const iconsMode = $derived($sidebarMode === "icons");
-  const iconsCollapsed = $derived(iconsMode && $sidebarIconsCollapsed);
+  function openIde() {
+    ideStageRequest.set($ideSuggestedStage || "content");
+    currentView = "ide";
+  }
 
   function openNewProject() {
     // Dashboard owns the modal, so make sure we're on that view before
@@ -113,502 +37,264 @@
     newProjectOpen.set(true);
   }
 
-  function clearRailHideTimer() {
-    if (railHideTimer) {
-      clearTimeout(railHideTimer);
-      railHideTimer = null;
-    }
-  }
-
-  function revealRail() {
-    if (!autoHide) return;
-    clearRailHideTimer();
-    railRevealed = true;
-  }
-
-  function scheduleHideRail(delay = RAIL_HIDE_MS) {
-    if (!autoHide) return;
-    clearRailHideTimer();
-    railHideTimer = setTimeout(() => {
-      railRevealed = false;
-      railHideTimer = null;
-    }, delay);
-  }
-
-  function onRailFocusOut(e: FocusEvent) {
-    if (!autoHide) return;
-    const next = e.relatedTarget;
-    if (next instanceof Node && e.currentTarget instanceof Node && e.currentTarget.contains(next)) {
+  async function selectInstance(path: string) {
+    if ($projectPath === path) {
+      currentView = "dashboard";
       return;
     }
-    scheduleHideRail();
-  }
-
-  $effect(() => {
-    if (!autoHide) {
-      railRevealed = false;
-      clearRailHideTimer();
+    try {
+      const info = await api.project.validate(path);
+      const manifestPath = info.manifestPath || path;
+      // reorder:false — rail icons must not jump around on every click.
+      recentProjects.add({ path: manifestPath, info: info as any }, { reorder: false });
+      projectPath.set(manifestPath);
+      projectInfo.set(info as any);
+      void api.session.setLastOpened(manifestPath).catch(() => {});
+    } catch {
+      const cached = $recentProjects.find((p) => p.path === path);
+      if (!cached) return;
+      projectPath.set(cached.path);
+      projectInfo.set(cached.info);
     }
-  });
-
-  onDestroy(() => clearRailHideTimer());
-
-  async function syncIndicator() {
-    await tick();
-    const inBottom = currentView === "settings";
-    indicatorInBottom = inBottom;
-    const host = inBottom ? bottomEl : navEl;
-    const btn = host?.querySelector(".nav-item.active") as HTMLElement | null;
-    if (!host || !btn) {
-      indicatorReady = false;
-      return;
-    }
-    // offsetTop is stable vs getBoundingClientRect (ignores global button hover transforms).
-    indicatorY = btn.offsetTop;
-    indicatorH = btn.offsetHeight;
-    indicatorReady = true;
+    currentView = "dashboard";
   }
-
-  $effect(() => {
-    currentView;
-    iconsCollapsed;
-    railRevealed;
-    $sidebarMode;
-    $ideActiveStage;
-    void syncIndicator();
-  });
 </script>
 
-<div
-  class="sidebar-slot"
-  class:auto-hide={autoHide}
-  class:icons-collapsed={iconsCollapsed}
-  class:revealed={railRevealed || !autoHide}
->
-  {#if autoHide}
-    <div
-      class="sidebar-hotzone"
-      aria-hidden="true"
-      onmouseenter={revealRail}
-      onmouseleave={() => scheduleHideRail()}
-    ></div>
-  {/if}
+<aside class="rail">
+  <nav class="rail-zone" aria-label="App">
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn"
+        class:active={currentView === "dashboard"}
+        title="Launcher"
+        aria-label="Launcher"
+        onclick={openHome}
+      >
+        <Home size={22} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn"
+        class:active={currentView === "ide"}
+        title="IDE"
+        aria-label="IDE"
+        onclick={openIde}
+      >
+        <Workflow size={22} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn add"
+        title="Add instance"
+        aria-label="Add instance"
+        onclick={openNewProject}
+      >
+        <Plus size={22} />
+      </button>
+    </div>
+  </nav>
 
-  <aside
-    class="sidebar"
-    class:compact={iconsCollapsed}
-    class:auto-hide-panel={autoHide}
-    class:revealed={railRevealed || !autoHide}
-    onmouseenter={revealRail}
-    onmouseleave={() => scheduleHideRail()}
-    onfocusin={revealRail}
-    onfocusout={onRailFocusOut}
-  >
-    <div class="brand">
-      <div class="logo">T</div>
-      {#if !iconsCollapsed}
-        <span class="brand-name">TuffBox</span>
-      {/if}
-      {#if iconsMode}
+  <div class="rail-divider" aria-hidden="true"></div>
+
+  <nav class="rail-zone rail-instances" aria-label="Instances">
+    {#each $recentProjects as instance (instance.path)}
+      <div class="rail-item">
         <button
           type="button"
-          class="collapse-btn tb-icon-hover"
-          title={iconsCollapsed ? "Expand sidebar" : "Collapse to icons"}
-          aria-expanded={!iconsCollapsed}
-          onclick={() => sidebarIconsCollapsed.toggle()}
+          class="rail-btn instance"
+          class:active={$projectPath === instance.path}
+          title={instance.info.name}
+          aria-label={instance.info.name}
+          style="background: linear-gradient(135deg, {gradientFrom(instance.info.name)}, {gradientFrom(instance.info.id)})"
+          onclick={() => selectInstance(instance.path)}
         >
-          {#if iconsCollapsed}
-            <PanelLeftOpen size={16} />
-          {:else}
-            <PanelLeftClose size={16} />
-          {/if}
+          <span class="instance-letter">{instance.info.name[0]}</span>
         </button>
-      {/if}
-    </div>
+      </div>
+    {/each}
+  </nav>
 
-    <nav class="nav" bind:this={navEl}>
-      <div
-        class="nav-indicator"
-        class:ready={indicatorReady && !indicatorInBottom}
-        style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
-        aria-hidden="true"
-      ></div>
-      {#each items as item (item.id)}
-        {@const NavIcon = item.icon}
-        <button
-          class="nav-item tb-icon-hover"
-          class:active={isNavActive(item.id)}
-          class:featured={item.featured}
-          disabled={item.needsProject && !hasProject}
-          onclick={(e) => {
-            if (item.needsProject && !hasProject) return;
-            selectNav(item.id, e.currentTarget);
-          }}
-          title={item.needsProject && !hasProject
-            ? `${item.label} (open an instance first)`
-            : item.shortcut
-              ? `${item.label} (${item.shortcut})`
-              : item.label}
-        >
-          <NavIcon size={20} />
-          {#if !iconsCollapsed}
-            <span class="nav-label">{item.label}</span>
-            {#if item.shortcut}
-              <span class="shortcut">{item.shortcut}</span>
-            {/if}
-          {/if}
-        </button>
-      {/each}
-
+  <nav class="rail-zone rail-bottom" aria-label="Launcher">
+    <div class="rail-item">
       <button
-        class="nav-item add tb-icon-hover"
-        title="New instance"
-        onclick={(e) => {
-          openNewProject();
-          if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
-          scheduleHideRail(320);
-        }}
-      >
-        <Plus size={20} />
-        {#if !iconsCollapsed}
-          <span class="nav-label">New</span>
-        {/if}
-      </button>
-    </nav>
-
-    <div class="bottom" bind:this={bottomEl}>
-      <div
-        class="nav-indicator"
-        class:ready={indicatorReady && indicatorInBottom}
-        style={`transform: translateY(${indicatorY}px); height: ${indicatorH}px`}
-        aria-hidden="true"
-      ></div>
-      <button
-        class="nav-item tb-icon-hover"
+        type="button"
+        class="rail-btn"
         class:active={currentView === "settings"}
-        onclick={(e) => selectNav("settings", e.currentTarget)}
         title="Settings"
+        aria-label="Settings"
+        onclick={() => (currentView = "settings")}
       >
-        <Settings size={20} />
-        {#if !iconsCollapsed}
-          <span class="nav-label">Settings</span>
-        {/if}
+        <Settings size={22} />
       </button>
     </div>
-  </aside>
-</div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn"
+        class:active={currentView === "me"}
+        title="Profile"
+        aria-label="Profile"
+        onclick={() => (currentView = "me")}
+      >
+        <User size={22} />
+      </button>
+    </div>
+  </nav>
+</aside>
 
 <style>
-  .sidebar-slot {
+  .rail {
+    width: 72px;
     flex-shrink: 0;
-    width: 212px;
     height: 100%;
     min-height: 0;
-    position: relative;
-    z-index: 30;
-    transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1);
-  }
-
-  .sidebar-slot.icons-collapsed {
-    width: 68px;
-  }
-
-  .sidebar-slot.auto-hide {
-    width: 0;
-    overflow: visible;
-  }
-
-  .sidebar-hotzone {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 20px;
-    z-index: 32;
-  }
-
-  .sidebar-slot.auto-hide:has(.sidebar.revealed) .sidebar-hotzone {
-    pointer-events: none;
-  }
-
-  .sidebar {
-    width: 212px;
-    height: 100%;
-    min-height: 0;
-    overflow: hidden;
+    box-sizing: border-box;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    padding: 16px 12px;
-    box-sizing: border-box;
+    align-items: center;
+    padding: 12px 0;
+    position: relative;
+    z-index: 30;
   }
 
-  .sidebar.compact {
-    width: 68px;
-    padding: 16px 8px;
-  }
-
-  .sidebar.auto-hide-panel {
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    transform: translateX(calc(-100% - 2px));
-    opacity: 0;
-    visibility: hidden;
-    transition:
-      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 0.16s ease,
-      visibility 0s linear 0.2s;
-    box-shadow: 12px 0 32px rgba(0, 0, 0, 0.32);
-    pointer-events: none;
-    will-change: transform, opacity;
-  }
-
-  .sidebar.auto-hide-panel.revealed {
-    transform: translateX(0);
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-    transition:
-      transform 0.2s cubic-bezier(0.22, 1, 0.36, 1),
-      opacity 0.14s ease,
-      visibility 0s linear 0s;
-  }
-
-  .brand {
+  .rail-zone {
     display: flex;
+    flex-direction: column;
     align-items: center;
     gap: 10px;
-    padding: 6px 8px 18px;
-    min-height: 48px;
-    flex-shrink: 0;
-  }
-
-  .sidebar.compact .brand {
-    flex-direction: column;
-    gap: 8px;
-    padding: 4px 0 14px;
-  }
-
-  .logo {
-    width: 36px;
-    height: 36px;
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-    border-radius: var(--border-radius-md);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 900;
-    font-size: 18px;
-    color: #000;
-    box-shadow: 0 4px 14px rgba(27, 217, 106, 0.35);
-    flex-shrink: 0;
-    animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .brand-name {
-    font-weight: 700;
-    font-size: 15px;
-    color: var(--text-primary);
-    letter-spacing: 0.2px;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .collapse-btn {
-    margin-left: auto;
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-sm);
-    background: var(--bg-primary);
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-
-  .sidebar.compact .collapse-btn {
-    margin-left: 0;
-  }
-
-  .collapse-btn:hover {
-    color: var(--accent-primary);
-    border-color: rgba(27, 217, 106, 0.4);
-  }
-
-  .nav,
-  .bottom {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
     width: 100%;
+    flex-shrink: 0;
   }
 
-  .nav {
+  .rail-divider {
+    width: 32px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--border-color);
+    margin: 10px 0;
+    flex-shrink: 0;
+  }
+
+  /* Middle zone owns the scroll; scrollbar hidden like server rails. */
+  .rail-instances {
     flex: 1;
     min-height: 0;
-    overflow-x: hidden;
     overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: var(--bg-elevated) transparent;
-    padding-right: 2px;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    padding: 2px 0;
+    flex-shrink: 1;
   }
 
-  .nav::-webkit-scrollbar {
-    width: 6px;
+  .rail-instances::-webkit-scrollbar {
+    display: none;
   }
 
-  .nav::-webkit-scrollbar-thumb {
-    background: var(--bg-elevated);
-    border-radius: 3px;
+  .rail-bottom {
+    padding-top: 10px;
   }
 
-  .nav-indicator {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 0;
-    border-radius: var(--border-radius-md);
-    background: rgba(27, 217, 106, 0.12);
-    border: 1px solid rgba(27, 217, 106, 0.22);
-    pointer-events: none;
-    opacity: 0;
-    transition:
-      transform var(--motion-page, 400ms) var(--ease-spring, ease),
-      height var(--motion-med, 240ms) var(--ease-out, ease),
-      opacity var(--motion-fast, 160ms) var(--ease-out, ease);
-    z-index: 0;
+  .rail-item {
+    position: relative;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    flex-shrink: 0;
   }
 
-  .nav-indicator.ready {
-    opacity: 1;
-  }
-
-  .nav-indicator::before {
+  /* Active/hover pill on the rail's left edge (height animates, Discord-style). */
+  .rail-item::before {
     content: "";
     position: absolute;
     left: 0;
     top: 50%;
     transform: translateY(-50%);
-    width: 3px;
-    height: 56%;
-    border-radius: 0 3px 3px 0;
+    width: 4px;
+    height: 0;
+    border-radius: 0 4px 4px 0;
     background: var(--accent-primary);
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.45);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    opacity: 0;
+    transition:
+      height var(--motion-fast, 160ms) var(--ease-out, ease),
+      opacity var(--motion-fast, 160ms) var(--ease-out, ease);
+    pointer-events: none;
   }
 
-  .nav-item {
-    position: relative;
-    z-index: 1;
-    width: 100%;
-    height: 42px;
-    padding: 0 12px;
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid transparent;
-    border-radius: var(--border-radius-md);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 14px;
-    font-weight: 500;
-    /* Kill global button hover translate — it desyncs the sliding indicator. */
-    transform: none !important;
-    transition: background var(--motion-fast, 160ms) var(--ease-out, ease),
-      color var(--motion-fast, 160ms) var(--ease-out, ease),
-      border-color var(--motion-fast, 160ms) var(--ease-out, ease);
+  .rail-item:hover::before {
+    height: 20px;
+    opacity: 1;
   }
 
-  .sidebar.compact .nav-item {
-    justify-content: center;
+  .rail-item:has(.rail-btn.active)::before {
+    height: 36px;
+    opacity: 1;
+  }
+
+  /* `.rail` prefix lifts specificity above the global themed button radius
+     (html[data-rounded-corners] :where(button)) so the Discord circle holds. */
+  .rail .rail-btn {
+    width: 48px;
+    height: 48px;
     padding: 0;
     gap: 0;
-  }
-
-  .nav-item:hover {
-    background: var(--bg-hover);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 50%;
+    background: var(--bg-tertiary);
     color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+    /* Kill the global button hover translate — it would desync the edge pill. */
+    transform: none !important;
+    transition:
+      border-radius var(--motion-med, 240ms) var(--ease-out, ease),
+      background-color var(--motion-fast, 160ms) var(--ease-out, ease),
+      color var(--motion-fast, 160ms) var(--ease-out, ease);
   }
 
-  .nav-item:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+  /* Circle → squircle morph on hover/active. */
+  .rail .rail-btn:hover,
+  .rail .rail-btn.active {
+    border-radius: var(--border-radius-lg);
+    background-color: var(--accent-primary);
+    color: #000;
   }
 
-  .nav-item:disabled:hover {
-    background: transparent;
-    color: var(--text-muted);
-  }
-
-  .nav-item.active {
+  .rail-btn.add {
     color: var(--accent-primary);
-    background: transparent;
   }
 
-  .nav-item.active:hover {
-    background: transparent;
+  .rail-btn.add:hover {
+    color: #000;
   }
 
-  .nav-label {
-    flex: 1;
-    text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  /* Instance avatars carry their own gradient (inline) — hover only morphs shape. */
+  .rail-btn.instance {
+    color: #fff;
   }
 
-  .shortcut {
-    font-size: 11px;
-    color: var(--text-faint, #6b7280);
-    background: var(--bg-tertiary, rgba(255, 255, 255, 0.05));
-    border-radius: 4px;
-    padding: 1px 6px;
-    font-weight: 600;
-    flex-shrink: 0;
+  .rail-btn.instance:hover,
+  .rail-btn.instance.active {
+    background-color: inherit;
+    color: #fff;
   }
 
-  .nav-item.featured {
-    margin-top: 8px;
-    border-color: rgba(27, 217, 106, 0.18);
-    background: transparent;
-    color: var(--text-secondary);
-  }
-
-  .nav-item.featured:hover {
-    color: var(--accent-primary);
-    background: var(--bg-hover);
-  }
-
-  .nav-item.featured.active {
-    color: var(--accent-primary);
-    border-color: transparent;
-    box-shadow: none;
-  }
-
-  .nav-item.add {
-    margin-top: 8px;
-    color: var(--accent-primary);
-    border: 1px dashed rgba(27, 217, 106, 0.4);
-  }
-
-  .nav-item.add:hover {
-    background: rgba(27, 217, 106, 0.1);
-    border-color: var(--accent-primary);
-  }
-
-  .bottom {
-    margin-top: 12px;
-    flex-shrink: 0;
-    padding-top: 4px;
-    border-top: 1px solid var(--border-color);
+  .instance-letter {
+    font-weight: 900;
+    font-size: 18px;
+    line-height: 1;
+    text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
   }
 </style>

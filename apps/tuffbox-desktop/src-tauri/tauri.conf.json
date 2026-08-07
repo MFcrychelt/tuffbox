@@ -56,7 +56,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "../../../bridges/jei-runtime/prebuilt/": "jei-bridge/"
+      "../../../bridges/jei-runtime/prebuilt/": "jei-bridge/",
+      "../../../bridges/mca-selector/prebuilt/": "mca-selector/"
     },
     "icon": [
       "icons/32x32.png",
