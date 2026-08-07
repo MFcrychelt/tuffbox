@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
+  import { SHAPE_OPTIONS } from "../../lib/questTypeLabels";
+  import ItemStackEditor from "./ItemStackEditor.svelte";
 
   let {
     chapter,
@@ -10,8 +12,6 @@
     chapterGroups?: QuestChapterGroup[];
     onDirty: () => void;
   } = $props();
-
-  const SHAPES = ["", "circle", "square", "rsquare", "diamond", "hexagon", "pentagon", "gear", "none"];
 
   let hideDefValue = $derived(
     chapter.defaultHideDependencyLines === true
@@ -69,8 +69,26 @@
 
 <div class="ch-set ftbq-panel">
   <h4>Chapter settings</h4>
-  <label>Title<input bind:value={chapter.title} oninput={onDirty} /></label>
-  <label>Icon<input bind:value={chapter.icon} oninput={onDirty} placeholder="mod:item" /></label>
+  <label
+    >Title<input
+      bind:value={chapter.title}
+      oninput={() => {
+        chapter.titleFromSnbt = true;
+        onDirty();
+      }}
+    /></label
+  >
+  <div class="icon-edit">
+    <ItemStackEditor
+      label="Icon"
+      value={chapter.icon ?? null}
+      allowFilters={false}
+      onChange={(v) => {
+        chapter.icon = v;
+        onDirty();
+      }}
+    />
+  </div>
   <label
     >Group
     <select
@@ -81,7 +99,7 @@
       }}
     >
       <option value="">(none)</option>
-      {#each chapterGroups as g}
+      {#each chapterGroups as g (g.id)}
         <option value={g.id}>{g.title}</option>
       {/each}
     </select>
@@ -107,8 +125,8 @@
         onDirty();
       }}
     >
-      {#each SHAPES as s}
-        <option value={s}>{s || "(default)"}</option>
+      {#each SHAPE_OPTIONS as s (s.id || "_default")}
+        <option value={s.id}>{s.label}</option>
       {/each}
     </select>
   </label>
@@ -146,7 +164,8 @@
     padding: 0 0 16px;
     font-size: 12px;
     background: var(--ftbq-bg-panel, #212126);
-    border-left: 1px solid var(--ftbq-border, #3a3a42);
+    border-left: 1px solid #101014;
+    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
     max-height: 100%;
     overflow: auto;
     overflow-x: hidden;
@@ -161,11 +180,13 @@
     letter-spacing: 0.06em;
     color: var(--ftbq-title-gold, #f2c94c);
     font-weight: 700;
-    background: rgba(0, 0, 0, 0.2);
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
+    border-bottom: 1px solid #101014;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
   }
   .ch-set h4:not(:first-child) {
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
+    border-top: 1px solid #101014;
     color: var(--ftbq-accent-teal, #3db8a8);
   }
   .ch-set label {
@@ -177,13 +198,17 @@
     letter-spacing: 0.04em;
     padding: 0 12px;
   }
+  .icon-edit {
+    padding: 0 12px;
+  }
   .ch-set input,
   .ch-set select {
     font-size: 12px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: #141419;
+    border: 1px solid #0c0c0f;
+    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 3px;
     text-transform: none;
   }
   .extra-row {
@@ -203,9 +228,18 @@
   .extra-add input,
   .extra-add button {
     font-size: 11px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: #141419;
+    border: 1px solid #0c0c0f;
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 3px;
+  }
+  .extra-add button {
+    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+  }
+  .extra-add button:hover {
+    background: linear-gradient(180deg, #47503f, #32382d);
+    color: #d6f5d0;
   }
 </style>

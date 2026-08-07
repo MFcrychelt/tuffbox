@@ -11,6 +11,8 @@ export interface QuestTask {
   title?: string | null;
   value?: unknown;
   properties?: Record<string, unknown>;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestReward {
@@ -42,6 +44,8 @@ export interface QuestData {
   minRequiredDependencies?: number | null;
   dependencyRequirement?: string | null;
   extras?: Record<string, unknown>;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestChapter {
@@ -56,12 +60,28 @@ export interface QuestChapter {
   quests: QuestData[];
   extras?: Record<string, unknown>;
   sourceFile?: string | null;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestChapterGroup {
   id: string;
   title: string;
+  titleFromSnbt?: boolean;
 }
+
+export interface QuestRewardTable {
+  id: string;
+  filename?: string | null;
+  orderIndex?: number | null;
+  lootSize?: number | null;
+  rewards: unknown[];
+  extras?: Record<string, unknown>;
+  sourceFile?: string | null;
+}
+
+export type LocaleValue = string | string[];
+export type LocaleMap = Record<string, LocaleValue>;
 
 export interface QuestBook {
   chapters: QuestChapter[];
@@ -69,11 +89,24 @@ export interface QuestBook {
   title?: string | null;
   subtitle?: string | null;
   bookSettings?: Record<string, unknown>;
+  rewardTables?: QuestRewardTable[];
+  /** locale code → translation keys (e.g. chapter.<id>.title) */
+  locales?: Record<string, LocaleMap>;
+  activeLocale?: string | null;
 }
 
 export interface QuestValidationIssue {
   questId: string;
   message: string;
+}
+
+export interface QuestBookLoadStats {
+  chapterCount: number;
+  fileCount: number;
+  langKeyCount: number;
+  rewardTableCount: number;
+  groupCount: number;
+  locale: string | null;
 }
 
 // ─── SNBT import/export helpers ─────────────────────────────────
@@ -106,13 +139,17 @@ function parseDependencies(v: SnbtValue): string[] {
 function parseTasks(arr: SnbtValue[]): QuestTask[] {
   return arr
     .filter((x): x is Record<string, SnbtValue> => typeof x === "object" && x !== null && !Array.isArray(x))
-    .map((m) => ({
-      id: gs(m, "id") ?? "",
-      type: gs(m, "type") ?? "checkmark",
-      title: gs(m, "title") ?? null,
-      value: m["value"] ?? null,
-      properties: extractExtras(m, ["id", "type", "title", "value"]),
-    }));
+    .map((m) => {
+      const inlineTitle = gs(m, "title");
+      return {
+        id: gs(m, "id") ?? "",
+        type: gs(m, "type") ?? "checkmark",
+        title: inlineTitle ?? null,
+        value: m["value"] ?? null,
+        properties: extractExtras(m, ["id", "type", "title", "value"]),
+        titleFromSnbt: inlineTitle != null,
+      };
+    });
 }
 
 function parseRewards(arr: SnbtValue[]): QuestReward[] {
@@ -137,6 +174,51 @@ function extractExtras(
   return out;
 }
 
+export function normalizeSnbtPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function basename(path: string): string {
+  const n = normalizeSnbtPath(path);
+  const i = n.lastIndexOf("/");
+  return i >= 0 ? n.slice(i + 1) : n;
+}
+
+function localeCodeFromLangPath(path: string): string | null {
+  const m = normalizeSnbtPath(path).match(/(?:^|\/)lang\/([^/]+)\.snbt$/i);
+  return m ? m[1]! : null;
+}
+
+export function isLangSnbtPath(path: string): boolean {
+  return /(?:^|\/)lang\/[^/]+\.snbt$/i.test(normalizeSnbtPath(path));
+}
+
+export function isRewardTableSnbtPath(path: string): boolean {
+  return /(?:^|\/)reward_tables\/[^/]+\.snbt$/i.test(normalizeSnbtPath(path));
+}
+
+export function isDataSnbtPath(path: string): boolean {
+  return /(?:^|\/)data\.snbt$/i.test(normalizeSnbtPath(path));
+}
+
+export function isChapterGroupsSnbtPath(path: string): boolean {
+  return /(?:^|\/)chapter_groups\.snbt$/i.test(normalizeSnbtPath(path));
+}
+
+export function isChapterSnbtPath(path: string): boolean {
+  const p = normalizeSnbtPath(path);
+  if (!p.endsWith(".snbt")) return false;
+  if (isLangSnbtPath(p) || isRewardTableSnbtPath(p) || isDataSnbtPath(p) || isChapterGroupsSnbtPath(p)) {
+    return false;
+  }
+  if (/(?:^|\/)chapters\/[^/]+\.snbt$/i.test(p)) return true;
+  // Legacy flat drop: single filename or no known meta folder in path
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length === 1) return true;
+  const parent = parts[parts.length - 2]!;
+  return parent !== "lang" && parent !== "reward_tables";
+}
+
 // ─── Parse SNBT chapter ─────────────────────────────────────────
 
 function parseSnbtChapter(content: string): QuestChapter | null {
@@ -156,10 +238,11 @@ function parseSnbtChapter(content: string): QuestChapter | null {
           : typeof desc === "string"
             ? [desc]
             : [];
+        const inlineTitle = gs(q, "title");
 
         return {
           id: gs(q, "id") ?? "",
-          title: gs(q, "title") ?? "Quest",
+          title: inlineTitle ?? "",
           subtitle: gs(q, "subtitle") ?? null,
           description,
           x: typeof q["x"] === "number" ? q["x"] : parseFloat(String(q["x"] ?? 0)),
@@ -167,7 +250,7 @@ function parseSnbtChapter(content: string): QuestChapter | null {
           icon: iconIdFromMap(q) ?? null,
           dependencies: parseDependencies(q["dependencies"] ?? []),
           tasks: parseTasks(Array.isArray(q["tasks"]) ? (q["tasks"] as SnbtValue[]) : []),
-          rewards: parseTasks(Array.isArray(q["rewards"]) ? (q["rewards"] as SnbtValue[]) : []) as QuestReward[],
+          rewards: parseRewards(Array.isArray(q["rewards"]) ? (q["rewards"] as SnbtValue[]) : []),
           optional: q["optional"] === true || q["optional"] === 1,
           shape: gs(q, "shape") ?? null,
           size: typeof q["size"] === "number" ? q["size"] : undefined,
@@ -185,12 +268,14 @@ function parseSnbtChapter(content: string): QuestChapter | null {
             "invisible", "disable_toast", "min_required_dependencies",
             "dependency_requirement",
           ]),
+          titleFromSnbt: inlineTitle != null,
         };
       });
 
+    const inlineTitle = gs(m, "title");
     return {
       id: gs(m, "id") ?? "untitled",
-      title: gs(m, "title") ?? "Untitled",
+      title: inlineTitle ?? "",
       icon: iconIdFromMap(m) ?? null,
       group: gs(m, "group") ?? null,
       orderIndex: typeof m["order_index"] === "number" ? (m["order_index"] as number) : null,
@@ -203,44 +288,291 @@ function parseSnbtChapter(content: string): QuestChapter | null {
         "default_quest_shape", "default_hide_dependency_lines",
       ]),
       sourceFile: null,
+      titleFromSnbt: inlineTitle != null,
     };
   } catch {
     return null;
   }
 }
 
+function parseLocaleFile(content: string): LocaleMap | null {
+  try {
+    const j = parseSnbt(content);
+    if (!j || typeof j !== "object" || Array.isArray(j)) return null;
+    const out: LocaleMap = {};
+    for (const [k, v] of Object.entries(j as Record<string, SnbtValue>)) {
+      if (typeof v === "string") out[k] = v;
+      else if (Array.isArray(v)) out[k] = v.map((x) => String(x));
+      else if (v !== null && v !== undefined) out[k] = String(v);
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+function parseChapterGroups(content: string): QuestChapterGroup[] {
+  try {
+    const j = parseSnbt(content);
+    if (!j || typeof j !== "object" || Array.isArray(j)) return [];
+    const arr = (j as Record<string, SnbtValue>)["chapter_groups"];
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x): x is Record<string, SnbtValue> => typeof x === "object" && x !== null && !Array.isArray(x))
+      .map((m) => {
+        const inlineTitle = gs(m, "title");
+        return {
+          id: gs(m, "id") ?? "",
+          title: inlineTitle ?? "",
+          titleFromSnbt: inlineTitle != null,
+        };
+      })
+      .filter((g) => g.id);
+  } catch {
+    return [];
+  }
+}
+
+function parseBookData(content: string): {
+  title: string | null;
+  subtitle: string | null;
+  bookSettings: Record<string, unknown>;
+} {
+  try {
+    const j = parseSnbt(content);
+    if (!j || typeof j !== "object" || Array.isArray(j)) {
+      return { title: null, subtitle: null, bookSettings: {} };
+    }
+    const m = j as Record<string, SnbtValue>;
+    const title = gs(m, "title") ?? null;
+    const subtitle = gs(m, "subtitle") ?? null;
+    const bookSettings = extractExtras(m, ["title", "subtitle"]);
+    return { title, subtitle, bookSettings };
+  } catch {
+    return { title: null, subtitle: null, bookSettings: {} };
+  }
+}
+
+function parseRewardTable(content: string, path: string): QuestRewardTable | null {
+  try {
+    const j = parseSnbt(content);
+    if (!j || typeof j !== "object" || Array.isArray(j)) return null;
+    const m = j as Record<string, SnbtValue>;
+    const file = basename(path).replace(/\.snbt$/i, "");
+    return {
+      id: gs(m, "id") ?? file,
+      filename: file,
+      orderIndex: typeof m["order_index"] === "number" ? (m["order_index"] as number) : null,
+      lootSize: typeof m["loot_size"] === "number" ? (m["loot_size"] as number) : null,
+      rewards: Array.isArray(m["rewards"]) ? (m["rewards"] as unknown[]) : [],
+      extras: extractExtras(m, ["id", "order_index", "loot_size", "rewards"]),
+      sourceFile: path,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function localeString(loc: LocaleMap, key: string): string | undefined {
+  const v = loc[key];
+  if (typeof v === "string") return v;
+  if (Array.isArray(v) && v.length > 0) return v.join("\n");
+  return undefined;
+}
+
+function localeStringArray(loc: LocaleMap, key: string): string[] | undefined {
+  const v = loc[key];
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") return [v];
+  return undefined;
+}
+
+function pickLocale(
+  locales: Record<string, LocaleMap> | undefined,
+  preferred?: string | null
+): { code: string; map: LocaleMap } | null {
+  if (!locales) return null;
+  if (preferred && locales[preferred]) return { code: preferred, map: locales[preferred]! };
+  if (locales["en_us"]) return { code: "en_us", map: locales["en_us"]! };
+  const first = Object.entries(locales)[0];
+  return first ? { code: first[0], map: first[1] } : null;
+}
+
+/**
+ * Apply FTB Quests lang/*.snbt strings onto the book for display.
+ * Does not mark fields as inline SNBT (titleFromSnbt stays false).
+ */
+export function applyLocaleOverlay(book: QuestBook, locale?: string | null): QuestBook {
+  const picked = pickLocale(book.locales, locale ?? book.activeLocale);
+  if (!picked) {
+    // Fallbacks when no lang file
+    for (const ch of book.chapters) {
+      if (!ch.title) ch.title = ch.filename ?? ch.id.slice(0, 8);
+      for (const q of ch.quests) {
+        if (!q.title) q.title = q.subtitle ?? q.id.slice(0, 8);
+      }
+    }
+    for (const g of book.chapterGroups) {
+      if (!g.title) g.title = g.id.slice(0, 8);
+    }
+    return book;
+  }
+
+  const loc = picked.map;
+  book.activeLocale = picked.code;
+
+  if (!book.title) {
+    for (const [k, v] of Object.entries(loc)) {
+      if (k.startsWith("file.") && k.endsWith(".title") && typeof v === "string") {
+        book.title = v;
+        break;
+      }
+    }
+  }
+
+  for (const g of book.chapterGroups) {
+    if (g.titleFromSnbt) continue;
+    const t = localeString(loc, `chapter_group.${g.id}.title`);
+    if (t) g.title = t;
+    else if (!g.title) g.title = g.id.slice(0, 8);
+  }
+
+  for (const ch of book.chapters) {
+    if (!ch.titleFromSnbt) {
+      const t = localeString(loc, `chapter.${ch.id}.title`);
+      if (t) ch.title = t;
+      else if (!ch.title) ch.title = ch.filename ?? ch.id.slice(0, 8);
+    }
+
+    for (const q of ch.quests) {
+      const langTitle = localeString(loc, `quest.${q.id}.title`);
+      const langSub = localeString(loc, `quest.${q.id}.quest_subtitle`);
+      const langDesc = localeStringArray(loc, `quest.${q.id}.quest_desc`);
+
+      if (!q.titleFromSnbt) {
+        // Prefer lang title; else existing inline/empty → subtitle → short id
+        q.title = langTitle || q.title || langSub || q.subtitle || q.id.slice(0, 8);
+      }
+      if (!q.subtitle && langSub) q.subtitle = langSub;
+      if ((!q.description || q.description.length === 0) && langDesc) {
+        q.description = langDesc;
+      }
+
+      for (const t of q.tasks) {
+        if (t.titleFromSnbt === false || t.title == null || t.title === "") {
+          const tt = localeString(loc, `task.${t.id}.title`);
+          if (tt) {
+            t.title = tt;
+            t.titleFromSnbt = false;
+          }
+        }
+      }
+    }
+  }
+
+  return book;
+}
+
+export function summarizeQuestBookLoad(book: QuestBook, fileCount: number): QuestBookLoadStats {
+  const locale = book.activeLocale ?? (book.locales ? Object.keys(book.locales)[0] ?? null : null);
+  const langKeyCount = locale && book.locales?.[locale]
+    ? Object.keys(book.locales[locale]!).length
+    : Object.values(book.locales ?? {}).reduce((n, m) => n + Object.keys(m).length, 0);
+  return {
+    chapterCount: book.chapters.length,
+    fileCount,
+    langKeyCount,
+    rewardTableCount: book.rewardTables?.length ?? 0,
+    groupCount: book.chapterGroups.length,
+    locale,
+  };
+}
+
+export function formatLoadMessage(stats: QuestBookLoadStats): string {
+  const bits = [`${stats.chapterCount} chapter(s)`];
+  if (stats.groupCount) bits.push(`${stats.groupCount} group(s)`);
+  if (stats.rewardTableCount) bits.push(`${stats.rewardTableCount} reward table(s)`);
+  if (stats.langKeyCount) {
+    bits.push(`${stats.langKeyCount} lang key(s)${stats.locale ? ` [${stats.locale}]` : ""}`);
+  }
+  bits.push(`${stats.fileCount} file(s)`);
+  return `Loaded ${bits.join(", ")}`;
+}
+
 // ─── Public API ─────────────────────────────────────────────────
 
 export function loadQuestBookFromSnbt(files: Map<string, string>): QuestBook {
   const chapters: QuestChapter[] = [];
+  const chapterGroups: QuestChapterGroup[] = [];
+  const rewardTables: QuestRewardTable[] = [];
+  const locales: Record<string, LocaleMap> = {};
+  let title: string | null = null;
+  let subtitle: string | null = null;
+  let bookSettings: Record<string, unknown> | undefined;
 
-  for (const [path, content] of files) {
-    if (!path.endsWith(".snbt")) continue;
-    // Skip non-chapter files
-    if (path.includes("data.snbt") || path.includes("chapter_groups.snbt") || path.includes("reward_tables/")) continue;
+  for (const [rawPath, content] of files) {
+    if (!rawPath.endsWith(".snbt") && !normalizeSnbtPath(rawPath).endsWith(".snbt")) continue;
+    const path = normalizeSnbtPath(rawPath);
 
-    const ch = parseSnbtChapter(content);
-    if (ch) {
-      ch.sourceFile = path;
-      chapters.push(ch);
+    if (isLangSnbtPath(path)) {
+      const code = localeCodeFromLangPath(path);
+      const map = parseLocaleFile(content);
+      if (code && map) locales[code] = map;
+      continue;
+    }
+
+    if (isDataSnbtPath(path)) {
+      const data = parseBookData(content);
+      title = data.title;
+      subtitle = data.subtitle;
+      bookSettings = data.bookSettings;
+      continue;
+    }
+
+    if (isChapterGroupsSnbtPath(path)) {
+      chapterGroups.push(...parseChapterGroups(content));
+      continue;
+    }
+
+    if (isRewardTableSnbtPath(path)) {
+      const table = parseRewardTable(content, path);
+      if (table) rewardTables.push(table);
+      continue;
+    }
+
+    if (isChapterSnbtPath(path)) {
+      const ch = parseSnbtChapter(content);
+      if (ch) {
+        ch.sourceFile = path;
+        if (!ch.filename) {
+          ch.filename = basename(path).replace(/\.snbt$/i, "");
+        }
+        chapters.push(ch);
+      }
     }
   }
 
   chapters.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+  rewardTables.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
 
-  return {
+  const book: QuestBook = {
     chapters,
-    chapterGroups: [],
-    title: null,
-    subtitle: null,
+    chapterGroups,
+    title,
+    subtitle,
+    bookSettings,
+    rewardTables,
+    locales: Object.keys(locales).length > 0 ? locales : undefined,
   };
+
+  return applyLocaleOverlay(book);
 }
 
 // ─── Serialize back to SNBT ─────────────────────────────────────
 
 function serializeQuestTask(t: QuestTask): Record<string, SnbtValue> {
   const obj: Record<string, SnbtValue> = { id: t.id, type: t.type };
-  if (t.title) obj.title = t.title;
+  if (t.titleFromSnbt !== false && t.title) obj.title = t.title;
   if (t.value !== undefined) obj.value = t.value as SnbtValue;
   if (t.properties && Object.keys(t.properties).length > 0) {
     Object.assign(obj, t.properties);
@@ -251,10 +583,10 @@ function serializeQuestTask(t: QuestTask): Record<string, SnbtValue> {
 function serializeQuest(q: QuestData): Record<string, SnbtValue> {
   const obj: Record<string, SnbtValue> = {
     id: q.id,
-    title: q.title,
     x: q.x,
     y: q.y,
   };
+  if (q.titleFromSnbt !== false && q.title) obj.title = q.title;
   if (q.subtitle) obj.subtitle = q.subtitle;
   if (q.description && q.description.length > 0) obj.description = q.description;
   if (q.icon) obj.icon = q.icon;
@@ -264,12 +596,20 @@ function serializeQuest(q: QuestData): Record<string, SnbtValue> {
   if (q.optional) obj.optional = 1;
   if (q.shape) obj.shape = q.shape;
   if (q.size !== undefined && q.size !== 1) obj.size = q.size;
-  if (q.hideDependencyLines !== null) obj.hide_dependency_lines = q.hideDependencyLines ? 1 : 0;
-  if (q.hideDependentLines !== null) obj.hide_dependent_lines = q.hideDependentLines ? 1 : 0;
-  if (q.canRepeat !== null) obj.can_repeat = q.canRepeat ? 1 : 0;
-  if (q.invisible !== null) obj.invisible = q.invisible ? 1 : 0;
-  if (q.disableToast !== null) obj.disable_toast = q.disableToast ? 1 : 0;
-  if (q.minRequiredDependencies !== null) obj.min_required_dependencies = q.minRequiredDependencies!;
+  if (q.hideDependencyLines !== null && q.hideDependencyLines !== undefined) {
+    obj.hide_dependency_lines = q.hideDependencyLines ? 1 : 0;
+  }
+  if (q.hideDependentLines !== null && q.hideDependentLines !== undefined) {
+    obj.hide_dependent_lines = q.hideDependentLines ? 1 : 0;
+  }
+  if (q.canRepeat !== null && q.canRepeat !== undefined) obj.can_repeat = q.canRepeat ? 1 : 0;
+  if (q.invisible !== null && q.invisible !== undefined) obj.invisible = q.invisible ? 1 : 0;
+  if (q.disableToast !== null && q.disableToast !== undefined) {
+    obj.disable_toast = q.disableToast ? 1 : 0;
+  }
+  if (q.minRequiredDependencies !== null && q.minRequiredDependencies !== undefined) {
+    obj.min_required_dependencies = q.minRequiredDependencies;
+  }
   if (q.dependencyRequirement) obj.dependency_requirement = q.dependencyRequirement;
   if (q.extras) Object.assign(obj, q.extras);
   return obj;
@@ -278,14 +618,16 @@ function serializeQuest(q: QuestData): Record<string, SnbtValue> {
 function serializeChapter(ch: QuestChapter): string {
   const obj: Record<string, SnbtValue> = {
     id: ch.id,
-    title: ch.title,
   };
+  if (ch.titleFromSnbt !== false && ch.title) obj.title = ch.title;
   if (ch.icon) obj.icon = ch.icon;
   if (ch.group) obj.group = ch.group;
   if (ch.orderIndex !== null && ch.orderIndex !== undefined) obj.order_index = ch.orderIndex;
   if (ch.filename) obj.filename = ch.filename;
   if (ch.defaultQuestShape) obj.default_quest_shape = ch.defaultQuestShape;
-  if (ch.defaultHideDependencyLines !== null) obj.default_hide_dependency_lines = ch.defaultHideDependencyLines ? 1 : 0;
+  if (ch.defaultHideDependencyLines !== null && ch.defaultHideDependencyLines !== undefined) {
+    obj.default_hide_dependency_lines = ch.defaultHideDependencyLines ? 1 : 0;
+  }
   if (ch.quests.length > 0) obj.quests = ch.quests.map(serializeQuest);
   if (ch.extras) Object.assign(obj, ch.extras);
 

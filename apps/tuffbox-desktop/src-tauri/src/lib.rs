@@ -10,6 +10,7 @@ mod mca_selector;
 mod pack_events;
 mod presence;
 mod quest_chat_api;
+mod snbt_parser;
 mod swarm_api;
 mod swarm_node;
 mod task_progress_api;
@@ -7249,9 +7250,28 @@ async fn generate_quest_plan_via_ai(
             .collect::<Vec<_>>()
     };
     let ctx = tuffbox_core::quest_plan::QuestAuthorContext {
-        existing_chapters: book.chapters.iter().map(|c| c.title.clone()).collect(),
+        existing_chapters: book
+            .chapters
+            .iter()
+            .map(|c| tuffbox_core::quest_plan::ExistingChapter {
+                id: c.id.clone(),
+                title: c.title.clone(),
+                group: c.group.clone(),
+            })
+            .collect(),
+        existing_groups: book
+            .chapter_groups
+            .iter()
+            .map(|g| tuffbox_core::quest_plan::ExistingGroup {
+                id: g.id.clone(),
+                title: g.title.clone(),
+            })
+            .collect(),
         sample_items,
         pack_hint: book.title.clone(),
+        existing_quests: Vec::new(),
+        anchor_quest: None,
+        target_chapter: None,
     };
     let user_msg = tuffbox_core::quest_plan::build_quest_author_user_message(prompt, &ctx);
     let messages = vec![serde_json::json!({"role": "user", "content": user_msg})];
@@ -7287,7 +7307,7 @@ fn save_quest_reward_table(
     )?;
     auto_snapshot_with_changed_files(&manifest_path, "save-quest-reward-table", &[PathBuf::from(&rel)])
         .map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "relativePath": rel, "entryCount": table.entries.len() }))
+    Ok(serde_json::json!({ "relativePath": rel, "entryCount": table.rewards.len() }))
 }
 
 /// Save quest book `data.snbt` (title + defaults).
@@ -7337,6 +7357,21 @@ fn save_quest_chapter_groups(
     Ok(serde_json::json!({ "relativePath": rel }))
 }
 
+/// Save `lang/<code>.snbt` locale overlay map.
+#[tauri::command(rename_all = "camelCase")]
+fn save_quest_locale(
+    path: String,
+    code: String,
+    map: std::collections::HashMap<String, serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let rel = tuffbox_core::unified::QuestBook::save_locale(&project_dir, &code, &map)?;
+    auto_snapshot_with_changed_files(&manifest_path, "save-quest-locale", &[PathBuf::from(&rel)])
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "relativePath": rel }))
+}
+
 /// List FTB Quests team progress files under saves/*/ftbquests/.
 #[tauri::command(rename_all = "camelCase")]
 fn list_quest_progress_teams(path: String) -> Result<Vec<serde_json::Value>, String> {
@@ -7358,6 +7393,20 @@ fn load_quest_progress(
     let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
     let snap =
         tuffbox_core::unified::load_progress_for_book(&project_dir, &relative_path, &book)?;
+    serde_json::to_value(snap).map_err(|e| e.to_string())
+}
+
+/// In-memory playthrough simulate — never reads/writes saves/.
+#[tauri::command(rename_all = "camelCase")]
+fn simulate_quest_progress(
+    book: tuffbox_core::unified::QuestBook,
+    completed_ids: Vec<String>,
+    task_progress_ids: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    use std::collections::HashSet;
+    let completed: HashSet<String> = completed_ids.into_iter().collect();
+    let tasks: HashSet<String> = task_progress_ids.unwrap_or_default().into_iter().collect();
+    let snap = tuffbox_core::unified::build_progress_snapshot(&book, &completed, &tasks);
     serde_json::to_value(snap).map_err(|e| e.to_string())
 }
 
@@ -13674,6 +13723,38 @@ pub(crate) fn download_project_mods_tracked(
     report
 }
 
+#[tauri::command(rename_all = "camelCase")]
+async fn load_quest_chapter(file_path: String) -> Result<String, String> {
+    let content = std::fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let json_value = snbt_parser::parse_snbt_to_json(&content)?;
+    Ok(json_value.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn save_quest_chapter_raw(file_path: String, json_payload: String) -> Result<(), String> {
+    let value: serde_json::Value = serde_json::from_str(&json_payload)
+        .map_err(|e| format!("Invalid JSON payload: {}", e))?;
+    let snbt_content = snbt_parser::json_to_snbt(&value);
+    std::fs::write(&file_path, snbt_content)
+        .map_err(|e| format!("Failed to write SNBT file: {}", e))?;
+    Ok(())
+}
+
+/// Serialize chapter JSON to SNBT without writing (same path as save).
+#[tauri::command(rename_all = "camelCase")]
+async fn preview_quest_chapter_snbt(json_payload: String) -> Result<String, String> {
+    let value: serde_json::Value = serde_json::from_str(&json_payload)
+        .map_err(|e| format!("Invalid JSON payload: {}", e))?;
+    Ok(snbt_parser::json_to_snbt(&value))
+}
+
+/// Read raw chapter SNBT (or any text) from an absolute path.
+#[tauri::command(rename_all = "camelCase")]
+async fn read_quest_chapter_text(file_path: String) -> Result<String, String> {
+    std::fs::read_to_string(&file_path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -13861,11 +13942,16 @@ pub fn run() {
             get_item_tag_entries,
             generate_kubejs_recipe_script,
             load_quest_book,
+            load_quest_chapter,
+            save_quest_chapter_raw,
+            preview_quest_chapter_snbt,
+            read_quest_chapter_text,
             save_quest_chapter,
             validate_quest_book,
             save_quest_reward_table,
             save_quest_book_data,
             save_quest_chapter_groups,
+            save_quest_locale,
             parse_and_merge_quest_plan,
             validate_quest_plan,
             quest_plan_system_prompt,
@@ -13876,11 +13962,13 @@ pub fn run() {
             quest_chat_api::delete_quest_chat_session,
             quest_chat_api::new_quest_chat_session,
             quest_chat_api::quest_chat_turn,
+            quest_chat_api::cancel_quest_chat_turn,
             quest_chat_api::generate_quest_line,
             quest_chat_api::filter_and_merge_quest_plan,
             list_quest_item_catalog,
             list_quest_progress_teams,
             load_quest_progress,
+            simulate_quest_progress,
             list_worlds,
             mca_selector::open_mca_selector,
             list_content_packs,

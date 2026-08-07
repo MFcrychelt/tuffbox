@@ -1,7 +1,16 @@
 <script lang="ts">
   import type { QuestChapter, QuestChapterGroup, QuestData, QuestValidationIssue, QuestBook } from "./lib/store";
-  import { loadQuestBookFromSnbt, exportChapterSnbt, validateQuestBook, saveToStorage, loadFromStorage, clearStorage } from "./lib/store";
-  import { createHistoryState, pushSnapshot, undo as historyUndo, redo as historyRedo, canUndo, canRedo, clearHistory } from "./lib/history";
+  import {
+    loadQuestBookFromSnbt,
+    exportChapterSnbt,
+    validateQuestBook,
+    saveToStorage,
+    loadFromStorage,
+    clearStorage,
+    summarizeQuestBookLoad,
+    formatLoadMessage,
+  } from "./lib/store";
+  import { createHistoryState, pushSnapshot, undo as historyUndo, redo as historyRedo, canUndo, canRedo, clearHistory, materializeChapters } from "./lib/history";
   import { createSelectionState, selectSingle, toggleSelect, addToSelection, selectAll, clearSelection, type SelectionState } from "./lib/selection";
   import { createSearchState, searchQuests, nextResult, prevResult, type SearchState } from "./lib/search";
   import { loadTheme, saveTheme, toggleTheme, getThemeVars, type Theme } from "./lib/theme";
@@ -17,6 +26,7 @@
   let chapters = $state<QuestChapter[]>([]);
   let chapterGroups = $state<QuestChapterGroup[]>([]);
   let bookTitle = $state<string | null>(null);
+  let loadedBook = $state<QuestBook | null>(null);
   let selectedChapter = $state("");
   let selectedQuest = $state<QuestData | null>(null);
   let validationIssues = $state<QuestValidationIssue[]>([]);
@@ -54,6 +64,7 @@
   $effect(() => {
     const saved = loadFromStorage();
     if (saved && saved.chapters.length > 0) {
+      loadedBook = saved;
       chapters = saved.chapters;
       chapterGroups = saved.chapterGroups ?? [];
       bookTitle = saved.title ?? null;
@@ -67,7 +78,16 @@
   // Auto-save to localStorage
   $effect(() => {
     if (chapters.length > 0 || bookTitle) {
-      saveToStorage({ chapters, chapterGroups, title: bookTitle });
+      saveToStorage({
+        chapters,
+        chapterGroups,
+        title: bookTitle,
+        rewardTables: loadedBook?.rewardTables,
+        locales: loadedBook?.locales,
+        activeLocale: loadedBook?.activeLocale,
+        bookSettings: loadedBook?.bookSettings,
+        subtitle: loadedBook?.subtitle,
+      });
     }
   });
 
@@ -97,6 +117,7 @@
     const n: QuestChapter = {
       id: `chapter_${Date.now().toString(16)}`,
       title: `Chapter ${chapters.length + 1}`,
+      titleFromSnbt: true,
       quests: [],
       extras: {},
       orderIndex: chapters.length,
@@ -115,6 +136,7 @@
     const newQ: QuestData = {
       id: crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase(),
       title: "New Quest",
+      titleFromSnbt: true,
       description: [],
       x,
       y,
@@ -257,6 +279,7 @@
     const ch = chapters.find((c) => c.id === id);
     if (ch) {
       ch.title = title;
+      ch.titleFromSnbt = true;
       markDirty(id);
     }
   }
@@ -290,60 +313,75 @@
     message = `Exported "${ch.title}"`;
   }
 
+  function applyLoadedBook(book: QuestBook, fileMap: Map<string, string>) {
+    if (book.chapters.length === 0) {
+      error = "Could not parse any chapters from files";
+      return false;
+    }
+    snbtFiles = fileMap;
+    loadedBook = book;
+    chapters = book.chapters;
+    chapterGroups = book.chapterGroups;
+    bookTitle = book.title ?? null;
+    selectedChapter = chapters[0]?.id ?? "";
+    selectedQuest = null;
+    dirtyChapters = new Set();
+    selection = clearSelection();
+    validationIssues = validateQuestBook(book);
+    message = formatLoadMessage(summarizeQuestBookLoad(book, fileMap.size));
+    error = null;
+    return true;
+  }
+
   function handleDrop(e: DragEvent) {
     e.preventDefault();
     showImportHelp = false;
     const items = e.dataTransfer?.items;
     if (!items) return;
 
-    const files: Promise<{ path: string; content: string }>[] = [];
+    const reads: Promise<Array<{ path: string; content: string }>>[] = [];
     for (const item of Array.from(items)) {
       if (item.kind === "file") {
         const entry = item.webkitGetAsEntry?.();
         if (entry) {
-          files.push(readEntryRecursive(entry, ""));
+          reads.push(readEntryRecursive(entry, ""));
         }
       }
     }
 
-    Promise.all(files).then((results) => {
-      const fileMap = new Map<string, string>();
-      for (const r of results) {
-        if (r.path.endsWith(".snbt")) {
-          fileMap.set(r.path, r.content);
+    Promise.all(reads)
+      .then((nested) => {
+        const fileMap = new Map<string, string>();
+        for (const r of nested.flat()) {
+          if (r.path.endsWith(".snbt")) {
+            fileMap.set(r.path.replace(/\\/g, "/"), r.content);
+          }
         }
-      }
-      if (fileMap.size === 0) {
-        error = "No .snbt files found in drop";
-        return;
-      }
-      snbtFiles = fileMap;
-      pushHistory();
-      const book = loadQuestBookFromSnbt(fileMap);
-      if (book.chapters.length === 0) {
-        error = "Could not parse any chapters from dropped files";
-        return;
-      }
-      chapters = book.chapters;
-      chapterGroups = book.chapterGroups;
-      bookTitle = book.title;
-      selectedChapter = chapters[0].id;
-      selectedQuest = null;
-      dirtyChapters = new Set();
-      validationIssues = validateQuestBook(book);
-      message = `Loaded ${chapters.length} chapter(s) from ${fileMap.size} file(s)`;
-    });
+        if (fileMap.size === 0) {
+          error = "No .snbt files found in drop";
+          return;
+        }
+        pushHistory();
+        applyLoadedBook(loadQuestBookFromSnbt(fileMap), fileMap);
+      })
+      .catch((err) => {
+        error = `Import failed: ${err instanceof Error ? err.message : String(err)}`;
+      });
   }
 
-  function readEntryRecursive(entry: FileSystemEntry, basePath: string): Promise<{ path: string; content: string }> {
+  function readEntryRecursive(
+    entry: FileSystemEntry,
+    basePath: string
+  ): Promise<Array<{ path: string; content: string }>> {
     return new Promise((resolve, reject) => {
       if (entry.isFile) {
         (entry as FileSystemFileEntry).file((file) => {
           const reader = new FileReader();
-          reader.onload = () => resolve({ path: basePath + file.name, content: reader.result as string });
-          reader.onerror = reject;
+          reader.onload = () =>
+            resolve([{ path: basePath + file.name, content: reader.result as string }]);
+          reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
           reader.readAsText(file);
-        });
+        }, reject);
       } else if (entry.isDirectory) {
         const dir = entry as FileSystemDirectoryEntry;
         const reader = dir.createReader();
@@ -351,8 +389,10 @@
         function readBatch() {
           reader.readEntries((batch) => {
             if (batch.length === 0) {
-              Promise.all(entries.map((e) => readEntryRecursive(e, basePath + dir.name + "/")))
-                .then((results) => resolve(results.length === 1 ? results[0]! : { path: "", content: results.map((r) => r.content).join("\n") }))
+              Promise.all(
+                entries.map((e) => readEntryRecursive(e, basePath + dir.name + "/"))
+              )
+                .then((results) => resolve(results.flat()))
                 .catch(reject);
             } else {
               entries.push(...batch);
@@ -362,7 +402,7 @@
         }
         readBatch();
       } else {
-        resolve({ path: "", content: "" });
+        resolve([]);
       }
     });
   }
@@ -380,7 +420,7 @@
     const result = historyUndo(history, chapters, chapterGroups, selectedChapter);
     if (result.snapshot) {
       history = result.state;
-      chapters = JSON.parse(result.snapshot.chapters);
+      chapters = materializeChapters(result.snapshot) as typeof chapters;
       chapterGroups = JSON.parse(result.snapshot.chapterGroups);
       selectedChapter = result.snapshot.selectedChapter;
       selectedQuest = null;
@@ -393,7 +433,7 @@
     const result = historyRedo(history, chapters, chapterGroups, selectedChapter);
     if (result.snapshot) {
       history = result.state;
-      chapters = JSON.parse(result.snapshot.chapters);
+      chapters = materializeChapters(result.snapshot) as typeof chapters;
       chapterGroups = JSON.parse(result.snapshot.chapterGroups);
       selectedChapter = result.snapshot.selectedChapter;
       selectedQuest = null;
@@ -595,6 +635,7 @@
     chapters = [];
     chapterGroups = [];
     bookTitle = null;
+    loadedBook = null;
     selectedChapter = "";
     selectedQuest = null;
     dirtyChapters = new Set();
@@ -624,23 +665,14 @@
     for (const file of Array.from(files)) {
       const reader = new FileReader();
       reader.onload = () => {
-        fileMap.set(file.name, reader.result as string);
+        const rel =
+          (file as File & { webkitRelativePath?: string }).webkitRelativePath ||
+          file.name;
+        fileMap.set(rel.replace(/\\/g, "/"), reader.result as string);
         pending--;
         if (pending === 0) {
           pushHistory();
-          const book = loadQuestBookFromSnbt(fileMap);
-          if (book.chapters.length > 0) {
-            chapters = book.chapters;
-            chapterGroups = book.chapterGroups;
-            bookTitle = book.title;
-            selectedChapter = chapters[0]?.id ?? "";
-            selectedQuest = null;
-            dirtyChapters = new Set();
-            validationIssues = validateQuestBook(book);
-            message = `Loaded ${chapters.length} chapter(s)`;
-          } else {
-            error = "Could not parse any chapters from files";
-          }
+          applyLoadedBook(loadQuestBookFromSnbt(fileMap), fileMap);
         }
       };
       reader.readAsText(file);
@@ -691,10 +723,10 @@
   </header>
 
   {#if error}
-    <div class="notice error" onclick={() => (error = null)} role="alert">{error}</div>
+    <button type="button" class="notice error" onclick={() => (error = null)}>{error}</button>
   {/if}
   {#if message}
-    <div class="notice success" onclick={() => (message = null)} role="status">{message}</div>
+    <button type="button" class="notice success" onclick={() => (message = null)}>{message}</button>
   {/if}
 
   {#if showImportHelp}
@@ -728,12 +760,16 @@
     <div class="empty">
       <div class="empty-icon">Quests</div>
       <h2>Start a quest line</h2>
-      <p>Drop FTB Quests <code>.snbt</code> files here, or create a new chapter.</p>
+      <p>Drop an FTB Quests <code>quests</code> folder (or <code>.snbt</code> files) here, or create a new chapter.</p>
       <div class="empty-actions">
         <button type="button" class="btn primary" onclick={createChapter}>+ Create first chapter</button>
         <label class="btn ghost file-label">
           Import .snbt files
           <input type="file" accept=".snbt" multiple onchange={handleFileImport} hidden />
+        </label>
+        <label class="btn ghost file-label">
+          Import quests folder
+          <input type="file" multiple webkitdirectory onchange={handleFileImport} hidden />
         </label>
       </div>
     </div>
@@ -936,10 +972,15 @@
   }
 
   .notice {
+    display: block;
+    width: 100%;
     padding: 8px 16px;
     font-size: 12px;
     cursor: pointer;
     flex-shrink: 0;
+    border: none;
+    text-align: left;
+    font-family: inherit;
   }
   .notice.error { background: rgba(239,68,68,0.1); color: #fecaca; border-bottom: 1px solid rgba(239,68,68,0.3); }
   .notice.success { background: rgba(85,201,90,0.1); color: var(--success); border-bottom: 1px solid rgba(85,201,90,0.3); }

@@ -142,13 +142,27 @@ pub fn load_progress_for_book(
             .or_else(|| raw.get("taskProgress")),
     );
 
+    let mut snap = build_progress_snapshot(book, &completed_keys, &task_keys);
+    snap.world = world;
+    snap.team_id = team_id;
+    snap.name = name;
+    Ok(snap)
+}
+
+/// Classify quest statuses from in-memory completed / task-progress id sets.
+/// Does not touch the filesystem.
+pub fn build_progress_snapshot(
+    book: &QuestBook,
+    completed: &HashSet<String>,
+    task_progress: &HashSet<String>,
+) -> QuestProgressSnapshot {
     let mut statuses = HashMap::new();
     let mut completed_count = 0usize;
     let mut started_count = 0usize;
 
     for ch in &book.chapters {
         for q in &ch.quests {
-            let status = classify_quest(q, book, &completed_keys, &task_keys);
+            let status = classify_quest(q, book, completed, task_progress);
             match status {
                 QuestProgressStatus::Completed => completed_count += 1,
                 QuestProgressStatus::Started => started_count += 1,
@@ -158,14 +172,14 @@ pub fn load_progress_for_book(
         }
     }
 
-    Ok(QuestProgressSnapshot {
-        world,
-        team_id,
-        name,
+    QuestProgressSnapshot {
+        world: String::new(),
+        team_id: "simulate".into(),
+        name: "Simulate".into(),
         statuses,
         completed_count,
         started_count,
-    })
+    }
 }
 
 fn classify_quest(
@@ -360,8 +374,11 @@ mod tests {
         let mk = |id: &str, deps: &[&str]| Quest {
             id: id.into(),
             title: id.into(),
+            title_from_snbt: true,
             subtitle: None,
+            subtitle_from_snbt: false,
             description: vec![],
+            description_from_snbt: false,
             x: 0.0,
             y: 0.0,
             icon: None,
@@ -370,6 +387,7 @@ mod tests {
                 id: format!("t_{id}"),
                 task_type: "checkmark".into(),
                 title: None,
+                title_from_snbt: false,
                 value: None,
                 properties: Default::default(),
             }],
@@ -390,6 +408,7 @@ mod tests {
             chapters: vec![Chapter {
                 id: "c".into(),
                 title: "C".into(),
+                title_from_snbt: true,
                 icon: None,
                 quests: vec![mk("AAAA", &[]), mk("BBBB", &["AAAA"]), mk("CCCC", &["BBBB"])],
                 group: None,
@@ -405,6 +424,8 @@ mod tests {
             chapter_groups: vec![],
             reward_tables: vec![],
             book_settings: Default::default(),
+            locales: Default::default(),
+            active_locale: None,
         }
     }
 
@@ -441,6 +462,38 @@ mod tests {
             snap.statuses.get("CCCC"),
             Some(&QuestProgressStatus::Locked)
         );
+    }
+
+    #[test]
+    fn simulate_marks_dependent_available() {
+        let book = sample_book();
+        let empty = HashSet::new();
+        let snap0 = build_progress_snapshot(&book, &empty, &empty);
+        assert_eq!(
+            snap0.statuses.get("AAAA"),
+            Some(&QuestProgressStatus::Available)
+        );
+        assert_eq!(
+            snap0.statuses.get("BBBB"),
+            Some(&QuestProgressStatus::Locked)
+        );
+
+        let mut completed = HashSet::new();
+        completed.insert("AAAA".into());
+        let snap1 = build_progress_snapshot(&book, &completed, &empty);
+        assert_eq!(
+            snap1.statuses.get("AAAA"),
+            Some(&QuestProgressStatus::Completed)
+        );
+        assert_eq!(
+            snap1.statuses.get("BBBB"),
+            Some(&QuestProgressStatus::Available)
+        );
+        assert_eq!(
+            snap1.statuses.get("CCCC"),
+            Some(&QuestProgressStatus::Locked)
+        );
+        assert_eq!(snap1.completed_count, 1);
     }
 
     fn tempfile_dir() -> PathBuf {

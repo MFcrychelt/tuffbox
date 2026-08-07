@@ -13,6 +13,9 @@ dist/
 share/
 *.zip
 
+# Local FTB Quests dataset from `tuffbox modrinth collect-quests`
+dataset/
+
 # JEI companion bridge build output
 bridges/jei-runtime/.gradle/
 bridges/jei-runtime/.vscode/

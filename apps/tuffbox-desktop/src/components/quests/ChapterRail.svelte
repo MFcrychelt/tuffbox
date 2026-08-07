@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "@lucide/svelte";
-  import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
+  import { iconDisplayId, type QuestChapter, type QuestChapterGroup } from "../../lib/api";
   import { projectPath } from "../../lib/store";
   import QuestItemIcon from "./QuestItemIcon.svelte";
   import { preloadItemIcons } from "./iconCache";
@@ -46,7 +46,9 @@
   });
 
   async function preloadRailIcons(list: QuestChapter[]) {
-    const ids = list.map((c) => c.icon).filter(Boolean) as string[];
+    const ids = list
+      .map((c) => iconDisplayId(c.icon))
+      .filter((id): id is string => !!id);
     if (!ids.length || !$projectPath) return;
     await preloadItemIcons(ids, $projectPath);
     iconRevision += 1;
@@ -86,7 +88,7 @@
   }
 
   function glyph(ch: QuestChapter): string {
-    const icon = ch.icon?.trim();
+    const icon = iconDisplayId(ch.icon);
     if (icon) {
       const leaf = icon.includes(":") ? icon.split(":").pop()! : icon;
       return (leaf[0] || "?").toUpperCase();
@@ -150,9 +152,9 @@
                 }
               }}
             >
-              <span class="glyph" title={ch.icon || ""}>
+              <span class="glyph" title={iconDisplayId(ch.icon) || ""}>
                 <QuestItemIcon
-                  itemId={ch.icon}
+                  itemId={iconDisplayId(ch.icon)}
                   fallback={glyph(ch)}
                   size={16}
                   revision={iconRevision}
@@ -225,7 +227,8 @@
     flex-direction: column;
     gap: 0;
     background: var(--ftbq-bg-panel, #212126);
-    border-right: 1px solid var(--ftbq-border, #3a3a42);
+    border-right: 1px solid #101014;
+    box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
     padding: 0;
     min-height: 0;
     height: 100%;
@@ -234,17 +237,19 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.15);
+    padding: 7px 8px;
+    border-bottom: 1px solid #101014;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.22));
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
   }
   .rail-h h3 {
     margin: 0;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-title-gold, #f2c94c);
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     font-weight: 700;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7);
   }
   .ico {
     width: 24px;
@@ -252,16 +257,23 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
+    border: 1px solid #101014;
+    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.45);
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
   }
   .ico:hover {
     color: var(--ftbq-text, #e8e8e8);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    background: rgba(61, 184, 168, 0.1);
+    border-color: #101014;
+    background: linear-gradient(180deg, #46464f, #32323a);
+    filter: brightness(1.08);
+  }
+  .ico:active {
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
   }
   .rail-list {
     flex: 1;
@@ -298,8 +310,9 @@
     border-left: 3px solid transparent;
   }
   .ch-row-wrap.sel {
-    background: rgba(85, 201, 90, 0.12);
+    background: linear-gradient(90deg, rgba(85, 201, 90, 0.16), rgba(85, 201, 90, 0.05));
     border-left-color: var(--ftbq-accent-green, #55c95a);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
   }
   .ch-row-wrap.dirty:not(.sel) {
     border-left-color: rgba(242, 201, 76, 0.4);
@@ -344,10 +357,12 @@
     min-width: 120px;
     display: flex;
     flex-direction: column;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+    background: var(--ftbq-bg-panel, #212126);
+    border: 1px solid #101014;
+    border-radius: 3px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 8px 20px rgba(0, 0, 0, 0.55);
   }
   .ch-menu button {
     text-align: left;
@@ -371,22 +386,27 @@
     padding: 0;
   }
   .glyph {
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     flex-shrink: 0;
-    border-radius: 2px;
-    background: var(--ftbq-node-fill, #18181c);
-    border: 2px solid var(--ftbq-border, #3a3a42);
+    border-radius: 3px;
+    background: #141419;
+    border: 1px solid #0c0c0f;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 11px;
     font-weight: 800;
     color: var(--ftbq-text, #e8e8e8);
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+    box-shadow:
+      inset 2px 2px 0 rgba(0, 0, 0, 0.55),
+      inset -1px -1px 0 rgba(255, 255, 255, 0.08);
   }
   .ch-row-wrap.sel .glyph {
-    border-color: var(--ftbq-accent-green, #55c95a);
+    box-shadow:
+      inset 2px 2px 0 rgba(0, 0, 0, 0.55),
+      inset -1px -1px 0 rgba(255, 255, 255, 0.08),
+      0 0 6px rgba(85, 201, 90, 0.45);
   }
   .ch-text {
     display: grid;
@@ -426,16 +446,20 @@
     justify-content: center;
     gap: 6px;
     padding: 7px;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-accent-green, #55c95a);
-    background: rgba(85, 201, 90, 0.12);
-    color: var(--ftbq-quest-completed, #55c95a);
+    border-radius: 3px;
+    border: 1px solid #12380f;
+    background: linear-gradient(180deg, #4fae53, #35833a);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+    color: #eaffe9;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
   }
   .save-ch:hover:not(:disabled) {
-    background: rgba(85, 201, 90, 0.2);
+    filter: brightness(1.12);
   }
   .save-ch:disabled {
     opacity: 0.5;

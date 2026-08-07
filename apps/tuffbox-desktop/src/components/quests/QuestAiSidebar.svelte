@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onDestroy, onMount } from "svelte";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import {
     Sparkles,
     Plus,
@@ -7,24 +8,42 @@
     Send,
     Loader2,
     PanelRightClose,
+    GitBranch,
+    MessageSquareText,
   } from "@lucide/svelte";
   import {
     api,
     type QuestChatSession,
+    type QuestData,
     type QuestPlanMergeResult,
   } from "../../lib/api";
   import { projectPath, questChatFocusId } from "../../lib/store";
   import QuestPlanReview from "./QuestPlanReview.svelte";
   import { invoke } from "@tauri-apps/api/core";
 
+  type QuestAiProgressPayload = {
+    chatId: string;
+    line: string;
+    phase: string;
+    i?: number;
+    n?: number;
+  };
+
   let {
     open = true,
     onclose,
     onapply,
+    anchorQuest = null,
+    anchorChapterTitle = null,
+    targetChapterId = null,
   }: {
     open?: boolean;
     onclose?: () => void;
     onapply?: (result: QuestPlanMergeResult) => void;
+    anchorQuest?: QuestData | null;
+    anchorChapterTitle?: string | null;
+    /** Current editor chapter — generate/extend upsert target. */
+    targetChapterId?: string | null;
   } = $props();
 
   let sessions = $state<QuestChatSession[]>([]);
@@ -34,17 +53,23 @@
   let showJson = $state(false);
   let rawJson = $state("");
   let forceAi = $state(true);
-  let allowOfflineHeuristic = $state(false);
   let busy = $state(false);
   let error = $state("");
   let aiReadyHint = $state("");
   let merge = $state<QuestPlanMergeResult | null>(null);
   let progressLog = $state<string[]>([]);
   let loreWarning = $state("");
+  /** Active intent for the next send: "generate" | "extend" | "lore" | "branch". */
+  let pendingIntent = $state<"generate" | "extend" | "lore" | "branch">("generate");
+  let unlistenProgress: UnlistenFn | undefined;
   const EXAMPLE_CHIPS = [
     {
       label: "24-quest line",
       text: "линейка на 24 квеста: early game → nether, с описаниями и наградами",
+    },
+    {
+      label: "3 chapters",
+      text: "3 chapters: early / mid / late progression with about 18 quests total",
     },
     {
       label: "Create early game",
@@ -60,6 +85,26 @@
     input = text;
     showJson = false;
   }
+
+  function setIntent(i: "generate" | "extend" | "lore" | "branch") {
+    pendingIntent = i;
+  }
+
+  function appendProgressLine(line: string) {
+    const last = progressLog[progressLog.length - 1];
+    if (last === line) return;
+    progressLog = [...progressLog, line];
+  }
+
+  /** When an anchor quest is selected, default the next send to "branch". */
+  $effect(() => {
+    if (anchorQuest && pendingIntent === "generate") {
+      pendingIntent = "branch";
+    }
+    if (!anchorQuest && pendingIntent === "branch") {
+      pendingIntent = "generate";
+    }
+  });
 
   async function refreshList() {
     if (!$projectPath) return;
@@ -123,10 +168,11 @@
     }
   }
 
-  async function send(intent: string | null = "generate") {
+  async function send(intent: "generate" | "extend" | "lore" | "branch" | null = "generate") {
     if (!$projectPath || busy) return;
+    const useIntent = intent ?? pendingIntent;
     const text = showJson && rawJson.trim() ? rawJson.trim() : input.trim();
-    if (!text && intent === "generate") return;
+    if (!text && useIntent !== "lore") return;
     busy = true;
     error = "";
     loreWarning = "";
@@ -137,27 +183,39 @@
         progressLog = ["Parsed pasted QuestPlan JSON"];
         input = "";
       } else {
-        const useForceAi = forceAi || !allowOfflineHeuristic;
-        if (useForceAi && intent !== "lore") {
+        const useForceAi = forceAi;
+        if (useForceAi && useIntent !== "lore") {
           progressLog = ["Checking AI…"];
           const ok = await preflightAi();
           if (!ok) return;
         }
         const msg =
-          intent === "lore"
+          useIntent === "lore"
             ? input.trim() || "Regenerate lore for pending plan"
-            : intent === "extend"
+            : useIntent === "extend"
               ? input.trim() || "Extend the quest line by 8 quests"
-              : text;
+              : useIntent === "branch"
+                ? input.trim() ||
+                  `Create a branch of 6 quests from "${anchorQuest?.title ?? "selected"}"`
+                : text;
         const result = await api.quests.chatTurn(
           msg,
-          { chatId: activeId, forceAi: useForceAi, intent },
+          {
+            chatId: activeId,
+            forceAi: useForceAi,
+            intent: useIntent,
+            anchorQuestId: useIntent === "branch" ? anchorQuest?.id ?? null : null,
+            targetChapterId:
+              useIntent === "generate" || useIntent === "extend"
+                ? targetChapterId
+                : null,
+          },
           $projectPath,
         );
         session = result.session;
         activeId = result.session.id;
         merge = result.merge;
-        progressLog = result.progressLog ?? [];
+        progressLog = result.progressLog ?? progressLog;
         const logJoined = progressLog.join("\n");
         if (/offline heuristic/i.test(logJoined)) {
           loreWarning = "Used offline heuristic (no LLM). Enable Force AI for full generation.";
@@ -171,10 +229,26 @@
         await refreshList();
       }
     } catch (e) {
-      error = String(e);
-      progressLog = [...progressLog, `Error: ${String(e)}`];
+      const msg = String(e);
+      if (/cancelled/i.test(msg)) {
+        error = "";
+        progressLog = [...progressLog, "Cancelled"];
+      } else {
+        error = msg;
+        progressLog = [...progressLog, `Error: ${msg}`];
+      }
     } finally {
       busy = false;
+    }
+  }
+
+  async function stopGeneration() {
+    if (!busy) return;
+    try {
+      await api.quests.cancelChatTurn();
+      appendProgressLine("Stopping…");
+    } catch (e) {
+      error = String(e);
     }
   }
 
@@ -201,6 +275,19 @@
 
   onMount(() => {
     void refreshList();
+    void listen<QuestAiProgressPayload>("quest-ai-progress", (event) => {
+      const payload = event.payload;
+      if (!busy) return;
+      // Accept when no session yet, or chat matches active (incl. after assign).
+      if (activeId != null && payload.chatId !== activeId) return;
+      appendProgressLine(payload.line);
+    }).then((unlisten) => {
+      unlistenProgress = unlisten;
+    });
+  });
+
+  onDestroy(() => {
+    unlistenProgress?.();
   });
 
   $effect(() => {
@@ -225,6 +312,18 @@
     </button>
   </div>
 
+  {#if anchorQuest}
+    <div class="anchor-banner" title="Branch will root at this quest">
+      <GitBranch size={14} />
+      <div class="anchor-text">
+        <span class="anchor-label">Branch from</span>
+        <strong class="anchor-title">{anchorQuest.title}</strong>
+        {#if anchorChapterTitle}<span class="anchor-ch">{anchorChapterTitle}</span>{/if}
+      </div>
+      <code class="anchor-id">{anchorQuest.id.slice(0, 8)}</code>
+    </div>
+  {/if}
+
   <div class="sessions">
     <button type="button" class="ghost" onclick={newSession} disabled={!$projectPath}>
       <Plus size={14} /> New
@@ -245,14 +344,22 @@
 
   <div class="transcript">
     {#if !session?.messages?.length}
-      <p class="hint">
-        Describe a quest line. <strong>Apply</strong> updates the editor; <strong>Save</strong> writes
-        SNBT.
-      </p>
-      <div class="chips">
-        {#each EXAMPLE_CHIPS as chip (chip.label)}
-          <button type="button" class="chip" onclick={() => useChip(chip.text)}>{chip.label}</button>
-        {/each}
+      <div class="empty-chat">
+        <MessageSquareText size={28} />
+        <p class="hint">
+          Describe a quest line. <strong>Apply</strong> updates the editor; <strong>Save</strong> writes
+          SNBT.
+        </p>
+        {#if anchorQuest}
+          <p class="hint hint-anchor">
+            Tip: with a quest selected, <kbd>Branch</kbd> creates a chain rooted at it.
+          </p>
+        {/if}
+        <div class="chips">
+          {#each EXAMPLE_CHIPS as chip (chip.label)}
+            <button type="button" class="chip" onclick={() => useChip(chip.text)}>{chip.label}</button>
+          {/each}
+        </div>
       </div>
     {:else}
       {#each session.messages as m, i (`${m.role}-${i}`)}
@@ -260,7 +367,10 @@
           <strong>{m.role === "user" ? "You" : "AI"}</strong>
           <p>{m.content}</p>
           {#if m.progressLog?.length}
-            <ul class="prog">{#each m.progressLog as p, pi (`p-${pi}`)}<li>{p}</li>{/each}</ul>
+            <details class="prog">
+              <summary>{m.progressLog.length} log lines</summary>
+              <ul>{#each m.progressLog as p, pi (`p-${pi}`)}<li>{p}</li>{/each}</ul>
+            </details>
           {/if}
         </div>
       {/each}
@@ -288,45 +398,78 @@
   {/if}
 
   <div class="composer">
+    <div class="intent-row">
+      <button
+        type="button"
+        class="intent"
+        class:active={pendingIntent === "generate"}
+        onclick={() => setIntent("generate")}
+      >Generate</button>
+      <button
+        type="button"
+        class="intent"
+        class:active={pendingIntent === "branch"}
+        disabled={!anchorQuest}
+        title={anchorQuest ? "Branch from selected quest" : "Select a quest on canvas first"}
+        onclick={() => setIntent("branch")}
+      ><GitBranch size={12} /> Branch</button>
+      <button
+        type="button"
+        class="intent"
+        class:active={pendingIntent === "extend"}
+        disabled={!session?.pendingPlan}
+        title={session?.pendingPlan ? "Append to pending plan" : "Generate a plan first"}
+        onclick={() => setIntent("extend")}
+      >Extend</button>
+      <button
+        type="button"
+        class="intent"
+        class:active={pendingIntent === "lore"}
+        disabled={!session?.pendingPlan}
+        title={session?.pendingPlan ? "Regenerate lore only" : "Generate a plan first"}
+        onclick={() => setIntent("lore")}
+      >Lore</button>
+    </div>
+
     {#if showJson}
       <textarea rows="4" placeholder={'{ "schemaVersion": 1, … }'} bind:value={rawJson}></textarea>
     {:else}
       <textarea
         rows="3"
-        placeholder="Describe the quest line…"
+        placeholder={pendingIntent === "branch"
+          ? `Describe the branch from "${anchorQuest?.title ?? "…"}"…`
+          : "Describe the quest line…"}
         bind:value={input}
         onkeydown={(e) => {
-          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void send("generate");
+          if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void send(pendingIntent);
         }}
       ></textarea>
     {/if}
     <div class="composer-actions">
-      <button type="button" disabled={busy || !$projectPath} onclick={() => send("generate")}>
-        {#if busy}<Loader2 size={14} class="spin" />{:else}<Send size={14} />{/if}
-        Generate
+      {#if busy}
+        <button type="button" class="stop" onclick={() => void stopGeneration()}>
+          Stop
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="primary"
+          disabled={!$projectPath}
+          onclick={() => send(pendingIntent)}
+        >
+          <Send size={14} />
+          {pendingIntent === "branch" ? "Branch" : pendingIntent === "extend" ? "Extend" : pendingIntent === "lore" ? "Lore" : "Generate"}
+        </button>
+      {/if}
+      <button type="button" class="ghost" onclick={() => (showJson = !showJson)} disabled={busy}>
+        {showJson ? "Text" : "JSON"}
       </button>
     </div>
     <details class="adv">
       <summary>Advanced</summary>
-      <label class="opt"><input type="checkbox" bind:checked={forceAi} /> Force AI (skip offline heuristic)</label>
       <label class="opt"
-        ><input type="checkbox" bind:checked={allowOfflineHeuristic} /> Allow offline heuristic</label
+        ><input type="checkbox" bind:checked={forceAi} /> Force AI (skip offline heuristic)</label
       >
-      <label class="opt"><input type="checkbox" bind:checked={showJson} /> Paste JSON</label>
-      <div class="composer-actions">
-        <button
-          type="button"
-          class="ghost"
-          disabled={busy || !session?.pendingPlan}
-          onclick={() => send("lore")}>Lore only</button
-        >
-        <button
-          type="button"
-          class="ghost"
-          disabled={busy || !$projectPath}
-          onclick={() => send("extend")}>Extend</button
-        >
-      </div>
     </details>
   </div>
 </aside>
@@ -335,10 +478,11 @@
   .qai {
     display: flex;
     flex-direction: column;
-    width: 340px;
-    min-width: 280px;
-    max-width: 420px;
-    border-left: 1px solid var(--ftbq-border, #3a3a42);
+    width: 360px;
+    min-width: 300px;
+    max-width: 440px;
+    border-left: 1px solid #101014;
+    box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
     background: var(--ftbq-bg-panel, #212126);
     color: var(--ftbq-text, #e8e8e8);
     min-height: 0;
@@ -349,14 +493,71 @@
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid #101014;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  }
+  .qai-h strong {
+    color: var(--ftbq-title-gold, #f2c94c);
+    font-size: 13px;
+    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.65);
+    letter-spacing: 0.02em;
   }
   .qai-h .ico {
     margin-left: auto;
   }
+
+  .anchor-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: linear-gradient(90deg, rgba(61, 184, 168, 0.18), rgba(61, 184, 168, 0.05));
+    border-bottom: 1px solid #101014;
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+    color: #c9f2ec;
+  }
+  .anchor-banner :global(svg) {
+    color: var(--ftbq-accent-teal, #3db8a8);
+    flex-shrink: 0;
+  }
+  .anchor-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .anchor-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .anchor-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ftbq-text, #e8e8e8);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+  }
+  .anchor-ch {
+    font-size: 10px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .anchor-id {
+    font-size: 9px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    background: rgba(0, 0, 0, 0.35);
+    padding: 2px 5px;
+    border-radius: 3px;
+    border: 1px solid #0c0c0f;
+  }
   .sessions {
     padding: 8px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid #101014;
   }
   .sess-list {
     display: flex;
@@ -395,47 +596,86 @@
     gap: 10px;
     min-height: 120px;
   }
+  .empty-chat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    text-align: center;
+    padding: 16px 8px;
+  }
+  .empty-chat :global(svg) {
+    color: var(--ftbq-text-muted, #9a9aa0);
+    opacity: 0.6;
+  }
   .msg {
     font-size: 12px;
-    padding: 8px;
-    border-radius: var(--border-radius-sm);
-    background: rgba(255, 255, 255, 0.04);
+    padding: 8px 10px;
+    border-radius: 3px;
+    background: #141419;
+    border: 1px solid #0c0c0f;
+    box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.4), inset -1px -1px 0 rgba(255, 255, 255, 0.04);
   }
   .msg.user {
-    background: rgba(27, 217, 106, 0.08);
+    background: linear-gradient(180deg, rgba(27, 217, 106, 0.12), rgba(27, 217, 106, 0.05));
+    border-color: #1f5a2c;
   }
   .msg p {
     margin: 4px 0 0;
     white-space: pre-wrap;
   }
   .prog {
-    margin: 4px 0 0;
-    padding-left: 16px;
+    margin: 6px 0 0;
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 11px;
+  }
+  .prog summary {
+    cursor: pointer;
+    padding: 2px 0;
+  }
+  .prog ul {
+    margin: 4px 0 0;
+    padding-left: 16px;
   }
   .hint {
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 12px;
     margin: 0;
   }
+  .hint-anchor {
+    font-size: 11px;
+  }
+  .hint-anchor kbd {
+    display: inline-block;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-family: monospace;
+    background: #141419;
+    border: 1px solid #0c0c0f;
+    border-radius: 3px;
+    margin: 0 2px;
+  }
   .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     margin-top: 10px;
+    justify-content: center;
   }
   .chip {
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid #101014;
+    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 2px;
+    border-radius: 3px;
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
   }
   .chip:hover {
-    border-color: var(--ftbq-accent-teal, #3db8a8);
+    background: linear-gradient(180deg, #47503f, #32382d);
+    color: #d6f5d0;
   }
   .adv {
     margin-top: 4px;
@@ -464,10 +704,45 @@
   }
   .composer {
     padding: 10px;
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
+    border-top: 1px solid #101014;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .intent-row {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .intent {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    border: 1px solid #101014;
+    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+    color: var(--ftbq-text-muted, #9a9aa0);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+  }
+  .intent:hover:not(:disabled) {
+    background: linear-gradient(180deg, #46464f, #32323a);
+    color: var(--ftbq-text, #e8e8e8);
+  }
+  .intent.active {
+    border-color: #12380f;
+    background: linear-gradient(180deg, #4fae53, #35833a);
+    color: #eaffe9;
+  }
+  .intent:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .opt {
     font-size: 11px;
@@ -479,9 +754,10 @@
   textarea {
     width: 100%;
     resize: vertical;
-    border-radius: var(--border-radius-sm);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg, #1a1a1e);
+    border-radius: 3px;
+    border: 1px solid #0c0c0f;
+    background: #141419;
+    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
     color: inherit;
     padding: 8px;
     font-family: inherit;
@@ -496,6 +772,41 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+  .composer-actions .primary {
+    flex: 1;
+    justify-content: center;
+    padding: 6px 12px;
+    border: 1px solid #12380f;
+    background: linear-gradient(180deg, #4fae53, #35833a);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+    color: #eaffe9;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    border-radius: 3px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .composer-actions .primary:hover:not(:disabled) {
+    filter: brightness(1.12);
+  }
+  .composer-actions .primary:disabled {
+    opacity: 0.5;
+  }
+  .composer-actions .stop {
+    flex: 1;
+    justify-content: center;
+    padding: 6px 12px;
+    border: 1px solid #5a1a1a;
+    background: linear-gradient(180deg, #a84848, #7a2e2e);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+    color: #ffe9e9;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    border-radius: 3px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .composer-actions .stop:hover {
+    filter: brightness(1.1);
   }
   :global(.spin) {
     animation: spin 0.8s linear infinite;

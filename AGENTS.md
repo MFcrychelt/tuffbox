@@ -78,3 +78,17 @@ ECC и engram комплементарны: engram — для явных арх�
 Почему: токены реагируют на toggle **Rounded corners** и на темы; литералы `8/12/16/24px` остаются круглыми, когда режим/тема требуют квадрат.
 
 Допустимо: мелкий декор (`2px`/`3px`/`4px`) и промежуточные размеры вне шкалы (`10px`/`14px`/`18px`/`20px`/`999px`). Проверка: `node apps/tuffbox-desktop/scripts/check-border-radius.mjs`.
+
+## Svelte — только синтаксис Svelte 5
+
+В `.svelte` / `.svelte.ts` / `.svelte.js` пиши **только Svelte 5**. Не используй синтаксис Svelte 4.
+
+| Запрещено (Svelte 4) | Используй (Svelte 5) |
+|----------------------|----------------------|
+| `export let` | `let { ... } = $props()` |
+| `let x` + реактивность через присваивание / `$:` | `$state`, `$derived`, `$effect` |
+| `on:click` / `on:input` и т.п. | `onclick` / `oninput` (свойства) |
+| `<slot>` / `$$slots` | `{#snippet}` / `{@render ...}` |
+| `createEventDispatcher` | callback-пропсы (`onclick`, `onchange`, …) |
+
+Новый и изменённый UI-код должен проходить через Svelte 5 runes / event props / snippets. Не смешивай оба стиля в одном файле.

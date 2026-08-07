@@ -135,6 +135,21 @@
     const q = quests.find((q) => q.id === node.id);
     if (q) onSelect(q, _event);
   }
+
+  /** Canvas MiniMap cannot resolve CSS custom properties — use computed hex. */
+  function cssColor(name: string, fallback: string): string {
+    if (typeof document === "undefined") return fallback;
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  }
+
+  function miniNodeColor(n: Node): string {
+    if (n.type !== "quest") return "#666666";
+    const q = quests.find((item) => item.id === n.id);
+    if (!q) return "#666666";
+    if (issueIds.has(q.id)) return cssColor("--warning", "#fbbf24");
+    return cssColor("--node-bg", "#18181c");
+  }
 </script>
 
 <div class="canvas-wrap">
@@ -185,15 +200,7 @@
       <Background variant={BackgroundVariant.Dots} gap={15} size={1} />
       <Controls />
       {#if quests.length > 0}
-        <MiniMap
-          nodeColor={(n) => {
-            if (n.type !== "quest") return "#666";
-            const q = quests.find((q) => q.id === n.id);
-            if (!q) return "#666";
-            if (issueIds.has(q.id)) return "var(--warning)";
-            return "var(--node-bg)";
-          }}
-        />
+        <MiniMap nodeColor={miniNodeColor} />
       {/if}
     </SvelteFlow>
   </div>

@@ -22,38 +22,55 @@ const DEFAULT_OPTIONS: LayoutOptions = {
 /**
  * Topological sort for dependency-based layout.
  * Returns quests in layers (levels) based on dependencies.
+ * Cyclic leftovers are appended as a final layer (no infinite loop).
  */
 function topologicalLayers(quests: QuestData[]): QuestData[][] {
   const questMap = new Map(quests.map((q) => [q.id, q]));
   const inDegree = new Map<string, number>();
-  const layers: QuestData[][] = [];
+  const children = new Map<string, string[]>();
 
-  // Calculate in-degree (number of dependencies)
   for (const q of quests) {
-    const deps = q.dependencies.filter((d) => questMap.has(d));
-    inDegree.set(q.id, deps.length);
+    inDegree.set(q.id, 0);
+    children.set(q.id, []);
   }
 
+  for (const q of quests) {
+    // Deduplicate + ignore unknown / self deps so degrees stay consistent.
+    const deps = [
+      ...new Set(q.dependencies.filter((d) => questMap.has(d) && d !== q.id)),
+    ];
+    inDegree.set(q.id, deps.length);
+    for (const d of deps) {
+      const list = children.get(d)!;
+      if (!list.includes(q.id)) list.push(q.id);
+    }
+  }
+
+  const layers: QuestData[][] = [];
+  const placed = new Set<string>();
   let currentLayer = quests.filter((q) => (inDegree.get(q.id) ?? 0) === 0);
 
+  // Kahn's algorithm — terminates even with cycles (leftovers handled below).
   while (currentLayer.length > 0) {
     layers.push(currentLayer);
+    for (const q of currentLayer) placed.add(q.id);
 
-    // Reduce in-degree for dependent quests
     const nextLayer: QuestData[] = [];
     for (const q of currentLayer) {
-      for (const other of quests) {
-        if (other.dependencies.includes(q.id)) {
-          const deg = (inDegree.get(other.id) ?? 1) - 1;
-          inDegree.set(other.id, deg);
-          if (deg === 0 && !layers.flat().includes(other)) {
-            nextLayer.push(other);
-          }
+      for (const childId of children.get(q.id) ?? []) {
+        if (placed.has(childId)) continue;
+        const deg = (inDegree.get(childId) ?? 1) - 1;
+        inDegree.set(childId, deg);
+        if (deg === 0) {
+          nextLayer.push(questMap.get(childId)!);
         }
       }
     }
     currentLayer = nextLayer;
   }
+
+  const leftover = quests.filter((q) => !placed.has(q.id));
+  if (leftover.length > 0) layers.push(leftover);
 
   return layers;
 }
@@ -71,7 +88,9 @@ export function layoutTree(
   if (quests.length === 0) return result;
 
   const layers = topologicalLayers(quests);
-  const maxLayerWidth = Math.max(...layers.map((l) => l.length));
+  if (layers.length === 0) return result;
+
+  const maxLayerWidth = Math.max(...layers.map((l) => l.length), 1);
 
   // Center the layout
   const totalWidth = (maxLayerWidth - 1) * opts.spacingX;
@@ -168,3 +187,6 @@ export function applyLayout(
     return q;
   });
 }
+
+/** Exported for unit tests */
+export { topologicalLayers as _topologicalLayersForTest };

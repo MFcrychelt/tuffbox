@@ -41,3 +41,5 @@ md-5.workspace = true
 sha2.workspace = true
 hex.workspace = true
 sysinfo = "0.33"
+pest = "2.7"
+pest_derive = "2.7"

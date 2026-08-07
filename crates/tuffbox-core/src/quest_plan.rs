@@ -21,21 +21,22 @@ pub const QUEST_PLAN_SYSTEM_PROMPT: &str = r#"You are TuffBox Quest Planner. You
 You do NOT write SNBT files and you do NOT apply changes. The launcher merges your plan into the FTB Quests book after the user confirms.
 
 AI Decision making (follow in order before emitting JSON):
-1. Understand the context — pack theme, available mods/items, existing chapters if provided.
-2. Isolate the goal — one coherent chapter (or a small set) that teaches a progression beat.
+1. Understand the context — pack theme, available mods/items, existing chapters/groups if provided.
+2. Isolate the goal — one coherent chapter, or multiple chapters/groups when the user asks or the theme spans distinct progressions.
 3. Accept the risk — mark needsUserReview true when item ids or deps are uncertain; keep confidence honest.
 4. Map decision — emit chapters/quests/tasks/rewards the launcher can merge; prefer concrete item ids (mod:path).
 
 Hard rules:
 1. Output ONLY valid JSON (no markdown outside optional ```json fences the parser strips).
 2. schemaVersion must be 1.
-3. Prefer 16-char uppercase hex ids for chapter/quest/task/reward ids. If omitted, the launcher generates them.
+3. Prefer 16-char uppercase hex ids for chapter/quest/task/reward ids. If omitted, the launcher generates them. When updating an existing chapter, REUSE its id from context.
 4. dependencies may be quest ids OR exact quest titles (launcher resolves titles within the plan + existing book). Dependencies may also target task ids.
 5. Every quest MUST have at least one task. Default checkmark is fine for narrative unlocks.
 6. Prefer ≥2 description lines (lore). Empty descriptions are warned; multi-pass lore fills them.
 7. item tasks/rewards: properties.item is a string "mod:id" (or a small NBT object with id). Do not invent mods not in context.
 8. Coordinates x/y are FTB quest-space floats (not pixels). Space nodes ~2–3 units apart; launcher can auto-layout.
 9. Do not invent cyclic dependencies.
+10. Chapter mode defaults to "upsert". Use "replace" only when the user asks to rewrite a chapter.
 
 JSON shape:
 {
@@ -83,12 +84,42 @@ Counts like "10 дерева" → properties.count = 10.
 One numbered list item = one quest; commas inside the item = multiple tasks on that quest.
 "#;
 
+/// Anchor quest for "branch from selected" generation.
+#[derive(Debug, Clone)]
+pub struct AnchorQuest {
+    pub id: String,
+    pub title: String,
+    pub chapter_title: Option<String>,
+}
+
+/// Existing book chapter for AI context / targeted upsert.
+#[derive(Debug, Clone, Default)]
+pub struct ExistingChapter {
+    pub id: String,
+    pub title: String,
+    pub group: Option<String>,
+}
+
+/// Existing chapter group for AI context.
+#[derive(Debug, Clone, Default)]
+pub struct ExistingGroup {
+    pub id: String,
+    pub title: String,
+}
+
 /// Context injected into the user message for the quest author model.
 #[derive(Debug, Clone, Default)]
 pub struct QuestAuthorContext {
-    pub existing_chapters: Vec<String>,
+    pub existing_chapters: Vec<ExistingChapter>,
+    pub existing_groups: Vec<ExistingGroup>,
     pub sample_items: Vec<String>,
     pub pack_hint: Option<String>,
+    /// Quests already in the book (id, title) — lets the model reference them as dependencies by title.
+    pub existing_quests: Vec<(String, String)>,
+    /// Selected quest to branch from (intent `branch`).
+    pub anchor_quest: Option<AnchorQuest>,
+    /// Current editor chapter — outline should upsert here unless multi-chapter is requested.
+    pub target_chapter: Option<ExistingChapter>,
 }
 
 /// Build the user-turn message for quest authoring (system prompt is separate).
@@ -102,13 +133,65 @@ pub fn build_quest_author_user_message(request: &str, ctx: &QuestAuthorContext) 
         p.push_str(hint);
         p.push('\n');
     }
-    if !ctx.existing_chapters.is_empty() {
-        p.push_str("\nExisting chapters (do not duplicate titles unless asked to extend):\n");
-        for t in ctx.existing_chapters.iter().take(40) {
-            p.push_str("- ");
-            p.push_str(t);
+    if !ctx.existing_groups.is_empty() {
+        p.push_str("\nExisting chapter groups (reuse ids when attaching chapters):\n");
+        for g in ctx.existing_groups.iter().take(20) {
+            p.push_str("- id: ");
+            p.push_str(&g.id);
+            p.push_str(" · title: ");
+            p.push_str(&g.title);
             p.push('\n');
         }
+    }
+    if !ctx.existing_chapters.is_empty() {
+        p.push_str(
+            "\nExisting chapters (reuse id when updating; do not duplicate titles unless asked):\n",
+        );
+        for ch in ctx.existing_chapters.iter().take(40) {
+            p.push_str("- id: ");
+            p.push_str(&ch.id);
+            p.push_str(" · title: ");
+            p.push_str(&ch.title);
+            if let Some(g) = &ch.group {
+                p.push_str(" · group: ");
+                p.push_str(g);
+            }
+            p.push('\n');
+        }
+    }
+    if let Some(target) = &ctx.target_chapter {
+        p.push_str("\nTARGET CHAPTER (upsert into this chapter — reuse its id; do not invent a sibling unless the user asks for multiple chapters):\n");
+        p.push_str("- id: ");
+        p.push_str(&target.id);
+        p.push_str("\n- title: ");
+        p.push_str(&target.title);
+        if let Some(g) = &target.group {
+            p.push_str("\n- group: ");
+            p.push_str(g);
+        }
+        p.push_str("\n- mode: upsert\n");
+    }
+    if !ctx.existing_quests.is_empty() {
+        p.push_str("\nExisting quests you may reference as dependencies by exact title:\n");
+        for (id, title) in ctx.existing_quests.iter().take(60) {
+            p.push_str("- ");
+            p.push_str(title);
+            p.push_str(" (id: ");
+            p.push_str(id);
+            p.push_str(")\n");
+        }
+    }
+    if let Some(anchor) = &ctx.anchor_quest {
+        p.push_str("\nANCHOR QUEST to branch from:\n");
+        p.push_str("- id: ");
+        p.push_str(&anchor.id);
+        p.push_str("\n- title: ");
+        p.push_str(&anchor.title);
+        if let Some(ch) = &anchor.chapter_title {
+            p.push_str("\n- chapter: ");
+            p.push_str(ch);
+        }
+        p.push('\n');
     }
     if !ctx.sample_items.is_empty() {
         p.push_str("\nPrefer item ids from this pack catalog when possible:\n");
@@ -120,6 +203,22 @@ pub fn build_quest_author_user_message(request: &str, ctx: &QuestAuthorContext) 
     }
     p.push_str("\nRespond with ONLY the QuestPlan JSON object.\n");
     p
+}
+
+/// Pin a single-chapter plan onto an existing book chapter (upsert).
+pub fn pin_target_chapter(plan: &mut QuestPlan, target: &ExistingChapter) {
+    if plan.chapters.len() != 1 {
+        return;
+    }
+    let ch = &mut plan.chapters[0];
+    ch.id = Some(target.id.clone());
+    if ch.title.trim().is_empty() {
+        ch.title = target.title.clone();
+    }
+    ch.mode = Some("upsert".into());
+    if ch.group.is_none() {
+        ch.group = target.group.clone();
+    }
 }
 
 /// Offline parse for simple “глава … квесты 1. … — награда …” prompts.
@@ -220,6 +319,14 @@ pub fn try_heuristic_quest_plan(request: &str) -> Option<QuestPlan> {
             mode: Some("upsert".into()),
             quests,
         }],
+    })
+    .map(|mut plan| {
+        if let Some(c) = detect_target_chapter_count(text) {
+            if c > 1 {
+                split_heuristic_into_chapters(&mut plan, c);
+            }
+        }
+        plan
     })
 }
 
@@ -973,16 +1080,19 @@ pub fn merge_quest_plan(book: &QuestBook, plan: &QuestPlan) -> Result<QuestPlanM
         let table = crate::unified::RewardTable {
             id: rt.id.clone(),
             title: rt.title.clone(),
-            entries: rt
+            rewards: rt
                 .entries
                 .iter()
-                .map(|e| crate::unified::WeightedReward {
-                    reward_id: e.reward_id.clone(),
-                    weight: e.weight,
+                .map(|e| {
+                    serde_json::json!({
+                        "id": e.reward_id,
+                        "weight": e.weight,
+                    })
                 })
                 .collect(),
             empty_weight: rt.empty_weight,
             source_file: None,
+            extras: HashMap::new(),
         };
         if let Some(existing) = out.reward_tables.iter_mut().find(|x| x.id == rt.id) {
             *existing = table;
@@ -1008,6 +1118,12 @@ pub fn merge_quest_plan(book: &QuestBook, plan: &QuestPlan) -> Result<QuestPlanM
             .id
             .clone()
             .filter(|s| !s.is_empty())
+            .or_else(|| {
+                out.chapters
+                    .iter()
+                    .find(|c| norm_title(&c.title) == norm_title(&pch.title))
+                    .map(|c| c.id.clone())
+            })
             .unwrap_or_else(|| new_hex_id(16));
         let mode = pch
             .mode
@@ -1031,7 +1147,8 @@ pub fn merge_quest_plan(book: &QuestBook, plan: &QuestPlan) -> Result<QuestPlanM
             Chapter {
                 id: String::new(), // fill below
                 title: pch.title.clone(),
-                icon: pch.icon.clone(),
+                title_from_snbt: true,
+                icon: pch.icon.clone().map(serde_json::Value::String),
                 quests,
                 group: pch.group.clone(),
                 order_index: pch.order_index,
@@ -1173,6 +1290,7 @@ fn materialize_quest(pq: &QuestPlanQuest, id: &str) -> Quest {
                 t.task_type.clone()
             },
             title: t.title.clone(),
+            title_from_snbt: t.title.is_some(),
             value: t.value.clone(),
             properties: t.properties.clone(),
         })
@@ -1199,11 +1317,14 @@ fn materialize_quest(pq: &QuestPlanQuest, id: &str) -> Quest {
     Quest {
         id: id.to_string(),
         title: pq.title.clone(),
+        title_from_snbt: true,
         subtitle: pq.subtitle.clone(),
+        subtitle_from_snbt: pq.subtitle.as_ref().is_some_and(|s| !s.is_empty()),
         description: pq.description.clone(),
+        description_from_snbt: !pq.description.is_empty(),
         x: pq.x,
         y: pq.y,
-        icon: pq.icon.clone(),
+        icon: pq.icon.clone().map(serde_json::Value::String),
         dependencies: pq.dependencies.clone(),
         tasks,
         rewards,
@@ -1283,6 +1404,8 @@ fn str_field(v: &Value, keys: &[&str]) -> Option<String> {
 /// Outline-only system prompt (Pass A) — stubs, deps, tasks/rewards skeletons; descriptions may be empty.
 pub const QUEST_OUTLINE_SYSTEM_PROMPT: &str = r#"You are TuffBox Quest Outline Planner. Output ONLY one JSON QuestPlan (schemaVersion 1).
 Focus on STRUCTURE for a large quest line (titles, dependency graph, x/y optional, tasks, rewards).
+You may emit multiple chapters and chapterGroups when the user asks or the progression needs distinct beats.
+When updating existing chapters from context, REUSE their ids and prefer mode "upsert" (use "replace" only if asked to rewrite).
 Descriptions may be empty or one stub line — a later lore pass fills them.
 Every quest MUST have ≥1 task. Prefer concrete item ids from context.
 Do not invent cyclic dependencies. Prefer 16-char hex ids or omit for launcher generation.
@@ -1311,7 +1434,10 @@ pub fn detect_target_quest_count(prompt: &str) -> usize {
         }
     }
     // Digits alone if prompt mentions "глава" / chapter / line
-    if lower.contains("квест") || lower.contains("quest") || lower.contains("линей") || lower.contains("chapter")
+    if lower.contains("квест")
+        || lower.contains("quest")
+        || lower.contains("линей")
+        || lower.contains("chapter")
     {
         for token in lower.split(|c: char| !c.is_ascii_digit()) {
             if let Ok(n) = token.parse::<usize>() {
@@ -1322,6 +1448,89 @@ pub fn detect_target_quest_count(prompt: &str) -> usize {
         }
     }
     16
+}
+
+/// Detect desired chapter count from NL (`None` = model decides; clamp 1..=8).
+pub fn detect_target_chapter_count(prompt: &str) -> Option<usize> {
+    let lower = prompt.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+            let n: usize = lower[start..i].parse().unwrap_or(0);
+            let rest = lower[i..].trim_start();
+            if rest.starts_with("chapter")
+                || rest.starts_with("глав")
+                || rest.starts_with("ch ")
+                || rest.starts_with("ch.")
+            {
+                if (1..=8).contains(&n) {
+                    return Some(n);
+                }
+            }
+            continue;
+        }
+        i += 1;
+    }
+    // "chapters: 3" / "глав: 3" / "chapters of 3"
+    for marker in ["chapters", "chapter", "глав"] {
+        if let Some(pos) = lower.find(marker) {
+            let after = lower[pos + marker.len()..]
+                .trim_start_matches(|c: char| !c.is_ascii_digit());
+            let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = num.parse::<usize>() {
+                if (1..=8).contains(&n) {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Split a single-chapter heuristic plan into `count` stub chapters (even quest distribution).
+pub fn split_heuristic_into_chapters(plan: &mut QuestPlan, count: usize) {
+    let count = count.clamp(1, 8);
+    if count <= 1 || plan.chapters.len() != 1 {
+        return;
+    }
+    let base = plan.chapters.remove(0);
+    let quests = base.quests.clone();
+    if quests.is_empty() {
+        plan.chapters.push(base);
+        return;
+    }
+    let n = quests.len();
+    let per = (n + count - 1) / count;
+    let labels = ["Early", "Mid", "Late", "End", "Bonus", "Extra", "Side", "Finale"];
+    let mut pushed = 0;
+    for (i, chunk) in quests.chunks(per).enumerate() {
+        if i >= count {
+            break;
+        }
+        let title = if i == 0 && !base.title.is_empty() && base.title != "New Chapter" {
+            base.title.clone()
+        } else {
+            format!("{} — {}", labels.get(i).unwrap_or(&"Part"), base.title)
+        };
+        plan.chapters.push(QuestPlanChapter {
+            id: None,
+            title,
+            icon: base.icon.clone(),
+            group: base.group.clone(),
+            order_index: Some(i as i64),
+            mode: Some("upsert".into()),
+            quests: chunk.to_vec(),
+        });
+        pushed += 1;
+    }
+    if pushed == 0 {
+        plan.chapters.push(base);
+    }
 }
 
 fn regex_lite_first_num(pat: &str, hay: &str) -> Result<usize, ()> {
@@ -1365,13 +1574,96 @@ fn regex_lite_first_num(pat: &str, hay: &str) -> Result<usize, ()> {
 }
 
 /// Place quests along a dependency DAG when coordinates are all ~0 or overlapping.
-pub fn auto_layout_plan(plan: &mut QuestPlan) {
+/// Returns `true` if any chapter was laid out.
+pub fn auto_layout_plan(plan: &mut QuestPlan) -> bool {
+    let mut any = false;
     for ch in &mut plan.chapters {
-        auto_layout_quests(&mut ch.quests);
+        if auto_layout_quests(&mut ch.quests) {
+            any = true;
+        }
     }
+    any
 }
 
-fn auto_layout_quests(quests: &mut [QuestPlanQuest]) {
+const LAYOUT_EPS: f64 = 0.05;
+const LAYOUT_CLOSE: f64 = 0.5;
+
+fn quest_near_origin(q: &QuestPlanQuest) -> bool {
+    q.x.abs() + q.y.abs() < LAYOUT_EPS
+}
+
+/// True when all coords are ~0 or most pairs are stacked on top of each other.
+fn needs_full_layout(quests: &[QuestPlanQuest]) -> bool {
+    if quests.is_empty() {
+        return false;
+    }
+    if quests.iter().all(quest_near_origin) {
+        return true;
+    }
+    if quests.len() < 2 {
+        return false;
+    }
+    let mut close = 0usize;
+    let mut pairs = 0usize;
+    for i in 0..quests.len() {
+        for j in (i + 1)..quests.len() {
+            pairs += 1;
+            let dx = quests[i].x - quests[j].x;
+            let dy = quests[i].y - quests[j].y;
+            if (dx * dx + dy * dy).sqrt() < LAYOUT_CLOSE {
+                close += 1;
+            }
+        }
+    }
+    pairs > 0 && (close as f64 / pairs as f64) > 0.5
+}
+
+fn auto_layout_quests(quests: &mut [QuestPlanQuest]) -> bool {
+    if !needs_full_layout(quests) {
+        return false;
+    }
+    apply_dag_layout(quests, 0.0);
+    true
+}
+
+/// Layout only near-origin quests, offset to the right of existing max-x (extend path).
+pub fn auto_layout_new_zero_quests(quests: &mut [QuestPlanQuest]) -> bool {
+    let established: Vec<usize> = quests
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| !quest_near_origin(q))
+        .map(|(i, _)| i)
+        .collect();
+    let new_idxs: Vec<usize> = quests
+        .iter()
+        .enumerate()
+        .filter(|(_, q)| quest_near_origin(q))
+        .map(|(i, _)| i)
+        .collect();
+    if new_idxs.is_empty() {
+        return false;
+    }
+    // If nothing is placed yet, full layout.
+    if established.is_empty() {
+        return auto_layout_quests(quests);
+    }
+    let max_x = established
+        .iter()
+        .map(|&i| quests[i].x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let base_x = max_x + 2.75;
+
+    // Temporarily extract new quests, layout among themselves, write back with offset.
+    let mut subset: Vec<QuestPlanQuest> = new_idxs.iter().map(|&i| quests[i].clone()).collect();
+    apply_dag_layout(&mut subset, 0.0);
+    for (k, &i) in new_idxs.iter().enumerate() {
+        quests[i].x = subset[k].x + base_x;
+        quests[i].y = subset[k].y;
+    }
+    true
+}
+
+fn apply_dag_layout(quests: &mut [QuestPlanQuest], x_offset: f64) {
     if quests.is_empty() {
         return;
     }
@@ -1433,10 +1725,120 @@ fn auto_layout_quests(quests: &mut [QuestPlanQuest]) {
         let count = idxs.len() as f64;
         for (k, &i) in idxs.iter().enumerate() {
             let y = (k as f64 - (count - 1.0) / 2.0) * row_gap;
-            quests[i].x = r as f64 * col_gap;
+            quests[i].x = x_offset + r as f64 * col_gap;
             quests[i].y = y;
         }
     }
+}
+
+fn quest_plan_key(q: &QuestPlanQuest) -> String {
+    if let Some(id) = q.id.as_ref().filter(|s| !s.is_empty()) {
+        format!("id:{}", id.to_ascii_uppercase())
+    } else {
+        format!("t:{}", norm_title(&q.title))
+    }
+}
+
+fn chapter_plan_key(ch: &QuestPlanChapter) -> String {
+    if let Some(id) = ch.id.as_ref().filter(|s| !s.is_empty()) {
+        format!("id:{}", id.to_ascii_uppercase())
+    } else {
+        format!("t:{}", norm_title(&ch.title))
+    }
+}
+
+/// Merge an AI extend outline onto a pending plan: keep all pending quests, append new ones.
+pub fn stitch_extend_plan(pending: &QuestPlan, ai: QuestPlan) -> (QuestPlan, Vec<String>) {
+    let mut notes = Vec::new();
+    let pending_count: usize = pending.chapters.iter().map(|c| c.quests.len()).sum();
+    let ai_count: usize = ai.chapters.iter().map(|c| c.quests.len()).sum();
+
+    let mut out = pending.clone();
+    if !ai.human_explanation.trim().is_empty() {
+        out.human_explanation = ai.human_explanation.clone();
+    }
+    out.confidence = ai.confidence;
+    out.source = Some("ai-multipass-extend".into());
+
+    let mut pending_keys: HashSet<String> = HashSet::new();
+    for ch in &pending.chapters {
+        for q in &ch.quests {
+            pending_keys.insert(quest_plan_key(q));
+        }
+    }
+
+    let mut ai_keys: HashSet<String> = HashSet::new();
+    for ch in &ai.chapters {
+        for q in &ch.quests {
+            ai_keys.insert(quest_plan_key(q));
+        }
+    }
+    let ai_dropped_pending = pending_keys.iter().any(|k| !ai_keys.contains(k));
+
+    let mut appended = 0usize;
+    for ai_ch in ai.chapters {
+        let key = chapter_plan_key(&ai_ch);
+        let ch_idx = out.chapters.iter().position(|c| chapter_plan_key(c) == key);
+        match ch_idx {
+            Some(idx) => {
+                for q in ai_ch.quests {
+                    let qk = quest_plan_key(&q);
+                    if pending_keys.contains(&qk) {
+                        continue;
+                    }
+                    // Also skip if already in out (from earlier AI chapter merge)
+                    let exists = out.chapters.iter().any(|c| {
+                        c.quests.iter().any(|oq| quest_plan_key(oq) == qk)
+                    });
+                    if exists {
+                        continue;
+                    }
+                    pending_keys.insert(qk);
+                    out.chapters[idx].quests.push(q);
+                    appended += 1;
+                }
+            }
+            None => {
+                let mut fresh = ai_ch;
+                fresh.quests.retain(|q| {
+                    let qk = quest_plan_key(q);
+                    if pending_keys.contains(&qk) {
+                        false
+                    } else {
+                        pending_keys.insert(qk);
+                        true
+                    }
+                });
+                if !fresh.quests.is_empty() {
+                    appended += fresh.quests.len();
+                    out.chapters.push(fresh);
+                }
+            }
+        }
+    }
+
+    // Layout only new near-zero quests per chapter
+    for ch in &mut out.chapters {
+        if auto_layout_new_zero_quests(&mut ch.quests) {
+            notes.push(format!("Layout: placed new quests in «{}»", ch.title));
+        }
+    }
+
+    if ai_count < pending_count || ai_dropped_pending {
+        out.needs_user_review = true;
+        notes.push(
+            "AI outline omitted some pending quests — kept prior quests and appended new ones"
+                .into(),
+        );
+    }
+    if appended > 0 {
+        notes.push(format!("Extend: appended {appended} new quest(s)"));
+    } else {
+        out.needs_user_review = true;
+        notes.push("Extend: AI added no new quests — review outline".into());
+    }
+
+    (out, notes)
 }
 
 /// Fill missing descriptions with template lore (offline fallback).
@@ -1599,44 +2001,100 @@ pub fn stitch_lore_into_plan(plan: &mut QuestPlan, lore_json: &str) -> Result<us
 }
 
 /// Filter plan to selected chapter titles/ids and quest titles/ids (for review Apply selected).
+/// When `quest_keys` is non-empty, quests are filtered first (chapter keys ignored as exclusive gate).
+/// When only `chapter_keys` is set, whole chapters are retained.
 pub fn filter_plan_selection(
     plan: &QuestPlan,
     chapter_keys: &[String],
     quest_keys: &[String],
 ) -> QuestPlan {
     let mut out = plan.clone();
-    if !chapter_keys.is_empty() {
-        out.chapters.retain(|ch| {
-            chapter_keys.iter().any(|k| {
-                ch.id.as_ref().map(|id| id == k).unwrap_or(false)
-                    || norm_title(&ch.title) == norm_title(k)
-                    || ch.title == *k
-            })
-        });
-    }
+    let matches_key = |key: &str, id: Option<&String>, title: &str| -> bool {
+        id.map(|id| id == key).unwrap_or(false)
+            || norm_title(title) == norm_title(key)
+            || title == key
+    };
+
     if !quest_keys.is_empty() {
         for ch in &mut out.chapters {
             ch.quests.retain(|q| {
-                quest_keys.iter().any(|k| {
-                    q.id.as_ref().map(|id| id == k).unwrap_or(false)
-                        || norm_title(&q.title) == norm_title(k)
-                        || q.title == *k
-                })
+                quest_keys
+                    .iter()
+                    .any(|k| matches_key(k, q.id.as_ref(), &q.title))
             });
         }
         out.chapters.retain(|ch| !ch.quests.is_empty());
+    } else if !chapter_keys.is_empty() {
+        out.chapters.retain(|ch| {
+            chapter_keys
+                .iter()
+                .any(|k| matches_key(k, ch.id.as_ref(), &ch.title))
+        });
     }
     out
 }
 
-/// Build user message for outline pass requesting N quests.
-pub fn build_outline_user_message(request: &str, ctx: &QuestAuthorContext, target_count: usize) -> String {
+/// Build user message for outline pass requesting N quests (optionally across C chapters).
+pub fn build_outline_user_message(
+    request: &str,
+    ctx: &QuestAuthorContext,
+    target_count: usize,
+) -> String {
     let mut p = build_quest_author_user_message(request, ctx);
-    p.push_str(&format!(
-        "\nTarget: about {target_count} quests in one coherent chapter (or split only if asked).\n"
-    ));
+    let chapter_count = detect_target_chapter_count(request);
+    match chapter_count {
+        Some(c) if c > 1 => {
+            p.push_str(&format!(
+                "\nTarget: about {target_count} quests across {c} chapters (group them if natural; emit chapterGroups when useful).\n"
+            ));
+            p.push_str(
+                "Give each chapter a distinct title and stable id. Prefer mode \"upsert\". Reuse existing chapter ids from context when updating.\n",
+            );
+        }
+        _ => {
+            p.push_str(&format!(
+                "\nTarget: about {target_count} quests in one coherent chapter, or multiple chapters only if the user asks / the theme spans distinct progressions.\n"
+            ));
+            if !ctx.existing_groups.is_empty() || chapter_count == Some(1) {
+                p.push_str("You may emit chapterGroups[] when grouping helps navigation.\n");
+            }
+            p.push_str(
+                "Prefer mode \"upsert\". Reuse existing chapter ids from context when updating.\n",
+            );
+        }
+    }
     p.push_str(
         "Include dependency chains (and light branches). Leave description empty or 1 stub line.\n",
+    );
+    p
+}
+
+/// Build user message for the `branch` intent: create a branch of N quests rooted at the anchor quest.
+/// The first quest of the branch MUST depend on the anchor quest id.
+pub fn build_branch_user_message(request: &str, ctx: &QuestAuthorContext, target_count: usize) -> String {
+    let mut p = build_quest_author_user_message(request, ctx);
+    let anchor = ctx
+        .anchor_quest
+        .as_ref()
+        .expect("build_branch_user_message requires ctx.anchor_quest");
+    p.push_str(&format!(
+        "\nTarget: about {target_count} quests forming a BRANCH from the anchor quest.\n"
+    ));
+    p.push_str(&format!(
+        "The FIRST quest of the generated chapter MUST list `dependencies: [\"{}\"]` (the anchor quest id).\n",
+        anchor.id
+    ));
+    p.push_str(&format!(
+        "Anchor quest: \"{}\"{}.\n",
+        anchor.title,
+        anchor
+            .chapter_title
+            .as_ref()
+            .map(|c| format!(" (in chapter \"{c}\")"))
+            .unwrap_or_default()
+    ));
+    p.push_str(
+        "Subsequent branch quests should chain from each other (dependency chain). Leave description empty or 1 stub line.\n",
     );
     p
 }
@@ -1728,6 +2186,148 @@ mod tests {
         auto_layout_plan(&mut plan);
         let xs: Vec<_> = plan.chapters[0].quests.iter().map(|q| q.x).collect();
         assert!(xs[4] > xs[0]);
+    }
+
+    #[test]
+    fn auto_layout_skips_when_coords_present() {
+        let mut plan = QuestPlan {
+            schema_version: 1,
+            human_explanation: "t".into(),
+            confidence: 0.9,
+            needs_user_review: false,
+            source: Some("test".into()),
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            chapters: vec![QuestPlanChapter {
+                id: Some("CH".into()),
+                title: "Ch".into(),
+                icon: None,
+                group: None,
+                order_index: None,
+                mode: None,
+                quests: vec![
+                    QuestPlanQuest {
+                        id: Some("A".into()),
+                        title: "A".into(),
+                        subtitle: None,
+                        description: vec!["a".into(), "b".into()],
+                        x: 1.0,
+                        y: 0.0,
+                        icon: None,
+                        dependencies: vec![],
+                        tasks: vec![QuestPlanTask {
+                            id: None,
+                            task_type: "checkmark".into(),
+                            title: None,
+                            value: None,
+                            properties: HashMap::new(),
+                        }],
+                        rewards: vec![],
+                        optional: false,
+                        shape: None,
+                        size: None,
+                    },
+                    QuestPlanQuest {
+                        id: Some("B".into()),
+                        title: "B".into(),
+                        subtitle: None,
+                        description: vec!["a".into(), "b".into()],
+                        x: 4.0,
+                        y: 1.0,
+                        icon: None,
+                        dependencies: vec!["A".into()],
+                        tasks: vec![QuestPlanTask {
+                            id: None,
+                            task_type: "checkmark".into(),
+                            title: None,
+                            value: None,
+                            properties: HashMap::new(),
+                        }],
+                        rewards: vec![],
+                        optional: false,
+                        shape: None,
+                        size: None,
+                    },
+                ],
+            }],
+        };
+        assert!(!auto_layout_plan(&mut plan));
+        assert_eq!(plan.chapters[0].quests[0].x, 1.0);
+        assert_eq!(plan.chapters[0].quests[1].x, 4.0);
+    }
+
+    #[test]
+    fn stitch_extend_keeps_pending_and_appends() {
+        let mk = |id: &str, title: &str, x: f64| QuestPlanQuest {
+            id: Some(id.into()),
+            title: title.into(),
+            subtitle: None,
+            description: vec!["a".into(), "b".into()],
+            x,
+            y: 0.0,
+            icon: None,
+            dependencies: vec![],
+            tasks: vec![QuestPlanTask {
+                id: None,
+                task_type: "checkmark".into(),
+                title: None,
+                value: None,
+                properties: HashMap::new(),
+            }],
+            rewards: vec![],
+            optional: false,
+            shape: None,
+            size: None,
+        };
+        let pending = QuestPlan {
+            schema_version: 1,
+            human_explanation: "old".into(),
+            confidence: 0.5,
+            needs_user_review: false,
+            source: Some("ai".into()),
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            chapters: vec![QuestPlanChapter {
+                id: Some("CH".into()),
+                title: "Ch".into(),
+                icon: None,
+                group: None,
+                order_index: None,
+                mode: None,
+                quests: vec![mk("Q1", "One", 1.0), mk("Q2", "Two", 3.0)],
+            }],
+        };
+        let ai = QuestPlan {
+            schema_version: 1,
+            human_explanation: "extend".into(),
+            confidence: 0.8,
+            needs_user_review: false,
+            source: Some("ai".into()),
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            chapters: vec![QuestPlanChapter {
+                id: Some("CH".into()),
+                title: "Ch".into(),
+                icon: None,
+                group: None,
+                order_index: None,
+                mode: None,
+                // AI "rewrote" and only returned Q2 + new Q3 (dropped Q1)
+                quests: vec![mk("Q2", "Two", 0.0), mk("Q3", "Three", 0.0)],
+            }],
+        };
+        let (stitched, notes) = stitch_extend_plan(&pending, ai);
+        assert_eq!(stitched.chapters[0].quests.len(), 3);
+        assert!(stitched.chapters[0].quests.iter().any(|q| q.id.as_deref() == Some("Q1")));
+        assert!(stitched.chapters[0].quests.iter().any(|q| q.id.as_deref() == Some("Q3")));
+        assert!(stitched.needs_user_review);
+        assert!(!notes.is_empty());
+        let q1 = stitched.chapters[0]
+            .quests
+            .iter()
+            .find(|q| q.id.as_deref() == Some("Q1"))
+            .unwrap();
+        assert_eq!(q1.x, 1.0); // preserved
     }
 
     #[test]
@@ -1840,12 +2440,16 @@ mod tests {
         book.chapters.push(Chapter {
             id: "CHEXIST".into(),
             title: "Old".into(),
+            title_from_snbt: true,
             icon: None,
             quests: vec![Quest {
                 id: "QOLD".into(),
                 title: "Old Quest".into(),
+                title_from_snbt: true,
                 subtitle: None,
+                subtitle_from_snbt: false,
                 description: vec![],
+                description_from_snbt: false,
                 x: 0.0,
                 y: 0.0,
                 icon: None,
@@ -1854,6 +2458,7 @@ mod tests {
                     id: "T1".into(),
                     task_type: "checkmark".into(),
                     title: None,
+                    title_from_snbt: false,
                     value: None,
                     properties: HashMap::new(),
                 }],
@@ -1947,5 +2552,208 @@ mod tests {
         let merged = merge_quest_plan(&empty_book(), &plan).unwrap();
         assert!(merged.validation.valid);
         assert!(merged.book.validate().is_empty());
+    }
+
+    #[test]
+    fn merge_matches_chapter_by_title_when_id_omitted() {
+        let mut book = empty_book();
+        book.chapters.push(Chapter {
+            id: "EXISTINGCH".into(),
+            title: "Early Game".into(),
+            title_from_snbt: true,
+            icon: None,
+            quests: vec![],
+            group: None,
+            order_index: Some(0),
+            filename: None,
+            default_quest_shape: None,
+            default_hide_dependency_lines: None,
+            extras: HashMap::new(),
+            source_file: Some("config/ftbquests/quests/chapters/early.snbt".into()),
+        });
+        let plan = QuestPlan {
+            schema_version: 1,
+            human_explanation: "upsert by title".into(),
+            confidence: 0.8,
+            needs_user_review: false,
+            source: Some("test".into()),
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            chapters: vec![QuestPlanChapter {
+                id: None,
+                title: "Early Game".into(),
+                icon: None,
+                group: None,
+                order_index: None,
+                mode: Some("upsert".into()),
+                quests: vec![QuestPlanQuest {
+                    id: Some("NEWQ".into()),
+                    title: "Chop Wood".into(),
+                    subtitle: None,
+                    description: vec!["a".into(), "b".into()],
+                    x: 0.0,
+                    y: 0.0,
+                    icon: None,
+                    dependencies: vec![],
+                    tasks: vec![QuestPlanTask {
+                        id: None,
+                        task_type: "checkmark".into(),
+                        title: None,
+                        value: None,
+                        properties: HashMap::new(),
+                    }],
+                    rewards: vec![],
+                    optional: false,
+                    shape: None,
+                    size: None,
+                }],
+            }],
+        };
+        let merged = merge_quest_plan(&book, &plan).unwrap();
+        assert_eq!(merged.book.chapters.len(), 1);
+        assert_eq!(merged.book.chapters[0].id, "EXISTINGCH");
+        assert_eq!(merged.book.chapters[0].quests.len(), 1);
+        assert_eq!(merged.touched_chapter_ids, vec!["EXISTINGCH".to_string()]);
+    }
+
+    #[test]
+    fn filter_plan_selection_quest_keys_primary() {
+        let plan = QuestPlan {
+            schema_version: 1,
+            human_explanation: "t".into(),
+            confidence: 0.9,
+            needs_user_review: false,
+            source: Some("test".into()),
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            chapters: vec![
+                QuestPlanChapter {
+                    id: Some("C1".into()),
+                    title: "A".into(),
+                    icon: None,
+                    group: None,
+                    order_index: None,
+                    mode: Some("upsert".into()),
+                    quests: vec![
+                        QuestPlanQuest {
+                            id: Some("Q1".into()),
+                            title: "One".into(),
+                            subtitle: None,
+                            description: vec!["a".into()],
+                            x: 0.0,
+                            y: 0.0,
+                            icon: None,
+                            dependencies: vec![],
+                            tasks: vec![QuestPlanTask {
+                                id: None,
+                                task_type: "checkmark".into(),
+                                title: None,
+                                value: None,
+                                properties: HashMap::new(),
+                            }],
+                            rewards: vec![],
+                            optional: false,
+                            shape: None,
+                            size: None,
+                        },
+                        QuestPlanQuest {
+                            id: Some("Q2".into()),
+                            title: "Two".into(),
+                            subtitle: None,
+                            description: vec!["a".into()],
+                            x: 1.0,
+                            y: 0.0,
+                            icon: None,
+                            dependencies: vec![],
+                            tasks: vec![QuestPlanTask {
+                                id: None,
+                                task_type: "checkmark".into(),
+                                title: None,
+                                value: None,
+                                properties: HashMap::new(),
+                            }],
+                            rewards: vec![],
+                            optional: false,
+                            shape: None,
+                            size: None,
+                        },
+                    ],
+                },
+                QuestPlanChapter {
+                    id: Some("C2".into()),
+                    title: "B".into(),
+                    icon: None,
+                    group: None,
+                    order_index: None,
+                    mode: Some("upsert".into()),
+                    quests: vec![QuestPlanQuest {
+                        id: Some("Q3".into()),
+                        title: "Three".into(),
+                        subtitle: None,
+                        description: vec!["a".into()],
+                        x: 0.0,
+                        y: 0.0,
+                        icon: None,
+                        dependencies: vec![],
+                        tasks: vec![QuestPlanTask {
+                            id: None,
+                            task_type: "checkmark".into(),
+                            title: None,
+                            value: None,
+                            properties: HashMap::new(),
+                        }],
+                        rewards: vec![],
+                        optional: false,
+                        shape: None,
+                        size: None,
+                    }],
+                },
+            ],
+        };
+        // Chapter key empty (partial pick) but quest Q2 selected — must survive.
+        let filtered = filter_plan_selection(&plan, &[], &["Q2".into()]);
+        assert_eq!(filtered.chapters.len(), 1);
+        assert_eq!(filtered.chapters[0].quests.len(), 1);
+        assert_eq!(filtered.chapters[0].quests[0].id.as_deref(), Some("Q2"));
+    }
+
+    #[test]
+    fn detects_chapter_count() {
+        assert_eq!(detect_target_chapter_count("3 chapters: early / mid / late"), Some(3));
+        assert_eq!(detect_target_chapter_count("сделай 2 главы early game"), Some(2));
+        assert_eq!(detect_target_chapter_count("make 20 quests about nether"), None);
+    }
+
+    #[test]
+    fn pin_target_chapter_sets_id() {
+        let mut plan = QuestPlan {
+            schema_version: 1,
+            human_explanation: "t".into(),
+            confidence: 0.9,
+            needs_user_review: false,
+            source: Some("test".into()),
+            chapter_groups: vec![],
+            reward_tables: vec![],
+            chapters: vec![QuestPlanChapter {
+                id: None,
+                title: "Draft".into(),
+                icon: None,
+                group: None,
+                order_index: None,
+                mode: None,
+                quests: vec![],
+            }],
+        };
+        pin_target_chapter(
+            &mut plan,
+            &ExistingChapter {
+                id: "TARGET".into(),
+                title: "Current".into(),
+                group: Some("G1".into()),
+            },
+        );
+        assert_eq!(plan.chapters[0].id.as_deref(), Some("TARGET"));
+        assert_eq!(plan.chapters[0].mode.as_deref(), Some("upsert"));
+        assert_eq!(plan.chapters[0].group.as_deref(), Some("G1"));
     }
 }

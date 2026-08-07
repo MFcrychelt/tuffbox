@@ -1,5 +1,7 @@
 <script lang="ts">
-  import type { QuestData, QuestTask, QuestReward, QuestValidationIssue } from "../../lib/store";
+  import type { QuestData, QuestValidationIssue } from "../../lib/store";
+  import { DEP_REQUIREMENT_OPTIONS, SHAPE_OPTIONS } from "../../lib/questTypeLabels";
+  import TaskRewardEditor from "./TaskRewardEditor.svelte";
 
   let {
     quest,
@@ -19,13 +21,9 @@
     onRemoveDep: (depId: string) => void;
   } = $props();
 
-  const SHAPES = ["", "circle", "square", "rsquare", "diamond", "hexagon", "pentagon", "gear", "none"];
-
   let depPick = $state("");
   let descText = $state("");
   let showAdvanced = $state(false);
-  let showTasks = $state(true);
-  let showRewards = $state(true);
 
   let depOptions = $derived(buildDepOptions(chapterQuests, quest));
   let myIssues = $derived(issues.filter((i) => i.questId === quest.id));
@@ -79,30 +77,8 @@
     return v === true ? "true" : v === false ? "false" : "";
   }
 
-  function taskTypeLabel(type: string): string {
-    const labels: Record<string, string> = {
-      checkmark: "Checkmark",
-      counter: "Counter",
-      resource: "Resource",
-      location: "Location",
-      recipe: "Recipe",
-      item: "Item",
-      fluid: "Fluid",
-      experience: "Experience",
-      priority: "Priority",
-      score: "Score",
-    };
-    return labels[type] ?? type;
-  }
-
-  function rewardTypeLabel(type: string): string {
-    const labels: Record<string, string> = {
-      command: "Command",
-      item: "Item",
-      xp: "XP",
-      luck: "Loot",
-    };
-    return labels[type] ?? type;
+  function inputVal(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
   }
 </script>
 
@@ -115,7 +91,7 @@
 
   {#if myIssues.length > 0}
     <div class="val-warn">
-      {#each myIssues as issue}
+      {#each myIssues as issue, i (`${issue.questId}-${i}`)}
         <div>⚠ {issue.message}</div>
       {/each}
     </div>
@@ -142,8 +118,8 @@
     <label>
       Shape
       <select value={quest.shape ?? ""} onchange={(e) => { quest.shape = (e.target as HTMLSelectElement).value || null; onDirty(); }}>
-        {#each SHAPES as s}
-          <option value={s}>{s || "(default)"}</option>
+        {#each SHAPE_OPTIONS as s (s.id || "__default")}
+          <option value={s.id}>{s.label}</option>
         {/each}
       </select>
     </label>
@@ -158,70 +134,80 @@
   </div>
 
   <button type="button" class="adv-tog" onclick={() => (showAdvanced = !showAdvanced)}>
-    {showAdvanced ? "▾" : "▸"} Advanced flags
+    {showAdvanced ? "▾" : "▸"} FTB flags
   </button>
   {#if showAdvanced}
     <div class="fields flags">
-      <label>Hide dep lines
+      <label>Hide dependency lines
         <select value={triVal(quest.hideDependencyLines)} onchange={(e) => tri("hideDependencyLines", e)}>
-          <option value="">unset</option><option value="true">true</option><option value="false">false</option>
+          <option value="">unset</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label>Hide dependent lines
+        <select value={triVal(quest.hideDependentLines)} onchange={(e) => tri("hideDependentLines", e)}>
+          <option value="">unset</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
         </select>
       </label>
       <label>Can repeat
         <select value={triVal(quest.canRepeat)} onchange={(e) => tri("canRepeat", e)}>
-          <option value="">unset</option><option value="true">true</option><option value="false">false</option>
+          <option value="">unset</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
         </select>
       </label>
       <label>Invisible
         <select value={triVal(quest.invisible)} onchange={(e) => tri("invisible", e)}>
-          <option value="">unset</option><option value="true">true</option><option value="false">false</option>
+          <option value="">unset</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label>Disable toast
+        <select value={triVal(quest.disableToast)} onchange={(e) => tri("disableToast", e)}>
+          <option value="">unset</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label
+        >Min required deps<input
+          type="number"
+          min="0"
+          value={quest.minRequiredDependencies ?? ""}
+          oninput={(e) => {
+            const v = inputVal(e);
+            quest.minRequiredDependencies = v === "" ? null : Number(v);
+            onDirty();
+          }}
+        /></label
+      >
+      <label>Dependency requirement
+        <select
+          value={quest.dependencyRequirement ?? ""}
+          onchange={(e) => {
+            quest.dependencyRequirement = (e.target as HTMLSelectElement).value || null;
+            onDirty();
+          }}
+        >
+          {#each DEP_REQUIREMENT_OPTIONS as d (d.id || "_default")}
+            <option value={d.id}>{d.label}</option>
+          {/each}
         </select>
       </label>
     </div>
   {/if}
 
-  <!-- Tasks -->
-  <button type="button" class="adv-tog" onclick={() => (showTasks = !showTasks)}>
-    {showTasks ? "▾" : "▸"} Tasks ({quest.tasks?.length ?? 0})
-  </button>
-  {#if showTasks}
-    <div class="task-reward-list">
-      {#if quest.tasks?.length}
-        {#each quest.tasks as task (task.id)}
-          <div class="tr-item">
-            <span class="tr-type">{taskTypeLabel(task.type)}</span>
-            <span class="tr-title">{task.title ?? task.id}</span>
-          </div>
-        {/each}
-      {:else}
-        <div class="tr-empty">No tasks</div>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- Rewards -->
-  <button type="button" class="adv-tog" onclick={() => (showRewards = !showRewards)}>
-    {showRewards ? "▾" : "▸"} Rewards ({quest.rewards?.length ?? 0})
-  </button>
-  {#if showRewards}
-    <div class="task-reward-list">
-      {#if quest.rewards?.length}
-        {#each quest.rewards as reward (reward.id)}
-          <div class="tr-item">
-            <span class="tr-type">{rewardTypeLabel(reward.type)}</span>
-            <span class="tr-title">{reward.title ?? reward.id}</span>
-          </div>
-        {/each}
-      {:else}
-        <div class="tr-empty">No rewards</div>
-      {/if}
-    </div>
-  {/if}
+  <!-- Tasks / Rewards (editable) -->
+  <TaskRewardEditor {quest} {onDirty} />
 
   <!-- Dependencies -->
   <h4>Dependencies</h4>
   <div class="deps">
-    {#each quest.dependencies as dep}
+    {#each quest.dependencies as dep (dep)}
       <span class="dep-tag">
         {titleOf(dep)}
         <button type="button" class="dep-rm" onclick={() => onRemoveDep(dep)}>×</button>
@@ -231,7 +217,7 @@
   <div class="dep-add">
     <select bind:value={depPick}>
       <option value="">Add dependency…</option>
-      {#each depOptions as o}
+      {#each depOptions as o (o.id)}
         <option value={o.id}>{o.label}</option>
       {/each}
     </select>
@@ -385,39 +371,4 @@
     font-size: 16px;
   }
   .ico.danger:hover { color: var(--danger); }
-
-  /* Tasks/Rewards list */
-  .task-reward-list {
-    padding: 4px 12px 8px;
-  }
-  .tr-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 8px;
-    font-size: 11px;
-    border-radius: 2px;
-    margin-bottom: 2px;
-  }
-  .tr-item:hover { background: rgba(255,255,255,0.04); }
-  .tr-type {
-    font-size: 9px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--accent);
-    min-width: 60px;
-  }
-  .tr-title {
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .tr-empty {
-    font-size: 11px;
-    color: var(--text-muted);
-    padding: 4px 8px;
-    font-style: italic;
-  }
 </style>

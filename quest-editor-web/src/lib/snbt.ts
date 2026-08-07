@@ -1,15 +1,42 @@
 /**
  * SNBT (Stringified NBT) parser and serializer.
  * Supports: unquoted keys, numeric suffixes (d/f/L/b), comments (// and /* *​/),
- * single-quoted strings, trailing commas.
+ * single-quoted strings, trailing commas, typed arrays ([I; …], [B; …], …).
  */
+
+export type SnbtArrayType = "I" | "B" | "L" | "F" | "D";
+
+/** Tagged typed array preserved across parse → serialize round-trips. */
+export interface SnbtTypedArray {
+  __snbtArray: SnbtArrayType;
+  values: SnbtValue[];
+}
 
 export type SnbtValue =
   | string
   | number
   | boolean
   | SnbtValue[]
+  | SnbtTypedArray
   | { [key: string]: SnbtValue };
+
+export function isSnbtTypedArray(v: unknown): v is SnbtTypedArray {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !Array.isArray(v) &&
+    typeof (v as SnbtTypedArray).__snbtArray === "string" &&
+    Array.isArray((v as SnbtTypedArray).values)
+  );
+}
+
+/** Treat plain arrays and tagged typed arrays as lists. */
+export function asSnbtList(v: SnbtValue | undefined | null): SnbtValue[] {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v;
+  if (isSnbtTypedArray(v)) return v.values;
+  return [];
+}
 
 // ─── Strip comments + trailing commas ───────────────────────────
 
@@ -131,7 +158,7 @@ class SnbtParser {
     return map;
   }
 
-  private parseArray(): SnbtValue[] {
+  private parseArray(): SnbtValue {
     this.pos++; // consume '['
     const arr: SnbtValue[] = [];
     this.skipWs();
@@ -139,18 +166,47 @@ class SnbtParser {
       this.pos++;
       return arr;
     }
+    // Typed arrays: [I; ...], [B; ...], [L; ...], [F; ...], [D; ...]
+    let typed: SnbtArrayType | null = null;
+    const t = this.peek();
+    if (
+      t &&
+      /[BILfdFD]/.test(t) &&
+      this.pos + 1 < this.chars.length &&
+      this.chars[this.pos + 1] === ";"
+    ) {
+      typed = t.toUpperCase() as SnbtArrayType;
+      this.pos += 2;
+      this.skipWs();
+      if (this.peek() === "]") {
+        this.pos++;
+        return { __snbtArray: typed, values: arr };
+      }
+    }
     while (true) {
       arr.push(this.parseValue());
       this.skipWs();
       const c = this.peek();
       if (c === ",") {
         this.pos++;
+        this.skipWs();
+        if (this.peek() === "]") {
+          this.pos++;
+          break;
+        }
         continue;
       }
       if (c === "]") {
         this.pos++;
         break;
       }
+      // SNBT allows whitespace-separated array elements (no commas)
+      if (c === undefined) {
+        throw new Error("SNBT parse: unterminated array");
+      }
+    }
+    if (typed) {
+      return { __snbtArray: typed, values: arr };
     }
     return arr;
   }
@@ -264,11 +320,17 @@ function snbtValue(v: SnbtValue, pad: string): string {
     if (Number.isInteger(v)) return `${v}L`;
     return `${v}d`;
   }
-  if (typeof v === "boolean") return v ? "1b" : "0b";
+  if (typeof v === "boolean") return v ? "true" : "false";
   if (Array.isArray(v)) {
     if (v.length === 0) return "[]";
     const items = v.map((x) => `${pad}  ${snbtValue(x, pad + "  ")}`);
     return `[\n${items.join(",\n")}\n${pad}]`;
+  }
+  if (isSnbtTypedArray(v)) {
+    const type = v.__snbtArray;
+    if (v.values.length === 0) return `[${type};]`;
+    const items = v.values.map((x) => `${pad}  ${snbtValue(x, pad + "  ")}`);
+    return `[${type};\n${items.join(",\n")}\n${pad}]`;
   }
   // object
   const entries = Object.entries(v);

@@ -1,19 +1,94 @@
 //! Quest AI chat sessions + multi-pass quest-line generation.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 use tuffbox_core::{
-    auto_layout_plan, build_lore_user_message, build_outline_user_message, delete_quest_chat,
-    detect_target_quest_count, fill_template_lore, filter_plan_selection, ground_items_in_plan,
-    list_quest_chats, load_quest_chat, merge_quest_plan, new_quest_chat_id, now_iso,
-    parse_quest_plan, save_quest_chat, stitch_lore_into_plan, try_heuristic_quest_plan,
-    QuestAuthorContext, QuestChatMessage, QuestChatSession, QuestPlan, QuestPlanMergeResult,
-    QUEST_LORE_SYSTEM_PROMPT, QUEST_OUTLINE_SYSTEM_PROMPT, QUEST_PLAN_SYSTEM_PROMPT,
+    auto_layout_plan, build_branch_user_message, build_lore_user_message, build_outline_user_message,
+    delete_quest_chat, detect_target_chapter_count, detect_target_quest_count, fill_template_lore,
+    filter_plan_selection, ground_items_in_plan, list_quest_chats, load_quest_chat, merge_quest_plan,
+    new_quest_chat_id, now_iso, parse_quest_plan, pin_target_chapter, save_quest_chat,
+    stitch_extend_plan, stitch_lore_into_plan, try_heuristic_quest_plan, AnchorQuest,
+    ExistingChapter, ExistingGroup, QuestAuthorContext, QuestChatMessage, QuestChatSession,
+    QuestPlan, QuestPlanMergeResult, QUEST_LORE_SYSTEM_PROMPT, QUEST_OUTLINE_SYSTEM_PROMPT,
+    QUEST_PLAN_SYSTEM_PROMPT,
 };
 
 use crate::integrations;
 use crate::manifest_parent;
+
+static QUEST_AI_CANCEL: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn cancel_quest_chat_turn() -> Result<(), String> {
+    QUEST_AI_CANCEL.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+fn clear_quest_ai_cancel() {
+    QUEST_AI_CANCEL.store(false, Ordering::SeqCst);
+}
+
+fn check_quest_ai_cancel(progress: &ProgressSink<'_>, log: &mut Vec<String>) -> Result<(), String> {
+    if QUEST_AI_CANCEL.load(Ordering::SeqCst) {
+        progress.push(log, "cancel", "Cancelled");
+        return Err("Cancelled".into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestAiProgressEvent {
+    chat_id: String,
+    line: String,
+    phase: String,
+    i: Option<usize>,
+    n: Option<usize>,
+}
+
+struct ProgressSink<'a> {
+    app: Option<&'a AppHandle>,
+    chat_id: String,
+}
+
+impl ProgressSink<'_> {
+    fn emit(&self, phase: &str, line: &str, i: Option<usize>, n: Option<usize>) {
+        if let Some(app) = self.app {
+            let _ = app.emit(
+                "quest-ai-progress",
+                QuestAiProgressEvent {
+                    chat_id: self.chat_id.clone(),
+                    line: line.to_string(),
+                    phase: phase.to_string(),
+                    i,
+                    n,
+                },
+            );
+        }
+    }
+
+    fn push(&self, log: &mut Vec<String>, phase: &str, line: impl Into<String>) {
+        let line = line.into();
+        self.emit(phase, &line, None, None);
+        log.push(line);
+    }
+
+    fn push_n(
+        &self,
+        log: &mut Vec<String>,
+        phase: &str,
+        line: impl Into<String>,
+        i: usize,
+        n: usize,
+    ) {
+        let line = line.into();
+        self.emit(phase, &line, Some(i), Some(n));
+        log.push(line);
+    }
+}
 
 fn project_dir(path: &str) -> Result<PathBuf, String> {
     manifest_parent(path)
@@ -36,9 +111,37 @@ fn author_ctx(
     pack_hint: Option<String>,
 ) -> QuestAuthorContext {
     QuestAuthorContext {
-        existing_chapters: book.chapters.iter().map(|c| c.title.clone()).collect(),
+        existing_chapters: book
+            .chapters
+            .iter()
+            .map(|c| ExistingChapter {
+                id: c.id.clone(),
+                title: c.title.clone(),
+                group: c.group.clone(),
+            })
+            .collect(),
+        existing_groups: book
+            .chapter_groups
+            .iter()
+            .map(|g| ExistingGroup {
+                id: g.id.clone(),
+                title: g.title.clone(),
+            })
+            .collect(),
         sample_items: collect_items(path),
         pack_hint: pack_hint.or_else(|| book.title.clone()),
+        existing_quests: book
+            .chapters
+            .iter()
+            .flat_map(|c| {
+                c.quests
+                    .iter()
+                    .map(|q| (q.id.clone(), q.title.clone()))
+            })
+            .take(60)
+            .collect(),
+        anchor_quest: None,
+        target_chapter: None,
     }
 }
 
@@ -98,25 +201,91 @@ pub async fn run_generate_quest_line(
     force_ai: bool,
     intent: Option<&str>,
     pending_plan: Option<&QuestPlan>,
+    anchor_quest_id: Option<&str>,
+    target_chapter_id: Option<&str>,
+    progress: ProgressSink<'_>,
 ) -> Result<(QuestPlan, Vec<String>), String> {
     let mut log = Vec::new();
     let intent = intent.unwrap_or("generate");
-    let ctx = author_ctx(path, book, None);
+    let mut ctx = author_ctx(path, book, None);
     let target = detect_target_quest_count(prompt);
-    log.push(format!("Target quest count ≈ {target}"));
+    let chapter_target = detect_target_chapter_count(prompt);
+    progress.push(&mut log, "init", format!("Target quest count ≈ {target}"));
+    if let Some(c) = chapter_target {
+        progress.push(&mut log, "init", format!("Target chapter count ≈ {c}"));
+    }
 
-    // Follow-up: lore-only on pending — handled by caller with existing plan
-    let mut plan = if !force_ai && intent == "generate" {
+    if let Some(tid) = target_chapter_id.filter(|s| !s.is_empty()) {
+        if let Some(ch) = book.chapters.iter().find(|c| c.id == tid) {
+            ctx.target_chapter = Some(ExistingChapter {
+                id: ch.id.clone(),
+                title: ch.title.clone(),
+                group: ch.group.clone(),
+            });
+            progress.push(
+                &mut log,
+                "init",
+                format!("Target chapter: {} ({})", ch.title, ch.id),
+            );
+        }
+    }
+
+    if intent == "branch" {
+        let aid = anchor_quest_id
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                "Branch requires a selected quest as anchor — select a quest on the canvas first."
+                    .to_string()
+            })?;
+        let found = book.chapters.iter().find_map(|c| {
+            c.quests.iter().find(|q| q.id == aid).map(|q| AnchorQuest {
+                id: q.id.clone(),
+                title: q.title.clone(),
+                chapter_title: Some(c.title.clone()),
+            })
+        });
+        let aq = found.ok_or_else(|| {
+            format!("Branch anchor quest id `{aid}` was not found in the loaded quest book.")
+        })?;
+        progress.push(
+            &mut log,
+            "branch",
+            format!("Branch anchor resolved: {} ({})", aq.title, aq.id),
+        );
+        ctx.anchor_quest = Some(aq);
+    }
+
+    if intent == "extend" && pending_plan.is_none() {
+        return Err(
+            "Nothing to extend — generate a quest line first (or load a chat with a pending plan)."
+                .into(),
+        );
+    }
+
+    progress.push(&mut log, "outline", "Outline: starting…");
+    let mut plan = if intent == "branch" {
+        progress.push(&mut log, "outline", "Outline: AI branch…");
+        let user = build_branch_user_message(prompt, &ctx, target);
+        ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
+    } else if !force_ai && intent == "generate" {
         if let Some(p) = try_heuristic_quest_plan(prompt) {
-            log.push("Outline: offline heuristic".into());
+            progress.push(&mut log, "outline", "Outline: offline heuristic");
             p
         } else {
-            log.push("Outline: AI…".into());
+            progress.push(&mut log, "outline", "Outline: AI…");
             let user = build_outline_user_message(prompt, &ctx, target);
             ai_quest_plan(QUEST_OUTLINE_SYSTEM_PROMPT, &user, history).await?
         }
     } else if intent == "generate" || intent == "extend" {
-        log.push("Outline: AI…".into());
+        progress.push(
+            &mut log,
+            "outline",
+            if intent == "extend" {
+                "Outline: AI extend…"
+            } else {
+                "Outline: AI…"
+            },
+        );
         let user = if intent == "extend" {
             let pending_json = pending_plan
                 .and_then(|p| serde_json::to_string_pretty(p).ok())
@@ -131,9 +300,38 @@ pub async fn run_generate_quest_line(
     } else {
         return Err(format!("unknown intent: {intent}"));
     };
+    progress.push(&mut log, "outline", "Outline: done");
+    check_quest_ai_cancel(&progress, &mut log)?;
+
+    // Pin single-chapter generate onto the editor's current chapter unless multi-chapter was requested.
+    if intent == "generate" {
+        let multi = chapter_target.map(|c| c > 1).unwrap_or(false);
+        if !multi {
+            if let Some(target_ch) = ctx.target_chapter.clone() {
+                pin_target_chapter(&mut plan, &target_ch);
+                progress.push(
+                    &mut log,
+                    "outline",
+                    format!("Pinned outline to chapter {}", target_ch.id),
+                );
+            }
+        }
+    }
+
+    if intent == "extend" {
+        if let Some(pending) = pending_plan {
+            let (stitched, notes) = stitch_extend_plan(pending, plan);
+            plan = stitched;
+            for n in notes {
+                progress.push(&mut log, "extend", n);
+            }
+        }
+    }
 
     plan.source = Some(if plan.source.as_deref() == Some("heuristic") {
         "heuristic+multipass".into()
+    } else if intent == "extend" {
+        "ai-multipass-extend".into()
     } else {
         "ai-multipass".into()
     });
@@ -149,34 +347,62 @@ pub async fn run_generate_quest_line(
     let total_chunks = indices.chunks(chunk_size).count().max(1);
     let mut chunk_i = 0usize;
     for chunk in indices.chunks(chunk_size) {
+        check_quest_ai_cancel(&progress, &mut log)?;
         chunk_i += 1;
-        log.push(format!("Lore {chunk_i}/{total_chunks}…"));
+        progress.push_n(
+            &mut log,
+            "lore",
+            format!("Lore {chunk_i}/{total_chunks}…"),
+            chunk_i,
+            total_chunks,
+        );
         let user = build_lore_user_message(&plan, chunk);
         match ai_json(QUEST_LORE_SYSTEM_PROMPT, &user, &[]).await {
             Ok(value) => {
                 match stitch_lore_into_plan(&mut plan, &value_to_raw(value)) {
-                    Ok(n) => log.push(format!("Lore chunk updated {n} quest(s)")),
-                    Err(e) => log.push(format!("Lore stitch skip: {e}")),
+                    Ok(n) => progress.push(
+                        &mut log,
+                        "lore",
+                        format!("Lore chunk updated {n} quest(s)"),
+                    ),
+                    Err(e) => progress.push(&mut log, "lore", format!("Lore stitch skip: {e}")),
                 }
             }
             Err(e) => {
-                log.push(format!("Lore AI unavailable ({e}) — template fill later"));
+                progress.push(
+                    &mut log,
+                    "lore",
+                    format!("Lore AI unavailable ({e}) — template fill later"),
+                );
             }
         }
     }
 
+    check_quest_ai_cancel(&progress, &mut log)?;
     fill_template_lore(&mut plan);
-    log.push("Lore: ensured ≥2 description lines".into());
+    progress.push(&mut log, "lore", "Lore: ensured ≥2 description lines");
 
+    check_quest_ai_cancel(&progress, &mut log)?;
     let ground_notes = ground_items_in_plan(&mut plan, &ctx.sample_items);
-    log.extend(ground_notes.iter().cloned().take(12));
-    log.push(format!("Grounding: {} note(s)", ground_notes.len()));
+    for n in ground_notes.iter().take(12) {
+        progress.push(&mut log, "ground", n.clone());
+    }
+    progress.push(
+        &mut log,
+        "ground",
+        format!("Grounding: {} note(s)", ground_notes.len()),
+    );
 
-    auto_layout_plan(&mut plan);
-    log.push("Layout: DAG auto-layout applied".into());
+    check_quest_ai_cancel(&progress, &mut log)?;
+    if auto_layout_plan(&mut plan) {
+        progress.push(&mut log, "layout", "Layout: DAG auto-layout applied");
+    } else {
+        progress.push(&mut log, "layout", "Layout: skipped — coords present");
+    }
 
     if plan.human_explanation.trim().is_empty() {
-        plan.human_explanation = format!("Generated quest line (~{target} quests) from author request.");
+        plan.human_explanation =
+            format!("Generated quest line (~{target} quests) from author request.");
     }
 
     Ok((plan, log))
@@ -234,16 +460,20 @@ pub fn new_quest_chat_session(
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn quest_chat_turn(
+    app: AppHandle,
     path: String,
     chat_id: Option<String>,
     message: String,
     force_ai: Option<bool>,
     intent: Option<String>,
+    anchor_quest_id: Option<String>,
+    target_chapter_id: Option<String>,
 ) -> Result<QuestChatTurnResult, String> {
     let message = message.trim().to_string();
     if message.is_empty() {
         return Err("Empty message".into());
     }
+    clear_quest_ai_cancel();
     let project_dir = project_dir(&path)?;
     let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
     let force_ai = force_ai.unwrap_or(false);
@@ -267,6 +497,12 @@ pub async fn quest_chat_turn(
         }
     };
 
+    let progress = ProgressSink {
+        app: Some(&app),
+        chat_id: session.id.clone(),
+    };
+    progress.emit("init", "Starting…", None, None);
+
     session.messages.push(QuestChatMessage {
         role: "user".into(),
         content: message.clone(),
@@ -280,10 +516,16 @@ pub async fn quest_chat_turn(
             .pending_plan
             .clone()
             .ok_or_else(|| "No pending plan to regenerate lore".to_string())?;
-        log_lore_only(&path, &mut base, &mut Vec::new()).await?;
+        let mut lore_log = Vec::new();
+        log_lore_only(&path, &mut base, &mut lore_log, &progress).await?;
         fill_template_lore(&mut base);
-        auto_layout_plan(&mut base);
-        (base, vec!["Lore-only regenerate done".into()])
+        if auto_layout_plan(&mut base) {
+            progress.push(&mut lore_log, "layout", "Layout: DAG auto-layout applied");
+        } else {
+            progress.push(&mut lore_log, "layout", "Layout: skipped — coords present");
+        }
+        progress.push(&mut lore_log, "done", "Lore-only regenerate done");
+        (base, lore_log)
     } else {
         run_generate_quest_line(
             &path,
@@ -293,6 +535,9 @@ pub async fn quest_chat_turn(
             force_ai,
             Some(intent_s.as_str()),
             session.pending_plan.as_ref(),
+            anchor_quest_id.as_deref(),
+            target_chapter_id.as_deref(),
+            progress,
         )
         .await?
     };
@@ -301,6 +546,21 @@ pub async fn quest_chat_turn(
     if plan.schema_version == 0 {
         plan.schema_version = 1;
     }
+
+    // Auto-title session from first chapter when still generic
+    if session.title == "Quest line" || session.title.is_empty() {
+        if let Some(ch) = plan.chapters.first() {
+            if !ch.title.trim().is_empty() {
+                session.title = truncate_title(&ch.title);
+            }
+        }
+    }
+
+    let progress_merge = ProgressSink {
+        app: Some(&app),
+        chat_id: session.id.clone(),
+    };
+    progress_merge.emit("merge", "Merging into book preview…", None, None);
 
     let merge = merge_quest_plan(&book, &plan)?;
     session.pending_plan = Some(plan.clone());
@@ -330,6 +590,7 @@ async fn log_lore_only(
     path: &str,
     plan: &mut QuestPlan,
     log: &mut Vec<String>,
+    progress: &ProgressSink<'_>,
 ) -> Result<(), String> {
     let indices: Vec<(usize, usize)> = plan
         .chapters
@@ -337,14 +598,19 @@ async fn log_lore_only(
         .enumerate()
         .flat_map(|(ci, ch)| (0..ch.quests.len()).map(move |qi| (ci, qi)))
         .collect();
+    let total = indices.chunks(6).count().max(1);
+    let mut i = 0usize;
     for chunk in indices.chunks(6) {
+        check_quest_ai_cancel(progress, log)?;
+        i += 1;
+        progress.push_n(log, "lore", format!("Lore {i}/{total}…"), i, total);
         let user = build_lore_user_message(plan, chunk);
         match ai_json(QUEST_LORE_SYSTEM_PROMPT, &user, &[]).await {
             Ok(value) => {
                 let _ = stitch_lore_into_plan(plan, &value_to_raw(value));
-                log.push("Lore chunk ok".into());
+                progress.push(log, "lore", "Lore chunk ok");
             }
-            Err(e) => log.push(format!("Lore fail: {e}")),
+            Err(e) => progress.push(log, "lore", format!("Lore fail: {e}")),
         }
     }
     let _ = path;
@@ -361,19 +627,26 @@ pub async fn generate_quest_line(
     if prompt.is_empty() {
         return Err("Empty prompt".into());
     }
+    clear_quest_ai_cancel();
     let project_dir = project_dir(&path)?;
     let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
-    let (plan, log) =
-        run_generate_quest_line(
-            &path,
-            &prompt,
-            &book,
-            &[],
-            force_ai.unwrap_or(false),
-            Some("generate"),
-            None,
-        )
-            .await?;
+    let sink = ProgressSink {
+        app: None,
+        chat_id: String::new(),
+    };
+    let (plan, log) = run_generate_quest_line(
+        &path,
+        &prompt,
+        &book,
+        &[],
+        force_ai.unwrap_or(false),
+        Some("generate"),
+        None,
+        None,
+        None,
+        sink,
+    )
+    .await?;
     let mut merge = merge_quest_plan(&book, &plan)?;
     merge.notes.extend(log);
     serde_json::to_value(merge).map_err(|e| e.to_string())

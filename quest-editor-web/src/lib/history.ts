@@ -1,10 +1,12 @@
 /**
  * Undo/Redo history stack for quest editor state.
- * Uses snapshot-based approach for simplicity and reliability.
+ * Per-chapter JSON strings with structural sharing across snapshots.
  */
 
 export interface HistorySnapshot {
-  chapters: string; // JSON serialized
+  /** chapter id → JSON.stringify(chapter); unchanged chapters reuse prior string refs */
+  chapterJsonById: Record<string, string>;
+  chapterOrder: string[];
   chapterGroups: string;
   selectedChapter: string;
 }
@@ -15,6 +17,8 @@ export interface HistoryState {
   maxSize: number;
 }
 
+type ChapterLike = { id?: unknown };
+
 export function createHistoryState(maxSize: number = 100): HistoryState {
   return {
     undoStack: [],
@@ -23,21 +27,73 @@ export function createHistoryState(maxSize: number = 100): HistoryState {
   };
 }
 
+function chapterId(ch: unknown, index: number): string {
+  const id = (ch as ChapterLike)?.id;
+  return typeof id === "string" && id.length > 0 ? id : `__idx_${index}`;
+}
+
+function buildSnapshot(
+  chapters: unknown[],
+  chapterGroups: unknown[],
+  selectedChapter: string,
+  prevMap?: Record<string, string>,
+): HistorySnapshot {
+  const chapterJsonById: Record<string, string> = {};
+  const chapterOrder: string[] = [];
+  for (let i = 0; i < chapters.length; i++) {
+    const ch = chapters[i];
+    const id = chapterId(ch, i);
+    chapterOrder.push(id);
+    const next = JSON.stringify(ch);
+    const prev = prevMap?.[id];
+    chapterJsonById[id] = prev !== undefined && prev === next ? prev : next;
+  }
+  return {
+    chapterJsonById,
+    chapterOrder,
+    chapterGroups: JSON.stringify(chapterGroups),
+    selectedChapter,
+  };
+}
+
+function snapshotsEqual(a: HistorySnapshot, b: HistorySnapshot): boolean {
+  if (a.selectedChapter !== b.selectedChapter) return false;
+  if (a.chapterGroups !== b.chapterGroups) return false;
+  if (a.chapterOrder.length !== b.chapterOrder.length) return false;
+  for (let i = 0; i < a.chapterOrder.length; i++) {
+    if (a.chapterOrder[i] !== b.chapterOrder[i]) return false;
+  }
+  for (const id of a.chapterOrder) {
+    if (a.chapterJsonById[id] !== b.chapterJsonById[id]) return false;
+  }
+  return true;
+}
+
+export function materializeChapters(snapshot: HistorySnapshot): unknown[] {
+  return snapshot.chapterOrder.map((id) => {
+    const raw = snapshot.chapterJsonById[id];
+    if (raw === undefined) {
+      throw new Error(`history snapshot missing chapter ${id}`);
+    }
+    return JSON.parse(raw);
+  });
+}
+
 export function pushSnapshot(
   state: HistoryState,
   chapters: unknown[],
   chapterGroups: unknown[],
-  selectedChapter: string
+  selectedChapter: string,
 ): HistoryState {
-  const snapshot: HistorySnapshot = {
-    chapters: JSON.stringify(chapters),
-    chapterGroups: JSON.stringify(chapterGroups),
-    selectedChapter,
-  };
-
-  // Don't push if identical to top of undo stack
   const top = state.undoStack[state.undoStack.length - 1];
-  if (top && top.chapters === snapshot.chapters && top.chapterGroups === snapshot.chapterGroups) {
+  const snapshot = buildSnapshot(
+    chapters,
+    chapterGroups,
+    selectedChapter,
+    top?.chapterJsonById,
+  );
+
+  if (top && snapshotsEqual(top, snapshot)) {
     return state;
   }
 
@@ -49,7 +105,7 @@ export function pushSnapshot(
   return {
     ...state,
     undoStack: newUndo,
-    redoStack: [], // Clear redo on new action
+    redoStack: [],
   };
 }
 
@@ -57,18 +113,19 @@ export function undo(
   state: HistoryState,
   currentChapters: unknown[],
   currentChapterGroups: unknown[],
-  currentSelectedChapter: string
+  currentSelectedChapter: string,
 ): { state: HistoryState; snapshot: HistorySnapshot | null } {
   if (state.undoStack.length === 0) {
     return { state, snapshot: null };
   }
 
-  // Save current state to redo stack
-  const currentSnapshot: HistorySnapshot = {
-    chapters: JSON.stringify(currentChapters),
-    chapterGroups: JSON.stringify(currentChapterGroups),
-    selectedChapter: currentSelectedChapter,
-  };
+  const top = state.undoStack[state.undoStack.length - 1];
+  const currentSnapshot = buildSnapshot(
+    currentChapters,
+    currentChapterGroups,
+    currentSelectedChapter,
+    top.chapterJsonById,
+  );
 
   const newUndo = [...state.undoStack];
   const snapshot = newUndo.pop()!;
@@ -87,18 +144,21 @@ export function redo(
   state: HistoryState,
   currentChapters: unknown[],
   currentChapterGroups: unknown[],
-  currentSelectedChapter: string
+  currentSelectedChapter: string,
 ): { state: HistoryState; snapshot: HistorySnapshot | null } {
   if (state.redoStack.length === 0) {
     return { state, snapshot: null };
   }
 
-  // Save current state to undo stack
-  const currentSnapshot: HistorySnapshot = {
-    chapters: JSON.stringify(currentChapters),
-    chapterGroups: JSON.stringify(currentChapterGroups),
-    selectedChapter: currentSelectedChapter,
-  };
+  const topRedo = state.redoStack[state.redoStack.length - 1];
+  const currentSnapshot = buildSnapshot(
+    currentChapters,
+    currentChapterGroups,
+    currentSelectedChapter,
+    // Prefer sharing vs undo top, then vs redo entry being applied.
+    state.undoStack[state.undoStack.length - 1]?.chapterJsonById ??
+      topRedo.chapterJsonById,
+  );
 
   const newRedo = [...state.redoStack];
   const snapshot = newRedo.pop()!;

@@ -40,6 +40,8 @@ export interface QuestTask {
   title?: string | null;
   value?: unknown;
   properties?: Record<string, unknown>;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestReward {
@@ -56,7 +58,8 @@ export interface QuestData {
   description: string[];
   x: number;
   y: number;
-  icon?: string | null;
+  /** String id or full item-stack compound `{ id, Count, tag, ... }`. */
+  icon?: string | Record<string, unknown> | null;
   dependencies: string[];
   tasks: QuestTask[];
   rewards: QuestReward[];
@@ -71,12 +74,19 @@ export interface QuestData {
   disableToast?: boolean | null;
   dependencyRequirement?: string | null;
   extras?: Record<string, unknown>;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
+  /** False when subtitle came only from lang overlay — omit on chapter SNBT export. */
+  subtitleFromSnbt?: boolean;
+  /** False when description came only from lang overlay — omit on chapter SNBT export. */
+  descriptionFromSnbt?: boolean;
 }
 
 export interface QuestChapter {
   id: string;
   title: string;
-  icon?: string | null;
+  /** String id or full item-stack compound. */
+  icon?: string | Record<string, unknown> | null;
   quests: QuestData[];
   group?: string | null;
   orderIndex?: number | null;
@@ -85,11 +95,122 @@ export interface QuestChapter {
   defaultHideDependencyLines?: boolean | null;
   extras?: Record<string, unknown>;
   sourceFile?: string | null;
+  /** False when title came only from lang overlay — omit on chapter SNBT export. */
+  titleFromSnbt?: boolean;
 }
 
 export interface QuestChapterGroup {
   id: string;
   title: string;
+  titleFromSnbt?: boolean;
+}
+
+/**
+ * Prefer omitting via `chapterToSnbtJson`. Safety net: drop locale-sourced text
+ * when the corresponding *FromSnbt flag is false.
+ */
+export function stripLocaleOverlay<T = unknown>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return value.map((v) => stripLocaleOverlay(v)) as T;
+  }
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...obj };
+  if (out.titleFromSnbt === false) delete out.title;
+  if (out.subtitleFromSnbt === false) delete out.subtitle;
+  if (out.descriptionFromSnbt === false) delete out.description;
+  delete out.titleFromSnbt;
+  delete out.subtitleFromSnbt;
+  delete out.descriptionFromSnbt;
+  if (Array.isArray(out.quests)) {
+    out.quests = out.quests.map((q) => stripLocaleOverlay(q));
+  }
+  if (Array.isArray(out.tasks)) {
+    out.tasks = out.tasks.map((t) => stripLocaleOverlay(t));
+  }
+  return out as T;
+}
+
+function omitEmpty<T extends Record<string, unknown>>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string" && v.length === 0) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out as T;
+}
+
+function taskToSnbtJson(t: QuestTask): Record<string, unknown> {
+  return omitEmpty({
+    id: t.id,
+    type: t.type,
+    title: t.titleFromSnbt !== false && t.title ? t.title : undefined,
+    value: t.value ?? undefined,
+    ...(t.properties ?? {}),
+  });
+}
+
+function rewardToSnbtJson(r: QuestReward): Record<string, unknown> {
+  return omitEmpty({
+    id: r.id,
+    type: r.type,
+    title: r.title ?? undefined,
+    ...(r.properties ?? {}),
+  });
+}
+
+function questToSnbtJson(q: QuestData): Record<string, unknown> {
+  return omitEmpty({
+    id: q.id,
+    title: q.titleFromSnbt !== false ? q.title : undefined,
+    subtitle: q.subtitleFromSnbt !== false ? (q.subtitle ?? undefined) : undefined,
+    description:
+      q.descriptionFromSnbt !== false && q.description?.length
+        ? q.description
+        : undefined,
+    x: q.x,
+    y: q.y,
+    icon: q.icon ?? undefined,
+    dependencies: q.dependencies?.length ? q.dependencies : undefined,
+    tasks: q.tasks?.length ? q.tasks.map(taskToSnbtJson) : undefined,
+    rewards: q.rewards?.length ? q.rewards.map(rewardToSnbtJson) : undefined,
+    optional: q.optional || undefined,
+    shape: q.shape ?? undefined,
+    size: q.size ?? undefined,
+    hide_dependency_lines: q.hideDependencyLines ?? undefined,
+    hide_dependent_lines: q.hideDependentLines ?? undefined,
+    min_required_dependencies: q.minRequiredDependencies ?? undefined,
+    can_repeat: q.canRepeat ?? undefined,
+    invisible: q.invisible ?? undefined,
+    disable_toast: q.disableToast ?? undefined,
+    dependency_requirement: q.dependencyRequirement ?? undefined,
+    ...(q.extras ?? {}),
+  });
+}
+
+/** Convert editor chapter model to FTB Quests SNBT-shaped JSON (before locale strip). */
+export function chapterToSnbtJson(ch: QuestChapter): Record<string, unknown> {
+  return omitEmpty({
+    id: ch.id,
+    title: ch.titleFromSnbt !== false ? ch.title : undefined,
+    icon: ch.icon ?? undefined,
+    group: ch.group ?? undefined,
+    order_index: ch.orderIndex ?? undefined,
+    filename: ch.filename ?? undefined,
+    default_quest_shape: ch.defaultQuestShape ?? undefined,
+    default_hide_dependency_lines: ch.defaultHideDependencyLines ?? undefined,
+    quests: ch.quests.map(questToSnbtJson),
+    ...(ch.extras ?? {}),
+  });
+}
+
+function joinProjectPath(projectDir: string, relative: string): string {
+  const sep = projectDir.includes("\\") ? "\\" : "/";
+  const base = projectDir.replace(/[/\\]+$/, "");
+  const rel = relative.replace(/^[/\\]+/, "").replace(/[/\\]/g, sep);
+  return `${base}${sep}${rel}`;
 }
 
 export interface QuestBook {
@@ -99,14 +220,46 @@ export interface QuestBook {
   chapterGroups?: QuestChapterGroup[];
   rewardTables?: QuestRewardTable[];
   bookSettings?: Record<string, unknown>;
+  /** locale code → translation keys from `lang/*.snbt`. */
+  locales?: Record<string, Record<string, string | string[] | unknown>>;
+  activeLocale?: string | null;
 }
 
 export interface QuestRewardTable {
   id: string;
   title?: string | null;
-  entries: { rewardId: string; weight: number }[];
+  /** Full FTB reward compounds (type/item/NBT preserved). */
+  rewards: Record<string, unknown>[];
   emptyWeight?: number;
   sourceFile?: string | null;
+  extras?: Record<string, unknown>;
+}
+
+/** Display id for UI; works with string or stack compound. */
+export function iconDisplayId(
+  icon: string | Record<string, unknown> | null | undefined,
+): string | null {
+  if (!icon) return null;
+  if (typeof icon === "string") return icon.trim() || null;
+  const id = icon.id ?? icon.item;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+/** Read weight from a reward-table entry compound. */
+export function rewardEntryWeight(entry: Record<string, unknown>): number {
+  const w = entry.weight;
+  if (typeof w === "number") return w;
+  if (typeof w === "string") {
+    const n = Number(w);
+    return Number.isFinite(n) ? n : 1;
+  }
+  return 1;
+}
+
+/** Read id from a reward-table entry compound. */
+export function rewardEntryId(entry: Record<string, unknown>): string {
+  const id = entry.id;
+  return typeof id === "string" ? id : "";
 }
 
 export interface QuestValidationIssue {
@@ -1791,12 +1944,36 @@ export const api = {
   // ── Quests (FTB Quests SNBT) ─────────────────────────────────────
   quests: {
     load(p?: string) { return cmd<QuestBook>("load_quest_book", pathArg(p)); },
-    saveChapter(chapter: QuestChapter, relativePath?: string | null, p?: string) {
-      return cmd<{ relativePath: string; questCount: number }>("save_quest_chapter", {
-        ...pathArg(p),
-        chapter,
-        relativePath: relativePath ?? null,
+    /**
+     * Save a chapter via `save_quest_chapter_raw`: strip locale text fields,
+     * then write SNBT to the chapter file path.
+     */
+    async saveChapter(chapter: QuestChapter, relativePath?: string | null, p?: string) {
+      const manifestOrPath = p ?? get(projectPath) ?? "";
+      const projectDir = await cmd<string>("get_project_dir", pathArg(manifestOrPath));
+      const rel =
+        relativePath ??
+        chapter.sourceFile ??
+        `config/ftbquests/quests/chapters/${chapter.filename ?? chapter.id}.snbt`;
+      const filePath = joinProjectPath(projectDir, rel);
+      const payload = stripLocaleOverlay(chapterToSnbtJson(chapter));
+      await cmd<void>("save_quest_chapter_raw", {
+        filePath,
+        jsonPayload: JSON.stringify(payload),
       });
+      return { relativePath: rel.replace(/\\/g, "/"), questCount: chapter.quests.length };
+    },
+    /** Low-level: write already-prepared JSON as SNBT to an absolute path. */
+    saveChapterRaw(filePath: string, jsonPayload: string) {
+      return cmd<void>("save_quest_chapter_raw", { filePath, jsonPayload });
+    },
+    /** Same serializer as save, without writing — for SNBT preflight diff. */
+    previewChapterSnbt(jsonPayload: string) {
+      return cmd<string>("preview_quest_chapter_snbt", { jsonPayload });
+    },
+    /** Read absolute chapter path as text (disk side of preflight diff). */
+    readChapterText(filePath: string) {
+      return cmd<string>("read_quest_chapter_text", { filePath });
     },
     validate(p?: string) { return cmd<QuestValidationIssue[]>("validate_quest_book", pathArg(p)); },
     saveRewardTable(table: QuestRewardTable, relativePath?: string | null, p?: string) {
@@ -1818,6 +1995,13 @@ export const api = {
         groups,
       });
     },
+    saveLocale(code: string, map: Record<string, string | string[]>, p?: string) {
+      return cmd<{ relativePath: string }>("save_quest_locale", {
+        ...pathArg(p),
+        code,
+        map,
+      });
+    },
     itemCatalog(p?: string) { return cmd<string[]>("list_quest_item_catalog", pathArg(p)); },
     listProgressTeams(p?: string) {
       return cmd<QuestProgressTeamRef[]>("list_quest_progress_teams", pathArg(p));
@@ -1826,6 +2010,18 @@ export const api = {
       return cmd<QuestProgressSnapshot>("load_quest_progress", {
         ...pathArg(p),
         relativePath,
+      });
+    },
+    /** In-memory classify; does not touch saves/. */
+    simulateProgress(
+      book: QuestBook,
+      completedIds: string[],
+      taskProgressIds?: string[],
+    ) {
+      return cmd<QuestProgressSnapshot>("simulate_quest_progress", {
+        book,
+        completedIds,
+        taskProgressIds: taskProgressIds ?? [],
       });
     },
     /** Parse AI QuestPlan JSON and merge into current book (memory only). */
@@ -1887,7 +2083,13 @@ export const api = {
     },
     chatTurn(
       message: string,
-      opts?: { chatId?: string | null; forceAi?: boolean; intent?: string | null },
+      opts?: {
+        chatId?: string | null;
+        forceAi?: boolean;
+        intent?: string | null;
+        anchorQuestId?: string | null;
+        targetChapterId?: string | null;
+      },
       p?: string,
     ) {
       return cmd<QuestChatTurnResult>("quest_chat_turn", {
@@ -1896,7 +2098,12 @@ export const api = {
         chatId: opts?.chatId ?? null,
         forceAi: opts?.forceAi ?? false,
         intent: opts?.intent ?? null,
+        anchorQuestId: opts?.anchorQuestId ?? null,
+        targetChapterId: opts?.targetChapterId ?? null,
       });
+    },
+    cancelChatTurn() {
+      return cmd<void>("cancel_quest_chat_turn");
     },
     validatePlan(plan: QuestPlan) {
       return cmd<QuestPlanValidation>("validate_quest_plan", { plan });
