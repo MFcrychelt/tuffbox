@@ -16,7 +16,7 @@
   import { api } from "../lib/api";
   import { launchWithFeedback } from "../lib/launch";
 
-  type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
+  import type { View } from "../lib/types";
   let { currentView = $bindable() }: { currentView: View } = $props();
 
   /** Real pack icon (data URL from the instance listing) keyed by project path. */

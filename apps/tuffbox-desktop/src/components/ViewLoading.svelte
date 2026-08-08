@@ -2,13 +2,16 @@
   // Shown briefly while a lazily-loaded view chunk (see App.svelte's
   // VIEW_LOADERS) is being fetched/parsed. Reuses the existing skeleton
   // utility classes so it looks native to whichever theme is active.
-  let { error = null }: { error?: string | null } = $props();
+  let { error = null, onRetry = null }: { error?: string | null; onRetry?: (() => void) | null } = $props();
 </script>
 
 {#if error}
   <div class="view-load-error">
     <p>Couldn't load this screen.</p>
     <p class="detail">{error}</p>
+    {#if onRetry}
+      <button type="button" class="retry-btn" onclick={onRetry}>Retry</button>
+    {/if}
   </div>
 {:else}
   <div class="view-loading" aria-busy="true" aria-label="Loading">
@@ -53,5 +56,20 @@
     margin-top: 8px;
     color: var(--accent-danger);
     word-break: break-word;
+  }
+
+  .retry-btn {
+    margin-top: 16px;
+    padding: 6px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--border-radius-sm);
+    background: var(--surface-raised);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .retry-btn:hover {
+    background: var(--surface-hover);
   }
 </style>

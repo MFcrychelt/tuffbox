@@ -7,7 +7,9 @@
   import { quintOut } from "svelte/easing";
   import { projectPath, projectInfo, openLaunchLog } from "../lib/store";
 
-  let { currentView }: { currentView: string } = $props();
+  import type { View } from "../lib/types";
+
+  let { currentView }: { currentView: View } = $props();
 
   let onlineCount = $state(0);
   let onlineOk = $state(false);
@@ -37,7 +39,7 @@
     if (onlineTimer) clearInterval(onlineTimer);
   });
 
-  const titles: Record<string, string> = {
+  const titles: Record<View, string> = {
     dashboard: "Launcher",
     ide: "IDE Workflow",
     mods: "Mods",

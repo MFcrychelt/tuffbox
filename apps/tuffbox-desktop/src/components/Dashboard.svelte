@@ -54,7 +54,9 @@
   import InstanceHome from "./InstanceHome.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
 
-  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "me" | "library" | "chats" | "world" } = $props();
+  import type { View } from "../lib/types";
+
+  let { currentView = $bindable() }: { currentView: View } = $props();
 
   let authReady = $state(false);
 
@@ -415,9 +417,10 @@
             class:stop={selectedRunning && !$isLaunching}
             onclick={selectedRunning && !$isLaunching ? stopGame : launch}
             disabled={!selectedPath || $isLaunching}
+            aria-busy={$isLaunching}
           >
             {#if $isLaunching}
-              <span class="spinner"></span>
+              <span class="spinner" aria-hidden="true"></span>
               <span class="play-text">Launching...</span>
             {:else if selectedRunning}
               <Square size={24} fill="currentColor" />

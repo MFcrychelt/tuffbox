@@ -42,24 +42,7 @@
     }
   }
 
-  type View =
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "world"
-    | "diagnostics"
-    | "crash-votes"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me";
+  import type { View } from "./lib/types";
 
   /** Sidebar-ish order — drives slide direction between tabs. */
   const VIEW_ORDER: View[] = [
@@ -125,6 +108,15 @@
     } finally {
       viewsLoading.delete(key);
     }
+  }
+
+  function retryLoad() {
+    const key = currentView as LazyView;
+    if (key === "dashboard") return;
+    delete loadedViews[key];
+    loadedViews = { ...loadedViews };
+    viewLoadError = null;
+    void ensureViewLoaded(currentView);
   }
 
   let currentView = $state<View>("dashboard");
@@ -610,37 +602,37 @@
           {#if currentView === "dashboard"}
             <Dashboard bind:currentView />
           {:else if currentView === "ide"}
-            {#if loadedViews.ide}{@const IdeView = loadedViews.ide}<IdeView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.ide}{@const IdeView = loadedViews.ide}<IdeView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "mods"}
-            {#if loadedViews.mods}{@const ModsView = loadedViews.mods}<ModsView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.mods}{@const ModsView = loadedViews.mods}<ModsView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "graph"}
-            {#if loadedViews.graph}{@const GraphView = loadedViews.graph}<GraphView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.graph}{@const GraphView = loadedViews.graph}<GraphView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "diagnostics"}
-            {#if loadedViews.diagnostics}{@const DiagnosticsView = loadedViews.diagnostics}<DiagnosticsView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.diagnostics}{@const DiagnosticsView = loadedViews.diagnostics}<DiagnosticsView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "crash-votes"}
-            {#if loadedViews["crash-votes"]}{@const CrashVotesView = loadedViews["crash-votes"]}<CrashVotesView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews["crash-votes"]}{@const CrashVotesView = loadedViews["crash-votes"]}<CrashVotesView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "snapshots"}
-            {#if loadedViews.snapshots}{@const SnapshotsView = loadedViews.snapshots}<SnapshotsView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.snapshots}{@const SnapshotsView = loadedViews.snapshots}<SnapshotsView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "configs"}
-            {#if loadedViews.configs}{@const ConfigsView = loadedViews.configs}<ConfigsView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.configs}{@const ConfigsView = loadedViews.configs}<ConfigsView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "settings"}
-            {#if loadedViews.settings}{@const SettingsView = loadedViews.settings}<SettingsView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.settings}{@const SettingsView = loadedViews.settings}<SettingsView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "project-settings"}
-            {#if loadedViews["project-settings"]}{@const ProjectSettingsView = loadedViews["project-settings"]}<ProjectSettingsView onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews["project-settings"]}{@const ProjectSettingsView = loadedViews["project-settings"]}<ProjectSettingsView onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "ore-gen"}
-            {#if loadedViews["ore-gen"]}{@const OreGenView = loadedViews["ore-gen"]}<OreGenView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews["ore-gen"]}{@const OreGenView = loadedViews["ore-gen"]}<OreGenView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "recipes"}
-            {#if loadedViews.recipes}{@const RecipesView = loadedViews.recipes}<RecipesView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.recipes}{@const RecipesView = loadedViews.recipes}<RecipesView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "quests"}
-            {#if loadedViews.quests}{@const QuestsView = loadedViews.quests}<QuestsView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.quests}{@const QuestsView = loadedViews.quests}<QuestsView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "world"}
-            {#if loadedViews.world}{@const WorldView = loadedViews.world}<WorldView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.world}{@const WorldView = loadedViews.world}<WorldView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "library"}
-            {#if loadedViews.library}{@const LibraryView = loadedViews.library}<LibraryView bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.library}{@const LibraryView = loadedViews.library}<LibraryView bind:currentView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "chats"}
-            {#if loadedViews.chats}{@const ChatsView = loadedViews.chats}<ChatsView bind:currentView />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.chats}{@const ChatsView = loadedViews.chats}<ChatsView bind:currentView />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {:else if currentView === "me"}
-            {#if loadedViews.me}{@const MeView = loadedViews.me}<MeView onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} />{/if}
+            {#if loadedViews.me}{@const MeView = loadedViews.me}<MeView onBack={() => (currentView = "dashboard")} />{:else}<ViewLoading error={viewLoadError} onRetry={retryLoad} />{/if}
           {/if}
         </div>
       {/key}
