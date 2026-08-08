@@ -14,6 +14,7 @@ pub mod crash_remote;
 pub mod diagnostics;
 pub mod exporter;
 pub mod forge_install;
+pub mod fs_util;
 pub mod graph;
 pub mod graph_service;
 pub mod http;

@@ -426,6 +426,7 @@ mod tests {
             book_settings: Default::default(),
             locales: Default::default(),
             active_locale: None,
+            load_warnings: vec![],
         }
     }
 

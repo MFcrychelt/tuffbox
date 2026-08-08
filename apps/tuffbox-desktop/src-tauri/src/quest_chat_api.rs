@@ -2,24 +2,33 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tuffbox_core::{
     auto_layout_plan, build_branch_user_message, build_lore_user_message, build_outline_user_message,
     delete_quest_chat, detect_target_chapter_count, detect_target_quest_count, fill_template_lore,
-    filter_plan_selection, ground_items_in_plan, list_quest_chats, load_quest_chat, merge_quest_plan,
-    new_quest_chat_id, now_iso, parse_quest_plan, pin_target_chapter, save_quest_chat,
-    stitch_extend_plan, stitch_lore_into_plan, try_heuristic_quest_plan, AnchorQuest,
-    ExistingChapter, ExistingGroup, QuestAuthorContext, QuestChatMessage, QuestChatSession,
-    AiTokenUsage, QuestPlan, QuestPlanMergeResult, QUEST_LORE_SYSTEM_PROMPT, QUEST_OUTLINE_SYSTEM_PROMPT,
-    QUEST_PLAN_SYSTEM_PROMPT,
+    filter_plan_selection, ground_items_in_plan, list_quest_chats_detailed, load_quest_chat,
+    merge_quest_plan, merge_quest_plan_strict, new_quest_chat_id, now_iso, parse_quest_plan,
+    pin_target_chapter,
+    save_quest_chat, stitch_extend_plan, stitch_lore_into_plan, try_heuristic_quest_plan,
+    AnchorQuest, ExistingChapter, ExistingGroup, QuestAuthorContext, QuestChatMessage,
+    QuestChatSession, AiTokenUsage, QuestPlan, QuestPlanMergeResult, QUEST_LORE_SYSTEM_PROMPT,
+    QUEST_OUTLINE_SYSTEM_PROMPT, QUEST_PLAN_SYSTEM_PROMPT,
 };
 
+use crate::helpers::QUEST_IO_LOCK;
 use crate::integrations;
 use crate::manifest_parent;
 
 static QUEST_AI_CANCEL: AtomicBool = AtomicBool::new(false);
+static QUEST_AI_LAST_TURN: Lazy<Mutex<Option<Instant>>> = Lazy::new(|| Mutex::new(None));
+const QUEST_AI_MIN_INTERVAL: Duration = Duration::from_secs(1);
+const HISTORY_CHAR_BUDGET: usize = 6000;
+const HISTORY_MAX_MESSAGES: usize = 8;
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn cancel_quest_chat_turn() -> Result<(), String> {
@@ -37,6 +46,42 @@ fn check_quest_ai_cancel(progress: &ProgressSink<'_>, log: &mut Vec<String>) -> 
         return Err("Cancelled".into());
     }
     Ok(())
+}
+
+fn enforce_quest_ai_cooldown() -> Result<(), String> {
+    let mut guard = QUEST_AI_LAST_TURN
+        .lock()
+        .map_err(|_| "quest AI cooldown lock poisoned".to_string())?;
+    if let Some(prev) = *guard {
+        let elapsed = prev.elapsed();
+        if elapsed < QUEST_AI_MIN_INTERVAL {
+            let wait = QUEST_AI_MIN_INTERVAL - elapsed;
+            return Err(format!(
+                "Please wait {}ms before another Quest AI request",
+                wait.as_millis()
+            ));
+        }
+    }
+    *guard = Some(Instant::now());
+    Ok(())
+}
+
+fn history_for_ai(history: &[QuestChatMessage]) -> Vec<QuestChatMessage> {
+    let mut out = Vec::new();
+    let mut chars = 0usize;
+    for m in history.iter().rev() {
+        if m.role != "user" && m.role != "assistant" {
+            continue;
+        }
+        let len = m.content.chars().count();
+        if out.len() >= HISTORY_MAX_MESSAGES || chars.saturating_add(len) > HISTORY_CHAR_BUDGET {
+            break;
+        }
+        chars = chars.saturating_add(len);
+        out.push(m.clone());
+    }
+    out.reverse();
+    out
 }
 
 #[derive(Clone, Serialize)]
@@ -57,7 +102,8 @@ struct QuestAiTokenEvent {
     phase: String,
 }
 
-struct ProgressSink<'a> {
+pub(crate) struct ProgressSink<'a> {
+
     app: Option<&'a AppHandle>,
     chat_id: String,
 }
@@ -118,22 +164,24 @@ fn project_dir(path: &str) -> Result<PathBuf, String> {
     manifest_parent(path)
 }
 
-fn collect_items(path: &str) -> Vec<String> {
+fn collect_items(path: &str) -> (Vec<String>, Option<String>) {
     let Ok(manifest_path) = crate::resolve_manifest_path(path) else {
-        return Vec::new();
+        return (
+            Vec::new(),
+            Some("item catalog: could not resolve project manifest".into()),
+        );
     };
-    crate::collect_catalog_item_ids(&manifest_path)
-        .unwrap_or_default()
-        .into_iter()
-        .take(120)
-        .collect()
+    match crate::collect_catalog_item_ids(&manifest_path) {
+        Ok(ids) => (ids.into_iter().take(120).collect(), None),
+        Err(e) => (Vec::new(), Some(format!("item catalog unavailable: {e}"))),
+    }
 }
 
 fn author_ctx(
     path: &str,
     book: &tuffbox_core::unified::QuestBook,
     pack_hint: Option<String>,
-) -> QuestAuthorContext {
+) -> (QuestAuthorContext, Option<String>) {
     let mut lore: Vec<(String, String, String)> = Vec::new();
     let mut lore_chars = 0usize;
     const LORE_CHAR_BUDGET: usize = 3500;
@@ -153,11 +201,7 @@ fn author_ctx(
             if desc.is_empty() {
                 continue;
             }
-            let truncated = if desc.len() > 180 {
-                format!("{}…", &desc[..180])
-            } else {
-                desc
-            };
+            let truncated = truncate_chars(&desc, 180);
             lore_chars += truncated.len();
             lore.push((q.id.clone(), q.title.clone(), truncated));
         }
@@ -190,40 +234,45 @@ fn author_ctx(
         }
     });
 
-    QuestAuthorContext {
-        existing_chapters: book
-            .chapters
-            .iter()
-            .map(|c| ExistingChapter {
-                id: c.id.clone(),
-                title: c.title.clone(),
-                group: c.group.clone(),
-            })
-            .collect(),
-        existing_groups: book
-            .chapter_groups
-            .iter()
-            .map(|g| ExistingGroup {
-                id: g.id.clone(),
-                title: g.title.clone(),
-            })
-            .collect(),
-        sample_items: collect_items(path),
-        pack_hint: resolved_hint,
-        existing_quests: book
-            .chapters
-            .iter()
-            .flat_map(|c| {
-                c.quests
-                    .iter()
-                    .map(|q| (q.id.clone(), q.title.clone()))
-            })
-            .take(60)
-            .collect(),
-        existing_quest_lore: lore,
-        anchor_quest: None,
-        target_chapter: None,
-    }
+    let (sample_items, items_warn) = collect_items(path);
+
+    (
+        QuestAuthorContext {
+            existing_chapters: book
+                .chapters
+                .iter()
+                .map(|c| ExistingChapter {
+                    id: c.id.clone(),
+                    title: c.title.clone(),
+                    group: c.group.clone(),
+                })
+                .collect(),
+            existing_groups: book
+                .chapter_groups
+                .iter()
+                .map(|g| ExistingGroup {
+                    id: g.id.clone(),
+                    title: g.title.clone(),
+                })
+                .collect(),
+            sample_items,
+            pack_hint: resolved_hint,
+            existing_quests: book
+                .chapters
+                .iter()
+                .flat_map(|c| {
+                    c.quests
+                        .iter()
+                        .map(|q| (q.id.clone(), q.title.clone()))
+                })
+                .take(60)
+                .collect(),
+            existing_quest_lore: lore,
+            anchor_quest: None,
+            target_chapter: None,
+        },
+        items_warn,
+    )
 }
 
 async fn ai_json(
@@ -232,14 +281,13 @@ async fn ai_json(
     history: &[QuestChatMessage],
 ) -> Result<(serde_json::Value, Option<AiTokenUsage>), String> {
     let settings = integrations::get_integration_status().settings;
+    let capped = history_for_ai(history);
     let mut messages = Vec::new();
-    for m in history.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev() {
-        if m.role == "user" || m.role == "assistant" {
-            messages.push(serde_json::json!({
-                "role": m.role,
-                "content": m.content,
-            }));
-        }
+    for m in &capped {
+        messages.push(serde_json::json!({
+            "role": m.role,
+            "content": m.content,
+        }));
     }
     messages.push(serde_json::json!({"role": "user", "content": user}));
     integrations::call_ai_messages_with_usage(&settings.ai, system, &messages, true, None).await
@@ -253,14 +301,13 @@ async fn ai_json_stream(
     phase: &str,
 ) -> Result<(serde_json::Value, Option<AiTokenUsage>), String> {
     let settings = integrations::get_integration_status().settings;
+    let capped = history_for_ai(history);
     let mut messages = Vec::new();
-    for m in history.iter().rev().take(6).collect::<Vec<_>>().into_iter().rev() {
-        if m.role == "user" || m.role == "assistant" {
-            messages.push(serde_json::json!({
-                "role": m.role,
-                "content": m.content,
-            }));
-        }
+    for m in &capped {
+        messages.push(serde_json::json!({
+            "role": m.role,
+            "content": m.content,
+        }));
     }
     messages.push(serde_json::json!({"role": "user", "content": user}));
     integrations::call_ai_messages_stream(&settings.ai, system, &messages, true, |delta| {
@@ -276,10 +323,9 @@ fn merge_usage(into: &mut AiTokenUsage, extra: Option<AiTokenUsage>) {
 }
 
 fn value_to_raw(value: serde_json::Value) -> String {
-    if value.is_string() {
-        value.as_str().unwrap_or("").to_string()
-    } else {
-        value.to_string()
+    match value {
+        serde_json::Value::String(s) => s,
+        other => other.to_string(),
     }
 }
 
@@ -304,9 +350,9 @@ async fn ai_quest_plan(
                 "{user}\n\nYour previous answer was invalid QuestPlan JSON ({first_err}).\nReturn ONLY one JSON object matching schemaVersion 1 (chapters with quests, tasks, rewards). No markdown fences."
             );
             let (value2, usage2) = if let Some(p) = progress {
-                ai_json_stream(system, &repair, &[], p, "outline").await?
+                ai_json_stream(system, &repair, history, p, "outline").await?
             } else {
-                ai_json(system, &repair, &[]).await?
+                ai_json(system, &repair, history).await?
             };
             merge_usage(usage_acc, usage2);
             parse_quest_plan(&value_to_raw(value2))
@@ -331,13 +377,17 @@ pub async fn run_generate_quest_line(
     let mut log = Vec::new();
     let mut usage_acc = AiTokenUsage::default();
     let intent = intent.unwrap_or("generate");
-    let mut ctx = author_ctx(path, book, None);
+    let (mut ctx, items_warn) = author_ctx(path, book, None);
     let target = detect_target_quest_count(prompt);
     let chapter_target = detect_target_chapter_count(prompt);
     progress.push(&mut log, "init", format!("Target quest count ≈ {target}"));
     if let Some(c) = chapter_target {
         progress.push(&mut log, "init", format!("Target chapter count ≈ {c}"));
     }
+    if let Some(w) = items_warn {
+        progress.push(&mut log, "init", w);
+    }
+    check_quest_ai_cancel(&progress, &mut log)?;
 
     if let Some(tid) = target_chapter_id.filter(|s| !s.is_empty()) {
         if let Some(ch) = book.chapters.iter().find(|c| c.id == tid) {
@@ -389,7 +439,7 @@ pub async fn run_generate_quest_line(
     progress.push(&mut log, "outline", "Outline: starting…");
     let mut plan = if intent == "branch" {
         progress.push(&mut log, "outline", "Outline: AI branch…");
-        let user = build_branch_user_message(prompt, &ctx, target);
+        let user = build_branch_user_message(prompt, &ctx, target)?;
         ai_quest_plan(
             QUEST_OUTLINE_SYSTEM_PROMPT,
             &user,
@@ -564,14 +614,28 @@ pub struct QuestChatTurnResult {
     pub usage: Option<AiTokenUsage>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestChatSessionsList {
+    pub sessions: Vec<QuestChatSession>,
+    pub corrupt_skipped: u32,
+}
+
 #[tauri::command(rename_all = "camelCase")]
-pub fn list_quest_chat_sessions(path: String) -> Result<Vec<QuestChatSession>, String> {
+pub fn list_quest_chat_sessions(path: String) -> Result<QuestChatSessionsList, String> {
     let dir = project_dir(&path)?;
-    list_quest_chats(&dir)
+    let detailed = list_quest_chats_detailed(&dir)?;
+    Ok(QuestChatSessionsList {
+        sessions: detailed.sessions,
+        corrupt_skipped: detailed.corrupt_skipped,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn save_quest_chat_session(path: String, session: QuestChatSession) -> Result<(), String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let dir = project_dir(&path)?;
     save_quest_chat(&dir, &session)?;
     Ok(())
@@ -579,12 +643,18 @@ pub fn save_quest_chat_session(path: String, session: QuestChatSession) -> Resul
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn load_quest_chat_session(path: String, chat_id: String) -> Result<QuestChatSession, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let dir = project_dir(&path)?;
     load_quest_chat(&dir, &chat_id)
 }
 
 #[tauri::command(rename_all = "camelCase")]
 pub fn delete_quest_chat_session(path: String, chat_id: String) -> Result<(), String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let dir = project_dir(&path)?;
     delete_quest_chat(&dir, &chat_id)
 }
@@ -594,6 +664,9 @@ pub fn new_quest_chat_session(
     path: String,
     title: Option<String>,
 ) -> Result<QuestChatSession, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let dir = project_dir(&path)?;
     let session = QuestChatSession {
         id: new_quest_chat_id(),
@@ -622,28 +695,34 @@ pub async fn quest_chat_turn(
         return Err("Empty message".into());
     }
     clear_quest_ai_cancel();
+    enforce_quest_ai_cooldown()?;
     let project_dir = project_dir(&path)?;
-    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    let (book, mut session) = {
+        let _guard = QUEST_IO_LOCK
+            .lock()
+            .map_err(|_| "quest I/O lock poisoned".to_string())?;
+        let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+        let session = if let Some(id) = chat_id.filter(|s| !s.is_empty()) {
+            load_quest_chat(&project_dir, &id).unwrap_or_else(|_| QuestChatSession {
+                id: new_quest_chat_id(),
+                title: truncate_title(&message),
+                messages: vec![],
+                pending_plan: None,
+                updated_at: now_iso(),
+            })
+        } else {
+            QuestChatSession {
+                id: new_quest_chat_id(),
+                title: truncate_title(&message),
+                messages: vec![],
+                pending_plan: None,
+                updated_at: now_iso(),
+            }
+        };
+        (book, session)
+    };
     let force_ai = force_ai.unwrap_or(false);
     let intent_s = intent.unwrap_or_else(|| "generate".into());
-
-    let mut session = if let Some(id) = chat_id.filter(|s| !s.is_empty()) {
-        load_quest_chat(&project_dir, &id).unwrap_or_else(|_| QuestChatSession {
-            id: new_quest_chat_id(),
-            title: truncate_title(&message),
-            messages: vec![],
-            pending_plan: None,
-            updated_at: now_iso(),
-        })
-    } else {
-        QuestChatSession {
-            id: new_quest_chat_id(),
-            title: truncate_title(&message),
-            messages: vec![],
-            pending_plan: None,
-            updated_at: now_iso(),
-        }
-    };
 
     let progress = ProgressSink {
         app: Some(&app),
@@ -735,7 +814,18 @@ pub async fn quest_chat_turn(
         usage: usage.clone(),
     });
     session.updated_at = now_iso();
-    save_quest_chat(&project_dir, &session)?;
+    {
+        let dir = project_dir.clone();
+        let session_to_save = session.clone();
+        tokio::task::spawn_blocking(move || {
+            let _guard = QUEST_IO_LOCK
+                .lock()
+                .map_err(|_| "quest I/O lock poisoned".to_string())?;
+            save_quest_chat(&dir, &session_to_save)
+        })
+        .await
+        .map_err(|e| format!("quest chat save join: {e}"))??;
+    }
 
     Ok(QuestChatTurnResult {
         session,
@@ -789,8 +879,14 @@ pub async fn generate_quest_line(
         return Err("Empty prompt".into());
     }
     clear_quest_ai_cancel();
+    enforce_quest_ai_cooldown()?;
     let project_dir = project_dir(&path)?;
-    let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
+    let book = {
+        let _guard = QUEST_IO_LOCK
+            .lock()
+            .map_err(|_| "quest I/O lock poisoned".to_string())?;
+        tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?
+    };
     let sink = ProgressSink {
         app: None,
         chat_id: String::new(),
@@ -823,18 +919,47 @@ pub fn filter_and_merge_quest_plan(
     let project_dir = project_dir(&path)?;
     let book = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
     let filtered = filter_plan_selection(&plan, &chapter_keys, &quest_keys);
-    let result = merge_quest_plan(&book, &filtered)?;
+    let result = merge_quest_plan_strict(&book, &filtered)?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
 fn truncate_title(s: &str) -> String {
-    let t: String = s.chars().take(48).collect();
-    if s.chars().count() > 48 {
-        format!("{t}…")
-    } else if t.is_empty() {
+    let t = truncate_chars(s, 48);
+    if t.is_empty() || t == "…" {
         "Quest line".into()
     } else {
         t
+    }
+}
+
+/// Truncate by Unicode scalar values (not bytes) so multi-byte UTF-8 cannot panic.
+pub(crate) fn truncate_chars(s: &str, max: usize) -> String {
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(max).collect();
+    if it.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_chars;
+
+    #[test]
+    fn truncate_chars_handles_cyrillic_past_byte_limit() {
+        // 100 Cyrillic letters = 200 bytes; max 180 chars must not panic on byte slice.
+        let s: String = "я".repeat(100);
+        assert!(s.len() > 180);
+        let out = truncate_chars(&s, 50);
+        assert_eq!(out.chars().count(), 51); // 50 + ellipsis
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_chars_short_unchanged() {
+        assert_eq!(truncate_chars("hi", 180), "hi");
     }
 }
 

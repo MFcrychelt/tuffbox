@@ -16,6 +16,9 @@ use crate::types::LauncherDataState;
 /// cannot overwrite an in-flight Update All / single update.
 pub(crate) static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+/// Serializes FTB Quests book / chat disk mutations across Tauri commands.
+pub(crate) static QUEST_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
 // ── Path resolution ──────────────────────────────────────────────
 
 pub(crate) fn find_manifest_in_project_dir(project_dir: &str) -> Result<PathBuf, String> {

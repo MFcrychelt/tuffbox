@@ -21,7 +21,11 @@
   } = $props();
 </script>
 
-<div class="cd-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && oncancel?.()} onkeydown={() => {}}>
+<div
+  class="cd-backdrop"
+  role="presentation"
+  onclick={(e) => e.target === e.currentTarget && oncancel?.()}
+>
   <div class="cd-dialog" role="alertdialog" aria-modal="true" use:trapFocus={{ onEscape: () => oncancel?.() }}>
     <div class="cd-icon">
       <AlertTriangle size={28} color={danger ? "#f87171" : "#fbbf24"} />

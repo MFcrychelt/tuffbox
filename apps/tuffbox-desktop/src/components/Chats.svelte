@@ -180,10 +180,11 @@
       return;
     }
     try {
-      const [createList, questList] = await Promise.all([
+      const [createList, questChats] = await Promise.all([
         invoke<CreateChatSession[]>("list_create_chats", { path: $projectPath }),
-        api.quests.listChats($projectPath).catch(() => [] as QuestChatSession[]),
+        api.quests.listChats($projectPath).catch(() => ({ sessions: [], corruptSkipped: 0 })),
       ]);
+      const questList = questChats.sessions;
       const unified: UnifiedSession[] = [
         ...createList.map((s) => ({
           kind: "create" as const,

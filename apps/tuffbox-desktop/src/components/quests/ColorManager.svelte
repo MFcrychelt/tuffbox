@@ -50,6 +50,18 @@
     showPopup = false;
   }
 
+  $effect(() => {
+    if (!showPopup) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closePopup();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  });
+
   function applyRecolor() {
     if (!selectedHit || !popupColor) return;
 
@@ -241,10 +253,22 @@
 
 {#if showPopup}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="popup-overlay" onclick={closePopup} oncontextmenu={(e) => e.preventDefault()}>
+  <div
+    class="popup-overlay"
+    role="presentation"
+    onclick={closePopup}
+    oncontextmenu={(e) => e.preventDefault()}
+  >
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="popup" style="left: {popupPos.x}px; top: {popupPos.y}px"
-      onclick={(e) => e.stopPropagation()} oncontextmenu={(e) => e.preventDefault()}>
+    <div
+      class="popup"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Recolor"
+      style="left: {popupPos.x}px; top: {popupPos.y}px"
+      onclick={(e) => e.stopPropagation()}
+      oncontextmenu={(e) => e.preventDefault()}
+    >
       <div class="popup-title">Recolor to:</div>
       <div class="popup-colors">
         {#each MC_COLORS as mc}

@@ -120,14 +120,6 @@
       .map(([k]) => k);
   }
 
-  function applyAll() {
-    if (requiresAck && !reviewAck) return;
-    onapply?.({
-      chapterKeys: selectedChapterKeys(),
-      questKeys: selectedQuestKeys(),
-    });
-  }
-
   function modeLabel(mode?: string | null): string {
     return (mode || "upsert").toLowerCase();
   }
@@ -136,6 +128,44 @@
     plan?.chapters.reduce((n, ch) => n + (ch.quests?.length ?? 0), 0) ?? 0,
   );
   let chapterCount = $derived(plan?.chapters.length ?? 0);
+
+  let selectedCount = $derived(Object.values(questOn).filter(Boolean).length);
+
+  let applyBlockedReason = $derived.by(() => {
+    if (!merge.validation?.valid) {
+      return merge.validation?.errors?.[0] || "Fix validation errors before apply";
+    }
+    if (requiresAck && !reviewAck) {
+      return "Acknowledge the review checklist first";
+    }
+    if (selectedCount === 0) {
+      return "Select at least one quest";
+    }
+    return "";
+  });
+
+  let applyDisabled = $derived(!!applyBlockedReason);
+
+  function setAllQuests(on: boolean) {
+    if (!plan) return;
+    const nextCh: Record<string, boolean> = {};
+    const nextQ: Record<string, boolean> = {};
+    plan.chapters.forEach((ch, ci) => {
+      const ck = chKey(ch, ci);
+      nextCh[ck] = on;
+      for (const qk of chapterQuestKeys(ch)) nextQ[qk] = on;
+    });
+    chapterOn = nextCh;
+    questOn = nextQ;
+  }
+
+  function applyAll() {
+    if (applyDisabled) return;
+    onapply?.({
+      chapterKeys: selectedChapterKeys(),
+      questKeys: selectedQuestKeys(),
+    });
+  }
 </script>
 
 {#if plan}
@@ -147,6 +177,10 @@
         >{chapterCount} ch · {questCount} quests · {(plan.confidence * 100).toFixed(0)}% · {plan.source ??
           "ai"}</span
       >
+      <div class="sel-btns">
+        <button type="button" class="ghost sel-btn" onclick={() => setAllQuests(true)}>All</button>
+        <button type="button" class="ghost sel-btn" onclick={() => setAllQuests(false)}>None</button>
+      </div>
     </div>
     <p class="expl">{plan.humanExplanation}</p>
     {#if merge.notes?.length}
@@ -181,6 +215,7 @@
               type="button"
               class="fold"
               class:open={isOpen}
+              aria-expanded={isOpen}
               onclick={() => (expanded = { ...expanded, [ck]: !isOpen })}
               aria-label={isOpen ? "Collapse chapter" : "Expand chapter"}
             >
@@ -251,7 +286,8 @@
     <div class="actions">
       <button
         type="button"
-        disabled={!merge.validation?.valid || (requiresAck && !reviewAck)}
+        disabled={applyDisabled}
+        title={applyBlockedReason || "Apply selected quests to the editor"}
         onclick={applyAll}
       >
         <Check size={14} /> Apply selected
@@ -260,6 +296,9 @@
         <X size={14} /> Discard
       </button>
     </div>
+    {#if applyBlockedReason}
+      <p class="apply-hint" role="status">{applyBlockedReason}</p>
+    {/if}
   </div>
 {/if}
 
@@ -294,6 +333,17 @@
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 12px;
     margin: 0;
+  }
+  .sel-btns {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+  }
+  .sel-btn {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .tree {
     display: flex;
@@ -414,5 +464,10 @@
     background: transparent;
     border-color: transparent;
     color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .apply-hint {
+    margin: 0;
+    font-size: 11px;
+    color: #fbbf24;
   }
 </style>

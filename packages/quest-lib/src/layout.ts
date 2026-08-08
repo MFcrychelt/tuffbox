@@ -139,6 +139,10 @@ export function layoutCircle(
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const result = new Map<string, { x: number; y: number }>();
   if (quests.length === 0) return result;
+  if (quests.length === 1) {
+    result.set(quests[0]!.id, { x: opts.centerX, y: opts.centerY });
+    return result;
+  }
 
   const radius = Math.max(quests.length * 0.5, 3);
 

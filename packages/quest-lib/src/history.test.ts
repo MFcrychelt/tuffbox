@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   createHistoryState,
+  dirtyIdsAgainstBaseline,
   materializeChapters,
+  patchSavedBaseline,
   pushSnapshot,
 } from "./history";
 
@@ -38,5 +40,30 @@ describe("history structural sharing", () => {
     const afterFirst = state.undoStack.length;
     state = pushSnapshot(state, chapters, [], "A");
     expect(state.undoStack.length).toBe(afterFirst);
+  });
+});
+
+describe("dirtyIdsAgainstBaseline", () => {
+  it("marks edited and new chapters dirty; clean after revert", () => {
+    const saved = {
+      A: JSON.stringify({ id: "A", title: "Alpha", quests: [] }),
+      B: JSON.stringify({ id: "B", title: "Beta", quests: [] }),
+    };
+    const edited = {
+      A: JSON.stringify({ id: "A", title: "Alpha changed", quests: [] }),
+      B: saved.B,
+      C: JSON.stringify({ id: "C", title: "New", quests: [] }),
+    };
+    expect(dirtyIdsAgainstBaseline(edited, saved).sort()).toEqual(["A", "C"]);
+    expect(dirtyIdsAgainstBaseline(saved, saved)).toEqual([]);
+  });
+
+  it("patchSavedBaseline clears dirtiness for that chapter", () => {
+    let baseline = {
+      A: JSON.stringify({ id: "A", title: "Old", quests: [] }),
+    };
+    const next = JSON.stringify({ id: "A", title: "New", quests: [] });
+    baseline = patchSavedBaseline(baseline, "A", next);
+    expect(dirtyIdsAgainstBaseline({ A: next }, baseline)).toEqual([]);
   });
 });

@@ -148,14 +148,21 @@
   <summary>Reward tables ({tables.length})</summary>
   <div class="rt-body">
     <div class="rt-side">
-      {#each tables as t (t.id)}
-        <button
-          type="button"
-          class:sel={selected?.id === t.id}
-          onclick={() => (selectedId = t.id)}>{t.title || t.id}</button
-        >
-      {/each}
-      <button type="button" class="add" onclick={onCreate}><Plus size={12} /> New table</button>
+      {#if tables.length === 0}
+        <div class="rt-empty">
+          <p>No reward tables yet.</p>
+          <button type="button" class="add primary" onclick={onCreate}><Plus size={12} /> Create table</button>
+        </div>
+      {:else}
+        {#each tables as t (t.id)}
+          <button
+            type="button"
+            class:sel={selected?.id === t.id}
+            onclick={() => (selectedId = t.id)}>{t.title || t.id}</button
+          >
+        {/each}
+        <button type="button" class="add" onclick={onCreate}><Plus size={12} /> New table</button>
+      {/if}
     </div>
     {#if selected}
       <div class="rt-edit">
@@ -194,7 +201,12 @@
                 }}
                 title="Weight (0 = always)"
               />
-              <button type="button" class="ico" onclick={() => removeEntry(i)}
+              <button
+                type="button"
+                class="ico"
+                aria-label={`Remove reward ${rewardEntryId(entry) || i + 1}`}
+                title="Remove reward"
+                onclick={() => removeEntry(i)}
                 ><Trash2 size={12} /></button
               >
             </div>
@@ -324,6 +336,22 @@
   }
   .rt-side .add {
     color: var(--ftbq-accent-green, #55c95a);
+  }
+  .rt-side .add.primary {
+    background: rgba(85, 201, 90, 0.12);
+    border-color: var(--ftbq-accent-green, #55c95a);
+    font-weight: 700;
+  }
+  .rt-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 4px;
+  }
+  .rt-empty p {
+    margin: 0;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .rt-edit {
     display: grid;

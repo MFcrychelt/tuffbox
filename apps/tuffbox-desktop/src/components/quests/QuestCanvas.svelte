@@ -33,6 +33,7 @@
     progressStatuses = {},
     progressOverlay = false,
     emptyHint = "Double-click to add a quest",
+    showEmptyAddCta = false,
     onSelect,
     onMove,
     onAddAt,
@@ -48,6 +49,7 @@
     progressStatuses?: Record<string, QuestProgressStatus>;
     progressOverlay?: boolean;
     emptyHint?: string;
+    showEmptyAddCta?: boolean;
     onSelect: (q: QuestData | null, e?: MouseEvent) => void;
     onMove: (q: QuestData, x: number, y: number) => void;
     onAddAt: (x: number, y: number) => void;
@@ -295,9 +297,14 @@
     }
   }
 
+  function focusCanvas() {
+    viewportEl?.focus({ preventScroll: true });
+  }
+
   function onMarqueePointerDown(e: PointerEvent) {
     if (e.button !== 0) return;
     if (!isEmptyPaneTarget(e.target)) return;
+    focusCanvas();
     // Let middle/right pan alone; left on empty pane = marquee.
     const container = flowContainer();
     if (!container) return;
@@ -409,13 +416,17 @@
     // Double-click create is handled via ondblclick on the viewport (getWorldCoordinates).
     if (event.detail >= 2) return;
     if (marqueeActive) return;
+    focusCanvas();
     onSelect(null, event);
   }
 
   function handleNodeClick({ node, event }: { node: Node; event: MouseEvent | TouchEvent }) {
     if (node.id.startsWith("ext:")) return;
     const q = quests.find((item) => item.id === node.id);
-    if (q) onSelect(q, event instanceof MouseEvent ? event : undefined);
+    if (q) {
+      focusCanvas();
+      onSelect(q, event instanceof MouseEvent ? event : undefined);
+    }
   }
 
   function addAtCenter() {
@@ -435,32 +446,101 @@
       onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
     }
   }
+
+  /** Move selection among chapter quests (list order). */
+  function selectQuestByIndex(index: number) {
+    if (!quests.length) return;
+    const clamped = Math.max(0, Math.min(index, quests.length - 1));
+    onSelect(quests[clamped]);
+  }
+
+  function handleCanvasKeydown(e: KeyboardEvent) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    switch (e.key) {
+      case "Escape": {
+        e.preventDefault();
+        e.stopPropagation();
+        onSelect(null);
+        return;
+      }
+      case "Home": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectQuestByIndex(0);
+        return;
+      }
+      case "End": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectQuestByIndex(quests.length - 1);
+        return;
+      }
+      case "ArrowRight":
+      case "ArrowDown": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        {
+          const idx = selectedId ? quests.findIndex((q) => q.id === selectedId) : -1;
+          selectQuestByIndex(idx < 0 ? 0 : Math.min(idx + 1, quests.length - 1));
+        }
+        return;
+      }
+      case "ArrowLeft":
+      case "ArrowUp": {
+        if (!quests.length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        {
+          const idx = selectedId ? quests.findIndex((q) => q.id === selectedId) : -1;
+          selectQuestByIndex(idx < 0 ? quests.length - 1 : Math.max(idx - 1, 0));
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
 </script>
 
 <div class="canvas-wrap ftbq-canvas">
   <div class="canvas-toolbar">
-    <button type="button" class="tb" title="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
+    <button type="button" class="tb" title="Fit view" aria-label="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
       <Maximize2 size={14} class="flex-shrink-0" /> Fit
     </button>
-    <button type="button" class="tb" title="Add quest at center" onclick={addAtCenter}>
+    <button type="button" class="tb" title="Add quest at center" aria-label="Add quest at center" onclick={addAtCenter}>
       <Plus size={14} class="flex-shrink-0" /> Add quest
     </button>
     <span class="hint">Drag · Scroll zoom · Connect · Dbl-click add · Shift/Ctrl multi · Marquee</span>
   </div>
 
+  <!-- Focusable canvas widget: arrow/Home/End/Escape selection via existing onSelect -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div
     class="viewport"
     role="application"
-    aria-label="Quest canvas"
+    tabindex="0"
+    aria-label="Quest canvas. Arrow keys select next or previous quest. Home and End jump. Escape clears selection. Shift+Arrow outside canvas nudges selected quests."
     bind:this={viewportEl}
     onpointerdown={onMarqueePointerDown}
     onpointermove={onMarqueePointerMove}
     onpointerup={onMarqueePointerUp}
     onpointercancel={onMarqueePointerUp}
     ondblclick={onCanvasDblClick}
+    onkeydown={handleCanvasKeydown}
   >
     {#if quests.length === 0}
-      <div class="empty-hint">{emptyHint}</div>
+      <div class="empty-hint">
+        <span>{emptyHint}</span>
+        {#if showEmptyAddCta}
+          <button type="button" class="empty-add" onclick={(e) => { e.stopPropagation(); addAtCenter(); }}>
+            Add quest
+          </button>
+        {/if}
+      </div>
     {/if}
 
     <SvelteFlow
@@ -563,18 +643,42 @@
     min-height: 0;
     overflow: hidden;
   }
+  .viewport:focus {
+    outline: none;
+  }
+  .viewport:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 80%, #fff);
+    outline-offset: -2px;
+  }
   .empty-hint {
     position: absolute;
     inset: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 10px;
     pointer-events: none;
     z-index: 10;
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 12px;
     font-weight: 600;
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+  }
+  .empty-add {
+    pointer-events: auto;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+    border-radius: 2px;
+    background: rgba(61, 184, 168, 0.15);
+    color: var(--ftbq-accent-teal, #3db8a8);
+    cursor: pointer;
+    text-shadow: none;
+  }
+  .empty-add:hover {
+    background: rgba(61, 184, 168, 0.28);
   }
   .vignette {
     position: absolute;

@@ -42,11 +42,12 @@
 <details class="prog-details" bind:open>
   <summary><Eye size={14} /> Progress</summary>
   <div class="prog-bar">
-    <div class="prog-modes">
+    <div class="prog-modes" role="group" aria-label="Progress mode">
       <button
         type="button"
         class="ghost"
         class:sel={progressMode === "save"}
+        aria-pressed={progressMode === "save"}
         onclick={() => void onentersave()}
         >Save overlay</button
       >
@@ -54,6 +55,7 @@
         type="button"
         class="ghost"
         class:sel={progressMode === "simulate"}
+        aria-pressed={progressMode === "simulate"}
         onclick={() => void onentersimulate()}
         >Simulate</button
       >
@@ -62,38 +64,43 @@
       <input
         type="checkbox"
         bind:checked={progressOverlay}
-        disabled={!progressSnap}
+        disabled={progressMode === "save" ? !progressSnap : false}
         title="Show progress on canvas"
       />
       Overlay
     </label>
+    <select
+      bind:value={progressKey}
+      aria-label={progressMode === "simulate" ? "Team for Seed from team" : "Team for save overlay"}
+      onchange={() => {
+        if (progressMode === "save") void onloadprogress();
+      }}
+      disabled={progressLoading || progressTeams.length === 0}
+      title={progressMode === "simulate" ? "Team used for Seed from team" : "Load save overlay"}
+    >
+      <option value="">
+        {progressTeams.length === 0
+          ? "No saves/*/ftbquests progress"
+          : "Select team / player…"}
+      </option>
+      {#each progressTeams as t (t.relativePath)}
+        <option value={t.relativePath}>{t.world} — {t.name}</option>
+      {/each}
+    </select>
     {#if progressMode === "save"}
-      <select
-        bind:value={progressKey}
-        onchange={() => void onloadprogress()}
-        disabled={progressLoading || progressTeams.length === 0}
-      >
-        <option value="">
-          {progressTeams.length === 0
-            ? "No saves/*/ftbquests progress"
-            : "Select team / player…"}
-        </option>
-        {#each progressTeams as t (t.relativePath)}
-          <option value={t.relativePath}>{t.world} — {t.name}</option>
-        {/each}
-      </select>
       <button
         type="button"
         class="ghost"
         disabled={progressLoading || !progressKey}
         onclick={() => void onloadprogress()}
         title="Reload progress"
+        aria-label="Reload progress"
       >
         <RefreshCw size={14} class={progressLoading ? "spin" : ""} />
       </button>
     {:else}
       <span class="prog-sim-hint"
-        >Click quests on canvas to toggle complete ({simCompleted.length})</span
+        >Alt+click quests to toggle complete ({simCompleted.length})</span
       >
       <button
         type="button"
@@ -101,9 +108,15 @@
         disabled={progressLoading || !progressKey}
         onclick={() => void onseed()}
         title="Copy completed quests from selected save team"
+        aria-label="Seed simulate from selected team"
         >Seed from team</button
       >
-      <button type="button" class="ghost" disabled={simBusy} onclick={() => void onreset()}
+      <button
+        type="button"
+        class="ghost"
+        disabled={simBusy}
+        onclick={() => void onreset()}
+        aria-label="Reset simulate completed quests"
         >Reset</button
       >
       <button
@@ -112,11 +125,12 @@
         disabled={simBusy}
         onclick={() => void onrefreshsim()}
         title="Reclassify"
+        aria-label="Refresh simulate classification"
       >
         <RefreshCw size={14} class={simBusy ? "spin" : ""} />
       </button>
     {/if}
-    {#if progressMode === "save" && progressTeamLabel}
+    {#if progressTeamLabel}
       <code class="prog-path">{progressTeamLabel.relativePath}</code>
     {/if}
   </div>

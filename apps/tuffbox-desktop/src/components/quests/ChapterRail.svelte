@@ -33,6 +33,7 @@
 
   let collapsed = $state<Set<string>>(new Set());
   let editingId = $state<string | null>(null);
+  let titleEditEl = $state<HTMLInputElement | null>(null);
   let menuId = $state<string | null>(null);
   let iconRevision = $state(0);
 
@@ -40,9 +41,36 @@
   let groups = $derived(buildGroups(chapters, groupTitle));
 
   $effect(() => {
+    if (editingId && titleEditEl) {
+      titleEditEl.focus();
+      titleEditEl.select();
+    }
+  });
+
+  $effect(() => {
     if (chapters && $projectPath) {
       void preloadRailIcons(chapters);
     }
+  });
+
+  $effect(() => {
+    if (!menuId) return;
+    const onPtr = (e: PointerEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el?.closest?.(".ch-menu-wrap")) menuId = null;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        menuId = null;
+      }
+    };
+    window.addEventListener("pointerdown", onPtr, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPtr, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
   });
 
   async function preloadRailIcons(list: QuestChapter[]) {
@@ -164,8 +192,8 @@
                 {#if editingId === ch.id}
                   <input
                     class="title-edit"
+                    bind:this={titleEditEl}
                     value={ch.title}
-                    autofocus
                     onclick={(e) => e.stopPropagation()}
                     onkeydown={(e) => {
                       if (e.key === "Enter") commitTitle(ch, inputVal(e));
@@ -186,6 +214,9 @@
                   type="button"
                   class="ico tiny"
                   title="Chapter actions"
+                  aria-haspopup="menu"
+                  aria-expanded={menuId === ch.id}
+                  aria-label={`Chapter actions for ${stripMc(ch.title)}`}
                   onclick={(e) => {
                     e.stopPropagation();
                     menuId = menuId === ch.id ? null : ch.id;
@@ -194,13 +225,13 @@
                   <MoreVertical size={12} class="flex-shrink-0" />
                 </button>
                 {#if menuId === ch.id}
-                  <div class="ch-menu">
+                  <div class="ch-menu" role="menu">
                     {#if onMove}
-                      <button type="button" onclick={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
-                      <button type="button" onclick={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
+                      <button type="button" role="menuitem" onclick={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
+                      <button type="button" role="menuitem" onclick={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
                     {/if}
                     {#if onDelete}
-                      <button type="button" class="danger" onclick={() => { onDelete?.(ch.id); menuId = null; }}
+                      <button type="button" role="menuitem" class="danger" onclick={() => { onDelete?.(ch.id); menuId = null; }}
                         >Delete…</button
                       >
                     {/if}
@@ -472,10 +503,6 @@
   .save-ch:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-
-  .flex-shrink-0 {
-    flex-shrink: 0;
   }
 
   :global(.ftbq-rail svg) {

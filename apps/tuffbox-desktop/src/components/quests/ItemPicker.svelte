@@ -2,6 +2,7 @@
   import { Search, X } from "@lucide/svelte";
   import { api } from "../../lib/api";
   import { projectPath } from "../../lib/store";
+  import { trapFocus } from "../../lib/focusTrap";
 
   let {
     open = false,
@@ -19,6 +20,8 @@
   let catalog = $state<string[]>([]);
   let icons = $state<Record<string, string | null>>({});
   let loadedForPath = $state<string | null>(null);
+  let searchInput = $state<HTMLInputElement | null>(null);
+  let wasOpen = $state(false);
 
   let filtered = $derived(filterCatalog(catalog, query).slice(0, 120));
 
@@ -42,6 +45,14 @@
     if (open && filtered.length) {
       void preloadIcons(filtered.slice(0, 48));
     }
+  });
+
+  $effect(() => {
+    const justOpened = open && !wasOpen;
+    wasOpen = open;
+    if (!justOpened) return;
+    query = "";
+    queueMicrotask(() => searchInput?.focus({ preventScroll: true }));
   });
 
   async function loadCatalog() {
@@ -109,23 +120,30 @@
     onPick(id);
     onClose();
   }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") onClose();
-  }
 </script>
 
 {#if open}
-  <div class="overlay" role="dialog" aria-modal="true" onkeydown={onKey}>
-    <button type="button" class="backdrop" aria-label="Close" onclick={onClose}></button>
-    <div class="panel">
+  <div class="overlay">
+    <button type="button" class="backdrop" aria-label="Close item picker" onclick={onClose}></button>
+    <div
+      class="panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="item-picker-title"
+      tabindex="-1"
+      use:trapFocus={{ onEscape: onClose }}
+    >
       <div class="panel-h">
-        <strong>Pick item</strong>
-        <button type="button" class="ico" onclick={onClose}><X size={14} /></button>
+        <strong id="item-picker-title">Pick item</strong>
+        <button type="button" class="ico" onclick={onClose} aria-label="Close"><X size={14} /></button>
       </div>
       <div class="search">
         <Search size={14} />
-        <input bind:value={query} placeholder="Search id… (@mod, name)" autofocus />
+        <input
+          bind:this={searchInput}
+          bind:value={query}
+          placeholder="Search id… (@mod, name)"
+        />
       </div>
       {#if loading}
         <p class="muted">Loading catalog…</p>

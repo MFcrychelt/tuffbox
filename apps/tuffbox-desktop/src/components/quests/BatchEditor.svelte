@@ -2,10 +2,12 @@
   import type { QuestChapter, QuestData } from "../../lib/api";
   import { mcFormat, stripCodes } from "../../lib/mcformat";
   import { SHAPE_OPTIONS } from "../../lib/questTypeLabels";
+  import ConfirmDialog from "../ConfirmDialog.svelte";
 
   interface Props {
     chapters: QuestChapter[];
     selectedIds?: Set<string>;
+    focusToken?: number;
     onQuestUpdate: (chapterId: string, quest: QuestData) => void;
     onBatchApply?: (questIds: Set<string>, mutator: (q: QuestData) => QuestData) => void;
     onSaveChapter: (chapterId: string) => void;
@@ -14,6 +16,7 @@
   let {
     chapters,
     selectedIds = new Set(),
+    focusToken = 0,
     onQuestUpdate,
     onBatchApply,
     onSaveChapter,
@@ -21,6 +24,8 @@
 
   // Search state
   let query = $state("");
+  let searchInputEl = $state<HTMLInputElement | null>(null);
+  let lastFocusToken = $state(-1);
   let caseSensitive = $state(false);
   let noTitle = $state(false);
   let noSubtitle = $state(false);
@@ -38,6 +43,7 @@
   let massHideDep = $state<"keep" | "true" | "false" | "unset">("keep");
   let massHideDependent = $state<"keep" | "true" | "false" | "unset">("keep");
   let massStatus = $state<string | null>(null);
+  let massConfirmOpen = $state(false);
 
   // Turn on when selection appears; clear when selection empties
   $effect(() => {
@@ -45,6 +51,13 @@
     if (n > 0 && prevSelectedCount === 0) scopeSelection = true;
     if (n === 0) scopeSelection = false;
     prevSelectedCount = n;
+  });
+
+  $effect(() => {
+    if (focusToken === lastFocusToken) return;
+    lastFocusToken = focusToken;
+    if (focusToken <= 0) return;
+    queueMicrotask(() => searchInputEl?.focus({ preventScroll: true }));
   });
 
   // Editing state
@@ -202,6 +215,21 @@
       return;
     }
 
+    if (results.length >= 10) {
+      massConfirmOpen = true;
+      return;
+    }
+    runMassApply(optional, sizeNum, shape, hideDependencyLines, hideDependentLines);
+  }
+
+  function runMassApply(
+    optional: boolean | undefined,
+    sizeNum: number | undefined,
+    shape: string | null | undefined,
+    hideDependencyLines: boolean | null | undefined,
+    hideDependentLines: boolean | null | undefined,
+  ) {
+    if (!onBatchApply) return;
     const ids = new Set(results.map((r) => r.quest.id));
     onBatchApply(ids, (q) => {
       const next: QuestData = { ...q };
@@ -216,6 +244,21 @@
     setTimeout(() => {
       if (massStatus?.startsWith("Applied")) massStatus = null;
     }, 2500);
+  }
+
+  function confirmMassApply() {
+    massConfirmOpen = false;
+    const sizeNum = massSize.trim() === "" ? undefined : Number(massSize);
+    const optional =
+      massOptional === "keep" ? undefined : massOptional === "true";
+    const shape = massShape === "__keep__" ? undefined : massShape || null;
+    runMassApply(
+      optional,
+      sizeNum,
+      shape,
+      parseTri(massHideDep),
+      parseTri(massHideDependent),
+    );
   }
 
   function matchColor(field: string): string {
@@ -237,7 +280,14 @@
       type="text"
       class="search-input"
       placeholder="Search quests..."
+      bind:this={searchInputEl}
       bind:value={query}
+      onkeydown={(e) => {
+        if (e.key === "Escape" && query) {
+          e.stopPropagation();
+          query = "";
+        }
+      }}
     />
     <div class="filters">
       <label class="filter">
@@ -340,7 +390,12 @@
         <div class="quest-card" class:editing={editingId === r.quest.id}>
           <div class="quest-header" role="button" tabindex="0"
             onclick={() => editingId === r.quest.id ? null : startEdit(r.quest)}
-            onkeydown={(e) => { if (e.key === "Enter") startEdit(r.quest); }}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                startEdit(r.quest);
+              }
+            }}
           >
             <span class="quest-chapter" style="color: {matchColor(r.matchField)}">
               {r.chapterTitle}
@@ -350,8 +405,8 @@
               <span class="save-badge" class:saving={saveStatus[r.quest.id] === "saving"}
                 class:saved={saveStatus[r.quest.id] === "saved"}
                 class:error={saveStatus[r.quest.id] === "error"}>
-                {saveStatus[r.quest.id] === "saving" ? "Saving..." :
-                 saveStatus[r.quest.id] === "saved" ? "Saved" : "Error"}
+                {saveStatus[r.quest.id] === "saving" ? "Updating…" :
+                 saveStatus[r.quest.id] === "saved" ? "Updated" : "Error"}
               </span>
             {/if}
           </div>
@@ -376,7 +431,7 @@
               <div class="edit-actions">
                 <button type="button" class="btn primary small"
                   onclick={() => saveEdit(r.chapterId, r.quest)}>
-                  Save
+                  Update
                 </button>
                 <button type="button" class="btn ghost small" onclick={cancelEdit}>
                   Cancel
@@ -428,6 +483,16 @@
     {/if}
   {/if}
 </div>
+
+{#if massConfirmOpen}
+  <ConfirmDialog
+    title="Mass apply to many quests?"
+    message={`Apply field changes to ${results.length} quests? One Undo (Ctrl+Z) reverts the whole batch.`}
+    confirmLabel="Apply"
+    onconfirm={confirmMassApply}
+    oncancel={() => (massConfirmOpen = false)}
+  />
+{/if}
 
 <style>
   .batch-editor {

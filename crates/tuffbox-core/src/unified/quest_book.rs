@@ -1,6 +1,9 @@
 //! SNBT (Stringified NBT) parser for FTB Quests.
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::path::{Component, Path};
+
+use crate::fs_util::atomic_write;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QuestBook {
@@ -20,6 +23,9 @@ pub struct QuestBook {
     /// Active locale code after overlay (set by clients; optional on load).
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "activeLocale")]
     pub active_locale: Option<String>,
+    /// Non-fatal load problems (corrupt chapter SNBT, bad lang file, etc.).
+    #[serde(default, rename = "loadWarnings", skip_serializing_if = "Vec::is_empty")]
+    pub load_warnings: Vec<String>,
 }
 
 /// FTB Quests sidebar group (`chapter_groups.snbt`).
@@ -168,6 +174,7 @@ impl QuestBook {
         project_dir: &std::path::Path,
     ) -> Result<Self, String> {
         let mut chapters = Vec::new();
+        let mut load_warnings = Vec::new();
         let chapter_dir = dir.join("chapters");
         let search_dir = if chapter_dir.is_dir() {
             chapter_dir
@@ -183,13 +190,26 @@ impl QuestBook {
             if path.extension().map_or(true, |e| e != "snbt") {
                 continue;
             }
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(mut ch) = parse_snbt_chapter(&content) {
-                    ch.source_file = path
-                        .strip_prefix(project_dir)
-                        .ok()
-                        .map(|p| p.to_string_lossy().replace('\\', "/"));
-                    chapters.push(ch);
+            let label = path
+                .strip_prefix(project_dir)
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|| path.display().to_string());
+            match std::fs::read_to_string(&path) {
+                Ok(content) => match parse_snbt_chapter(&content) {
+                    Ok((mut ch, mut file_warnings)) => {
+                        ch.source_file = Some(label.clone());
+                        for w in file_warnings.drain(..) {
+                            load_warnings.push(format!("{label}: {w}"));
+                        }
+                        chapters.push(ch);
+                    }
+                    Err(e) => {
+                        load_warnings.push(format!("Skipped chapter {label}: {e}"));
+                    }
+                },
+                Err(e) => {
+                    load_warnings.push(format!("Skipped chapter {label}: {e}"));
                 }
             }
         }
@@ -200,8 +220,10 @@ impl QuestBook {
         });
 
         let (title, subtitle, book_settings) = load_book_data(dir);
-        let chapter_groups = load_chapter_groups(dir);
-        let locales = load_locales(dir);
+        let (chapter_groups, mut group_warns) = load_chapter_groups(dir);
+        load_warnings.append(&mut group_warns);
+        let (locales, mut locale_warns) = load_locales(dir);
+        load_warnings.append(&mut locale_warns);
 
         Ok(QuestBook {
             chapters,
@@ -212,6 +234,7 @@ impl QuestBook {
             book_settings,
             locales,
             active_locale: None,
+            load_warnings,
         })
     }
 
@@ -258,7 +281,7 @@ impl QuestBook {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&target, snbt).map_err(|e| e.to_string())?;
+        atomic_write(&target, snbt)?;
         Ok(rel)
     }
 
@@ -269,7 +292,12 @@ impl QuestBook {
     ) -> Result<String, String> {
         let quests_dir = Self::quests_dir_for_project(project_dir);
         std::fs::create_dir_all(&quests_dir).map_err(|e| e.to_string())?;
-        let rel = "config/ftbquests/quests/chapter_groups.snbt";
+        let config_candidate = project_dir.join("config/ftbquests/quests");
+        let rel = if quests_dir == config_candidate || quests_dir.starts_with(&config_candidate) {
+            "config/ftbquests/quests/chapter_groups.snbt"
+        } else {
+            "defaultconfigs/ftbquests/quests/chapter_groups.snbt"
+        };
         let mut lines = vec!["{".to_string(), "\tchapter_groups: [".to_string()];
         for (i, g) in groups.iter().enumerate() {
             let comma = if i + 1 == groups.len() { "" } else { "," };
@@ -287,7 +315,7 @@ impl QuestBook {
         lines.push("\t]".to_string());
         lines.push("}".to_string());
         let target = project_dir.join(rel);
-        std::fs::write(&target, lines.join("\n")).map_err(|e| e.to_string())?;
+        atomic_write(&target, lines.join("\n"))?;
         Ok(rel.into())
     }
 
@@ -306,13 +334,21 @@ impl QuestBook {
         {
             return Err("Invalid locale code".into());
         }
+        let mut comps = Path::new(code).components();
+        match comps.next() {
+            Some(Component::Normal(_)) if comps.next().is_none() => {}
+            _ => return Err("Invalid locale code".into()),
+        }
         let quests_dir = Self::quests_dir_for_project(project_dir);
         let lang_dir = quests_dir.join("lang");
         std::fs::create_dir_all(&lang_dir).map_err(|e| e.to_string())?;
         let snbt = format!("{{\n{}\n}}\n", snbt_object_body(map, 1));
         let file_name = format!("{code}.snbt");
         let target = lang_dir.join(&file_name);
-        std::fs::write(&target, snbt).map_err(|e| e.to_string())?;
+        if target.parent() != Some(lang_dir.as_path()) {
+            return Err("Invalid locale code".into());
+        }
+        atomic_write(&target, snbt)?;
         // Prefer config/… relative path when under standard layout
         let candidate = project_dir.join("config/ftbquests/quests/lang").join(&file_name);
         let rel = if target == candidate || target.starts_with(project_dir.join("config")) {
@@ -340,6 +376,15 @@ impl QuestBook {
 
     /// Resolve a dependency id to a quest id (quest itself, or parent of a task).
     pub fn resolve_dep(&self, dep: &str) -> Option<String> {
+        self.resolve_dep_with(dep, &self.task_owner_map())
+    }
+
+    /// Like [`Self::resolve_dep`], reusing a precomputed task→quest map (hot paths).
+    pub fn resolve_dep_with(
+        &self,
+        dep: &str,
+        task_owners: &HashMap<String, String>,
+    ) -> Option<String> {
         if self
             .chapters
             .iter()
@@ -348,7 +393,7 @@ impl QuestBook {
         {
             return Some(dep.to_string());
         }
-        self.task_owner_map().get(dep).cloned()
+        task_owners.get(dep).cloned()
     }
 
     /// Quest dependency graph with task-id edges rewritten to parent quests.
@@ -400,7 +445,7 @@ impl QuestBook {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let snbt = serialize_chapter_to_snbt(chapter);
-        std::fs::write(&target, snbt).map_err(|e| e.to_string())?;
+        atomic_write(&target, snbt)?;
         Ok(rel)
     }
 
@@ -468,7 +513,7 @@ impl QuestBook {
             errors.push(QuestValidationError { quest_id, message: msg });
         }
 
-        for qid in self.unreachable_quest_ids() {
+        for qid in self.unreachable_quest_ids_with(&task_owners) {
             errors.push(QuestValidationError {
                 quest_id: qid,
                 message: "Unreachable from any root quest".into(),
@@ -482,6 +527,15 @@ impl QuestBook {
     /// (quests with no dependencies). Missing deps are treated as roots'
     /// children only when the dep id exists in the book.
     pub fn unreachable_quest_ids(&self) -> Vec<String> {
+        let owners = self.task_owner_map();
+        self.unreachable_quest_ids_with(&owners)
+    }
+
+    /// Same as [`Self::unreachable_quest_ids`] but reuses a precomputed task-owner map.
+    pub fn unreachable_quest_ids_with(
+        &self,
+        task_owners: &HashMap<String, String>,
+    ) -> Vec<String> {
         let graph = self.resolved_dep_graph();
         if graph.is_empty() {
             return Vec::new();
@@ -521,7 +575,6 @@ impl QuestBook {
 
         // Only flag islands where every raw dep resolves — broken/missing deps
         // already have their own error and would otherwise flood the list.
-        let task_owners = self.task_owner_map();
         let quest_ids: HashSet<String> = graph.keys().cloned().collect();
         let mut missing: Vec<String> = self
             .chapters
@@ -531,9 +584,9 @@ impl QuestBook {
                 if reachable.contains(&q.id) {
                     return false;
                 }
-                q.dependencies.iter().all(|d| {
-                    quest_ids.contains(d) || task_owners.contains_key(d)
-                })
+                q.dependencies
+                    .iter()
+                    .all(|d| quest_ids.contains(d) || task_owners.contains_key(d))
             })
             .map(|q| q.id.clone())
             .collect();
@@ -684,10 +737,15 @@ pub fn snbt_to_json(text: &str) -> Result<serde_json::Value, String> {
 /// SNBT uses the same structure as JSON but permits unquoted keys and
 /// optional (whitespace or comma) separators between values.
 fn parse_snbt(text: &str) -> Result<serde_json::Value, String> {
+    Ok(parse_snbt_with_flags(text)?.0)
+}
+
+fn parse_snbt_with_flags(text: &str) -> Result<(serde_json::Value, bool), String> {
     let chars: Vec<char> = text.chars().collect();
     let mut p = SnbtParser {
         chars: &chars,
         pos: 0,
+        loose_separator: false,
     };
     p.skip_ws();
     let v = p.parse_value()?;
@@ -698,12 +756,13 @@ fn parse_snbt(text: &str) -> Result<serde_json::Value, String> {
             p.pos
         ));
     }
-    Ok(v)
+    Ok((v, p.loose_separator))
 }
 
 struct SnbtParser<'a> {
     chars: &'a [char],
     pos: usize,
+    loose_separator: bool,
 }
 
 impl<'a> SnbtParser<'a> {
@@ -765,7 +824,11 @@ impl<'a> SnbtParser<'a> {
                     self.pos += 1;
                     break;
                 }
-                Some(_) => continue, // SNBT allows whitespace-only separators
+                Some(_) => {
+                    // SNBT historically allows whitespace-only separators; FTB may reject.
+                    self.loose_separator = true;
+                    continue;
+                }
                 None => return Err("SNBT parse: unexpected end of input in object".into()),
             }
         }
@@ -808,7 +871,10 @@ impl<'a> SnbtParser<'a> {
                     self.pos += 1;
                     break;
                 }
-                Some(_) => continue,
+                Some(_) => {
+                    self.loose_separator = true;
+                    continue;
+                }
                 None => return Err("SNBT parse: unexpected end of input in array".into()),
             }
         }
@@ -869,9 +935,24 @@ impl<'a> SnbtParser<'a> {
         if self.peek() == Some('-') {
             self.pos += 1;
         }
+        let mut saw_dot = false;
+        let mut saw_exp = false;
         while let Some(c) = self.peek() {
-            if c.is_ascii_digit() || c == '.' || c == 'e' || c == 'E' || c == '-' || c == '+' {
+            if c.is_ascii_digit() {
                 self.pos += 1;
+            } else if c == '.' && !saw_dot && !saw_exp {
+                saw_dot = true;
+                self.pos += 1;
+            } else if (c == 'e' || c == 'E') && !saw_exp {
+                saw_exp = true;
+                self.pos += 1;
+                if matches!(self.peek(), Some('+') | Some('-')) {
+                    self.pos += 1;
+                }
+                // Exponent must contain at least one digit.
+                if !self.peek().is_some_and(|d| d.is_ascii_digit()) {
+                    return Err(format!("SNBT parse: bad exponent at {}", self.pos));
+                }
             } else {
                 break;
             }
@@ -893,7 +974,7 @@ impl<'a> SnbtParser<'a> {
         if let Ok(f) = numeric.parse::<f64>() {
             return Ok(serde_json::Value::from(f));
         }
-        Err(format!("SNBT parse: invalid number '{}'", s))
+        Err(format!("SNBT parse: invalid number '{s}'"))
     }
     fn parse_ident_value(&mut self) -> Result<serde_json::Value, String> {
         let start = self.pos;
@@ -943,15 +1024,25 @@ fn load_book_data(
     (title, subtitle, settings)
 }
 
-fn load_chapter_groups(dir: &std::path::Path) -> Vec<ChapterGroup> {
+fn load_chapter_groups(dir: &std::path::Path) -> (Vec<ChapterGroup>, Vec<String>) {
     let path = dir.join("chapter_groups.snbt");
     let Ok(content) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    let Ok(j) = snbt_to_json(&content) else {
-        return Vec::new();
+    let Ok((j, loose)) = parse_snbt_with_flags(&content) else {
+        return (
+            Vec::new(),
+            vec!["chapter_groups.snbt: parse failed — groups ignored".into()],
+        );
     };
-    j.get("chapter_groups")
+    let mut warnings = Vec::new();
+    if loose {
+        warnings.push(
+            "chapter_groups.snbt: used whitespace-only separators (FTB may reject)".into(),
+        );
+    }
+    let groups = j
+        .get("chapter_groups")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -966,16 +1057,18 @@ fn load_chapter_groups(dir: &std::path::Path) -> Vec<ChapterGroup> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    (groups, warnings)
 }
 
 /// Load `lang/<code>.snbt` into locale maps.
-fn load_locales(dir: &std::path::Path) -> HashMap<String, HashMap<String, serde_json::Value>> {
+fn load_locales(dir: &std::path::Path) -> (HashMap<String, HashMap<String, serde_json::Value>>, Vec<String>) {
     let lang_dir = dir.join("lang");
     let Ok(entries) = std::fs::read_dir(&lang_dir) else {
-        return HashMap::new();
+        return (HashMap::new(), Vec::new());
     };
     let mut locales = HashMap::new();
+    let mut warnings = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().map_or(true, |e| e != "snbt") {
@@ -985,23 +1078,31 @@ fn load_locales(dir: &std::path::Path) -> HashMap<String, HashMap<String, serde_
             continue;
         };
         let Ok(content) = std::fs::read_to_string(&path) else {
+            warnings.push(format!("lang/{stem}.snbt: read failed"));
             continue;
         };
-        let Ok(j) = snbt_to_json(&content) else {
+        let Ok((j, loose)) = parse_snbt_with_flags(&content) else {
+            warnings.push(format!("lang/{stem}.snbt: parse failed — locale ignored"));
             continue;
         };
-        let Some(m) = j.as_object() else {
+        if loose {
+            warnings.push(format!(
+                "lang/{stem}.snbt: used whitespace-only separators (FTB may reject)"
+            ));
+        }
+        let Some(obj) = j.as_object() else {
+            warnings.push(format!("lang/{stem}.snbt: root is not an object"));
             continue;
         };
         let mut map = HashMap::new();
-        for (k, v) in m {
+        for (k, v) in obj {
             map.insert(k.clone(), v.clone());
         }
         if !map.is_empty() {
             locales.insert(stem.to_string(), map);
         }
     }
-    locales
+    (locales, warnings)
 }
 
 fn snbt_object_body(map: &HashMap<String, serde_json::Value>, indent: usize) -> String {
@@ -1014,8 +1115,12 @@ fn snbt_object_body(map: &HashMap<String, serde_json::Value>, indent: usize) -> 
         .join("\n")
 }
 
-fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {
-    let j = snbt_to_json(c)?;
+fn parse_snbt_chapter(c: &str) -> Result<(Chapter, Vec<String>), String> {
+    let (j, loose) = parse_snbt_with_flags(c)?;
+    let mut warnings = Vec::new();
+    if loose {
+        warnings.push("used whitespace-only separators (FTB may reject)".into());
+    }
     let m = j.as_object().ok_or("not object")?;
     const KNOWN: &[&str] = &[
         "id",
@@ -1034,8 +1139,9 @@ fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {
             extras.insert(k.clone(), v.clone());
         }
     }
-    Ok(Chapter {
-        id: gs(m, "id").unwrap_or_else(|| "untitled".into()),
+    let mut used_ids = HashSet::new();
+    let chapter = Chapter {
+        id: resolve_hex_id(gs(m, "id"), 16, &mut used_ids),
         title: gs(m, "title").unwrap_or_default(),
         title_from_snbt: m.get("title").is_some(),
         icon: icon_value_from_map(m),
@@ -1054,12 +1160,17 @@ fn parse_snbt_chapter(c: &str) -> Result<Chapter, String> {
         quests: m
             .get("quests")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|q| parse_snbt_quest(q).ok()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|q| parse_snbt_quest(q, &mut used_ids).ok())
+                    .collect()
+            })
             .unwrap_or_default(),
         source_file: None,
-    })
+    };
+    Ok((chapter, warnings))
 }
-fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
+fn parse_snbt_quest(v: &serde_json::Value, used_ids: &mut HashSet<String>) -> Result<Quest, String> {
     let m = v.as_object().ok_or("not object")?;
     let dependencies = m
         .get("dependencies")
@@ -1094,7 +1205,7 @@ fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
         }
     }
     Ok(Quest {
-        id: gs(m, "id").unwrap_or_default(),
+        id: resolve_hex_id(gs(m, "id"), 16, used_ids),
         title: gs(m, "title").unwrap_or_default(),
         title_from_snbt: m.get("title").is_some(),
         subtitle: gs(m, "subtitle"),
@@ -1116,12 +1227,20 @@ fn parse_snbt_quest(v: &serde_json::Value) -> Result<Quest, String> {
         tasks: m
             .get("tasks")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|t| parse_snbt_task(t).ok()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| parse_snbt_task(t, used_ids).ok())
+                    .collect()
+            })
             .unwrap_or_default(),
         rewards: m
             .get("rewards")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|r| parse_snbt_reward(r).ok()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|r| parse_snbt_reward(r, used_ids).ok())
+                    .collect()
+            })
             .unwrap_or_default(),
         optional: m.get("optional").and_then(|v| v.as_bool()).unwrap_or(false),
         shape: gs(m, "shape"),
@@ -1153,11 +1272,11 @@ fn parse_dependencies(v: &serde_json::Value) -> Vec<String> {
     }
     Vec::new()
 }
-fn parse_snbt_task(v: &serde_json::Value) -> Result<Task, String> {
+fn parse_snbt_task(v: &serde_json::Value, used_ids: &mut HashSet<String>) -> Result<Task, String> {
     let m = v.as_object().ok_or("not object")?;
     let title = gs(m, "title");
     Ok(Task {
-        id: gs(m, "id").unwrap_or_default(),
+        id: resolve_hex_id(gs(m, "id"), 12, used_ids),
         task_type: gs(m, "type").unwrap_or_else(|| "item".into()),
         title_from_snbt: title.is_some(),
         title,
@@ -1169,10 +1288,10 @@ fn parse_snbt_task(v: &serde_json::Value) -> Result<Task, String> {
             .collect(),
     })
 }
-fn parse_snbt_reward(v: &serde_json::Value) -> Result<Reward, String> {
+fn parse_snbt_reward(v: &serde_json::Value, used_ids: &mut HashSet<String>) -> Result<Reward, String> {
     let m = v.as_object().ok_or("not object")?;
     Ok(Reward {
-        id: gs(m, "id").unwrap_or_default(),
+        id: resolve_hex_id(gs(m, "id"), 12, used_ids),
         reward_type: gs(m, "type").unwrap_or_else(|| "item".into()),
         title: gs(m, "title"),
         properties: m
@@ -1263,6 +1382,44 @@ fn collect_item_ids_from_value(v: &serde_json::Value, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+fn fresh_hex_id(len: usize) -> String {
+    use rand::Rng;
+    const HEX: &[u8] = b"0123456789ABCDEF";
+    let mut rng = rand::thread_rng();
+    let mut out = String::with_capacity(len);
+    for _ in 0..len {
+        out.push(HEX[rng.gen_range(0..16)] as char);
+    }
+    out
+}
+
+/// Allocate a hex id not already in `used`, then insert it (mirrors quest_plan::alloc_hex_id).
+fn alloc_fresh_hex_id(len: usize, used: &mut HashSet<String>) -> String {
+    for _ in 0..64 {
+        let id = fresh_hex_id(len);
+        if used.insert(id.clone()) {
+            return id;
+        }
+    }
+    let mut widen = len + 4;
+    loop {
+        let id = fresh_hex_id(widen);
+        if used.insert(id.clone()) {
+            return id;
+        }
+        widen = widen.saturating_add(2);
+    }
+}
+
+fn resolve_hex_id(raw: Option<String>, len: usize, used: &mut HashSet<String>) -> String {
+    let id = raw.unwrap_or_default();
+    if id.trim().is_empty() {
+        return alloc_fresh_hex_id(len, used);
+    }
+    used.insert(id.clone());
+    id
 }
 
 fn extract_quest_item_ids(q: &Quest) -> Vec<String> {
@@ -1616,7 +1773,7 @@ impl RewardTable {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let snbt = serialize_reward_table_to_snbt(table);
-        std::fs::write(&target, snbt).map_err(|e| e.to_string())?;
+        atomic_write(&target, snbt)?;
         Ok(rel)
     }
 
@@ -1745,9 +1902,9 @@ mod tests {
     #[test]
     fn roundtrips_chapter() {
         let snbt = r#"{ title: "Test" id: "abc" quests: [{ id: "q1" title: "Q1" x: 0.0 y: 0.0 tasks: [{ id: "t1" type: "item" }] rewards: [{ id: "r1" type: "item" }] }] }"#;
-        let ch = parse_snbt_chapter(snbt).unwrap();
+        let (ch, _) = parse_snbt_chapter(snbt).unwrap();
         let out = serialize_chapter_to_snbt(&ch);
-        let ch2 = parse_snbt_chapter(&out).unwrap();
+        let (ch2, _) = parse_snbt_chapter(&out).unwrap();
         assert_eq!(ch.title, ch2.title);
         assert_eq!(ch.quests.len(), ch2.quests.len());
         assert_eq!(ch.quests[0].id, ch2.quests[0].id);
@@ -1769,7 +1926,7 @@ mod tests {
             rewards: []
           }]
         }"#;
-        let ch = parse_snbt_chapter(snbt).unwrap();
+        let (ch, _) = parse_snbt_chapter(snbt).unwrap();
         assert_eq!(
             ch.icon.as_ref().and_then(icon_display_id).as_deref(),
             Some("minecraft:apple")
@@ -1787,7 +1944,7 @@ mod tests {
             Some(1)
         );
         let out = serialize_chapter_to_snbt(&ch);
-        let ch2 = parse_snbt_chapter(&out).unwrap();
+        let (ch2, _) = parse_snbt_chapter(&out).unwrap();
         assert_eq!(
             ch2.icon
                 .as_ref()
@@ -1856,6 +2013,7 @@ mod tests {
             book_settings: HashMap::new(),
             locales: HashMap::new(),
             active_locale: None,
+            load_warnings: vec![],
         }
     }
 
@@ -2140,7 +2298,8 @@ mod tests {
         let mut ch = parse_snbt_chapter(
             r#"{ id: "CH" title: "T" quests: [{ id: "Q1" title: "Inline" x: 0.0d y: 0.0d tasks: [{ id: "T1" type: "checkmark" }] }] }"#,
         )
-        .unwrap();
+        .unwrap()
+        .0;
         ch.quests[0].subtitle = Some("from lang".into());
         ch.quests[0].subtitle_from_snbt = false;
         ch.quests[0].description = vec!["line".into()];
@@ -2200,7 +2359,7 @@ mod tests {
             tasks: [{ id: "T1" type: "checkmark" }]
           }]
         }"#;
-        let ch = parse_snbt_chapter(snbt).unwrap();
+        let (ch, _) = parse_snbt_chapter(snbt).unwrap();
         assert_eq!(ch.default_hide_dependency_lines, Some(true));
         assert_eq!(ch.filename.as_deref(), Some("t"));
         assert_eq!(ch.quests[0].hide_dependency_lines, Some(true));
@@ -2210,7 +2369,7 @@ mod tests {
             Some("kept")
         );
         let out = serialize_chapter_to_snbt(&ch);
-        let ch2 = parse_snbt_chapter(&out).unwrap();
+        let (ch2, _) = parse_snbt_chapter(&out).unwrap();
         assert_eq!(ch2.quests[0].hide_dependency_lines, Some(true));
         assert_eq!(
             ch2.quests[0].extras.get("custom_flag").and_then(|v| v.as_str()),
@@ -2239,5 +2398,47 @@ mod tests {
     fn emits_booleans_as_true_false() {
         assert_eq!(snbt_value(&serde_json::json!(true)), "true");
         assert_eq!(snbt_value(&serde_json::json!(false)), "false");
+    }
+
+    #[test]
+    fn warns_on_whitespace_only_separators() {
+        let snbt = r#"{ id: "CH" title: "T" quests: [] }"#;
+        let (_ch, warnings) = parse_snbt_chapter(snbt).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("whitespace-only")),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn alloc_fresh_hex_id_avoids_used() {
+        let mut used = HashSet::new();
+        used.insert("AAAAAAAAAAAA".into());
+        for _ in 0..32 {
+            let id = alloc_fresh_hex_id(12, &mut used);
+            assert_eq!(id.len(), 12);
+            assert_ne!(id, "AAAAAAAAAAAA");
+        }
+        assert_eq!(used.len(), 33);
+    }
+
+    #[test]
+    fn missing_ids_get_unique_allocations() {
+        let snbt = r#"{ title: "T" quests: [
+          { title: "A" x: 0.0d y: 0.0d tasks: [{ type: "checkmark" }] rewards: [{ type: "xp" }] },
+          { title: "B" x: 1.0d y: 0.0d tasks: [{ type: "checkmark" }] rewards: [{ type: "xp" }] }
+        ] }"#;
+        let (ch, _) = parse_snbt_chapter(snbt).unwrap();
+        let mut ids = HashSet::new();
+        assert!(ids.insert(ch.id.clone()));
+        for q in &ch.quests {
+            assert!(ids.insert(q.id.clone()), "duplicate quest id {}", q.id);
+            for t in &q.tasks {
+                assert!(ids.insert(t.id.clone()), "duplicate task id {}", t.id);
+            }
+            for r in &q.rewards {
+                assert!(ids.insert(r.id.clone()), "duplicate reward id {}", r.id);
+            }
+        }
     }
 }

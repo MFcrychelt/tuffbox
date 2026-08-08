@@ -24,7 +24,7 @@
     chapterGroups: QuestChapterGroup[];
     chapters: QuestChapter[];
     onCreateLocale: (code: string, fromCode: string | null) => Promise<void> | void;
-    onJumpGap: (entry: LocaleGapEntry) => void;
+    onJumpGap: (entry: LocaleGapEntry, targetCode: string) => void;
     onCompareLocaleChange: (code: string | null) => void;
   } = $props();
 
@@ -171,7 +171,7 @@
       </p>
       <div class="gap-list">
         {#each gaps.slice(0, 200) as g (g.key)}
-          <button type="button" class="gap-row" onclick={() => onJumpGap(g)}>
+          <button type="button" class="gap-row" onclick={() => onJumpGap(g, targetCode)}>
             <span class="kind {g.kind}">{g.kind}</span>
             <code class="key">{g.key}</code>
             <span class="prev">{preview(g.basePreview)}</span>

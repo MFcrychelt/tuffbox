@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Trash2, Link2, AlertTriangle } from "@lucide/svelte";
+  import { Trash2, Link2, AlertTriangle, Copy, Check } from "@lucide/svelte";
   import type { QuestChapter, QuestData, QuestValidationIssue } from "../../lib/api";
   import { DEP_REQUIREMENT_OPTIONS, SHAPE_OPTIONS } from "../../lib/questTypeLabels";
   import {
@@ -48,6 +48,22 @@
   let depFilter = $state("");
   let descText = $state("");
   let extraKey = $state("");
+  let idCopied = $state(false);
+  let idCopyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function copyQuestId() {
+    try {
+      await navigator.clipboard.writeText(quest.id);
+      idCopied = true;
+      if (idCopyTimer) clearTimeout(idCopyTimer);
+      idCopyTimer = setTimeout(() => {
+        idCopied = false;
+        idCopyTimer = null;
+      }, 1500);
+    } catch {
+      /* clipboard may be unavailable */
+    }
+  }
   let extraVal = $state("");
   let showAdvanced = $state(false);
   let cmpTitle = $state("");
@@ -307,11 +323,24 @@
 <aside class="insp ftbq-view">
   <div class="insp-h">
     <h3 title={quest.id}>{quest.title}</h3>
-    <button type="button" class="ico danger" title="Delete quest" onclick={onRemove}>
+    <button type="button" class="ico danger" title="Delete quest" aria-label="Delete quest" onclick={onRemove}>
       <Trash2 size={14} />
     </button>
   </div>
-  <code class="qid">{quest.id}</code>
+  <button
+    type="button"
+    class="qid"
+    title="Click to copy quest id"
+    onclick={() => void copyQuestId()}
+  >
+    <code>{quest.id}</code>
+    {#if idCopied}
+      <Check size={12} />
+      <span class="qid-copied">Copied</span>
+    {:else}
+      <Copy size={12} />
+    {/if}
+  </button>
 
   {#if myIssues.length > 0}
     <div class="val-warn">
@@ -367,6 +396,12 @@
           >
           <label
             >Description
+            <div class="fmt-bar">
+              <button type="button" class="ghost" onclick={() => wrapFmt("&l")}>Bold</button>
+              <button type="button" class="ghost" onclick={() => wrapFmt("&a")}>Green</button>
+              <button type="button" class="ghost" onclick={() => wrapFmt("&7")}>Gray</button>
+              <button type="button" class="ghost" onclick={() => wrapFmt("&e")}>Gold</button>
+            </div>
             <textarea
               rows="4"
               value={descText}
@@ -487,11 +522,17 @@
     </label>
   </div>
 
-  <button type="button" class="adv-tog" onclick={() => (showAdvanced = !showAdvanced)}>
+  <button
+    type="button"
+    class="adv-tog"
+    aria-expanded={showAdvanced}
+    aria-controls="quest-ftb-flags"
+    onclick={() => (showAdvanced = !showAdvanced)}
+  >
     {showAdvanced ? "▾" : "▸"} FTB flags
   </button>
   {#if showAdvanced}
-    <div class="fields flags">
+    <div class="fields flags" id="quest-ftb-flags">
       <label
         >Hide dependency lines
         <select value={triVal(quest.hideDependencyLines)} onchange={(e) => tri("hideDependencyLines", e)}>
@@ -650,13 +691,34 @@
     text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.65);
   }
   .qid {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
     font-size: 9px;
     color: var(--ftbq-text-muted, #9a9aa0);
     margin: 0;
     padding: 4px 12px 8px;
     word-break: break-all;
+    border: none;
     border-bottom: 1px solid var(--ftbq-border);
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+  }
+  .qid:hover {
+    color: var(--ftbq-text, #e8e8e8);
+  }
+  .qid code {
+    flex: 1;
+    min-width: 0;
+    font-size: inherit;
+    color: inherit;
+  }
+  .qid-copied {
+    font-size: 10px;
+    font-weight: 600;
+    color: #86efac;
   }
   .val-warn {
     padding: 8px 10px;

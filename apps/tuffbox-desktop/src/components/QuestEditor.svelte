@@ -20,6 +20,7 @@
   import ChapterGroupsPanel from "./quests/ChapterGroupsPanel.svelte";
   import ProgressPanel from "./quests/ProgressPanel.svelte";
   import ShortcutsModal from "./ui/ShortcutsModal.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import { wouldCreateQuestCycle } from "./quests/deps";
   import type { QuestRewardTable } from "../lib/api";
   import { snbtTextsEqual, type SnbtDiffFile } from "../lib/snbtDiff";
@@ -42,7 +43,8 @@
     canRedo,
     clearHistory,
     materializeChapters,
-    diffDirtyChapterIds,
+    dirtyIdsAgainstBaseline,
+    patchSavedBaseline,
     chapterJsonMap,
     serializeBookMeta,
     parseBookMeta,
@@ -108,13 +110,51 @@
   let saving = $state(false);
   let error = $state<string | null>(null);
   let message = $state<string | null>(null);
+  let noticeClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearNotices() {
+    if (noticeClearTimer) {
+      clearTimeout(noticeClearTimer);
+      noticeClearTimer = null;
+    }
+    error = null;
+    message = null;
+  }
+
+  function flashNotice(kind: "success" | "error", text: string) {
+    if (noticeClearTimer) {
+      clearTimeout(noticeClearTimer);
+      noticeClearTimer = null;
+    }
+    if (kind === "error") {
+      message = null;
+      error = text;
+    } else {
+      error = null;
+      message = text;
+      noticeClearTimer = setTimeout(() => {
+        message = null;
+        noticeClearTimer = null;
+      }, 5000);
+    }
+  }
   let selectedChapter = $state("");
   let selectedQuest = $state<QuestData | null>(null);
   let validationIssues = $state<QuestValidationIssue[]>([]);
   let dirtyChapters = $state(new Set<string>());
+  /** Chapter id → JSON at last successful load/save (disk baseline for dirty + undo). */
+  let savedChapterJson = $state<Record<string, string>>({});
   let lastLoadedPath = $state<string | null>(null);
   let fitToken = $state(0);
   let questSearch = $state("");
+  let questSearchDebounced = $state("");
+  $effect(() => {
+    const q = questSearch;
+    const t = setTimeout(() => {
+      questSearchDebounced = q;
+    }, 150);
+    return () => clearTimeout(t);
+  });
   let showBookPanel = $state(false);
   let showGroupsPanel = $state(false);
   let showTablesPanel = $state(false);
@@ -137,6 +177,9 @@
   let history = $state(createHistoryState());
   let selection = $state(createSelectionState());
   let search = $state(createSearchState());
+  let searchInputEl = $state<HTMLInputElement | null>(null);
+  let searchWasOpen = $state(false);
+  let batchFocusToken = $state(0);
   let clipboard = $state<QuestData[]>([]);
   let showShortcuts = $state(false);
   let panelTab = $state<"quest" | "info" | "batch" | "colors" | "raw">("info");
@@ -153,6 +196,65 @@
   let snbtDiffFiles = $state<SnbtDiffFile[] | null>(null);
   let snbtDiffConfirmLabel = $state("Save");
   let snbtDiffResolver: ((ok: boolean) => void) | null = null;
+
+  let confirmOpen = $state(false);
+  let confirmTitle = $state("Confirm");
+  let confirmMessage = $state("");
+  let confirmDanger = $state(false);
+  let confirmLabel = $state("Confirm");
+  let confirmResolver: ((ok: boolean) => void) | null = null;
+  let reloadGen = 0;
+  let pathSwitchGen = 0;
+
+  const PANEL_TABS = ["quest", "info", "batch", "colors", "raw"] as const;
+  type PanelTab = (typeof PANEL_TABS)[number];
+
+  function onPanelTabKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") {
+      return;
+    }
+    const i = PANEL_TABS.indexOf(panelTab as PanelTab);
+    if (i < 0) return;
+    e.preventDefault();
+    let next = i;
+    if (e.key === "ArrowRight") next = (i + 1) % PANEL_TABS.length;
+    else if (e.key === "ArrowLeft") next = (i - 1 + PANEL_TABS.length) % PANEL_TABS.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = PANEL_TABS.length - 1;
+    const tab = PANEL_TABS[next]!;
+    setPanelTab(tab);
+    queueMicrotask(() => {
+      document.getElementById(`quest-panel-tab-${tab}`)?.focus();
+    });
+  }
+
+  function setPanelTab(tab: PanelTab) {
+    panelTab = tab;
+    if (tab === "batch") batchFocusToken += 1;
+  }
+
+  function askConfirm(opts: {
+    title: string;
+    message: string;
+    danger?: boolean;
+    confirmLabel?: string;
+  }): Promise<boolean> {
+    confirmTitle = opts.title;
+    confirmMessage = opts.message;
+    confirmDanger = opts.danger ?? false;
+    confirmLabel = opts.confirmLabel ?? "Confirm";
+    confirmOpen = true;
+    return new Promise<boolean>((resolve) => {
+      confirmResolver = resolve;
+    });
+  }
+
+  function closeConfirm(ok: boolean) {
+    confirmOpen = false;
+    const r = confirmResolver;
+    confirmResolver = null;
+    r?.(ok);
+  }
 
   function scheduleLiveValidate() {
     if (validateTimer) clearTimeout(validateTimer);
@@ -176,11 +278,13 @@
 
   async function load() {
     if (!$projectPath) return;
+    const gen = ++reloadGen;
     loading = true;
     error = null;
     message = null;
     try {
       const book = await api.quests.load($projectPath);
+      if (gen !== reloadGen) return;
       locales = asLocaleMaps(book.locales);
       const overlay = applyLocaleOverlay(
         {
@@ -209,6 +313,7 @@
       }));
       rewardTablesDirty = false;
       dirtyChapters = new Set();
+      savedChapterJson = chapterJsonMap(chapters);
       dirtyLocales = new Set();
       compareLocale = null;
       history = clearHistory();
@@ -221,18 +326,30 @@
       selectedQuest = null;
       try {
         const catalog = await api.quests.itemCatalog($projectPath);
+        if (gen !== reloadGen) return;
         itemCatalogCache = new Set(catalog ?? []);
       } catch {
+        if (gen !== reloadGen) return;
         itemCatalogCache = null;
       }
       validationIssues = await api.quests.validate($projectPath);
+      if (gen !== reloadGen) return;
+      if (book.loadWarnings?.length) {
+        const shown = book.loadWarnings.slice(0, 3).join(" · ");
+        const more =
+          book.loadWarnings.length > 3
+            ? ` (+${book.loadWarnings.length - 3} more)`
+            : "";
+        flashNotice("error", `Load warnings: ${shown}${more}`);
+      }
       lastLoadedPath = $projectPath;
       fitToken += 1;
       await refreshProgressTeams();
     } catch (e) {
-      error = String(e);
+      if (gen !== reloadGen) return;
+      flashNotice("error", String(e));
     } finally {
-      loading = false;
+      if (gen === reloadGen) loading = false;
     }
   }
 
@@ -270,8 +387,16 @@
 
   const availableLocales = $derived(localeCodes(locales));
 
-  function requestReload() {
-    if (hasDirty && !confirm("Reload and discard unsaved quest edits?")) return;
+  async function requestReload() {
+    if (hasDirty) {
+      const ok = await askConfirm({
+        title: "Reload quests?",
+        message: "Reload and discard unsaved quest edits?",
+        danger: true,
+        confirmLabel: "Discard & reload",
+      });
+      if (!ok) return;
+    }
     void load();
   }
 
@@ -300,7 +425,7 @@
       progressOverlay = true;
       progressMode = "save";
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
       progressSnap = null;
     } finally {
       progressLoading = false;
@@ -329,7 +454,7 @@
       );
       progressOverlay = true;
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       simBusy = false;
     }
@@ -351,7 +476,7 @@
 
   async function seedSimulateFromTeam() {
     if (!$projectPath || !progressKey) {
-      error = "Select a save team first, then Seed.";
+      flashNotice("error", "Select a save team first, then Seed.");
       return;
     }
     progressLoading = true;
@@ -362,9 +487,9 @@
         .map(([id]) => id);
       progressMode = "simulate";
       await refreshSimulate();
-      message = `Simulate seeded with ${simCompleted.length} completed quest(s)`;
+      flashNotice("success", `Simulate seeded with ${simCompleted.length} completed quest(s)`);
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       progressLoading = false;
     }
@@ -391,9 +516,9 @@
 
   const progressStatuses = $derived((progressSnap?.statuses ?? {}) as Record<string, QuestProgressStatus>);
 
-  function markDirty(chapterId: string) {
-    dirtyChapters = new Set([...dirtyChapters, chapterId]);
+  function markDirty(_chapterId: string) {
     chapters = [...chapters];
+    syncDirtyFromBaseline();
     if (activeLocale) {
       dirtyLocales = new Set([...dirtyLocales, activeLocale]);
     }
@@ -447,12 +572,15 @@
     await api.quests.saveLocale(normalized, seed, $projectPath);
     dirtyLocales = new Set([...dirtyLocales].filter((c) => c !== normalized));
     switchLocale(normalized);
-    message = `Created lang/${normalized}.snbt`;
+    flashNotice("success", `Created lang/${normalized}.snbt`);
   }
 
-  function jumpToLocaleGap(entry: LocaleGapEntry) {
-    showLocalePanel = true;
-    bookMenuOpen = true;
+  function jumpToLocaleGap(entry: LocaleGapEntry, targetCode: string) {
+    if (targetCode && targetCode !== activeLocale) {
+      compareLocale = targetCode;
+    } else {
+      compareLocale = null;
+    }
     let questId = entry.questId;
     if (!questId && entry.key.startsWith("task.")) {
       const taskId = entry.key.split(".")[1];
@@ -467,17 +595,24 @@
     if (questId) {
       jumpToIssue({ questId, message: entry.key });
       panelTab = "quest";
+      showLocalePanel = false;
+      bookMenuOpen = false;
       return;
     }
     if (entry.chapterId && chapters.some((c) => c.id === entry.chapterId)) {
       selectedChapter = entry.chapterId;
       selectedQuest = null;
+      showLocalePanel = false;
+      bookMenuOpen = false;
       return;
     }
     if (entry.groupId) {
       showGroupsPanel = true;
       showLocalePanel = false;
+      return;
     }
+    showLocalePanel = true;
+    bookMenuOpen = true;
   }
 
   async function promptSnbtDiff(opts: {
@@ -571,7 +706,7 @@
             confirmLabel: "Write SNBT",
           });
           if (!ok) {
-            message = "Save cancelled";
+            flashNotice("success", "Save cancelled");
             return "cancelled";
           }
           saving = true;
@@ -580,13 +715,14 @@
 
       await api.quests.saveChapterRaw(filePath, jsonPayload);
       ch.sourceFile = relativePath;
-      dirtyChapters = new Set([...dirtyChapters].filter((id) => id !== chapterId));
       chapters = [...chapters];
-      message = `Saved ${ch.quests.length} quests → ${ch.sourceFile}`;
+      rememberSavedChapter(chapterId);
+      syncDirtyFromBaseline();
+      flashNotice("success", `Saved ${ch.quests.length} quests → ${ch.sourceFile}`);
       validationIssues = await api.quests.validate($projectPath);
       return "saved";
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
       return "error";
     } finally {
       saving = false;
@@ -597,29 +733,34 @@
     try {
       await saveLocaleIfNeeded();
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
       return;
     }
+    const dirtyIds = [...dirtyChapters];
     const parts: string[] = [];
-    if (dirtyChapters.size) parts.push(`${dirtyChapters.size} chapter(s)`);
+    if (dirtyIds.length) parts.push(`${dirtyIds.length} chapter(s)`);
     if (rewardTablesDirty) parts.push("reward tables");
     if (bookDirty) parts.push("book data");
     if (groupsDirty) parts.push("chapter groups");
     if (parts.length === 0) {
-      message = "Nothing to save";
+      flashNotice("success", "Nothing to save");
       return;
     }
-    const chapterNames = [...dirtyChapters]
+    const chapterNames = dirtyIds
       .map((id) => chapters.find((c) => c.id === id)?.title || id)
       .slice(0, 8);
     const summary =
       `Save All: ${parts.join(", ")}` +
       (chapterNames.length
-        ? `\n\nChapters:\n- ${chapterNames.join("\n- ")}${dirtyChapters.size > chapterNames.length ? "\n- …" : ""}`
+        ? `\n\nChapters:\n- ${chapterNames.join("\n- ")}${dirtyIds.length > chapterNames.length ? "\n- …" : ""}`
         : "");
-    if (!window.confirm(summary)) return;
+    const confirmed = await askConfirm({
+      title: "Save all changes?",
+      message: summary,
+      confirmLabel: "Save all",
+    });
+    if (!confirmed) return;
 
-    const dirtyIds = [...dirtyChapters];
     if (dirtyIds.length > 0 && $projectPath) {
       const projectDir = await api.project.getDir($projectPath);
       const diffs: SnbtDiffFile[] = [];
@@ -630,7 +771,7 @@
           const d = await buildChapterSnbtDiff(ch, projectDir);
           if (d) diffs.push(d);
         } catch (e) {
-          error = String(e);
+          flashNotice("error", String(e));
           return;
         }
       }
@@ -641,7 +782,7 @@
           confirmLabel: "Write all SNBT",
         });
         if (!ok) {
-          message = "Save cancelled";
+          flashNotice("success", "Save cancelled");
           return;
         }
       }
@@ -663,9 +804,9 @@
     if (!$projectPath) return;
     try {
       validationIssues = await api.quests.validate($projectPath);
-      message = `Disk validate: ${validationIssues.length} issue(s)`;
+      flashNotice("success", `Disk validate: ${validationIssues.length} issue(s)`);
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     }
   }
 
@@ -680,13 +821,13 @@
       try {
         diskText = await api.quests.readChapterText(filePath);
       } catch {
-        message = "No chapter file on disk yet";
+        flashNotice("success", "No chapter file on disk yet");
         return;
       }
       const payload = stripLocaleOverlay(chapterToSnbtJson(ch));
       const editorText = await api.quests.previewChapterSnbt(JSON.stringify(payload));
       if (snbtTextsEqual(diskText, editorText)) {
-        message = "Editor matches disk SNBT";
+        flashNotice("success", "Editor matches disk SNBT");
         return;
       }
       await promptSnbtDiff({
@@ -704,7 +845,7 @@
         confirmLabel: "Close",
       });
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     }
   }
 
@@ -717,6 +858,22 @@
       }),
       rewardTablesJson: JSON.stringify(rewardTables),
     };
+  }
+
+  function syncDirtyFromBaseline() {
+    dirtyChapters = new Set(
+      dirtyIdsAgainstBaseline(chapterJsonMap(chapters), savedChapterJson),
+    );
+  }
+
+  function rememberSavedChapter(chapterId: string) {
+    const ch = chapters.find((c) => c.id === chapterId);
+    if (!ch) return;
+    savedChapterJson = patchSavedBaseline(
+      savedChapterJson,
+      chapterId,
+      JSON.stringify(ch),
+    );
   }
 
   function pushHistory() {
@@ -865,10 +1022,20 @@
     markDirty(selectedChapter);
     selectedQuest = newQ;
     selection = selectSingle(selection, newQ.id);
+    if (questSearch.trim()) {
+      questSearch = "";
+      flashNotice("success", "Filter cleared so the new quest is visible");
+    }
   }
 
-  function removeQuest(q: QuestData) {
-    if (!confirm(`Delete quest "${q.title}" from this chapter?`)) return;
+  async function removeQuest(q: QuestData) {
+    const ok = await askConfirm({
+      title: "Delete quest?",
+      message: `Delete quest "${q.title}" from this chapter?`,
+      danger: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     pushHistory();
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
@@ -886,10 +1053,16 @@
     selection = clearSelection();
   }
 
-  function removeSelectedQuests() {
+  async function removeSelectedQuests() {
     if (selection.selectedIds.size === 0) return;
     const n = selection.selectedIds.size;
-    if (!confirm(`Delete ${n} selected quest(s)?`)) return;
+    const ok = await askConfirm({
+      title: "Delete selected quests?",
+      message: `Delete ${n} selected quest(s)?`,
+      danger: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     pushHistory();
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
@@ -936,7 +1109,7 @@
     if (!depId || q.dependencies.includes(depId) || depId === q.id) return;
     const allQuests = chapters.flatMap((c) => c.quests);
     if (wouldCycle(q.id, depId, allQuests)) {
-      error = "That dependency would create a cycle.";
+      flashNotice("error", "That dependency would create a cycle.");
       return;
     }
     error = null;
@@ -983,9 +1156,9 @@
       table.sourceFile = res.relativePath;
       rewardTables = [...rewardTables];
       rewardTablesDirty = false;
-      message = `Saved reward table → ${res.relativePath}`;
+      flashNotice("success", `Saved reward table → ${res.relativePath}`);
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       saving = false;
     }
@@ -1014,7 +1187,6 @@
   function handleBatchApply(questIds: Set<string>, mutator: (q: QuestData) => QuestData) {
     if (questIds.size === 0) return;
     pushHistory();
-    const dirty = new Set(dirtyChapters);
     chapters = chapters.map((ch) => {
       let touched = false;
       const quests = ch.quests.map((q) => {
@@ -1022,10 +1194,9 @@
         touched = true;
         return mutator(q);
       });
-      if (touched) dirty.add(ch.id);
       return touched ? { ...ch, quests } : ch;
     });
-    dirtyChapters = dirty;
+    syncDirtyFromBaseline();
     if (selectedQuest && questIds.has(selectedQuest.id)) {
       for (const ch of chapters) {
         const q = ch.quests.find((x) => x.id === selectedQuest!.id);
@@ -1039,7 +1210,6 @@
   }
 
   function handleUndo() {
-    const beforeMap = chapterJsonMap(chapters);
     const extras = historyExtras();
     const result = historyUndo(
       history,
@@ -1050,18 +1220,13 @@
     );
     if (!result.snapshot) return;
     history = result.state;
-    const changed = diffDirtyChapterIds(
-      { chapterJsonById: beforeMap },
-      result.snapshot,
-    );
     applyHistorySnapshot(result.snapshot);
-    dirtyChapters = new Set([...dirtyChapters, ...changed]);
+    syncDirtyFromBaseline();
     scheduleLiveValidate();
     if (progressMode === "simulate") void refreshSimulate();
   }
 
   function handleRedo() {
-    const beforeMap = chapterJsonMap(chapters);
     const extras = historyExtras();
     const result = historyRedo(
       history,
@@ -1072,12 +1237,8 @@
     );
     if (!result.snapshot) return;
     history = result.state;
-    const changed = diffDirtyChapterIds(
-      { chapterJsonById: beforeMap },
-      result.snapshot,
-    );
     applyHistorySnapshot(result.snapshot);
-    dirtyChapters = new Set([...dirtyChapters, ...changed]);
+    syncDirtyFromBaseline();
     scheduleLiveValidate();
     if (progressMode === "simulate") void refreshSimulate();
   }
@@ -1087,7 +1248,7 @@
     const ch = chapters.find((c) => c.id === selectedChapter);
     if (!ch) return;
     clipboard = ch.quests.filter((q) => selection.selectedIds.has(q.id)).map((q) => structuredClone(q));
-    message = `Copied ${clipboard.length} quest(s)`;
+    flashNotice("success", `Copied ${clipboard.length} quest(s)`);
   }
 
   function handlePaste() {
@@ -1125,7 +1286,7 @@
     markDirty(selectedChapter);
     selection = selectAll(newQuests.map((q) => q.id));
     selectedQuest = newQuests[0] ?? null;
-    message = `Pasted ${newQuests.length} quest(s)`;
+    flashNotice("success", `Pasted ${newQuests.length} quest(s)`);
   }
 
   function handleSelectAll() {
@@ -1148,11 +1309,24 @@
   }
 
   function handleSearchKeyDown(e: KeyboardEvent) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      search = nextResult(search);
+      navigateSearchResult();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      search = prevResult(search);
+      navigateSearchResult();
+      return;
+    }
     if (e.key === "Enter") {
       e.preventDefault();
       if (e.shiftKey) search = prevResult(search);
       else search = nextResult(search);
       navigateSearchResult();
+      return;
     }
     if (e.key === "Escape") {
       search = { ...search, isOpen: false };
@@ -1228,6 +1402,25 @@
     }
 
     if (e.key === "Escape") {
+      if (bookMenuOpen) {
+        bookMenuOpen = false;
+        return;
+      }
+      if (issuesOpen) {
+        issuesOpen = false;
+        return;
+      }
+      if (showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel) {
+        showBookPanel = false;
+        showGroupsPanel = false;
+        showTablesPanel = false;
+        showLocalePanel = false;
+        return;
+      }
+      if (aiSidebarOpen) {
+        setAiSidebar(false);
+        return;
+      }
       if (search.isOpen) {
         search = { ...search, isOpen: false };
       } else if (showShortcuts) {
@@ -1246,6 +1439,10 @@
     }
 
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('[role="application"].viewport, .viewport[role="application"]')) {
+        return;
+      }
       if (!isInput && selection.selectedIds.size > 0) {
         e.preventDefault();
         const step = e.shiftKey ? 5 : 1;
@@ -1269,7 +1466,10 @@
 
   function applyMergeResult(result: QuestPlanMergeResult) {
     if (!result.validation?.valid) {
-      error = (result.validation?.errors ?? []).slice(0, 3).join("; ") || "Plan invalid";
+      flashNotice(
+        "error",
+        (result.validation?.errors ?? []).slice(0, 3).join("; ") || "Plan invalid",
+      );
       return;
     }
     pushHistory();
@@ -1290,10 +1490,7 @@
     if ((b.chapterGroups?.length ?? 0) > 0) {
       groupsDirty = true;
     }
-    dirtyChapters = new Set([
-      ...dirtyChapters,
-      ...(result.touchedChapterIds ?? []),
-    ]);
+    syncDirtyFromBaseline();
     if (result.touchedChapterIds?.length) {
       selectedChapter = result.touchedChapterIds[0];
     } else if (chapters.length && !chapters.some((c) => c.id === selectedChapter)) {
@@ -1311,7 +1508,10 @@
         { availableItems: itemCatalogCache },
       );
     }
-    message = `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Save to write SNBT.`;
+    flashNotice(
+      "success",
+      `AI plan applied in editor (${result.touchedChapterIds.length} chapter(s)). Undo (Ctrl+Z) to revert. Save to write SNBT.`,
+    );
     fitToken += 1;
   }
 
@@ -1325,9 +1525,9 @@
         $projectPath,
       );
       bookDirty = false;
-      message = "Book data.snbt saved.";
+      flashNotice("success", "Book data.snbt saved.");
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       saving = false;
     }
@@ -1341,9 +1541,9 @@
       await saveLocaleIfNeeded();
       await api.quests.saveChapterGroups(chapterGroups, $projectPath);
       groupsDirty = false;
-      message = "Chapter groups saved.";
+      flashNotice("success", "Chapter groups saved.");
     } catch (e) {
-      error = String(e);
+      flashNotice("error", String(e));
     } finally {
       saving = false;
     }
@@ -1385,17 +1585,18 @@
     groupsDirty = true;
   }
 
-  function deleteChapter(id: string) {
-    if (
-      !confirm(
+  async function deleteChapter(id: string) {
+    const ok = await askConfirm({
+      title: "Remove chapter?",
+      message:
         "Remove this chapter from the editor? The SNBT file may remain on disk — delete or empty it manually if needed.",
-      )
-    ) {
-      return;
-    }
+      danger: true,
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
     pushHistory();
     chapters = chapters.filter((c) => c.id !== id);
-    dirtyChapters = new Set([...dirtyChapters].filter((x) => x !== id));
+    syncDirtyFromBaseline();
     if (selectedChapter === id) {
       selectedChapter = chapters[0]?.id ?? "";
       selectedQuest = null;
@@ -1440,15 +1641,15 @@
     }
   }
 
-  const filteredChapterQuests = $derived(questSearch.trim()
+  const filteredChapterQuests = $derived(questSearchDebounced.trim()
     ? chapterQuests.filter((q) => {
-        const s = questSearch.toLowerCase();
+        const s = questSearchDebounced.toLowerCase();
         return (
           q.title.toLowerCase().includes(s) ||
           q.id.toLowerCase().includes(s) ||
           (q.subtitle ?? "").toLowerCase().includes(s)
         );
-      })
+      }).slice(0, 200)
     : chapterQuests);
 
   const hasDirty = $derived(
@@ -1459,11 +1660,53 @@
       dirtyLocales.size > 0,
   );
   $effect(() => {
+    const justOpened = search.isOpen && !searchWasOpen;
+    searchWasOpen = search.isOpen;
+    if (!justOpened) return;
+    queueMicrotask(() => searchInputEl?.focus({ preventScroll: true }));
+  });
+
+  $effect(() => {
     questDirty.set(hasDirty);
   });
+
+  async function handleProjectPathChange(nextPath: string) {
+    const gen = ++pathSwitchGen;
+    if (!nextPath || nextPath === lastLoadedPath) return;
+    if (hasDirty && lastLoadedPath) {
+      const prev = lastLoadedPath;
+      const ok = await askConfirm({
+        title: "Switch project?",
+        message: "Discard unsaved quest edits and switch project?",
+        danger: true,
+        confirmLabel: "Discard & switch",
+      });
+      if (gen !== pathSwitchGen) return;
+      if (!ok) {
+        if ($projectPath === nextPath) projectPath.set(prev);
+        return;
+      }
+    }
+    if (gen !== pathSwitchGen) return;
+    if ($projectPath !== nextPath) return;
+    await load();
+  }
+
   $effect(() => {
-    if ($projectPath && $projectPath !== lastLoadedPath) load();
+    const path = $projectPath;
+    if (path && path !== lastLoadedPath) {
+      void handleProjectPathChange(path);
+    }
   });
+
+  $effect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasDirty) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  });
+
   $effect(() => {
     if (selectedQuest) {
         const fresh = chapterQuests.find((q) => q.id === selectedQuest!.id);
@@ -1482,11 +1725,29 @@
 
   onDestroy(() => {
     if (validateTimer) clearTimeout(validateTimer);
+    if (noticeClearTimer) clearTimeout(noticeClearTimer);
     questDirty.set(false);
   });
+  function onWindowPointerDown(e: PointerEvent) {
+    const t = e.target as HTMLElement | null;
+    if (!t) return;
+    if (issuesOpen && !t.closest(".issues-wrap")) {
+      issuesOpen = false;
+    }
+    if (
+      (bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel) &&
+      !t.closest(".tb-pop")
+    ) {
+      bookMenuOpen = false;
+      showBookPanel = false;
+      showGroupsPanel = false;
+      showTablesPanel = false;
+      showLocalePanel = false;
+    }
+  }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onpointerdown={onWindowPointerDown} />
 
 <div class="qe ftbq">
   <div class="qe-tb">
@@ -1518,6 +1779,7 @@
           type="button"
           class="ghost ico"
           title="Locales — create, gaps, compare"
+          aria-label="Locales — create, gaps, compare"
           onclick={() => {
             showLocalePanel = true;
             showBookPanel = false;
@@ -1525,7 +1787,7 @@
             showTablesPanel = false;
             bookMenuOpen = true;
           }}
-        >+ New</button>
+        >Locales</button>
       </div>
       <div class="tb-pop">
         <button
@@ -1534,6 +1796,9 @@
           class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel}
           class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
           title="Book, groups, reward tables, locales"
+          aria-haspopup="menu"
+          aria-expanded={bookMenuOpen}
+          aria-controls="quest-book-menu"
           onclick={() => {
             bookMenuOpen = !bookMenuOpen;
             if (!bookMenuOpen) {
@@ -1547,7 +1812,7 @@
           Book{#if bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
         </button>
         {#if bookMenuOpen && $projectPath}
-          <div class="book-menu" role="menu">
+          <div class="book-menu" id="quest-book-menu" role="menu">
             <button
               type="button"
               role="menuitem"
@@ -1708,6 +1973,7 @@
         class="ghost"
         class:active={aiSidebarOpen}
         title="Quest AI sidebar"
+        aria-label="Quest AI sidebar"
         onclick={() => setAiSidebar(!aiSidebarOpen)}
       >
         <Sparkles size={16} /> AI
@@ -1717,6 +1983,7 @@
         class="ghost"
         disabled={!canUndo(history)}
         title="Undo (Ctrl+Z)"
+        aria-label="Undo (Ctrl+Z)"
         onclick={handleUndo}
       >
         <Undo2 size={16} />
@@ -1726,6 +1993,7 @@
         class="ghost"
         disabled={!canRedo(history)}
         title="Redo (Ctrl+Y)"
+        aria-label="Redo (Ctrl+Y)"
         onclick={handleRedo}
       >
         <Redo2 size={16} />
@@ -1734,6 +2002,7 @@
         type="button"
         class="ghost"
         title="Shortcuts (Ctrl+/)"
+        aria-label="Shortcuts (Ctrl+/)"
         onclick={() => (showShortcuts = !showShortcuts)}
       >
         <Keyboard size={16} />
@@ -1756,6 +2025,7 @@
         onclick={requestReload}
         disabled={!$projectPath || loading}
         title="Reload from disk"
+        aria-label="Reload from disk"
       >
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
@@ -1772,6 +2042,9 @@
           class="issues-btn"
           class:warn={validationIssues.length > 0}
           disabled={validationIssues.length === 0}
+          aria-haspopup="true"
+          aria-expanded={issuesOpen}
+          aria-controls="quest-issues-pop"
           onclick={() => (issuesOpen = !issuesOpen)}
         >
           {validationIssues.length === 0 ? "✓ valid" : `${validationIssues.length} issues`}
@@ -1785,8 +2058,8 @@
           Revalidate
         </button>
         {#if issuesOpen && validationIssues.length > 0}
-          <div class="issues-pop">
-            {#each validationIssues.slice(0, 40) as iss, i (`${iss.questId}-${i}`)}
+          <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
+            {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
               <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
                 <code>{iss.questId.slice(0, 8)}</code>
                 <span>{iss.message}</span>
@@ -1820,16 +2093,38 @@
     />
   {/if}
 
-  {#if error}<div class="notice error"><AlertTriangle size={14} /> {error}</div>{/if}
-  {#if message}<div class="notice success"><CheckCircle2 size={14} /> {message}</div>{/if}
+  {#if error}
+    <div class="notice error" role="alert" aria-live="assertive">
+      <AlertTriangle size={14} />
+      <span class="notice-text">{error}</span>
+      <button type="button" class="ghost ico notice-dismiss" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = null)}>
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
+  {#if message}
+    <div class="notice success" role="status" aria-live="polite">
+      <CheckCircle2 size={14} />
+      <span class="notice-text">{message}</span>
+      <button type="button" class="ghost ico notice-dismiss" title="Dismiss" aria-label="Dismiss message" onclick={() => (message = null)}>
+        <X size={14} />
+      </button>
+    </div>
+  {/if}
 
   {#if search.isOpen}
     <div class="search-panel">
       <div class="search-bar">
         <input
           type="search"
-          placeholder="Search all quests… (Enter next, Shift+Enter prev, Esc close)"
+          id="quest-global-search"
+          placeholder="Search… words, /regex/, or re:pattern (Enter next)"
           value={search.query}
+          bind:this={searchInputEl}
+          aria-controls="quest-search-results"
+          aria-activedescendant={search.results.length
+            ? `quest-search-hit-${search.selectedIndex}`
+            : undefined}
           oninput={(e) => updateSearch(inputVal(e))}
           onkeydown={handleSearchKeyDown}
         />
@@ -1838,18 +2133,30 @@
             ? `${search.selectedIndex + 1}/${search.results.length}`
             : "0"}</span
         >
-        <button type="button" class="ghost ico" title="Close" onclick={() => (search = { ...search, isOpen: false })}
+        <button
+          type="button"
+          class="ghost ico"
+          title="Close"
+          aria-label="Close search"
+          onclick={() => (search = { ...search, isOpen: false })}
           ><X size={14} /></button
         >
       </div>
-      {#if search.results.length > 0}
-        <ul class="search-results">
+      {#if search.query.trim() && search.results.length === 0}
+        <p class="search-empty" role="status">
+          No matches. Try words, <code>/regex/</code>, or <code>re:pattern</code>.
+        </p>
+      {:else if search.results.length > 0}
+        <ul class="search-results" id="quest-search-results" role="listbox" aria-label="Search results">
           {#each search.results.slice(0, 50) as r, i (`${r.chapterId}-${r.quest.id}-${r.matchField}-${i}`)}
             <li>
               <button
                 type="button"
                 class="search-hit"
                 class:active={i === search.selectedIndex}
+                id={`quest-search-hit-${i}`}
+                role="option"
+                aria-selected={i === search.selectedIndex}
                 onclick={() => {
                   search = { ...search, selectedIndex: i };
                   navigateSearchResult();
@@ -1917,6 +2224,14 @@
           />
           {#if questSearch}
             <span class="filt-count">{filteredChapterQuests.length}/{chapterQuests.length}</span>
+            <button
+              type="button"
+              class="ghost clear-filter"
+              title="Clear filter"
+              onclick={() => (questSearch = "")}
+            >
+              Clear filter
+            </button>
           {/if}
           <div class="layout-btns" title="Auto-layout current chapter">
             <button type="button" class="layout-btn" onclick={() => applyChapterLayout("tree")}>Tree</button>
@@ -1937,11 +2252,13 @@
             emptyHint={questSearch.trim()
               ? `No quests match “${questSearch.trim()}”`
               : "Double-click to add a quest"}
+            showEmptyAddCta={!questSearch.trim()}
             onSelect={(q, e) => {
               if (
                 progressMode === "simulate" &&
                 progressOverlay &&
                 q &&
+                e?.altKey &&
                 !e?.shiftKey &&
                 !e?.ctrlKey &&
                 !e?.metaKey
@@ -1972,20 +2289,66 @@
           onpointerdown={(e) => startColResize("insp", e)}
         ></div>
         <div class="side-panel">
-          <div class="panel-tabs">
-            <button type="button" class="tab" class:active={panelTab === "quest"} onclick={() => (panelTab = "quest")}
+          <div
+            class="panel-tabs"
+            role="tablist"
+            aria-label="Quest side panel"
+            tabindex="-1"
+            onkeydown={onPanelTabKeydown}
+          >
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "quest"}
+              aria-selected={panelTab === "quest"}
+              id="quest-panel-tab-quest"
+              tabindex={panelTab === "quest" ? 0 : -1}
+              onclick={() => setPanelTab("quest")}
               >Quest</button
             >
-            <button type="button" class="tab" class:active={panelTab === "info"} onclick={() => (panelTab = "info")}
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "info"}
+              aria-selected={panelTab === "info"}
+              id="quest-panel-tab-info"
+              tabindex={panelTab === "info" ? 0 : -1}
+              onclick={() => setPanelTab("info")}
               >Info</button
             >
-            <button type="button" class="tab" class:active={panelTab === "batch"} onclick={() => (panelTab = "batch")}
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "batch"}
+              aria-selected={panelTab === "batch"}
+              id="quest-panel-tab-batch"
+              tabindex={panelTab === "batch" ? 0 : -1}
+              onclick={() => setPanelTab("batch")}
               >Batch</button
             >
-            <button type="button" class="tab" class:active={panelTab === "colors"} onclick={() => (panelTab = "colors")}
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "colors"}
+              aria-selected={panelTab === "colors"}
+              id="quest-panel-tab-colors"
+              tabindex={panelTab === "colors" ? 0 : -1}
+              onclick={() => setPanelTab("colors")}
               >Colors</button
             >
-            <button type="button" class="tab" class:active={panelTab === "raw"} onclick={() => (panelTab = "raw")}
+            <button
+              type="button"
+              role="tab"
+              class="tab"
+              class:active={panelTab === "raw"}
+              aria-selected={panelTab === "raw"}
+              id="quest-panel-tab-raw"
+              tabindex={panelTab === "raw" ? 0 : -1}
+              onclick={() => setPanelTab("raw")}
               >Raw</button
             >
           </div>
@@ -2025,7 +2388,15 @@
                   }}
                 />
               {:else}
-                <p class="sel-hint">Select a quest on the canvas</p>
+                <div class="sel-empty">
+                  <p class="sel-hint">Select a quest on the canvas</p>
+                  <button
+                    type="button"
+                    class="ghost"
+                    onclick={() => addQuestAt(0, 0)}
+                    disabled={!selectedChapter}
+                  >Add quest</button>
+                </div>
               {/if}
             {:else if panelTab === "info"}
               <ChapterSettings
@@ -2043,6 +2414,7 @@
               <BatchEditor
                 {chapters}
                 selectedIds={selection.selectedIds}
+                focusToken={batchFocusToken}
                 onQuestUpdate={handleQuestUpdate}
                 onBatchApply={handleBatchApply}
                 onSaveChapter={(id) => void saveChapter(id)}
@@ -2052,6 +2424,7 @@
             {:else if panelTab === "raw"}
               <RawSnbtView
                 chapter={selectedChapterObj}
+                selectedQuestId={selectedQuest?.id ?? null}
                 onDiffVsDisk={() => void showChapterDiffVsDisk()}
               />
             {/if}
@@ -2092,6 +2465,17 @@
   onConfirm={() => closeSnbtDiff(true)}
   onCancel={() => closeSnbtDiff(false)}
 />
+
+{#if confirmOpen}
+  <ConfirmDialog
+    title={confirmTitle}
+    message={confirmMessage}
+    danger={confirmDanger}
+    confirmLabel={confirmLabel}
+    onconfirm={() => closeConfirm(true)}
+    oncancel={() => closeConfirm(false)}
+  />
+{/if}
 
 <style>
   .qe {
@@ -2304,7 +2688,7 @@
     left: 0;
     z-index: 30;
     min-width: 320px;
-    max-height: 240px;
+    max-height: min(80vh, 480px);
     overflow: auto;
     background: var(--ftbq-bg-panel);
     border: 1px solid var(--ftbq-frame);
@@ -2402,6 +2786,23 @@
     flex-shrink: 0;
     font-size: 12px;
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+  }
+  .notice-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .notice-dismiss {
+    flex-shrink: 0;
+    opacity: 0.8;
+  }
+  .notice-dismiss:hover {
+    opacity: 1;
+  }
+  .clear-filter {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    padding: 2px 8px;
   }
   .notice.error {
     color: #fecaca;
@@ -2587,6 +2988,15 @@
   .search-panel .search-bar {
     border-bottom: none;
   }
+  .search-empty {
+    margin: 0;
+    padding: 8px 12px 10px;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .search-empty code {
+    font-size: 10px;
+  }
   .search-results {
     list-style: none;
     margin: 0;
@@ -2688,6 +3098,18 @@
     font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
     border-top: 1px solid var(--ftbq-frame);
+  }
+  .sel-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 12px 12px;
+    border-top: 1px solid var(--ftbq-frame);
+  }
+  .sel-empty .sel-hint {
+    border-top: none;
+    padding: 0;
   }
   .qe-footer {
     margin-top: 8px;

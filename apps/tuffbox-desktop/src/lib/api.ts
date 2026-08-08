@@ -223,6 +223,8 @@ export interface QuestBook {
   /** locale code → translation keys from `lang/*.snbt`. */
   locales?: Record<string, Record<string, string | string[] | unknown>>;
   activeLocale?: string | null;
+  /** Non-fatal problems while loading SNBT (corrupt chapter, bad lang, etc.). */
+  loadWarnings?: string[];
 }
 
 export interface QuestRewardTable {
@@ -2079,7 +2081,10 @@ export const api = {
       });
     },
     listChats(p?: string) {
-      return cmd<QuestChatSession[]>("list_quest_chat_sessions", pathArg(p));
+      return cmd<{ sessions: QuestChatSession[]; corruptSkipped: number }>(
+        "list_quest_chat_sessions",
+        pathArg(p),
+      );
     },
     newChat(title?: string | null, p?: string) {
       return cmd<QuestChatSession>("new_quest_chat_session", {

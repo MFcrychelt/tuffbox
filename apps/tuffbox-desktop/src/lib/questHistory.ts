@@ -11,6 +11,8 @@ export {
   clearHistory,
   materializeChapters,
   diffDirtyChapterIds,
+  dirtyIdsAgainstBaseline,
+  patchSavedBaseline,
   chapterJsonMap,
   type HistorySnapshot,
   type HistoryBookMeta,

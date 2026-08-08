@@ -20,6 +20,7 @@
   } from "../../lib/api";
   import { projectPath, questChatFocusId } from "../../lib/store";
   import QuestPlanReview from "./QuestPlanReview.svelte";
+  import ConfirmDialog from "../ConfirmDialog.svelte";
   import { invoke } from "@tauri-apps/api/core";
 
   type QuestAiProgressPayload = {
@@ -69,6 +70,13 @@
   let loreWarning = $state("");
   /** Active intent for the next send: "generate" | "extend" | "lore" | "branch". */
   let pendingIntent = $state<"generate" | "extend" | "lore" | "branch">("generate");
+  let discardConfirmOpen = $state(false);
+  let deleteConfirmOpen = $state(false);
+  let deleteTarget = $state<{ id: string; title: string } | null>(null);
+  let composerHint = $state("");
+  let transcriptEl = $state<HTMLDivElement | null>(null);
+  let composerEl = $state<HTMLTextAreaElement | null>(null);
+  let wasOpen = $state(false);
   let unlistenProgress: UnlistenFn | undefined;
   let unlistenTokens: UnlistenFn | undefined;
   type ExampleChip = { label: string; text: string };
@@ -170,6 +178,33 @@
     pendingIntent = i;
   }
 
+  const INTENT_ORDER = ["generate", "branch", "extend", "lore"] as const;
+
+  function intentEnabled(i: (typeof INTENT_ORDER)[number]): boolean {
+    if (i === "branch") return !!anchorQuest;
+    if (i === "extend" || i === "lore") return !!session?.pendingPlan;
+    return true;
+  }
+
+  function onIntentKeydown(e: KeyboardEvent) {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) {
+      return;
+    }
+    e.preventDefault();
+    const enabled = INTENT_ORDER.filter(intentEnabled);
+    if (enabled.length === 0) return;
+    const idx = Math.max(0, enabled.indexOf(pendingIntent as (typeof INTENT_ORDER)[number]));
+    let next = idx;
+    if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = enabled.length - 1;
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      next = (idx - 1 + enabled.length) % enabled.length;
+    } else {
+      next = (idx + 1) % enabled.length;
+    }
+    setIntent(enabled[next]!);
+  }
+
   function appendProgressLine(line: string) {
     const last = progressLog[progressLog.length - 1];
     if (last === line) return;
@@ -186,10 +221,23 @@
     }
   });
 
+  $effect(() => {
+    const _msgs = session?.messages?.length ?? 0;
+    const _stream = streamDraft.length;
+    const _prog = progressLog.length;
+    void _msgs;
+    void _stream;
+    void _prog;
+    if (!transcriptEl) return;
+    queueMicrotask(() => {
+      transcriptEl?.scrollTo({ top: transcriptEl.scrollHeight, behavior: "smooth" });
+    });
+  });
+
   async function refreshList() {
     if (!$projectPath) return;
     try {
-      sessions = await api.quests.listChats($projectPath);
+      sessions = (await api.quests.listChats($projectPath)).sessions;
     } catch (e) {
       sessions = [];
       error = String(e);
@@ -204,6 +252,16 @@
       merge = null;
       progressLog = [];
       streamDraft = "";
+      error = "";
+      composerHint = "";
+      if (session.pendingPlan) {
+        merge = await api.quests.filterAndMergePlan(
+          session.pendingPlan,
+          [],
+          [],
+          $projectPath,
+        );
+      }
     } catch (e) {
       error = String(e);
     }
@@ -223,11 +281,19 @@
     }
   }
 
-  async function removeSession(id: string) {
-    if (!$projectPath) return;
+  function requestDeleteSession(id: string, title: string) {
+    deleteTarget = { id, title };
+    deleteConfirmOpen = true;
+  }
+
+  async function confirmDeleteSession() {
+    deleteConfirmOpen = false;
+    const target = deleteTarget;
+    deleteTarget = null;
+    if (!target || !$projectPath) return;
     try {
-      await api.quests.deleteChat(id, $projectPath);
-      if (activeId === id) {
+      await api.quests.deleteChat(target.id, $projectPath);
+      if (activeId === target.id) {
         activeId = null;
         session = null;
         merge = null;
@@ -235,6 +301,24 @@
       await refreshList();
     } catch (e) {
       error = String(e);
+    }
+  }
+
+  async function reopenPendingReview() {
+    if (!session?.pendingPlan || !$projectPath || busy) return;
+    busy = true;
+    error = "";
+    try {
+      merge = await api.quests.filterAndMergePlan(
+        session.pendingPlan,
+        [],
+        [],
+        $projectPath,
+      );
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
     }
   }
 
@@ -250,11 +334,23 @@
     }
   }
 
+  let canSend = $derived(
+    !!$projectPath &&
+      (pendingIntent === "lore" ||
+        (showJson ? rawJson.trim().length > 0 : input.trim().length > 0)),
+  );
+
   async function send(intent: "generate" | "extend" | "lore" | "branch" | null = "generate") {
     if (!$projectPath || busy) return;
     const useIntent = intent ?? pendingIntent;
     const text = showJson && rawJson.trim() ? rawJson.trim() : input.trim();
-    if (!text && useIntent !== "lore") return;
+    if (!text && useIntent !== "lore") {
+      composerHint = showJson
+        ? "Paste QuestPlan JSON first"
+        : "Describe the quest line first";
+      return;
+    }
+    composerHint = "";
     busy = true;
     error = "";
     loreWarning = "";
@@ -338,6 +434,7 @@
   }
 
   function onApplyReview(detail: { chapterKeys: string[]; questKeys: string[] }) {
+    if (busy) return;
     if (!merge?.plan || !$projectPath) return;
     void (async () => {
       busy = true;
@@ -350,12 +447,35 @@
         );
         onapply?.(filtered);
         merge = null;
+        if (session) {
+          const next: QuestChatSession = { ...session, pendingPlan: null };
+          session = next;
+          await api.quests.saveChat(next, $projectPath!);
+          await refreshList();
+        }
       } catch (err) {
         error = String(err);
       } finally {
         busy = false;
       }
     })();
+  }
+
+  async function confirmDiscardPendingPlan() {
+    discardConfirmOpen = false;
+    if (!session?.pendingPlan || !$projectPath) return;
+    const next: QuestChatSession = { ...session, pendingPlan: null };
+    session = next;
+    merge = null;
+    if (pendingIntent === "extend" || pendingIntent === "lore") {
+      pendingIntent = "generate";
+    }
+    try {
+      await api.quests.saveChat(next, $projectPath);
+      await refreshList();
+    } catch (e) {
+      error = String(e);
+    }
   }
 
   onMount(() => {
@@ -377,7 +497,11 @@
       const payload = event.payload;
       if (!busy) return;
       if (activeId != null && payload.chatId !== activeId) return;
+      if (streamDraft.length >= 262144) return;
       streamDraft += payload.text;
+      if (streamDraft.length > 262144) {
+        streamDraft = `${streamDraft.slice(0, 262144)}\n…`;
+      }
     }).then((unlisten) => {
       unlistenTokens = unlisten;
     });
@@ -399,9 +523,20 @@
       void selectSession(id);
     }
   });
+
+  $effect(() => {
+    const justOpened = open && !wasOpen;
+    wasOpen = open;
+    if (!justOpened || !open) return;
+    if (discardConfirmOpen || deleteConfirmOpen) return;
+    queueMicrotask(() => {
+      if (discardConfirmOpen || deleteConfirmOpen) return;
+      composerEl?.focus({ preventScroll: true });
+    });
+  });
 </script>
 
-<aside class="qai" class:open>
+<aside class="qai" class:open aria-busy={busy}>
   <div class="qai-h">
     <Sparkles size={16} />
     <strong>Quest AI</strong>
@@ -435,7 +570,13 @@
           <button type="button" class="sess-open" onclick={() => selectSession(s.id)}>
             {s.title}
           </button>
-          <button type="button" class="ghost ico" onclick={() => removeSession(s.id)}>
+          <button
+            type="button"
+            class="ghost ico"
+            aria-label={`Delete chat ${s.title}`}
+            title={`Delete chat ${s.title}`}
+            onclick={() => requestDeleteSession(s.id, s.title)}
+          >
             <Trash2 size={12} />
           </button>
         </div>
@@ -443,7 +584,7 @@
     </div>
   </div>
 
-  <div class="transcript">
+  <div class="transcript" bind:this={transcriptEl}>
     {#if !session?.messages?.length}
       <div class="empty-chat">
         <MessageSquareText size={28} />
@@ -487,15 +628,32 @@
       {progressLog.length ? progressLog[progressLog.length - 1] : "Streaming…"}
     </div>
     {#if streamDraft}
-      <pre class="stream-draft">{streamDraft}</pre>
+      <details class="stream-wrap" open={busy && !merge}>
+        <summary>Stream draft ({streamDraft.length} chars)</summary>
+        <pre class="stream-draft">{streamDraft}</pre>
+      </details>
     {/if}
   {/if}
   {#if !busy && lastUsage && formatUsage(lastUsage)}
     <div class="live-prog usage-last">Last turn: {formatUsage(lastUsage)}</div>
   {/if}
 
-  {#if error}<div class="err">{error}</div>{/if}
-  {#if loreWarning}<div class="warn">{loreWarning}</div>{/if}
+  {#if error}
+    <div class="err" role="alert">
+      <span class="err-text">{error}</span>
+      <button type="button" class="ghost ico err-dismiss" title="Dismiss" aria-label="Dismiss error" onclick={() => (error = "")}>
+        ×
+      </button>
+    </div>
+  {/if}
+  {#if loreWarning}
+    <div class="warn" role="status">
+      <span class="warn-text">{loreWarning}</span>
+      <button type="button" class="ghost ico err-dismiss" title="Dismiss" aria-label="Dismiss warning" onclick={() => (loreWarning = "")}>
+        ×
+      </button>
+    </div>
+  {/if}
   {#if aiReadyHint && busy}<div class="live-prog">{aiReadyHint}</div>{/if}
 
   {#if merge}
@@ -503,22 +661,55 @@
       {merge}
       needsReviewAck={!!merge.plan?.needsUserReview}
       onapply={onApplyReview}
-      ondiscard={() => (merge = null)}
+      ondiscard={() => (discardConfirmOpen = true)}
     />
   {/if}
 
-  <div class="composer">
-    <div class="intent-row">
+  {#if session?.pendingPlan && !merge}
+    <div class="pending-plan-bar">
+      <span class="pending-plan-label">Pending plan ready</span>
       <button
+        type="button"
+        class="ghost review-plan"
+        disabled={busy}
+        onclick={() => void reopenPendingReview()}
+      >
+        Review
+      </button>
+      <button
+        type="button"
+        class="ghost discard-plan"
+        disabled={busy}
+        onclick={() => (discardConfirmOpen = true)}
+      >
+        Discard
+      </button>
+    </div>
+  {/if}
+
+  <div class="composer">
+    <div
+      class="intent-row"
+      role="radiogroup"
+      aria-label="Quest AI intent"
+      tabindex="-1"
+      onkeydown={onIntentKeydown}
+    >      <button
         type="button"
         class="intent"
         class:active={pendingIntent === "generate"}
+        role="radio"
+        aria-checked={pendingIntent === "generate"}
+        tabindex={pendingIntent === "generate" ? 0 : -1}
         onclick={() => setIntent("generate")}
       >Generate</button>
       <button
         type="button"
         class="intent"
         class:active={pendingIntent === "branch"}
+        role="radio"
+        aria-checked={pendingIntent === "branch"}
+        tabindex={pendingIntent === "branch" ? 0 : -1}
         disabled={!anchorQuest}
         title={anchorQuest ? "Branch from selected quest" : "Select a quest on canvas first"}
         onclick={() => setIntent("branch")}
@@ -527,6 +718,9 @@
         type="button"
         class="intent"
         class:active={pendingIntent === "extend"}
+        role="radio"
+        aria-checked={pendingIntent === "extend"}
+        tabindex={pendingIntent === "extend" ? 0 : -1}
         disabled={!session?.pendingPlan}
         title={session?.pendingPlan ? "Append to pending plan" : "Generate a plan first"}
         onclick={() => setIntent("extend")}
@@ -535,6 +729,9 @@
         type="button"
         class="intent"
         class:active={pendingIntent === "lore"}
+        role="radio"
+        aria-checked={pendingIntent === "lore"}
+        tabindex={pendingIntent === "lore" ? 0 : -1}
         disabled={!session?.pendingPlan}
         title={session?.pendingPlan ? "Regenerate lore only" : "Generate a plan first"}
         onclick={() => setIntent("lore")}
@@ -542,19 +739,31 @@
     </div>
 
     {#if showJson}
-      <textarea rows="4" placeholder={'{ "schemaVersion": 1, … }'} bind:value={rawJson}></textarea>
+      <textarea
+        rows="4"
+        placeholder={'{ "schemaVersion": 1, … }'}
+        bind:this={composerEl}
+        bind:value={rawJson}
+        oninput={() => (composerHint = "")}
+      ></textarea>
     {:else}
       <textarea
         rows="3"
         placeholder={pendingIntent === "branch"
           ? `Describe the branch from "${anchorQuest?.title ?? "…"}"…`
           : "Describe the quest line…"}
+        bind:this={composerEl}
         bind:value={input}
+        oninput={() => (composerHint = "")}
         onkeydown={(e) => {
           if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) void send(pendingIntent);
         }}
       ></textarea>
     {/if}
+    {#if composerHint}
+      <div class="composer-hint" role="status">{composerHint}</div>
+    {/if}
+    <p class="send-chord">Ctrl+Enter to send</p>
     <div class="composer-actions">
       {#if busy}
         <button type="button" class="stop" onclick={() => void stopGeneration()}>
@@ -564,7 +773,8 @@
         <button
           type="button"
           class="primary"
-          disabled={!$projectPath}
+          disabled={!canSend}
+          title={!canSend && $projectPath ? "Describe the quest line first" : undefined}
           onclick={() => send(pendingIntent)}
         >
           <Send size={14} />
@@ -583,6 +793,31 @@
     </details>
   </div>
 </aside>
+
+{#if discardConfirmOpen}
+  <ConfirmDialog
+    title="Discard pending plan?"
+    message="This clears the pending QuestPlan from the chat session. You can generate a new one afterward."
+    danger={true}
+    confirmLabel="Discard"
+    onconfirm={() => void confirmDiscardPendingPlan()}
+    oncancel={() => (discardConfirmOpen = false)}
+  />
+{/if}
+
+{#if deleteConfirmOpen && deleteTarget}
+  <ConfirmDialog
+    title="Delete chat?"
+    message={`Delete chat “${deleteTarget.title}”? History cannot be recovered.`}
+    danger={true}
+    confirmLabel="Delete"
+    onconfirm={() => void confirmDeleteSession()}
+    oncancel={() => {
+      deleteConfirmOpen = false;
+      deleteTarget = null;
+    }}
+  />
+{/if}
 
 <style>
   .qai {
@@ -824,8 +1059,21 @@
     align-items: center;
     gap: 6px;
   }
-  .stream-draft {
+  .stream-wrap {
     margin: 0 10px 8px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: var(--border-radius-sm);
+    background: rgba(0, 0, 0, 0.2);
+  }
+  .stream-wrap summary {
+    cursor: pointer;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    font-weight: 600;
+  }
+  .stream-draft {
+    margin: 0;
     max-height: 140px;
     overflow: auto;
     padding: 8px;
@@ -835,15 +1083,96 @@
     word-break: break-word;
     color: var(--ftbq-text-muted, #9a9aa0);
     background: rgba(0, 0, 0, 0.25);
-    border: 1px solid var(--ftbq-frame);
-    border-radius: var(--border-radius-sm);
+    border: none;
+    border-top: 1px solid var(--ftbq-frame);
+    border-radius: 0;
   }
   .err {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    color: #f87171;
+    padding: 6px 10px;
+    font-size: 12px;
+    background: rgba(239, 68, 68, 0.08);
+    border-top: 1px solid rgba(239, 68, 68, 0.25);
+  }
+  .err-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .err-dismiss {
+    flex-shrink: 0;
+    line-height: 1;
+    font-size: 16px;
+    padding: 0 4px;
     color: #f87171;
   }
   .warn {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
     color: var(--ftbq-quest-started, #f2c94c);
     background: rgba(242, 201, 76, 0.08);
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .warn-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .send-chord {
+    margin: 0;
+    font-size: 10px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .pending-plan-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--ftbq-frame);
+    background: rgba(242, 201, 76, 0.06);
+  }
+  .pending-plan-label {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ftbq-quest-started, #f2c94c);
+  }
+  .review-plan {
+    font-size: 11px;
+    font-weight: 600;
+    color: #86efac;
+    background: transparent;
+    border: 1px solid #1f5a2c;
+    border-radius: 3px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .review-plan:hover:not(:disabled) {
+    background: rgba(27, 217, 106, 0.12);
+  }
+  .review-plan:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .discard-plan {
+    font-size: 11px;
+    font-weight: 600;
+    color: #f87171;
+    background: transparent;
+    border: 1px solid #5a1a1a;
+    border-radius: 3px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  .discard-plan:hover:not(:disabled) {
+    background: rgba(248, 113, 113, 0.12);
+  }
+  .discard-plan:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .composer {
     padding: 10px;
@@ -853,6 +1182,11 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .composer-hint {
+    font-size: 11px;
+    color: #fbbf24;
+    padding: 2px 0;
   }
   .intent-row {
     display: flex;

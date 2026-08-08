@@ -91,10 +91,8 @@
 {#if open}
   <div
     class="modal-backdrop"
-    role="button"
-    tabindex="-1"
+    role="presentation"
     onclick={(e) => e.target === e.currentTarget && onCancel?.()}
-    onkeydown={() => {}}
   >
     <div
       class="modal snbt-diff-modal"

@@ -254,6 +254,31 @@ export function diffDirtyChapterIds(
   return dirty;
 }
 
+/**
+ * Dirty chapter ids relative to a saved baseline (disk / last successful save).
+ * New chapters (missing from baseline) and edited chapters are dirty.
+ * Chapters only in baseline (deleted in editor) are not listed — callers track deletes separately.
+ */
+export function dirtyIdsAgainstBaseline(
+  currentChapterJsonById: Record<string, string>,
+  savedBaseline: Record<string, string>,
+): string[] {
+  const dirty: string[] = [];
+  for (const id of Object.keys(currentChapterJsonById)) {
+    if (currentChapterJsonById[id] !== savedBaseline[id]) dirty.push(id);
+  }
+  return dirty;
+}
+
+/** Merge one chapter's JSON into a baseline map (after successful save). */
+export function patchSavedBaseline(
+  baseline: Record<string, string>,
+  chapterId: string,
+  chapterJson: string,
+): Record<string, string> {
+  return { ...baseline, [chapterId]: chapterJson };
+}
+
 /** Build chapterJsonById map for the current editor chapters (no structural sharing). */
 export function chapterJsonMap(chapters: unknown[]): Record<string, string> {
   const map: Record<string, string> = {};

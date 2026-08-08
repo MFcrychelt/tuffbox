@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { trapFocus } from "../../lib/focusTrap";
+
   let {
     isOpen,
     onClose,
@@ -13,36 +15,52 @@
       { keys: ["Ctrl", "/"], action: "This shortcuts dialog" },
       { keys: ["Ctrl", "Z"], action: "Undo" },
       { keys: ["Ctrl", "Shift", "Z"], action: "Redo" },
-      { keys: ["Ctrl", "F"], action: "Search quests" },
+      { keys: ["Ctrl", "F"], action: "Search quests (/regex/ or re:…)" },
       { keys: ["Ctrl", "0"], action: "Zoom to fit" },
-      { keys: ["Esc"], action: "Deselect / Close panel" },
+      { keys: ["Esc"], action: "Close menus / drawers / AI / search / deselect" },
     ]},
     { category: "Editing", items: [
       { keys: ["Ctrl", "C"], action: "Copy selected quests" },
       { keys: ["Ctrl", "V"], action: "Paste quests" },
       { keys: ["Ctrl", "A"], action: "Select all quests" },
       { keys: ["Del"], action: "Delete selected quests" },
-      { keys: ["Arrow keys"], action: "Nudge selected quests (1px)" },
-      { keys: ["Shift", "Arrow"], action: "Nudge selected quests (5px)" },
+      { keys: ["Arrow keys"], action: "Nudge selected (1px) when canvas not focused" },
+      { keys: ["Shift", "Arrow"], action: "Nudge selected (5px)" },
     ]},
     { category: "Canvas", items: [
+      { keys: ["Arrow keys"], action: "Select next/previous quest (canvas focused)" },
+      { keys: ["Home", "End"], action: "Jump to first/last quest" },
+      { keys: ["Esc"], action: "Clear canvas selection" },
+      { keys: ["Alt", "Click"], action: "Toggle simulate complete (Simulate mode)" },
       { keys: ["Space", "Drag"], action: "Pan canvas" },
       { keys: ["Scroll"], action: "Zoom in/out" },
       { keys: ["Double-click"], action: "Add new quest" },
       { keys: ["Shift", "Drag"], action: "Link quests (create dependency)" },
       { keys: ["Click + Drag"], action: "Marquee select" },
     ]},
+    { category: "Quest AI", items: [
+      { keys: ["Ctrl", "Enter"], action: "Send / Generate (composer)" },
+      { keys: ["Arrow keys"], action: "Move between intent radios" },
+    ]},
   ];
 </script>
 
 {#if isOpen}
-  <!-- svelte-ignore a11y_interactive_supports_focus a11y_click_events_have_key_events -->
-  <div class="overlay" onclick={onClose} role="dialog" aria-modal="true" tabindex="-1">
-    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="modal" onclick={(e) => e.stopPropagation()} role="document">
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="overlay" role="presentation" onclick={onClose}>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-title"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      use:trapFocus={{ onEscape: onClose }}
+    >
       <div class="modal-header">
-        <h2>Keyboard Shortcuts</h2>
-        <button type="button" class="close" onclick={onClose}>×</button>
+        <h2 id="shortcuts-title">Keyboard Shortcuts</h2>
+        <button type="button" class="close" onclick={onClose} aria-label="Close">×</button>
       </div>
       <div class="modal-body">
         {#each shortcuts as section (section.category)}

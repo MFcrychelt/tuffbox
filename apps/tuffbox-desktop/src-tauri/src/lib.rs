@@ -45,6 +45,7 @@ pub(crate) use helpers::{
     save_backup_index, save_manifest, save_stats, save_launcher_data,
     slugify_project_name,
     unified_text_diff, read_small_text_file, validate_relative_snapshot_path,
+    QUEST_IO_LOCK,
 };
 
 #[tauri::command(rename_all = "camelCase")]
@@ -7094,6 +7095,9 @@ fn save_quest_chapter(
     chapter: tuffbox_core::unified::Chapter,
     relative_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let rel = tuffbox_core::unified::QuestBook::save_chapter(
@@ -7323,6 +7327,9 @@ fn save_quest_reward_table(
     table: tuffbox_core::unified::RewardTable,
     relative_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let rel = tuffbox_core::unified::RewardTable::save_to_project(
@@ -7341,6 +7348,9 @@ fn save_quest_book_data(
     path: String,
     book: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let mut loaded = tuffbox_core::unified::QuestBook::load_from_project(&project_dir)?;
@@ -7370,6 +7380,9 @@ fn save_quest_chapter_groups(
     path: String,
     groups: Vec<tuffbox_core::unified::ChapterGroup>,
 ) -> Result<serde_json::Value, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let rel = tuffbox_core::unified::QuestBook::save_chapter_groups(&project_dir, &groups)?;
@@ -7389,6 +7402,9 @@ fn save_quest_locale(
     code: String,
     map: std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let rel = tuffbox_core::unified::QuestBook::save_locale(&project_dir, &code, &map)?;
@@ -13777,10 +13793,13 @@ async fn load_quest_chapter(file_path: String) -> Result<String, String> {
 
 #[tauri::command(rename_all = "camelCase")]
 async fn save_quest_chapter_raw(file_path: String, json_payload: String) -> Result<(), String> {
+    let _guard = QUEST_IO_LOCK
+        .lock()
+        .map_err(|_| "quest I/O lock poisoned".to_string())?;
     let value: serde_json::Value = serde_json::from_str(&json_payload)
         .map_err(|e| format!("Invalid JSON payload: {}", e))?;
     let snbt_content = snbt_parser::json_to_snbt(&value);
-    std::fs::write(&file_path, snbt_content)
+    tuffbox_core::fs_util::atomic_write(std::path::Path::new(&file_path), snbt_content)
         .map_err(|e| format!("Failed to write SNBT file: {}", e))?;
     Ok(())
 }

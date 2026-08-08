@@ -916,7 +916,11 @@ fn api_error(service: &str, status: reqwest::StatusCode, body: &Value) -> String
                 raw.chars().take(280).collect()
             }
         });
-    format!("{service} returned {status}: {message}")
+    let mut out = format!("{service} returned {status}: {message}");
+    if status == reqwest::StatusCode::UNAUTHORIZED || status.as_u16() == 403 {
+        out.push_str(" — check the AI API key in Settings → Integrations → AI");
+    }
+    out
 }
 
 fn is_gemini_endpoint(endpoint: &str) -> bool {
@@ -1016,15 +1020,15 @@ async fn call_gemini_generate_content(
     }
     body["generationConfig"] = gen;
 
-    let response = client
-        .post(gemini_generate_url(model))
-        .header(USER_AGENT, APP_USER_AGENT)
-        .header("x-goog-api-key", api_key.trim())
-        .header(ACCEPT, "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Gemini request failed: {e}"))?;
+    let response = send_ai_http_with_retry("Gemini", || {
+        client
+            .post(gemini_generate_url(model))
+            .header(USER_AGENT, APP_USER_AGENT)
+            .header("x-goog-api-key", api_key.trim())
+            .header(ACCEPT, "application/json")
+            .json(&body)
+    })
+    .await?;
     let status = response.status();
     let body_text = response.text().await.map_err(|e| e.to_string())?;
     let parsed: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2079,23 +2083,102 @@ fn parse_gemini_usage(body: &Value) -> Option<tuffbox_core::AiTokenUsage> {
     })
 }
 
+const AI_HTTP_MAX_RETRIES: u32 = 3;
+const AI_STREAM_MAX_BYTES: usize = 1024 * 1024;
+
+/// Retry AI HTTP on transport errors, 429, and 5xx (async counterpart to core `http::fetch` backoff).
+async fn send_ai_http_with_retry(
+    label: &str,
+    mut make_req: impl FnMut() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    let mut last_err = format!("{label} request failed");
+    for attempt in 0..=AI_HTTP_MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt.min(4)))).await;
+        }
+        let response = match make_req().send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("{label} request failed: {e}");
+                if attempt < AI_HTTP_MAX_RETRIES {
+                    continue;
+                }
+                return Err(last_err);
+            }
+        };
+        let status = response.status();
+        if status.as_u16() == 429 || status.is_server_error() {
+            if attempt < AI_HTTP_MAX_RETRIES {
+                let delay = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or_else(|| (2u64.pow(attempt + 1)).min(60))
+                    .min(60);
+                let _ = response.bytes().await;
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                continue;
+            }
+        }
+        return Ok(response);
+    }
+    Err(last_err)
+}
+
+fn append_stream_capped(full: &mut String, delta: &str) -> Result<(), String> {
+    if full.len().saturating_add(delta.len()) > AI_STREAM_MAX_BYTES {
+        return Err(format!(
+            "AI stream exceeded {AI_STREAM_MAX_BYTES} bytes — aborting to avoid OOM"
+        ));
+    }
+    full.push_str(delta);
+    Ok(())
+}
+
+fn strip_ai_fences(content: &str) -> &str {
+    let trimmed = content.trim();
+    let without_open = if let Some(rest) = trimmed.strip_prefix("```") {
+        let rest = rest.trim_start();
+        let rest = rest
+            .strip_prefix("json")
+            .or_else(|| rest.strip_prefix("JSON"))
+            .or_else(|| rest.strip_prefix("Json"))
+            .unwrap_or(rest);
+        rest.trim_start_matches(['\r', '\n']).trim_start()
+    } else {
+        trimmed
+    };
+    let s = without_open.trim_end();
+    let without_close = if let Some(rest) = s
+        .strip_suffix("```json")
+        .or_else(|| s.strip_suffix("```JSON"))
+        .or_else(|| s.strip_suffix("```Json"))
+        .or_else(|| s.strip_suffix("```"))
+    {
+        rest.trim_end()
+    } else {
+        s
+    };
+    without_close.trim()
+}
+
 fn finalize_ai_content(
     content: String,
     json_mode: bool,
 ) -> Result<Value, String> {
-    let trimmed = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    let trimmed = strip_ai_fences(&content);
 
     if json_mode {
         serde_json::from_str(trimmed)
             .or_else(|_| {
-                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-                    if end > start {
-                        return serde_json::from_str(&trimmed[start..=end]);
+                // Only slice out first `{`…last `}` when the payload looks like prose wrapping JSON.
+                // If it already starts with `{`, a failed full parse must not carve a corrupt substring.
+                if !trimmed.starts_with('{') {
+                    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                        if end > start {
+                            return serde_json::from_str(&trimmed[start..=end]);
+                        }
                     }
                 }
                 Err(serde_json::Error::io(std::io::Error::new(
@@ -2142,12 +2225,12 @@ pub async fn call_ai_messages_with_usage(
                 body["format"] = json!("json");
             }
         }
-        let response = client
-            .post(ollama_chat_url(&settings.endpoint))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
+        let response = send_ai_http_with_retry("Ollama", || {
+            client
+                .post(ollama_chat_url(&settings.endpoint))
+                .json(&body)
+        })
+        .await?;
         let status = response.status();
         let body_text = response.text().await.map_err(|e| e.to_string())?;
         let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2186,17 +2269,17 @@ pub async fn call_ai_messages_with_usage(
         if json_mode {
             payload["response_format"] = json!({"type": "json_object"});
         }
-        let mut req = client
-            .post(openai_chat_url(&settings.endpoint))
-            .header(USER_AGENT, APP_USER_AGENT)
-            .json(&payload);
-        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
-            req = req.bearer_auth(token);
-        }
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("AI request failed: {e}"))?;
+        let response = send_ai_http_with_retry("AI provider", || {
+            let mut req = client
+                .post(openai_chat_url(&settings.endpoint))
+                .header(USER_AGENT, APP_USER_AGENT)
+                .json(&payload);
+            if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+                req = req.bearer_auth(token);
+            }
+            req
+        })
+        .await?;
         let status = response.status();
         let body_text = response.text().await.map_err(|e| e.to_string())?;
         let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2306,12 +2389,12 @@ where
         if json_mode {
             body["format"] = json!("json");
         }
-        let mut response = client
-            .post(ollama_chat_url(&settings.endpoint))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
+        let mut response = send_ai_http_with_retry("Ollama", || {
+            client
+                .post(ollama_chat_url(&settings.endpoint))
+                .json(&body)
+        })
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
@@ -2342,7 +2425,7 @@ where
                 }
                 if let Some(delta) = parse_ollama_stream_delta(&line) {
                     if !delta.is_empty() {
-                        full.push_str(&delta);
+                        append_stream_capped(&mut full, &delta)?;
                         on_token(&delta);
                     }
                 }
@@ -2359,7 +2442,7 @@ where
             }
             if let Some(delta) = parse_ollama_stream_delta(line) {
                 if !delta.is_empty() {
-                    full.push_str(&delta);
+                    append_stream_capped(&mut full, &delta)?;
                     on_token(&delta);
                 }
             }
@@ -2376,18 +2459,18 @@ where
         if json_mode {
             payload["response_format"] = json!({"type": "json_object"});
         }
-        let mut req = client
-            .post(openai_chat_url(&settings.endpoint))
-            .header(USER_AGENT, APP_USER_AGENT)
-            .header(ACCEPT, "text/event-stream")
-            .json(&payload);
-        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
-            req = req.bearer_auth(token);
-        }
-        let mut response = req
-            .send()
-            .await
-            .map_err(|e| format!("AI request failed: {e}"))?;
+        let mut response = send_ai_http_with_retry("AI provider", || {
+            let mut req = client
+                .post(openai_chat_url(&settings.endpoint))
+                .header(USER_AGENT, APP_USER_AGENT)
+                .header(ACCEPT, "text/event-stream")
+                .json(&payload);
+            if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+                req = req.bearer_auth(token);
+            }
+            req
+        })
+        .await?;
         if !response.status().is_success() {
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
@@ -2411,7 +2494,7 @@ where
                 }
                 if let Some(delta) = parse_openai_sse_delta(&line) {
                     if !delta.is_empty() {
-                        full.push_str(&delta);
+                        append_stream_capped(&mut full, &delta)?;
                         on_token(&delta);
                     }
                 }
@@ -2424,7 +2507,7 @@ where
             }
             if let Some(delta) = parse_openai_sse_delta(line) {
                 if !delta.is_empty() {
-                    full.push_str(&delta);
+                    append_stream_capped(&mut full, &delta)?;
                     on_token(&delta);
                 }
             }
@@ -2470,20 +2553,21 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
         .map_err(|e| format!("HTTP client error: {e}"))?;
     let content = if settings.provider == "ollama" {
         let model = ensure_ollama_ready(settings).await?;
-        let response = client
-            .post(ollama_chat_url(&settings.endpoint))
-            .json(&json!({
-                "model": model,
-                "stream": false,
-                "format": "json",
-                "messages": [
-                    {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
-                    {"role": "user", "content": prompt}
-                ]
-            }))
-            .send()
-            .await
-            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
+        let body = json!({
+            "model": model,
+            "stream": false,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
+                {"role": "user", "content": prompt}
+            ]
+        });
+        let response = send_ai_http_with_retry("Ollama", || {
+            client
+                .post(ollama_chat_url(&settings.endpoint))
+                .json(&body)
+        })
+        .await?;
         let status = response.status();
         let body_text = response.text().await.map_err(|e| e.to_string())?;
         let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2513,25 +2597,26 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
     } else {
         // OpenAI-compatible / Hermes-style: API key optional for local endpoints.
         let token = secret("ai").ok();
-        let mut req = client
-            .post(openai_chat_url(&settings.endpoint))
-            .header(USER_AGENT, APP_USER_AGENT)
-            .json(&json!({
-                "model": settings.model,
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
-                    {"role": "user", "content": prompt}
-                ]
-            }));
-        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
-            req = req.bearer_auth(token);
-        }
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("AI request failed: {e}"))?;
+        let body = json!({
+            "model": settings.model,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
+                {"role": "user", "content": prompt}
+            ]
+        });
+        let response = send_ai_http_with_retry("AI provider", || {
+            let mut req = client
+                .post(openai_chat_url(&settings.endpoint))
+                .header(USER_AGENT, APP_USER_AGENT)
+                .json(&body);
+            if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+                req = req.bearer_auth(token);
+            }
+            req
+        })
+        .await?;
         let status = response.status();
         let body_text = response.text().await.map_err(|e| e.to_string())?;
         let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2549,12 +2634,7 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
             .ok_or_else(|| "AI response did not contain choices[0].message.content".to_string())?
             .to_string()
     };
-    let trimmed = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    let trimmed = strip_ai_fences(&content);
     // Prefer ActionPlan parse; fall back to raw JSON.
     match tuffbox_core::action_plan::parse_action_plan(trimmed) {
         Ok(plan) => serde_json::to_value(plan).map_err(|e| e.to_string()),
@@ -2824,6 +2904,14 @@ mod tests {
     }
 
     #[test]
+    fn api_error_401_hints_api_key() {
+        let body = json!({ "error": { "message": "API key not valid" } });
+        let msg = api_error("Gemini", reqwest::StatusCode::UNAUTHORIZED, &body);
+        assert!(msg.contains("API key"), "{msg}");
+        assert!(msg.contains("Settings"), "{msg}");
+    }
+
+    #[test]
     fn normalizes_release_versions() {
         assert_eq!(
             normalized_semver("v1.2.3"),
@@ -2845,5 +2933,18 @@ mod tests {
         fs::create_dir(dir.path().join("blobs")).unwrap();
         fs::create_dir(dir.path().join("manifests")).unwrap();
         assert!(is_ollama_models_dir(dir.path()));
+    }
+
+    #[test]
+    fn strip_ai_fences_closing_language_tag() {
+        assert_eq!(
+            strip_ai_fences("```json\n{\"ok\":true}\n```json"),
+            "{\"ok\":true}"
+        );
+        assert_eq!(
+            strip_ai_fences("```JSON\n{\"ok\":1}\n```JSON"),
+            "{\"ok\":1}"
+        );
+        assert_eq!(strip_ai_fences("```\n{}\n```"), "{}");
     }
 }
