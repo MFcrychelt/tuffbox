@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
   import { Mountain, RefreshCw, Database, Map as MapIcon } from "@lucide/svelte";
-  import { projectPath, ideStageRequest } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
+  import { api } from "../lib/api";
   import EmptyState from "./EmptyState.svelte";
 
   type OreEntry = {
@@ -22,32 +22,48 @@
   let error = $state<string | null>(null);
   let selectedOre = $state<string | null>(null);
   let lastOreScanPath = $state<string | null>(null);
+  let scanVersion = $state(0);
 
-  const WORLD_MIN = -64;
-  const WORLD_MAX = 320;
+  const worldMin = $derived(isLegacyVersion($projectInfo?.minecraftVersion) ? 0 : -64);
+  const worldMax = $derived(isLegacyVersion($projectInfo?.minecraftVersion) ? 255 : 320);
+
+  function isLegacyVersion(ver: string | undefined): boolean {
+    if (!ver) return false;
+    const match = ver.match(/^1\.(\d+)/);
+    if (!match) return false;
+    const minor = parseInt(match[1], 10);
+    return minor < 18;
+  }
+
   const CANVAS_HEIGHT = 520;
   const BAR_SLOT = 28;
   const CHART_PAD_LEFT = 60;
   const CHART_PAD_RIGHT = 20;
 
   function yToCanvas(y: number): number {
-    const ratio = (y - WORLD_MIN) / (WORLD_MAX - WORLD_MIN);
+    const ratio = (y - worldMin) / (worldMax - worldMin);
     return CANVAS_HEIGHT - ratio * CANVAS_HEIGHT;
   }
 
   async function scan() {
     if (!$projectPath) return;
     const path = $projectPath;
+    const myVersion = ++scanVersion;
     loading = true;
     error = null;
     try {
-      ores = await invoke("scan_ore_generation", { path });
+      const raw = await api.diagnostics.scanOre(path);
+      if (myVersion !== scanVersion) return;
+      ores = raw as OreEntry[];
     } catch (e) {
+      if (myVersion !== scanVersion) return;
       error = String(e);
       ores = [];
     } finally {
-      lastOreScanPath = path;
-      loading = false;
+      if (myVersion === scanVersion) {
+        lastOreScanPath = path;
+        loading = false;
+      }
     }
   }
 
@@ -83,6 +99,14 @@
   const chartWidth = $derived(
     Math.max(260, oreBars.length * BAR_SLOT + CHART_PAD_LEFT + CHART_PAD_RIGHT),
   );
+
+  const yTicks = $derived((() => {
+    const range = worldMax - worldMin;
+    const step = range <= 128 ? 32 : 64;
+    const ticks: number[] = [];
+    for (let y = worldMax; y >= worldMin; y -= step) ticks.push(y);
+    return ticks;
+  })());
   const oreColors: Record<string, string> = {
     coal: "#2d2d2d",
     iron: "#d4a373",
@@ -139,7 +163,7 @@
   <p class="hint">
     Height / vein chart from configs. Chunk select, delete, and export live in
     <button type="button" class="linkish" onclick={openWorldMap}>World map</button>
-    (IDE) or sidebar World (Ctrl+8).
+    (IDE) or sidebar World.
   </p>
 
   {#if !$projectPath}
@@ -155,9 +179,10 @@
   {:else}
     <div class="layout">
       <div class="chart-shell">
-        <svg viewBox="0 0 {chartWidth} {CANVAS_HEIGHT + 40}" class="ore-chart" width={chartWidth}>
+        <svg viewBox="0 0 {chartWidth} {CANVAS_HEIGHT + 40}" class="ore-chart" width={chartWidth} role="img" aria-label="Ore height range chart">
+          <title>Ore height ranges — Y axis from {worldMin} to {worldMax}</title>
           <line x1="60" y1="10" x2="60" y2={CANVAS_HEIGHT + 10} stroke="rgba(255,255,255,.12)" stroke-width="1" />
-          {#each [320, 256, 192, 128, 64, 0, -64] as y (y)}
+          {#each yTicks as y (y)}
             {@const cy = yToCanvas(y) + 10}
             <text x="54" y={cy + 4} text-anchor="end" fill="#6b7280" font-size="10">{y}</text>
             <line x1="58" y1={cy} x2={chartWidth - 20} y2={cy} stroke="rgba(255,255,255,.04)" stroke-width="1" />
@@ -167,13 +192,15 @@
 
           {#each oreBars as ore, idx (ore.resource + ore.configFile)}
             {@const barX = 68 + idx * BAR_SLOT}
-            {@const topY = yToCanvas(Math.min(ore.maxY, WORLD_MAX)) + 10}
-            {@const botY = yToCanvas(Math.max(ore.minY, WORLD_MIN)) + 10}
+            {@const topY = yToCanvas(Math.min(ore.maxY, worldMax)) + 10}
+            {@const botY = yToCanvas(Math.max(ore.minY, worldMin)) + 10}
             {@const barH = Math.max(2, botY - topY)}
             <rect
               x={barX} y={topY} width="18" height={barH} rx="2"
               fill={colorFor(ore.resource)} opacity={ore.enabled ? 0.8 : 0.2}
               stroke={colorFor(ore.resource)} stroke-width="1"
+              role="graphics-symbol"
+              aria-label="{ore.resource}: Y{ore.minY} to Y{ore.maxY}, vein {ore.veinSize}, {ore.spawnsPerChunk}/chunk{ore.enabled ? '' : ', disabled'}"
             />
             <text
               x={barX + 9} y={CANVAS_HEIGHT + 28} text-anchor="middle"

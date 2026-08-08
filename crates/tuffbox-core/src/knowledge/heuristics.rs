@@ -178,6 +178,11 @@ pub fn scan_configs_for_ore_gen(config_contents: &[(String, String)]) -> Vec<Heu
         }
     }
 
+    // Deduplicate by (resource_name, config_file) — keep first occurrence
+    // (highest confidence since Medium is pushed before Low).
+    let mut seen = std::collections::HashSet::new();
+    results.retain(|r| seen.insert((r.resource_name.clone(), r.config_file.clone())));
+
     results
 }
 

@@ -4412,8 +4412,10 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
         let kb_hint =
             tuffbox_core::knowledge::builtin::ModKnowledgeEntry::lookup(&hit.resource_name);
         let confidence = match (hit.confidence, kb_hint.is_some()) {
-            (_, true) => "high",
-            (tuffbox_core::knowledge::heuristics::HeuristicConfidence::Medium, _) => "medium",
+            (tuffbox_core::knowledge::heuristics::HeuristicConfidence::Medium, true) => "high",
+            (tuffbox_core::knowledge::heuristics::HeuristicConfidence::Medium, false) => "medium",
+            (tuffbox_core::knowledge::heuristics::HeuristicConfidence::High, _) => "high",
+            (_, true) => "medium",
             _ => "low",
         };
         results.push(serde_json::json!({
