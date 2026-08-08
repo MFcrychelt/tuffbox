@@ -12,6 +12,8 @@
     ideSuggestedStage,
     openLaunchLog,
     isLaunching,
+    brandIcon,
+    BRAND_ICON_CREEPER_SRC_SM,
   } from "../lib/store";
   import { api } from "../lib/api";
   import { launchWithFeedback } from "../lib/launch";
@@ -112,9 +114,19 @@
 </script>
 
 <aside class="rail">
-  <!-- Brand mark — constant amber identity, not a nav button. -->
+  <!-- Brand mark — constant identity, not a nav button. -->
   <div class="rail-brand" title="TuffBox">
-    <span class="brand-logo" aria-hidden="true">T</span>
+    {#if $brandIcon === "creeper"}
+      <img
+        class="brand-logo brand-logo-img"
+        src={BRAND_ICON_CREEPER_SRC_SM}
+        alt=""
+        draggable="false"
+        aria-hidden="true"
+      />
+    {:else}
+      <span class="brand-logo" aria-hidden="true">T</span>
+    {/if}
   </div>
 
   <nav class="rail-zone" aria-label="App">
@@ -276,6 +288,15 @@
     justify-content: center;
     box-shadow: 0 4px 14px rgba(255, 197, 0, 0.28);
     animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .brand-logo-img {
+    display: block;
+    object-fit: cover;
+    background: transparent;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+    color: transparent;
+    font-size: 0;
   }
 
   .rail-zone {

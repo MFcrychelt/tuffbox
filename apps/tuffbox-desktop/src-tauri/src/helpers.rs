@@ -330,6 +330,33 @@ pub(crate) fn save_launcher_data(
     std::fs::write(&path, json).map_err(|e| e.to_string())
 }
 
+fn recent_projects_path() -> PathBuf {
+    dirs::config_dir()
+        .or_else(dirs::data_local_dir)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("TuffBox")
+        .join("recent_projects.json")
+}
+
+pub(crate) fn load_recent_projects() -> Vec<crate::types::RecentProjectEntry> {
+    let path = recent_projects_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn save_recent_projects(
+    projects: &[crate::types::RecentProjectEntry],
+) -> Result<(), String> {
+    let path = recent_projects_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(projects).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
 // ── Stats persistence ────────────────────────────────────────────
 
 pub(crate) fn stats_path(project_dir: &Path) -> PathBuf {

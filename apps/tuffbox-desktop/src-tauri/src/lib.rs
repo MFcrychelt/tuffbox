@@ -4424,8 +4424,14 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
                 continue;
             };
             // Read actual enabled value from the config file
-            let enabled_value = read_config_key(content, &mapping.enabled_key)
+            let mut enabled_value = read_config_key(content, &mapping.enabled_key)
                 .unwrap_or_else(|| "true".to_string());
+            // Invert if this is a disable-key (e.g. disableZincOre = true → ore is OFF)
+            if mapping.enabled_inverted && enabled_value == "true" {
+                enabled_value = "false".to_string();
+            } else if mapping.enabled_inverted && enabled_value == "false" {
+                enabled_value = "true".to_string();
+            }
             let vein_size = mapping
                 .vein_size_key
                 .as_deref()
@@ -4500,7 +4506,11 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
 fn read_config_key(content: &str, key: &str) -> Option<String> {
     let key_lower = key.to_lowercase();
     for line in content.lines() {
-        let trimmed = line.trim();
+        let trimmed = line
+            .trim()
+            .trim_start_matches("B:")
+            .trim_start_matches("I:")
+            .trim_start_matches("S:");
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
             continue;
         }
@@ -12217,6 +12227,18 @@ fn get_last_opened_project() -> Result<Option<String>, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+fn load_recent_projects() -> Result<Vec<crate::types::RecentProjectEntry>, String> {
+    Ok(helpers::load_recent_projects())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn save_recent_projects(
+    projects: Vec<crate::types::RecentProjectEntry>,
+) -> Result<(), String> {
+    helpers::save_recent_projects(&projects)
+}
+
+#[tauri::command(rename_all = "camelCase")]
 fn get_home_dir() -> Result<String, String> {
     dirs::home_dir()
         .map(|p| p.to_string_lossy().to_string())
@@ -14292,6 +14314,8 @@ pub fn run() {
             is_project_pinned,
             set_last_opened_project,
             get_last_opened_project,
+            load_recent_projects,
+            save_recent_projects,
             update_project_settings,
             auth::mc_start_device_code,
             auth::mc_poll_device_code,

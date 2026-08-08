@@ -2295,6 +2295,12 @@ export const api = {
     isPinned(p?: string) { return cmd<boolean>("is_project_pinned", pathArg(p)); },
     setLastOpened(p?: string) { return cmd<void>("set_last_opened_project", pathArg(p)); },
     getLastOpened() { return cmd<string | null>("get_last_opened_project"); },
+    loadRecentProjects() {
+      return cmd<Array<{ path: string; info: Record<string, unknown> }>>("load_recent_projects");
+    },
+    saveRecentProjects(projects: Array<{ path: string; info: Record<string, unknown> }>) {
+      return cmd<void>("save_recent_projects", { projects });
+    },
   },
 
   // ── File Operations ───────────────────────────────────────────────

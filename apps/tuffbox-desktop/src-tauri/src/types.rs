@@ -336,6 +336,30 @@ pub struct LauncherDataState {
     pub last_opened: Option<String>,
 }
 
+/// Sidebar / Library recent instance list — survives WebView2 profile wipes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectEntry {
+    pub path: String,
+    pub info: RecentProjectInfo,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectInfo {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub minecraft_version: String,
+    pub loader_kind: String,
+    pub loader_version: String,
+    pub java_path: Option<String>,
+    pub memory_mb: u32,
+    #[serde(default)]
+    pub jvm_args: Vec<String>,
+    pub player_name: String,
+}
+
 // ── Live debug types ─────────────────────────────────────────────
 
 #[derive(Clone, serde::Serialize)]

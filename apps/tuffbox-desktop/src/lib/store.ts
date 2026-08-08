@@ -1,5 +1,6 @@
 import { writable } from "svelte/store";
 import type { RunningInstance } from "./api";
+import { api } from "./api";
 
 export interface ProjectInfo {
   id: string;
@@ -17,6 +18,16 @@ export interface ProjectInfo {
 export interface RecentProject {
   path: string;
   info: ProjectInfo;
+}
+
+function persistRecent(projects: RecentProject[]) {
+  try {
+    localStorage.setItem("recentProjects", JSON.stringify(projects));
+  } catch {
+    /* ignore quota / private mode */
+  }
+  // Disk copy survives WebView2 profile wipes (EBWebView clears).
+  void api.session.saveRecentProjects(projects).catch(() => {});
 }
 
 function createRecentProjects() {
@@ -60,9 +71,7 @@ function createRecentProjects() {
           );
           next = [project, ...filtered].slice(0, 20);
         }
-        try {
-          localStorage.setItem("recentProjects", JSON.stringify(next));
-        } catch {}
+        persistRecent(next);
         return next;
       });
     },
@@ -71,22 +80,46 @@ function createRecentProjects() {
         const next = projects.map((p) =>
           p.path === path ? { ...p, info } : p
         );
-        try {
-          localStorage.setItem("recentProjects", JSON.stringify(next));
-        } catch {}
+        persistRecent(next);
         return next;
       });
     },
     remove: (path: string) => {
       update((projects) => {
         const next = projects.filter((p) => p.path !== path);
-        try {
-          localStorage.setItem("recentProjects", JSON.stringify(next));
-        } catch {}
+        persistRecent(next);
         return next;
       });
     },
-    set,
+    set: (projects: RecentProject[]) => {
+      persistRecent(projects);
+      set(projects);
+    },
+    /** Merge disk-backed list after WebView localStorage was wiped. */
+    async hydrateFromDisk() {
+      try {
+        const disk = await api.session.loadRecentProjects();
+        if (!disk?.length) return;
+        update((projects) => {
+          if (projects.length > 0) {
+            // Keep local order; fill gaps from disk.
+            const have = new Set(projects.map((p) => p.path));
+            const merged = [...projects];
+            for (const p of disk) {
+              if (!have.has(p.path)) merged.push(p);
+            }
+            const next = merged.slice(0, 20);
+            persistRecent(next);
+            return next;
+          }
+          const next = disk.slice(0, 20);
+          persistRecent(next);
+          return next;
+        });
+      } catch {
+        /* offline / old binary */
+      }
+    },
   };
 }
 
@@ -637,6 +670,43 @@ function createSidebarIconsCollapsed() {
   };
 }
 export const sidebarIconsCollapsed = createSidebarIconsCollapsed();
+
+/** App chrome brand mark: classic amber "T" or creeper-in-a-box. */
+export type BrandIconId = "classic" | "creeper";
+
+const BRAND_ICON_KEY = "tuffbox.brand-icon";
+
+function readBrandIcon(): BrandIconId {
+  try {
+    const v = localStorage.getItem(BRAND_ICON_KEY);
+    if (v === "creeper" || v === "classic") return v;
+  } catch {
+    /* ignore */
+  }
+  return "classic";
+}
+
+function createBrandIcon() {
+  const { subscribe, set } = writable<BrandIconId>(
+    typeof window !== "undefined" ? readBrandIcon() : "classic",
+  );
+  return {
+    subscribe,
+    set: (id: BrandIconId) => {
+      try {
+        localStorage.setItem(BRAND_ICON_KEY, id);
+      } catch {
+        /* ignore */
+      }
+      set(id);
+    },
+  };
+}
+
+export const brandIcon = createBrandIcon();
+
+export const BRAND_ICON_CREEPER_SRC = "/brand/creeper-box.png";
+export const BRAND_ICON_CREEPER_SRC_SM = "/brand/creeper-box-128.png";
 
 /** Global YouTube player session — survives view switches so mini player stays on any page. */
 export type YoutubePlayerSession = {

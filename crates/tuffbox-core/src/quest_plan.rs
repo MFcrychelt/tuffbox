@@ -270,9 +270,9 @@ pub fn try_heuristic_quest_plan(request: &str) -> Option<QuestPlan> {
     let chapter_title = extract_chapter_title(text).unwrap_or_else(|| "New Chapter".into());
 
     // Body after "квест" / "quest" / first numbered item
-    let body = if let Some(idx) = lower.find("квест") {
+    let body = if let Some(idx) = find_ci(text, "квест") {
         &text[idx..]
-    } else if let Some(idx) = lower.find("quest") {
+    } else if let Some(idx) = find_ci(text, "quest") {
         &text[idx..]
     } else {
         text
@@ -358,24 +358,54 @@ pub fn try_heuristic_quest_plan(request: &str) -> Option<QuestPlan> {
     })
 }
 
+/// Case-insensitive substring search returning byte offset in the original string.
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let needle_lower: Vec<char> = needle.to_lowercase().chars().collect();
+    if needle_lower.is_empty() {
+        return Some(0);
+    }
+    let mut window: Vec<char> = Vec::new();
+    for (byte_pos, ch) in haystack.char_indices() {
+        window.push(ch.to_lowercase().next().unwrap_or(ch));
+        if window.len() > needle_lower.len() {
+            window.remove(0);
+        }
+        if window == needle_lower {
+            // Return the byte offset where this match starts
+            let match_start = haystack[..byte_pos]
+                .char_indices()
+                .nth_back(window.len() - 1)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            return Some(match_start);
+        }
+    }
+    None
+}
+
 fn extract_chapter_title(text: &str) -> Option<String> {
-    let lower = text.to_lowercase();
     // "главу 1: …" / "глава 1: …" / "chapter 1: …"
     for (key, prefix) in [("глав", "Глава"), ("chapter", "Chapter")] {
-        if let Some(idx) = lower.find(key) {
-            // skip past the whole word (глава/главу/главе…)
-            let after_key = idx + key.len();
+        if let Some(idx) = find_ci(text, key) {
+            // skip past the whole word (глава/главу/главе… / chapter)
+            // Advance past non-whitespace to skip the full word (not just the matched prefix).
+            let mut after_key = idx;
+            for ch in text[idx..].chars() {
+                if ch.is_whitespace() || ch.is_ascii_digit() || ch == ':' || ch == '-' {
+                    break;
+                }
+                after_key += ch.len_utf8();
+            }
             let rest_start = text[after_key..]
                 .find(|c: char| c.is_whitespace() || c.is_ascii_digit() || c == ':' || c == '-')
                 .map(|d| after_key + d)
                 .unwrap_or(after_key);
             let rest = text[rest_start..].trim_start();
-            let rest_l = rest.to_lowercase();
             let end = rest
                 .find([',', '.', ';'])
-                .or_else(|| rest_l.find("в ней"))
-                .or_else(|| rest_l.find("квест"))
-                .or_else(|| rest_l.find("quest"))
+                .or_else(|| find_ci(rest, "в ней"))
+                .or_else(|| find_ci(rest, "квест"))
+                .or_else(|| find_ci(rest, "quest"))
                 .unwrap_or(rest.len());
             let title = rest[..end].trim().trim_matches(|c| c == '-' || c == '–').trim();
             if title.is_empty() {
@@ -438,10 +468,8 @@ fn split_numbered_items(body: &str) -> Vec<String> {
 }
 
 fn split_reward(chunk: &str) -> (&str, Option<&str>) {
-    let lower = chunk.to_lowercase();
-    let key_at = lower
-        .find("наград")
-        .or_else(|| lower.find("reward"));
+    let key_at = find_ci(chunk, "наград")
+        .or_else(|| find_ci(chunk, "reward"));
     if let Some(idx) = key_at {
         let before = chunk[..idx]
             .trim()

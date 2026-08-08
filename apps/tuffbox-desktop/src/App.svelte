@@ -375,6 +375,8 @@
         markSwarmOnboardLocallyDone();
       }
       try {
+        // Restore rail instances after WebView2 profile wipe (localStorage only).
+        await recentProjects.hydrateFromDisk();
         // Desktop shortcut / CLI: `--launch <manifest>` opens the instance and starts the client.
         const pendingLaunch = await api.files.takePendingLaunch();
         if (pendingLaunch) {

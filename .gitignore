@@ -31,5 +31,10 @@ bridges/mca-selector/prebuilt/**
 bridges/cosmetics/.gradle/
 bridges/cosmetics/**/.gradle/
 bridges/cosmetics/**/build/
+bridges/cosmetics/**/bin/
 bridges/cosmetics/.vscode/
 !bridges/cosmetics/gradle/wrapper/gradle-wrapper.jar
+
+# Vendored external projects (not part of TuffBox)
+ServerPackCreator/
+packwiz/

@@ -21,7 +21,12 @@
     suggestUiScalePercent,
     UI_SCALE_STEPS,
     notifyLauncherSettingsChanged,
+    brandIcon,
+    BRAND_ICON_CREEPER_SRC,
+    BRAND_ICON_CREEPER_SRC_SM,
+    type BrandIconId,
   } from "../lib/store";
+  import ConfettiBurst from "./ConfettiBurst.svelte";
   import {
     readStoredTheme, commitTheme, type ThemeId,
   } from "../lib/themes";
@@ -178,6 +183,7 @@
   let customW = $state(1280);
   let customH = $state(720);
   let discordDirty = $state(false);
+  let brandConfetti = $state(false);
 
   const concurrentOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
   const concurrentSelectOptions = $derived(
@@ -776,6 +782,14 @@
     localStorage.setItem("tuffbox-reduced-motion", reducedMotion ? "1" : "0");
     applyPotatoPc(reducedMotion);
     void persistLauncher({ potatoPc: reducedMotion });
+  }
+
+  function selectBrandIcon(id: BrandIconId) {
+    const prev = $brandIcon;
+    brandIcon.set(id);
+    if (id === "creeper" && prev !== "creeper" && !reducedMotion) {
+      brandConfetti = true;
+    }
   }
 
   function statusLabel(set: boolean) {
@@ -1684,12 +1698,53 @@
           </div>
         {/if}
         <div class="about">
-          <div class="logo-big">T</div>
+          {#if $brandIcon === "creeper"}
+            <img class="logo-big logo-big-img" src={BRAND_ICON_CREEPER_SRC} alt="" draggable="false" />
+          {:else}
+            <div class="logo-big">T</div>
+          {/if}
           <div>
             <h4>TuffBox IDE</h4>
             <p>Developer harness for Minecraft modpacks.</p>
             <span class="version">Version {appVersion || "…"}</span>
           </div>
+        </div>
+      </section>
+
+      <section class="card card-wide">
+        <div class="card-title">
+          <Palette size={18} />
+          <h3>App icon</h3>
+        </div>
+        <p class="hint">Shown on the left rail and on this About page.</p>
+        <div class="brand-icon-picker" role="radiogroup" aria-label="App icon">
+          <button
+            type="button"
+            class="brand-icon-option"
+            class:selected={$brandIcon === "classic"}
+            role="radio"
+            aria-checked={$brandIcon === "classic"}
+            onclick={() => selectBrandIcon("classic")}
+          >
+            <span class="brand-icon-preview brand-icon-classic" aria-hidden="true">T</span>
+            <span class="brand-icon-label">Classic</span>
+          </button>
+          <button
+            type="button"
+            class="brand-icon-option"
+            class:selected={$brandIcon === "creeper"}
+            role="radio"
+            aria-checked={$brandIcon === "creeper"}
+            onclick={() => selectBrandIcon("creeper")}
+          >
+            <img
+              class="brand-icon-preview brand-icon-creeper"
+              src={BRAND_ICON_CREEPER_SRC_SM}
+              alt=""
+              draggable="false"
+            />
+            <span class="brand-icon-label">Creeper box</span>
+          </button>
         </div>
       </section>
     {/if}
@@ -1705,6 +1760,8 @@
     onselected={(path) => { showJavaPicker = false; void persistLauncher({ defaultJavaPath: path }); }}
   />
 {/if}
+
+<ConfettiBurst active={brandConfetti} ondone={() => (brandConfetti = false)} />
 
 <style>
   .settings {
@@ -1989,6 +2046,75 @@
     font-size: 32px;
     color: #000;
     box-shadow: 0 8px 24px rgba(27, 217, 106, 0.25);
+  }
+
+  .logo-big-img {
+    display: block;
+    object-fit: cover;
+    background: transparent;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    color: transparent;
+    font-size: 0;
+  }
+
+  .brand-icon-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .brand-icon-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    min-width: 120px;
+    padding: 14px 16px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+  }
+
+  .brand-icon-option:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .brand-icon-option.selected {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+  }
+
+  .brand-icon-preview {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--border-radius-md);
+  }
+
+  .brand-icon-classic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #ffc500, #ff9500);
+    color: #241703;
+    font-weight: 900;
+    font-size: 22px;
+    box-shadow: 0 4px 14px rgba(255, 197, 0, 0.28);
+  }
+
+  .brand-icon-creeper {
+    display: block;
+    object-fit: cover;
+    background: transparent;
+  }
+
+  .brand-icon-label {
+    font-size: 12px;
+    font-weight: 600;
   }
 
   .about h4 {

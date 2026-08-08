@@ -125,7 +125,8 @@
   }
 
   function miniWMax(): number {
-    return Math.max(MINI_W_MIN, Math.min(960, window.innerWidth - 16));
+    const vw = document.documentElement?.clientWidth ?? window.innerWidth;
+    return Math.max(MINI_W_MIN, Math.min(960, vw - 16));
   }
 
   function clampMiniW(w: number): number {
@@ -181,16 +182,21 @@
 
   function placeMiniDefault() {
     const pad = 20;
+    const vw = document.documentElement?.clientWidth ?? window.innerWidth;
+    const vh = document.documentElement?.clientHeight ?? window.innerHeight;
     const h = Math.round((miniW * 9) / 16) + MINI_HEADER_H;
-    miniX = Math.max(pad, window.innerWidth - miniW - pad);
-    miniY = Math.max(pad, window.innerHeight - h - pad);
+    miniX = Math.max(pad, vw - miniW - pad);
+    miniY = Math.max(pad, vh - h - pad);
   }
 
   function clampMiniPos() {
     const w = miniW;
     const h = Math.round((miniW * 9) / 16) + MINI_HEADER_H;
-    const maxX = Math.max(8, window.innerWidth - w - 8);
-    const maxY = Math.max(8, window.innerHeight - h - 8);
+    // Use documentElement for reliable viewport size (matches actual visible area).
+    const vw = document.documentElement?.clientWidth ?? window.innerWidth;
+    const vh = document.documentElement?.clientHeight ?? window.innerHeight;
+    const maxX = Math.max(8, vw - w - 8);
+    const maxY = Math.max(8, vh - h - 8);
     miniX = Math.min(maxX, Math.max(8, miniX));
     miniY = Math.min(maxY, Math.max(8, miniY));
   }
