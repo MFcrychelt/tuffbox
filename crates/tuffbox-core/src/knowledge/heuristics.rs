@@ -287,18 +287,20 @@ fn infer_resource_name(key: &str, _file_path: &str) -> String {
 }
 
 fn find_related_key(lines: &[&str], center: usize, suffixes: &[&str]) -> Option<(String, String)> {
-    let window = 8usize;
-    let start = center.saturating_sub(window);
-    let end = (center + window).min(lines.len());
+    // Try small window first (most configs keep related keys close), then expand.
+    for window in [8usize, 20] {
+        let start = center.saturating_sub(window);
+        let end = (center + window).min(lines.len());
 
-    for line in &lines[start..end] {
-        if let Some((k, v)) = parse_toml_kv(line)
-            .or_else(|| parse_json_kv(line))
-            .or_else(|| parse_cfg_kv(line))
-        {
-            let kl = k.to_lowercase();
-            if suffixes.iter().any(|s| kl.contains(&s.to_lowercase())) {
-                return Some((k.to_string(), v.to_string()));
+        for line in &lines[start..end] {
+            if let Some((k, v)) = parse_toml_kv(line)
+                .or_else(|| parse_json_kv(line))
+                .or_else(|| parse_cfg_kv(line))
+            {
+                let kl = k.to_lowercase();
+                if suffixes.iter().any(|s| kl.contains(&s.to_lowercase())) {
+                    return Some((k.to_string(), v.to_string()));
+                }
             }
         }
     }
@@ -309,26 +311,30 @@ fn find_height_range(
     lines: &[&str],
     center: usize,
 ) -> (Option<(String, String)>, Option<(String, String)>) {
-    let window = 10usize;
-    let start = center.saturating_sub(window);
-    let end = (center + window).min(lines.len());
     let (min_sfx, max_sfx) = &HEIGHT_SUFFIXES[0];
-
     let mut min = None;
     let mut max = None;
 
-    for line in &lines[start..end] {
-        if let Some((k, v)) = parse_toml_kv(line)
-            .or_else(|| parse_json_kv(line))
-            .or_else(|| parse_cfg_kv(line))
-        {
-            let kl = k.to_lowercase();
-            if min_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
-                min = Some((k.to_string(), v.to_string()));
+    for window in [10usize, 24] {
+        let start = center.saturating_sub(window);
+        let end = (center + window).min(lines.len());
+
+        for line in &lines[start..end] {
+            if let Some((k, v)) = parse_toml_kv(line)
+                .or_else(|| parse_json_kv(line))
+                .or_else(|| parse_cfg_kv(line))
+            {
+                let kl = k.to_lowercase();
+                if min.is_none() && min_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
+                    min = Some((k.to_string(), v.to_string()));
+                }
+                if max.is_none() && max_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
+                    max = Some((k.to_string(), v.to_string()));
+                }
             }
-            if max_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
-                max = Some((k.to_string(), v.to_string()));
-            }
+        }
+        if min.is_some() && max.is_some() {
+            break;
         }
     }
     (min, max)

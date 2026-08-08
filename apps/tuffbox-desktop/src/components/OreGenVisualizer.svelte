@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Mountain, RefreshCw, Database, Map as MapIcon } from "@lucide/svelte";
+  import { slide } from "svelte/transition";
   import { projectPath, projectInfo, ideStageRequest } from "../lib/store";
   import { api } from "../lib/api";
   import EmptyState from "./EmptyState.svelte";
@@ -45,6 +46,8 @@
     return CANVAS_HEIGHT - ratio * CANVAS_HEIGHT;
   }
 
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
   async function scan() {
     if (!$projectPath) return;
     const path = $projectPath;
@@ -71,12 +74,29 @@
     const path = $projectPath;
     if (!path) return;
     if (lastOreScanPath === path) return;
-    void scan();
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => void scan(), 300);
+    return () => { if (debounceTimer) clearTimeout(debounceTimer); };
   });
 
   function parseHeight(val: any): number | null {
     if (!val || !Array.isArray(val) || val.length < 2) return null;
-    const n = Number(val[1]);
+    const raw = String(val[1]).trim();
+    // Simple arithmetic: "64 + 16", "128-32", etc.
+    const expr = raw.replace(/\s/g, "");
+    const match = expr.match(/^(-?\d+(?:\.\d+)?)([+\-*/])(-?\d+(?:\.\d+)?)$/);
+    if (match) {
+      const [, a, op, b] = match;
+      const va = Number(a), vb = Number(b);
+      if (!Number.isFinite(va) || !Number.isFinite(vb)) return null;
+      switch (op) {
+        case "+": return va + vb;
+        case "-": return va - vb;
+        case "*": return va * vb;
+        case "/": return vb !== 0 ? va / vb : null;
+      }
+    }
+    const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   }
 
@@ -107,6 +127,7 @@
     for (let y = worldMax; y >= worldMin; y -= step) ticks.push(y);
     return ticks;
   })());
+
   const oreColors: Record<string, string> = {
     coal: "#2d2d2d",
     iron: "#d4a373",
@@ -121,6 +142,7 @@
     uranium: "#6bc148",
     zinc: "#a8bd99",
     aluminum: "#f0e2c8",
+    aluminium: "#f0e2c8",
     osmium: "#8bbaff",
     platinum: "#c0c8e0",
     ruby: "#e63946",
@@ -129,11 +151,26 @@
     sulfur: "#ffea00",
     quartz: "#f0f0f0",
     iridium: "#d5ceff",
+    tungsten: "#8a8a8a",
+    titanium: "#bfc4d0",
+    chromium: "#8ecaff",
+    certus: "#a8d8ea",
+    fluorite: "#73e8a0",
+    saltpeter: "#e8dcc8",
+    redstone: "#ff3333",
+    lapis: "#345ec3",
+    netherite: "#4a3c2a",
+    ancient_debris: "#5c4033",
+    amethyst: "#9b59b6",
+    topaz: "#ffc048",
+    peridot: "#8bc34a",
+    bauxite: "#c9a96e",
   };
 
   function colorFor(resource: string): string {
+    const lower = resource.toLowerCase();
     for (const [key, color] of Object.entries(oreColors)) {
-      if (resource.toLowerCase().includes(key)) return color;
+      if (lower.includes(key)) return color;
     }
     return "#7c7c8a";
   }
@@ -226,7 +263,7 @@
             </div>
           </button>
           {#if selectedOre === ore.resource}
-            <div class="ore-details">
+            <div class="ore-details" transition:slide={{ duration: 150 }}>
               <code>{ore.configFile}</code>
             </div>
           {/if}
@@ -257,6 +294,11 @@
     cursor: pointer;
     font: inherit;
     text-decoration: underline;
+  }
+  .linkish:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.28); }
