@@ -24,12 +24,23 @@
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-minecraft: "Press Start 2P", "Minecraft", ui-monospace, monospace;
+  --font-base: 14px;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
 
-  /* Interface scale (Settings → Appearance). Chromium `zoom` on .app-shell. */
+  /* Interface scale (Settings → Appearance). Applied as CSS zoom on <html>
+     so fixed overlays, pointer hit-tests, and layout share one coordinate space.
+     (Zoom only on .app-shell used to offset Library menus / folder drag.) */
   --ui-scale: 1;
+}
+
+/* Fill the viewport after html zoom shrinks/enlarges CSS pixels. */
+html[data-ui-scaled="1"],
+html[data-ui-scaled="1"] body,
+html[data-ui-scaled="1"] #app {
+  width: calc(100vw / var(--ui-scale, 1));
+  height: calc(100vh / var(--ui-scale, 1));
 }
 
 @font-face {
@@ -41,7 +52,8 @@
 }
 
 /* Light theme */
-[data-theme="light"] {
+[data-theme="light"],
+[data-theme="tuffbox-light"] {
   --bg-primary: #f8f9fa;
   --bg-secondary: #ffffff;
   --bg-tertiary: #f1f3f5;
@@ -56,6 +68,8 @@
   --accent-primary: #0ca84c;
   --accent-hover: #09913f;
   --accent-secondary: #6d3cd6;
+  --accent-danger: #dc2626;
+  --accent-warning: #d97706;
 
   --border-color: #dee2e6;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
@@ -63,37 +77,47 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
 }
 
-[data-theme="light"] button {
+[data-theme="light"] button,
+[data-theme="tuffbox-light"] button {
   color: #fff;
 }
 
 [data-theme="light"] button.secondary,
-[data-theme="light"] button.ghost {
+[data-theme="light"] button.ghost,
+[data-theme="tuffbox-light"] button.secondary,
+[data-theme="tuffbox-light"] button.ghost {
   color: var(--text-secondary);
 }
 
 [data-theme="light"] button.secondary:hover,
-[data-theme="light"] button.ghost:hover {
+[data-theme="light"] button.ghost:hover,
+[data-theme="tuffbox-light"] button.secondary:hover,
+[data-theme="tuffbox-light"] button.ghost:hover {
   color: var(--text-primary);
 }
 
 [data-theme="light"] pre,
-[data-theme="light"] textarea {
+[data-theme="light"] textarea,
+[data-theme="tuffbox-light"] pre,
+[data-theme="tuffbox-light"] textarea {
   background: #f1f3f5;
   color: #212529;
 }
 
-[data-theme="light"] .sidebar {
+[data-theme="light"] .sidebar,
+[data-theme="tuffbox-light"] .sidebar {
   background: #ffffff;
   border-color: #dee2e6;
 }
 
-[data-theme="light"] .header {
+[data-theme="light"] .header,
+[data-theme="tuffbox-light"] .header {
   background: rgba(255, 255, 255, 0.85);
   border-color: #dee2e6;
 }
 
-[data-theme="light"] code {
+[data-theme="light"] code,
+[data-theme="tuffbox-light"] code {
   color: var(--accent-primary);
   background: #e9ecef;
 }
@@ -110,6 +134,8 @@ body,
 #app {
   height: 100%;
   width: 100%;
+  /* One scroll owner: panes inside .app-shell — never the document. */
+  overflow: hidden;
 }
 
 body {
@@ -117,7 +143,7 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
-  font-size: 14px;
+  font-size: var(--font-base, 14px);
   line-height: 1.5;
 }
 
@@ -254,7 +280,8 @@ h4 {
 
 /* Text fields only — radio/checkbox/range break if padded like text inputs */
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]),
-select {
+select,
+textarea {
   font-family: inherit;
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
@@ -266,8 +293,14 @@ select {
 }
 
 input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="hidden"]):focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--accent-primary);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-hover) var(--bg-elevated, rgba(255, 255, 255, 0.04));
 }
 
 ::-webkit-scrollbar {
@@ -276,7 +309,7 @@ select:focus {
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
 }
 
 ::-webkit-scrollbar-thumb {
@@ -327,5 +360,75 @@ button:active:not(:disabled) {
 }
 html.potato-pc button:active:not(:disabled) {
   transform: none;
+}
+
+/* ── Search fields with overlaid glyph ─────────────────────────────
+   Absolute icon + input without extra left padding = placeholder
+   colliding with the magnifying glass (common project bug). */
+.search-glyph {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 1;
+  flex-shrink: 0;
+  line-height: 0;
+}
+.search:has(> .search-glyph),
+.search-field:has(> .search-glyph),
+.toolbar-search:has(> .search-glyph) {
+  position: relative;
+}
+.search:has(> .search-glyph) > input,
+.search-field:has(> .search-glyph) > input,
+.toolbar-search:has(> .search-glyph) > input {
+  /* Beat local `padding:` shorthands that wipe padding-left */
+  padding-left: 40px !important;
+}
+.search.mini:has(> .search-glyph) > .search-glyph {
+  left: 8px;
+}
+.search.mini:has(> .search-glyph) > input {
+  padding-left: 30px !important;
+}
+
+/* Prefer in-flow icon (no overlay). Use on new search UIs. */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  box-sizing: border-box;
+}
+.search-box > input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 10px 0;
+  outline: none;
+  font: inherit;
+}
+.search-box > input::placeholder {
+  color: var(--text-muted);
+}
+.search-box.mini {
+  padding: 0 8px;
+  gap: 6px;
+}
+.search-box.mini > input {
+  padding: 6px 0;
+  font-size: 12px;
 }
 

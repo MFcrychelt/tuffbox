@@ -2,7 +2,7 @@ pub mod curseforge;
 pub mod local;
 pub mod modrinth;
 
-pub use curseforge::CurseForgeProvider;
+pub use curseforge::{normalize_mod_category, CurseForgeProvider};
 pub use local::LocalJarProvider;
 pub use modrinth::{markdown_to_html, ModrinthCategory, ModrinthProvider};
 
@@ -91,6 +91,10 @@ pub struct ProjectInfo {
     pub client_side: Option<String>,
     #[serde(default)]
     pub server_side: Option<String>,
+    #[serde(default)]
+    pub issues_url: Option<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

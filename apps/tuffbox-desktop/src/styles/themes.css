@@ -3,6 +3,8 @@
 
 [data-theme="tuffbox"] {
   /* alias of :root — kept for explicit selection */
+  --accent-danger: #ef4444;
+  --accent-warning: #f59e0b;
 }
 
 [data-theme="tuffbox-light"],
@@ -19,6 +21,8 @@
   --accent-primary: #0ca84c;
   --accent-hover: #09913f;
   --accent-secondary: #6d3cd6;
+  --accent-danger: #dc2626;
+  --accent-warning: #d97706;
   --border-color: #dee2e6;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
@@ -38,7 +42,12 @@
   --accent-primary: #3e85d0;
   --accent-hover: #2b6bb1;
   --accent-secondary: #8cb6e3;
+  --accent-danger: #f87171;
+  --accent-warning: #fbbf24;
   --border-color: #333947;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.55);
 }
 
 [data-theme="inferno"] {
@@ -49,12 +58,17 @@
   --bg-hover: #3a2323;
   --bg-active: #4a2d2d;
   --text-primary: #fffaf5;
-  --text-secondary: #ff9678;
-  --text-muted: #dc3c2d;
+  --text-secondary: #e8b4a4;
+  --text-muted: #a87a6e;
   --accent-primary: #ff5722;
   --accent-hover: #f44336;
   --accent-secondary: #ffc107;
+  --accent-danger: #ff6b6b;
+  --accent-warning: #ffb020;
   --border-color: #301c1c;
+  --shadow-sm: 0 1px 2px rgba(40, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(40, 0, 0, 0.55);
+  --shadow-lg: 0 14px 36px rgba(40, 0, 0, 0.6);
 }
 
 [data-theme="aether"] {
@@ -66,15 +80,17 @@
   --bg-active: #5b21b6;
   --text-primary: #ffffff;
   --text-secondary: #e9d5ff;
-  --text-muted: #c084fc;
+  --text-muted: #c4b5fd;
   --accent-primary: #c084fc;
   --accent-hover: #a855f7;
   --accent-secondary: #22c55e;
+  --accent-danger: #fb7185;
+  --accent-warning: #fbbf24;
   --border-color: #3a1870;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
+  /* Radius comes from data-rounded-corners — do not bake 0 here. */
+  --shadow-sm: 0 1px 2px rgba(20, 0, 40, 0.5);
+  --shadow-md: 0 4px 16px rgba(20, 0, 40, 0.55);
+  --shadow-lg: 0 14px 40px rgba(20, 0, 40, 0.65);
 }
 
 [data-theme="frost"] {
@@ -90,11 +106,12 @@
   --accent-primary: #06b6d4;
   --accent-hover: #0891b2;
   --accent-secondary: #fbbf24;
+  --accent-danger: #fb7185;
+  --accent-warning: #fcd34d;
   --border-color: #0284c7;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
+  --shadow-sm: 0 1px 2px rgba(0, 30, 60, 0.35);
+  --shadow-md: 0 4px 14px rgba(0, 30, 60, 0.4);
+  --shadow-lg: 0 14px 36px rgba(0, 30, 60, 0.45);
 }
 
 [data-theme="pixelato"] {
@@ -110,12 +127,13 @@
   --accent-primary: #4caf50;
   --accent-hover: #43a047;
   --accent-secondary: #4169e1;
+  --accent-danger: #ef5350;
+  --accent-warning: #ffca28;
   --border-color: #404040;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
   --font-sans: var(--font-minecraft), ui-monospace, monospace;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 4px 0 rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 8px 0 rgba(0, 0, 0, 0.5);
 }
 
 [data-theme="win95"] {
@@ -131,13 +149,12 @@
   --accent-primary: #000080;
   --accent-hover: #0000c0;
   --accent-secondary: #008080;
+  --accent-danger: #800000;
+  --accent-warning: #808000;
   --border-color: #808080;
-  --border-radius-sm: 0px;
-  --border-radius-md: 0px;
-  --border-radius-lg: 0px;
-  --border-radius-xl: 0px;
   --shadow-sm: inset -1px -1px 0 #000, inset 1px 1px 0 #fff;
   --shadow-md: inset -2px -2px 0 #000, inset 2px 2px 0 #fff;
+  --shadow-lg: inset -2px -2px 0 #000, inset 2px 2px 0 #fff, 2px 2px 0 #000;
 }
 
 [data-theme="win95"] button:not(.ghost):not(.secondary) {
@@ -145,6 +162,156 @@
   border: 2px solid;
   border-color: #dfdfdf #000 #000 #dfdfdf;
   background: #c0c0c0;
+}
+
+/* ── Apple / macOS–inspired minimal palettes (gradient accent pairs) ──
+   Deep base + vivid accent; soft radii; quiet borders; ambient shadow. */
+
+[data-theme="solar"] {
+  --bg-primary: #1a1200;
+  --bg-secondary: #22180a;
+  --bg-tertiary: #2c1f0c;
+  --bg-elevated: #362714;
+  --bg-hover: #423018;
+  --bg-active: #523c1e;
+  --text-primary: #fff8e8;
+  --text-secondary: #e8d4a8;
+  --text-muted: #a89068;
+  --accent-primary: #ffc500;
+  --accent-hover: #e6b100;
+  --accent-secondary: #ffb020;
+  --accent-danger: #ff6b4a;
+  --accent-warning: #ffc500;
+  --border-color: rgba(255, 197, 0, 0.14);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(26, 18, 0, 0.45);
+  --shadow-md: 0 8px 24px rgba(26, 18, 0, 0.5), 0 0 0 1px rgba(255, 197, 0, 0.06);
+  --shadow-lg: 0 20px 48px rgba(26, 18, 0, 0.55), 0 0 40px rgba(255, 197, 0, 0.06);
+}
+
+[data-theme="fern"] {
+  --bg-primary: #001a08;
+  --bg-secondary: #052210;
+  --bg-tertiary: #0a2c16;
+  --bg-elevated: #0f361c;
+  --bg-hover: #144224;
+  --bg-active: #1a5230;
+  --text-primary: #e8fff0;
+  --text-secondary: #a8e0bc;
+  --text-muted: #5a9a70;
+  --accent-primary: #00c85a;
+  --accent-hover: #00b050;
+  --accent-secondary: #34d399;
+  --accent-danger: #f87171;
+  --accent-warning: #fbbf24;
+  --border-color: rgba(0, 200, 90, 0.14);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(0, 26, 8, 0.45);
+  --shadow-md: 0 8px 24px rgba(0, 26, 8, 0.5), 0 0 0 1px rgba(0, 200, 90, 0.06);
+  --shadow-lg: 0 20px 48px rgba(0, 26, 8, 0.55), 0 0 40px rgba(0, 200, 90, 0.06);
+}
+
+[data-theme="blaze"] {
+  --bg-primary: #1a0000;
+  --bg-secondary: #240606;
+  --bg-tertiary: #2e0c0c;
+  --bg-elevated: #3a1212;
+  --bg-hover: #4a1818;
+  --bg-active: #5c2020;
+  --text-primary: #fff5f5;
+  --text-secondary: #f0b4b4;
+  --text-muted: #a86a6a;
+  --accent-primary: #ff2d2d;
+  --accent-hover: #e62020;
+  --accent-secondary: #ff6b6b;
+  --accent-danger: #ff2d2d;
+  --accent-warning: #ffb020;
+  --border-color: rgba(255, 45, 45, 0.16);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(26, 0, 0, 0.5);
+  --shadow-md: 0 8px 24px rgba(26, 0, 0, 0.55), 0 0 0 1px rgba(255, 45, 45, 0.08);
+  --shadow-lg: 0 20px 48px rgba(26, 0, 0, 0.6), 0 0 40px rgba(255, 45, 45, 0.08);
+}
+
+[data-theme="dusk"] {
+  --bg-primary: #200310;
+  --bg-secondary: #2c0818;
+  --bg-tertiary: #3a0e22;
+  --bg-elevated: #48142c;
+  --bg-hover: #5a1a38;
+  --bg-active: #6e2248;
+  --text-primary: #fff5f8;
+  --text-secondary: #f0c0d0;
+  --text-muted: #b07890;
+  --accent-primary: #ff6b9c;
+  --accent-hover: #f05588;
+  --accent-secondary: #ff9ec0;
+  --accent-danger: #ff4d6d;
+  --accent-warning: #ffb020;
+  --border-color: rgba(255, 107, 156, 0.16);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(32, 3, 16, 0.5);
+  --shadow-md: 0 8px 24px rgba(32, 3, 16, 0.55), 0 0 0 1px rgba(255, 107, 156, 0.08);
+  --shadow-lg: 0 20px 48px rgba(32, 3, 16, 0.6), 0 0 40px rgba(255, 107, 156, 0.08);
+}
+
+[data-theme="glacier"] {
+  --bg-primary: #001020;
+  --bg-secondary: #061828;
+  --bg-tertiary: #0c2234;
+  --bg-elevated: #122c40;
+  --bg-hover: #1a384c;
+  --bg-active: #24485c;
+  --text-primary: #f0faff;
+  --text-secondary: #b8dcec;
+  --text-muted: #6a98b0;
+  --accent-primary: #a8e6ff;
+  --accent-hover: #8ed8f5;
+  --accent-secondary: #5ec8f0;
+  --accent-danger: #fb7185;
+  --accent-warning: #fcd34d;
+  --border-color: rgba(168, 230, 255, 0.14);
+  --border-radius-sm: 10px;
+  --border-radius-md: 14px;
+  --border-radius-lg: 20px;
+  --border-radius-xl: 28px;
+  --shadow-sm: 0 1px 2px rgba(0, 16, 32, 0.5);
+  --shadow-md: 0 8px 24px rgba(0, 16, 32, 0.55), 0 0 0 1px rgba(168, 230, 255, 0.06);
+  --shadow-lg: 0 20px 48px rgba(0, 16, 32, 0.6), 0 0 40px rgba(168, 230, 255, 0.06);
+}
+
+/* Subtle gradient wash on chrome — macOS depth without clutter */
+[data-theme="solar"] .sidebar,
+[data-theme="fern"] .sidebar,
+[data-theme="blaze"] .sidebar,
+[data-theme="dusk"] .sidebar,
+[data-theme="glacier"] .sidebar {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 6%, var(--bg-secondary)) 0%, var(--bg-secondary) 48%);
+  border-right-color: var(--border-color);
+  backdrop-filter: blur(20px);
+}
+
+[data-theme="solar"] .header,
+[data-theme="fern"] .header,
+[data-theme="blaze"] .header,
+[data-theme="dusk"] .header,
+[data-theme="glacier"] .header {
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(16px);
+  border-bottom-color: var(--border-color);
 }
 
 [data-theme="win95"] button:not(.ghost):not(.secondary):active {
@@ -156,6 +323,8 @@
 :root {
   /* Structure / chrome leave */
   --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Hover morph: slight slow-start, then normal settle */
+  --ease-hover-in: cubic-bezier(0.45, 0, 0.15, 1);
   /* Delight enter / hover (lighter bounce than typical “spring”) */
   --ease-spring: cubic-bezier(0.22, 1.15, 0.36, 1);
   --ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
@@ -591,15 +760,17 @@
 }
 
 /* ── Rounded corners mode (Settings → Appearance) ──
-   Must load after theme tokens so it can override themes that force radius: 0. */
-html[data-rounded-corners="on"] {
+   Must load after theme tokens. Uses data-rounded-corners only —
+   never list theme ids. Attribute selector specificity beats
+   [data-theme="…"] token blocks that bake radius: 0 (aether/frost/…). */
+html[data-rounded-corners="on"][data-theme] {
   --border-radius-sm: 10px;
   --border-radius-md: 14px;
   --border-radius-lg: 18px;
   --border-radius-xl: 28px;
 }
 
-html[data-rounded-corners="off"] {
+html[data-rounded-corners="off"][data-theme] {
   --border-radius-sm: 0px;
   --border-radius-md: 0px;
   --border-radius-lg: 0px;
@@ -607,8 +778,8 @@ html[data-rounded-corners="off"] {
 }
 
 /* When rounded mode is on, force common block chrome to use the tokens
-   (covers hardcoded radius:0 / sharp theme leftovers on panels & cards). */
-html[data-rounded-corners="on"] :where(
+   (covers hardcoded radius leftovers on panels & cards). */
+html[data-rounded-corners="on"][data-theme] :where(
   .panel,
   .card,
   .modal,
@@ -645,7 +816,12 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-lg);
 }
 
-html[data-rounded-corners="on"] :where(
+/* Skin panel badges stay compact — forced lg looks wrong on tiny chips. */
+html[data-rounded-corners="on"][data-theme] .skin-panel .type-badge {
+  border-radius: 4px;
+}
+
+html[data-rounded-corners="on"][data-theme] :where(
   button,
   .action-btn,
   .quiet-action,
@@ -659,7 +835,7 @@ html[data-rounded-corners="on"] :where(
   border-radius: var(--border-radius-md);
 }
 
-html[data-rounded-corners="on"] :where(
+html[data-rounded-corners="on"][data-theme] :where(
   .mr-card,
   .cf-card,
   .mr-page,
@@ -675,7 +851,7 @@ html[data-rounded-corners="on"] :where(
 }
 
 /* Pills / round avatars stay fully round */
-html[data-rounded-corners="on"] :where(
+html[data-rounded-corners="on"][data-theme] :where(
   .chip,
   .cat-chip,
   .mr-tag,
@@ -686,7 +862,7 @@ html[data-rounded-corners="on"] :where(
   border-radius: 999px;
 }
 
-html[data-rounded-corners="off"] :where(
+html[data-rounded-corners="off"][data-theme] :where(
   .panel,
   .card,
   .modal,
@@ -713,4 +889,52 @@ html[data-rounded-corners="off"] :where(
   button
 ) {
   border-radius: 0;
+}
+
+/* ── Quest editor (FTBQ) — follow active launcher theme ───────────────
+   Quest UI historically used a fixed dark slate palette via --ftbq-*.
+   Map those aliases to TuffBox theme tokens so every data-theme works
+   (including modals rendered outside .qe). */
+:root,
+html[data-theme] {
+  --ftbq-bg: var(--bg-primary);
+  --ftbq-bg-panel: var(--bg-secondary);
+  --ftbq-bg-canvas: var(--bg-tertiary);
+  --ftbq-border: var(--border-color);
+  --ftbq-frame: color-mix(in srgb, var(--border-color) 85%, var(--text-primary) 15%);
+  --ftbq-text: var(--text-primary);
+  --ftbq-text-muted: var(--text-muted);
+  --ftbq-quest-default: var(--text-primary);
+  --ftbq-quest-locked: var(--text-muted);
+  --ftbq-quest-started: var(--accent-warning);
+  --ftbq-quest-completed: var(--accent-primary);
+  --ftbq-line: color-mix(in srgb, var(--accent-secondary) 55%, var(--text-secondary));
+  --ftbq-line-hover: var(--accent-secondary);
+  --ftbq-line-done: var(--accent-primary);
+  --ftbq-accent-teal: var(--accent-secondary);
+  --ftbq-accent-green: var(--accent-primary);
+  --ftbq-title-gold: var(--accent-warning);
+  --ftbq-node-fill: var(--bg-elevated);
+  --ftbq-input-bg: var(--bg-primary);
+  --ftbq-btn-top: var(--bg-elevated);
+  --ftbq-btn-bottom: var(--bg-tertiary);
+  --ftbq-btn-hover-top: var(--bg-hover);
+  --ftbq-btn-hover-bottom: var(--bg-elevated);
+}
+
+.qe.ftbq {
+  color: var(--ftbq-text);
+  background: var(--ftbq-bg);
+}
+
+/* Inputs inside quest UI — kill leftover dark-only hex fills */
+.qe.ftbq :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  background-color: var(--ftbq-input-bg);
+  border-color: var(--ftbq-frame);
+  color: var(--ftbq-text);
+  color-scheme: inherit;
+}
+
+.qe.ftbq :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):not([type="range"])::placeholder {
+  color: var(--ftbq-text-muted);
 }

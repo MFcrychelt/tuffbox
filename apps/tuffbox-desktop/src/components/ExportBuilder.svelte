@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "lucide-svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "@lucide/svelte";
+  import { projectPath, projectInfo, pushWorkTrail } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
   type ExportResult = {
@@ -10,18 +10,18 @@
     overrideCount: number;
   };
 
-  let targetPath = "";
-  let serverTargetPath = "";
-  let prismTargetPath = "";
-  let curseforgeTargetPath = "";
-  let projectDir = "";
-  let exporting = false;
-  let result: ExportResult | null = null;
-  let error: string | null = null;
-  let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
-  let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
+  let targetPath = $state("");
+  let serverTargetPath = $state("");
+  let prismTargetPath = $state("");
+  let curseforgeTargetPath = $state("");
+  let projectDir = $state("");
+  let exporting = $state(false);
+  let result = $state<ExportResult | null>(null);
+  let error = $state<string | null>(null);
+  let issues = $state<{ severity: "error" | "warning"; code: string; message: string; target?: string | null }[]>([]);
+  let exportMode = $state<"mrpack" | "server" | "prism" | "curseforge">("mrpack");
 
-  let lastPathForDefaults = "";
+  let lastPathForDefaults = $state("");
 
   async function loadDefaultPaths(path: string) {
     projectDir = await invoke("get_project_dir", { path });
@@ -71,6 +71,12 @@
         path: $projectPath,
         targetPath: pathValue,
       });
+      if (result) {
+        pushWorkTrail(`Export ready · ${result.path}`, [
+          { id: "release", label: "Open Release", kind: "stage", stage: "release" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -78,13 +84,15 @@
     }
   }
 
-  $: onProjectPathChange($projectPath);
+  $effect(() => {
+    onProjectPathChange($projectPath);
+  });
 </script>
 
 <div class="export-builder">
   <div class="toolbar">
     <div class="title"><UploadCloud size={18} /> Export builder</div>
-    <button class="ghost" on:click={refreshDefaultPath} disabled={!$projectPath}>
+    <button class="ghost" onclick={refreshDefaultPath} disabled={!$projectPath}>
       <RefreshCw size={16} />
       Default path
     </button>
@@ -100,28 +108,28 @@
   {:else}
     <section class="panel">
       <div class="format-grid">
-        <button class="format-card" class:active={exportMode === "mrpack"} on:click={() => (exportMode = "mrpack")}>
+        <button class="format-card" class:active={exportMode === "mrpack"} onclick={() => (exportMode = "mrpack")}>
           <PackageOpen size={28} />
           <div>
             <h2>Modrinth .mrpack</h2>
             <p>modrinth.index.json + remote downloads + overrides.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "server"} on:click={() => (exportMode = "server")}>
+        <button class="format-card" class:active={exportMode === "server"} onclick={() => (exportMode = "server")}>
           <PackageOpen size={28} />
           <div>
             <h2>Server pack</h2>
             <p>Server-safe mods, configs, manifest and start scripts.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "prism"} on:click={() => (exportMode = "prism")}>
+        <button class="format-card" class:active={exportMode === "prism"} onclick={() => (exportMode = "prism")}>
           <PackageOpen size={28} />
           <div>
             <h2>Prism instance</h2>
             <p>instance.cfg + mmc-pack.json + mods/configs.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "curseforge"} on:click={() => (exportMode = "curseforge")}>
+        <button class="format-card" class:active={exportMode === "curseforge"} onclick={() => (exportMode = "curseforge")}>
           <PackageOpen size={28} />
           <div>
             <h2>CurseForge zip</h2>
@@ -178,22 +186,22 @@
 
       <div class="export-actions">
         {#if exportMode === "mrpack"}
-          <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
+          <button class="export" onclick={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
             <UploadCloud size={16} />
             {exporting ? "Exporting..." : "Export .mrpack"}
           </button>
         {:else if exportMode === "server"}
-          <button class="export" on:click={exportServerPack} disabled={exporting}>
+          <button class="export" onclick={exportServerPack} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export server pack"}
           </button>
         {:else if exportMode === "prism"}
-          <button class="export" on:click={exportPrismInstance} disabled={exporting}>
+          <button class="export" onclick={exportPrismInstance} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export Prism instance"}
           </button>
         {:else if exportMode === "curseforge"}
-          <button class="export" on:click={exportCurseForgePack} disabled={exporting}>
+          <button class="export" onclick={exportCurseForgePack} disabled={exporting}>
             <PackageOpen size={16} />
             {exporting ? "Exporting..." : "Export CurseForge zip"}
           </button>

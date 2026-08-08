@@ -1,0 +1,112 @@
+<script lang="ts">
+  import { X } from "@lucide/svelte";
+  import type { QuestChapterGroup } from "../../lib/api";
+
+  let {
+    chapterGroups,
+    groupsDirty = false,
+    saving = false,
+    onclose,
+    onsave,
+    onadd,
+    onremove,
+    onmove,
+    ontitlechange,
+  }: {
+    chapterGroups: QuestChapterGroup[];
+    groupsDirty?: boolean;
+    saving?: boolean;
+    onclose: () => void;
+    onsave: () => void;
+    onadd: () => void;
+    onremove: (id: string) => void;
+    onmove: (id: string, dir: -1 | 1) => void;
+    ontitlechange: (id: string, title: string) => void;
+  } = $props();
+</script>
+
+<div class="drawer drawer-wide">
+  <div class="drawer-h">
+    <strong>Chapter groups</strong>
+    <button type="button" class="ghost" onclick={onadd}>+ Group</button>
+    <button type="button" class="ghost ico" onclick={onclose}><X size={14} /></button>
+  </div>
+  {#each chapterGroups as g, gi (g.id)}
+    <div class="group-row">
+      <code>{g.id}</code>
+      <input
+        value={g.title}
+        oninput={(e) => ontitlechange(g.id, (e.currentTarget as HTMLInputElement).value)}
+      />
+      <button
+        type="button"
+        class="ghost"
+        disabled={gi === 0}
+        title="Move up"
+        onclick={() => onmove(g.id, -1)}>↑</button
+      >
+      <button
+        type="button"
+        class="ghost"
+        disabled={gi === chapterGroups.length - 1}
+        title="Move down"
+        onclick={() => onmove(g.id, 1)}>↓</button
+      >
+      <button type="button" class="ghost" onclick={() => onremove(g.id)}>Remove</button>
+    </div>
+  {/each}
+  <p class="drawer-hint">Included in Save all</p>
+  <button type="button" onclick={onsave} disabled={saving || !groupsDirty}>Save groups</button>
+</div>
+
+<style>
+  .drawer {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 40;
+    width: 280px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 12px 28px rgba(0, 0, 0, 0.55);
+  }
+  .drawer-wide {
+    width: 360px;
+    max-height: min(70vh, 560px);
+    overflow: auto;
+  }
+  .drawer-h {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .drawer-h strong {
+    flex: 1;
+  }
+  .drawer-hint {
+    margin: 0;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .group-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .group-row input {
+    flex: 1;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
+    color: inherit;
+    border-radius: 3px;
+    padding: 6px 8px;
+    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
+  }
+</style>

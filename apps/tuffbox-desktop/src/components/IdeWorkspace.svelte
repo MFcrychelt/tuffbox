@@ -17,8 +17,19 @@
     ScrollText,
     Circle,
     Map as MapIcon,
-  } from "lucide-svelte";
-  import { projectPath, ideStageRequest, autoHideWorkflowRail, tuneDirty, briefDirty, questDirty } from "../lib/store";
+  } from "@lucide/svelte";
+  import {
+    projectPath,
+    ideStageRequest,
+    ideActiveStage,
+    autoHideWorkflowRail,
+    tuneDirty,
+    briefDirty,
+    questDirty,
+    requestIdeNextAction,
+    requestIdePlay,
+    pushIdeRecent,
+  } from "../lib/store";
   import { onDestroy, onMount } from "svelte";
   import ProjectSettings from "./ProjectSettings.svelte";
   import Mods from "./Mods.svelte";
@@ -36,6 +47,7 @@
   import ReleaseRoom from "./ReleaseRoom.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import BriefEditor from "./BriefEditor.svelte";
+  import IdeNextBar from "./IdeNextBar.svelte";
 
   type StageId =
     | "brief"
@@ -186,10 +198,31 @@
     },
   ];
 
-  let activeStage: StageId = "brief";
-  let leaveConfirmOpen = false;
-  let pendingStage: StageId | null = null;
-  let leaveKind: "tune" | "brief" | "quests" = "tune";
+  /** Stage chords when IDE focused (avoid App Ctrl+1… Home shortcuts). */
+  const STAGE_CHORD: Record<string, StageId> = {
+    "1": "content",
+    "2": "resolve",
+    "3": "history",
+    "4": "test",
+    "5": "diagnose",
+    "6": "snapshots",
+    "7": "configs",
+    "8": "quests",
+    "9": "export",
+    "0": "brief",
+  };
+
+  let activeStage = $state<StageId>("content");
+  let leaveConfirmOpen = $state(false);
+  let pendingStage = $state<StageId | null>(null);
+  let leaveKind = $state<"tune" | "brief" | "quests">("tune");
+
+  function goAdjacentStage(dir: -1 | 1) {
+    const index = stages.findIndex((s) => s.id === activeStage);
+    if (index < 0) return;
+    const next = stages[index + dir];
+    if (next) goToStage(next.id);
+  }
 
   function goToStage(id: StageId) {
     if (id === activeStage) return;
@@ -212,6 +245,8 @@
       return;
     }
     activeStage = id;
+    const stage = stages.find((s) => s.id === id);
+    if (stage) pushIdeRecent(`ide:${id}`, `IDE · ${stage.label}`);
   }
 
   function confirmLeaveStage() {
@@ -220,8 +255,11 @@
     else if (leaveKind === "brief") briefDirty.set(false);
     else questDirty.set(false);
     if (pendingStage) {
-      activeStage = pendingStage;
+      const id = pendingStage;
+      activeStage = id;
       pendingStage = null;
+      const stage = stages.find((s) => s.id === id);
+      if (stage) pushIdeRecent(`ide:${id}`, `IDE · ${stage.label}`);
     }
   }
 
@@ -230,13 +268,20 @@
     pendingStage = null;
   }
 
-  $: if ($ideStageRequest) {
-    const req = $ideStageRequest;
-    ideStageRequest.set(null);
-    if (stages.some((s) => s.id === req)) {
-      goToStage(req as StageId);
-    }
-  }
+  $effect(() => {
+    ideActiveStage.set(activeStage);
+  });
+
+  $effect(() => {
+    if ($ideStageRequest) {
+        const req = $ideStageRequest;
+        ideStageRequest.set(null);
+        if (stages.some((s) => s.id === req)) {
+          goToStage(req as StageId);
+        }
+        revealRailFromNavigation();
+      }
+  });
 
   let focusedScanTimer: ReturnType<typeof setInterval> | null = null;
   /** Background delta scan is useful on History/Diagnose; skip on other stages to save CPU. */
@@ -268,30 +313,73 @@
     }
   }
 
-  $: if ($projectPath && FOCUSED_SCAN_STAGES.includes(activeStage)) {
-    void refreshFocusedScanLoop();
-  } else {
-    stopFocusedScanLoop();
-  }
+  $effect(() => {
+    if ($projectPath && FOCUSED_SCAN_STAGES.includes(activeStage)) {
+        void refreshFocusedScanLoop();
+      } else {
+        stopFocusedScanLoop();
+      }
+  });
 
   onMount(() => {
+    revealRailFromNavigation();
     const onVis = () => {
       if (document.visibilityState === "visible") void refreshFocusedScanLoop();
       else stopFocusedScanLoop();
     };
     const onSettings = () => void refreshFocusedScanLoop();
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target;
+      if (t instanceof HTMLElement) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        requestIdeNextAction();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "P" || e.key === "p")) {
+        e.preventDefault();
+        e.stopPropagation();
+        requestIdePlay();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && STAGE_CHORD[e.key]) {
+        e.preventDefault();
+        e.stopPropagation();
+        goToStage(STAGE_CHORD[e.key]);
+        revealRailFromNavigation();
+        return;
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "[") {
+        e.preventDefault();
+        goAdjacentStage(-1);
+        revealRailFromNavigation();
+        return;
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key === "]") {
+        e.preventDefault();
+        goAdjacentStage(1);
+        revealRailFromNavigation();
+      }
+    };
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("tuffbox:history-settings-changed", onSettings);
+    window.addEventListener("keydown", onKey, true);
     return () => {
       document.removeEventListener("visibilitychange", onVis);
       window.removeEventListener("tuffbox:history-settings-changed", onSettings);
+      window.removeEventListener("keydown", onKey, true);
     };
   });
 
-  let railRevealed = false;
+  let railRevealed = $state(false);
   let railHideTimer: ReturnType<typeof setTimeout> | null = null;
   /** Grace before hide — enough to move from hotzone onto the rail. */
   const RAIL_HIDE_MS = 280;
+  /** Keep the rail visible longer after left-nav / stage jumps so it feels opened. */
+  const RAIL_NAV_HOLD_MS = 2800;
 
   function clearRailHideTimer() {
     if (railHideTimer) {
@@ -304,6 +392,14 @@
     if (!$autoHideWorkflowRail) return;
     clearRailHideTimer();
     railRevealed = true;
+  }
+
+  /** Programmatic open (sidebar / shortcuts) — show rail, then auto-hide after a beat. */
+  function revealRailFromNavigation() {
+    if (!$autoHideWorkflowRail) return;
+    clearRailHideTimer();
+    railRevealed = true;
+    scheduleHideRail(RAIL_NAV_HOLD_MS);
   }
 
   function scheduleHideRail(delay = RAIL_HIDE_MS) {
@@ -324,19 +420,26 @@
     scheduleHideRail();
   }
 
-  $: if (!$autoHideWorkflowRail) {
-    railRevealed = false;
-    clearRailHideTimer();
-  }
+  $effect(() => {
+    if (!$autoHideWorkflowRail) {
+        railRevealed = false;
+        clearRailHideTimer();
+      }
+  });
 
   onDestroy(() => {
     stopFocusedScanLoop();
     clearRailHideTimer();
+    ideActiveStage.set(null);
   });
 </script>
 
 <div class="ide-workspace" class:auto-hide-rail={$autoHideWorkflowRail}>
   <section class="stage-shell">
+    <IdeNextBar onGoStage={(s) => {
+      goToStage(s as StageId);
+      revealRailFromNavigation();
+    }} />
     <div
       class="stage-content"
       class:fill-stage={
@@ -347,7 +450,9 @@
         activeStage === "content" ||
         activeStage === "resolve" ||
         activeStage === "test" ||
-        activeStage === "diagnose"
+        activeStage === "diagnose" ||
+        activeStage === "recipes" ||
+        activeStage === "snapshots"
       }
     >
       {#if activeStage === "brief"}
@@ -395,24 +500,25 @@
     <div
       class="rail-hotzone"
       aria-hidden="true"
-      on:mouseenter={revealRail}
-      on:mouseleave={() => scheduleHideRail()}
+      onmouseenter={revealRail}
+      onmouseleave={() => scheduleHideRail()}
     ></div>
   {/if}
   <nav
     class="workflow-rail"
     class:revealed={railRevealed || !$autoHideWorkflowRail}
     aria-label="Modpack production workflow"
-    on:mouseenter={revealRail}
-    on:mouseleave={() => scheduleHideRail()}
-    on:focusin={revealRail}
-    on:focusout={onRailFocusOut}
+    onmouseenter={revealRail}
+    onmouseleave={() => scheduleHideRail()}
+    onfocusin={revealRail}
+    onfocusout={onRailFocusOut}
   >
     {#each stages as stage (stage.id)}
+      {@const StageIcon = stage.icon}
       <button
         class="stage-tab"
         class:active={activeStage === stage.id}
-        on:click={(e) => {
+        onclick={(e) => {
           goToStage(stage.id);
           if (e.currentTarget instanceof HTMLElement) e.currentTarget.blur();
           scheduleHideRail(320);
@@ -423,7 +529,7 @@
         <span class="stage-status" aria-hidden="true">
           <Circle size={12} fill={activeStage === stage.id ? "currentColor" : "none"} />
         </span>
-        <svelte:component this={stage.icon} size={20} />
+        <StageIcon size={20} />
         <span class="stage-text">
           <strong>{stage.label}</strong>
           <small>{stage.short}</small>
@@ -447,8 +553,8 @@
         : "You have unsaved quest edits. Leave Quests and discard them?"}
     danger={false}
     confirmLabel="Discard & leave"
-    on:confirm={confirmLeaveStage}
-    on:cancel={cancelLeaveStage}
+    onconfirm={confirmLeaveStage}
+    oncancel={cancelLeaveStage}
   />
 {/if}
 
@@ -495,6 +601,7 @@
   }
 
   .stage-content.fill-stage {
+    /* One scroll owner = child; avoid outer scrollbar over edge-to-edge content. */
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -530,7 +637,9 @@
   .stage-content.fill-stage > :global(.mods),
   .stage-content.fill-stage > :global(.graph),
   .stage-content.fill-stage > :global(.test-runs),
-  .stage-content.fill-stage > :global(.diagnostics) {
+  .stage-content.fill-stage > :global(.diagnostics),
+  .stage-content.fill-stage > :global(.jei),
+  .stage-content.fill-stage > :global(.snapshots) {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -540,9 +649,27 @@
   }
 
   .stage-content.fill-stage > :global(.mods),
-  .stage-content.fill-stage > :global(.graph),
   .stage-content.fill-stage > :global(.test-runs),
-  .stage-content.fill-stage > :global(.diagnostics) {
+  .stage-content.fill-stage > :global(.diagnostics),
+  .stage-content.fill-stage > :global(.jei) {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    overflow: hidden;
+  }
+
+  /* Graph: long lists under the canvas — this root owns vertical scroll.
+     Snapshots keep overflow:hidden (internal panes scroll). */
+  .stage-content.fill-stage > :global(.graph) {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .stage-content.fill-stage > :global(.snapshots) {
     display: flex;
     flex-direction: column;
     padding: 12px 16px;

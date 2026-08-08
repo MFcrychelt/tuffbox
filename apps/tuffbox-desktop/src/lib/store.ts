@@ -1,5 +1,6 @@
 import { writable } from "svelte/store";
 import type { RunningInstance } from "./api";
+import { api } from "./api";
 
 export interface ProjectInfo {
   id: string;
@@ -19,6 +20,16 @@ export interface RecentProject {
   info: ProjectInfo;
 }
 
+function persistRecent(projects: RecentProject[]) {
+  try {
+    localStorage.setItem("recentProjects", JSON.stringify(projects));
+  } catch {
+    /* ignore quota / private mode */
+  }
+  // Disk copy survives WebView2 profile wipes (EBWebView clears).
+  void api.session.saveRecentProjects(projects).catch(() => {});
+}
+
 function createRecentProjects() {
   let initial: RecentProject[] = [];
   try {
@@ -31,13 +42,36 @@ function createRecentProjects() {
 
   return {
     subscribe,
-    add: (project: RecentProject) => {
+    add: (project: RecentProject, opts?: { reorder?: boolean; replacePath?: string }) => {
+      const reorder = opts?.reorder !== false;
+      const replacePath = opts?.replacePath;
       update((projects) => {
-        const filtered = projects.filter((p) => p.path !== project.path);
-        const next = [project, ...filtered].slice(0, 20);
-        try {
-          localStorage.setItem("recentProjects", JSON.stringify(next));
-        } catch {}
+        const matchIdx = projects.findIndex(
+          (p) =>
+            p.path === project.path ||
+            (replacePath != null && p.path === replacePath),
+        );
+        let next: RecentProject[];
+        if (!reorder && matchIdx >= 0) {
+          next = projects
+            .map((p, i) => (i === matchIdx ? project : p))
+            .filter((p, i) => i === matchIdx || p.path !== project.path);
+        } else if (!reorder) {
+          const filtered = projects.filter(
+            (p) =>
+              p.path !== project.path &&
+              (replacePath == null || p.path !== replacePath),
+          );
+          next = [...filtered, project].slice(0, 20);
+        } else {
+          const filtered = projects.filter(
+            (p) =>
+              p.path !== project.path &&
+              (replacePath == null || p.path !== replacePath),
+          );
+          next = [project, ...filtered].slice(0, 20);
+        }
+        persistRecent(next);
         return next;
       });
     },
@@ -46,22 +80,46 @@ function createRecentProjects() {
         const next = projects.map((p) =>
           p.path === path ? { ...p, info } : p
         );
-        try {
-          localStorage.setItem("recentProjects", JSON.stringify(next));
-        } catch {}
+        persistRecent(next);
         return next;
       });
     },
     remove: (path: string) => {
       update((projects) => {
         const next = projects.filter((p) => p.path !== path);
-        try {
-          localStorage.setItem("recentProjects", JSON.stringify(next));
-        } catch {}
+        persistRecent(next);
         return next;
       });
     },
-    set,
+    set: (projects: RecentProject[]) => {
+      persistRecent(projects);
+      set(projects);
+    },
+    /** Merge disk-backed list after WebView localStorage was wiped. */
+    async hydrateFromDisk() {
+      try {
+        const disk = await api.session.loadRecentProjects();
+        if (!disk?.length) return;
+        update((projects) => {
+          if (projects.length > 0) {
+            // Keep local order; fill gaps from disk.
+            const have = new Set(projects.map((p) => p.path));
+            const merged = [...projects];
+            for (const p of disk) {
+              if (!have.has(p.path)) merged.push(p);
+            }
+            const next = merged.slice(0, 20);
+            persistRecent(next);
+            return next;
+          }
+          const next = disk.slice(0, 20);
+          persistRecent(next);
+          return next;
+        });
+      } catch {
+        /* offline / old binary */
+      }
+    },
   };
 }
 
@@ -98,6 +156,8 @@ export interface AccountEntry {
   addedAt: number;
   /** Yggdrasil / authlib-injector API root (Ely.by, LittleSkin, custom). */
   authority?: string | null;
+  /** Microsoft OAuth backend for token refresh (`azure` | `live`). */
+  msOauthBackend?: "azure" | "live" | null;
 }
 
 export interface YggdrasilPreset {
@@ -139,11 +199,21 @@ export interface LauncherSettings {
   sidebarMode: SidebarMode;
   /** Interface zoom percent (75–150). */
   uiScalePercent: number;
+  /** `auto` follows screen/window size; `manual` locks uiScalePercent. */
+  uiScaleMode: UiScaleMode;
   /** Round corners on panels/cards/buttons everywhere. */
   roundedCorners: boolean;
+  /** Hide InstanceHome (mods/packs/worlds) preview block on the home dashboard. */
+  hideInstanceHome: boolean;
 }
 
 export type SidebarMode = "full" | "icons" | "autoHide";
+export type UiScaleMode = "auto" | "manual";
+
+export const UI_SCALE_STEPS = [75, 90, 100, 110, 125, 150] as const;
+
+/** Live applied UI zoom percent — App binds `data-ui-scaled` / zoom from this. */
+export const uiScalePercentLive = writable(100);
 
 export function normalizeSidebarMode(raw: unknown): SidebarMode {
   if (raw === "icons" || raw === "autoHide" || raw === "full") return raw;
@@ -156,12 +226,124 @@ export function normalizeUiScalePercent(raw: unknown): number {
   return Math.min(150, Math.max(75, Math.round(n)));
 }
 
-/** Apply Chromium zoom via CSS variable (buttons, cards, modals). */
+export function normalizeUiScaleMode(raw: unknown): UiScaleMode {
+  return raw === "manual" ? "manual" : "auto";
+}
+
+/** Migrate unset mode: preserve non-100% as manual. */
+export function resolveUiScaleMode(settings: {
+  uiScaleMode?: unknown;
+  uiScalePercent?: unknown;
+}): UiScaleMode {
+  const raw = settings.uiScaleMode;
+  if (raw === "auto" || raw === "manual") return raw;
+  return normalizeUiScalePercent(settings.uiScalePercent) !== 100 ? "manual" : "auto";
+}
+
+function snapUiScalePercent(raw: number): number {
+  let best = UI_SCALE_STEPS[0];
+  let bestDist = Math.abs(raw - best);
+  for (const step of UI_SCALE_STEPS) {
+    const d = Math.abs(raw - step);
+    if (d < bestDist) {
+      best = step;
+      bestDist = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Suggest UI zoom from screen/window size + devicePixelRatio.
+ * Snaps to the same chips used in Settings (75–150).
+ *
+ * Tuned for laptop panels (1366×768, 1440×900, 1600×900) that feel cramped at 100%.
+ */
+export function suggestUiScalePercent(): number {
+  if (typeof window === "undefined") return 100;
+  const screenW = window.screen?.availWidth || window.screen?.width || 1920;
+  const screenH = window.screen?.availHeight || window.screen?.height || 1080;
+  const innerW = window.innerWidth || screenW;
+  const innerH = window.innerHeight || screenH;
+  // Tighter of screen vs window — a small window on a big monitor still needs denser UI.
+  const width = Math.min(screenW, innerW);
+  const height = Math.min(screenH, innerH);
+  const dpr = window.devicePixelRatio || 1;
+  const shortSide = Math.min(width, height);
+
+  let suggested = 100;
+  // Tiny / phone-like or very short height
+  if (width < 1100 || height < 720 || shortSide < 700) suggested = 125;
+  // Classic laptops: 1366×768, 1400×900, 1440×900, 1600×900
+  else if (width <= 1440 || height <= 900) suggested = 110;
+  else if (dpr >= 2 && width < 1800) suggested = 110;
+  else if (width < 1600 && height < 1000) suggested = 110;
+  else if (width >= 1920 && height >= 1080 && dpr <= 1) suggested = 100;
+  else suggested = 100;
+
+  return snapUiScalePercent(suggested);
+}
+
+/** Current CSS zoom factor from `--ui-scale` (1 = 100%). */
+export function getUiScale(): number {
+  if (typeof document === "undefined") return 1;
+  const el = document.documentElement as HTMLElement & { currentCSSZoom?: number };
+  if (typeof el.currentCSSZoom === "number" && el.currentCSSZoom > 0) {
+    return el.currentCSSZoom;
+  }
+  const raw = getComputedStyle(el).getPropertyValue("--ui-scale").trim();
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+/**
+ * Map viewport (clientX/Y) → CSS `position: fixed` left/top.
+ * Zoom lives on `html`, so Chromium uses one coordinate frame — return as-is.
+ * Kept for callers / WebKit edge cases that report visual px vs layout px.
+ */
+export function viewportToShellFixed(clientX: number, clientY: number): { x: number; y: number } {
+  return { x: clientX, y: clientY };
+}
+
+/** Apply Chromium zoom on <html> so fixed menus, drag, and hit-tests share one coord space. */
 export function applyUiScale(percent: unknown) {
   const p = normalizeUiScalePercent(percent);
-  if (typeof document === "undefined") return p;
-  document.documentElement.style.setProperty("--ui-scale", String(p / 100));
+  if (typeof document === "undefined") {
+    uiScalePercentLive.set(p);
+    return p;
+  }
+  const scale = p / 100;
+  const root = document.documentElement;
+  root.style.setProperty("--ui-scale", String(scale));
+  uiScalePercentLive.set(p);
+
+  // Zoom on html (not .app-shell): shell-only zoom desyncs clientX from
+  // getBoundingClientRect / fixed overlays and breaks Library drag + context menus.
+  if (p === 100) {
+    root.removeAttribute("data-ui-scaled");
+    root.style.removeProperty("zoom");
+  } else {
+    root.setAttribute("data-ui-scaled", "1");
+    root.style.zoom = String(scale);
+  }
+
+  // Clear legacy shell zoom from older sessions / HMR.
+  const shell = document.querySelector(".app-shell");
+  if (shell instanceof HTMLElement) {
+    shell.removeAttribute("data-ui-scaled");
+  }
   return p;
+}
+
+/** Resolve mode + apply (auto → suggest, manual → stored percent). */
+export function applyUiScaleFromSettings(settings: {
+  uiScaleMode?: unknown;
+  uiScalePercent?: unknown;
+}): number {
+  const mode = resolveUiScaleMode(settings);
+  const pct =
+    mode === "auto" ? suggestUiScalePercent() : normalizeUiScalePercent(settings.uiScalePercent);
+  return applyUiScale(pct);
 }
 
 /**
@@ -269,6 +451,9 @@ export const skinPath = writable<string | null>(null);
 // including the sidebar's + button which lives outside the Dashboard tree.
 export const newProjectOpen = writable<boolean>(false);
 
+/** Open a Library tab (`discover` / `yours` / `create`). Cleared by Library when applied. */
+export const libraryTabRequest = writable<"yours" | "discover" | "create" | null>(null);
+
 // Global launch state — true while a launch is in progress.
 // Used by Header to show spinner, and by Dashboard to disable play button.
 export const isLaunching = writable<boolean>(false);
@@ -309,6 +494,109 @@ export function closeLaunchLog() {
 /** One-shot: open IDE on this stage id (e.g. "content" = Mods). Cleared by IdeWorkspace. */
 export const ideStageRequest = writable<string | null>(null);
 
+/** Live IDE stage while IdeWorkspace is mounted (for left-nav active highlight). */
+export const ideActiveStage = writable<string | null>(null);
+
+/** Suggested IDE stage when opening from Home (updated by IdeNextBar / diagnostics refresh). */
+export const ideSuggestedStage = writable<string>("content");
+
+/** Blocking pack issues count (missing deps + conflicts) for Home badge / Next bar. */
+export const ideIssueCount = writable(0);
+
+/** Optional crash/needs-fix hint for Next Action priority. */
+export const ideNeedsHealth = writable(false);
+
+export type WorkTrailAction = {
+  id: string;
+  label: string;
+  /** Navigate to IDE stage, launch test, or dismiss. */
+  kind: "stage" | "play" | "dismiss";
+  stage?: string;
+};
+
+export type WorkTrail = {
+  message: string;
+  actions: WorkTrailAction[];
+  createdAt: number;
+};
+
+/** Contextual continue strip after Content / Resolve / Diagnose mutations. */
+export const workTrail = writable<WorkTrail | null>(null);
+
+export function pushWorkTrail(message: string, actions: WorkTrailAction[]) {
+  workTrail.set({
+    message,
+    actions,
+    createdAt: Date.now(),
+  });
+}
+
+export function clearWorkTrail() {
+  workTrail.set(null);
+}
+
+/** Bump to ask IdeNextBar to run its Next action (Ctrl+Enter). */
+export const ideNextTrigger = writable(0);
+
+export function requestIdeNextAction() {
+  ideNextTrigger.update((n) => n + 1);
+}
+
+/** Bump to refresh issue counts on IdeNextBar. */
+export const ideIssuesRefresh = writable(0);
+
+export function requestIdeIssuesRefresh() {
+  ideIssuesRefresh.update((n) => n + 1);
+}
+
+/** Bump to ask IdeNextBar to run Play (Ctrl+Shift+P). */
+export const idePlayTrigger = writable(0);
+
+export function requestIdePlay() {
+  idePlayTrigger.update((n) => n + 1);
+}
+
+/** Recent IDE stages / commands for the command palette (max 5). */
+export const ideRecentCommands = writable<{ id: string; label: string }[]>([]);
+
+export function pushIdeRecent(id: string, label: string) {
+  ideRecentCommands.update((list) => {
+    const next = [{ id, label }, ...list.filter((x) => x.id !== id)];
+    return next.slice(0, 5);
+  });
+}
+
+/** Deterministic Next Action for IdeNextBar / Open IDE. */
+export function computeIdeNextAction(opts: {
+  issueCount: number;
+  needsHealth: boolean;
+  briefDirty: boolean;
+  tuneDirty: boolean;
+  questDirty: boolean;
+}): { label: string; stage: string | null; kind: "stage" | "none"; detail?: string } {
+  if (opts.issueCount > 0) {
+    return {
+      label: "Fix pack graph",
+      stage: "resolve",
+      kind: "stage",
+      detail: `${opts.issueCount} issue${opts.issueCount === 1 ? "" : "s"}`,
+    };
+  }
+  if (opts.needsHealth) {
+    return { label: "Open Health", stage: "diagnose", kind: "stage", detail: "Crash needs a look" };
+  }
+  if (opts.briefDirty) {
+    return { label: "Finish Brief", stage: "brief", kind: "stage", detail: "Unsaved listing" };
+  }
+  if (opts.tuneDirty) {
+    return { label: "Save Tune", stage: "configs", kind: "stage", detail: "Unsaved configs" };
+  }
+  if (opts.questDirty) {
+    return { label: "Save Quests", stage: "quests", kind: "stage", detail: "Unsaved quests" };
+  }
+  return { label: "Open Launch", stage: "test", kind: "stage", detail: "Verify the pack in Test" };
+}
+
 /** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */
 export const questChatFocusId = writable<string | null>(null);
 
@@ -335,6 +623,18 @@ export const autoHideWorkflowRail = writable(false);
 
 /** Live mirror of launcherSettings.sidebarMode. */
 export const sidebarMode = writable<SidebarMode>("full");
+
+/** Latest launcher settings — updated when Settings persists (keeps App auto-scale in sync). */
+export const launcherSettingsLive = writable<LauncherSettings | null>(null);
+
+export function notifyLauncherSettingsChanged(settings: LauncherSettings) {
+  launcherSettingsLive.set(settings);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("tuffbox:launcher-settings", { detail: settings }),
+    );
+  }
+}
 
 /** Icons mode only: true = labels hidden (icon rail). Persisted in localStorage. */
 function createSidebarIconsCollapsed() {
@@ -370,6 +670,43 @@ function createSidebarIconsCollapsed() {
   };
 }
 export const sidebarIconsCollapsed = createSidebarIconsCollapsed();
+
+/** App chrome brand mark: classic amber "T" or creeper-in-a-box. */
+export type BrandIconId = "classic" | "creeper";
+
+const BRAND_ICON_KEY = "tuffbox.brand-icon";
+
+function readBrandIcon(): BrandIconId {
+  try {
+    const v = localStorage.getItem(BRAND_ICON_KEY);
+    if (v === "creeper" || v === "classic") return v;
+  } catch {
+    /* ignore */
+  }
+  return "classic";
+}
+
+function createBrandIcon() {
+  const { subscribe, set } = writable<BrandIconId>(
+    typeof window !== "undefined" ? readBrandIcon() : "classic",
+  );
+  return {
+    subscribe,
+    set: (id: BrandIconId) => {
+      try {
+        localStorage.setItem(BRAND_ICON_KEY, id);
+      } catch {
+        /* ignore */
+      }
+      set(id);
+    },
+  };
+}
+
+export const brandIcon = createBrandIcon();
+
+export const BRAND_ICON_CREEPER_SRC = "/brand/creeper-box.png";
+export const BRAND_ICON_CREEPER_SRC_SM = "/brand/creeper-box-128.png";
 
 /** Global YouTube player session — survives view switches so mini player stays on any page. */
 export type YoutubePlayerSession = {

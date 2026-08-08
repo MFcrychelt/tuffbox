@@ -1,17 +1,26 @@
 <script lang="ts">
-  import { X, Search, Loader2, FolderOpen, Check } from "lucide-svelte";
-  import { createEventDispatcher, onMount } from "svelte";
+  import { X, Search, Loader2, FolderOpen, Check, Download } from "@lucide/svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ close: void; selected: string }>();
+  type JavaRuntime = { path: string; version: string; major: number };
 
-  export let current: string;
+  let {
+    current,
+    onclose,
+    onselected,
+  }: {
+    current: string;
+    onclose?: () => void;
+    onselected?: (path: string) => void;
+  } = $props();
 
-  let runtimes: { path: string; version: string; major: number }[] = [];
-  let loading = true;
-  let error = "";
+  let runtimes = $state<JavaRuntime[]>([]);
+  let loading = $state(true);
+  let installing = $state(false);
+  let error = $state("");
 
   onMount(async () => {
     try {
@@ -31,23 +40,39 @@
       filters: [{ name: "Java executable", extensions: ["exe"] }],
     });
     if (selected && typeof selected === "string") {
-      dispatch("selected", selected);
+      onselected?.(selected);
+    }
+  }
+
+  async function downloadGraalVm() {
+    if (installing) return;
+    installing = true;
+    error = "";
+    try {
+      const runtime = await invoke<JavaRuntime>("ensure_java_runtime");
+      runtimes = await invoke<JavaRuntime[]>("find_java_runtimes");
+      runtimes.sort((a, b) => b.major - a.major);
+      onselected?.(runtime.path);
+    } catch (e) {
+      error = `${e}`;
+    } finally {
+      installing = false;
     }
   }
 
   function select(path: string) {
-    dispatch("selected", path);
+    onselected?.(path);
   }
 </script>
 
-<div class="modal-backdrop" on:click={(e) => e.target === e.currentTarget && dispatch("close")} role="button" tabindex="-1" aria-label="Close" on:keydown={() => {}}>
-  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="modal-backdrop" onclick={(e) => e.target === e.currentTarget && onclose?.()} role="button" tabindex="-1" aria-label="Close" onkeydown={() => {}}>
+  <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-header">
       <h2>
         <Search size={18} />
         Select Java Runtime
       </h2>
-      <button class="icon-btn" on:click={() => dispatch("close")} aria-label="Close">
+      <button class="icon-btn" onclick={() => onclose?.()} aria-label="Close">
         <X size={18} />
       </button>
     </div>
@@ -58,9 +83,18 @@
       {/if}
 
       <div class="actions-row">
-        <button class="ghost" on:click={browse}>
+        <button class="ghost" onclick={browse} disabled={installing}>
           <FolderOpen size={16} />
           Browse manually
+        </button>
+        <button class="secondary" onclick={downloadGraalVm} disabled={installing}>
+          {#if installing}
+            <Loader2 size={16} class="spin" />
+            Downloading GraalVM…
+          {:else}
+            <Download size={16} />
+            Download GraalVM
+          {/if}
         </button>
       </div>
 
@@ -70,14 +104,16 @@
           Scanning for Java installations...
         </div>
       {:else if runtimes.length === 0}
-        <div class="empty">No Java installations found.</div>
+        <div class="empty">
+          No Java installations found. Download GraalVM to install a managed runtime.
+        </div>
       {:else}
         <div class="runtimes">
-          {#each runtimes as runtime}
+          {#each runtimes as runtime (runtime.path)}
             <button
               class="runtime"
               class:active={runtime.path === current}
-              on:click={() => select(runtime.path)}
+              onclick={() => select(runtime.path)}
             >
               <div class="runtime-info">
                 <span class="runtime-version">Java {runtime.major}</span>
@@ -93,7 +129,7 @@
     </div>
 
     <div class="modal-footer">
-      <button class="ghost" on:click={() => dispatch("close")}>Cancel</button>
+      <button class="ghost" onclick={() => onclose?.()}>Cancel</button>
     </div>
   </div>
 </div>

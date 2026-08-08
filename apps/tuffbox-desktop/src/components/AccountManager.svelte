@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
   import {
     X,
     LogIn,
@@ -13,7 +12,7 @@
     ArrowLeftRight,
     Shield,
     Palette,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api } from "../lib/api";
   import {
     authState,
@@ -25,23 +24,25 @@
   } from "../lib/store";
   import { toasts } from "../lib/toast";
 
-  const dispatch = createEventDispatcher();
+  let { onclose }: { onclose?: () => void } = $props();
 
-  let mode: "list" | "add-select" | "add-offline" | "add-yggdrasil" = "list";
-  let accounts: AccountEntry[] = [];
-  let activeUuid: string | null = null;
-  let offlineUsername = "";
-  let offlineSkinSource: SkinSource = "mojang";
-  let yggPresets: YggdrasilPreset[] = [];
-  let yggPresetId = "elyby";
-  let yggAuthority = "";
-  let yggUsername = "";
-  let yggPassword = "";
-  let busy = false;
-  let errorMsg = "";
+  let mode = $state<"list" | "add-select" | "add-offline" | "add-yggdrasil">("list");
+  let accounts = $state<AccountEntry[]>([]);
+  let activeUuid = $state<string | null>(null);
+  let offlineUsername = $state("");
+  let offlineSkinSource = $state<SkinSource>("mojang");
+  let yggPresets = $state<YggdrasilPreset[]>([]);
+  let yggPresetId = $state("elyby");
+  let yggAuthority = $state("");
+  let yggUsername = $state("");
+  let yggPassword = $state("");
+  let busy = $state(false);
+  let errorMsg = $state("");
 
-  $: accounts = $authState.accounts;
-  $: activeUuid = $authState.activeAccountUuid;
+  $effect(() => {
+    accounts = $authState.accounts;
+    activeUuid = $authState.activeAccountUuid;
+  });
 
   async function loadAccounts() {
     try {
@@ -135,37 +136,20 @@
     busy = true;
     errorMsg = "";
     try {
-      const info = await api.mcAuth.startDeviceCode();
-      try {
-        const { open } = await import("@tauri-apps/plugin-shell");
-        await open(info.verificationUri);
-      } catch {}
-
-      const deadline = Date.now() + 15 * 60 * 1000;
-      while (Date.now() < deadline) {
+      const result = await api.mcAuth.startMicrosoftWebviewAuth();
+      await loadAccounts();
+      if (result.profile.uuid) {
         try {
-          const result = await api.mcAuth.pollDeviceCode();
-          await loadAccounts();
-          if (result.profile.uuid) {
-            try {
-              skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
-            } catch {}
-          }
-          toasts.success(`Added ${result.profile.name}`);
-          mode = "list";
-          return;
-        } catch (e) {
-          const msg = String(e);
-          if (msg.includes("authorization_pending") || msg.includes("slow_down")) {
-            await new Promise((r) => setTimeout(r, 3500));
-            continue;
-          }
-          throw e;
-        }
+          skinPath.set(await api.mcAuth.getSkinPath(result.profile.uuid));
+        } catch {}
       }
-      errorMsg = "Login timed out";
+      toasts.success(`Added ${result.profile.name}`);
+      mode = "list";
     } catch (e) {
-      errorMsg = String(e);
+      const msg = String(e);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        errorMsg = msg;
+      }
     } finally {
       busy = false;
     }
@@ -231,17 +215,17 @@
   }
 
   function close() {
-    dispatch("close");
+    onclose?.();
   }
 </script>
 
-<!-- svelte-ignore a11y-click-events-have-key-events -->
-<!-- svelte-ignore a11y-no-static-element-interactions -->
-<div class="overlay" on:click|self={close}>
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="overlay" onclick={(e) => e.target === e.currentTarget && close()}>
   <div class="modal">
     <div class="modal-header">
       {#if mode !== "list"}
-        <button class="back-btn" on:click={() => (mode = "list")} aria-label="Back">
+        <button class="back-btn" onclick={() => (mode = "list")} aria-label="Back">
           <ArrowLeftRight size={16} />
         </button>
       {/if}
@@ -254,7 +238,7 @@
           {:else}Add Offline Account{/if}
         </h3>
       </div>
-      <button class="close-btn" on:click={close} aria-label="Close">
+      <button class="close-btn" onclick={close} aria-label="Close">
         <X size={18} />
       </button>
     </div>
@@ -265,7 +249,7 @@
           <div class="empty-accounts">
             <User size={32} />
             <p>No accounts added yet</p>
-            <button class="accent-btn" on:click={() => (mode = "add-select")}>
+            <button class="accent-btn" onclick={() => (mode = "add-select")}>
               <Plus size={16} /> Add Account
             </button>
           </div>
@@ -313,7 +297,7 @@
                   {#if account.uuid !== activeUuid}
                     <button
                       class="icon-btn small"
-                      on:click={() => switchAccount(account.uuid)}
+                      onclick={() => switchAccount(account.uuid)}
                       disabled={busy}
                       title="Switch to this account"
                     >
@@ -322,7 +306,7 @@
                   {/if}
                   <button
                     class="icon-btn small danger"
-                    on:click={() => removeAccount(account.uuid)}
+                    onclick={() => removeAccount(account.uuid)}
                     disabled={busy}
                     title="Remove account"
                   >
@@ -333,22 +317,22 @@
             {/each}
           </div>
 
-          <button class="accent-btn full-width" on:click={() => (mode = "add-select")}>
+          <button class="accent-btn full-width" onclick={() => (mode = "add-select")}>
             <Plus size={16} /> Add Account
           </button>
         {/if}
 
       {:else if mode === "add-select"}
         <div class="add-options">
-          <button class="add-option" on:click={startMicrosoftAdd} disabled={busy}>
+          <button class="add-option" onclick={startMicrosoftAdd} disabled={busy}>
             <div class="option-icon ms"><Globe size={20} /></div>
             <div class="option-info">
               <span class="option-title">Microsoft Account</span>
-              <span class="option-desc">Online play, skins, Realms</span>
+              <span class="option-desc">Sign in in a popup — online play, skins, Realms</span>
             </div>
           </button>
 
-          <button class="add-option" on:click={() => (mode = "add-offline")} disabled={busy}>
+          <button class="add-option" onclick={() => (mode = "add-offline")} disabled={busy}>
             <div class="option-icon offline"><User size={20} /></div>
             <div class="option-info">
               <span class="option-title">Offline Account</span>
@@ -356,7 +340,7 @@
             </div>
           </button>
 
-          <button class="add-option" on:click={openYggdrasil} disabled={busy}>
+          <button class="add-option" onclick={openYggdrasil} disabled={busy}>
             <div class="option-icon ygg"><Shield size={20} /></div>
             <div class="option-info">
               <span class="option-title">Ely.by / LittleSkin / Custom</span>
@@ -366,14 +350,14 @@
         </div>
 
       {:else if mode === "add-yggdrasil"}
-        <form class="offline-form" on:submit|preventDefault={addYggdrasil}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); addYggdrasil(); }}>
           <div class="skin-source-grid ygg-presets">
             {#each yggPresets as preset}
               <button
                 type="button"
                 class="source-option"
                 class:active={yggPresetId === preset.id}
-                on:click={() => selectYggPreset(preset.id)}
+                onclick={() => selectYggPreset(preset.id)}
                 disabled={busy}
               >
                 {preset.label}
@@ -410,7 +394,7 @@
         </form>
 
       {:else if mode === "add-offline"}
-        <form class="offline-form" on:submit|preventDefault={addOffline}>
+        <form class="offline-form" onsubmit={(e) => { e.preventDefault(); addOffline(); }}>
           <label class="field">
             <span>Username</span>
             <input
@@ -425,16 +409,16 @@
           <label class="field">
             <span>Skin Source</span>
             <div class="skin-source-grid">
-              <button type="button" class="source-option" class:active={offlineSkinSource === "mojang"} on:click={() => (offlineSkinSource = "mojang")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "mojang"} onclick={() => (offlineSkinSource = "mojang")}>
                 <Monitor size={14} /> Mojang
               </button>
-              <button type="button" class="source-option" class:active={offlineSkinSource === "elyby"} on:click={() => (offlineSkinSource = "elyby")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "elyby"} onclick={() => (offlineSkinSource = "elyby")}>
                 <Globe size={14} /> Ely.by
               </button>
-              <button type="button" class="source-option" class:active={offlineSkinSource === "tlauncher"} on:click={() => (offlineSkinSource = "tlauncher")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "tlauncher"} onclick={() => (offlineSkinSource = "tlauncher")}>
                 <Globe size={14} /> TLauncher
               </button>
-              <button type="button" class="source-option" class:active={offlineSkinSource === "offline"} on:click={() => (offlineSkinSource = "offline")}>
+              <button type="button" class="source-option" class:active={offlineSkinSource === "offline"} onclick={() => (offlineSkinSource = "offline")}>
                 <User size={14} /> None
               </button>
             </div>

@@ -10,7 +10,7 @@
     Compass,
     LayoutGrid,
     ExternalLink,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { open } from "@tauri-apps/plugin-dialog";
   import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -19,6 +19,7 @@
     projectPath,
     projectInfo,
     newProjectOpen,
+    libraryTabRequest,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -26,30 +27,16 @@
   import CreationTrends from "./CreationTrends.svelte";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
 
-  export let currentView:
-    | "dashboard"
-    | "ide"
-    | "mods"
-    | "graph"
-    | "diagnostics"
-    | "snapshots"
-    | "configs"
-    | "settings"
-    | "project-settings"
-    | "ore-gen"
-    | "recipes"
-    | "quests"
-    | "library"
-    | "chats"
-    | "me"
-    | "world";
+  let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
   type Tab = "yours" | "discover" | "create";
-  let tab: Tab = "yours";
-  let swarmEnabled = false;
-  let importing = false;
-  let importMenuOpen = false;
+
+  let tab = $state<Tab>("yours");
+  let swarmEnabled = $state(false);
+  let importing = $state(false);
+  let importMenuOpen = $state(false);
 
   async function loadSwarm() {
     try {
@@ -148,9 +135,8 @@
     await importFromSource(selected);
   }
 
-  async function onPackCreated(e: CustomEvent<string>) {
+  async function onPackCreated(path: string) {
     newProjectOpen.set(false);
-    const path = e.detail;
     try {
       const info = (await invoke("validate_project", { path })) as any;
       const manifestPath = info.manifestPath || path;
@@ -180,14 +166,17 @@
   type DiscoverResult = SearchResult & { provider?: "modrinth" | "curseforge" };
   type DiscoverProvider = "modrinth" | "curseforge" | "both";
 
-  let query = "";
-  let results: DiscoverResult[] = [];
-  let loadingDiscover = false;
-  let discoverError = "";
-  let adding = new Set<string>();
-  let discoverProvider: DiscoverProvider = "modrinth";
-  let downloadDir = "";
-  let defaultDownloadDir = "";
+  let query = $state("");
+  let results = $state<DiscoverResult[]>([]);
+  let loadingDiscover = $state(false);
+  let discoverError = $state("");
+  let adding = $state(new Set<string>());
+  let discoverProvider = $state<DiscoverProvider>("modrinth");
+  let downloadDir = $state("");
+  let defaultDownloadDir = $state("");
+  let brokenIcons = $state<string[]>([]);
+  let catalogViewResult = $state<DiscoverResult | null>(null);
+  let searchRequestId = 0;
 
   async function loadDownloadDir() {
     try {
@@ -252,7 +241,15 @@
     return `https://modrinth.com/modpack/${slugOrId}`;
   }
 
-  async function openModpackPage(result: DiscoverResult) {
+  function openCatalogInApp(result: DiscoverResult) {
+    catalogViewResult = result;
+  }
+
+  function closeCatalogInApp() {
+    catalogViewResult = null;
+  }
+
+  async function openModpackExternal(result: DiscoverResult) {
     const url = modpackPageUrl(result);
     if (!url) {
       toasts.error("No catalog page for this modpack.");
@@ -262,6 +259,12 @@
       await openExternal(url);
     } catch (e) {
       toasts.error(`Could not open link: ${e}`);
+    }
+  }
+
+  function markIconBroken(key: string) {
+    if (!brokenIcons.includes(key)) {
+      brokenIcons = [...brokenIcons, key];
     }
   }
 
@@ -332,15 +335,18 @@
   }
 
   async function search(_opts?: { reset?: boolean }) {
+    const requestId = ++searchRequestId;
     loadingDiscover = true;
     discoverError = "";
     try {
+      let next: DiscoverResult[];
       if (discoverProvider === "modrinth") {
-        results = await searchModrinth();
+        next = await searchModrinth();
       } else if (discoverProvider === "curseforge") {
-        results = await searchCurseForge();
+        next = await searchCurseForge();
       } else {
         const settled = await Promise.allSettled([searchModrinth(), searchCurseForge()]);
+        if (requestId !== searchRequestId) return;
         const mr = settled[0].status === "fulfilled" ? settled[0].value : [];
         const cf = settled[1].status === "fulfilled" ? settled[1].value : [];
         const errors = settled
@@ -352,19 +358,26 @@
         if (errors.length > 0) {
           discoverError = errors.join("; ");
         }
-        results = interleaveResults(mr, cf);
+        next = interleaveResults(mr, cf);
       }
+      if (requestId !== searchRequestId) return;
+      results = next;
+      brokenIcons = brokenIcons.filter((id) => next.some((r) => resultKey(r) === id));
     } catch (e) {
+      if (requestId !== searchRequestId) return;
       discoverError = String(e);
       results = [];
     } finally {
-      loadingDiscover = false;
+      if (requestId === searchRequestId) {
+        loadingDiscover = false;
+      }
     }
   }
 
   function setDiscoverProvider(provider: DiscoverProvider) {
     if (discoverProvider === provider) return;
     discoverProvider = provider;
+    catalogViewResult = null;
     search();
   }
 
@@ -404,7 +417,6 @@
       const manifestPath = info.manifestPath || res.path;
       recentProjects.add({ path: manifestPath, info: info as any });
       toasts.success(`Added "${result.name}" to ${targetDir}.`);
-      search();
     } catch (e) {
       toasts.error(`Could not add ${result.name}: ${e}`);
     } finally {
@@ -420,8 +432,16 @@
     if (tab === "discover") search();
   });
 
+  $effect(() => {
+    const req = $libraryTabRequest;
+    if (!req) return;
+    libraryTabRequest.set(null);
+    switchTab(req);
+  });
+
   function switchTab(t: Tab) {
     tab = t;
+    if (t !== "discover") catalogViewResult = null;
     if (t === "discover") {
       void loadDownloadDir();
       if (results.length === 0) search();
@@ -436,16 +456,17 @@
     return String(n);
   }
 
-  $: discoverPlaceholder =
+  const discoverPlaceholder = $derived(
     discoverProvider === "curseforge"
       ? "Search CurseForge modpacks…"
       : discoverProvider === "both"
         ? "Search modpacks…"
-        : "Search Modrinth modpacks…";
+        : "Search Modrinth modpacks…",
+  );
 </script>
 
 <div class="library fade-slide-in lib-page">
-  <div class="library-header lib-header-enter">
+  <div class="library-header lib-header-enter" class:compact={tab === "yours"}>
     <div class="title-row">
       <span class="lib-title-icon"><LibraryIcon size={22} /></span>
       <h1>Library</h1>
@@ -458,7 +479,7 @@
             class="header-btn"
             class:busy={importing}
             disabled={importing}
-            on:click|stopPropagation={() => (importMenuOpen = !importMenuOpen)}
+            onclick={(e) => { e.stopPropagation(); (importMenuOpen = !importMenuOpen);  }}
             title="Import .mrpack, .zip, or Prism/MultiMC/CurseForge instance"
           >
             {#if importing}
@@ -469,10 +490,10 @@
           </button>
           {#if importMenuOpen}
             <div class="import-menu" role="menu">
-              <button type="button" role="menuitem" on:click={importPackFile}>
+              <button type="button" role="menuitem" onclick={importPackFile}>
                 File (.mrpack / .zip)
               </button>
-              <button type="button" role="menuitem" on:click={importInstanceFolder}>
+              <button type="button" role="menuitem" onclick={importInstanceFolder}>
                 Instance folder
               </button>
             </div>
@@ -480,15 +501,15 @@
         </div>
       {/if}
       <div class="tabs">
-        <button class:active={tab === "yours"} on:click={() => switchTab("yours")}>
+        <button class:active={tab === "yours"} onclick={() => switchTab("yours")}>
           <LayoutGrid size={15} /> Your packs
         </button>
-        <button class:active={tab === "discover"} on:click={() => switchTab("discover")}>
+        <button class:active={tab === "discover"} onclick={() => switchTab("discover")}>
           <Compass size={15} /> Discover
         </button>
         <button
           class:active={tab === "create"}
-          on:click={() => switchTab("create")}
+          onclick={() => switchTab("create")}
           title="Create a new modpack"
         >
           <Plus size={15} /> Create
@@ -498,24 +519,40 @@
   </div>
 
   {#if tab === "yours"}
-    <LibraryInstancesPane bind:currentView />
+    <div class="yours-wrap">
+      <LibraryInstancesPane bind:currentView />
+    </div>
   {:else if tab === "discover"}
+  <div class="tab-scroll">
+    {#if catalogViewResult}
+      <CatalogProjectView
+        result={catalogViewResult}
+        installing={adding.has(resultKey(catalogViewResult))}
+        onback={closeCatalogInApp}
+        oninstall={() => {
+          if (catalogViewResult) void addModpack(catalogViewResult);
+        }}
+        onopenexternal={() => {
+          if (catalogViewResult) void openModpackExternal(catalogViewResult);
+        }}
+      />
+    {:else}
     <div class="discover-bar">
       <div class="provider-toggle" role="group" aria-label="Catalog provider">
         <button
           type="button"
           class:active={discoverProvider === "modrinth"}
-          on:click={() => setDiscoverProvider("modrinth")}
+          onclick={() => setDiscoverProvider("modrinth")}
         >Modrinth</button>
         <button
           type="button"
           class:active={discoverProvider === "curseforge"}
-          on:click={() => setDiscoverProvider("curseforge")}
+          onclick={() => setDiscoverProvider("curseforge")}
         >CurseForge</button>
         <button
           type="button"
           class:active={discoverProvider === "both"}
-          on:click={() => setDiscoverProvider("both")}
+          onclick={() => setDiscoverProvider("both")}
           title="Search both catalogs at once"
         >Both</button>
       </div>
@@ -525,10 +562,10 @@
           aria-label="Search modpacks"
           bind:value={query}
           placeholder={discoverPlaceholder}
-          on:keydown={(e) => e.key === "Enter" && search()}
+          onkeydown={(e) => e.key === "Enter" && search()}
         />
       </div>
-      <button class="search-btn" on:click={() => search()} disabled={loadingDiscover}>
+      <button class="search-btn" onclick={() => search()} disabled={loadingDiscover}>
         {loadingDiscover ? "Searching…" : "Search"}
       </button>
     </div>
@@ -541,10 +578,10 @@
           bind:value={downloadDir}
           placeholder={defaultDownloadDir || "Choose a folder for modpacks"}
         />
-        <button type="button" class="path-btn" on:click={browseDownloadDir} title="Browse">
+        <button type="button" class="path-btn" onclick={browseDownloadDir} title="Browse">
           <FolderOpen size={15} />
         </button>
-        <button type="button" class="path-btn save" on:click={applyDownloadDir}>Save</button>
+        <button type="button" class="path-btn save" onclick={applyDownloadDir}>Save</button>
       </div>
     </div>
 
@@ -563,17 +600,31 @@
     {:else}
       <div class="pack-grid tb-stagger">
         {#each results as result, i (resultKey(result))}
-          <div class="pack-card discover-card tb-card" style={`--i: ${i}`}>
+          {@const key = resultKey(result)}
+          {@const showIcon = !!result.iconUrl && !brokenIcons.includes(key)}
+          <div
+            class="pack-card discover-card tb-card"
+            style={`--i: ${Math.min(i, 8)}`}
+            role="button"
+            tabindex="0"
+            onclick={() => openCatalogInApp(result)}
+            onkeydown={(e) => e.key === "Enter" && openCatalogInApp(result)}
+          >
             <div
               class="pack-cover"
-              style={result.iconUrl
-                ? `background: #18181b`
-                : `background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug)})`}
+              style={`background: linear-gradient(135deg, ${gradientFrom(result.name)}, ${gradientFrom(result.slug || result.id)})`}
             >
-              {#if result.iconUrl}
-                <img class="pack-cover-img tb-cover-media" src={result.iconUrl} alt="" />
+              {#if showIcon}
+                <img
+                  class="pack-cover-img tb-cover-media"
+                  src={result.iconUrl}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  onerror={() => markIconBroken(key)}
+                />
               {:else}
-                <span class="pack-cover-letter tb-cover-media">{result.name[0]}</span>
+                <span class="pack-cover-letter tb-cover-media">{result.name[0]?.toUpperCase() ?? "?"}</span>
               {/if}
             </div>
             <div class="pack-body">
@@ -581,8 +632,11 @@
                 <button
                   type="button"
                   class="pack-name linkish"
-                  title="Open on {result.provider === 'curseforge' ? 'CurseForge' : 'Modrinth'}"
-                  on:click={() => openModpackPage(result)}
+                  title={result.name}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openCatalogInApp(result);
+                  }}
                 >{result.name}</button>
                 {#if discoverProvider === "both"}
                   <span
@@ -603,17 +657,23 @@
                 <button
                   type="button"
                   class="pack-page"
-                  title="Open catalog page"
-                  on:click={() => openModpackPage(result)}
+                  title="Open catalog page in TuffBox"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    openCatalogInApp(result);
+                  }}
                 >
                   <ExternalLink size={14} /> Page
                 </button>
                 <button
                   class="pack-add"
-                  disabled={adding.has(resultKey(result))}
-                  on:click={() => addModpack(result)}
+                  disabled={adding.has(key)}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    void addModpack(result);
+                  }}
                 >
-                  {#if adding.has(resultKey(result))}
+                  {#if adding.has(key)}
                     <span class="mini-spinner"></span> Adding…
                   {:else}
                     <Plus size={14} /> Add to TuffBox
@@ -625,14 +685,17 @@
         {/each}
       </div>
     {/if}
+    {/if}
+  </div>
   {:else if tab === "create"}
+  <div class="tab-scroll">
     <div class="create-pane">
       <header class="create-hero">
         <h2>Start a pack</h2>
         <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
       </header>
       <div class="create-actions">
-        <button type="button" class="create-plus" on:click={openNewPack}>
+        <button type="button" class="create-plus" onclick={openNewPack}>
           <span class="plus-ring"><Plus size={28} strokeWidth={2.25} /></span>
           <div class="create-copy">
             <strong>Create modpack</strong>
@@ -642,7 +705,7 @@
         <button
           type="button"
           class="create-plus import"
-          on:click={() => (importMenuOpen = true)}
+          onclick={() => (importMenuOpen = true)}
           disabled={importing}
         >
           <span class="plus-ring"><Download size={26} strokeWidth={2.25} /></span>
@@ -656,22 +719,42 @@
         <CreationTrends {swarmEnabled} />
       </div>
     </div>
+  </div>
   {/if}
 </div>
 
 {#if $newProjectOpen}
   <AddInstanceModal
-    on:close={() => newProjectOpen.set(false)}
-    on:created={onPackCreated}
+    onclose={() => newProjectOpen.set(false)}
+    oncreated={onPackCreated}
   />
 {/if}
 
-<svelte:window on:mousedown={onGlobalPointerDown} on:keydown={onGlobalKeydown} />
+<svelte:window onmousedown={onGlobalPointerDown} onkeydown={onGlobalKeydown} />
 
 <style>
   .library {
-    max-width: 1200px;
-    margin: 0 auto;
+    max-width: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+  }
+  .library .yours-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .library .tab-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
   }
 
   .lib-header-enter {
@@ -689,6 +772,9 @@
     margin-bottom: 22px;
     gap: 16px;
     flex-wrap: wrap;
+  }
+  .library-header.compact {
+    margin-bottom: 6px;
   }
   .header-actions {
     display: flex;
@@ -824,7 +910,9 @@
 
   .pack-cover {
     position: relative;
-    height: 120px;
+    aspect-ratio: 1;
+    width: 100%;
+    height: auto;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -840,7 +928,7 @@
   .pack-cover-img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .pack-body {

@@ -14,7 +14,7 @@
     ArrowLeft,
     Upload,
     Link2,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { api } from "../lib/api";
   import {
@@ -31,29 +31,31 @@
   import AccountManager from "./AccountManager.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
 
-  export let onBack: () => void = () => {};
+  let { onBack = () => {} }: { onBack?: () => void } = $props();
 
-  let showAccountManager = false;
-  let showLogin = false;
-  let playtimeSeconds = 0;
-  let busy = false;
-  let capeCatalog: CapeCatalog | null = null;
-  let mojangCapeMenuOpen = false;
+  let showAccountManager = $state(false);
+  let showLogin = $state(false);
+  let playtimeSeconds = $state(0);
+  let busy = $state(false);
+  let capeCatalog = $state<CapeCatalog | null>(null);
+  let mojangCapeMenuOpen = $state(false);
 
-  let skinUrlInput = "";
-  let skinVariant: "classic" | "slim" = "classic";
-  let skinBusy = false;
+  let skinUrlInput = $state("");
+  let skinVariant = $state<"classic" | "slim">("classic");
+  let skinBusy = $state(false);
 
-  $: skinUrl = $authState.profile?.skinUrl ?? null;
-  $: capeUrl = $authState.profile?.capeUrl ?? null;
-  $: accountKey = $authState.activeAccountUuid ?? $authState.profile?.uuid ?? "";
-  $: activeAuthority =
-    $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority ?? null;
-  $: mojangCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang");
-  $: otherCapeOffers = (capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang");
-  $: canChangeMojangCape =
-    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate);
-  $: canChangeMojangSkin = $authState.loginType === "microsoft" && $authState.loggedIn;
+  const skinUrl = $derived($authState.profile?.skinUrl ?? null);
+  const capeUrl = $derived($authState.profile?.capeUrl ?? null);
+  const accountKey = $derived($authState.activeAccountUuid ?? $authState.profile?.uuid ?? "");
+  const activeAuthority = $derived(
+    $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority ?? null,
+  );
+  const mojangCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang"));
+  const otherCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang"));
+  const canChangeMojangCape = $derived(
+    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate),
+  );
+  const canChangeMojangSkin = $derived($authState.loginType === "microsoft" && $authState.loggedIn);
 
   const capeProviders: { id: CapeProvider; label: string }[] = [
     { id: "mojang", label: "Mojang" },
@@ -225,19 +227,19 @@
 
 <div class="me-page">
   <div class="me-top">
-    <button class="back-btn" on:click={onBack} title="Back">
+    <button class="back-btn" onclick={onBack} title="Back">
       <ArrowLeft size={18} />
       <span>Back</span>
     </button>
     <h1 class="me-title">Me</h1>
     <div class="me-top-actions">
       {#if $authState.loggedIn}
-        <button class="ghost-btn danger" disabled={busy} on:click={logout} title="Sign out">
+        <button class="ghost-btn danger" disabled={busy} onclick={logout} title="Sign out">
           <LogOut size={16} />
           Sign out
         </button>
       {/if}
-      <button class="ghost-btn" on:click={() => (showLogin = true)}>
+      <button class="ghost-btn" onclick={() => (showLogin = true)}>
         <Plus size={16} />
         Add account
       </button>
@@ -269,7 +271,7 @@
         <div class="skin-empty">
           <User size={48} />
           <p>Not signed in</p>
-          <button class="accent-btn" on:click={() => (showLogin = true)}>
+          <button class="accent-btn" onclick={() => (showLogin = true)}>
             <LogIn size={16} /> Sign in
           </button>
         </div>
@@ -301,12 +303,12 @@
               <button
                 class="chip"
                 class:active={skinVariant === "classic"}
-                on:click={() => (skinVariant = "classic")}
+                onclick={() => (skinVariant = "classic")}
               >Classic</button>
               <button
                 class="chip"
                 class:active={skinVariant === "slim"}
-                on:click={() => (skinVariant = "slim")}
+                onclick={() => (skinVariant = "slim")}
               >Slim</button>
             </div>
             <div class="url-row">
@@ -317,11 +319,11 @@
                 bind:value={skinUrlInput}
                 disabled={skinBusy}
               />
-              <button class="mini" disabled={skinBusy} on:click={applySkinFromUrl} title="Apply URL">
+              <button class="mini" disabled={skinBusy} onclick={applySkinFromUrl} title="Apply URL">
                 <Link2 size={14} />
               </button>
             </div>
-            <button class="accent-btn wide" disabled={skinBusy} on:click={uploadSkinFile}>
+            <button class="accent-btn wide" disabled={skinBusy} onclick={uploadSkinFile}>
               <Upload size={16} />
               Upload PNG
             </button>
@@ -342,7 +344,7 @@
               class="chip"
               class:active={($authState.capeProvider ?? "mojang") === opt.id}
               disabled={!$authState.loggedIn}
-              on:click={() => setCapeProvider(opt.id)}
+              onclick={() => setCapeProvider(opt.id)}
             >
               {opt.label}
             </button>
@@ -353,7 +355,7 @@
           <button
             class="mini"
             disabled={!$authState.loggedIn}
-            on:click={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
+            onclick={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
           >
             {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
           </button>
@@ -364,7 +366,7 @@
             {#each mojangCapeOffers as offer (offer.id)}
               <div class="cape-row" class:active={offer.active}>
                 <span>{offer.label}</span>
-                <button class="mini" on:click={() => applyCape(offer.id)} disabled={offer.active}>
+                <button class="mini" onclick={() => applyCape(offer.id)} disabled={offer.active}>
                   {offer.active ? "Active" : "Equip"}
                 </button>
               </div>
@@ -378,7 +380,7 @@
               <div class="cape-row" class:active={($authState.capeProvider ?? "mojang") === offer.provider}>
                 <span>{offer.label} ({offer.provider})</span>
                 {#if ($authState.capeProvider ?? "mojang") !== offer.provider}
-                  <button class="mini" on:click={() => setCapeProvider(offer.provider)}>Show</button>
+                  <button class="mini" onclick={() => setCapeProvider(offer.provider)}>Show</button>
                 {/if}
               </div>
             {/each}
@@ -390,17 +392,17 @@
         <div class="card-head">
           <User size={16} />
           <h3>Accounts</h3>
-          <button class="ghost-icon" title="Add account" on:click={() => (showLogin = true)}>
+          <button class="ghost-icon" title="Add account" onclick={() => (showLogin = true)}>
             <Plus size={16} />
           </button>
-          <button class="ghost-icon" title="Manage accounts" on:click={() => (showAccountManager = true)}>
+          <button class="ghost-icon" title="Manage accounts" onclick={() => (showAccountManager = true)}>
             <ArrowLeftRight size={16} />
           </button>
         </div>
 
         {#if $authState.accounts.length === 0}
           <p class="hint">No saved accounts. Sign in with Microsoft, Offline, Ely.by, LittleSkin, or custom Yggdrasil.</p>
-          <button class="accent-btn" on:click={() => (showLogin = true)}>
+          <button class="accent-btn" onclick={() => (showLogin = true)}>
             <LogIn size={16} /> Add account
           </button>
         {:else}
@@ -410,7 +412,7 @@
                 <button
                   class="account-main"
                   disabled={busy || account.uuid === $authState.activeAccountUuid}
-                  on:click={() => switchAccount(account.uuid)}
+                  onclick={() => switchAccount(account.uuid)}
                   title={account.uuid === $authState.activeAccountUuid ? "Active" : "Switch"}
                 >
                   <div
@@ -438,7 +440,7 @@
                       class="ghost-icon"
                       title="Switch"
                       disabled={busy}
-                      on:click={() => switchAccount(account.uuid)}
+                      onclick={() => switchAccount(account.uuid)}
                     >
                       <ArrowLeftRight size={14} />
                     </button>
@@ -447,7 +449,7 @@
                     class="ghost-icon danger"
                     title="Remove"
                     disabled={busy}
-                    on:click={() => removeAccount(account.uuid)}
+                    onclick={() => removeAccount(account.uuid)}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -463,7 +465,7 @@
 
 {#if showLogin}
   <MinecraftLogin
-    on:close={() => {
+    onclose={() => {
       showLogin = false;
       void refreshAuth();
       void refreshCapes();
@@ -472,7 +474,7 @@
 {/if}
 {#if showAccountManager}
   <AccountManager
-    on:close={() => {
+    onclose={() => {
       showAccountManager = false;
       void refreshAuth();
       void refreshCapes();

@@ -12,14 +12,22 @@
     FolderOpen,
     ExternalLink,
     Play,
-  } from "lucide-svelte";
+    ChevronDown,
+    ChevronUp,
+  } from "@lucide/svelte";
   import { api, type WorldListItem } from "../lib/api";
   import { toasts } from "../lib/toast";
   import { launchWithFeedback } from "../lib/launch";
 
-  export let projectPath: string;
-  export let onOpenMods: () => void = () => {};
-  export let onOpenWorld: () => void = () => {};
+  let {
+    projectPath,
+    onOpenMods = () => {},
+    onOpenWorld = () => {},
+  }: {
+    projectPath: string;
+    onOpenMods?: () => void;
+    onOpenWorld?: () => void;
+  } = $props();
 
   type Tab = "mods" | "resourcepacks" | "shaderpacks" | "worlds" | "servers";
   type PackEntry = {
@@ -43,52 +51,137 @@
     error: string | null;
   };
 
-  let tab: Tab = "resourcepacks";
-  let loading = false;
-  let packs: PackEntry[] = [];
-  let worlds: WorldListItem[] = [];
-  let servers: ServerEntry[] = [];
-  let pings: Record<string, PingResult> = {};
-  let modCount: number | null = null;
-  let busyKey: string | null = null;
+  const COLLAPSE_KEY = "tuffbox-instance-home-collapsed";
 
-  let newServerName = "";
-  let newServerAddress = "";
+  let tab = $state<Tab>("resourcepacks");
+  let loading = $state(false);
+  let resourcePacks = $state<PackEntry[]>([]);
+  let shaderPacks = $state<PackEntry[]>([]);
+  let worlds = $state<WorldListItem[]>([]);
+  let servers = $state<ServerEntry[]>([]);
+  let pings = $state<Record<string, PingResult>>({});
+  let modCount = $state<number | null>(null);
+  let busyKey = $state<string | null>(null);
+  /** Tabs that already have a successful load — avoid skeleton/collapse on revisit. */
+  let primed = $state<Partial<Record<Tab, boolean>>>({});
+  let loadGen = 0;
+  let collapsed = $state(
+    typeof localStorage === "undefined"
+      ? false
+      : localStorage.getItem(COLLAPSE_KEY) === "true",
+  );
 
-  async function load() {
-    if (!projectPath) return;
-    loading = true;
+  let newServerName = $state("");
+  let newServerAddress = $state("");
+
+  const packs = $derived(tab === "shaderpacks" ? shaderPacks : resourcePacks);
+  const tabPrimed = $derived(!!primed[tab]);
+  const showSkeleton = $derived(
+    loading &&
+      !tabPrimed &&
+      tab !== "mods" &&
+      (tab === "resourcepacks" || tab === "shaderpacks"
+        ? packs.length === 0
+        : tab === "worlds"
+          ? worlds.length === 0
+          : servers.length === 0),
+  );
+
+  const collapsedSummary = $derived((() => {
+    switch (tab) {
+      case "mods":
+        return modCount == null ? "Mods" : `${modCount} mods`;
+      case "resourcepacks":
+        return `Resource packs · ${resourcePacks.length}`;
+      case "shaderpacks":
+        return `Shaders · ${shaderPacks.length}`;
+      case "worlds":
+        return `Worlds · ${worlds.length}`;
+      case "servers":
+        return `Servers · ${servers.length}`;
+    }
+  })());
+
+  function toggleCollapsed() {
+    collapsed = !collapsed;
     try {
-      if (tab === "resourcepacks" || tab === "shaderpacks") {
-        packs = await api.content.listPacks(tab, projectPath);
-      } else if (tab === "worlds") {
-        worlds = await api.worlds.list(projectPath);
-      } else if (tab === "servers") {
-        servers = await api.servers.list(projectPath);
-      } else if (tab === "mods") {
-        try {
-          const mods = await api.mods.list(projectPath);
-          modCount = Array.isArray(mods) ? mods.filter((m: any) => !m.contentType || m.contentType === "mod").length : 0;
-        } catch {
-          modCount = null;
-        }
-      }
-    } catch (e) {
-      toasts.error(String(e));
-    } finally {
-      loading = false;
+      localStorage.setItem(COLLAPSE_KEY, String(collapsed));
+    } catch {
+      /* ignore */
     }
   }
 
-  $: if (projectPath && tab) {
-    void load();
+  async function load(opts?: { force?: boolean }) {
+    if (!projectPath) return;
+    const t = tab;
+    const force = !!opts?.force;
+    const first = !primed[t];
+    const gen = ++loadGen;
+    // Only flash loading UI on cold tab — keeps panel height stable when switching.
+    if (first || force) loading = true;
+    try {
+      if (t === "resourcepacks" || t === "shaderpacks") {
+        const next = await api.content.listPacks(t, projectPath);
+        if (gen !== loadGen) return;
+        if (t === "shaderpacks") shaderPacks = next;
+        else resourcePacks = next;
+      } else if (t === "worlds") {
+        const next = await api.worlds.list(projectPath);
+        if (gen !== loadGen) return;
+        worlds = next;
+      } else if (t === "servers") {
+        const next = await api.servers.list(projectPath);
+        if (gen !== loadGen) return;
+        servers = next;
+      } else if (t === "mods") {
+        try {
+          const mods = await api.mods.list(projectPath);
+          if (gen !== loadGen) return;
+          modCount = Array.isArray(mods)
+            ? mods.filter((m: any) => !m.contentType || m.contentType === "mod").length
+            : 0;
+        } catch {
+          if (gen !== loadGen) return;
+          modCount = null;
+        }
+      }
+      if (gen !== loadGen) return;
+      primed = { ...primed, [t]: true };
+    } catch (e) {
+      if (gen === loadGen) toasts.error(String(e));
+    } finally {
+      if (gen === loadGen) loading = false;
+    }
   }
+
+  let lastProjectPath = "";
+
+  $effect(() => {
+    if (!projectPath) return;
+    if (projectPath !== lastProjectPath) {
+      lastProjectPath = projectPath;
+      resourcePacks = [];
+      shaderPacks = [];
+      worlds = [];
+      servers = [];
+      modCount = null;
+      primed = {};
+    }
+    // Depend on tab so switching tabs reloads (from cache when primed).
+    void tab;
+    void load();
+  });
 
   async function togglePack(pack: PackEntry) {
     busyKey = pack.fileName;
     try {
-      await api.content.setEnabled(tab === "shaderpacks" ? "shaderpacks" : "resourcepacks", pack.fileName, !pack.enabled, projectPath);
-      await load();
+      await api.content.setEnabled(
+        tab === "shaderpacks" ? "shaderpacks" : "resourcepacks",
+        pack.fileName,
+        !pack.enabled,
+        projectPath,
+      );
+      await load({ force: true });
     } catch (e) {
       toasts.error(String(e));
     } finally {
@@ -178,163 +271,182 @@
   }
 </script>
 
-<section class="instance-home">
+<section class="instance-home" class:collapsed>
   <div class="tabs">
-    <button class:active={tab === "mods"} on:click={() => (tab = "mods")}>
+    <button class:active={tab === "mods"} onclick={() => (tab = "mods")}>
       <Package size={14} /> Mods
     </button>
-    <button class:active={tab === "resourcepacks"} on:click={() => (tab = "resourcepacks")}>
+    <button class:active={tab === "resourcepacks"} onclick={() => (tab = "resourcepacks")}>
       <Image size={14} /> Resource packs
     </button>
-    <button class:active={tab === "shaderpacks"} on:click={() => (tab = "shaderpacks")}>
+    <button class:active={tab === "shaderpacks"} onclick={() => (tab = "shaderpacks")}>
       <Sparkles size={14} /> Shaders
     </button>
-    <button class:active={tab === "worlds"} on:click={() => (tab = "worlds")}>
+    <button class:active={tab === "worlds"} onclick={() => (tab = "worlds")}>
       <Globe size={14} /> Worlds
     </button>
-    <button class:active={tab === "servers"} on:click={() => (tab = "servers")}>
+    <button class:active={tab === "servers"} onclick={() => (tab = "servers")}>
       <Server size={14} /> Servers
     </button>
     <div class="tabs-spacer"></div>
-    <button class="icon-btn" on:click={load} title="Refresh" disabled={loading}>
+    <button class="icon-btn" onclick={() => load({ force: true })} title="Refresh" disabled={loading}>
       <RefreshCw size={14} class={loading ? "spin" : ""} />
     </button>
-    <button class="icon-btn" on:click={openFolder} title="Open instance folder">
+    <button class="icon-btn" onclick={openFolder} title="Open instance folder">
       <FolderOpen size={14} />
+    </button>
+    <button
+      class="icon-btn"
+      onclick={toggleCollapsed}
+      title={collapsed ? "Expand" : "Collapse"}
+      aria-expanded={!collapsed}
+    >
+      {#if collapsed}
+        <ChevronDown size={14} />
+      {:else}
+        <ChevronUp size={14} />
+      {/if}
     </button>
   </div>
 
-  <div class="panel">
-    {#if loading && packs.length === 0 && worlds.length === 0 && servers.length === 0 && tab !== "mods"}
-      <div class="list home-skel-stagger" aria-busy="true" aria-hidden="true">
-        {#each Array(4) as _, i (i)}
-          <div class="row skel-row" style={`--i: ${i}`}>
-            <div class="row-main" style="gap: 8px; width: 100%;">
-              <span class="skeleton skeleton-block skeleton-line medium" style="height: 12px;"></span>
-              <span class="skeleton skeleton-block skeleton-line short" style="height: 10px;"></span>
+  {#if collapsed}
+    <div class="collapsed-summary">{collapsedSummary}</div>
+  {:else}
+    <div class="panel" class:is-loading={loading && tabPrimed}>
+      {#if showSkeleton}
+        <div class="list home-skel-stagger" aria-busy="true" aria-hidden="true">
+          {#each Array(4) as _, i (i)}
+            <div class="row skel-row" style={`--i: ${i}`}>
+              <div class="row-main" style="gap: 8px; width: 100%;">
+                <span class="skeleton skeleton-block skeleton-line medium" style="height: 12px;"></span>
+                <span class="skeleton skeleton-block skeleton-line short" style="height: 10px;"></span>
+              </div>
+              <span class="skeleton skeleton-block skeleton-round" style="width: 56px; height: 28px; flex-shrink: 0;"></span>
             </div>
-            <span class="skeleton skeleton-block skeleton-round" style="width: 56px; height: 28px; flex-shrink: 0;"></span>
+          {/each}
+        </div>
+      {:else if tab === "mods"}
+        <div class="mods-cta">
+          <div>
+            {#if loading && modCount == null}
+              <strong class="skeleton skeleton-block" style="display:inline-block; width: 28px; height: 18px; vertical-align: middle;"></strong>
+            {:else}
+              <strong>{modCount == null ? "—" : modCount}</strong>
+            {/if}
+            <span>mods in this instance</span>
           </div>
-        {/each}
-      </div>
-    {:else if tab === "mods"}
-      <div class="mods-cta" class:tb-anim-fade-in={!loading}>
-        <div>
-          {#if loading && modCount == null}
-            <strong class="skeleton skeleton-block" style="display:inline-block; width: 28px; height: 18px; vertical-align: middle;"></strong>
-          {:else}
-            <strong>{modCount == null ? "—" : modCount}</strong>
-          {/if}
-          <span>mods in this instance</span>
+          <button class="accent" onclick={onOpenMods}>
+            <ExternalLink size={14} /> Open Mods
+          </button>
         </div>
-        <button class="accent" on:click={onOpenMods}>
-          <ExternalLink size={14} /> Open Mods
-        </button>
-      </div>
-    {:else if tab === "resourcepacks" || tab === "shaderpacks"}
-      {#if packs.length === 0}
-        <div class="empty">
-          <p>No {tab === "shaderpacks" ? "shader packs" : "resource packs"} yet.</p>
-          <p class="hint">Drop `.zip` files into the folder or install from Mods → content type filter.</p>
-        </div>
-      {:else}
-        <div class="list">
-          {#each packs as pack (pack.fileName)}
-            <div class="row" class:disabled={!pack.enabled}>
-              <div class="row-main">
-                <strong>{pack.name}</strong>
-                <span>{pack.kind} · {pack.sizeFormatted}</span>
+      {:else if tab === "resourcepacks" || tab === "shaderpacks"}
+        {#if packs.length === 0}
+          <div class="empty">
+            <p>No {tab === "shaderpacks" ? "shader packs" : "resource packs"} yet.</p>
+            <p class="hint">Drop `.zip` files into the folder or install from Mods → content type filter.</p>
+          </div>
+        {:else}
+          <div class="list">
+            {#each packs as pack (pack.fileName)}
+              <div class="row" class:disabled={!pack.enabled}>
+                <div class="row-main">
+                  <strong>{pack.name}</strong>
+                  <span>{pack.kind} · {pack.sizeFormatted}</span>
+                </div>
+                <button
+                  class="toggle"
+                  class:on={pack.enabled}
+                  disabled={busyKey === pack.fileName}
+                  onclick={() => togglePack(pack)}
+                  title={pack.enabled ? "Disable" : "Enable"}
+                >
+                  <Power size={14} />
+                  {pack.enabled ? "On" : "Off"}
+                </button>
               </div>
-              <button
-                class="toggle"
-                class:on={pack.enabled}
-                disabled={busyKey === pack.fileName}
-                on:click={() => togglePack(pack)}
-                title={pack.enabled ? "Disable" : "Enable"}
-              >
-                <Power size={14} />
-                {pack.enabled ? "On" : "Off"}
-              </button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    {:else if tab === "worlds"}
-      {#if worlds.length === 0}
-        <div class="empty"><p>No worlds in `saves/`.</p></div>
-      {:else}
-        <div class="list">
-          {#each worlds as world (world.name)}
-            <div class="row">
-              <div class="row-main">
-                <strong>{world.name}</strong>
-                <span>{world.sizeFormatted}{#if !world.hasLevelDat} · missing level.dat{/if}</span>
+            {/each}
+          </div>
+        {/if}
+      {:else if tab === "worlds"}
+        {#if worlds.length === 0}
+          <div class="empty"><p>No worlds in `saves/`.</p></div>
+        {:else}
+          <div class="list">
+            {#each worlds as world (world.name)}
+              <div class="row">
+                <div class="row-main">
+                  <strong>{world.name}</strong>
+                  <span>{world.sizeFormatted}{#if !world.hasLevelDat} · missing level.dat{/if}</span>
+                </div>
+                <button
+                  class="accent"
+                  disabled={busyKey === `play:${world.name}`}
+                  onclick={() => playWorld(world.name)}
+                >
+                  <Play size={14} /> Play
+                </button>
+                <button class="ghost" onclick={onOpenWorld}>Open World tools</button>
               </div>
-              <button
-                class="accent"
-                disabled={busyKey === `play:${world.name}`}
-                on:click={() => playWorld(world.name)}
-              >
-                <Play size={14} /> Play
-              </button>
-              <button class="ghost" on:click={onOpenWorld}>Open World tools</button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    {:else if tab === "servers"}
-      <form class="add-server" on:submit|preventDefault={addServer}>
-        <input bind:value={newServerName} placeholder="Name" maxlength={64} />
-        <input bind:value={newServerAddress} placeholder="Address (host:port)" maxlength={128} />
-        <button type="submit" class="accent" disabled={busyKey === "add-server" || !newServerName.trim() || !newServerAddress.trim()}>
-          <Plus size={14} /> Add
-        </button>
-      </form>
-      {#if servers.length === 0}
-        <div class="empty"><p>No servers in `servers.dat`.</p></div>
-      {:else}
-        <div class="list">
-          {#each servers as srv (srv.address)}
-            <div class="row">
-              <div class="row-main">
-                <strong>{srv.name}</strong>
-                <span>{srv.address}</span>
-                {#if pings[srv.address]}
-                  <span class="ping" class:online={pings[srv.address].online} class:offline={!pings[srv.address].online}>
-                    {#if pings[srv.address].online}
-                      {pings[srv.address].latencyMs ?? "?"} ms
-                    {:else}
-                      offline
-                    {/if}
-                  </span>
-                {/if}
+            {/each}
+          </div>
+        {/if}
+      {:else if tab === "servers"}
+        <form class="add-server" onsubmit={(e) => { e.preventDefault(); addServer(); }}>
+          <input bind:value={newServerName} placeholder="Name" maxlength={64} />
+          <input bind:value={newServerAddress} placeholder="Address (host:port)" maxlength={128} />
+          <button type="submit" class="accent" disabled={busyKey === "add-server" || !newServerName.trim() || !newServerAddress.trim()}>
+            <Plus size={14} /> Add
+          </button>
+        </form>
+        {#if servers.length === 0}
+          <div class="empty"><p>No servers in `servers.dat`.</p></div>
+        {:else}
+          <div class="list">
+            {#each servers as srv (srv.address)}
+              <div class="row">
+                <div class="row-main">
+                  <strong>{srv.name}</strong>
+                  <span>{srv.address}</span>
+                  {#if pings[srv.address]}
+                    <span class="ping" class:online={pings[srv.address].online} class:offline={!pings[srv.address].online}>
+                      {#if pings[srv.address].online}
+                        {pings[srv.address].latencyMs ?? "?"} ms
+                      {:else}
+                        offline
+                      {/if}
+                    </span>
+                  {/if}
+                </div>
+                <button
+                  class="accent"
+                  disabled={busyKey === `join:${srv.address}`}
+                  onclick={() => joinServer(srv.address)}
+                >
+                  <Play size={14} /> Join
+                </button>
+                <button class="ghost" disabled={busyKey === `ping:${srv.address}`} onclick={() => pingServer(srv.address)}>Ping</button>
+                <button class="danger" disabled={busyKey === srv.address} onclick={() => removeServer(srv.address)}>
+                  <Trash2 size={14} />
+                </button>
               </div>
-              <button
-                class="accent"
-                disabled={busyKey === `join:${srv.address}`}
-                on:click={() => joinServer(srv.address)}
-              >
-                <Play size={14} /> Join
-              </button>
-              <button class="ghost" disabled={busyKey === `ping:${srv.address}`} on:click={() => pingServer(srv.address)}>Ping</button>
-              <button class="danger" disabled={busyKey === srv.address} on:click={() => removeServer(srv.address)}>
-                <Trash2 size={14} />
-              </button>
-            </div>
-          {/each}
-        </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
-    {/if}
-  </div>
+    </div>
+  {/if}
 </section>
 
 <style>
   .instance-home {
-    margin-top: 16px;
+    margin-top: 0;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
     background: var(--bg-secondary);
     overflow: hidden;
+  }
+  .instance-home.collapsed .tabs {
+    border-bottom: none;
   }
   .tabs {
     display: flex;
@@ -372,14 +484,57 @@
   }
   .icon-btn:hover { color: var(--text-primary); }
 
-  .panel { padding: 12px; min-height: 140px; max-height: 320px; overflow: auto; }
-  .empty { color: var(--text-muted); font-size: 13px; padding: 18px 8px; text-align: center; }
+  .collapsed-summary {
+    padding: 6px 14px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .panel {
+    padding: 8px;
+    min-height: 120px;
+    height: 160px;
+    max-height: 160px;
+    overflow: auto;
+    box-sizing: border-box;
+  }
+  .panel.is-loading {
+    opacity: 0.85;
+  }
+  .mods-cta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 100%;
+    padding: 12px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    box-sizing: border-box;
+  }
+  .empty {
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 12px 8px;
+    text-align: center;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+  }
   .empty .hint { font-size: 12px; margin-top: 6px; }
 
   .list { display: flex; flex-direction: column; gap: 6px; }
   .row {
     display: flex; align-items: center; gap: 8px;
-    padding: 10px 12px; border-radius: 10px;
+    padding: 8px 10px; border-radius: 10px;
     background: var(--bg-primary); border: 1px solid var(--border-color);
   }
   .row.disabled { opacity: 0.55; }
@@ -402,10 +557,6 @@
   .danger:hover { color: #ef4444; border-color: rgba(239, 68, 68, 0.35); }
   .ghost:hover { color: var(--text-primary); }
 
-  .mods-cta {
-    display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    padding: 16px; border-radius: var(--border-radius-md); background: var(--bg-primary); border: 1px solid var(--border-color);
-  }
   .mods-cta strong { display: block; font-size: 28px; color: var(--accent-primary); }
   .mods-cta span { color: var(--text-muted); font-size: 12px; }
 

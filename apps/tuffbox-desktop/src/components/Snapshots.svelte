@@ -2,7 +2,7 @@
   import {
     History, Plus, RefreshCw, RotateCcw, Calendar, GitCompare, FileText, Archive, Trash2,
     Search, ChevronDown, ChevronRight, ExternalLink, AlertTriangle,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
   import {
@@ -16,33 +16,33 @@
   } from "../lib/api";
   import { historyFocusSnapshotId, ideStageRequest, projectPath } from "../lib/store";
 
-  let snapshots: Snapshot[] = [];
-  let loading = false;
-  let newName = "";
-  let error: string | null = null;
-  let message: string | null = null;
-  let projectDir: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let fromId = "";
-  let toId = "";
-  let diff: SnapshotDiff | null = null;
-  let selectedDiffPath = "";
-  let fileDiff: SnapshotFileDiff | null = null;
-  let diffLoading = false;
+  let snapshots = $state<Snapshot[]>([]);
+  let loading = $state(false);
+  let newName = $state("");
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let projectDir = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let fromId = $state("");
+  let toId = $state("");
+  let diff = $state<SnapshotDiff | null>(null);
+  let selectedDiffPath = $state("");
+  let fileDiff = $state<SnapshotFileDiff | null>(null);
+  let diffLoading = $state(false);
 
-  let selectedId = "";
-  let detail: SnapshotDetail | null = null;
-  let detailLoading = false;
-  let search = "";
-  let filterKind: "all" | "auto" | "manual" | "crash" = "all";
-  let backupsOpen = false;
-  let compareOpen = false;
+  let selectedId = $state("");
+  let detail = $state<SnapshotDetail | null>(null);
+  let detailLoading = $state(false);
+  let search = $state("");
+  let filterKind = $state<"all" | "auto" | "manual" | "crash">("all");
+  let backupsOpen = $state(false);
+  let compareOpen = $state(false);
 
-  let confirmOpen = false;
-  let confirmTitle = "";
-  let confirmMessage = "";
-  let confirmDanger = false;
-  let confirmAction: (() => void) | null = null;
+  let confirmOpen = $state(false);
+  let confirmTitle = $state("");
+  let confirmMessage = $state("");
+  let confirmDanger = $state(false);
+  let confirmAction = $state<(() => void) | null>(null);
 
   function showConfirm(title: string, message: string, action: () => void, danger = false) {
     confirmTitle = title;
@@ -58,12 +58,12 @@
     confirmAction = null;
   }
 
-  let manifestDiff: ManifestSnapshotDiff | null = null;
-  let manifestDiffLoading = false;
+  let manifestDiff = $state<ManifestSnapshotDiff | null>(null);
+  let manifestDiffLoading = $state(false);
 
-  let backups: BackupEntry[] = [];
-  let backupLoading = false;
-  let backupName = "";
+  let backups = $state<BackupEntry[]>([]);
+  let backupLoading = $state(false);
+  let backupName = $state("");
 
   async function ensureProjectDir() {
     if (!$projectPath) return null;
@@ -168,7 +168,7 @@
     return s.reason || "No action details";
   }
 
-  $: filtered = (() => {
+  const filtered = $derived((() => {
     const q = search.trim().toLowerCase();
     let list = [...snapshots].reverse();
     if (filterKind === "auto") list = list.filter(isAuto);
@@ -190,7 +190,7 @@
       });
     }
     return list;
-  })();
+  })());
 
   async function load(force = false) {
     if (!$projectPath) return;
@@ -385,10 +385,12 @@
     return "context";
   }
 
-  $: allDiffFiles = diff
+  const allDiffFiles = $derived(diff
     ? Array.from(new Set([...diff.addedFiles, ...diff.removedFiles, ...diff.modifiedFiles])).sort()
-    : [];
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+    : []);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  });
 </script>
 
 <div class="snapshots">
@@ -399,11 +401,11 @@
     </div>
     <div class="actions">
       <input bind:value={newName} placeholder="Snapshot name" />
-      <button on:click={create} disabled={!$projectPath || loading}>
+      <button onclick={create} disabled={!$projectPath || loading}>
         <Plus size={16} />
         Create
       </button>
-      <button class="ghost" on:click={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
+      <button class="ghost" onclick={() => load(true)} title="Refresh" disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
@@ -425,10 +427,10 @@
         <input bind:value={search} placeholder="Search name, actions, tags…" />
       </div>
       <div class="chips">
-        <button class:active={filterKind === "all"} on:click={() => (filterKind = "all")}>All</button>
-        <button class:active={filterKind === "auto"} on:click={() => (filterKind = "auto")}>Auto</button>
-        <button class:active={filterKind === "manual"} on:click={() => (filterKind = "manual")}>Manual</button>
-        <button class:active={filterKind === "crash"} on:click={() => (filterKind = "crash")}>Crash fix</button>
+        <button class:active={filterKind === "all"} onclick={() => (filterKind = "all")}>All</button>
+        <button class:active={filterKind === "auto"} onclick={() => (filterKind = "auto")}>Auto</button>
+        <button class:active={filterKind === "manual"} onclick={() => (filterKind = "manual")}>Manual</button>
+        <button class:active={filterKind === "crash"} onclick={() => (filterKind = "crash")}>Crash fix</button>
       </div>
     </div>
 
@@ -439,7 +441,7 @@
             type="button"
             class="row"
             class:selected={selectedId === s.id}
-            on:click={() => selectSnapshot(s.id)}
+            onclick={() => selectSnapshot(s.id)}
           >
             <div class="row-top">
               <strong>{s.name}</strong>
@@ -476,16 +478,16 @@
               </div>
             </div>
             <div class="detail-actions">
-              <button class="secondary" on:click={() => compareWithPrevious(s.id)} title="Compare with previous">
+              <button class="secondary" onclick={() => compareWithPrevious(s.id)} title="Compare with previous">
                 <GitCompare size={14} /> Compare prev
               </button>
-              <button class="secondary" on:click={() => openInHistory(s.id)}>
+              <button class="secondary" onclick={() => openInHistory(s.id)}>
                 <ExternalLink size={14} /> History
               </button>
-              <button class="ghost rollback" on:click={() => rollback(s.id)}>
+              <button class="ghost rollback" onclick={() => rollback(s.id)}>
                 <RotateCcw size={14} /> Rollback
               </button>
-              <button class="ghost danger" on:click={() => removeSnapshot(s.id)}>
+              <button class="ghost danger" onclick={() => removeSnapshot(s.id)}>
                 <Trash2 size={14} /> Delete
               </button>
             </div>
@@ -567,7 +569,7 @@
     </div>
 
     <div class="collapsible">
-      <button type="button" class="collapse-toggle" on:click={() => (compareOpen = !compareOpen)}>
+      <button type="button" class="collapse-toggle" onclick={() => (compareOpen = !compareOpen)}>
         {#if compareOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
         <GitCompare size={16} /> Compare snapshots
       </button>
@@ -579,8 +581,8 @@
           <select bind:value={toId}>
             {#each snapshots as s}<option value={s.id}>{s.name} · {s.id}</option>{/each}
           </select>
-          <button class="secondary" on:click={compare} disabled={fromId === toId}>Diff files</button>
-          <button class="secondary" on:click={loadManifestDiff} disabled={fromId === toId || manifestDiffLoading}>
+          <button class="secondary" onclick={compare} disabled={fromId === toId}>Diff files</button>
+          <button class="secondary" onclick={loadManifestDiff} disabled={fromId === toId || manifestDiffLoading}>
             {manifestDiffLoading ? "Loading..." : "Diff manifest"}
           </button>
         </div>
@@ -615,7 +617,7 @@
               <aside class="diff-files">
                 <h3><FileText size={14} /> Changed files</h3>
                 {#each allDiffFiles as path}
-                  <button class:selected={selectedDiffPath === path} on:click={() => openFileDiff(path)}>
+                  <button class:selected={selectedDiffPath === path} onclick={() => openFileDiff(path)}>
                     <span>{path}</span>
                     {#if diff.addedFiles.includes(path)}<small class="added-label">added</small>{/if}
                     {#if diff.removedFiles.includes(path)}<small class="removed-label">removed</small>{/if}
@@ -647,7 +649,7 @@
     </div>
 
     <div class="collapsible">
-      <button type="button" class="collapse-toggle" on:click={() => (backupsOpen = !backupsOpen)}>
+      <button type="button" class="collapse-toggle" onclick={() => (backupsOpen = !backupsOpen)}>
         {#if backupsOpen}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
         <Archive size={16} /> Project backups ({backups.length})
       </button>
@@ -655,10 +657,10 @@
         <div class="backup-section">
           <div class="backup-create">
             <input bind:value={backupName} placeholder="Backup name" />
-            <button on:click={createBackup} disabled={!$projectPath || loading}>
+            <button onclick={createBackup} disabled={!$projectPath || loading}>
               <Archive size={16} /> Backup
             </button>
-            <button class="ghost" on:click={loadBackups} disabled={backupLoading}>
+            <button class="ghost" onclick={loadBackups} disabled={backupLoading}>
               <RefreshCw size={14} class={backupLoading ? "spin" : ""} />
             </button>
           </div>
@@ -670,10 +672,10 @@
                     <strong>{b.name}</strong>
                     <span>{formatDate(b.createdAt)} · {formatBytes(b.sizeBytes)}</span>
                   </div>
-                  <button class="ghost mini" on:click={() => restoreBackup(b.id)} title="Restore">
+                  <button class="ghost mini" onclick={() => restoreBackup(b.id)} title="Restore">
                     <RotateCcw size={14} />
                   </button>
-                  <button class="ghost mini danger" on:click={() => deleteBackup(b.id)}>
+                  <button class="ghost mini danger" onclick={() => deleteBackup(b.id)}>
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -692,15 +694,24 @@
       title={confirmTitle}
       message={confirmMessage}
       danger={confirmDanger}
-      on:confirm={handleConfirm}
-      on:cancel={() => ((confirmOpen = false), (confirmAction = null))}
+      onconfirm={handleConfirm}
+      oncancel={() => ((confirmOpen = false), (confirmAction = null))}
     />
   {/if}
 </div>
 
 <style>
-  .snapshots { max-width: none; width: 100%; display: flex; flex-direction: column; gap: 14px; }
-  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .snapshots {
+    max-width: none;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
+  }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; flex-shrink: 0; }
   .title, .actions, .row-meta, .detail-sub, .detail-actions, .backup-create, .search, .collapse-toggle {
     display: flex; align-items: center; gap: 10px;
   }
@@ -718,11 +729,17 @@
   .chips button { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-muted); padding: 6px 12px; font-size: 12px; transform: none; }
   .chips button.active { color: var(--text-primary); border-color: rgba(27, 217, 106, 0.35); background: rgba(27, 217, 106, 0.08); }
 
-  .master-detail { display: grid; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); gap: 14px; min-height: 420px; }
+  .master-detail {
+    display: grid;
+    grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
+  }
   .list-pane, .detail-pane, .compare-panel, .diff-panel, .inline-diff-shell, .backup-section, .collapsible {
     background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg);
   }
-  .list-pane { overflow: auto; max-height: 70vh; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .list-pane { overflow: auto; min-height: 0; max-height: none; padding: 8px; display: flex; flex-direction: column; gap: 6px; scrollbar-gutter: stable; }
   .row { width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--border-radius-md); padding: 12px; color: var(--text-secondary); display: grid; gap: 6px; transform: none; }
   .row:hover, .row.selected { background: var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.28); color: var(--text-primary); }
   .row-top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
@@ -732,7 +749,7 @@
   .row-meta { font-size: 11px; color: var(--text-muted); flex-wrap: wrap; }
   .tags { display: flex; gap: 4px; flex-wrap: wrap; }
 
-  .detail-pane { padding: 18px; overflow: auto; max-height: 70vh; display: flex; flex-direction: column; gap: 14px; }
+  .detail-pane { padding: 18px; overflow: auto; min-height: 0; max-height: none; display: flex; flex-direction: column; gap: 14px; scrollbar-gutter: stable; }
   .detail-header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
   .detail-header h2 { margin: 0 0 6px; font-size: 18px; }
   .detail-actions { flex-wrap: wrap; }

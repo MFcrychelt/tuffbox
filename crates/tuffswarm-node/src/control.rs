@@ -154,6 +154,22 @@ async fn publish_capsule(
         )
     })?;
 
+    match capsule.verify_signature() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "unsigned capsule rejected — Ed25519 signature required" })),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e })),
+            ));
+        }
+    }
+
     let stored = {
         let lib = state.library.lock().await;
         lib.publish(&capsule).map_err(|e| {

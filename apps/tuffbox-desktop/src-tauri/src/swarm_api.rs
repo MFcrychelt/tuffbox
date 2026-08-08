@@ -17,11 +17,18 @@ use tuffbox_core::swarm::{
 use tuffbox_core::{ContentProvider, ProjectManifest, Snapshot, SnapshotMeta, SnapshotStore};
 use tauri::Emitter;
 
+fn resolve_manifest(path: &str) -> Result<PathBuf, String> {
+    crate::resolve_manifest_path(path)
+}
+
 fn manifest_parent(path: &str) -> Result<PathBuf, String> {
-    PathBuf::from(path)
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "manifest path has no parent".into())
+    crate::manifest_parent(path)
+}
+
+fn load_project_manifest(path: &str) -> Result<(PathBuf, ProjectManifest), String> {
+    let manifest_path = resolve_manifest(path)?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    Ok((manifest_path, manifest))
 }
 
 fn last_crash_fix_path(project_dir: &Path) -> PathBuf {
@@ -574,18 +581,17 @@ pub fn confirm_crash_resolution_after_launch(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = manifest_path
-        .parent()
-        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let manifest_path = resolve_manifest(&path)?;
+    let path_str = manifest_path.to_string_lossy().to_string();
+    let project_dir = manifest_parent(&path_str)?;
     // Immediate attempt (game already healthy / relaunch into existing session).
     if let Some(rec) = maybe_confirm_crash_resolution(&manifest_path, "successful_launch")? {
-        emit_success_soft_verify(&app, &path, project_dir, &rec);
-        emit_distill_resolution(&app, &path, &rec);
+        emit_success_soft_verify(&app, &path_str, &project_dir, &rec);
+        emit_distill_resolution(&app, &path_str, &rec);
         return Ok(Some(rec));
     }
     // Otherwise watch until soft-verify playtime + healthy post-fix session.
-    if pending_fix_marker_exists(project_dir) {
+    if pending_fix_marker_exists(&project_dir) {
         spawn_crash_resolution_watcher(app, manifest_path);
     }
     Ok(None)
@@ -596,14 +602,13 @@ pub fn confirm_crash_resolution_from_diagnose(
     app: tauri::AppHandle,
     path: String,
 ) -> Result<Option<CrashResolutionRecord>, String> {
-    let manifest_path = PathBuf::from(&path);
-    let project_dir = manifest_path
-        .parent()
-        .ok_or_else(|| "manifest path has no parent".to_string())?;
+    let manifest_path = resolve_manifest(&path)?;
+    let path_str = manifest_path.to_string_lossy().to_string();
+    let project_dir = manifest_parent(&path_str)?;
     let rec = maybe_confirm_crash_resolution(&manifest_path, "diagnose_healthy")?;
     if let Some(ref r) = rec {
-        emit_success_soft_verify(&app, &path, project_dir, r);
-        emit_distill_resolution(&app, &path, r);
+        emit_success_soft_verify(&app, &path_str, &project_dir, r);
+        emit_distill_resolution(&app, &path_str, r);
     }
     Ok(rec)
 }
@@ -643,7 +648,7 @@ pub fn report_soft_verify_failure(
     path: String,
     reason: Option<String>,
 ) -> Result<Option<LastCrashFixMarker>, String> {
-    let manifest_path = PathBuf::from(&path);
+    let manifest_path = resolve_manifest(&path)?;
     let why = reason.unwrap_or_else(|| "launch_crash".into());
     fail_soft_verify(&app, &manifest_path, &why)
 }
@@ -664,7 +669,7 @@ pub fn rollback_last_crash_fix(
     let snapshot = store
         .rollback(marker.snapshot_id.clone())
         .map_err(|e| e.to_string())?;
-    let manifest_path = PathBuf::from(&path);
+    let manifest_path = resolve_manifest(&path)?;
     let _ = fail_soft_verify(&app, &manifest_path, "rollback");
     Ok(json!({
         "ok": true,
@@ -1005,7 +1010,8 @@ pub fn change_actions_to_launcher(
                 version,
             } => tuffbox_core::action_plan::LauncherAction {
                 op: "install_mod".into(),
-                mod_id: None,
+                // Prefer slug-like project_id as modId so grounding/validation agree.
+                mod_id: Some(project_id.clone()),
                 provider: Some("modrinth".into()),
                 project_id: Some(project_id.clone()),
                 version: version.clone(),
@@ -1248,17 +1254,49 @@ pub async fn publish_experience_capsule(
     let fp_key = fingerprint_key
         .or_else(|| marker.as_ref().map(|m| m.fingerprint_key.clone()))
         .unwrap_or_else(|| "unknown".into());
-    let solution = human_explanation
+    let mut solution = human_explanation
         .or_else(|| marker.as_ref().map(|m| m.human_explanation.clone()))
         .unwrap_or_else(|| "Shared crash fix".into());
-    let launcher_actions = actions.unwrap_or_else(|| {
+    let mut launcher_actions = actions.unwrap_or_else(|| {
         marker
             .as_ref()
             .map(|m| m.actions.clone())
             .unwrap_or_default()
     });
 
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
+    let inventory_ids = pack_mod_ids(&manifest);
+    let mut share_plan = ActionPlan {
+        schema_version: tuffbox_core::action_plan::ACTION_PLAN_SCHEMA_VERSION,
+        human_explanation: solution.clone(),
+        confidence: 0.8,
+        suspected_mods: Vec::new(),
+        needs_user_review: true,
+        source: Some("distill".into()),
+        matched_case_ids: marker
+            .as_ref()
+            .map(|m| m.matched_case_ids.clone())
+            .unwrap_or_default(),
+        actions: launcher_actions,
+        additional_context: None,
+    };
+    let grounded =
+        tuffbox_core::action_plan::ground_action_plan(share_plan, &inventory_ids, &[]);
+    share_plan = grounded.plan;
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+        &share_plan,
+        &inventory_ids,
+        &[],
+    );
+    if !validation.ok {
+        return Err(format!(
+            "Cannot publish invalid plan: {}",
+            validation.errors.join("; ")
+        ));
+    }
+    launcher_actions = share_plan.actions.clone();
+    solution = share_plan.human_explanation.clone();
+
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
     let crash = std::fs::read_to_string(project_dir.join("logs").join("latest.log")).unwrap_or_default();
     // Prefer a real fingerprint from logs when available; never publish the log itself.
@@ -1402,7 +1440,7 @@ pub async fn publish_experience_capsule(
 #[tauri::command(rename_all = "camelCase")]
 pub fn record_project_cooccurrence(path: String) -> Result<(), String> {
     let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let ids = pack_mod_ids(&manifest);
     let plan = plan_pack_observation(
@@ -1441,7 +1479,7 @@ pub async fn record_and_upload_cooccurrence_opts(
     record_local: bool,
 ) -> Result<serde_json::Value, String> {
     let project_dir = manifest_parent(path)?;
-    let manifest = ProjectManifest::load_from_path(path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
     let ids = if mod_ids.is_empty() {
@@ -1551,7 +1589,7 @@ pub async fn get_creation_trends(
 
     let mut network_pairs: Vec<ModPairStat> = Vec::new();
     let mut network: Option<serde_json::Value> = None;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
 
@@ -1661,7 +1699,7 @@ pub async fn suggest_partners_for_mod(
 ) -> Result<Vec<serde_json::Value>, String> {
     let limit = limit.unwrap_or(8).clamp(1, 20) as usize;
     let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string();
     let mc = manifest.minecraft.version.clone();
     let installed: std::collections::HashSet<String> = pack_mod_ids(&manifest).into_iter().collect();
@@ -1849,7 +1887,7 @@ pub async fn distill_resolved_crash_plan(
 ) -> Result<serde_json::Value, String> {
     integrations::require_swarm_enabled()?;
     let project_dir = manifest_parent(&path)?;
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let (_manifest_path, manifest) = load_project_manifest(&path)?;
     let loader = format!("{:?}", manifest.loader.kind).to_lowercase();
 
     let resolutions = list_crash_resolutions(&project_dir)?;
@@ -1928,7 +1966,7 @@ pub async fn distill_resolved_crash_plan(
     let prompt = tuffbox_core::ai_explanation::build_distill_prompt(&distill_ctx);
     let settings = integrations::get_integration_status().settings;
 
-    let (plan, distill_source) =
+    let (mut plan, distill_source) =
         match integrations::call_ai_crash_explain(&settings.ai, &prompt).await {
             Ok(value) => {
                 let raw = serde_json::to_string(&value).unwrap_or_default();
@@ -1955,7 +1993,19 @@ pub async fn distill_resolved_crash_plan(
             ),
         };
 
-    let validation = tuffbox_core::action_plan::validate_action_plan(&plan);
+    let inventory_ids = pack_mod_ids(&manifest);
+    let missing_ids: Vec<String> = Vec::new();
+    if plan.source.as_deref().is_none_or(|s| !s.starts_with("distill")) {
+        plan.source = Some("distill".into());
+    }
+    let grounded =
+        tuffbox_core::action_plan::ground_action_plan(plan, &inventory_ids, &missing_ids);
+    let plan = grounded.plan;
+    let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
+        &plan,
+        &inventory_ids,
+        &missing_ids,
+    );
     Ok(json!({
         "schemaVersion": plan.schema_version,
         "humanExplanation": plan.human_explanation,
@@ -1967,6 +2017,7 @@ pub async fn distill_resolved_crash_plan(
         "actions": plan.actions,
         "additionalContext": plan.additional_context,
         "validation": validation,
+        "groundingNotes": grounded.notes,
         "distilledFrom": "user_history",
         "distillSource": distill_source,
         "resolutionId": rec.id,

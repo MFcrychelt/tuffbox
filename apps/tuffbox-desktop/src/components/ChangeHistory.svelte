@@ -3,7 +3,7 @@
   import {
     History, RefreshCw, Search, FileText, Maximize2, Save, X, RotateCcw,
     ChevronDown, ChevronRight, ScanSearch, Stethoscope, Sparkles, AlertTriangle,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import {
     diagnoseFocusPaths,
@@ -33,25 +33,25 @@
     op?: string;
   };
 
-  let entries: ChangeEntry[] = [];
-  let selectedId = "";
-  let filter = "";
-  let categoryFilter = "All";
-  let actorFilter = "All";
-  let loading = false;
-  let scanning = false;
-  let error: string | null = null;
-  let message: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let explainText: string | null = null;
+  let entries = $state<ChangeEntry[]>([]);
+  let selectedId = $state("");
+  let filter = $state("");
+  let categoryFilter = $state("All");
+  let actorFilter = $state("All");
+  let loading = $state(false);
+  let scanning = $state(false);
+  let error = $state<string | null>(null);
+  let message = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let explainText = $state<string | null>(null);
 
-  let editorOpen = false;
-  let editorPath = "";
-  let editorContent = "";
-  let editorOriginal = "";
-  let saving = false;
-  let expanded: Record<string, boolean> = {};
-  let tracked: Record<string, boolean> = {
+  let editorOpen = $state(false);
+  let editorPath = $state("");
+  let editorContent = $state("");
+  let editorOriginal = $state("");
+  let saving = $state(false);
+  let expanded = $state<Record<string, boolean>>({});
+  let tracked = $state<Record<string, boolean>>({
     Mods: true,
     Configs: true,
     Shaders: true,
@@ -59,9 +59,9 @@
     Resolutions: true,
     "World/Data": false,
     Other: true,
-  };
-  let focusedScan = false;
-  let settingsLoadedPath: string | null = null;
+  });
+  let focusedScan = $state(false);
+  let settingsLoadedPath = $state<string | null>(null);
 
   const rootsByCategory: Record<string, string[]> = {
     Mods: ["mods"],
@@ -73,11 +73,11 @@
     Other: [],
   };
 
-  let confirmOpen = false;
-  let confirmEntry: ChangeEntry | null = null;
-  let visibleLimit = 40;
+  let confirmOpen = $state(false);
+  let confirmEntry = $state<ChangeEntry | null>(null);
+  let visibleLimit = $state(40);
   const VISIBLE_STEP = 40;
-  let prevFilterKey = "";
+  let prevFilterKey = $state("");
 
   function actorLabel(actor?: string) {
     switch ((actor ?? "").toLowerCase()) {
@@ -300,9 +300,9 @@
     return entry.kind === "file_changed" && !!entry.snapshotId;
   }
 
-  $: categories = ["All", ...Array.from(new Set(entries.map((e) => e.category)))];
-  $: actors = ["All", "launcher", "scan", "ai", "user"];
-  $: visible = entries.filter((entry) => {
+  const categories = $derived(["All", ...Array.from(new Set(entries.map((e) => e.category)))]);
+  const actors = $derived(["All", "launcher", "scan", "ai", "user"]);
+  const visible = $derived(entries.filter((entry) => {
     const q = filter.toLowerCase();
     const matchesText =
       !q ||
@@ -314,25 +314,29 @@
     const matchesTracked = tracked[entry.category] ?? true;
     const matchesActor = actorFilter === "All" || (entry.actor || "launcher") === actorFilter;
     return matchesText && matchesCategory && matchesTracked && matchesActor;
-  });
-  $: byDay = visible.reduce<Record<string, ChangeEntry[]>>((acc, entry) => {
+  }));
+  const byDay = $derived(visible.reduce<Record<string, ChangeEntry[]>>((acc, entry) => {
     const key = dayKey(entry.createdAt);
     acc[key] = acc[key] ?? [];
     acc[key].push(entry);
     return acc;
-  }, {});
-  $: dayKeys = Object.keys(byDay).sort((a, b) => b.localeCompare(a));
-  $: visibleSlice = visible.slice(0, visibleLimit);
-  $: filterKey = `${filter}|${categoryFilter}|${actorFilter}`;
-  $: if (filterKey !== prevFilterKey) {
-    prevFilterKey = filterKey;
-    visibleLimit = VISIBLE_STEP;
-  }
-  $: hasMoreVisible = visible.length > visibleLimit;
-  $: editorDirty = editorContent !== editorOriginal;
-  $: if ($projectPath && lastLoadedPath !== $projectPath) {
-    load(true).then(() => scanNow(true));
-  }
+  }, {}));
+  const dayKeys = $derived(Object.keys(byDay).sort((a, b) => b.localeCompare(a)));
+  const visibleSlice = $derived(visible.slice(0, visibleLimit));
+  const filterKey = $derived(`${filter}|${categoryFilter}|${actorFilter}`);
+  $effect(() => {
+    if (filterKey !== prevFilterKey) {
+      prevFilterKey = filterKey;
+      visibleLimit = VISIBLE_STEP;
+    }
+  });
+  const hasMoreVisible = $derived(visible.length > visibleLimit);
+  const editorDirty = $derived(editorContent !== editorOriginal);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) {
+      load(true).then(() => scanNow(true));
+    }
+  });
 </script>
 
 <div class="change-history">
@@ -349,11 +353,11 @@
       <select bind:value={actorFilter} title="Actor filter">
         {#each actors as a}<option value={a}>{a === "All" ? "All actors" : actorLabel(a)}</option>{/each}
       </select>
-      <button class="secondary" on:click={() => scanNow()} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
+      <button class="secondary" onclick={() => scanNow()} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
         <ScanSearch size={16} /> {scanning ? "Scanning…" : "Scan now"}
       </button>
-      <button class="secondary" on:click={saveHistorySettings} disabled={!$projectPath || loading}>Save settings</button>
-      <button class="ghost" on:click={() => load(true)} disabled={!$projectPath || loading}>
+      <button class="secondary" onclick={saveHistorySettings} disabled={!$projectPath || loading}>Save settings</button>
+      <button class="ghost" onclick={() => load(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
       </button>
     </div>
@@ -367,7 +371,7 @@
       <label><input type="checkbox" bind:checked={tracked[key]} /> {key}{#if key === "World/Data"}<small>opt-in</small>{/if}</label>
     {/each}
     <label title="While IDE is open, rescan every 60s">
-      <input type="checkbox" bind:checked={focusedScan} on:change={saveHistorySettings} /> Focused scan
+      <input type="checkbox" bind:checked={focusedScan} onchange={saveHistorySettings} /> Focused scan
     </label>
   </div>
 
@@ -389,7 +393,7 @@
                 <button
                   class="file-strip {entry.kind}"
                   class:selected={selectedId === entry.id}
-                  on:click={() => {
+                  onclick={() => {
                     selectedId = entry.id;
                     document.getElementById("change-" + entry.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
                   }}
@@ -425,16 +429,16 @@
                   <p>{entry.createdAt} · {entry.reason}</p>
                 </div>
                 <div class="preview-actions">
-                  <button class="secondary" on:click={() => explainEntry(entry)} title="Explain this change">
+                  <button class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
                     <Sparkles size={16} /> Explain
                   </button>
-                  <button class="secondary" on:click={() => openDiagnose(entry)} title="Open Diagnose">
+                  <button class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
                     <Stethoscope size={16} /> Diagnose
                   </button>
-                  <button class="secondary" on:click={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
+                  <button class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
                     <RotateCcw size={16} /> Rollback
                   </button>
-                  <button class="secondary" on:click={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                  <button class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
                     <Maximize2 size={16} /> Open
                   </button>
                 </div>
@@ -444,8 +448,8 @@
                 class="summary-card"
                 role="button"
                 tabindex="0"
-                on:click={() => toggleExpanded(entry)}
-                on:keydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
+                onclick={() => toggleExpanded(entry)}
+                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
               >
                 <div class="summary-row">
                   <strong>{entry.operation}</strong>
@@ -470,7 +474,7 @@
           {/each}
           {#if hasMoreVisible}
             <div class="show-more-row">
-              <button class="secondary" on:click={() => (visibleLimit += VISIBLE_STEP)}>
+              <button class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
                 Show more ({visible.length - visibleLimit} remaining)
               </button>
             </div>
@@ -491,10 +495,10 @@
         </div>
         <div class="editor-actions">
           {#if editorDirty}<span class="dirty">Unsaved</span>{/if}
-          <button on:click={saveEditor} disabled={!editorDirty || saving}>
+          <button onclick={saveEditor} disabled={!editorDirty || saving}>
             <Save size={16} /> {saving ? "Saving…" : "Save"}
           </button>
-          <button class="icon-btn" on:click={() => (editorOpen = false)}><X size={18} /></button>
+          <button class="icon-btn" onclick={() => (editorOpen = false)}><X size={18} /></button>
         </div>
       </div>
       <textarea bind:value={editorContent} spellcheck="false" />
@@ -504,7 +508,7 @@
 
 {#if confirmOpen}
   <ConfirmDialog title="Rollback file?" message={`Restore ${confirmEntry?.path ?? "file"} from snapshot?`} danger={false}
-    confirmLabel="Rollback" on:confirm={doRollback} on:cancel={() => (confirmOpen = false, confirmEntry = null)} />
+    confirmLabel="Rollback" onconfirm={doRollback} oncancel={() => (confirmOpen = false, confirmEntry = null)} />
 {/if}
 
 <style>
@@ -513,9 +517,32 @@
   .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
   .title { gap: 10px; color: var(--text-secondary); font-weight: 800; }
   .toolbar-actions { gap: 10px; flex-wrap: wrap; }
-  .search { position: relative; display: flex; align-items: center; min-width: 240px; }
-  .search :global(svg) { position: absolute; left: 12px; color: var(--text-muted); }
-  .search input { width: 100%; padding-left: 36px; }
+  .search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 240px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+  }
+  .search :global(svg) {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: var(--text-primary);
+    padding: 10px 0;
+    outline: none;
+  }
   .notice, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .notice { padding: 12px 14px; margin-bottom: 14px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }

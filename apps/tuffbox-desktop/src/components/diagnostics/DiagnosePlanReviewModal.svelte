@@ -1,34 +1,43 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-
-  /** ActionPlan review modal (replaces window.confirm) — pure presentation.
-   *  Parent (Diagnostics.svelte) owns building/applying the plan; this
-   *  component only lets the user pick which rows to apply and acknowledge
-   *  destructive plans, then reports back via events. */
-  export let open = false;
-  export let source: "ai" | "network" = "ai";
-  export let explanation = "";
-  export let hasDestructive = false;
-  export let rows: {
-    key: string;
-    selected: boolean;
-    op: string;
-    modId: string | null;
-    path: string | null;
-    patchPreview: string | null;
-    reason: string;
-    risk: string;
-    diffKind?: "add" | "remove" | "change" | "other";
-    destructive?: boolean;
-    raw: any;
-  }[] = [];
-  export let needsAck = false;
-  export let acknowledged = false;
-  export let canApply = false;
-  export let selectedCount = 0;
-  export let busy = false;
-
-  const dispatch = createEventDispatcher<{ cancel: void; confirm: void }>();
+  let {
+    open = $bindable(false),
+    source = "ai",
+    explanation = "",
+    hasDestructive = false,
+    rows = $bindable([]),
+    needsAck = false,
+    acknowledged = $bindable(false),
+    canApply = false,
+    selectedCount = 0,
+    busy = false,
+    onCancel,
+    onConfirm,
+  }: {
+    open?: boolean;
+    source?: "ai" | "network";
+    explanation?: string;
+    hasDestructive?: boolean;
+    rows?: {
+      key: string;
+      selected: boolean;
+      op: string;
+      modId: string | null;
+      path: string | null;
+      patchPreview: string | null;
+      reason: string;
+      risk: string;
+      diffKind?: "add" | "remove" | "change" | "other";
+      destructive?: boolean;
+      raw: any;
+    }[];
+    needsAck?: boolean;
+    acknowledged?: boolean;
+    canApply?: boolean;
+    selectedCount?: number;
+    busy?: boolean;
+    onCancel?: () => void;
+    onConfirm?: () => void;
+  } = $props();
 </script>
 
 {#if open}
@@ -36,8 +45,8 @@
     class="modal-backdrop"
     role="button"
     tabindex="-1"
-    on:click|self={() => dispatch("cancel")}
-    on:keydown={() => {}}
+    onclick={(e) => e.target === e.currentTarget && onCancel?.()}
+    onkeydown={() => {}}
   >
     <div class="modal plan-review-modal" role="dialog" aria-modal="true">
       <div class="modal-header">
@@ -45,7 +54,7 @@
           <h2>{source === "network" ? "Review network ActionPlan" : "Review AI ActionPlan"}</h2>
           <p>Snapshot will be created first. Uncheck actions you do not want applied.</p>
         </div>
-        <button class="icon-btn" type="button" on:click={() => dispatch("cancel")} aria-label="Close">×</button>
+        <button class="icon-btn" type="button" onclick={() => onCancel?.()} aria-label="Close">×</button>
       </div>
       <p class="plan-review-expl">{explanation}</p>
       {#if source === "network" && hasDestructive}
@@ -81,12 +90,12 @@
         </label>
       {/if}
       <div class="plan-review-actions">
-        <button class="ghost" type="button" on:click={() => dispatch("cancel")}>Cancel</button>
+        <button class="ghost" type="button" onclick={() => onCancel?.()}>Cancel</button>
         <button
           class="primary"
           type="button"
           disabled={!canApply || busy}
-          on:click={() => dispatch("confirm")}
+          onclick={() => onConfirm?.()}
         >
           Apply {selectedCount} action{selectedCount === 1 ? "" : "s"} (snapshot first)
         </button>

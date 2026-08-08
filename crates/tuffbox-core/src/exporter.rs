@@ -198,7 +198,7 @@ pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> 
             issues.push(issue(
                 ExportIssueSeverity::Warning,
                 "MOD_WITHOUT_DOWNLOAD_URL",
-                "This mod cannot be represented as a remote Modrinth pack download and will be skipped by the MVP .mrpack exporter.",
+                "This mod cannot be represented as a remote Modrinth pack download and will be embedded in overrides instead.",
                 Some(module.id.clone()),
             ));
         }
@@ -269,35 +269,8 @@ pub fn export_modrinth_pack(
         }
     }
 
-    let files = manifest
-        .mods
-        .iter()
-        .filter_map(|module| {
-            let file_name = module
-                .file_name
-                .clone()
-                .unwrap_or_else(|| format!("{}.jar", module.id));
-            let downloads = module
-                .source
-                .url
-                .clone()
-                .map(|url| vec![url])
-                .unwrap_or_default();
-            if downloads.is_empty() {
-                return None;
-            }
-            let hashes = module.hashes.as_ref();
-            Some(ModrinthFile {
-                path: format!("mods/{file_name}"),
-                hashes: ModrinthHashes {
-                    sha1: hashes.and_then(|h| h.sha1.clone()),
-                    sha512: hashes.and_then(|h| h.sha512.clone()),
-                },
-                downloads,
-                env: side_env(module.side),
-            })
-        })
-        .collect::<Vec<_>>();
+    let (files, override_content, skip_override_paths) =
+        modrinth_files_and_overrides(manifest, project_dir);
 
     let index = ModrinthIndex {
         format_version: 1,
@@ -316,7 +289,13 @@ pub fn export_modrinth_pack(
     zip.start_file("modrinth.index.json", options)?;
     zip.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
 
-    let mut override_count = add_overrides(&mut zip, project_dir, options)?;
+    let mut override_count =
+        add_modrinth_overrides(&mut zip, project_dir, options, &skip_override_paths)?;
+    for (src, dest) in &override_content {
+        zip.start_file(dest, options)?;
+        zip.write_all(&fs::read(src)?)?;
+        override_count += 1;
+    }
     override_count += add_listing_pack_icon(&mut zip, manifest, project_dir, options, ListingIconMode::Modrinth)?;
     zip.finish()?;
 
@@ -625,6 +604,13 @@ fn resolve_mod_jar_path(
     project_dir: &Path,
     module: &crate::manifest::ModSpec,
 ) -> Option<PathBuf> {
+    resolve_content_path(project_dir, module)
+}
+
+fn resolve_content_path(
+    project_dir: &Path,
+    module: &crate::manifest::ModSpec,
+) -> Option<PathBuf> {
     if let Some(rel) = module.source.path.as_ref() {
         let p = project_dir.join(rel);
         if p.is_file() {
@@ -632,12 +618,61 @@ fn resolve_mod_jar_path(
         }
     }
     if let Some(name) = module.file_name.as_ref() {
-        let p = project_dir.join("mods").join(name);
+        let p = project_dir
+            .join(module.content_type.folder_name())
+            .join(name);
         if p.is_file() {
             return Some(p);
         }
     }
     None
+}
+
+/// Build Modrinth index entries and collect local-only content for
+/// `overrides/{content_type.folder}/…`, mirroring the CurseForge
+/// `override_jars` pattern.
+fn modrinth_files_and_overrides(
+    manifest: &ProjectManifest,
+    project_dir: &Path,
+) -> (Vec<ModrinthFile>, Vec<(PathBuf, String)>, std::collections::HashSet<String>) {
+    let mut files = Vec::new();
+    let mut override_content = Vec::new();
+    let mut skip_paths = std::collections::HashSet::new();
+
+    for module in &manifest.mods {
+        let file_name = module
+            .file_name
+            .clone()
+            .unwrap_or_else(|| format!("{}.jar", module.id));
+        let folder = module.content_type.folder_name();
+        let index_path = format!("{folder}/{file_name}");
+        let downloads = module
+            .source
+            .url
+            .clone()
+            .map(|url| vec![url])
+            .unwrap_or_default();
+        let hashes = module.hashes.as_ref();
+
+        if downloads.is_empty() {
+            if let Some(local) = resolve_content_path(project_dir, module) {
+                override_content.push((local, format!("overrides/{index_path}")));
+            }
+        }
+
+        skip_paths.insert(index_path.clone());
+        files.push(ModrinthFile {
+            path: index_path,
+            hashes: ModrinthHashes {
+                sha1: hashes.and_then(|h| h.sha1.clone()),
+                sha512: hashes.and_then(|h| h.sha512.clone()),
+            },
+            downloads,
+            env: side_env(module.side),
+        });
+    }
+
+    (files, override_content, skip_paths)
 }
 
 fn prism_instance_cfg(manifest: &ProjectManifest) -> String {
@@ -773,6 +808,15 @@ fn add_overrides<W: Write + Seek>(
     project_dir: &Path,
     options: SimpleFileOptions,
 ) -> Result<usize, ExportError> {
+    add_modrinth_overrides(zip, project_dir, options, &std::collections::HashSet::new())
+}
+
+fn add_modrinth_overrides<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    project_dir: &Path,
+    options: SimpleFileOptions,
+    skip_paths: &std::collections::HashSet<String>,
+) -> Result<usize, ExportError> {
     let ignore = TuffboxIgnore::load(project_dir);
     let mut count = 0;
     for root in [
@@ -782,10 +826,11 @@ fn add_overrides<W: Write + Seek>(
         "scripts",
         "resourcepacks",
         "shaderpacks",
+        "datapacks",
     ] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir(zip, project_dir, &dir, options, &ignore)?;
+            count += add_dir(zip, project_dir, &dir, options, &ignore, skip_paths)?;
         }
     }
     Ok(count)
@@ -840,7 +885,7 @@ fn add_server_overrides<W: Write + Seek>(
     for root in ["config", "defaultconfigs", "kubejs", "scripts"] {
         let dir = project_dir.join(root);
         if dir.is_dir() {
-            count += add_dir(zip, project_dir, &dir, options, &ignore)?;
+            count += add_dir(zip, project_dir, &dir, options, &ignore, &std::collections::HashSet::new())?;
         }
     }
     Ok(count)
@@ -961,6 +1006,7 @@ fn add_dir<W: Write + Seek>(
     dir: &Path,
     options: SimpleFileOptions,
     ignore: &TuffboxIgnore,
+    skip_paths: &std::collections::HashSet<String>,
 ) -> Result<usize, ExportError> {
     let mut count = 0;
     for entry in fs::read_dir(dir)? {
@@ -974,11 +1020,11 @@ fn add_dir<W: Write + Seek>(
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        if ignore.is_ignored(&relative) {
+        if ignore.is_ignored(&relative) || skip_paths.contains(&relative) {
             continue;
         }
         if path.is_dir() {
-            count += add_dir(zip, project_dir, &path, options, ignore)?;
+            count += add_dir(zip, project_dir, &path, options, ignore, skip_paths)?;
         } else if path.is_file() {
             zip.start_file(format!("overrides/{relative}"), options)?;
             zip.write_all(&fs::read(&path)?)?;
@@ -1230,8 +1276,220 @@ mod tests {
         let res = result.unwrap();
         assert!(out.exists(), "output mrpack not created");
         // Both "both"-side and "client"-side mods get a download entry
-        assert_eq!(res.file_count, 2);
+        assert_eq!(res.file_count, 3);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_modrinth_pack_embeds_local_jar_and_uses_content_type_paths() {
+        use zip::ZipArchive;
+
+        let dir = std::env::temp_dir().join("tuffbox_export_test_mr_local");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("mods")).unwrap();
+        fs::create_dir_all(dir.join("resourcepacks")).unwrap();
+        fs::write(dir.join("mods").join("localmod.jar"), b"local-jar-bytes").unwrap();
+        fs::write(dir.join("resourcepacks").join("vanilla-tweaks.zip"), b"rp-bytes").unwrap();
+
+        let manifest = ProjectManifest {
+            schema_version: "1.0".to_string(),
+            project: ProjectMetadata {
+                id: "local-pack".to_string(),
+                name: "Local Pack".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                authors: vec![],
+            },
+            minecraft: MinecraftSpec {
+                version: "1.20.1".to_string(),
+            },
+            loader: LoaderSpec {
+                kind: LoaderKind::Fabric,
+                version: "0.16.0".to_string(),
+            },
+            brief: None,
+            listing: None,
+            java: None,
+            profiles: vec![],
+            mods: vec![
+                ModSpec {
+                    id: "localmod".to_string(),
+                    name: "Local Mod".to_string(),
+                    source: ModSource {
+                        kind: SourceKind::Local,
+                        project_id: None,
+                        file_id: None,
+                        url: None,
+                        path: None,
+                        icon_url: None,
+                        categories: Vec::new(),
+                    },
+                    version: "1.0.0".to_string(),
+                    file_name: Some("localmod.jar".to_string()),
+                    hashes: Some(FileHashes {
+                        sha1: Some("local-sha1".to_string()),
+                        sha512: None,
+                    }),
+                    side: Side::Both,
+                    dependencies: vec![],
+                    status: vec![],
+                    content_type: ContentType::Mod,
+                    authors: Vec::new(),
+                    option: None,
+                },
+                ModSpec {
+                    id: "remote-rp".to_string(),
+                    name: "Remote RP".to_string(),
+                    source: ModSource {
+                        kind: SourceKind::Modrinth,
+                        project_id: Some("vanilla-tweaks".to_string()),
+                        file_id: None,
+                        url: Some("https://example.com/vanilla-tweaks.zip".to_string()),
+                        path: None,
+                        icon_url: None,
+                        categories: Vec::new(),
+                    },
+                    version: "1.0.0".to_string(),
+                    file_name: Some("vanilla-tweaks.zip".to_string()),
+                    hashes: Some(FileHashes {
+                        sha1: Some("rp-sha1".to_string()),
+                        sha512: None,
+                    }),
+                    side: Side::Both,
+                    dependencies: vec![],
+                    status: vec![],
+                    content_type: ContentType::Resourcepack,
+                    authors: Vec::new(),
+                    option: None,
+                },
+            ],
+            overrides: None,
+        };
+
+        let manifest_path = dir.join("tuffbox.json");
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let out = dir.join("pack.mrpack");
+        let result = export_modrinth_pack(&manifest, &manifest_path, &out);
+        assert!(result.is_ok(), "{:?}", result.err());
+        let res = result.unwrap();
+        assert_eq!(res.file_count, 2);
+        assert_eq!(res.override_count, 1, "only local jar embedded, not remote rp on disk");
+
+        let file = fs::File::open(&out).unwrap();
+        let mut zip = ZipArchive::new(file).unwrap();
+
+        let mut index = String::new();
+        zip.by_name("modrinth.index.json")
+            .unwrap()
+            .read_to_string(&mut index)
+            .unwrap();
+        let index_json: serde_json::Value = serde_json::from_str(&index).unwrap();
+        let files = index_json.get("files").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(files.len(), 2);
+
+        let local_entry = files
+            .iter()
+            .find(|f| f.get("path").and_then(|p| p.as_str()) == Some("mods/localmod.jar"))
+            .expect("local mod in index");
+        assert!(
+            local_entry
+                .get("downloads")
+                .and_then(|d| d.as_array())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            local_entry.get("hashes").and_then(|h| h.get("sha1")).and_then(|s| s.as_str()),
+            Some("local-sha1")
+        );
+
+        let rp_entry = files
+            .iter()
+            .find(|f| {
+                f.get("path").and_then(|p| p.as_str()) == Some("resourcepacks/vanilla-tweaks.zip")
+            })
+            .expect("resourcepack uses resourcepacks/ path");
+        assert_eq!(
+            rp_entry
+                .get("downloads")
+                .and_then(|d| d.as_array())
+                .and_then(|d| d.first())
+                .and_then(|u| u.as_str()),
+            Some("https://example.com/vanilla-tweaks.zip")
+        );
+
+        let mut embedded = Vec::new();
+        zip.by_name("overrides/mods/localmod.jar")
+            .unwrap()
+            .read_to_end(&mut embedded)
+            .unwrap();
+        assert_eq!(embedded, b"local-jar-bytes");
+        assert!(
+            zip.by_name("overrides/resourcepacks/vanilla-tweaks.zip").is_err(),
+            "remote resourcepack on disk must not be double-packed"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_modrinth_export_warns_embedded_not_skipped() {
+        let manifest = ProjectManifest {
+            schema_version: "1.0".to_string(),
+            project: ProjectMetadata {
+                id: "test".to_string(),
+                name: "Test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                authors: vec![],
+            },
+            minecraft: MinecraftSpec {
+                version: "1.20.1".to_string(),
+            },
+            loader: LoaderSpec {
+                kind: LoaderKind::Fabric,
+                version: "0.16.0".to_string(),
+            },
+            brief: None,
+            listing: None,
+            java: None,
+            profiles: vec![],
+            mods: vec![ModSpec {
+                id: "local".to_string(),
+                name: "Local".to_string(),
+                source: ModSource {
+                    kind: SourceKind::Local,
+                    project_id: None,
+                    file_id: None,
+                    url: None,
+                    path: None,
+                    icon_url: None,
+                    categories: Vec::new(),
+                },
+                version: "1.0.0".to_string(),
+                file_name: Some("local.jar".to_string()),
+                hashes: None,
+                side: Side::Both,
+                dependencies: vec![],
+                status: vec![],
+                content_type: ContentType::Mod,
+                authors: Vec::new(),
+                option: None,
+            }],
+            overrides: None,
+        };
+        let issues = validate_modrinth_export(&manifest);
+        let url_issue = issues
+            .iter()
+            .find(|i| i.code == "MOD_WITHOUT_DOWNLOAD_URL")
+            .expect("missing url warning");
+        assert!(url_issue.message.contains("embedded"));
+        assert!(!url_issue.message.contains("skipped"));
     }
 
     #[test]

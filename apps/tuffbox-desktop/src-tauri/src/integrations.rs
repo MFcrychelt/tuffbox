@@ -897,16 +897,179 @@ fn api_error(service: &str, status: reqwest::StatusCode, body: &Value) -> String
     let message = body
         .get("message")
         .or_else(|| body.get("description"))
+        .or_else(|| body.pointer("/error/message"))
         .and_then(Value::as_str)
-        .unwrap_or("request rejected");
-    format!("{service} returned {status}: {message}")
+        .map(|s| s.to_string())
+        .or_else(|| {
+            // Gemini OpenAI-compat sometimes returns `[{ "error": { "message": "…" } }]`
+            body.as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|item| item.pointer("/error/message"))
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            let raw = body.to_string();
+            if raw == "null" || raw.is_empty() {
+                "request rejected".to_string()
+            } else {
+                raw.chars().take(280).collect()
+            }
+        });
+    let mut out = format!("{service} returned {status}: {message}");
+    if status == reqwest::StatusCode::UNAUTHORIZED || status.as_u16() == 403 {
+        out.push_str(" — check the AI API key in Settings → Integrations → AI");
+    }
+    out
+}
+
+fn is_gemini_endpoint(endpoint: &str) -> bool {
+    let e = endpoint.to_ascii_lowercase();
+    e.contains("generativelanguage.googleapis.com") || e.contains("/v1beta/openai")
+}
+
+fn gemini_model_id(model: &str) -> String {
+    model
+        .trim()
+        .trim_start_matches("models/")
+        .trim()
+        .to_string()
+}
+
+fn gemini_generate_url(model: &str) -> String {
+    format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+        gemini_model_id(model)
+    )
+}
+
+/// Native Gemini `generateContent` (more reliable than experimental OpenAI-compat for JSON).
+async fn call_gemini_generate_content(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+) -> Result<(String, Option<tuffbox_core::AiTokenUsage>), String> {
+    if api_key.trim().is_empty() {
+        return Err("Gemini API key is not set — paste it in Settings → Integrations → AI".into());
+    }
+    if gemini_model_id(model).is_empty() {
+        return Err("Gemini model is empty — set e.g. gemini-2.0-flash or gemini-flash-latest".into());
+    }
+
+    let mut contents: Vec<Value> = Vec::new();
+    for m in messages {
+        let role = m.get("role").and_then(Value::as_str).unwrap_or("user");
+        let text = m
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if text.trim().is_empty() {
+            continue;
+        }
+        if role == "system" {
+            // Already passed via systemInstruction; skip duplicates in contents.
+            continue;
+        }
+        let gemini_role = if role == "assistant" { "model" } else { "user" };
+        // Gemini requires alternating user/model; merge consecutive same-role turns.
+        if let Some(last) = contents.last_mut() {
+            if last.get("role").and_then(Value::as_str) == Some(gemini_role) {
+                if let Some(parts) = last.get_mut("parts").and_then(Value::as_array_mut) {
+                    if let Some(part) = parts.first_mut() {
+                        if let Some(existing) = part.get("text").and_then(Value::as_str) {
+                            part["text"] = json!(format!("{existing}\n\n{text}"));
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        contents.push(json!({
+            "role": gemini_role,
+            "parts": [{ "text": text }]
+        }));
+    }
+    if contents.is_empty() {
+        return Err("Gemini request has no user messages".into());
+    }
+    // First turn must be user.
+    if contents
+        .first()
+        .and_then(|c| c.get("role"))
+        .and_then(Value::as_str)
+        != Some("user")
+    {
+        contents.insert(
+            0,
+            json!({ "role": "user", "parts": [{ "text": "(continue)" }] }),
+        );
+    }
+
+    let mut body = json!({ "contents": contents });
+    if !system.trim().is_empty() {
+        body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
+    }
+    let mut gen = json!({ "temperature": 0.3 });
+    if json_mode {
+        // Mime-type only — full JSON Schema with null unions often 400s on Gemini.
+        gen["responseMimeType"] = json!("application/json");
+    }
+    body["generationConfig"] = gen;
+
+    let response = send_ai_http_with_retry("Gemini", || {
+        client
+            .post(gemini_generate_url(model))
+            .header(USER_AGENT, APP_USER_AGENT)
+            .header("x-goog-api-key", api_key.trim())
+            .header(ACCEPT, "application/json")
+            .json(&body)
+    })
+    .await?;
+    let status = response.status();
+    let body_text = response.text().await.map_err(|e| e.to_string())?;
+    let parsed: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+        json!({ "error": body_text.chars().take(500).collect::<String>() })
+    });
+    if !status.is_success() {
+        return Err(api_error("Gemini", status, &parsed));
+    }
+
+    // Prefer candidates[0].content.parts[*].text
+    if let Some(parts) = parsed
+        .pointer("/candidates/0/content/parts")
+        .and_then(Value::as_array)
+    {
+        let mut text = String::new();
+        for part in parts {
+            if let Some(t) = part.get("text").and_then(Value::as_str) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(t);
+            }
+        }
+        if !text.trim().is_empty() {
+            return Ok((text, parse_gemini_usage(&parsed)));
+        }
+    }
+    Err(format!(
+        "Gemini response missing candidates[0].content.parts[].text: {}",
+        body_text.chars().take(240).collect::<String>()
+    ))
 }
 
 fn openai_chat_url(endpoint: &str) -> String {
     let endpoint = endpoint.trim_end_matches('/');
     if endpoint.ends_with("/chat/completions") {
         endpoint.to_string()
-    } else if endpoint.ends_with("/v1") {
+    } else if endpoint.ends_with("/v1")
+        // Gemini OpenAI-compat base: …/v1beta/openai (+ optional trailing slash trimmed)
+        || endpoint.ends_with("/openai")
+    {
         format!("{endpoint}/chat/completions")
     } else {
         format!("{endpoint}/v1/chat/completions")
@@ -1841,99 +2004,181 @@ pub async fn call_ai_messages(
     messages: &[Value],
     json_mode: bool,
 ) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    Ok(call_ai_messages_with_usage(settings, system, messages, json_mode, None)
+        .await?
+        .0)
+}
 
-    let mut api_messages = Vec::with_capacity(messages.len() + 1);
-    api_messages.push(json!({"role": "system", "content": system}));
-    for m in messages {
-        api_messages.push(m.clone());
+/// Like `call_ai_messages`, but Ollama can take a JSON Schema in `format` (Structured Outputs).
+/// OpenAI-compat still uses `response_format: json_object`; callers must validate.
+pub async fn call_ai_messages_with_schema(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+    json_schema: Option<Value>,
+) -> Result<Value, String> {
+    Ok(
+        call_ai_messages_with_usage(settings, system, messages, json_mode, json_schema)
+            .await?
+            .0,
+    )
+}
+
+fn usage_u32(v: &Value, key: &str) -> Option<u32> {
+    v.get(key)
+        .and_then(|x| x.as_u64().or_else(|| x.as_f64().map(|f| f as u64)))
+        .map(|n| n as u32)
+}
+
+fn parse_openai_usage(body: &Value) -> Option<tuffbox_core::AiTokenUsage> {
+    let u = body.get("usage")?;
+    let prompt = usage_u32(u, "prompt_tokens");
+    let completion = usage_u32(u, "completion_tokens");
+    let total = usage_u32(u, "total_tokens").or_else(|| match (prompt, completion) {
+        (Some(a), Some(b)) => Some(a.saturating_add(b)),
+        _ => None,
+    });
+    if prompt.is_none() && completion.is_none() && total.is_none() {
+        return None;
     }
+    Some(tuffbox_core::AiTokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: total,
+    })
+}
 
-    let content = if settings.provider == "ollama" {
-        let model = ensure_ollama_ready(settings).await?;
-        let mut body = json!({
-            "model": model,
-            "stream": false,
-            "messages": api_messages,
-        });
-        if json_mode {
-            body["format"] = json!("json");
+fn parse_ollama_usage(body: &Value) -> Option<tuffbox_core::AiTokenUsage> {
+    let prompt = usage_u32(body, "prompt_eval_count");
+    let completion = usage_u32(body, "eval_count");
+    if prompt.is_none() && completion.is_none() {
+        return None;
+    }
+    Some(tuffbox_core::AiTokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: match (prompt, completion) {
+            (Some(a), Some(b)) => Some(a.saturating_add(b)),
+            _ => None,
+        },
+    })
+}
+
+fn parse_gemini_usage(body: &Value) -> Option<tuffbox_core::AiTokenUsage> {
+    let u = body.get("usageMetadata")?;
+    let prompt = usage_u32(u, "promptTokenCount");
+    let completion = usage_u32(u, "candidatesTokenCount");
+    let total = usage_u32(u, "totalTokenCount").or_else(|| match (prompt, completion) {
+        (Some(a), Some(b)) => Some(a.saturating_add(b)),
+        _ => None,
+    });
+    if prompt.is_none() && completion.is_none() && total.is_none() {
+        return None;
+    }
+    Some(tuffbox_core::AiTokenUsage {
+        prompt_tokens: prompt,
+        completion_tokens: completion,
+        total_tokens: total,
+    })
+}
+
+const AI_HTTP_MAX_RETRIES: u32 = 3;
+const AI_STREAM_MAX_BYTES: usize = 1024 * 1024;
+
+/// Retry AI HTTP on transport errors, 429, and 5xx (async counterpart to core `http::fetch` backoff).
+async fn send_ai_http_with_retry(
+    label: &str,
+    mut make_req: impl FnMut() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    let mut last_err = format!("{label} request failed");
+    for attempt in 0..=AI_HTTP_MAX_RETRIES {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt.min(4)))).await;
         }
-        let response = client
-            .post(ollama_chat_url(&settings.endpoint))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
+        let response = match make_req().send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("{label} request failed: {e}");
+                if attempt < AI_HTTP_MAX_RETRIES {
+                    continue;
+                }
+                return Err(last_err);
+            }
+        };
         let status = response.status();
-        let body_text = response.text().await.map_err(|e| e.to_string())?;
-        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
-            json!({ "error": body_text.chars().take(500).collect::<String>() })
-        });
-        if !status.is_success() {
-            return Err(api_error("Ollama", status, &body));
+        if status.as_u16() == 429 || status.is_server_error() {
+            if attempt < AI_HTTP_MAX_RETRIES {
+                let delay = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .unwrap_or_else(|| (2u64.pow(attempt + 1)).min(60))
+                    .min(60);
+                let _ = response.bytes().await;
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                continue;
+            }
         }
-        body.get("message")
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
-            .to_string()
+        return Ok(response);
+    }
+    Err(last_err)
+}
+
+fn append_stream_capped(full: &mut String, delta: &str) -> Result<(), String> {
+    if full.len().saturating_add(delta.len()) > AI_STREAM_MAX_BYTES {
+        return Err(format!(
+            "AI stream exceeded {AI_STREAM_MAX_BYTES} bytes — aborting to avoid OOM"
+        ));
+    }
+    full.push_str(delta);
+    Ok(())
+}
+
+fn strip_ai_fences(content: &str) -> &str {
+    let trimmed = content.trim();
+    let without_open = if let Some(rest) = trimmed.strip_prefix("```") {
+        let rest = rest.trim_start();
+        let rest = rest
+            .strip_prefix("json")
+            .or_else(|| rest.strip_prefix("JSON"))
+            .or_else(|| rest.strip_prefix("Json"))
+            .unwrap_or(rest);
+        rest.trim_start_matches(['\r', '\n']).trim_start()
     } else {
-        let token = secret("ai").ok();
-        let mut payload = json!({
-            "model": settings.model,
-            "temperature": 0.3,
-            "messages": api_messages,
-        });
-        if json_mode {
-            payload["response_format"] = json!({"type": "json_object"});
-        }
-        let mut req = client
-            .post(openai_chat_url(&settings.endpoint))
-            .header(USER_AGENT, APP_USER_AGENT)
-            .json(&payload);
-        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
-            req = req.bearer_auth(token);
-        }
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("AI request failed: {e}"))?;
-        let status = response.status();
-        let body_text = response.text().await.map_err(|e| e.to_string())?;
-        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
-            json!({ "error": body_text.chars().take(500).collect::<String>() })
-        });
-        if !status.is_success() {
-            return Err(api_error("AI provider", status, &body));
-        }
-        body.get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| "AI response did not contain choices[0].message.content".to_string())?
-            .to_string()
+        trimmed
     };
+    let s = without_open.trim_end();
+    let without_close = if let Some(rest) = s
+        .strip_suffix("```json")
+        .or_else(|| s.strip_suffix("```JSON"))
+        .or_else(|| s.strip_suffix("```Json"))
+        .or_else(|| s.strip_suffix("```"))
+    {
+        rest.trim_end()
+    } else {
+        s
+    };
+    without_close.trim()
+}
 
-    let trimmed = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+fn finalize_ai_content(
+    content: String,
+    json_mode: bool,
+) -> Result<Value, String> {
+    let trimmed = strip_ai_fences(&content);
 
     if json_mode {
         serde_json::from_str(trimmed)
             .or_else(|_| {
-                // Some models wrap JSON in prose; try extracting outermost object.
-                if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-                    if end > start {
-                        return serde_json::from_str(&trimmed[start..=end]);
+                // Only slice out first `{`…last `}` when the payload looks like prose wrapping JSON.
+                // If it already starts with `{`, a failed full parse must not carve a corrupt substring.
+                if !trimmed.starts_with('{') {
+                    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+                        if end > start {
+                            return serde_json::from_str(&trimmed[start..=end]);
+                        }
                     }
                 }
                 Err(serde_json::Error::io(std::io::Error::new(
@@ -1945,6 +2190,331 @@ pub async fn call_ai_messages(
     } else {
         Ok(json!({ "content": trimmed }))
     }
+}
+
+/// Like `call_ai_messages_with_schema`, also returning provider token usage when available.
+pub async fn call_ai_messages_with_usage(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+    json_schema: Option<Value>,
+) -> Result<(Value, Option<tuffbox_core::AiTokenUsage>), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let mut api_messages = Vec::with_capacity(messages.len() + 1);
+    api_messages.push(json!({"role": "system", "content": system}));
+    for m in messages {
+        api_messages.push(m.clone());
+    }
+
+    let (content, usage) = if settings.provider == "ollama" {
+        let model = ensure_ollama_ready(settings).await?;
+        let mut body = json!({
+            "model": model,
+            "stream": false,
+            "messages": api_messages,
+        });
+        if json_mode {
+            if let Some(schema) = json_schema {
+                body["format"] = schema;
+            } else {
+                body["format"] = json!("json");
+            }
+        }
+        let response = send_ai_http_with_retry("Ollama", || {
+            client
+                .post(ollama_chat_url(&settings.endpoint))
+                .json(&body)
+        })
+        .await?;
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+            json!({ "error": body_text.chars().take(500).collect::<String>() })
+        });
+        if !status.is_success() {
+            return Err(api_error("Ollama", status, &body));
+        }
+        let content = body
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
+            .to_string();
+        (content, parse_ollama_usage(&body))
+    } else if is_gemini_endpoint(&settings.endpoint)
+        || settings.model.to_ascii_lowercase().contains("gemini")
+    {
+        let token = secret("ai").ok().unwrap_or_default();
+        call_gemini_generate_content(
+            &client,
+            &token,
+            &settings.model,
+            system,
+            messages,
+            json_mode,
+        )
+        .await?
+    } else {
+        let token = secret("ai").ok();
+        let mut payload = json!({
+            "model": settings.model,
+            "temperature": 0.3,
+            "messages": api_messages,
+        });
+        if json_mode {
+            payload["response_format"] = json!({"type": "json_object"});
+        }
+        let response = send_ai_http_with_retry("AI provider", || {
+            let mut req = client
+                .post(openai_chat_url(&settings.endpoint))
+                .header(USER_AGENT, APP_USER_AGENT)
+                .json(&payload);
+            if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+                req = req.bearer_auth(token);
+            }
+            req
+        })
+        .await?;
+        let status = response.status();
+        let body_text = response.text().await.map_err(|e| e.to_string())?;
+        let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+            json!({ "error": body_text.chars().take(500).collect::<String>() })
+        });
+        if !status.is_success() {
+            return Err(api_error("AI provider", status, &body));
+        }
+        let content = body
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| "AI response did not contain choices[0].message.content".to_string())?
+            .to_string();
+        (content, parse_openai_usage(&body))
+    };
+
+    Ok((finalize_ai_content(content, json_mode)?, usage))
+}
+
+fn parse_openai_sse_delta(line: &str) -> Option<String> {
+    let data = line.strip_prefix("data:")?.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+    let v: Value = serde_json::from_str(data).ok()?;
+    v.get("choices")
+        .and_then(Value::as_array)
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("delta"))
+        .and_then(|d| d.get("content"))
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
+}
+
+fn parse_openai_sse_usage(line: &str) -> Option<tuffbox_core::AiTokenUsage> {
+    let data = line.strip_prefix("data:")?.trim();
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+    let v: Value = serde_json::from_str(data).ok()?;
+    parse_openai_usage(&v)
+}
+
+fn parse_ollama_stream_delta(chunk_json: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(chunk_json).ok()?;
+    v.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
+}
+
+/// Stream assistant tokens via `on_token`, then parse like `call_ai_messages`.
+/// Gemini falls back to non-streaming (full response, one token emit).
+/// Returns provider usage when the stream/provider reports it.
+pub async fn call_ai_messages_stream<F>(
+    settings: &AiSettings,
+    system: &str,
+    messages: &[Value],
+    json_mode: bool,
+    mut on_token: F,
+) -> Result<(Value, Option<tuffbox_core::AiTokenUsage>), String>
+where
+    F: FnMut(&str),
+{
+    // Gemini streaming not wired — use blocking path and emit once.
+    if is_gemini_endpoint(&settings.endpoint)
+        || settings.model.to_ascii_lowercase().contains("gemini")
+    {
+        let (value, usage) =
+            call_ai_messages_with_usage(settings, system, messages, json_mode, None).await?;
+        let preview = if value.is_string() {
+            value.as_str().unwrap_or("").to_string()
+        } else {
+            value.to_string()
+        };
+        if !preview.is_empty() {
+            on_token(&preview);
+        }
+        return Ok((value, usage));
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let mut api_messages = Vec::with_capacity(messages.len() + 1);
+    api_messages.push(json!({"role": "system", "content": system}));
+    for m in messages {
+        api_messages.push(m.clone());
+    }
+
+    let mut full = String::new();
+    let mut usage: Option<tuffbox_core::AiTokenUsage> = None;
+
+    if settings.provider == "ollama" {
+        let model = ensure_ollama_ready(settings).await?;
+        let mut body = json!({
+            "model": model,
+            "stream": true,
+            "messages": api_messages,
+        });
+        if json_mode {
+            body["format"] = json!("json");
+        }
+        let mut response = send_ai_http_with_retry("Ollama", || {
+            client
+                .post(ollama_chat_url(&settings.endpoint))
+                .json(&body)
+        })
+        .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+                json!({ "error": body_text.chars().take(500).collect::<String>() })
+            });
+            return Err(api_error("Ollama", status, &body));
+        }
+        let mut buf = String::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("Ollama stream read failed: {e}"))?
+        {
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find('\n') {
+                let line = buf[..pos].trim().to_string();
+                buf = buf[pos + 1..].to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if v.get("done").and_then(Value::as_bool) == Some(true) {
+                        if let Some(u) = parse_ollama_usage(&v) {
+                            usage = Some(u);
+                        }
+                    }
+                }
+                if let Some(delta) = parse_ollama_stream_delta(&line) {
+                    if !delta.is_empty() {
+                        append_stream_capped(&mut full, &delta)?;
+                        on_token(&delta);
+                    }
+                }
+            }
+        }
+        if !buf.trim().is_empty() {
+            let line = buf.trim();
+            if let Ok(v) = serde_json::from_str::<Value>(line) {
+                if v.get("done").and_then(Value::as_bool) == Some(true) {
+                    if let Some(u) = parse_ollama_usage(&v) {
+                        usage = Some(u);
+                    }
+                }
+            }
+            if let Some(delta) = parse_ollama_stream_delta(line) {
+                if !delta.is_empty() {
+                    append_stream_capped(&mut full, &delta)?;
+                    on_token(&delta);
+                }
+            }
+        }
+    } else {
+        let token = secret("ai").ok();
+        let mut payload = json!({
+            "model": settings.model,
+            "temperature": 0.3,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+            "messages": api_messages,
+        });
+        if json_mode {
+            payload["response_format"] = json!({"type": "json_object"});
+        }
+        let mut response = send_ai_http_with_retry("AI provider", || {
+            let mut req = client
+                .post(openai_chat_url(&settings.endpoint))
+                .header(USER_AGENT, APP_USER_AGENT)
+                .header(ACCEPT, "text/event-stream")
+                .json(&payload);
+            if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+                req = req.bearer_auth(token);
+            }
+            req
+        })
+        .await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
+                json!({ "error": body_text.chars().take(500).collect::<String>() })
+            });
+            return Err(api_error("AI provider", status, &body));
+        }
+        let mut buf = String::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("AI stream read failed: {e}"))?
+        {
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buf.find('\n') {
+                let line = buf[..pos].trim_end_matches('\r').to_string();
+                buf = buf[pos + 1..].to_string();
+                if let Some(u) = parse_openai_sse_usage(&line) {
+                    usage = Some(u);
+                }
+                if let Some(delta) = parse_openai_sse_delta(&line) {
+                    if !delta.is_empty() {
+                        append_stream_capped(&mut full, &delta)?;
+                        on_token(&delta);
+                    }
+                }
+            }
+        }
+        for line in buf.lines() {
+            let line = line.trim_end_matches('\r');
+            if let Some(u) = parse_openai_sse_usage(line) {
+                usage = Some(u);
+            }
+            if let Some(delta) = parse_openai_sse_delta(line) {
+                if !delta.is_empty() {
+                    append_stream_capped(&mut full, &delta)?;
+                    on_token(&delta);
+                }
+            }
+        }
+    }
+
+    Ok((finalize_ai_content(full, json_mode)?, usage))
 }
 
 /// Call AI and ensure the response parses as ActionPlan; one repair retry on failure.
@@ -1983,20 +2553,21 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
         .map_err(|e| format!("HTTP client error: {e}"))?;
     let content = if settings.provider == "ollama" {
         let model = ensure_ollama_ready(settings).await?;
-        let response = client
-            .post(ollama_chat_url(&settings.endpoint))
-            .json(&json!({
-                "model": model,
-                "stream": false,
-                "format": "json",
-                "messages": [
-                    {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
-                    {"role": "user", "content": prompt}
-                ]
-            }))
-            .send()
-            .await
-            .map_err(|e| format!("Ollama request failed (is Ollama running?): {e}"))?;
+        let body = json!({
+            "model": model,
+            "stream": false,
+            "format": "json",
+            "messages": [
+                {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
+                {"role": "user", "content": prompt}
+            ]
+        });
+        let response = send_ai_http_with_retry("Ollama", || {
+            client
+                .post(ollama_chat_url(&settings.endpoint))
+                .json(&body)
+        })
+        .await?;
         let status = response.status();
         let body_text = response.text().await.map_err(|e| e.to_string())?;
         let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2010,28 +2581,42 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
             .and_then(Value::as_str)
             .ok_or_else(|| "Ollama response did not contain message.content".to_string())?
             .to_string()
+    } else if is_gemini_endpoint(&settings.endpoint)
+        || settings.model.to_ascii_lowercase().contains("gemini")
+    {
+        let token = secret("ai").ok().unwrap_or_default();
+        let system = format!(
+            "{}\n\n{}",
+            tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT,
+            tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT
+        );
+        let msgs = vec![json!({"role": "user", "content": prompt})];
+        call_gemini_generate_content(&client, &token, &settings.model, &system, &msgs, true)
+            .await?
+            .0
     } else {
         // OpenAI-compatible / Hermes-style: API key optional for local endpoints.
         let token = secret("ai").ok();
-        let mut req = client
-            .post(openai_chat_url(&settings.endpoint))
-            .header(USER_AGENT, APP_USER_AGENT)
-            .json(&json!({
-                "model": settings.model,
-                "temperature": 0.2,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
-                    {"role": "user", "content": prompt}
-                ]
-            }));
-        if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
-            req = req.bearer_auth(token);
-        }
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("AI request failed: {e}"))?;
+        let body = json!({
+            "model": settings.model,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": format!("{}\n\n{}", tuffbox_core::action_plan::ACTION_PLAN_SYSTEM_PROMPT, tuffbox_core::ai_explanation::CRASH_JSON_SCHEMA_HINT)},
+                {"role": "user", "content": prompt}
+            ]
+        });
+        let response = send_ai_http_with_retry("AI provider", || {
+            let mut req = client
+                .post(openai_chat_url(&settings.endpoint))
+                .header(USER_AGENT, APP_USER_AGENT)
+                .json(&body);
+            if let Some(token) = token.as_ref().filter(|t| !t.trim().is_empty()) {
+                req = req.bearer_auth(token);
+            }
+            req
+        })
+        .await?;
         let status = response.status();
         let body_text = response.text().await.map_err(|e| e.to_string())?;
         let body: Value = serde_json::from_str(&body_text).unwrap_or_else(|_| {
@@ -2049,12 +2634,7 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
             .ok_or_else(|| "AI response did not contain choices[0].message.content".to_string())?
             .to_string()
     };
-    let trimmed = content
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
+    let trimmed = strip_ai_fences(&content);
     // Prefer ActionPlan parse; fall back to raw JSON.
     match tuffbox_core::action_plan::parse_action_plan(trimmed) {
         Ok(plan) => serde_json::to_value(plan).map_err(|e| e.to_string()),
@@ -2293,9 +2873,42 @@ mod tests {
             "http://localhost:1234/v1/chat/completions"
         );
         assert_eq!(
+            openai_chat_url("https://generativelanguage.googleapis.com/v1beta/openai"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+        assert_eq!(
+            openai_chat_url("https://generativelanguage.googleapis.com/v1beta/openai/"),
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+        );
+        assert_eq!(
             ollama_chat_url("http://127.0.0.1:11434"),
             "http://127.0.0.1:11434/api/chat"
         );
+        assert_eq!(
+            gemini_generate_url("gemini-flash-latest"),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+        );
+        assert_eq!(gemini_model_id("models/gemini-2.0-flash"), "gemini-2.0-flash");
+        assert!(is_gemini_endpoint(
+            "https://generativelanguage.googleapis.com/v1beta/openai"
+        ));
+    }
+
+    #[test]
+    fn api_error_reads_nested_gemini_message() {
+        let body = json!({
+            "error": { "code": 400, "message": "Request contains an invalid argument.", "status": "INVALID_ARGUMENT" }
+        });
+        let msg = api_error("Gemini", reqwest::StatusCode::BAD_REQUEST, &body);
+        assert!(msg.contains("invalid argument"), "{msg}");
+    }
+
+    #[test]
+    fn api_error_401_hints_api_key() {
+        let body = json!({ "error": { "message": "API key not valid" } });
+        let msg = api_error("Gemini", reqwest::StatusCode::UNAUTHORIZED, &body);
+        assert!(msg.contains("API key"), "{msg}");
+        assert!(msg.contains("Settings"), "{msg}");
     }
 
     #[test]
@@ -2320,5 +2933,18 @@ mod tests {
         fs::create_dir(dir.path().join("blobs")).unwrap();
         fs::create_dir(dir.path().join("manifests")).unwrap();
         assert!(is_ollama_models_dir(dir.path()));
+    }
+
+    #[test]
+    fn strip_ai_fences_closing_language_tag() {
+        assert_eq!(
+            strip_ai_fences("```json\n{\"ok\":true}\n```json"),
+            "{\"ok\":true}"
+        );
+        assert_eq!(
+            strip_ai_fences("```JSON\n{\"ok\":1}\n```JSON"),
+            "{\"ok\":1}"
+        );
+        assert_eq!(strip_ai_fences("```\n{}\n```"), "{}");
     }
 }

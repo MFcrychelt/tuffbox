@@ -273,72 +273,94 @@ pub fn project_versions_key(provider: &str, project_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Process-global cache is shared; serialize these tests so clear/evict
+    /// in one test cannot wipe entries another test just inserted.
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    fn with_isolated_cache<R>(f: impl FnOnce() -> R) -> R {
+        let _lock = TEST_GUARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear();
+        let out = f();
+        clear();
+        out
+    }
 
     #[test]
     fn get_returns_none_for_missing_key() {
-        clear();
-        assert!(get::<String>("nonexistent").is_none());
+        with_isolated_cache(|| {
+            assert!(get::<String>("nonexistent").is_none());
+        });
     }
 
     #[test]
     fn put_and_get_roundtrip() {
-        clear();
-        put("test_key", "hello".to_string());
-        assert_eq!(get::<String>("test_key"), Some("hello".to_string()));
+        with_isolated_cache(|| {
+            put("test_key", "hello".to_string());
+            assert_eq!(get::<String>("test_key"), Some("hello".to_string()));
+        });
     }
 
     #[test]
     fn get_or_insert_calls_fn_on_miss() {
-        clear();
-        let val = get_or_insert("computed", || 42);
-        assert_eq!(val, 42);
-        // Second call should return cached.
-        let val2 = get_or_insert("computed", || 99);
-        assert_eq!(val2, 42);
+        with_isolated_cache(|| {
+            let val = get_or_insert("computed", || 42);
+            assert_eq!(val, 42);
+            // Second call should return cached.
+            let val2 = get_or_insert("computed", || 99);
+            assert_eq!(val2, 42);
+        });
     }
 
     #[test]
     fn invalidate_removes_entry() {
-        clear();
-        put("to_remove", 1);
-        invalidate("to_remove");
-        assert!(get::<i32>("to_remove").is_none());
+        with_isolated_cache(|| {
+            put("to_remove", 1);
+            invalidate("to_remove");
+            assert!(get::<i32>("to_remove").is_none());
+        });
     }
 
     #[test]
     fn invalidate_prefix_removes_matching() {
-        clear();
-        put("test_prefix_a:a", 1_i32);
-        put("test_prefix_a:b", 2_i32);
-        put("test_prefix_b:c", 3_i32);
-        invalidate_prefix("test_prefix_a:");
-        assert!(get::<i32>("test_prefix_a:a").is_none());
-        assert!(get::<i32>("test_prefix_a:b").is_none());
-        assert_eq!(get::<i32>("test_prefix_b:c"), Some(3_i32));
+        with_isolated_cache(|| {
+            put("test_prefix_a:a", 1_i32);
+            put("test_prefix_a:b", 2_i32);
+            put("test_prefix_b:c", 3_i32);
+            invalidate_prefix("test_prefix_a:");
+            assert!(get::<i32>("test_prefix_a:a").is_none());
+            assert!(get::<i32>("test_prefix_a:b").is_none());
+            assert_eq!(get::<i32>("test_prefix_b:c"), Some(3_i32));
+        });
     }
 
     #[test]
     fn get_stale_returns_value_even_after_ttl() {
-        clear();
-        // Insert with a 0-second TTL so it's immediately stale.
-        put_with_ttl("stale_key", "value".to_string(), Duration::from_secs(0));
-        // `get` should return None (stale).
-        assert!(get::<String>("stale_key").is_none());
-        // `get_stale` should still return the value.
-        assert_eq!(
-            get_stale::<String>("stale_key"),
-            Some("value".to_string())
-        );
+        with_isolated_cache(|| {
+            // Insert with a 0-second TTL so it's immediately stale.
+            put_with_ttl("stale_key", "value".to_string(), Duration::from_secs(0));
+            // `get` should return None (stale).
+            assert!(get::<String>("stale_key").is_none());
+            // `get_stale` should still return the value.
+            assert_eq!(
+                get_stale::<String>("stale_key"),
+                Some("value".to_string())
+            );
+        });
     }
 
     #[test]
     fn cache_evicts_oldest_when_full() {
-        clear();
-        for i in 0..MAX_ENTRIES + 10 {
-            put(format!("key_{i}"), i);
-        }
-        // Should not exceed MAX_ENTRIES by much (oldest evicted).
-        assert!(len() <= MAX_ENTRIES);
+        with_isolated_cache(|| {
+            for i in 0..MAX_ENTRIES + 10 {
+                put(format!("key_{i}"), i);
+            }
+            // Should not exceed MAX_ENTRIES by much (oldest evicted).
+            assert!(len() <= MAX_ENTRIES);
+        });
     }
 
     #[test]

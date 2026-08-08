@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { open } from "@tauri-apps/plugin-shell";
-  import { Youtube, ChevronDown, PictureInPicture2 } from "lucide-svelte";
+  import { Youtube, ChevronDown, PictureInPicture2 } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
   import { api } from "../lib/api";
   import { openYoutubePlayer } from "../lib/store";
@@ -17,22 +17,39 @@
     published_at?: string | null;
   };
 
-  /** `row` = horizontal home strip; `rail` = vertical under-skin column. */
-  export let variant: "row" | "rail" = "row";
+  /** `row` = horizontal strip; `grid` = main card grid; `rail` = vertical under-skin column. */
+  let { variant = "row" }: { variant?: "row" | "grid" | "rail" } = $props();
 
   const STORAGE_KEY = "tuffbox-youtube-feed-expanded";
-  const FEED_LIMIT = 20;
-  const SKEL_COUNT = 5;
+  /** Horizontal/grid initial strip size. */
+  const FEED_LIMIT_ROW = 24;
+  /** Rail: large client pool; reveal in pages (scroll lives on skin+feed column). */
+  const FEED_POOL_RAIL = 60;
+  const FEED_PAGE_RAIL = 16;
+  const FEED_MORE_RAIL = 12;
+  const SKEL_COUNT_ROW = 5;
+  const SKEL_COUNT_RAIL = 4;
   /** Cap clips from the same channel so mega-creators don't fill the strip. */
   const MAX_PER_CHANNEL = 2;
+  const MAX_PER_CHANNEL_RAIL = 3;
   /** Share of tracked-creator videos in the final strip. */
   const CHANNEL_SHARE = 0.4;
 
-  let videos: FeedVideo[] = [];
-  let loading = true;
-  let loadError = "";
-  let expanded = true;
-  let inlinePlayer = true;
+  const poolLimit = $derived(variant === "rail" ? FEED_POOL_RAIL : FEED_LIMIT_ROW);
+  const skelCount = $derived(variant === "rail" ? SKEL_COUNT_RAIL : SKEL_COUNT_ROW);
+
+  let videoPool = $state<FeedVideo[]>([]);
+  let visibleCount = $state(FEED_PAGE_RAIL);
+  let loading = $state(true);
+  let loadError = $state("");
+  let expanded = $state(true);
+  let inlinePlayer = $state(true);
+  let loadMoreEl = $state<HTMLElement | null>(null);
+
+  const visibleVideos = $derived(
+    variant === "rail" ? videoPool.slice(0, visibleCount) : videoPool,
+  );
+  const canLoadMore = $derived(variant === "rail" && visibleCount < videoPool.length);
 
   function onCardClick(video: FeedVideo, event: MouseEvent) {
     if (inlinePlayer) {
@@ -106,7 +123,12 @@
   /**
    * Build a varied strip: channel caps, then native-lang first, foreign after.
    */
-  function diversifyFeed(rows: FeedVideo[], limit: number, preferLang: string): FeedVideo[] {
+  function diversifyFeed(
+    rows: FeedVideo[],
+    limit: number,
+    preferLang: string,
+    maxPerChannel = MAX_PER_CHANNEL,
+  ): FeedVideo[] {
     if (rows.length === 0) return [];
 
     const daySeed = Math.floor(Date.now() / 86_400_000);
@@ -142,7 +164,7 @@
           if (!pass(v)) continue;
           const ch = channelKey(v);
           const used = counts.get(ch) ?? 0;
-          if (used >= MAX_PER_CHANNEL) continue;
+          if (used >= maxPerChannel) continue;
           counts.set(ch, used + 1);
           out.push(v);
         }
@@ -174,7 +196,7 @@
         if (mixed.length >= limit) break;
         if (used.has(v.video_id)) continue;
         const ch = channelKey(v);
-        if ((counts.get(ch) ?? 0) >= MAX_PER_CHANNEL) continue;
+        if ((counts.get(ch) ?? 0) >= maxPerChannel) continue;
         counts.set(ch, (counts.get(ch) ?? 0) + 1);
         used.add(v.video_id);
         mixed.push(v);
@@ -225,19 +247,20 @@
           .in("lang", langs)
           .eq("source", "popular")
           .order("view_count", { ascending: false })
-          .limit(80),
+          .limit(120),
         supabase
           .from("youtube_feed")
           .select(cols)
           .in("lang", langs)
           .eq("source", "channel")
           .order("view_count", { ascending: false })
-          .limit(60),
+          .limit(80),
       ]);
 
       if (popularRes.error && channelRes.error) {
         loadError = popularRes.error.message || channelRes.error.message || "Failed to load feed";
-        videos = [];
+        videoPool = [];
+        visibleCount = FEED_PAGE_RAIL;
         return;
       }
 
@@ -251,17 +274,38 @@
       for (const v of channel) byId.set(v.video_id, v);
       for (const v of popular) byId.set(v.video_id, v);
 
-      videos = diversifyFeed([...byId.values()], FEED_LIMIT, lang);
-      if (videos.length === 0) {
+      const maxPer = variant === "rail" ? MAX_PER_CHANNEL_RAIL : MAX_PER_CHANNEL;
+      videoPool = diversifyFeed([...byId.values()], poolLimit, lang, maxPer);
+      visibleCount = variant === "rail" ? Math.min(FEED_PAGE_RAIL, videoPool.length) : videoPool.length;
+      if (videoPool.length === 0) {
         loadError = "";
       }
     } catch (e) {
-      videos = [];
+      videoPool = [];
+      visibleCount = FEED_PAGE_RAIL;
       loadError = String(e);
     } finally {
       loading = false;
     }
   }
+
+  function loadMoreFromPool() {
+    if (!canLoadMore) return;
+    visibleCount = Math.min(visibleCount + FEED_MORE_RAIL, videoPool.length);
+  }
+
+  $effect(() => {
+    if (variant !== "rail" || !canLoadMore || !loadMoreEl) return;
+    const el = loadMoreEl;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMoreFromPool();
+      },
+      { root: null, rootMargin: "120px", threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  });
 
   function toggleExpanded() {
     expanded = !expanded;
@@ -275,11 +319,28 @@
   async function openVideo(videoId: string) {
     await open(`https://www.youtube.com/watch?v=${videoId}`);
   }
+
+  /** Map vertical wheel to horizontal scroll so the strip is usable with a mouse. */
+  function onFeedWheel(e: WheelEvent) {
+    if (variant !== "row") return;
+    const el = e.currentTarget as HTMLElement;
+    if (el.scrollWidth <= el.clientWidth) return;
+    // Prefer horizontal delta; otherwise tilt vertical into horizontal.
+    const dx = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (dx === 0) return;
+    el.scrollLeft += dx;
+    e.preventDefault();
+  }
 </script>
 
-{#if loading || videos.length > 0 || loadError !== "" || (!loading && videos.length === 0)}
-  <section class="youtube-feed" class:rail={variant === "rail"} aria-busy={loading}>
-    <button type="button" class="section-header" on:click={toggleExpanded} disabled={loading}>
+{#if loading || videoPool.length > 0 || loadError !== "" || (!loading && videoPool.length === 0)}
+  <section
+    class="youtube-feed"
+    class:rail={variant === "rail"}
+    class:grid={variant === "grid"}
+    aria-busy={loading}
+  >
+    <button type="button" class="section-header" onclick={toggleExpanded} disabled={loading}>
       <Youtube size={18} />
       <h2>Minecraft on YouTube</h2>
       <span class="chevron" class:rotated={expanded} aria-hidden="true">
@@ -288,8 +349,8 @@
     </button>
     {#if expanded}
       {#if loading}
-        <div class="feed-row home-skel-stagger" aria-hidden="true">
-          {#each Array(SKEL_COUNT) as _, i (i)}
+        <div class="feed-row home-skel-stagger" aria-hidden="true" onwheel={onFeedWheel}>
+          {#each Array(skelCount) as _, i (i)}
             <div class="video-card skel-card" style={`--i: ${i}`}>
               <div class="thumb skeleton skeleton-block skeleton-card"></div>
               <span class="skeleton skeleton-block skeleton-line medium"></span>
@@ -301,21 +362,21 @@
         <div class="feed-status">
           <p>Couldn’t load YouTube feed.</p>
           <span class="feed-status-detail">{loadError}</span>
-          <button type="button" class="retry-btn" on:click={() => loadFeed()}>Retry</button>
+          <button type="button" class="retry-btn" onclick={() => loadFeed()}>Retry</button>
         </div>
-      {:else if videos.length === 0}
+      {:else if videoPool.length === 0}
         <div class="feed-status">
           <p>No videos yet. The feed fills every few hours.</p>
-          <button type="button" class="retry-btn" on:click={() => loadFeed()}>Refresh</button>
+          <button type="button" class="retry-btn" onclick={() => loadFeed()}>Refresh</button>
         </div>
       {:else}
-        <div class="feed-row tb-anim-fade-in">
-          {#each videos as video (video.video_id)}
+        <div class="feed-row tb-anim-fade-in" onwheel={onFeedWheel}>
+          {#each visibleVideos as video (video.video_id)}
             <div class="video-card-wrap">
               <button
                 type="button"
                 class="video-card"
-                on:click={(e) => onCardClick(video, e)}
+                onclick={(e) => onCardClick(video, e)}
               >
                 <div class="thumb">
                   {#if video.thumbnail_url}
@@ -333,7 +394,7 @@
                   class="pip-btn"
                   title="Play in mini window"
                   aria-label="Play in mini window"
-                  on:click={(e) => onCardMini(video, e)}
+                  onclick={(e) => onCardMini(video, e)}
                 >
                   <PictureInPicture2 size={14} />
                 </button>
@@ -341,6 +402,13 @@
             </div>
           {/each}
         </div>
+        {#if canLoadMore}
+          <div class="load-more-wrap" bind:this={loadMoreEl}>
+            <button type="button" class="load-more-btn" onclick={loadMoreFromPool}>
+              Load more ({videoPool.length - visibleCount} left)
+            </button>
+          </div>
+        {/if}
       {/if}
     {/if}
   </section>
@@ -387,7 +455,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
-    transition: transform 0.2s ease;
+    transition: transform 0.2s var(--ease-hover-in, ease);
   }
 
   .chevron :global(svg) {
@@ -400,33 +468,90 @@
 
   .feed-row {
     display: flex;
+    flex-wrap: nowrap;
     gap: 12px;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow-x: auto;
-    padding-bottom: 4px;
+    overflow-y: hidden;
+    padding-bottom: 6px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
   }
 
+  /* Rail: natural height — parent `.home-side` scrolls skin + feed together. */
   .rail .feed-row {
     flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
-    max-height: min(70vh, 640px);
+    gap: 10px;
+    overflow: visible;
+    padding-bottom: 4px;
+    touch-action: pan-y;
+  }
+
+  /* Grid: card mosaic — the home feed now owns the freed instances space,
+     so cards run larger and stretch to the available width. */
+  .grid .feed-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 18px 16px;
+    overflow: visible;
     padding-bottom: 0;
+    touch-action: auto;
+  }
+
+  .grid .video-card-wrap {
+    flex: unset;
+    width: auto;
+    min-width: 0;
+  }
+
+  .grid .video-card {
+    flex: unset;
+    width: 100%;
   }
 
   .feed-row::-webkit-scrollbar {
     height: 6px;
   }
 
-  .rail .feed-row::-webkit-scrollbar {
-    width: 6px;
-    height: auto;
-  }
-
   .feed-row::-webkit-scrollbar-thumb {
     background: var(--bg-elevated);
     border-radius: 3px;
+  }
+
+  .youtube-feed.rail {
+    min-width: 0;
+  }
+
+  .rail .section-header {
+    margin-bottom: 10px;
+  }
+
+  .load-more-wrap {
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 4px;
+  }
+
+  .load-more-btn {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+  }
+
+  .load-more-btn:hover {
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-color));
   }
 
   .video-card {
@@ -442,7 +567,7 @@
     text-align: left;
     cursor: pointer;
     color: inherit;
-    transition: transform 0.15s ease;
+    transition: transform var(--motion-med, 240ms) var(--ease-hover-in, ease);
   }
 
   .video-card-wrap {
@@ -494,6 +619,25 @@
   .rail .video-card {
     flex: 0 0 auto;
     width: 100%;
+    gap: 6px;
+  }
+
+  .rail .thumb {
+    border-radius: var(--border-radius-sm);
+  }
+
+  .rail .title {
+    font-size: 12px;
+    line-height: 1.35;
+    -webkit-line-clamp: 2;
+  }
+
+  .rail .channel {
+    font-size: 11px;
+  }
+
+  .rail .video-card:hover {
+    transform: none;
   }
 
   .skel-card {

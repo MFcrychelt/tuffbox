@@ -1,12 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List } from "lucide-svelte";
-  import { projectPath } from "../lib/store";
+  import { GitGraph, RefreshCw, AlertTriangle, Box, Workflow, Download, X, Loader2, Maximize2, Minimize2, RotateCw, Info, Ban, ShieldAlert, ChevronDown, List, ExternalLink } from "@lucide/svelte";
+  import { projectPath, projectInfo, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
+  import CatalogProjectView from "./CatalogProjectView.svelte";
   import { trapFocus } from "../lib/focusTrap";
   import * as d3 from "d3-force";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
 
 
   type GraphNode = {
@@ -45,43 +46,56 @@
     alreadyPresent?: string[];
   };
 
-  let graph: GraphModel | null = null;
-  let loading = false;
-  let error: string | null = null;
-  let selectedId: string | null = null;
-  let lastLoadedPath: string | null = null;
-  let resolving = false;
-  let message: string | null = null;
-  let changePlan: any | null = null;
+  let graph = $state<GraphModel | null>(null);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+  let selectedId = $state<string | null>(null);
+  let lastLoadedPath = $state<string | null>(null);
+  let resolving = $state(false);
+  let message = $state<string | null>(null);
+  let changePlan = $state<any | null>(null);
   /** Monotonic token so stale loadChangePlan / refresh results never overwrite a newer load. */
   let changePlanGen = 0;
-  let changePlanLoading = false;
-  let graphSource = "local";
-  let graphGeneratedAt: string | null = null;
-  let graphRefreshing = false;
-  let refreshError: string | null = null;
+  let changePlanLoading = $state(false);
+  let graphSource = $state("local");
+  let graphGeneratedAt = $state<string | null>(null);
+  let graphRefreshing = $state(false);
+  let refreshError = $state<string | null>(null);
+  let catalogViewResult = $state<{
+    id: string;
+    slug: string;
+    name: string;
+    description: string;
+    projectType: string;
+    iconUrl?: string | null;
+    author?: string | null;
+    downloads?: number | null;
+    follows?: number | null;
+    categories?: string[];
+    provider?: string;
+  } | null>(null);
 
   // Dependency preview dialog
-  let depPreviewOpen = false;
-  let depPreviewLoading = false;
-  let depPreviewSlug = "";
-  let depPreviewName = "";
-  let depPreviewRequired: { target: string; reason?: string | null }[] = [];
-  let depPreviewOptional: { target: string; reason?: string | null }[] = [];
-  let depPreviewInstallWithOptional = true;
-  let depInstallStatus: "idle" | "downloading" | "done" | "failed" = "idle";
-  let depInstallMessage = "";
-  let depInstallError: string | null = null;
-  let depInstallFailedIds: string[] = [];
-  let depInstallBatchSeen = false;
+  let depPreviewOpen = $state(false);
+  let depPreviewLoading = $state(false);
+  let depPreviewSlug = $state("");
+  let depPreviewName = $state("");
+  let depPreviewRequired = $state<{ target: string; reason?: string | null }[]>([]);
+  let depPreviewOptional = $state<{ target: string; reason?: string | null }[]>([]);
+  let depPreviewInstallWithOptional = $state(true);
+  let depInstallStatus = $state<"idle" | "downloading" | "done" | "failed">("idle");
+  let depInstallMessage = $state("");
+  let depInstallError = $state<string | null>(null);
+  let depInstallFailedIds = $state<string[]>([]);
+  let depInstallBatchSeen = $state(false);
   let unlistenDownloadProgress: UnlistenFn | null = null;
   let unlistenDownloadBatch: UnlistenFn | null = null;
-  let graphCanvasEl: HTMLElement;
-  let fullscreenElement: Element | null = null;
-  $: graphFullscreen = fullscreenElement === graphCanvasEl;
+  let graphCanvasEl = $state<HTMLElement | undefined>(undefined);
+  let fullscreenElement = $state<Element | null>(null);
+  const graphFullscreen = $derived(fullscreenElement === graphCanvasEl);
 
-  let showNodeList = true;
-  let changePlanExpanded = false;
+  let showNodeList = $state(true);
+  let changePlanExpanded = $state(true);
   let changePlanSeenKey = "";
   let canvasResizeObserver: ResizeObserver | null = null;
 
@@ -93,13 +107,13 @@
     simulation?.stop();
   }
 
-  $: if (changePlan) {
+  $effect(() => {
+    if (!changePlan) return;
     const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
-    if (key !== changePlanSeenKey) {
-      changePlanSeenKey = key;
-      changePlanExpanded = !!(changePlan.actions?.length);
-    }
-  }
+    if (key === changePlanSeenKey) return;
+    changePlanSeenKey = key;
+    changePlanExpanded = !!(changePlan.actions?.length);
+  });
 
   /** Right-click = same install path as left-click (hint: "click or right-click to install"). */
   async function onNodeContextInstall(event: MouseEvent, node: GraphNode & { ghost?: boolean }) {
@@ -275,9 +289,9 @@
   }
 
   // Track which nodes have a broken icon so we can fall back to a letter avatar
-  let brokenIcons = new Set<string>();
+  let brokenIcons = $state(new Set<string>())
   /// Modrinth/CurseForge metadata for missing (ghost) dependency nodes.
-  let ghostMeta: Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }> = {};
+  let ghostMeta = $state<Record<string, { name: string; iconUrl?: string | null; projectId?: string; description?: string; source?: string }>>({});
 
   function markIconBroken(id: string) {
     if (!brokenIcons.has(id)) {
@@ -301,8 +315,11 @@
       if (url) {
         node.metadata = { ...(node.metadata ?? {}), icon_url: url };
         graph = { ...graph };
-        brokenIcons.delete(node.id);
-        brokenIcons = brokenIcons;
+        if (brokenIcons.has(node.id)) {
+          const next = new Set(brokenIcons);
+          next.delete(node.id);
+          brokenIcons = next;
+        }
       }
     } catch {
       // keep letter-avatar fallback
@@ -377,7 +394,11 @@
   }
 
   function edgeDanger(edge: GraphEdge) {
-    if (edge.kind === "Conflicts" || edge.kind === "BreaksWith") return true;
+    if (edge.kind === "Conflicts" || edge.kind === "BreaksWith") {
+      const from = nodeById(edge.from);
+      const to = nodeById(edge.to);
+      return !!from && !!to && from.kind === "Mod" && to.kind === "Mod";
+    }
     return edge.kind === "Requires" && !nodeById(edge.to);
   }
 
@@ -487,6 +508,13 @@
       const applied: string[] = await invoke("apply_resolve_action", { path: $projectPath, actionIndex: index });
       message = applied.length ? `Applied action: ${applied.join(", ")}` : "No deterministic action was applied.";
       await load(true);
+      if (applied.length) {
+        pushWorkTrail(`Applied resolve action · ${applied.join(", ")}`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -503,6 +531,13 @@
       const applied: string[] = await invoke("apply_resolve_change_plan", { path: $projectPath });
       message = applied.length ? `Applied plan: ${applied.join(", ")}` : "No deterministic actions were applied.";
       await load(true);
+      if (applied.length) {
+        pushWorkTrail(`Applied resolve plan (${applied.length})`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -523,7 +558,7 @@
   }
 
   async function installMissingDependencies() {
-    if (!$projectPath || missingEdges.length === 0) return;
+    if (!$projectPath || !hasMissingSpotlight) return;
     resolving = true;
     error = null;
     message = null;
@@ -531,6 +566,13 @@
       const installed: string[] = await invoke("resolve_missing_dependencies", { path: $projectPath });
       message = installed.length ? `Installed dependencies: ${installed.join(", ")}` : "No installable missing dependencies were found.";
       await load(true);
+      if (installed.length) {
+        pushWorkTrail(`Installed ${installed.length} dependencies`, [
+          { id: "test", label: "Test launch", kind: "play" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+        requestIdeIssuesRefresh();
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -650,7 +692,46 @@
   /// Installed mods that other mods require/optionally depend on.
   /// These are "downloaded dependencies" and get the third (amber) tone.
   /// Mods with no incoming dep edges are "main" and keep their side color.
-  $: depNodeIds = new Set(
+
+  // Transitive reduction over the Requires graph: if A requires B and B
+  // requires C, drop the direct A->C link so the centre isn't overloaded with
+  // redundant edges (modrinth-extras / hub-and-spoke readability). Non-Requires
+  // edges (conflicts, optional, loader links) are left untouched.
+  function reduceTransitiveRequires(allEdges: GraphEdge[]): GraphEdge[] {
+    const req = allEdges.filter((e) => e.kind === "Requires");
+    const adj = new Map<string, string[]>();
+    for (const e of req) {
+      if (!adj.has(e.from)) adj.set(e.from, []);
+      adj.get(e.from)!.push(e.to);
+    }
+    const reachable = (start: string, excludeDirect: string): boolean => {
+      const seen = new Set<string>([start]);
+      const stack = [...(adj.get(start) ?? [])];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        if (cur === excludeDirect) return true;
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        for (const next of adj.get(cur) ?? []) {
+          if (next !== excludeDirect) stack.push(next);
+        }
+      }
+      return false;
+    };
+    const keep = req.filter((e) => !reachable(e.from, e.to));
+    const others = allEdges.filter((e) => e.kind !== "Requires");
+    return [...keep, ...others];
+  }
+
+  const nodes = $derived(graph?.nodes ?? []);
+  const edges = $derived(graph?.edges ?? []);
+  const displayEdges = $derived(reduceTransitiveRequires(
+    edges.filter((e) =>
+      ["Requires", "Optional", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
+    )
+  ));
+
+  const depNodeIds = $derived(new Set(
     nodes
       .filter((node) => node.kind === "Mod")
       .filter((node) => {
@@ -660,18 +741,16 @@
         return incoming.length > 0;
       })
       .map((node) => node.id)
-  );
+  ));
 
-  $: nodes = graph?.nodes ?? [];
-  $: edges = graph?.edges ?? [];
-  $: selected = selectedId ? nodeById(selectedId) : null;
-  $: selectedEdges = selectedId
+  const selected = $derived(selectedId ? nodeById(selectedId) : null);
+  const selectedEdges = $derived(selectedId
     ? displayEdges.filter((edge) => edge.from === selectedId || edge.to === selectedId)
-    : [];
-  $: missingEdges = displayEdges.filter(
+    : []);
+  const missingEdges = $derived(displayEdges.filter(
     (edge) => edge.kind === "Requires" && (!nodeById(edge.to) || nodeById(edge.to)?.kind === "Missing")
-  );
-  $: missingDepsByMod = (() => {
+  ));
+  const missingDepsByMod = $derived((() => {
     const map = new Map<string, GraphEdge[]>();
     for (const edge of missingEdges) {
       const list = map.get(edge.from) ?? [];
@@ -679,8 +758,75 @@
       map.set(edge.from, list);
     }
     return map;
-  })();
-  $: selectedMissingDeps = selectedId ? (missingDepsByMod.get(selectedId) ?? []) : [];
+  })());
+  const selectedMissingDeps = $derived(selectedId ? (missingDepsByMod.get(selectedId) ?? []) : []);
+
+  function catalogResultFromNode(node: GraphNode) {
+    const meta = node.metadata ?? {};
+    const ghost = ghostMeta[node.id];
+    const slug = (meta.slug || node.id.replace(/^mod:/, "").replace(/^__ghost__/, "")).trim();
+    const projectId = String(meta.project_id || ghost?.projectId || "").trim();
+    const id = (projectId || slug).trim();
+    if (!id && !slug) return null;
+    const source = (meta.source || ghost?.source || "modrinth").toLowerCase();
+    // Local jars still open via Modrinth/CF when we know a project id or slug;
+    // never send provider "local" to the catalog API.
+    const provider =
+      source === "curseforge"
+        ? "curseforge"
+        : source === "modrinth" || source === "local" || source === "direct"
+          ? "modrinth"
+          : "modrinth";
+    return {
+      id: id || slug,
+      slug: slug || id,
+      name: node.label,
+      description: meta.description || ghost?.description || "",
+      projectType: "mod",
+      iconUrl: meta.icon_url || ghost?.iconUrl || null,
+      author: meta.author || null,
+      downloads: null,
+      follows: null,
+      categories: nodeCategories(node),
+      provider,
+    };
+  }
+
+  function openSelectedInLauncher() {
+    if (!selected) return;
+    const result = catalogResultFromNode(selected);
+    if (!result) {
+      message = "No catalog page for this node.";
+      return;
+    }
+    catalogViewResult = result;
+  }
+
+  async function openSelectedExternal() {
+    if (!catalogViewResult) return;
+    const slugOrId = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!slugOrId) return;
+    const url =
+      catalogViewResult.provider === "curseforge"
+        ? /^\d+$/.test(slugOrId)
+          ? `https://www.curseforge.com/projects/${slugOrId}`
+          : `https://www.curseforge.com/minecraft/mc-mods/${slugOrId}`
+        : `https://modrinth.com/mod/${slugOrId}`;
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } catch (e) {
+      message = `Could not open link: ${e}`;
+    }
+  }
+
+  async function installSelectedFromCatalog() {
+    if (!catalogViewResult || !$projectPath) return;
+    const id = (catalogViewResult.slug || catalogViewResult.id || "").trim();
+    if (!id) return;
+    catalogViewResult = null;
+    await previewModrinthDep(id);
+  }
 
   async function installSelectedMissingDeps() {
     for (const edge of selectedMissingDeps) {
@@ -688,14 +834,23 @@
     }
   }
 
-  $: conflictEdges = displayEdges.filter(
-    (edge) => ["Conflicts", "BreaksWith"].includes(edge.kind)
-      && nodeById(edge.from)?.kind !== "Missing"
-      && nodeById(edge.to)?.kind !== "Missing"
-  );
+  const conflictEdges = $derived(displayEdges.filter((edge) => {
+    if (!["Conflicts", "BreaksWith"].includes(edge.kind)) return false;
+    const from = nodeById(edge.from);
+    const to = nodeById(edge.to);
+    // Both ends must be installed mods. Declaring "incompatible with X" when X
+    // isn't in the pack is metadata, not a real conflict (undefined !== "Missing"
+    // used to let those through and recommend removing the installed mod).
+    return (
+      !!from &&
+      !!to &&
+      from.kind === "Mod" &&
+      to.kind === "Mod"
+    );
+  }));
 
   /** Deduped conflict pairs with a recommended removal target. */
-  $: conflictInsights = (() => {
+  const conflictInsights = $derived((() => {
     type Insight = {
       key: string;
       edge: GraphEdge;
@@ -765,16 +920,205 @@
       if (x.known !== y.known) return x.known ? -1 : 1;
       return x.leftLabel.localeCompare(y.leftLabel);
     });
-  })();
+  })());
 
-  $: byKind = nodes.reduce<Record<string, number>>((acc, node) => {
+  const byKind = $derived(nodes.reduce<Record<string, number>>((acc, node) => {
     acc[node.kind] = (acc[node.kind] ?? 0) + 1;
     return acc;
-  }, {});
-  $: modNodes = nodes.filter((node) => node.kind === "Mod");
+  }, {}));
+
+  /// Human-friendly mod categories so the graph reads as labelled clusters
+  type ModGroup = {
+    key: string;
+    label: string;
+    color: string;
+    matches: (id: string, label: string) => boolean;
+  };
+
+  /// Clusters mirror Modrinth's official mod category taxonomy (1:1).
+  /// Keyword `matches` is only a fallback when provider categories are missing.
+  const MOD_GROUPS: ModGroup[] = [
+    {
+      key: "local",
+      label: "Local",
+      color: "rgba(148,163,184,0.55)",
+      matches: () => false,
+    },
+    {
+      key: "adventure",
+      label: "Adventure",
+      color: "rgba(239,68,68,0.5)",
+      matches: (id, label) =>
+        /(adventure|dungeon|exploration|quest|rpg.?quest|twilight|aether|cataclysm|yungs)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "cursed",
+      label: "Cursed",
+      color: "rgba(127,29,29,0.55)",
+      matches: (id, label) =>
+        /(cursed|horror|scary|creepy|nightmare|villain|evil|gore|haunt)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "decor",
+      label: "Decoration",
+      color: "rgba(45,212,191,0.5)",
+      matches: (id, label) =>
+        /(bookshelf|supplementaries|decor|furniture|macaw|macaws|chisel|construction|lantern|lighting|painting|statue|plant|flower|abundance|cobble|quark)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "economy",
+      label: "Economy",
+      color: "rgba(234,179,8,0.5)",
+      matches: (id, label) =>
+        /(economy|shop|trade|market|currency|coin|bank|claim|land.?claim)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "equipment",
+      label: "Equipment",
+      color: "rgba(248,113,113,0.5)",
+      matches: (id, label) =>
+        /(equipment|weapon|armor|tool|sword|bow|shield|combat|tactical)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "farming",
+      label: "Food",
+      color: "rgba(132,204,22,0.5)",
+      matches: (id, label) =>
+        /(farmers|croptopia|delight|food|farm|brewin|beer|cuisine|pam|crop|nutrition|spice|bee|honey)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "game_mechanics",
+      label: "Game Mechanics",
+      color: "rgba(251,146,60,0.5)",
+      matches: (id, label) =>
+        /(game.?mechanic|origin|origins|skill|level.?up|progression|difficulty|hardcore|serene|seasons?)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "library",
+      label: "Library",
+      color: "rgba(148,163,184,0.55)",
+      matches: (id, label) =>
+        /(api|lib|library|core|architectury|cloth|yacl|trinkets|cardinal|collective|midnightlib|resourceful|balm|configured|framework|modmenu|curios|packetfixer|fabric-language|mixin)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "magic",
+      label: "Magic",
+      color: "rgba(217,70,239,0.5)",
+      matches: (id, label) =>
+        /(magic|mana|arcanus|hexerei|ironspell|spell|bloodmagic|astral|occultism|forbidden|ars|naturesaura|reliquary|artifact|runes|mage|wizard|ritual)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "management",
+      label: "Management",
+      color: "rgba(96,165,250,0.5)",
+      matches: (id, label) =>
+        /(jei|rei|emi|justenough|roughlyenough|jade|wthit|theoneprobe|waila|appleskin|tooltip)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "minigame",
+      label: "Minigame",
+      color: "rgba(244,114,182,0.5)",
+      matches: (id, label) =>
+        /(minigame|arcade|bingo|parkour|party.?game)/i.test(id + " " + label),
+    },
+    {
+      key: "mobs",
+      label: "Mobs",
+      color: "rgba(220,38,38,0.55)",
+      matches: (id, label) =>
+        /(mob|creature|enemy|boss|undead|mutant|goblin|dragon|bestiary|alex.?mobs|guard|iceandfire|entity)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "rendering",
+      label: "Optimization",
+      color: "rgba(139,92,246,0.5)",
+      matches: (id, label) =>
+        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|etf|entity.?texture|dashloader|smoothboot|memoryleakfix|modernfix|krypton|shader|exordium|optifine|performance|fps|distanthorizons)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "social",
+      label: "Social",
+      color: "rgba(56,189,248,0.5)",
+      matches: (id, label) =>
+        /(social|chat|emoji|discord|voice|proximity|skin|cosmetic|presence)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "storage",
+      label: "Storage",
+      color: "rgba(14,165,233,0.5)",
+      matches: (id, label) =>
+        /(inventory|sort|chest|shulker|sophisticated|ironchest|backpack|storage|expandedstorage|itemzo)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "create",
+      label: "Technology",
+      color: "rgba(245,158,11,0.55)",
+      matches: (id, label) =>
+        /(create|flywheel|ponder|steam|mechanical|automated|factory|pipez|integrateddynamics|applied|refinedstorage|thermal|mekanism|techreborn|industrial|immersive|powah|energy|ae2)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "transport",
+      label: "Transportation",
+      color: "rgba(94,234,212,0.5)",
+      matches: (id, label) =>
+        /(transport|train|rail|boat|vehicle|flight|elevator|teleport|waystone|waystones)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "qol",
+      label: "Utility",
+      color: "rgba(250,204,21,0.5)",
+      matches: (id, label) =>
+        /(qol|utility|xaero|journeymap|minimap|map|sound|music|rightclick|mouse|keybind|zoom|recipe|patchouli|comfort|physic|easy|fast)/i.test(
+          id + " " + label
+        ),
+    },
+    {
+      key: "worldgen",
+      label: "World Generation",
+      color: "rgba(34,197,94,0.5)",
+      matches: (id, label) =>
+        /(biome|terrablender|terralith|tectonic|biomesoplenty|byg|ohthebiomes|reterraforged|cave|structure|explorify|wwoo|noise|worldgen|geophilic|incendium|amplified|promenade|regions|nullscape|wilder)/i.test(
+          id + " " + label
+        ),
+    },
+  ];
+
+  const modNodes = $derived(nodes.filter((node) => node.kind === "Mod"));
   /// Side-panel grouping: mods bucketed by the same human categories used for
   /// the graph clusters, so the list reads top-to-bottom like the canvas.
-  $: groupedMods = (() => {
+  const groupedMods = $derived((() => {
     const buckets = new Map<string, { label: string; color: string; nodes: GraphNode[] }>();
     for (const node of modNodes) {
       const g = categorizeMod(node);
@@ -793,9 +1137,9 @@
         ...bucket,
         nodes: bucket.nodes.slice().sort((x, y) => x.label.localeCompare(y.label)),
       }));
-  })();
-  $: platformNodes = nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing");
-  $: profileNodes = nodes.filter((node) => node.kind === "Profile");
+  })());
+  const platformNodes = $derived(nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing"));
+  const profileNodes = $derived(nodes.filter((node) => node.kind === "Profile"));
 
   // Synthesize ghost nodes for any edge endpoint that has no real node. This
   // is the single most important fix: the Rust builder intentionally emits
@@ -805,7 +1149,7 @@
   // nodes keep every link resolvable while still being visually distinct
   // (and the missing-dependency panel operates on the real graph).
   const nodeIdSet = (id: string) => nodes.some((n) => n.id === id);
-  $: ghostNodes = (() => {
+  const ghostNodes = $derived((() => {
     const out: GraphNode[] = nodes
       .filter((node) => node.kind === "Missing")
       .map((node) => ({
@@ -844,51 +1188,22 @@
       }
     }
     return out;
-  })();
-  $: displayNodes = [
+  })());
+  const missingSpotlightIds = $derived((() => {
+    const ids = new Set<string>();
+    for (const edge of missingEdges) {
+      ids.add(edge.from);
+      ids.add(edge.to);
+    }
+    for (const n of ghostNodes) ids.add(n.id);
+    return ids;
+  })());
+  const hasMissingSpotlight = $derived(missingSpotlightIds.size > 0);
+  const displayNodes = $derived([
     ...nodes.filter((n) => n.kind === "Mod"),
     ...platformNodes,
     ...ghostNodes,
-  ];
-  // Transitive reduction over the Requires graph: if A requires B and B
-  // requires C, drop the direct A->C link so the centre isn't overloaded with
-  // redundant edges (modrinth-extras / hub-and-spoke readability). Non-Requires
-  // edges (conflicts, optional, loader links) are left untouched.
-  function reduceTransitiveRequires(allEdges: GraphEdge[]): GraphEdge[] {
-    const req = allEdges.filter((e) => e.kind === "Requires");
-    const adj = new Map<string, string[]>();
-    for (const e of req) {
-      if (!adj.has(e.from)) adj.set(e.from, []);
-      adj.get(e.from)!.push(e.to);
-    }
-    const reachable = (start: string, excludeDirect: string): boolean => {
-      const seen = new Set<string>([start]);
-      const stack = [...(adj.get(start) ?? [])];
-      while (stack.length) {
-        const cur = stack.pop()!;
-        if (cur === excludeDirect) return true;
-        if (seen.has(cur)) continue;
-        seen.add(cur);
-        for (const next of adj.get(cur) ?? []) {
-          if (next !== excludeDirect) stack.push(next);
-        }
-      }
-      return false;
-    };
-    const keep = req.filter((e) => !reachable(e.from, e.to));
-    const others = allEdges.filter((e) => e.kind !== "Requires");
-    return [...keep, ...others];
-  }
-
-  // Mod-to-mod relations plus loader/runtime links (fabric-api, lithium,
-  // ferrite-core etc. only depend on the loader, so without these edges they
-  // look orphaned). Optional edges are now shown as semantic (yellow/green)
-  // integration links; transitive Requires edges are collapsed away.
-  $: displayEdges = reduceTransitiveRequires(
-    edges.filter((e) =>
-      ["Requires", "Optional", "Conflicts", "BreaksWith", "Replaces", "RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(e.kind)
-    )
-  );
+  ]);
 
   // --- Canvas edge curation ---
   // The full edge list drives the side panel, missing-dep detection and the
@@ -900,10 +1215,10 @@
   // reads as a connected web instead of just the red conflict edges. Hub
   // fan-ins (e.g. everything → fabric-api) are still drawn but faded so they
   // don't dominate. The "All edges" toggle also reveals the runtime links.
-  let showAllEdges = false;
+  let showAllEdges = $state(false);
   const RUNTIME_EDGE_KINDS = ["RequiresLoader", "RequiresMinecraft", "RequiresJava"];
   const HUB_FAN_IN_THRESHOLD = 8;
-  $: hubTargetIds = new Set(
+  const hubTargetIds = $derived(new Set(
     [
       ...displayEdges
         .filter((e) => e.kind === "Requires")
@@ -912,8 +1227,8 @@
     ]
       .filter(([, count]) => count >= HUB_FAN_IN_THRESHOLD)
       .map(([id]) => id),
-  );
-  $: renderedEdges = showAllEdges
+  ));
+  const renderedEdges = $derived(showAllEdges
     ? displayEdges
     : displayEdges.filter((e) => {
         // Pure runtime links (loader/minecraft/java) — only for the selected node.
@@ -930,7 +1245,7 @@
           return !!selectedId && (e.from === selectedId || e.to === selectedId);
         }
         return true;
-      });
+      }));
 
   async function hydrateGhostNodes() {
     if (!$projectPath || !graph) return;
@@ -984,11 +1299,17 @@
     );
     if (Object.keys(updates).length > 0) {
       ghostMeta = { ...ghostMeta, ...updates };
+      if (positioned.length > 0) {
+        positioned = positioned.map((node) => ({
+          ...node,
+          label: displayLabel(node),
+        }));
+      }
     }
   }
 
   /// Group mods by which profile includes them (via IncludedInProfile edges)
-  $: modsByProfile = (() => {
+  const modsByProfile = $derived((() => {
     const map = new Map<string, GraphNode[]>();
     const orphaned: GraphNode[] = [];
     for (const mod of modNodes) {
@@ -1006,7 +1327,7 @@
       }
     }
     return { map, orphaned };
-  })();
+  })());
   type LayoutNode = PositionedNode & {
     depth: number;
     isHub: boolean;
@@ -1023,20 +1344,21 @@
   };
 
   type GroupMeta = { key: string; label: string; color: string; x: number; y: number; r: number };
-  let groupMeta: GroupMeta[] = [];
+  let groupMeta = $state<GroupMeta[]>([]);
 
   /// Cluster currently hovered in the legend / on a halo; used to spotlight that
   /// group's nodes and edges and dim the rest.
-  let hoveredGroup: string | null = null;
+  let hoveredGroup = $state<string | null>(null);
 
   /** Spotlight conflicts or missing deps (toolbar toggle). */
-  let highlightMode: null | "conflicts" | "missing" = null;
+  let highlightMode = $state<null | "conflicts" | "missing">(null);
 
   const LEGEND_STORAGE_KEY = "tuffbox.graph.legend-expanded";
-  let legendExpanded =
+  let legendExpanded = $state(
     typeof localStorage === "undefined"
       ? true
-      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false";
+      : localStorage.getItem(LEGEND_STORAGE_KEY) !== "false",
+  );
 
   function toggleLegend() {
     legendExpanded = !legendExpanded;
@@ -1071,178 +1393,110 @@
       return conflictEdges.some((e) => e.from === nodeId || e.to === nodeId);
     }
     if (kind === "Missing") return true;
-    return missingEdges.some((e) => e.from === nodeId || e.to === nodeId);
+    return missingSpotlightIds.has(nodeId);
   }
 
-  function edgeInHighlight(from: string, to: string, kind: string, danger: boolean): boolean {
+  function edgeInHighlight(from: string, to: string, _kind: string, _danger: boolean): boolean {
     if (!highlightMode) return true;
     if (highlightMode === "conflicts") {
-      return danger || ["Conflicts", "BreaksWith"].includes(kind);
+      return conflictEdges.some(
+        (e) => (e.from === from && e.to === to) || (e.from === to && e.to === from),
+      );
     }
-    return missingEdges.some((e) => e.from === from && e.to === to);
+    return (
+      missingEdges.some((e) => e.from === from && e.to === to) ||
+      (missingSpotlightIds.has(from) && missingSpotlightIds.has(to))
+    );
   }
 
-  let canvasWidth = 1600;
-  let canvasHeight = 900;
-  let positioned: PositionedNode[] = [];
+  let canvasWidth = $state(1600);
+  let canvasHeight = $state(900);
+  // Must be $state so {#each positioned} mounts nodes after simulation starts.
+  // Do NOT $effect(read positioned → write positioned) — that loops forever.
+  let positioned = $state<PositionedNode[]>([]);
   let simulation: any = null;
   let simulationLayoutKey = "";
   let simNodes: LayoutNode[] = [];
   const nodeEls = new Map<string, SVGGElement>();
   const edgeEls = new Map<string, SVGPathElement>();
+  // Camera fit flag — plain let. Must NOT be $state: startSimulation reads+writes
+  // it, and that used to live inside $effect → effect_update_depth_exceeded (tab hang).
   let resetViewOnNextLayout = true;
 
-  /// Human-friendly mod categories so the graph reads as labelled clusters
-  /// ("Rendering", "Create / Automation", …) instead of one undifferentiated
-  /// tangle where every mod is shoved into a corner by depth-from-hub rings.
-  type ModGroup = {
-    key: string;
-    label: string;
-    color: string;
-    matches: (id: string, label: string) => boolean;
-  };
-
-  // Functional clusters (Hub & Spoke). Every mod is routed into exactly one
-  // cluster by keyword match; unmatched mods fall back to Quality of Life so no
-  // node is orphaned. Adding a group here automatically adds a ring anchor, a
-  // colour-coded halo and a side-panel section.
-  const MOD_GROUPS: ModGroup[] = [
-    {
-      key: "library",
-      label: "Libraries & Core",
-      color: "rgba(148,163,184,0.55)",
-      matches: (id, label) =>
-        /(api|lib|library|core|fabric|forge|neoforge|quilt|architectury|cloth|yacl|trinkets|cardinal|player|collective|midnightlib|resourceful|reacharound|commander|balm|container|configured|framework|platform|modmenu|curios|slight|packetfixer|fabric-language|java|mixin|config)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "rendering",
-      label: "Rendering & Performance",
-      color: "rgba(139,92,246,0.5)",
-      matches: (id, label) =>
-        /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|sodium-extra|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|cull-less|continuity|entitytexture|entity-texture|etf|dashloader|smoothboot|memoryleakfix|modernfix|krypton|letme|enhancedblock|betterfps|fastquit|farsight|distants|lod|distanthorizons|shader|exordium|frames|particle|render|optifine|performance|fps|sky|skies)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "worldgen",
-      label: "World Generation",
-      color: "rgba(34,197,94,0.5)",
-      matches: (id, label) =>
-        /(biome|terrablender|terralith|tectonic|biomesoplenty|byg|ohthebiomes|dungeons|reterraforged|yungs|cave|structure|waystones|explorify|wwoo|noise|worldgen|geophilic|largemeals|incendium|amplified|promenade|regions|nullscape|wilder|biomes)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "storage",
-      label: "Storage & Inventory",
-      color: "rgba(56,189,248,0.5)",
-      matches: (id, label) =>
-        /(jei|rei|emi|inventory|sort|chest|shulker|sophisticated|ironchest|trinket|backpack|curios|collective|roughly|jade|wthit|theoneprobe|glassential|itemzo|justenough|waila|storage|ironbar|expandedstorage)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "qol",
-      label: "Quality of Life",
-      color: "rgba(250,204,21,0.5)",
-      matches: (id, label) =>
-        /(qol|utility|tooltip|xaero|journeymap|minimap|map|sound|music|harvest|rightclick|mouse|keybind|zoom|chat|emoji|cosmetic|skin|recipe|patchouli|comfort|physic|presence|villager|easy|fast|extra|more|added)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "create",
-      label: "Create & Automation",
-      color: "rgba(245,158,11,0.55)",
-      matches: (id, label) =>
-        /(create|flywheel|ponder|train|steam|rc|trackwork|createplus|decorative|casing|sequenced|mechanical|automated|factory|pipez|integrateddynamics|applied|refinedstorage|thermal|mekanism|techreborn|industrial|immersive|botania|powah|energy|ae2)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "magic",
-      label: "Magic & RPG",
-      color: "rgba(217,70,239,0.5)",
-      matches: (id, label) =>
-        /(magic|mana|arcanus|hexerei|ironspell|spell|bloodmagic|astral|occultism|forbidden|ars|naturesaura|reliquary|artifact|origins|runes|mage|wizard|ritual)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "adventure",
-      label: "Adventure & Mobs",
-      color: "rgba(239,68,68,0.5)",
-      matches: (id, label) =>
-        /(mob|creature|enemy|entity|boss|dungeon|adventure|expansion|farm|alex|guard|equipment|weapon|armor|combat|tactical|cataclysm|goblin|undead|mutant|iceandfire|twilight|aether|shire|dragon|bestiary|poke)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "farming",
-      label: "Farming & Food",
-      color: "rgba(132,204,22,0.5)",
-      matches: (id, label) =>
-        /(farmers|croptopia|delight|food|farm|brewin|beer|harvest|cuisine|pam|vanilla|apple|crop|nutrition|spice|bee|honey)/i.test(
-          id + " " + label
-        ),
-    },
-    {
-      key: "decor",
-      label: "Building & Decor",
-      color: "rgba(45,212,191,0.5)",
-      matches: (id, label) =>
-        /(bookshelf|supplementaries|decor|furniture|macaw|macaws|totem|waystone|building|chisel|construction|architectury-furniture|gravestone|lantern|lighting|painting|statue|plant|flower|terraform|abundance|cobble|quark)/i.test(
-          id + " " + label
-        ),
-    },
-  ];
-
-  /// Modrinth's official category taxonomy → our cluster key. This is the
-  /// authoritative distribution: a mod tagged `optimization` on the site lands
-  /// in Rendering & Performance regardless of its name. Keyword matching is
-  /// only a fallback for mods with no cached categories (local jars, ghosts).
-  /// Ordered by specificity: technology/create before generic buckets.
+  /// Modrinth's official category taxonomy → our cluster key (1:1).
+  /// Keyword matching is only a fallback for mods with no cached categories.
   const MODRINTH_CATEGORY_TO_GROUP: Record<string, string> = {
-    // Rendering & Performance
-    optimization: "rendering",
-    // World Generation
-    worldgen: "worldgen",
-    // Storage & Inventory
-    storage: "storage",
-    management: "storage",
-    // Create & Automation / tech
-    technology: "create",
-    transportation: "create",
-    // Magic & RPG
-    magic: "magic",
-    // Adventure & Mobs
     adventure: "adventure",
-    mobs: "adventure",
-    equipment: "adventure",
-    minigame: "adventure",
-    // Farming & Food
-    food: "farming",
-    // Building & Decor
+    cursed: "cursed",
     decoration: "decor",
-    // Quality of Life (catch-all interface/social/economy/mechanics)
-    utility: "qol",
-    social: "qol",
-    economy: "qol",
-    "game-mechanics": "qol",
-    // Libraries & Core
+    economy: "economy",
+    equipment: "equipment",
+    food: "farming",
+    "game-mechanics": "game_mechanics",
     library: "library",
-    // Loose/aesthetic tags that shouldn't hijack a functional bucket fall
-    // through to keyword matching below (cursed, etc.).
+    magic: "magic",
+    management: "management",
+    minigame: "minigame",
+    mobs: "mobs",
+    optimization: "rendering",
+    social: "social",
+    storage: "storage",
+    technology: "create",
+    transportation: "transport",
+    utility: "qol",
+    worldgen: "worldgen",
   };
+
+  /// CurseForge display names → Modrinth slugs (after space/punct normalize).
+  const CATEGORY_ALIASES: Record<string, string> = {
+    "adventure-and-rpg": "adventure",
+    "api-and-library": "library",
+    "armor-tools-and-weapons": "equipment",
+    cosmetic: "social",
+    "map-and-information": "management",
+    performance: "optimization",
+    "utility-qol": "utility",
+    "world-gen": "worldgen",
+    "world-generation": "worldgen",
+    farming: "food",
+    redstone: "technology",
+    automation: "technology",
+    energy: "technology",
+    "energy-fluid-and-item-transport": "transportation",
+    "player-transport": "transportation",
+    biomes: "worldgen",
+    dimensions: "worldgen",
+    structures: "worldgen",
+    "ores-and-resources": "worldgen",
+    "bug-fixes": "utility",
+    "server-utility": "utility",
+    miscellaneous: "utility",
+    education: "utility",
+    genetics: "game-mechanics",
+    processing: "technology",
+    mcreator: "library",
+    "twitch-integration": "social",
+  };
+
+  /** CF returns "Utility & QoL" / "World Gen"; Modrinth uses "utility" / "worldgen". */
+  function normalizeCategorySlug(raw: string): string {
+    const slug = raw
+      .trim()
+      .toLowerCase()
+      .replace(/[&+,/]/g, " ")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    return CATEGORY_ALIASES[slug] ?? slug;
+  }
 
   function nodeCategories(node: { metadata?: Record<string, string> }): string[] {
     const raw = node.metadata?.categories;
     if (!raw) return [];
-    return raw
-      .split(",")
-      .map((c) => c.trim().toLowerCase())
+    // Prefer `|` (current graph serializer); also accept legacy comma-joined lists.
+    const parts = raw.includes("|") ? raw.split("|") : raw.split(",");
+    return parts
+      .map((c) => normalizeCategorySlug(c))
       .filter((c) => c && !LOADER_CATEGORY_NOISE.has(c));
   }
 
@@ -1251,10 +1505,28 @@
     "sponge", "bungeecord", "waterfall", "velocity",
   ]);
 
-  /// Specific Modrinth tags beat catch-alls (qol / library).
-  /// Decor before storage so furniture tagged both (Macaw's) lands in Building & Decor.
+  /// Content-specific tags beat catch-alls (utility / library).
   const GROUP_PRIORITY = [
-    "rendering", "worldgen", "decor", "storage", "create", "magic", "adventure", "farming", "library", "qol",
+    "local",
+    "cursed",
+    "rendering",
+    "worldgen",
+    "mobs",
+    "adventure",
+    "equipment",
+    "magic",
+    "game_mechanics",
+    "create",
+    "transport",
+    "farming",
+    "decor",
+    "storage",
+    "management",
+    "economy",
+    "social",
+    "minigame",
+    "library",
+    "qol",
   ];
 
   /// Assign every Mod/Missing node to one cluster. Strong name signals win over
@@ -1265,6 +1537,10 @@
     const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
     const text = `${slug} ${label}`;
     const cats = nodeCategories(node);
+
+    if ((node.metadata?.source ?? "").toLowerCase() === "local") {
+      return MOD_GROUPS.find((g) => g.key === "local")!;
+    }
 
     const decorGroup = MOD_GROUPS.find((g) => g.key === "decor")!;
     const renderingGroup = MOD_GROUPS.find((g) => g.key === "rendering")!;
@@ -1307,14 +1583,13 @@
   }
 
   // Bump when layout algorithm parameters change so cached graphs re-seed.
-  const LAYOUT_VERSION = "v4-modrinth-cats";
+  const LAYOUT_VERSION = "v6-local-cluster";
 
-  $: layoutKey = [
+  const layoutKey = $derived([
     LAYOUT_VERSION,
     ...displayNodes.map((n) => n.id).sort(),
     ...displayEdges.map((e) => `${e.from}:${e.to}:${e.kind}`).sort(),
-    groupMeta.map((g) => g.key).join(","),
-  ].join("|");
+  ].join("|"));
 
   // Edge kinds that link every mod to the core runtime. They carry no layout
   // information (every mod has both), but as d3 links they dominate the physics
@@ -1409,7 +1684,7 @@
     });
 
     // Expose cluster halos/labels for rendering. Halo radius follows the disc
-    // size so big categories (a 100+ mod "Quality of Life" pack) stay inside.
+    // size so big categories (a 100+ mod Utility pack) stay inside.
     groupMeta = clusters.map((cluster) => {
       const def = MOD_GROUPS.find((g) => g.key === cluster.key) ?? {
         key: cluster.key,
@@ -1580,24 +1855,27 @@
     }
   }
 
-  $: if (displayNodes.length && layoutKey !== simulationLayoutKey) {
-    simulationLayoutKey = layoutKey;
-    startSimulation();
-  }
+  $effect(() => {
+    const key = layoutKey;
+    const count = displayNodes.length;
+    if (!count || key === simulationLayoutKey) return;
+    simulationLayoutKey = key;
+    // Defer + untrack: startSimulation writes positioned / camera $state.
+    // Tracking those inside this effect re-enters forever under Svelte 5.
+    queueMicrotask(() => {
+      if (simulationLayoutKey !== key) return;
+      untrack(() => startSimulation());
+    });
+  });
 
-  // Refresh labels when Modrinth metadata arrives without restarting layout.
-  $: if (positioned.length && Object.keys(ghostMeta).length > 0) {
-    positioned = positioned.map((node) => ({
-      ...node,
-      label: displayLabel(node),
-    }));
-  }
-
-  $: positionById = new Map(positioned.map((node) => [node.id, node]));
+  // Refresh labels when Modrinth metadata arrives — update in place at the
+  // fetch site. Do NOT $effect(read positioned → write positioned): that
+  // loops forever under Svelte 5 runes (tab hang).
+  const positionById = $derived(new Map(positioned.map((node) => [node.id, node])));
 
   // Reactive edge paths: recomputed whenever `positioned` (and thus
   // `positionById`) changes, so arrows track nodes live during the sim.
-  $: edgePaths = renderedEdges.map((edge) => ({
+  const edgePaths = $derived(renderedEdges.map((edge) => ({
     key: `${edge.from}:${edge.to}:${edge.kind}`,
     edge,
     kind: edge.kind,
@@ -1608,7 +1886,7 @@
     // Fan-in into a heavily-shared library (fabric-api, cloth-config, …): still
     // drawn so the hub reads as a star, but faded so it doesn't drown the graph.
     hub: edge.kind === "Requires" && hubTargetIds.has(edge.to),
-  }));
+  })));
 
   function edgeKey(edge: GraphEdge): string {
     return `${edge.from}:${edge.to}:${edge.kind}`;
@@ -1641,22 +1919,22 @@
   // --- Obsidian-style pan & zoom viewport state ---
   // The canvas itself stays a fixed logical size; instead of resizing the
   // SVG we move/scale a "camera" viewBox over it, exactly like Obsidian's
-  // graph view: scroll to zoom (toward the cursor), drag empty space to
-  // pan, double-click / button to reset.
+  // graph view: wheel zooms (toward the cursor), drag empty space to pan,
+  // double-click / button to reset.
   let viewportEl: SVGSVGElement;
-  let viewX = 0;
-  let viewY = 0;
-  let viewScale = 1;
-  let isPanning = false;
-  let isNodeDragging = false;
+  let viewX = $state(0);
+  let viewY = $state(0);
+  let viewScale = $state(1);
+  let isPanning = $state(false);
+  let isNodeDragging = $state(false);
   let panStart = { x: 0, y: 0, viewX: 0, viewY: 0 };
   let panPointerId: number | null = null;
   let nodeDragPointerId: number | null = null;
   let endNodeDrag: (() => void) | null = null;
-  $: viewBoxHeight = canvasHeight / viewScale;
-  $: viewBoxWidth = canvasWidth / viewScale;
-  $: viewBoxString = `${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`;
-  $: denseGraph = renderedEdges.length > 70;
+  const viewBoxHeight = $derived(canvasHeight / viewScale);
+  const viewBoxWidth = $derived(canvasWidth / viewScale);
+  const viewBoxString = $derived(`${viewX} ${viewY} ${viewBoxWidth} ${viewBoxHeight}`);
+  const denseGraph = $derived(renderedEdges.length > 70);
 
   function clientToSvgPoint(clientX: number, clientY: number) {
     // Prefer screen CTM so letterboxed SVG (preserveAspectRatio meet) maps correctly.
@@ -1695,6 +1973,11 @@
   }
 
   function handleWheel(event: WheelEvent) {
+    // Plain wheel scrolls the tab (details / node list below the canvas).
+    // Ctrl/Meta+wheel (or fullscreen) zooms the graph — Obsidian-style.
+    if (!(event.ctrlKey || event.metaKey) && !graphFullscreen) {
+      return;
+    }
     event.preventDefault();
     const zoomFactor = event.deltaY > 0 ? 1.12 : 1 / 1.12;
     const nextScale = Math.min(8, Math.max(0.15, viewScale / zoomFactor));
@@ -1709,7 +1992,7 @@
     viewScale = nextScale;
   }
 
-  let panMoved = false;
+  let panMoved = $state(false);
 
   function endBackgroundPan(event?: PointerEvent) {
     if (!isPanning) return;
@@ -1823,7 +2106,8 @@
       if (graphFullscreen) {
         await document.exitFullscreen();
       } else {
-        await graphCanvasEl.requestFullscreen();
+        const el = graphCanvasEl;
+        if (el) await el.requestFullscreen();
       }
       resetView();
     } catch (e) {
@@ -1888,14 +2172,18 @@
     simulation?.stop();
   });
 
-  $: if (graphCanvasEl && typeof ResizeObserver !== "undefined" && !canvasResizeObserver) {
-    canvasResizeObserver = new ResizeObserver(() => {
-      // SVG fills the flex canvas via width/height 100%; observer keeps layout in sync on stage resize.
-    });
-    canvasResizeObserver.observe(graphCanvasEl);
-  }
+  $effect(() => {
+    if (graphCanvasEl && typeof ResizeObserver !== "undefined" && !canvasResizeObserver) {
+        canvasResizeObserver = new ResizeObserver(() => {
+          // SVG fills the flex canvas via width/height 100%; observer keeps layout in sync on stage resize.
+        });
+        canvasResizeObserver.observe(graphCanvasEl);
+      }
+  });
 
-  $: if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  $effect(() => {
+    if ($projectPath && lastLoadedPath !== $projectPath) load(true);
+  });
   function handleNodeMouseDown(event: PointerEvent, node: PositionedNode) {
     event.stopPropagation();
     if (event.button !== 0) return;
@@ -1989,11 +2277,11 @@
       <span>Dependency graph</span>
     </div>
     <div class="toolbar-actions">
-      <button class="secondary" on:click={installMissingDependencies} disabled={!$projectPath || resolving || missingEdges.length === 0}>
+      <button class="secondary" onclick={installMissingDependencies} disabled={!$projectPath || resolving || !hasMissingSpotlight}>
         <Workflow size={16} />
         {resolving ? "Resolving..." : "Auto-install dependencies"}
       </button>
-      <button class="ghost" on:click={() => refreshGraph(true)} title="Refresh dependency metadata" disabled={!$projectPath || loading || graphRefreshing}>
+      <button class="ghost" onclick={() => refreshGraph(true)} title="Refresh dependency metadata" disabled={!$projectPath || loading || graphRefreshing}>
         <RefreshCw size={16} class={graphRefreshing ? "spin" : ""} />
       </button>
     </div>
@@ -2016,7 +2304,14 @@
   {/if}
 
   {#if loading && !graph}
-    <div class="loading">Loading graph...</div>
+    <div class="graph-body">
+      <section class="graph-canvas" aria-busy="true" aria-label="Dependency graph canvas">
+        <div class="graph-loading-overlay" role="status">
+          <Loader2 size={20} class="spin" />
+          <span>Loading graph…</span>
+        </div>
+      </section>
+    </div>
   {:else if error}
     <EmptyState icon={AlertTriangle} title="Failed to load graph" description={error} />
   {:else if graph}
@@ -2029,8 +2324,23 @@
         <span class="stat-value">{displayEdges.length}</span>
         <span class="stat-label">Dependencies</span>
       </div>
-      <div class="stat-card" class:danger={missingEdges.length > 0}>
-        <span class="stat-value">{missingEdges.length}</span>
+      <div
+        class="stat-card"
+        class:danger={hasMissingSpotlight}
+        class:clickable={hasMissingSpotlight}
+        role={hasMissingSpotlight ? "button" : undefined}
+        tabindex={hasMissingSpotlight ? 0 : undefined}
+        onclick={() => hasMissingSpotlight && toggleHighlight("missing")}
+        onkeydown={(e) => {
+          if (!hasMissingSpotlight) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleHighlight("missing");
+          }
+        }}
+        title={hasMissingSpotlight ? "Spotlight missing dependencies" : undefined}
+      >
+        <span class="stat-value">{Math.max(missingEdges.length, ghostNodes.length)}</span>
         <span class="stat-label">Missing</span>
       </div>
       <div class="stat-card" class:danger={conflictInsights.length > 0}>
@@ -2038,47 +2348,6 @@
         <span class="stat-label">Conflicts</span>
       </div>
     </div>
-
-    {#if changePlanLoading && !changePlan}
-      <section class="change-plan-panel loading">
-        <div class="change-plan-head">
-          <span class="eyebrow">Change plan</span>
-          <strong class="change-plan-summary muted">Resolving dependencies…</strong>
-        </div>
-      </section>
-    {:else if changePlan}
-      <section class="change-plan-panel" class:expanded={changePlanExpanded}>
-        <button
-          type="button"
-          class="change-plan-toggle"
-          on:click={() => (changePlanExpanded = !changePlanExpanded)}
-          aria-expanded={changePlanExpanded}
-        >
-          <div class="change-plan-head">
-            <span class="eyebrow">Change plan</span>
-            <strong class="change-plan-summary">{changePlan.summary}</strong>
-            <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
-              {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
-            </span>
-          </div>
-          <ChevronDown size={16} class={changePlanExpanded ? "rot" : ""} />
-        </button>
-        {#if changePlanExpanded}
-          <div class="change-plan-actions">
-            {#if changePlan.actions?.length}
-              {#each changePlan.actions as action, index (index)}
-                <button class="chip" on:click={() => applyAction(index)} disabled={resolving} title={formatChangeAction(action)}>
-                  {formatChangeAction(action)}
-                </button>
-              {/each}
-            {/if}
-            <button class="primary mini" on:click={applyChangePlan} disabled={resolving}>
-              {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
-            </button>
-          </div>
-        {/if}
-      </section>
-    {/if}
 
     <div class="graph-body">
     <section
@@ -2090,13 +2359,13 @@
       aria-label="Dependency graph canvas"
     >
       <div class="canvas-controls">
-        <button class="ghost mini" on:click={() => zoomBy(1.25)} title="Zoom in">+</button>
-        <button class="ghost mini" on:click={() => zoomBy(1 / 1.25)} title="Zoom out">−</button>
-        <button class="ghost mini" on:click={resetView} title="Fit graph to view">⤢</button>
+        <button class="ghost mini" onclick={() => zoomBy(1.25)} title="Zoom in (Ctrl+scroll)">+</button>
+        <button class="ghost mini" onclick={() => zoomBy(1 / 1.25)} title="Zoom out (Ctrl+scroll)">−</button>
+        <button class="ghost mini" onclick={resetView} title="Fit graph to view">⤢</button>
         <button
           class="ghost mini edge-toggle"
           class:active={showAllEdges}
-          on:click={() => (showAllEdges = !showAllEdges)}
+          onclick={() => (showAllEdges = !showAllEdges)}
           title={showAllEdges
             ? "Hide optional / hub / runtime edges"
             : "Show optional, hub fan-in and runtime edges"}
@@ -2107,7 +2376,7 @@
           class="ghost mini edge-toggle hl-btn conflicts"
           class:active={highlightMode === "conflicts"}
           disabled={conflictEdges.length === 0}
-          on:click={() => toggleHighlight("conflicts")}
+          onclick={() => toggleHighlight("conflicts")}
           title="Spotlight conflict edges (high contrast)"
         >
           <ShieldAlert size={14} /> Conflicts
@@ -2115,19 +2384,19 @@
         <button
           class="ghost mini edge-toggle hl-btn missing"
           class:active={highlightMode === "missing"}
-          disabled={missingEdges.length === 0}
-          on:click={() => toggleHighlight("missing")}
+          disabled={!hasMissingSpotlight}
+          onclick={() => toggleHighlight("missing")}
           title="Spotlight missing dependencies (high contrast)"
         >
           <AlertTriangle size={14} /> Missing
         </button>
-        <button class="ghost mini" on:click={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
+        <button class="ghost mini" onclick={toggleFullscreen} title={graphFullscreen ? "Exit fullscreen" : "Open fullscreen"}>
           {#if graphFullscreen}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
         </button>
         <span class="zoom-readout">{Math.round(viewScale * 100)}%</span>
       </div>
       <div class="graph-legend" class:collapsed={!legendExpanded}>
-        <button type="button" class="legend-toggle" on:click={toggleLegend} aria-expanded={legendExpanded}>
+        <button type="button" class="legend-toggle" onclick={toggleLegend} aria-expanded={legendExpanded}>
           <span>Legend</span>
           <ChevronDown size={14} class={legendExpanded ? "rot" : ""} />
         </button>
@@ -2155,9 +2424,9 @@
                   class="legend-chip"
                   class:on={hoveredGroup === group.key}
                   style={`--chip:${group.color}`}
-                  on:mouseenter={() => (hoveredGroup = group.key)}
-                  on:mouseleave={() => (hoveredGroup = null)}
-                  on:click|stopPropagation={() => (hoveredGroup = hoveredGroup === group.key ? null : group.key)}
+                  onmouseenter={() => (hoveredGroup = group.key)}
+                  onmouseleave={() => (hoveredGroup = null)}
+                  onclick={(e) => { e.stopPropagation(); (hoveredGroup = hoveredGroup === group.key ? null : group.key); } }
                 >{group.label}</button>
               {/each}
             </div>
@@ -2172,15 +2441,15 @@
         aria-label="Dependency graph"
         class:panning={isPanning}
         class:dragging={isNodeDragging}
-        on:wheel={handleWheel}
-        on:pointerdown={handleBackgroundPointerDown}
-        on:click={() => {
+        onwheel={handleWheel}
+        onpointerdown={handleBackgroundPointerDown}
+        onclick={() => {
           // Click on empty canvas (not a node — those stopPropagation) clears
           // the current selection, but only if the user wasn't panning.
           if (!panMoved && !isNodeDragging) selectedId = null;
         }}
-        on:dblclick={resetView}
-        on:keydown={() => {}}
+        ondblclick={resetView}
+        onkeydown={() => {}}
       >
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse">
@@ -2224,8 +2493,8 @@
             style={`color:${group.color}`}
             role="group"
             aria-label={group.label}
-            on:mouseenter={() => (hoveredGroup = group.key)}
-            on:mouseleave={() => (hoveredGroup = null)}
+            onmouseenter={() => (hoveredGroup = group.key)}
+            onmouseleave={() => (hoveredGroup = null)}
           >
             <circle class="group-halo" cx={group.x} cy={group.y} r={group.r} />
             <text class="group-label" x={group.x} y={group.y - group.r - 18} text-anchor="middle">{group.label}</text>
@@ -2280,10 +2549,10 @@
             class:spotlight-missing={inHl && highlightMode === "missing"}
             role="button"
             tabindex="0"
-            on:pointerdown={(e) => handleNodeMouseDown(e, node)}
-            on:click|stopPropagation={() => handleNodeClick(node)}
-            on:contextmenu|stopPropagation={(e) => onNodeContextInstall(e, node)}
-            on:keydown={(e) => e.key === "Enter" && handleNodeClick(node)}
+            onpointerdown={(e) => handleNodeMouseDown(e, node)}
+            onclick={(e) => { e.stopPropagation(); handleNodeClick(node); } }
+            oncontextmenu={(e) => { e.stopPropagation(); void onNodeContextInstall(e, node); } }
+            onkeydown={(e) => e.key === "Enter" && handleNodeClick(node)}
             aria-label={node.label}
           >
             {#if inHl}
@@ -2299,8 +2568,8 @@
                 class="dep-icon-hit"
                 role="button"
                 tabindex="0"
-                on:click|stopPropagation={() => handleDepIconClick(node)}
-                on:keydown={(e) => e.key === "Enter" && handleDepIconClick(node)}
+                onclick={(e) => { e.stopPropagation(); handleDepIconClick(node); } }
+                onkeydown={(e) => e.key === "Enter" && handleDepIconClick(node)}
                 aria-label={isGhost ? `Install ${node.label}` : `Re-download ${node.label}`}
               >
                 <rect x={-half} y={-half} width={size} height={size} rx="8" ry="8" />
@@ -2316,7 +2585,7 @@
                     height={size - 4}
                     clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                     preserveAspectRatio="xMidYMid slice"
-                    on:error={() => handleIconError(node)}
+                    onerror={() => handleIconError(node)}
                   />
                 {:else}
                   <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
@@ -2336,7 +2605,7 @@
                   height={size - 4}
                   clip-path={`url(#clip-${node.id.replace(/[^a-zA-Z0-9]/g, '_')})`}
                   preserveAspectRatio="xMidYMid slice"
-                  on:error={() => handleIconError(node)}
+                  onerror={() => handleIconError(node)}
                 />
               {:else}
                 <text class="fallback-letter" y="5" text-anchor="middle">{node.label?.[0]?.toUpperCase() ?? "?"}</text>
@@ -2346,7 +2615,7 @@
               <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
             {:else}
               <text class="node-label-text" y={half + 14} text-anchor="middle">{node.label.length > 18 ? node.label.slice(0, 17) + "…" : node.label}</text>
-              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" on:pointerdown|stopPropagation={() => {}} on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+              <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") removeConflictNode(node.id); } }>
                 <circle cx={half - 2} cy={-half + 2} r="8" />
                 <text x={half - 2} y={-half + 6} text-anchor="middle" class="remove-x">×</text>
               </g>
@@ -2354,43 +2623,61 @@
           </g>
         {/each}
       </svg>
+      {#if loading}
+        <div class="graph-loading-overlay" role="status">
+          <Loader2 size={20} class="spin" />
+          <span>Loading graph…</span>
+        </div>
+      {/if}
     </section>
 
-    <aside class="details">
-        {#if selected}
-          <div class="details-header">
-            <div>
-              <span class="eyebrow">Selected node</span>
+    <aside class="details" aria-label="Selected node">
+        <div class="details-header">
+          <div>
+            <span class="eyebrow">Selected node</span>
+            {#if selected}
               <h2>{selected.label}</h2>
-            </div>
-            <span class="tag">{selected.kind}</span>
+            {:else}
+              <h2 class="details-placeholder">None selected</h2>
+            {/if}
           </div>
+          {#if selected}
+            <span class="tag">{selected.kind}</span>
+          {/if}
+        </div>
 
+        {#if selected}
           <div class="details-actions">
+            {#if catalogResultFromNode(selected)}
+              <button type="button" class="secondary mini details-action-btn" onclick={openSelectedInLauncher}>
+                <ExternalLink size={14} />
+                Open page
+              </button>
+            {/if}
             {#if selected.kind === "Missing"}
-              <button class="install-btn" on:click={() => installGhostNode(selected.id)} disabled={resolving}>
+              <button class="install-btn" onclick={() => installGhostNode(selected.id)} disabled={resolving}>
                 <Download size={16} />
                 {resolving ? "Installing..." : "Install from Modrinth"}
               </button>
             {:else if selected.kind === "Mod"}
               {#if depNodeIds.has(selected.id)}
-                <button class="secondary mini details-action-btn" on:click={downloadMissingFiles} disabled={resolving}>
+                <button class="secondary mini details-action-btn" onclick={downloadMissingFiles} disabled={resolving}>
                   <Download size={14} />
                   Re-download files
                 </button>
               {/if}
               {#if selectedMissingDeps.length > 0}
-                <button class="install-btn" on:click={installSelectedMissingDeps} disabled={resolving}>
+                <button class="install-btn" onclick={installSelectedMissingDeps} disabled={resolving}>
                   <Download size={16} />
-                  {resolving ? "Installing..." : `Install ${selectedMissingDeps.length} missing`}
+                  {resolving ? "Installing..." : `Install all ${selectedMissingDeps.length} missing`}
                 </button>
               {/if}
-              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+              <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
                 <X size={16} />
                 Remove mod
               </button>
             {:else}
-              <button class="remove-btn-panel" on:click={() => removeConflictNode(selected.id)} disabled={resolving}>
+              <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
                 <X size={16} />
                 Remove mod
               </button>
@@ -2420,7 +2707,11 @@
             <div class="relations">
               {#each selectedEdges as edge (`${edge.from}:${edge.to}:${edge.kind}`)}
                 {@const otherId = edge.from === selectedId ? edge.to : edge.from}
-                {@const isMissingDep = edge.kind === "Requires" && !nodeById(otherId)}
+                {@const otherNode = nodeById(otherId) ?? ghostNodes.find((n) => n.id === otherId) ?? null}
+                {@const isMissingDep =
+                  edge.kind === "Requires" &&
+                  edge.from === selectedId &&
+                  (!otherNode || otherNode.kind === "Missing")}
                 <div class="relation" class:incoming={edge.to === selectedId}>
                   <span class="relation-kind">{edge.kind}</span>
                   <span class="relation-text">
@@ -2429,7 +2720,7 @@
                   </span>
                   {#if edge.reason}<small>{edge.reason}</small>{/if}
                   {#if isMissingDep}
-                    <button class="secondary mini" on:click={() => installGhostNode(otherId)} disabled={resolving}>
+                    <button class="secondary mini" onclick={() => installGhostNode(otherId)} disabled={resolving}>
                       <Download size={12} /> Install
                     </button>
                   {/if}
@@ -2445,8 +2736,62 @@
         {/if}
       </aside>
 
+    {#if changePlanLoading && !changePlan}
+      <section class="change-plan-panel loading">
+        <div class="change-plan-head">
+          <span class="eyebrow">Change plan</span>
+          <strong class="change-plan-summary muted">Resolving dependencies…</strong>
+        </div>
+      </section>
+    {:else if changePlan}
+      <section class="change-plan-panel" class:expanded={changePlanExpanded}>
+        <button
+          type="button"
+          class="change-plan-toggle"
+          onclick={() => (changePlanExpanded = !changePlanExpanded)}
+          aria-expanded={changePlanExpanded}
+        >
+          <div class="change-plan-head">
+            <span class="eyebrow">Change plan</span>
+            <strong class="change-plan-summary">{changePlan.summary}</strong>
+            <span class="change-plan-risk" class:req={changePlan.requiresSnapshot}>
+              {changePlan.requiresSnapshot ? "snapshot required" : "no snapshot"} · risk {changePlan.risk}
+            </span>
+          </div>
+          <ChevronDown size={16} class={changePlanExpanded ? "rot" : ""} />
+        </button>
+        {#if changePlanExpanded}
+          <ul class="change-plan-list">
+            {#if changePlan.actions?.length}
+              {#each changePlan.actions as action, index (index)}
+                <li>
+                  <button
+                    type="button"
+                    class="change-plan-item"
+                    onclick={() => applyAction(index)}
+                    disabled={resolving}
+                    title={formatChangeAction(action)}
+                  >
+                    <span class="change-plan-item-idx">{index + 1}</span>
+                    <span class="change-plan-item-text">{formatChangeAction(action)}</span>
+                  </button>
+                </li>
+              {/each}
+            {:else}
+              <li class="change-plan-empty">No pending actions.</li>
+            {/if}
+          </ul>
+          <div class="change-plan-actions">
+            <button class="primary mini" onclick={applyChangePlan} disabled={resolving}>
+              {changePlan.actions?.length ? "Apply full plan" : "Mark reviewed"}
+            </button>
+          </div>
+        {/if}
+      </section>
+    {/if}
+
     <div class="list-toggle-row">
-      <button type="button" class="ghost mini list-toggle-btn" on:click={() => (showNodeList = !showNodeList)}>
+      <button type="button" class="ghost mini list-toggle-btn" onclick={() => (showNodeList = !showNodeList)}>
         <List size={14} />
         {showNodeList ? "Hide list" : "Show list"}
         {#if !showNodeList}
@@ -2477,27 +2822,27 @@
                   class:is-dep={isClickableDep}
                   role="button"
                   tabindex="0"
-                  on:click={() => (selectedId = node.id)}
-                  on:contextmenu={(e) => onNodeContextInstall(e, node)}
-                  on:keydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
+                  onclick={() => (selectedId = node.id)}
+                  oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                  onkeydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
                 >
                   {#if icon}
                     {#if isClickableDep}
                       <button
                         class="card-icon-btn"
                         title="Click to re-download this dependency"
-                        on:click|stopPropagation={downloadMissingFiles}
+                        onclick={(e) => { e.stopPropagation(); downloadMissingFiles(); } }
                       >
-                        <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                        <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                       </button>
                     {:else}
-                      <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                      <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                     {/if}
                   {:else if isClickableDep}
                     <button
                       class="card-icon-btn"
                       title="Click to re-download this dependency"
-                      on:click|stopPropagation={downloadMissingFiles}
+                      onclick={(e) => { e.stopPropagation(); downloadMissingFiles(); } }
                     >
                       <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                     </button>
@@ -2509,22 +2854,44 @@
                     <span class="node-meta">{node.version ?? "unknown"}{depNodeIds.has(node.id) ? " · dep" : ""}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
                   </div>
                   {#if missingDeps.length > 0}
-                    <button
-                      class="card-install-btn"
-                      type="button"
-                      title="Install {missingDeps.length} missing dependencies"
-                      on:click|stopPropagation={async () => {
-                        for (const edge of missingDeps) {
-                          await installSingleMissingDep(edge);
-                        }
-                      }}
-                      disabled={resolving}
-                    >
-                      <Download size={14} strokeWidth={2.25} />
-                      <span>Install</span>
-                    </button>
+                    <div class="card-missing-list">
+                      {#each missingDeps as edge (edge.to)}
+                        <button
+                          class="card-install-btn"
+                          type="button"
+                          title="Install {resolveNodeLabel(edge.to)}"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void installSingleMissingDep(edge);
+                          }}
+                          disabled={resolving}
+                        >
+                          <Download size={14} strokeWidth={2.25} />
+                          <span>Install {resolveNodeLabel(edge.to)}</span>
+                        </button>
+                      {/each}
+                      {#if missingDeps.length > 1}
+                        <button
+                          class="card-install-btn all"
+                          type="button"
+                          title="Install all {missingDeps.length} missing dependencies"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void (async () => {
+                              for (const edge of missingDeps) {
+                                await installSingleMissingDep(edge);
+                              }
+                            })();
+                          }}
+                          disabled={resolving}
+                        >
+                          <Download size={14} strokeWidth={2.25} />
+                          <span>Install all ({missingDeps.length})</span>
+                        </button>
+                      {/if}
+                    </div>
                   {/if}
-                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" on:click|stopPropagation={() => removeConflictNode(node.id)} on:keydown|stopPropagation={(e) => e.key === "Enter" && removeConflictNode(node.id)}>
+                  <span class="card-remove" role="button" tabindex="0" title="Remove mod" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") void removeConflictNode(node.id); } }>
                     <X size={14} />
                   </span>
                 </div>
@@ -2546,12 +2913,12 @@
                 role="button"
                 tabindex="0"
                 title="Install {node.label}"
-                on:click={() => installGhostNode(node.id)}
-                on:contextmenu={(e) => onNodeContextInstall(e, node)}
-                on:keydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
+                onclick={() => installGhostNode(node.id)}
+                oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
               >
                 {#if icon}
-                  <img class="card-icon" src={icon} alt="" loading="lazy" on:error={() => handleIconError(node)} />
+                  <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
                 {:else}
                   <span class="card-icon-fallback missing-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
                 {/if}
@@ -2563,7 +2930,7 @@
                   class="card-install-btn"
                   type="button"
                   title="Install {node.label}"
-                  on:click|stopPropagation={() => installGhostNode(node.id)}
+                  onclick={(e) => { e.stopPropagation(); installGhostNode(node.id); } }
                   disabled={resolving}
                 >
                   <Download size={14} strokeWidth={2.25} />
@@ -2606,7 +2973,7 @@
                   type="button"
                   disabled={resolving}
                   title="Recommended: fewer dependents"
-                  on:click={() => removeConflictNode(c.recommendRemoveId)}
+                  onclick={() => removeConflictNode(c.recommendRemoveId)}
                 >
                   <Ban size={13} />
                   Remove {c.recommendRemoveLabel}
@@ -2615,11 +2982,11 @@
                   class="ghost small"
                   type="button"
                   disabled={resolving}
-                  on:click={() => removeConflictNode(c.keepId)}
+                  onclick={() => removeConflictNode(c.keepId)}
                 >
                   Remove {c.keepLabel} instead
                 </button>
-                <button class="ghost small" type="button" on:click={() => (selectedId = c.leftId)}>Focus</button>
+                <button class="ghost small" type="button" onclick={() => (selectedId = c.leftId)}>Focus</button>
               </div>
             </article>
           {/each}
@@ -2633,15 +3000,44 @@
   {/if}
 </div>
 
+{#if catalogViewResult}
+  <div
+    class="modal-backdrop catalog-backdrop"
+    role="button"
+    tabindex="-1"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) catalogViewResult = null;
+    }}
+    onkeydown={() => {}}
+  >
+    <div
+      class="modal catalog-modal"
+      role="dialog"
+      aria-modal="true"
+      use:trapFocus={{ onEscape: () => (catalogViewResult = null) }}
+    >
+      <CatalogProjectView
+        result={catalogViewResult}
+        minecraftVersion={$projectInfo?.minecraftVersion ?? null}
+        loaderKind={$projectInfo?.loaderKind ?? null}
+        installing={resolving}
+        onback={() => (catalogViewResult = null)}
+        oninstall={() => void installSelectedFromCatalog()}
+        onopenexternal={() => void openSelectedExternal()}
+      />
+    </div>
+  </div>
+{/if}
+
 {#if depPreviewOpen}
-  <div class="modal-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} on:keydown={() => {}}>
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (depPreviewOpen = false)} onkeydown={() => {}}>
     <div class="modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (depPreviewOpen = false) }}>
       <div class="modal-header">
         <div>
           <h2>Install dependency: {depPreviewName}</h2>
           <p>This mod has dependencies on Modrinth. Choose what to install.</p>
         </div>
-        <button class="icon-btn" on:click={() => (depPreviewOpen = false)}><X size={18} /></button>
+        <button class="icon-btn" onclick={() => (depPreviewOpen = false)}><X size={18} /></button>
       </div>
       <div class="modal-body">
         {#if depPreviewLoading}
@@ -2697,15 +3093,15 @@
           </div>
         {/if}
         <div class="modal-footer-actions">
-          <button class="secondary" on:click={() => (depPreviewOpen = false)} disabled={depInstallStatus === "downloading"}>
+          <button class="secondary" onclick={() => (depPreviewOpen = false)} disabled={depInstallStatus === "downloading"}>
             {depInstallStatus === "done" ? "Close" : "Cancel"}
           </button>
           {#if depInstallStatus === "failed"}
-            <button on:click={retryDepInstall} disabled={resolving}>
+            <button onclick={retryDepInstall} disabled={resolving}>
               <RotateCw size={16} /> Retry
             </button>
           {:else if depInstallStatus !== "done"}
-            <button on:click={confirmDepInstall} disabled={depPreviewLoading || depInstallStatus === "downloading"}>
+            <button onclick={confirmDepInstall} disabled={depPreviewLoading || depInstallStatus === "downloading"}>
               <Download size={16} /> {depInstallStatus === "downloading" ? "Downloading…" : "Install"}
             </button>
           {/if}
@@ -2719,20 +3115,25 @@
   .graph {
     display: flex;
     flex-direction: column;
+    flex: 1;
     height: 100%;
     min-height: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     max-width: none;
     width: 100%;
+    scrollbar-gutter: stable;
+    overscroll-behavior: contain;
+    container-type: size;
   }
 
   .graph-body {
-    flex: 1;
+    flex: 0 0 auto;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
-    gap: 8px;
+    overflow: visible;
+    gap: 10px;
   }
 
   .toolbar,
@@ -2839,7 +3240,8 @@
   .change-plan-toggle :global(.rot) {
     transform: rotate(180deg);
   }
-  .change-plan-panel:not(.expanded) .change-plan-actions {
+  .change-plan-panel:not(.expanded) .change-plan-actions,
+  .change-plan-panel:not(.expanded) .change-plan-list {
     display: none;
   }
   .change-plan-summary.muted {
@@ -2855,6 +3257,46 @@
   }
   .change-plan-risk.req { color: #fbbf24; border-color: rgba(251,191,36,.35); }
   .change-plan-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .change-plan-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .change-plan-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  .change-plan-item:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+  }
+  .change-plan-item:disabled { opacity: 0.5; cursor: default; }
+  .change-plan-item-idx {
+    flex: 0 0 auto;
+    min-width: 1.5rem;
+    font-weight: 700;
+    color: var(--text-muted);
+  }
+  .change-plan-item-text { flex: 1; min-width: 0; white-space: normal; }
+  .change-plan-empty {
+    padding: 6px 2px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
   .chip {
     max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 5px 10px; font-size: 12px; border-radius: 999px;
@@ -2871,9 +3313,9 @@
   .graph-canvas {
     position: relative;
     flex: 0 0 auto;
+    height: calc(100cqh - 64px);
+    min-height: 420px;
     width: 100%;
-    height: min(28vh, 240px);
-    min-height: 160px;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -2887,6 +3329,23 @@
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
+  }
+
+  .graph-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(9, 9, 11, 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 600;
   }
 
   .graph-canvas svg {
@@ -3413,6 +3872,13 @@
     background: linear-gradient(135deg, rgba(239, 68, 68, 0.12), var(--bg-secondary));
   }
 
+  .stat-card.clickable {
+    cursor: pointer;
+  }
+  .stat-card.clickable:hover {
+    border-color: rgba(27, 217, 106, 0.55);
+  }
+
   .stat-value {
     font-size: 28px;
     font-weight: 800;
@@ -3462,21 +3928,40 @@
   .details {
     flex: 0 0 auto;
     width: 100%;
-    max-height: min(22vh, 180px);
-    min-height: 0;
-    overflow: auto;
+    min-height: 160px;
+    max-height: none;
+    overflow: visible;
     position: static;
   }
 
-  .details:not(:has(.details-header)) {
-    max-height: none;
-    padding: 10px 14px;
+  .details-placeholder {
+    color: var(--text-muted);
+    font-weight: 600;
   }
 
   .details-action-btn {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+
+  .catalog-backdrop .catalog-modal {
+    /* Match Mods "Add" browser: near-fullscreen so the catalog page is readable. */
+    width: calc(100vw - 12px);
+    height: calc(100vh - 12px);
+    max-width: none;
+    max-height: calc(100vh - 12px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 16px 18px 14px;
+    border-radius: 14px;
+  }
+
+  .catalog-backdrop .catalog-modal :global(.catalog-page) {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
   }
 
   .mods-column {
@@ -3557,6 +4042,7 @@
   .node-card.compact {
     margin-bottom: 0;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
   }
@@ -3666,6 +4152,18 @@
     font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
+  }
+  .card-missing-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    flex: 1 1 100%;
+    width: 100%;
+    margin-top: 4px;
+  }
+  .card-install-btn.all {
+    border-color: rgba(27, 217, 106, 0.7);
+    background: rgba(27, 217, 106, 0.22);
   }
   .card-install-btn :global(svg) {
     fill: none !important;
@@ -4160,10 +4658,6 @@
   .muted { color: var(--text-muted); font-size: 13px; }
 
   @media (max-width: 1180px) {
-    .details {
-      max-height: min(28vh, 220px);
-    }
-
     .graph-layout,
     .graph-list {
       flex-direction: column;

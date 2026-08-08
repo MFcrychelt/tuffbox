@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import {
     ArrowLeft,
@@ -9,34 +9,43 @@
     Clock,
     Loader2,
     Package,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
+  import { sanitizeHtml } from "../lib/sanitizeHtml";
 
-  export let result: {
-    id: string;
-    slug: string;
-    name: string;
-    description: string;
-    projectType: string;
-    iconUrl?: string | null;
-    author?: string | null;
-    downloads?: number | null;
-    follows?: number | null;
-    dateModified?: string | null;
-    categories?: string[];
-    provider?: string;
-  };
-  export let minecraftVersion: string | null = null;
-  export let loaderKind: string | null = null;
-  export let installed = false;
-  export let installing = false;
-
-  const dispatch = createEventDispatcher<{
-    back: void;
-    install: void;
-    openExternal: void;
-  }>();
+  let {
+    result,
+    minecraftVersion = null,
+    loaderKind = null,
+    installed = false,
+    installing = false,
+    onback,
+    oninstall,
+    onopenexternal,
+  }: {
+    result: {
+      id: string;
+      slug: string;
+      name: string;
+      description: string;
+      projectType: string;
+      iconUrl?: string | null;
+      author?: string | null;
+      downloads?: number | null;
+      follows?: number | null;
+      dateModified?: string | null;
+      categories?: string[];
+      provider?: string;
+    };
+    minecraftVersion?: string | null;
+    loaderKind?: string | null;
+    installed?: boolean;
+    installing?: boolean;
+    onback?: () => void;
+    oninstall?: () => void;
+    onopenexternal?: () => void;
+  } = $props();
 
   type CatalogDetail = typeof result & {
     descriptionHtml?: string | null;
@@ -57,17 +66,17 @@
     compatible?: boolean;
   };
 
-  let detail: CatalogDetail = { ...result };
-  let loading = true;
-  let versionsLoading = false;
-  let versions: CatalogVersion[] = [];
-  let tab: "overview" | "versions" = "overview";
-  let showIncompatible = false;
-  let error: string | null = null;
+  let detail: CatalogDetail = $state({ ...result });
+  let loading = $state(true);
+  let versionsLoading = $state(false);
+  let versions = $state<CatalogVersion[]>([]);
+  let tab: "overview" | "versions" = $state("overview");
+  let showIncompatible = $state(false);
+  let error: string | null = $state(null);
 
-  $: provider = (result.provider ?? "modrinth").toLowerCase() === "curseforge" ? "curseforge" : "modrinth";
-  $: compatibleVersions = versions.filter((v) => v.compatible !== false);
-  $: shownVersions = showIncompatible ? versions : compatibleVersions;
+  const provider = $derived((result.provider ?? "modrinth").toLowerCase() === "curseforge" ? "curseforge" : "modrinth");
+  const compatibleVersions = $derived(versions.filter((v) => v.compatible !== false));
+  const shownVersions = $derived(showIncompatible ? versions : compatibleVersions);
 
   function formatCount(n: number | null | undefined): string {
     if (n == null) return "0";
@@ -142,11 +151,11 @@
 
 <div class="catalog-page" transition:fly={{ x: 28, duration: 320, opacity: 0, easing: quintOut }}>
   <header class="page-head">
-    <button type="button" class="back" on:click={() => dispatch("back")}>
+    <button type="button" class="back" onclick={() => onback?.()}>
       <ArrowLeft size={16} /> Back to search
     </button>
     <div class="head-actions">
-      <button type="button" class="ghost" on:click={() => dispatch("openExternal")}>
+      <button type="button" class="ghost" onclick={() => onopenexternal?.()}>
         <ExternalLink size={15} />
         Open on {provider === "curseforge" ? "CurseForge" : "Modrinth"}
       </button>
@@ -154,7 +163,7 @@
         type="button"
         class="primary"
         disabled={installing || installed}
-        on:click={() => dispatch("install")}
+        onclick={() => oninstall?.()}
       >
         <Download size={15} />
         {installed ? "Installed" : installing ? "Installing…" : "Install"}
@@ -197,9 +206,11 @@
   </div>
 
   <div class="tabs" role="tablist">
-    <button type="button" class:active={tab === "overview"} on:click={() => (tab = "overview")}>Overview</button>
-    <button type="button" class:active={tab === "versions"} on:click={() => (tab = "versions")}>
-      Versions{#if versions.length} ({compatibleVersions.length}){/if}
+    <button type="button" class:active={tab === "overview"} onclick={() => (tab = "overview")}>Overview</button>
+    <button type="button" class:active={tab === "versions"} onclick={() => (tab = "versions")}>
+      Versions{#if versions.length}
+        ({compatibleVersions.length}{#if compatibleVersions.length !== versions.length}/{versions.length}{/if})
+      {/if}
     </button>
   </div>
 
@@ -210,7 +221,7 @@
   {:else if tab === "overview"}
     <section class="overview">
       {#if detail.descriptionHtml}
-        <div class="html-body">{@html detail.descriptionHtml}</div>
+        <div class="html-body">{@html sanitizeHtml(detail.descriptionHtml)}</div>
       {:else}
         <p class="plain">{detail.description || "No description."}</p>
       {/if}

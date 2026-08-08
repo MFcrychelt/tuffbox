@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, isTauri } from "@tauri-apps/api/core";
   import { open as openShell } from "@tauri-apps/plugin-shell";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { onMount } from "svelte";
@@ -7,17 +7,26 @@
     Palette, Info, Command, Plug, KeyRound, CheckCircle2, AlertTriangle, Loader2,
     Bot, Network, Coffee, Terminal, HardDrive, Settings2,
     MessageCircle, ExternalLink,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api } from "../lib/api";
-  import type { PresenceSettings, LauncherSettings, SidebarMode } from "../lib/store";
+  import type { PresenceSettings, LauncherSettings, SidebarMode, UiScaleMode } from "../lib/store";
   import {
     autoHideWorkflowRail,
     sidebarMode,
     normalizeSidebarMode,
-    applyUiScale,
+    applyUiScaleFromSettings,
     applyRoundedCorners,
     normalizeUiScalePercent,
+    resolveUiScaleMode,
+    suggestUiScalePercent,
+    UI_SCALE_STEPS,
+    notifyLauncherSettingsChanged,
+    brandIcon,
+    BRAND_ICON_CREEPER_SRC,
+    BRAND_ICON_CREEPER_SRC_SM,
+    type BrandIconId,
   } from "../lib/store";
+  import ConfettiBurst from "./ConfettiBurst.svelte";
   import {
     readStoredTheme, commitTheme, type ThemeId,
   } from "../lib/themes";
@@ -26,7 +35,7 @@
   import JavaPickerModal from "./JavaPickerModal.svelte";
 
   type SettingsTab = "general" | "appearance" | "java" | "commands" | "runtime" | "integrations" | "about";
-  let tab: SettingsTab = "appearance";
+  let tab = $state<SettingsTab>("appearance");
 
   type AiSettings = {
     provider: string;
@@ -66,66 +75,81 @@
     checkedAt?: string;
   };
 
-  let theme: ThemeId = readStoredTheme();
-  let reducedMotion = localStorage.getItem("tuffbox-reduced-motion") === "1";
-  let shortcuts: any[] = [];
-  let shortcutsOpen = false;
-  let appVersion = "";
-  let updateCheck: UpdateCheck | null = null;
-  let updateError = "";
-  let updateLoading = false;
+  async function ipc<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+    if (!isTauri()) {
+      throw new Error("Desktop IPC unavailable. Run the Tauri app, not the browser preview.");
+    }
+    return invoke<T>(cmd, args);
+  }
 
-  let integrationsLoading = false;
-  let integrationsError = "";
-  let integrationsMessage = "";
-  let githubRepository = "";
-  let aiProvider: "ollama" | "openai-compatible" = "ollama";
-  let aiEndpoint = "";
-  let aiModel = "";
-  let ollamaBinaryPath = "";
-  let ollamaModelsPath = "";
-  let diagnoseMode: "server" | "local" | "kb_only" = "server";
-  let crashKbEndpoint = "";
-  let githubTokenSet = false;
-  let modrinthTokenSet = false;
-  let curseforgeTokenSet = false;
-  let aiApiKeySet = false;
-  let crashKbTokenSet = false;
+  let theme = $state<ThemeId>(readStoredTheme());
+  let reducedMotion = $state(localStorage.getItem("tuffbox-reduced-motion") === "1");
+  let shortcuts = $state<any[]>([]);
+  let shortcutsOpen = $state(false);
+  let appVersion = $state("");
+  let updateCheck = $state<UpdateCheck | null>(null);
+  let updateError = $state("");
+  let updateLoading = $state(false);
 
-  let githubTokenDraft = "";
-  let modrinthTokenDraft = "";
-  let curseforgeTokenDraft = "";
-  let aiApiKeyDraft = "";
-  let crashKbTokenDraft = "";
-  let swarmEnabled = false;
-  let swarmSharePrompts = true;
-  let swarmSupabaseUrl = "";
-  let swarmSupabaseAnonDraft = "";
-  let swarmSupabaseAnonSet = false;
-  let swarmSupabaseUsingBuiltin = true;
-  let swarmSupabaseConfigured = false;
-  let swarmSupabaseAdvanced = false;
-  let swarmHubUrl = "";
-  let swarmP2pEnabled = false;
-  let swarmP2pControlUrl = "http://127.0.0.1:8790";
-  let swarmP2pStatus = "";
-  let swarmSaving = false;
+  let integrationsLoading = $state(false);
+  let integrationsError = $state("");
+  let integrationsMessage = $state("");
+  let githubRepository = $state("");
+  let aiProvider = $state<"ollama" | "openai-compatible">("ollama");
+  let aiEndpoint = $state("");
+  let aiModel = $state("");
+  let ollamaBinaryPath = $state("");
+  let ollamaModelsPath = $state("");
+  let diagnoseMode = $state<"server" | "local" | "kb_only">("server");
+  let crashKbEndpoint = $state("");
+  let githubTokenSet = $state(false);
+  let modrinthTokenSet = $state(false);
+  let curseforgeTokenSet = $state(false);
+  let aiApiKeySet = $state(false);
+  let crashKbTokenSet = $state(false);
 
-  let savingSettings = false;
-  let savingSecret: string | null = null;
-  let clearingSecret: string | null = null;
-  let testingProvider: string | null = null;
-  let testResults: Record<string, string> = {};
+  let githubTokenDraft = $state("");
+  let modrinthTokenDraft = $state("");
+  let curseforgeTokenDraft = $state("");
+  let aiApiKeyDraft = $state("");
+  let crashKbTokenDraft = $state("");
+  let swarmEnabled = $state(false);
+  let swarmSharePrompts = $state(true);
+  let swarmSupabaseUrl = $state("");
+  let swarmSupabaseAnonDraft = $state("");
+  let swarmSupabaseAnonSet = $state(false);
+  let swarmSupabaseUsingBuiltin = $state(true);
+  let swarmSupabaseConfigured = $state(false);
+  let swarmSupabaseAdvanced = $state(false);
+  let swarmHubUrl = $state("");
+  let swarmP2pEnabled = $state(false);
+  let swarmP2pControlUrl = $state("http://127.0.0.1:8790");
+  let swarmP2pStatus = $state("");
+  let swarmSaving = $state(false);
 
-  let discordRpcEnabled = false;
-  let discordClientId = "";
-  let discordSaving = false;
-  let discordMessage = "";
-  let discordError = "";
-  let aiModalOpen = false;
+  let savingSettings = $state(false);
+  let savingSecret = $state<string | null>(null);
+  let clearingSecret = $state<string | null>(null);
+  let testingProvider = $state<string | null>(null);
+  let testResults = $state<Record<string, string>>({});
+
+  let discordRpcEnabled = $state(false);
+  let discordClientId = $state("");
+  let discordSaving = $state(false);
+  let discordMessage = $state("");
+  let discordError = $state("");
+  let aiModalOpen = $state(false);
+  let savingGemini = $state(false);
+
+  const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai";
+  const GEMINI_DEFAULT_MODEL = "gemini-flash-latest";
+
+  const isGeminiEndpoint = $derived(
+    aiEndpoint.includes("generativelanguage.googleapis.com") || aiEndpoint.includes("/v1beta/openai"),
+  );
 
   // Launcher settings
-  let launcher: LauncherSettings = {
+  let launcher = $state<LauncherSettings>({
     theme: "tuffbox",
     potatoPc: false,
     perfAutoDetected: false,
@@ -143,25 +167,30 @@
     autoHideWorkflowRail: false,
     sidebarMode: "full",
     uiScalePercent: 100,
+    uiScaleMode: "auto",
     roundedCorners: true,
-  };
-  let launcherSaving = false;
-  let launcherMsg = "";
-  let launcherErr = "";
-  let defaultRuntimePath = "";
-  let runtimeDraft = "";
-  let defaultInstancesPath = "";
-  let instancesDraft = "";
-  let showJavaPicker = false;
-  let resMode: "default" | "854x480" | "1280x720" | "1920x1080" | "custom" = "default";
-  let customW = 1280;
-  let customH = 720;
-  let discordDirty = false;
+    hideInstanceHome: false,
+  });
+  let launcherSaving = $state(false);
+  let launcherMsg = $state("");
+  let launcherErr = $state("");
+  let defaultRuntimePath = $state("");
+  let runtimeDraft = $state("");
+  let defaultInstancesPath = $state("");
+  let instancesDraft = $state("");
+  let showJavaPicker = $state(false);
+  let resMode = $state<"default" | "854x480" | "1280x720" | "1920x1080" | "custom">("default");
+  let customW = $state(1280);
+  let customH = $state(720);
+  let discordDirty = $state(false);
+  let brandConfetti = $state(false);
 
   const concurrentOptions = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32];
-  $: concurrentSelectOptions = concurrentOptions.includes(launcher.concurrentDownloads)
-    ? concurrentOptions
-    : [...concurrentOptions, launcher.concurrentDownloads].sort((a, b) => a - b);
+  const concurrentSelectOptions = $derived(
+    concurrentOptions.includes(launcher.concurrentDownloads)
+      ? concurrentOptions
+      : [...concurrentOptions, launcher.concurrentDownloads].sort((a, b) => a - b),
+  );
 
   const tabs: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
     { id: "appearance", label: "Appearance", icon: Palette },
@@ -193,6 +222,10 @@
     launcherErr = "";
     try {
       launcher = await api.launcher.get();
+      launcher = {
+        ...launcher,
+        uiScaleMode: resolveUiScaleMode(launcher),
+      };
       theme = (THEMES_SAFE(launcher.theme) as ThemeId) || readStoredTheme();
       reducedMotion = !!launcher.potatoPc;
       applyPotatoPc(reducedMotion);
@@ -200,7 +233,8 @@
       commitTheme(theme);
       autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
       sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
-      applyUiScale(launcher.uiScalePercent);
+      const applied = applyUiScaleFromSettings(launcher);
+      launcher = { ...launcher, uiScalePercent: applied };
       applyRoundedCorners(launcher.roundedCorners !== false);
       syncResModeFromLauncher();
       const info = await api.launcher.runtimePathInfo();
@@ -215,7 +249,21 @@
   }
 
   function THEMES_SAFE(id: string): string {
-    const ok = ["tuffbox", "tuffbox-light", "carbon", "inferno", "aether", "frost", "pixelato", "win95"];
+    const ok = [
+      "tuffbox",
+      "tuffbox-light",
+      "carbon",
+      "inferno",
+      "aether",
+      "frost",
+      "pixelato",
+      "win95",
+      "solar",
+      "fern",
+      "blaze",
+      "dusk",
+      "glacier",
+    ];
     if (id === "dark") return "tuffbox";
     if (id === "light") return "tuffbox-light";
     return ok.includes(id) ? id : "tuffbox";
@@ -225,6 +273,7 @@
     launcherSaving = true;
     launcherErr = "";
     launcherMsg = "";
+    const prev = launcher;
     try {
       const next: LauncherSettings = { ...launcher, ...partial };
       if (partial?.theme) {
@@ -234,23 +283,63 @@
       }
       if (partial && "uiScalePercent" in partial) {
         next.uiScalePercent = normalizeUiScalePercent(partial.uiScalePercent);
+        if (!("uiScaleMode" in (partial ?? {}))) {
+          next.uiScaleMode = "manual";
+        }
       }
-      launcher = await api.launcher.save(next);
+      if (partial && "uiScaleMode" in partial) {
+        next.uiScaleMode = resolveUiScaleMode({
+          uiScaleMode: partial.uiScaleMode,
+          uiScalePercent: next.uiScalePercent,
+        });
+        if (next.uiScaleMode === "auto") {
+          next.uiScalePercent = suggestUiScalePercent();
+        }
+      }
+      // Optimistic: chips + zoom update before disk round-trip.
+      launcher = next;
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        const applied = applyUiScaleFromSettings(next);
+        launcher = { ...launcher, uiScalePercent: applied };
+        next.uiScalePercent = applied;
+      }
+      if (partial && "autoHideWorkflowRail" in partial) {
+        autoHideWorkflowRail.set(!!next.autoHideWorkflowRail);
+      }
+      if (partial && "sidebarMode" in partial) {
+        sidebarMode.set(normalizeSidebarMode(next.sidebarMode));
+      }
+      if (partial && "roundedCorners" in partial) {
+        applyRoundedCorners(next.roundedCorners !== false);
+      }
+
+      const saved = await api.launcher.save(next);
+      launcher = {
+        ...saved,
+        uiScaleMode: resolveUiScaleMode(saved),
+        uiScalePercent: normalizeUiScalePercent(saved.uiScalePercent),
+      };
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        const applied = applyUiScaleFromSettings(launcher);
+        launcher = { ...launcher, uiScalePercent: applied };
+      }
       if (partial && "autoHideWorkflowRail" in partial) {
         autoHideWorkflowRail.set(!!launcher.autoHideWorkflowRail);
       }
       if (partial && "sidebarMode" in partial) {
         sidebarMode.set(normalizeSidebarMode(launcher.sidebarMode));
       }
-      if (partial && "uiScalePercent" in partial) {
-        applyUiScale(launcher.uiScalePercent);
-      }
       if (partial && "roundedCorners" in partial) {
         applyRoundedCorners(launcher.roundedCorners !== false);
       }
+      notifyLauncherSettingsChanged(launcher);
       launcherMsg = "Saved.";
       setTimeout(() => (launcherMsg = ""), 1600);
     } catch (e) {
+      launcher = prev;
+      if (partial && ("uiScalePercent" in partial || "uiScaleMode" in partial)) {
+        applyUiScaleFromSettings(prev);
+      }
       launcherErr = String(e);
     } finally {
       launcherSaving = false;
@@ -351,7 +440,7 @@
     updateError = "";
     updateCheck = null;
     try {
-      updateCheck = await invoke<UpdateCheck>("check_for_app_update");
+      updateCheck = await ipc<UpdateCheck>("check_for_app_update");
     } catch (e) {
       updateError = String(e);
     } finally {
@@ -361,7 +450,7 @@
 
   async function loadAppVersion() {
     try {
-      appVersion = await invoke<string>("get_app_version");
+      appVersion = await ipc<string>("get_app_version");
     } catch {
       appVersion = "";
     }
@@ -371,7 +460,7 @@
     integrationsLoading = true;
     integrationsError = "";
     try {
-      const status = await invoke<IntegrationStatus>("get_integration_status");
+      const status = await ipc<IntegrationStatus>("get_integration_status");
       githubRepository = status.settings?.githubRepository ?? "";
       aiProvider = (status.settings?.ai?.provider === "openai-compatible" ? "openai-compatible" : "ollama");
       aiEndpoint = status.settings?.ai?.endpoint ?? "";
@@ -419,7 +508,7 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
-      await invoke("save_integration_settings", {
+      await ipc("save_integration_settings", {
         settings: {
           githubRepository: githubRepository.trim(),
           ai: {
@@ -460,7 +549,7 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
-      await invoke("set_integration_secret", { kind, value: value.trim() });
+      await ipc("set_integration_secret", { kind, value: value.trim() });
       integrationsMessage = `${kind} credential saved.`;
       if (kind === "github") githubTokenDraft = "";
       if (kind === "modrinth") modrinthTokenDraft = "";
@@ -481,7 +570,7 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
-      await invoke("clear_integration_secret", { kind });
+      await ipc("clear_integration_secret", { kind });
       integrationsMessage = `${kind} credential cleared.`;
       await loadIntegrations();
     } catch (e) {
@@ -495,7 +584,7 @@
     testingProvider = provider;
     integrationsError = "";
     try {
-      const result = await invoke<string>("test_integration", { provider });
+      const result = await ipc<string>("test_integration", { provider });
       testResults = { ...testResults, [provider]: result };
       integrationsMessage = result;
     } catch (e) {
@@ -506,12 +595,65 @@
     }
   }
 
+  /** Switch AI to Gemini OpenAI-compat + save API key (for quick testing). */
+  async function useGeminiForTesting() {
+    savingGemini = true;
+    integrationsError = "";
+    integrationsMessage = "";
+    try {
+      const model =
+        aiModel.trim().toLowerCase().includes("gemini") && aiModel.trim()
+          ? aiModel.trim()
+          : GEMINI_DEFAULT_MODEL;
+      aiProvider = "openai-compatible";
+      aiEndpoint = GEMINI_ENDPOINT;
+      aiModel = model;
+      await ipc("save_integration_settings", {
+        settings: {
+          githubRepository: githubRepository.trim(),
+          ai: {
+            provider: "openai-compatible",
+            endpoint: GEMINI_ENDPOINT,
+            model,
+            diagnoseMode,
+            crashKbEndpoint: crashKbEndpoint.trim(),
+            ollamaBinaryPath: ollamaBinaryPath.trim(),
+            ollamaModelsPath: ollamaModelsPath.trim(),
+          },
+          swarm: {
+            enabled: swarmEnabled,
+            onboardingDone: true,
+            sharePromptsEnabled: swarmSharePrompts,
+            supabaseUrl: swarmSupabaseUrl.trim(),
+            hubUrl: swarmHubUrl.trim(),
+            p2pEnabled: swarmP2pEnabled,
+            p2pControlUrl: swarmP2pControlUrl.trim() || "http://127.0.0.1:8790",
+          },
+        },
+      });
+      if (aiApiKeyDraft.trim()) {
+        await ipc("set_integration_secret", { kind: "ai", value: aiApiKeyDraft.trim() });
+        aiApiKeyDraft = "";
+      } else if (!aiApiKeySet) {
+        integrationsError = "Enter a Gemini API key first (Google AI Studio).";
+        await loadIntegrations();
+        return;
+      }
+      integrationsMessage = `Gemini ready · model ${model}`;
+      await loadIntegrations();
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      savingGemini = false;
+    }
+  }
+
   async function toggleSwarmEnabled() {
     swarmSaving = true;
     integrationsError = "";
     try {
       const next = !swarmEnabled;
-      const s = await invoke<SwarmSettings>("set_swarm_enabled", { enabled: next });
+      const s = await ipc<SwarmSettings>("set_swarm_enabled", { enabled: next });
       swarmEnabled = !!s.enabled;
       integrationsMessage = swarmEnabled
         ? "TuffSwarm network enabled — Fix Mode (network) and Creation Mode available."
@@ -527,7 +669,7 @@
     swarmSaving = true;
     try {
       const next = !swarmSharePrompts;
-      const s = await invoke<SwarmSettings>("set_swarm_share_prompts", { enabled: next });
+      const s = await ipc<SwarmSettings>("set_swarm_share_prompts", { enabled: next });
       swarmSharePrompts = s.sharePromptsEnabled !== false;
     } catch (e) {
       integrationsError = String(e);
@@ -540,7 +682,7 @@
     swarmSaving = true;
     integrationsError = "";
     try {
-      const s = await invoke<SwarmSettings>("set_swarm_supabase_url", {
+      const s = await ipc<SwarmSettings>("set_swarm_supabase_url", {
         supabaseUrl: swarmSupabaseUrl.trim(),
       });
       swarmSupabaseUrl = s.supabaseUrl ?? "";
@@ -559,7 +701,7 @@
     integrationsError = "";
     try {
       const next = !swarmP2pEnabled;
-      const s = await invoke<SwarmSettings>("set_swarm_p2p", {
+      const s = await ipc<SwarmSettings>("set_swarm_p2p", {
         enabled: next,
         controlUrl: swarmP2pControlUrl.trim() || null,
       });
@@ -579,7 +721,7 @@
 
   async function refreshP2pStatus() {
     try {
-      const st = await invoke<{ enabled?: boolean; healthy?: boolean; controlUrl?: string; node?: { peers?: number; capsuleCount?: number } }>(
+      const st = await ipc<{ enabled?: boolean; healthy?: boolean; controlUrl?: string; node?: { peers?: number; capsuleCount?: number } }>(
         "get_p2p_node_status",
       );
       if (!st.enabled) {
@@ -602,7 +744,7 @@
     swarmSaving = true;
     integrationsError = "";
     try {
-      await invoke("ensure_p2p_node");
+      await ipc("ensure_p2p_node");
       await refreshP2pStatus();
       integrationsMessage = "tuffswarm-node attached (P2P preferred; hub remains fallback).";
     } catch (e) {
@@ -624,7 +766,7 @@
 
   onMount(async () => {
     applyPotatoPc(reducedMotion);
-    try { shortcuts = await invoke("get_keyboard_shortcuts"); } catch {}
+    try { shortcuts = await ipc("get_keyboard_shortcuts"); } catch {}
     await loadAppVersion();
     await loadIntegrations();
     await loadPresence();
@@ -640,6 +782,14 @@
     localStorage.setItem("tuffbox-reduced-motion", reducedMotion ? "1" : "0");
     applyPotatoPc(reducedMotion);
     void persistLauncher({ potatoPc: reducedMotion });
+  }
+
+  function selectBrandIcon(id: BrandIconId) {
+    const prev = $brandIcon;
+    brandIcon.set(id);
+    if (id === "creeper" && prev !== "creeper" && !reducedMotion) {
+      brandConfetti = true;
+    }
   }
 
   function statusLabel(set: boolean) {
@@ -688,13 +838,14 @@
 <div class="settings fade-slide-in">
   <nav class="tabs" aria-label="Settings sections">
     {#each tabs as t (t.id)}
+      {@const Icon = t.icon}
       <button
         type="button"
         class="tab press-effect"
         class:active={tab === t.id}
-        on:click={() => (tab = t.id)}
+        onclick={() => (tab = t.id)}
       >
-        <svelte:component this={t.icon} size={16} />
+        <Icon size={16} />
         {t.label}
       </button>
     {/each}
@@ -716,7 +867,7 @@
           <p class="hint">Hover a swatch to preview — click to save.</p>
         </div>
         <label class="check-row">
-          <input type="checkbox" checked={reducedMotion} on:change={toggleReducedMotion} />
+          <input type="checkbox" checked={reducedMotion} onchange={toggleReducedMotion} />
           Potato PC mode (reduce motion / animations)
         </label>
         <p class="hint">Disables CSS animations and transitions for weaker machines.</p>
@@ -726,29 +877,48 @@
             type="checkbox"
             checked={launcher.roundedCorners !== false}
             disabled={launcherSaving}
-            on:change={(e) => void persistLauncher({ roundedCorners: e.currentTarget.checked })}
+            onchange={(e) => void persistLauncher({ roundedCorners: e.currentTarget.checked })}
           />
           Rounded corners
         </label>
-        <p class="hint">Round edges on panels, cards, modals, and chrome across the whole app.</p>
+        <p class="hint">Round edges on panels, cards, modals, and chrome — works with every theme.</p>
 
         <div class="settings-row" style="margin-top: 18px;">
           <div class="settings-row-text">
             <strong>Interface scale</strong>
             <p>
-              Zoom the whole UI — buttons, sidebar, Content mod cards, dialogs. Useful on high-DPI or
-              small screens.
+              Zoom the whole UI — buttons, sidebar, Content mod cards, dialogs.
+              <strong>Auto</strong> picks a size from your screen and window; pick a percent to lock it.
+            </p>
+            <p class="hint" style="margin-top: 6px;">
+              Suggested for this screen: {suggestUiScalePercent()}%
+              {#if resolveUiScaleMode(launcher) === "auto"}
+                · following window size
+              {/if}
             </p>
           </div>
           <div class="settings-row-control">
-            <div class="chip-row tight">
-              {#each [75, 90, 100, 110, 125, 150] as pct (pct)}
+            <div class="chip-row scale-chips">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={resolveUiScaleMode(launcher) === "auto"}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ uiScaleMode: "auto" as UiScaleMode })}
+              >
+                {#if resolveUiScaleMode(launcher) === "auto"}
+                  Auto · {normalizeUiScalePercent(launcher.uiScalePercent)}%
+                {:else}
+                  Auto
+                {/if}
+              </button>
+              {#each UI_SCALE_STEPS as pct (pct)}
                 <button
                   type="button"
                   class="chip press-effect"
-                  class:active={normalizeUiScalePercent(launcher.uiScalePercent) === pct}
+                  class:active={resolveUiScaleMode(launcher) === "manual" && normalizeUiScalePercent(launcher.uiScalePercent) === pct}
                   disabled={launcherSaving}
-                  on:click={() => void persistLauncher({ uiScalePercent: pct })}
+                  onclick={() => void persistLauncher({ uiScaleMode: "manual" as UiScaleMode, uiScalePercent: pct })}
                 >
                   {pct}%
                 </button>
@@ -781,7 +951,7 @@
                 class="chip press-effect"
                 class:active={launcher.youtubeInlinePlayer !== false}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ youtubeInlinePlayer: true })}
+                onclick={() => void persistLauncher({ youtubeInlinePlayer: true })}
               >
                 In-app player
               </button>
@@ -790,13 +960,24 @@
                 class="chip press-effect"
                 class:active={launcher.youtubeInlinePlayer === false}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ youtubeInlinePlayer: false })}
+                onclick={() => void persistLauncher({ youtubeInlinePlayer: false })}
               >
                 Preview only
               </button>
             </div>
           </div>
         </div>
+
+        <label class="check-row" style="margin-top: 14px;">
+          <input
+            type="checkbox"
+            checked={!!launcher.hideInstanceHome}
+            disabled={launcherSaving}
+            onchange={(e) => void persistLauncher({ hideInstanceHome: e.currentTarget.checked })}
+          />
+          Hide instance preview on home
+        </label>
+        <p class="hint">Hides the mods / resource packs / worlds / servers block under Play on the dashboard.</p>
 
         <div class="settings-row">
           <div class="settings-row-text">
@@ -813,7 +994,7 @@
                 class="chip press-effect"
                 class:active={launcher.autoHideWorkflowRail === true}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ autoHideWorkflowRail: true })}
+                onclick={() => void persistLauncher({ autoHideWorkflowRail: true })}
               >
                 Auto-hide
               </button>
@@ -822,50 +1003,9 @@
                 class="chip press-effect"
                 class:active={launcher.autoHideWorkflowRail !== true}
                 disabled={launcherSaving}
-                on:click={() => void persistLauncher({ autoHideWorkflowRail: false })}
+                onclick={() => void persistLauncher({ autoHideWorkflowRail: false })}
               >
                 Always visible
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-row">
-          <div class="settings-row-text">
-            <strong>Left sidebar</strong>
-            <p>
-              Full labels, icon rail with a collapse button, or auto-hide until you hover the left
-              edge of the window.
-            </p>
-          </div>
-          <div class="settings-row-control">
-            <div class="chip-row tight">
-              <button
-                type="button"
-                class="chip press-effect"
-                class:active={normalizeSidebarMode(launcher.sidebarMode) === "full"}
-                disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "full" })}
-              >
-                Expanded
-              </button>
-              <button
-                type="button"
-                class="chip press-effect"
-                class:active={normalizeSidebarMode(launcher.sidebarMode) === "icons"}
-                disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "icons" })}
-              >
-                Icons toggle
-              </button>
-              <button
-                type="button"
-                class="chip press-effect"
-                class:active={normalizeSidebarMode(launcher.sidebarMode) === "autoHide"}
-                disabled={launcherSaving}
-                on:click={() => void persistLauncher({ sidebarMode: "autoHide" })}
-              >
-                Auto-hide
               </button>
             </div>
           </div>
@@ -880,7 +1020,7 @@
             <select
               class="control-select"
               value={String(launcher.concurrentDownloads)}
-              on:change={onConcurrentChange}
+              onchange={onConcurrentChange}
               disabled={launcherSaving}
               aria-label="Concurrent downloads"
             >
@@ -898,11 +1038,11 @@
           </div>
           <div class="settings-row-control">
             <div class="chip-row tight">
-              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} on:click={() => applyResolution("default")}>Default</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "854x480"} disabled={launcherSaving} on:click={() => applyResolution("854x480")}>854×480</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "1280x720"} disabled={launcherSaving} on:click={() => applyResolution("1280x720")}>720p</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "1920x1080"} disabled={launcherSaving} on:click={() => applyResolution("1920x1080")}>1080p</button>
-              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} on:click={() => (resMode = "custom")}>Custom</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "default"} disabled={launcherSaving} onclick={() => applyResolution("default")}>Default</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "854x480"} disabled={launcherSaving} onclick={() => applyResolution("854x480")}>854×480</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "1280x720"} disabled={launcherSaving} onclick={() => applyResolution("1280x720")}>720p</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "1920x1080"} disabled={launcherSaving} onclick={() => applyResolution("1920x1080")}>1080p</button>
+              <button type="button" class="chip press-effect" class:active={resMode === "custom"} disabled={launcherSaving} onclick={() => (resMode = "custom")}>Custom</button>
             </div>
             {#if resMode === "custom"}
               <div class="res-custom">
@@ -914,7 +1054,7 @@
                   Height
                   <input type="number" min="480" max="4320" step="1" bind:value={customH} />
                 </label>
-                <button type="button" class="secondary" on:click={() => applyResolution("custom")} disabled={launcherSaving}>
+                <button type="button" class="secondary" onclick={() => applyResolution("custom")} disabled={launcherSaving}>
                   Apply
                 </button>
               </div>
@@ -935,7 +1075,7 @@
                 type="checkbox"
                 checked={discordRpcEnabled}
                 disabled={discordSaving}
-                on:change={onDiscordToggle}
+                onchange={onDiscordToggle}
               />
               Enable Rich Presence
             </label>
@@ -947,15 +1087,15 @@
                   placeholder="Application ID from Discord Developer Portal"
                   autocomplete="off"
                   disabled={discordSaving}
-                  on:input={() => (discordDirty = true)}
+                  oninput={() => (discordDirty = true)}
                 />
-                <button type="button" class="ghost mini" on:click={openDiscordPortal} title="Open Discord Developer Portal">
+                <button type="button" class="ghost mini" onclick={openDiscordPortal} title="Open Discord Developer Portal">
                   <ExternalLink size={14} /> Portal
                 </button>
               </div>
             </label>
             <div class="row-actions">
-              <button type="button" on:click={savePresence} disabled={discordSaving || !discordDirty}>
+              <button type="button" onclick={savePresence} disabled={discordSaving || !discordDirty}>
                 {#if discordSaving}
                   <Loader2 size={14} class="spin" /> Saving…
                 {:else}
@@ -973,7 +1113,7 @@
             <p>Built-in hotkeys for navigating TuffBox.</p>
           </div>
           <div class="settings-row-control">
-            <button type="button" class="ghost" on:click={() => (shortcutsOpen = !shortcutsOpen)}>
+            <button type="button" class="ghost" onclick={() => (shortcutsOpen = !shortcutsOpen)}>
               <Command size={14} />
               {shortcutsOpen ? "Hide" : "Show"} shortcuts ({shortcuts.length})
             </button>
@@ -1007,7 +1147,7 @@
               value={launcher.defaultJavaPath ?? "Auto-detect"}
               title={launcher.defaultJavaPath ?? "Auto-detect"}
             />
-            <button type="button" class="secondary" on:click={() => (showJavaPicker = true)}>Browse…</button>
+            <button type="button" class="secondary" onclick={() => (showJavaPicker = true)}>Browse…</button>
           </div>
         </label>
         <label>
@@ -1016,7 +1156,7 @@
             rows="3"
             bind:value={launcher.javaCustomArgs}
             placeholder="-XX:+UseG1GC …"
-            on:blur={() => persistLauncher({ javaCustomArgs: launcher.javaCustomArgs?.trim() || null })}
+            onblur={() => persistLauncher({ javaCustomArgs: launcher.javaCustomArgs?.trim() || null })}
           ></textarea>
         </label>
         <label>
@@ -1026,7 +1166,7 @@
             min="512"
             step="256"
             bind:value={launcher.defaultMemoryMb}
-            on:change={() =>
+            onchange={() =>
               persistLauncher({
                 defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
               })}
@@ -1036,7 +1176,7 @@
           <button
             type="button"
             disabled={launcherSaving}
-            on:click={() =>
+            onclick={() =>
               persistLauncher({
                 javaCustomArgs: launcher.javaCustomArgs?.trim() || null,
                 defaultMemoryMb: Math.max(512, Number(launcher.defaultMemoryMb) || 4096),
@@ -1059,7 +1199,7 @@
           <input
             bind:value={launcher.preLaunchHook}
             placeholder="Command before game start"
-            on:blur={() => persistLauncher({ preLaunchHook: launcher.preLaunchHook?.trim() || null })}
+            onblur={() => persistLauncher({ preLaunchHook: launcher.preLaunchHook?.trim() || null })}
           />
         </label>
         <label>
@@ -1067,7 +1207,7 @@
           <input
             bind:value={launcher.postExitHook}
             placeholder="Command after game exits"
-            on:blur={() => persistLauncher({ postExitHook: launcher.postExitHook?.trim() || null })}
+            onblur={() => persistLauncher({ postExitHook: launcher.postExitHook?.trim() || null })}
           />
         </label>
         <label>
@@ -1075,14 +1215,14 @@
           <input
             bind:value={launcher.wrapperCommand}
             placeholder="e.g. gamemoderun"
-            on:blur={() => persistLauncher({ wrapperCommand: launcher.wrapperCommand?.trim() || null })}
+            onblur={() => persistLauncher({ wrapperCommand: launcher.wrapperCommand?.trim() || null })}
           />
         </label>
         <div class="row-actions save-row">
           <button
             type="button"
             disabled={launcherSaving}
-            on:click={() =>
+            onclick={() =>
               persistLauncher({
                 preLaunchHook: launcher.preLaunchHook?.trim() || null,
                 postExitHook: launcher.postExitHook?.trim() || null,
@@ -1109,18 +1249,18 @@
           Runtime directory
           <div class="path-row">
             <input bind:value={runtimeDraft} placeholder={defaultRuntimePath || "Runtime path"} />
-            <button type="button" class="secondary" on:click={browseRuntime}>Browse…</button>
+            <button type="button" class="secondary" onclick={browseRuntime}>Browse…</button>
           </div>
         </label>
         <div class="row-actions">
-          <button type="button" on:click={applyRuntimePath} disabled={launcherSaving}>
+          <button type="button" onclick={applyRuntimePath} disabled={launcherSaving}>
             {launcherSaving ? "Saving…" : "Apply path"}
           </button>
           <button
             type="button"
             class="ghost"
             disabled={!defaultRuntimePath}
-            on:click={() => {
+            onclick={() => {
               runtimeDraft = defaultRuntimePath;
               void applyRuntimePath();
             }}
@@ -1143,18 +1283,18 @@
           Download directory
           <div class="path-row">
             <input bind:value={instancesDraft} placeholder={defaultInstancesPath || "Instances path"} />
-            <button type="button" class="secondary" on:click={browseInstances}>Browse…</button>
+            <button type="button" class="secondary" onclick={browseInstances}>Browse…</button>
           </div>
         </label>
         <div class="row-actions">
-          <button type="button" on:click={applyInstancesPath} disabled={launcherSaving}>
+          <button type="button" onclick={applyInstancesPath} disabled={launcherSaving}>
             {launcherSaving ? "Saving…" : "Apply path"}
           </button>
           <button
             type="button"
             class="ghost"
             disabled={!defaultInstancesPath}
-            on:click={() => {
+            onclick={() => {
               instancesDraft = defaultInstancesPath;
               void applyInstancesPath();
             }}
@@ -1198,13 +1338,13 @@
               />
             </label>
             <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("github", githubTokenDraft)} disabled={!!savingSecret || !githubTokenDraft.trim()}>
+              <button class="secondary mini" onclick={() => saveSecret("github", githubTokenDraft)} disabled={!!savingSecret || !githubTokenDraft.trim()}>
                 {savingSecret === "github" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" on:click={() => clearSecret("github")} disabled={!githubTokenSet || !!clearingSecret}>
+              <button class="ghost mini" onclick={() => clearSecret("github")} disabled={!githubTokenSet || !!clearingSecret}>
                 {clearingSecret === "github" ? "Clearing…" : "Clear"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("github")} disabled={!githubTokenSet || !!testingProvider}>
+              <button class="ghost mini" onclick={() => testProvider("github")} disabled={!githubTokenSet || !!testingProvider}>
                 {testingProvider === "github" ? "Testing…" : "Test"}
               </button>
             </div>
@@ -1226,13 +1366,13 @@
               />
             </label>
             <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("modrinth", modrinthTokenDraft)} disabled={!!savingSecret || !modrinthTokenDraft.trim()}>
+              <button class="secondary mini" onclick={() => saveSecret("modrinth", modrinthTokenDraft)} disabled={!!savingSecret || !modrinthTokenDraft.trim()}>
                 {savingSecret === "modrinth" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" on:click={() => clearSecret("modrinth")} disabled={!modrinthTokenSet || !!clearingSecret}>
+              <button class="ghost mini" onclick={() => clearSecret("modrinth")} disabled={!modrinthTokenSet || !!clearingSecret}>
                 {clearingSecret === "modrinth" ? "Clearing…" : "Clear"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("modrinth")} disabled={!modrinthTokenSet || !!testingProvider}>
+              <button class="ghost mini" onclick={() => testProvider("modrinth")} disabled={!modrinthTokenSet || !!testingProvider}>
                 {testingProvider === "modrinth" ? "Testing…" : "Test"}
               </button>
             </div>
@@ -1254,13 +1394,13 @@
               />
             </label>
             <div class="row-actions">
-              <button class="secondary mini" on:click={() => saveSecret("curseforge", curseforgeTokenDraft)} disabled={!!savingSecret || !curseforgeTokenDraft.trim()}>
+              <button class="secondary mini" onclick={() => saveSecret("curseforge", curseforgeTokenDraft)} disabled={!!savingSecret || !curseforgeTokenDraft.trim()}>
                 {savingSecret === "curseforge" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" on:click={() => clearSecret("curseforge")} disabled={!curseforgeTokenSet || !!clearingSecret}>
+              <button class="ghost mini" onclick={() => clearSecret("curseforge")} disabled={!curseforgeTokenSet || !!clearingSecret}>
                 {clearingSecret === "curseforge" ? "Clearing…" : "Clear"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("curseforge")} disabled={!curseforgeTokenSet || !!testingProvider}>
+              <button class="ghost mini" onclick={() => testProvider("curseforge")} disabled={!curseforgeTokenSet || !!testingProvider}>
                 {testingProvider === "curseforge" ? "Testing…" : "Test"}
               </button>
             </div>
@@ -1271,23 +1411,74 @@
             <div class="provider-head">
               <strong>AI</strong>
               <span class:ok={aiProvider === "ollama" || aiApiKeySet}>
-                {aiProvider === "ollama" ? "Ollama" : aiApiKeySet ? "API key set" : "API (no key)"}
+                {aiProvider === "ollama"
+                  ? "Ollama"
+                  : isGeminiEndpoint
+                    ? aiApiKeySet
+                      ? "Gemini · key set"
+                      : "Gemini · no key"
+                    : aiApiKeySet
+                      ? "API key set"
+                      : "API (no key)"}
               </span>
             </div>
             <p class="hint">
-              Provider: <code>{aiProvider}</code>
-              · Endpoint: <code>{aiEndpoint || "—"}</code>
-              · Model: <code>{aiModel || "—"}</code>
+              <code>{aiProvider}</code> · <code>{aiModel || "—"}</code>
               {#if aiProvider === "ollama"}
-                · Path: <code>{ollamaBinaryPath || "auto"}</code>
-                · Models: <code>{ollamaModelsPath || "default"}</code>
+                · models <code>{ollamaModelsPath || "default"}</code>
               {/if}
             </p>
+
+            <label>
+              Gemini model
+              <input
+                bind:value={aiModel}
+                placeholder={GEMINI_DEFAULT_MODEL}
+                autocomplete="off"
+              />
+            </label>
+            <label>
+              <KeyRound size={12} /> Gemini API key
+              <input
+                type="password"
+                bind:value={aiApiKeyDraft}
+                placeholder={aiApiKeySet ? "•••••••• (enter new to replace)" : "AIza… from Google AI Studio"}
+                autocomplete="new-password"
+              />
+            </label>
+            <p class="hint">Gemini key from AI Studio — routed via OpenAI-compat endpoint.</p>
+
             <div class="row-actions">
-              <button type="button" class="secondary mini" on:click={() => (aiModalOpen = true)}>
-                <Bot size={14} /> Configure AI connection…
+              <button
+                type="button"
+                class="secondary mini"
+                onclick={useGeminiForTesting}
+                disabled={savingGemini || !!savingSecret}
+              >
+                {savingGemini ? "Saving…" : "Use Gemini"}
               </button>
-              <button class="ghost mini" on:click={() => testProvider("ai")} disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}>
+              <button
+                class="ghost mini"
+                onclick={() => saveSecret("ai", aiApiKeyDraft)}
+                disabled={!!savingSecret || !aiApiKeyDraft.trim()}
+              >
+                {savingSecret === "ai" ? "Saving…" : "Save key only"}
+              </button>
+              <button
+                class="ghost mini"
+                onclick={() => clearSecret("ai")}
+                disabled={!aiApiKeySet || !!clearingSecret}
+              >
+                {clearingSecret === "ai" ? "Clearing…" : "Clear key"}
+              </button>
+              <button type="button" class="ghost mini" onclick={() => (aiModalOpen = true)}>
+                <Bot size={14} /> More…
+              </button>
+              <button
+                class="ghost mini"
+                onclick={() => testProvider("ai")}
+                disabled={!!testingProvider || (aiProvider === "openai-compatible" && !aiApiKeySet && !aiEndpoint.includes("127.0.0.1") && !aiEndpoint.includes("localhost"))}
+              >
                 {testingProvider === "ai" ? "Testing…" : "Test AI"}
               </button>
             </div>
@@ -1299,17 +1490,13 @@
               <strong><Network size={14} /> TuffSwarm</strong>
               <span class:ok={swarmEnabled}>{swarmEnabled ? "enabled" : "off"}</span>
             </div>
-            <p class="hint">
-              Shares crash→fix capsules (fingerprint + solution + actions — not raw logs).
-              Community backend (Supabase) is built in — users only need to enable the network.
-              Optional: custom hub / P2P for self-hosting.
-            </p>
+            <p class="hint">Share crash fix capsules (signatures + plans, not raw logs). Built-in community backend — enable to join.</p>
             <label class="check-row">
               <input
                 type="checkbox"
                 checked={swarmEnabled}
                 disabled={swarmSaving}
-                on:change={toggleSwarmEnabled}
+                onchange={toggleSwarmEnabled}
               />
               Use TuffSwarm network
             </label>
@@ -1326,7 +1513,7 @@
               type="button"
               class="ghost mini"
               disabled={!swarmEnabled}
-              on:click={() => (swarmSupabaseAdvanced = !swarmSupabaseAdvanced)}
+              onclick={() => (swarmSupabaseAdvanced = !swarmSupabaseAdvanced)}
             >
               {swarmSupabaseAdvanced ? "Hide advanced backend" : "Advanced backend override…"}
             </button>
@@ -1345,7 +1532,7 @@
                 type="button"
                 class="mini"
                 disabled={swarmSaving || !swarmEnabled}
-                on:click={saveSupabaseUrl}
+                onclick={saveSupabaseUrl}
               >
                 Save Supabase URL
               </button>
@@ -1368,7 +1555,7 @@
                   savingSecret === "swarm_supabase" ||
                   !swarmSupabaseAnonDraft.trim()
                 }
-                on:click={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
+                onclick={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
               >
                 {savingSecret === "swarm_supabase" ? "Saving…" : "Save anon key"}
               </button>
@@ -1379,7 +1566,7 @@
                   clearingSecret === "swarm_supabase" ||
                   !swarmSupabaseAnonSet
                 }
-                on:click={() => clearSecret("swarm_supabase")}
+                onclick={() => clearSecret("swarm_supabase")}
               >
                 Clear override
               </button>
@@ -1399,7 +1586,7 @@
                 type="checkbox"
                 checked={swarmP2pEnabled}
                 disabled={swarmSaving || !swarmEnabled}
-                on:change={toggleP2pEnabled}
+                onchange={toggleP2pEnabled}
               />
               Prefer local P2P node (Phase C)
             </label>
@@ -1417,7 +1604,7 @@
                 type="button"
                 class="secondary mini"
                 disabled={!swarmEnabled || !swarmP2pEnabled || swarmSaving}
-                on:click={ensureP2pNode}
+                onclick={ensureP2pNode}
               >
                 Start / attach node
               </button>
@@ -1425,7 +1612,7 @@
                 type="button"
                 class="ghost mini"
                 disabled={!swarmEnabled || !swarmP2pEnabled || swarmSaving}
-                on:click={refreshP2pStatus}
+                onclick={refreshP2pStatus}
               >
                 Refresh status
               </button>
@@ -1438,7 +1625,7 @@
                 type="checkbox"
                 checked={swarmSharePrompts}
                 disabled={swarmSaving || !swarmEnabled}
-                on:change={toggleSharePrompts}
+                onchange={toggleSharePrompts}
               />
               Ask to share capsule after a successful relaunch
             </label>
@@ -1467,10 +1654,10 @@
               <input type="password" bind:value={crashKbTokenDraft} placeholder={crashKbTokenSet ? "•••••••• (set)" : "optional bearer token"} autocomplete="off" />
             </label>
             <div class="row-actions">
-              <button class="mini" disabled={savingSecret === "crash_kb" || !crashKbTokenDraft.trim()} on:click={() => saveSecret("crash_kb", crashKbTokenDraft)}>
+              <button class="mini" disabled={savingSecret === "crash_kb" || !crashKbTokenDraft.trim()} onclick={() => saveSecret("crash_kb", crashKbTokenDraft)}>
                 {savingSecret === "crash_kb" ? "Saving…" : "Save token"}
               </button>
-              <button class="ghost mini" disabled={clearingSecret === "crash_kb" || !crashKbTokenSet} on:click={() => clearSecret("crash_kb")}>
+              <button class="ghost mini" disabled={clearingSecret === "crash_kb" || !crashKbTokenSet} onclick={() => clearSecret("crash_kb")}>
                 Clear
               </button>
             </div>
@@ -1478,10 +1665,10 @@
         </div>
 
         <div class="row-actions save-row">
-          <button on:click={saveIntegrationSettings} disabled={savingSettings || integrationsLoading}>
+          <button onclick={saveIntegrationSettings} disabled={savingSettings || integrationsLoading}>
             {savingSettings ? "Saving…" : "Save settings"}
           </button>
-          <button class="ghost" on:click={loadIntegrations} disabled={integrationsLoading}>Reload status</button>
+          <button class="ghost" onclick={loadIntegrations} disabled={integrationsLoading}>Reload status</button>
         </div>
       </section>
     {/if}
@@ -1492,7 +1679,7 @@
           <Info size={18} />
           <h3>About</h3>
         </div>
-        <button class="ghost" on:click={async () => { await loadAppVersion(); await checkUpdate(); }} disabled={updateLoading}>
+        <button class="ghost" onclick={async () => { await loadAppVersion(); await checkUpdate(); }} disabled={updateLoading}>
           {updateLoading ? "Checking…" : "Check for updates"}
         </button>
         {#if updateError}
@@ -1503,7 +1690,7 @@
             {#if updateCheck.updateAvailable}
               <span class="update-avail">Update available: {updateCheck.latestVersion}</span>
               {#if updateCheck.releaseUrl}
-                <button class="ghost mini" on:click={openReleaseUrl}>Open release</button>
+                <button class="ghost mini" onclick={openReleaseUrl}>Open release</button>
               {/if}
             {:else}
               <span class="update-ok">Up to date ({updateCheck.currentVersion})</span>
@@ -1511,7 +1698,11 @@
           </div>
         {/if}
         <div class="about">
-          <div class="logo-big">T</div>
+          {#if $brandIcon === "creeper"}
+            <img class="logo-big logo-big-img" src={BRAND_ICON_CREEPER_SRC} alt="" draggable="false" />
+          {:else}
+            <div class="logo-big">T</div>
+          {/if}
           <div>
             <h4>TuffBox IDE</h4>
             <p>Developer harness for Minecraft modpacks.</p>
@@ -1519,19 +1710,58 @@
           </div>
         </div>
       </section>
+
+      <section class="card card-wide">
+        <div class="card-title">
+          <Palette size={18} />
+          <h3>App icon</h3>
+        </div>
+        <p class="hint">Shown on the left rail and on this About page.</p>
+        <div class="brand-icon-picker" role="radiogroup" aria-label="App icon">
+          <button
+            type="button"
+            class="brand-icon-option"
+            class:selected={$brandIcon === "classic"}
+            role="radio"
+            aria-checked={$brandIcon === "classic"}
+            onclick={() => selectBrandIcon("classic")}
+          >
+            <span class="brand-icon-preview brand-icon-classic" aria-hidden="true">T</span>
+            <span class="brand-icon-label">Classic</span>
+          </button>
+          <button
+            type="button"
+            class="brand-icon-option"
+            class:selected={$brandIcon === "creeper"}
+            role="radio"
+            aria-checked={$brandIcon === "creeper"}
+            onclick={() => selectBrandIcon("creeper")}
+          >
+            <img
+              class="brand-icon-preview brand-icon-creeper"
+              src={BRAND_ICON_CREEPER_SRC_SM}
+              alt=""
+              draggable="false"
+            />
+            <span class="brand-icon-label">Creeper box</span>
+          </button>
+        </div>
+      </section>
     {/if}
   </div>
 </div>
 
-<AiConnectionModal bind:open={aiModalOpen} on:saved={loadIntegrations} />
+<AiConnectionModal bind:open={aiModalOpen} onsaved={loadIntegrations} />
 
 {#if showJavaPicker}
   <JavaPickerModal
     current={launcher.defaultJavaPath ?? "Auto-detect"}
-    on:close={() => (showJavaPicker = false)}
-    on:selected={(e) => { showJavaPicker = false; void persistLauncher({ defaultJavaPath: e.detail }); }}
+    onclose={() => (showJavaPicker = false)}
+    onselected={(path) => { showJavaPicker = false; void persistLauncher({ defaultJavaPath: path }); }}
   />
 {/if}
+
+<ConfettiBurst active={brandConfetti} ondone={() => (brandConfetti = false)} />
 
 <style>
   .settings {
@@ -1639,6 +1869,16 @@
     min-height: 72px;
     font-family: ui-monospace, monospace;
     font-size: 12px;
+    line-height: 1.45;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 10px 14px;
+  }
+
+  textarea::placeholder {
+    color: var(--text-muted);
   }
 
   .path-row {
@@ -1808,6 +2048,75 @@
     box-shadow: 0 8px 24px rgba(27, 217, 106, 0.25);
   }
 
+  .logo-big-img {
+    display: block;
+    object-fit: cover;
+    background: transparent;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    color: transparent;
+    font-size: 0;
+  }
+
+  .brand-icon-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .brand-icon-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    min-width: 120px;
+    padding: 14px 16px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+  }
+
+  .brand-icon-option:hover {
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+  }
+
+  .brand-icon-option.selected {
+    color: var(--text-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+  }
+
+  .brand-icon-preview {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--border-radius-md);
+  }
+
+  .brand-icon-classic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #ffc500, #ff9500);
+    color: #241703;
+    font-weight: 900;
+    font-size: 22px;
+    box-shadow: 0 4px 14px rgba(255, 197, 0, 0.28);
+  }
+
+  .brand-icon-creeper {
+    display: block;
+    object-fit: cover;
+    background: transparent;
+  }
+
+  .brand-icon-label {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
   .about h4 {
     font-size: 18px;
     margin-bottom: 4px;
@@ -1844,8 +2153,33 @@
     border-radius: 4px;
   }
 
-  .integrations { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
-  .provider-block { display: grid; gap: 10px; padding: 14px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
+  .integrations {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+    gap: 14px;
+  }
+  .provider-block {
+    display: grid;
+    gap: 10px;
+    padding: 14px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    min-width: 0;
+  }
+  .provider-block label {
+    min-width: 0;
+  }
+  .provider-block input,
+  .provider-block select {
+    min-width: 0;
+  }
+  .provider-block .hint,
+  .provider-block .hint code,
+  .provider-block code {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
   .provider-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
   .provider-head strong { color: var(--text-primary); }
   .provider-head span { font-size: 11px; color: var(--text-muted); font-weight: 700; }
@@ -1865,10 +2199,25 @@
     cursor: pointer;
     font-weight: 500;
   }
+  .integrations .check-row,
+  .card .check-row {
+    flex-direction: row;
+    align-items: center;
+  }
   .check-row input {
     accent-color: var(--accent-primary);
     width: auto;
     flex-shrink: 0;
+    margin: 0;
+  }
+  .chip-row.scale-chips {
+    margin-bottom: 0;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+  .chip-row.scale-chips .chip {
+    padding: 6px 11px;
+    font-size: 11px;
   }
   .test-ok { color: var(--accent-primary); font-size: 11px; }
   .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }

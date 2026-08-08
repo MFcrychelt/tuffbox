@@ -1,35 +1,82 @@
 <script lang="ts">
-  import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "lucide-svelte";
-  import type { QuestChapter, QuestChapterGroup } from "../../lib/api";
+  import { Plus, Save, ChevronDown, ChevronRight, MoreVertical } from "@lucide/svelte";
+  import { iconDisplayId, type QuestChapter, type QuestChapterGroup } from "../../lib/api";
   import { projectPath } from "../../lib/store";
   import QuestItemIcon from "./QuestItemIcon.svelte";
   import { preloadItemIcons } from "./iconCache";
 
-  export let chapters: QuestChapter[];
-  export let chapterGroups: QuestChapterGroup[] = [];
-  export let selectedChapter: string;
-  export let dirtyIds: Set<string>;
-  export let saving = false;
-  export let onSelect: (id: string) => void;
-  export let onCreate: () => void;
-  export let onSave: (id: string) => void;
-  export let onDirty: (id: string) => void;
-  export let onDelete: ((id: string) => void) | null = null;
-  export let onMove: ((id: string, dir: -1 | 1) => void) | null = null;
+  let {
+    chapters,
+    chapterGroups = [],
+    selectedChapter,
+    dirtyIds,
+    saving = false,
+    onSelect,
+    onCreate,
+    onSave,
+    onDirty,
+    onDelete = null,
+    onMove = null,
+  }: {
+    chapters: QuestChapter[];
+    chapterGroups?: QuestChapterGroup[];
+    selectedChapter: string;
+    dirtyIds: Set<string>;
+    saving?: boolean;
+    onSelect: (id: string) => void;
+    onCreate: () => void;
+    onSave: (id: string) => void;
+    onDirty: (id: string) => void;
+    onDelete?: ((id: string) => void) | null;
+    onMove?: ((id: string, dir: -1 | 1) => void) | null;
+  } = $props();
 
-  let collapsed = new Set<string>();
-  let editingId: string | null = null;
-  let menuId: string | null = null;
-  let iconRevision = 0;
+  let collapsed = $state<Set<string>>(new Set());
+  let editingId = $state<string | null>(null);
+  let titleEditEl = $state<HTMLInputElement | null>(null);
+  let menuId = $state<string | null>(null);
+  let iconRevision = $state(0);
 
-  $: groupTitle = new Map(chapterGroups.map((g) => [g.id, g.title]));
-  $: groups = buildGroups(chapters, groupTitle);
-  $: if (chapters && $projectPath) {
-    void preloadRailIcons(chapters);
-  }
+  let groupTitle = $derived(new Map(chapterGroups.map((g) => [g.id, g.title])));
+  let groups = $derived(buildGroups(chapters, groupTitle));
+
+  $effect(() => {
+    if (editingId && titleEditEl) {
+      titleEditEl.focus();
+      titleEditEl.select();
+    }
+  });
+
+  $effect(() => {
+    if (chapters && $projectPath) {
+      void preloadRailIcons(chapters);
+    }
+  });
+
+  $effect(() => {
+    if (!menuId) return;
+    const onPtr = (e: PointerEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el?.closest?.(".ch-menu-wrap")) menuId = null;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        menuId = null;
+      }
+    };
+    window.addEventListener("pointerdown", onPtr, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", onPtr, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  });
 
   async function preloadRailIcons(list: QuestChapter[]) {
-    const ids = list.map((c) => c.icon).filter(Boolean) as string[];
+    const ids = list
+      .map((c) => iconDisplayId(c.icon))
+      .filter((id): id is string => !!id);
     if (!ids.length || !$projectPath) return;
     await preloadItemIcons(ids, $projectPath);
     iconRevision += 1;
@@ -38,7 +85,6 @@
   function buildGroups(list: QuestChapter[], titles: Map<string, string>) {
     const order: string[] = [];
     const map = new Map<string, QuestChapter[]>();
-    // Prefer declared group order from chapter_groups.snbt
     for (const g of chapterGroups) {
       if (!map.has(g.id)) {
         map.set(g.id, []);
@@ -53,7 +99,6 @@
       }
       map.get(g)!.push(ch);
     }
-    // Drop empty declared groups with no chapters
     return order
       .filter((key) => (map.get(key)?.length ?? 0) > 0)
       .map((key) => ({
@@ -64,13 +109,14 @@
   }
 
   function toggleGroup(key: string) {
-    if (collapsed.has(key)) collapsed.delete(key);
-    else collapsed.add(key);
-    collapsed = collapsed;
+    const next = new Set(collapsed);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsed = next;
   }
 
   function glyph(ch: QuestChapter): string {
-    const icon = ch.icon?.trim();
+    const icon = iconDisplayId(ch.icon);
     if (icon) {
       const leaf = icon.includes(":") ? icon.split(":").pop()! : icon;
       return (leaf[0] || "?").toUpperCase();
@@ -83,7 +129,6 @@
     if (next && next !== ch.title) {
       ch.title = next;
       onDirty(ch.id);
-      chapters = chapters;
     }
     editingId = null;
   }
@@ -100,16 +145,16 @@
 <aside class="rail ftbq-rail">
   <div class="rail-h">
     <h3>Chapters</h3>
-    <button type="button" class="ico" title="Add chapter" on:click={onCreate}>
-      <Plus size={14} />
+    <button type="button" class="ico" title="Add chapter" onclick={onCreate}>
+      <Plus size={14} class="flex-shrink-0" />
     </button>
   </div>
 
   <div class="rail-list">
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
-        <button type="button" class="group-h" on:click={() => toggleGroup(g.key)}>
-          {#if collapsed.has(g.key)}<ChevronRight size={12} />{:else}<ChevronDown size={12} />{/if}
+        <button type="button" class="group-h" onclick={() => toggleGroup(g.key)}>
+          {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
         </button>
       {/if}
@@ -123,21 +168,21 @@
             <button
               type="button"
               class="ch-row"
-              on:click={() => {
+              onclick={() => {
                 onSelect(ch.id);
                 menuId = null;
               }}
-              on:dblclick={() => (editingId = ch.id)}
-              on:keydown={(e) => {
+              ondblclick={() => (editingId = ch.id)}
+              onkeydown={(e) => {
                 if (e.key === "Delete" && onDelete) {
                   e.preventDefault();
                   onDelete(ch.id);
                 }
               }}
             >
-              <span class="glyph" title={ch.icon || ""}>
+              <span class="glyph" title={iconDisplayId(ch.icon) || ""}>
                 <QuestItemIcon
-                  itemId={ch.icon}
+                  itemId={iconDisplayId(ch.icon)}
                   fallback={glyph(ch)}
                   size={16}
                   revision={iconRevision}
@@ -147,14 +192,14 @@
                 {#if editingId === ch.id}
                   <input
                     class="title-edit"
+                    bind:this={titleEditEl}
                     value={ch.title}
-                    autofocus
-                    on:click|stopPropagation
-                    on:keydown={(e) => {
+                    onclick={(e) => e.stopPropagation()}
+                    onkeydown={(e) => {
                       if (e.key === "Enter") commitTitle(ch, inputVal(e));
                       if (e.key === "Escape") editingId = null;
                     }}
-                    on:blur={(e) => commitTitle(ch, inputVal(e))}
+                    onblur={(e) => commitTitle(ch, inputVal(e))}
                   />
                 {:else}
                   <strong>{stripMc(ch.title)}</strong>
@@ -169,18 +214,24 @@
                   type="button"
                   class="ico tiny"
                   title="Chapter actions"
-                  on:click|stopPropagation={() => (menuId = menuId === ch.id ? null : ch.id)}
+                  aria-haspopup="menu"
+                  aria-expanded={menuId === ch.id}
+                  aria-label={`Chapter actions for ${stripMc(ch.title)}`}
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    menuId = menuId === ch.id ? null : ch.id;
+                  }}
                 >
-                  <MoreVertical size={12} />
+                  <MoreVertical size={12} class="flex-shrink-0" />
                 </button>
                 {#if menuId === ch.id}
-                  <div class="ch-menu">
+                  <div class="ch-menu" role="menu">
                     {#if onMove}
-                      <button type="button" on:click={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
-                      <button type="button" on:click={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
+                      <button type="button" role="menuitem" onclick={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
+                      <button type="button" role="menuitem" onclick={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
                     {/if}
                     {#if onDelete}
-                      <button type="button" class="danger" on:click={() => { onDelete?.(ch.id); menuId = null; }}
+                      <button type="button" role="menuitem" class="danger" onclick={() => { onDelete?.(ch.id); menuId = null; }}
                         >Delete…</button
                       >
                     {/if}
@@ -195,8 +246,8 @@
   </div>
 
   {#if selectedChapter && dirtyIds.has(selectedChapter)}
-    <button type="button" class="save-ch" disabled={saving} on:click={() => onSave(selectedChapter)}>
-      <Save size={14} /> Save chapter
+    <button type="button" class="save-ch" disabled={saving} onclick={() => onSave(selectedChapter)}>
+      <Save size={14} class="flex-shrink-0" /> Save chapter
     </button>
   {/if}
 </aside>
@@ -206,8 +257,9 @@
     display: flex;
     flex-direction: column;
     gap: 0;
-    background: var(--ftbq-bg-panel, #212126);
-    border-right: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg-panel);
+    border-right: 1px solid var(--ftbq-frame);
+    box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
     padding: 0;
     min-height: 0;
     height: 100%;
@@ -216,17 +268,19 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 10px 8px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.15);
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.22));
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
   }
   .rail-h h3 {
     margin: 0;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--ftbq-title-gold, #f2c94c);
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     font-weight: 700;
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7);
   }
   .ico {
     width: 24px;
@@ -234,16 +288,23 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.45);
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
   }
   .ico:hover {
     color: var(--ftbq-text, #e8e8e8);
-    border-color: var(--ftbq-accent-teal, #3db8a8);
-    background: rgba(61, 184, 168, 0.1);
+    border-color: var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+    filter: brightness(1.08);
+  }
+  .ico:active {
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
   }
   .rail-list {
     flex: 1;
@@ -280,11 +341,16 @@
     border-left: 3px solid transparent;
   }
   .ch-row-wrap.sel {
-    background: rgba(85, 201, 90, 0.12);
-    border-left-color: var(--ftbq-accent-green, #55c95a);
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ftbq-accent-green) 16%, transparent),
+      color-mix(in srgb, var(--ftbq-accent-green) 5%, transparent)
+    );
+    border-left-color: var(--ftbq-accent-green);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
   }
   .ch-row-wrap.dirty:not(.sel) {
-    border-left-color: rgba(242, 201, 76, 0.4);
+    border-left-color: color-mix(in srgb, var(--ftbq-quest-started) 40%, transparent);
   }
   .ch-row {
     display: flex;
@@ -326,10 +392,12 @@
     min-width: 120px;
     display: flex;
     flex-direction: column;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    border-radius: 2px;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 3px;
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+      0 8px 20px rgba(0, 0, 0, 0.55);
   }
   .ch-menu button {
     text-align: left;
@@ -341,7 +409,7 @@
     cursor: pointer;
   }
   .ch-menu button:hover {
-    background: rgba(61, 184, 168, 0.12);
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent);
   }
   .ch-menu button.danger {
     color: #f87171;
@@ -353,22 +421,27 @@
     padding: 0;
   }
   .glyph {
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     flex-shrink: 0;
-    border-radius: 2px;
-    background: var(--ftbq-node-fill, #18181c);
-    border: 2px solid var(--ftbq-border, #3a3a42);
+    border-radius: 3px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 11px;
     font-weight: 800;
     color: var(--ftbq-text, #e8e8e8);
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+    box-shadow:
+      inset 2px 2px 0 rgba(0, 0, 0, 0.55),
+      inset -1px -1px 0 rgba(255, 255, 255, 0.08);
   }
   .ch-row-wrap.sel .glyph {
-    border-color: var(--ftbq-accent-green, #55c95a);
+    box-shadow:
+      inset 2px 2px 0 rgba(0, 0, 0, 0.55),
+      inset -1px -1px 0 rgba(255, 255, 255, 0.08),
+      0 0 6px color-mix(in srgb, var(--ftbq-accent-green) 45%, transparent);
   }
   .ch-text {
     display: grid;
@@ -392,8 +465,8 @@
     font-weight: 600;
     padding: 2px 4px;
     width: 100%;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
   }
   .dot {
@@ -408,19 +481,31 @@
     justify-content: center;
     gap: 6px;
     padding: 7px;
-    border-radius: 2px;
-    border: 1px solid var(--ftbq-accent-green, #55c95a);
-    background: rgba(85, 201, 90, 0.12);
-    color: var(--ftbq-quest-completed, #55c95a);
+    border-radius: 3px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, #000);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-primary) 88%, #fff 12%),
+      color-mix(in srgb, var(--accent-primary) 72%, #000 28%)
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+    color: var(--ftbq-text);
+    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
   }
   .save-ch:hover:not(:disabled) {
-    background: rgba(85, 201, 90, 0.2);
+    filter: brightness(1.12);
   }
   .save-ch:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  :global(.ftbq-rail svg) {
+    flex-shrink: 0;
   }
 </style>

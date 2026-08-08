@@ -154,9 +154,9 @@ pub fn scan_configs_for_ore_gen(config_contents: &[(String, String)]) -> Vec<Heu
             }
 
             // Look for related keys in nearby lines
-            let vein_size = find_related_key(&lines, line_no, VEIN_SIZE_SUFFIXES);
-            let frequency = find_related_key(&lines, line_no, FREQUENCY_SUFFIXES);
-            let (min_height, max_height) = find_height_range(&lines, line_no);
+            let vein_size = find_related_key(&lines, line_no, VEIN_SIZE_SUFFIXES, &resource_name);
+            let frequency = find_related_key(&lines, line_no, FREQUENCY_SUFFIXES, &resource_name);
+            let (min_height, max_height) = find_height_range(&lines, line_no, &resource_name);
 
             let confidence = if key_lower.contains("enable") || key_lower.contains("generate") {
                 HeuristicConfidence::Medium
@@ -177,6 +177,11 @@ pub fn scan_configs_for_ore_gen(config_contents: &[(String, String)]) -> Vec<Heu
             });
         }
     }
+
+    // Deduplicate by (resource_name, config_file) — keep first occurrence
+    // (highest confidence since Medium is pushed before Low).
+    let mut seen = std::collections::HashSet::new();
+    results.retain(|r| seen.insert((r.resource_name.clone(), r.config_file.clone())));
 
     results
 }
@@ -281,19 +286,30 @@ fn infer_resource_name(key: &str, _file_path: &str) -> String {
     stem.to_lowercase()
 }
 
-fn find_related_key(lines: &[&str], center: usize, suffixes: &[&str]) -> Option<(String, String)> {
-    let window = 8usize;
-    let start = center.saturating_sub(window);
-    let end = (center + window).min(lines.len());
+fn find_related_key(
+    lines: &[&str],
+    center: usize,
+    suffixes: &[&str],
+    ore_prefix: &str,
+) -> Option<(String, String)> {
+    let prefix_lower = ore_prefix.to_lowercase();
+    // Try small window first (most configs keep related keys close), then expand.
+    for window in [8usize, 20] {
+        let start = center.saturating_sub(window);
+        let end = (center + window).min(lines.len());
 
-    for line in &lines[start..end] {
-        if let Some((k, v)) = parse_toml_kv(line)
-            .or_else(|| parse_json_kv(line))
-            .or_else(|| parse_cfg_kv(line))
-        {
-            let kl = k.to_lowercase();
-            if suffixes.iter().any(|s| kl.contains(&s.to_lowercase())) {
-                return Some((k.to_string(), v.to_string()));
+        for line in &lines[start..end] {
+            if let Some((k, v)) = parse_toml_kv(line)
+                .or_else(|| parse_json_kv(line))
+                .or_else(|| parse_cfg_kv(line))
+            {
+                let kl = k.to_lowercase();
+                // Must contain both the ore prefix AND the suffix to avoid cross-contamination.
+                if kl.contains(&prefix_lower)
+                    && suffixes.iter().any(|s| kl.contains(&s.to_lowercase()))
+                {
+                    return Some((k.to_string(), v.to_string()));
+                }
             }
         }
     }
@@ -303,27 +319,36 @@ fn find_related_key(lines: &[&str], center: usize, suffixes: &[&str]) -> Option<
 fn find_height_range(
     lines: &[&str],
     center: usize,
+    ore_prefix: &str,
 ) -> (Option<(String, String)>, Option<(String, String)>) {
-    let window = 10usize;
-    let start = center.saturating_sub(window);
-    let end = (center + window).min(lines.len());
+    let prefix_lower = ore_prefix.to_lowercase();
     let (min_sfx, max_sfx) = &HEIGHT_SUFFIXES[0];
-
     let mut min = None;
     let mut max = None;
 
-    for line in &lines[start..end] {
-        if let Some((k, v)) = parse_toml_kv(line)
-            .or_else(|| parse_json_kv(line))
-            .or_else(|| parse_cfg_kv(line))
-        {
-            let kl = k.to_lowercase();
-            if min_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
-                min = Some((k.to_string(), v.to_string()));
+    for window in [10usize, 24] {
+        let start = center.saturating_sub(window);
+        let end = (center + window).min(lines.len());
+
+        for line in &lines[start..end] {
+            if let Some((k, v)) = parse_toml_kv(line)
+                .or_else(|| parse_json_kv(line))
+                .or_else(|| parse_cfg_kv(line))
+            {
+                let kl = k.to_lowercase();
+                if !kl.contains(&prefix_lower) {
+                    continue;
+                }
+                if min.is_none() && min_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
+                    min = Some((k.to_string(), v.to_string()));
+                }
+                if max.is_none() && max_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
+                    max = Some((k.to_string(), v.to_string()));
+                }
             }
-            if max_sfx.iter().any(|s| kl.contains(&s.to_lowercase())) {
-                max = Some((k.to_string(), v.to_string()));
-            }
+        }
+        if min.is_some() && max.is_some() {
+            break;
         }
     }
     (min, max)
