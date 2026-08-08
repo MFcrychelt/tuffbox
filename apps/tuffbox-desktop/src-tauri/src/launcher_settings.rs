@@ -68,6 +68,9 @@ pub struct LauncherSettings {
     /// Round corners on panels/cards/chrome everywhere (CSS `--border-radius-*`).
     #[serde(default = "default_rounded_corners")]
     pub rounded_corners: bool,
+    /// Hide InstanceHome preview block on the home dashboard.
+    #[serde(default)]
+    pub hide_instance_home: bool,
 }
 
 fn default_theme() -> String {
@@ -129,6 +132,7 @@ impl Default for LauncherSettings {
             ui_scale_percent: default_ui_scale_percent(),
             ui_scale_mode: "auto".into(),
             rounded_corners: default_rounded_corners(),
+            hide_instance_home: false,
         }
     }
 }

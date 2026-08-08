@@ -164,6 +164,7 @@
     uiScalePercent: 100,
     uiScaleMode: "auto",
     roundedCorners: true,
+    hideInstanceHome: false,
   });
   let launcherSaving = $state(false);
   let launcherMsg = $state("");
@@ -952,6 +953,17 @@
             </div>
           </div>
         </div>
+
+        <label class="check-row" style="margin-top: 14px;">
+          <input
+            type="checkbox"
+            checked={!!launcher.hideInstanceHome}
+            disabled={launcherSaving}
+            onchange={(e) => void persistLauncher({ hideInstanceHome: e.currentTarget.checked })}
+          />
+          Hide instance preview on home
+        </label>
+        <p class="hint">Hides the mods / resource packs / worlds / servers block under Play on the dashboard.</p>
 
         <div class="settings-row">
           <div class="settings-row-text">

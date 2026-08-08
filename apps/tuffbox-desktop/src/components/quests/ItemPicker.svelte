@@ -174,8 +174,8 @@
     max-height: min(70vh, 640px);
     display: flex;
     flex-direction: column;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-border);
     border-radius: 2px;
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
     overflow: hidden;
@@ -186,14 +186,14 @@
     justify-content: space-between;
     align-items: center;
     padding: 12px 14px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
   }
   .search {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 10px 14px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .search input {
@@ -218,8 +218,8 @@
     gap: 4px;
     padding: 8px 6px;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
-    background: var(--ftbq-bg, #1a1a1e);
+    border: 1px solid var(--ftbq-border);
+    background: var(--ftbq-bg);
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
     min-height: 72px;
@@ -242,7 +242,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--ftbq-node-fill, #18181c);
+    background: var(--ftbq-node-fill);
     border-radius: 2px;
     font-weight: 800;
     color: var(--ftbq-title-gold, #f2c94c);
@@ -269,7 +269,7 @@
     align-items: center;
     justify-content: center;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;

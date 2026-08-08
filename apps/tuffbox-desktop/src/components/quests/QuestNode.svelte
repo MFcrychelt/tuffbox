@@ -181,7 +181,7 @@
     justify-content: center;
     background:
       radial-gradient(circle at 50% 32%, rgba(255, 255, 255, 0.07), transparent 62%),
-      var(--ftbq-node-fill, #18181c);
+      var(--ftbq-node-fill);
     box-shadow:
       inset 2px 2px 0 rgba(0, 0, 0, 0.55),
       inset -1px -1px 0 rgba(255, 255, 255, 0.09);
@@ -272,7 +272,7 @@
     pointer-events: none;
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
     padding: 1px 4px;
-    border: 1px dashed var(--ftbq-border, #3a3a42);
+    border: 1px dashed var(--ftbq-border);
     border-radius: 2px;
     background: rgba(0, 0, 0, 0.35);
   }

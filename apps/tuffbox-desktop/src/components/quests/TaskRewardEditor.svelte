@@ -548,8 +548,8 @@
     gap: 8px;
     padding: 8px 12px 6px;
     background: rgba(0, 0, 0, 0.15);
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-top: 1px solid var(--ftbq-border);
+    border-bottom: 1px solid var(--ftbq-border);
   }
   .tr-h h4 {
     margin: 0;
@@ -562,8 +562,8 @@
   .add-row select {
     font-size: 10px;
     max-width: 130px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 2px;
   }
@@ -571,7 +571,7 @@
     display: grid;
     gap: 6px;
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.1);
   }
   .card-h {
@@ -582,8 +582,8 @@
   .card-h select {
     flex: 1;
     font-size: 12px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 2px;
   }
@@ -599,8 +599,8 @@
   .card select {
     font-size: 12px;
     text-transform: none;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 2px;
   }
@@ -620,7 +620,7 @@
     align-items: center;
     justify-content: center;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
@@ -639,7 +639,7 @@
   .icon-row {
     margin: 0;
     padding: 8px 12px 12px;
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
+    border-top: 1px solid var(--ftbq-border);
   }
   .raw {
     margin-top: 4px;
@@ -652,8 +652,8 @@
     font-family: ui-monospace, monospace;
     font-size: 10px;
     text-transform: none;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 2px;
   }

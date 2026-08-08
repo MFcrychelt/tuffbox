@@ -41,10 +41,12 @@
     ExternalLink,
     Users,
     FilePlus,
+    MoreHorizontal,
   } from "@lucide/svelte";
   import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
+  import ModInspector from "./ModInspector.svelte";
   import { toasts } from "../lib/toast";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
@@ -133,6 +135,7 @@ import { trapFocus } from "../lib/focusTrap";
   let steamBridgeInstalling = $state(false);
   let filter = $state("");
   let sideFilter = $state("all");
+  let actionsMenuOpen = $state(false);
   let contentFilter = $state("mod"); // mod, resourcepack, datapack, shader, favorites, list:<name>
   let error = $state<string | null>(null);
   let lastLoadedPath = $state<string | null>(null);
@@ -275,6 +278,7 @@ import { trapFocus } from "../lib/focusTrap";
         mods = [];
         lastLoadedPath = null;
         clearSelection();
+        clearFocusedMod();
       }
     });
     return unsub;
@@ -931,13 +935,27 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
-  // Multi-select (right-click enters selection mode; then LMB/RMB toggle)
+  // Multi-select (right-click enters selection mode; then LMB/RMB toggle).
+  // Left-click opens the inspector for a single mod.
   let selectionMode = $state(false);
   let selectedModIds = $state<Record<string, boolean>>({});
+  let focusedModId = $state<string | null>(null);
+
+  const focusedMod = $derived(focusedModId ? mods.find((m) => m.id === focusedModId) ?? null : null);
+
+  $effect(() => {
+    if (focusedModId && !mods.some((m) => m.id === focusedModId)) {
+      focusedModId = null;
+    }
+  });
 
   function clearSelection() {
     selectionMode = false;
     selectedModIds = {};
+  }
+
+  function clearFocusedMod() {
+    focusedModId = null;
   }
 
   function toggleModSelected(modId: string) {
@@ -951,6 +969,7 @@ import { trapFocus } from "../lib/focusTrap";
   function onCardContextMenu(e: MouseEvent, mod: ModRow) {
     e.preventDefault();
     e.stopPropagation();
+    clearFocusedMod();
     if (!selectionMode) {
       selectionMode = true;
       selectedModIds = { [mod.id]: true };
@@ -960,12 +979,20 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   function onCardClick(e: MouseEvent, mod: ModRow) {
-    if (!selectionMode) return;
-    // Ignore clicks on action buttons — they use stopPropagation.
     const target = e.target as HTMLElement | null;
-    if (target?.closest("button")) return;
-    e.preventDefault();
-    toggleModSelected(mod.id);
+    if (target?.closest("button, a, input, label")) return;
+
+    if (selectionMode) {
+      e.preventDefault();
+      toggleModSelected(mod.id);
+      return;
+    }
+
+    if (focusedModId === mod.id) {
+      clearFocusedMod();
+    } else {
+      focusedModId = mod.id;
+    }
   }
 
   async function toggleDisabled(mod: ModRow) {
@@ -2074,6 +2101,7 @@ import { trapFocus } from "../lib/focusTrap";
     contentFilter = next;
     filter = "";
     clearSelection();
+    clearFocusedMod();
     if (addOpen) searchMods(1);
     if (isSavedViewFilter(next)) {
       loadUserState().then(() => loadSavedModsView()).catch(() => {});
@@ -2664,136 +2692,142 @@ import { trapFocus } from "../lib/focusTrap";
         </button>
       {/each}
     </div>
-    <div class="toolbar-actions-row">
-      <button
-        class="ghost mini quiet-action"
-        onclick={importLocalFiles}
-        disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
-        title="Copy local jars/zips into the pack and register them in the manifest"
-      >
-        <FilePlus size={14} />
-        {importingLocal ? "…" : "Import"}
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        onclick={syncModsFolderFromUi}
-        disabled={!$projectPath || loading}
-        title="Rescan content folders and register new files"
-      >
-        <RotateCw size={14} /> Resync
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        class:has-updates={updateList.length > 0}
-        onclick={applyAllUpdates}
-        disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
-        title="Update all mods to the latest build for this Minecraft version"
-      >
-        <Sparkles size={14} />
-        {#if updateApplying}
-          Updating…
-        {:else if updateCheckLoading}
-          Checking…
-        {:else if updateList.length > 0}
-          Update ({updateList.length})
-        {:else}
-          Update all
-        {/if}
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        onclick={() => (optimizePackOpen = true)}
-        disabled={!$projectPath || contentFilter !== "mod"}
-        title="Install a curated Fabric opt pack or missing performance mods + safe configs"
-      >
-        <Zap size={14} />
-        Optimize
-      </button>
-      <button
-        class="ghost mini quiet-action"
-        onclick={loadRecommendations}
-        disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
-        title="Suggest optimization mods for this loader, Minecraft version, and pack"
-      >
-        <Lightbulb size={14} />
-        {recsLoading ? "…" : "Ideas"}
-      </button>
+  </div>
+
+  <div class="control-row">
+    {#if contentFilter === "mod"}
+      <div class="side-segment" role="group" aria-label="Side filters">
+        <button type="button" class:active={sideFilter === "all"} onclick={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
+        <button type="button" class:active={sideFilter === "both"} onclick={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
+        <button type="button" class:active={sideFilter === "client"} onclick={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
+        <button type="button" class:active={sideFilter === "server"} onclick={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+      </div>
+    {/if}
+    <div class="toolbar-search-cluster">
+      <div class="search toolbar-search">
+        <span class="search-glyph"><Search size={18} /></span>
+        <input bind:value={filter} placeholder={searchPlaceholder} />
+      </div>
       <label
-        class="ideas-toggle"
+        class="ideas-toggle often-together"
         class:on={ideasEnabled}
-        title="After installing from Add mods, offer popular companion mods from community stats"
+        title="Often together — after installing from Add mods, offer popular companion mods from community stats"
       >
         <input
           type="checkbox"
           checked={ideasEnabled}
           onchange={(e) => setIdeasEnabled(e.currentTarget.checked)}
         />
-        <Sparkles size={12} />
-        Often together
+        <Sparkles size={14} />
       </label>
-      <button
-        class="ghost mini quiet-action"
-        onclick={installSteamBridge}
-        disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
-        title={hasSteamBridge
-          ? "Steam Bridge is already installed"
-          : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
-      >
-        {#if steamBridgeInstalling}
-          <Loader2 size={14} class="spin" />
-          Steam Bridge…
-        {:else if hasSteamBridge}
-          <Check size={14} />
-          Steam Bridge
-        {:else}
-          <Users size={14} />
-          Steam Bridge
-        {/if}
-      </button>
     </div>
-  </div>
-
-  <div class="filters-search-row">
-    <div class="quick-filters" aria-label="Side filters">
-      {#if contentFilter === "mod"}
-      <button class:active={sideFilter === "all"} onclick={() => (sideFilter = "all")}>All <span>{counts.all}</span></button>
-      <button class:active={sideFilter === "both"} onclick={() => (sideFilter = "both")}>Both <span>{counts.both}</span></button>
-      <button class:active={sideFilter === "client"} onclick={() => (sideFilter = "client")}>Client <span>{counts.client}</span></button>
-      <button class:active={sideFilter === "server"} onclick={() => (sideFilter = "server")}>Server <span>{counts.server}</span></button>
+    <button
+      type="button"
+      class="ghost mini glow-btn ideas-accent"
+      onclick={loadRecommendations}
+      disabled={!$projectPath || recsLoading || contentFilter !== "mod"}
+      title="Suggest optimization mods for this loader, Minecraft version, and pack"
+    >
+      <Lightbulb size={14} />
+      {recsLoading ? "…" : "Ideas"}
+    </button>
+    <div class="more-wrap">
+      <button
+        type="button"
+        class="ghost mini more-toggle"
+        aria-expanded={actionsMenuOpen}
+        aria-haspopup="menu"
+        onclick={() => (actionsMenuOpen = !actionsMenuOpen)}
+        title="More actions"
+      >
+        <MoreHorizontal size={16} />
+        Actions
+      </button>
+      {#if actionsMenuOpen}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="more-backdrop" onclick={() => (actionsMenuOpen = false)} onkeydown={() => {}}></div>
+        <div class="more-menu" role="menu">
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void importLocalFiles(); }}
+            disabled={!$projectPath || importingLocal || mutating || isSavedViewFilter(contentFilter)}
+            title="Copy local jars/zips into the pack and register them in the manifest"
+          >
+            <FilePlus size={14} />
+            {importingLocal ? "…" : "Import"}
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void syncModsFolderFromUi(); }}
+            disabled={!$projectPath || loading}
+            title="Rescan content folders and register new files"
+          >
+            <RotateCw size={14} /> Resync
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            class:has-updates={updateList.length > 0}
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void applyAllUpdates(); }}
+            disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
+            title="Update all mods to the latest build for this Minecraft version"
+          >
+            <Sparkles size={14} />
+            {#if updateApplying}
+              Updating…
+            {:else if updateCheckLoading}
+              Checking…
+            {:else if updateList.length > 0}
+              Update ({updateList.length})
+            {:else}
+              Update all
+            {/if}
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; optimizePackOpen = true; }}
+            disabled={!$projectPath || contentFilter !== "mod"}
+            title="Install a curated Fabric opt pack or missing performance mods + safe configs"
+          >
+            <Zap size={14} />
+            Optimize
+          </button>
+          <button
+            type="button"
+            class="more-item"
+            role="menuitem"
+            onclick={() => { actionsMenuOpen = false; void installSteamBridge(); }}
+            disabled={!$projectPath || steamBridgeInstalling || mutating || contentFilter !== "mod" || hasSteamBridge}
+            title={hasSteamBridge
+              ? "Steam Bridge is already installed"
+              : "Play LAN worlds with Steam friends — no Radmin/VPN. Downloads the jar for this pack's Minecraft + loader from github.com/Ragalikx/steam-bridge-mc"}
+          >
+            {#if steamBridgeInstalling}
+              <Loader2 size={14} class="spin" />
+              Steam Bridge…
+            {:else if hasSteamBridge}
+              <Check size={14} />
+              Steam Bridge
+            {:else}
+              <Users size={14} />
+              Steam Bridge
+            {/if}
+          </button>
+        </div>
       {/if}
     </div>
-    <div class="toolbar-search-cluster">
-      <div class="search toolbar-search">
-        <span class="search-glyph"><Search size={18} /></span>
-        <input bind:value={filter} placeholder={searchPlaceholder} />
-      </div>
-      <button class="primary-action" onclick={openAddModal} disabled={!$projectPath || mutating}>
-        <Plus size={16} />
-        Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
-      </button>
-    </div>
+    <button class="primary-action" onclick={openAddModal} disabled={!$projectPath || mutating}>
+      <Plus size={16} />
+      Add {isSavedViewFilter(contentFilter) ? "mod" : contentFilter}
+    </button>
   </div>
-
-  {#if selectionMode}
-    <div class="selection-bar">
-      <span class="selection-count">{selectedCount} selected</span>
-      <div class="selection-actions">
-        <button class="secondary mini" onclick={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
-          <RotateCw size={14} /> Update
-        </button>
-        <button class="secondary mini" onclick={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
-          <PowerOff size={14} /> Disable
-        </button>
-        <button class="secondary mini" onclick={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
-          <Power size={14} /> Enable
-        </button>
-        <button class="secondary mini danger" onclick={bulkDeleteSelected} disabled={mutating}>
-          <Trash2 size={14} /> Delete
-        </button>
-        <button class="ghost mini" onclick={clearSelection}>Cancel</button>
-      </div>
-    </div>
-  {/if}
 
   {#if recommendations.length > 0}
     <div class="recs-panel">
@@ -2832,6 +2866,7 @@ import { trapFocus } from "../lib/focusTrap";
   {/if}
   </div>
 
+  <div class="mods-body" class:has-side={selectionMode || !!focusedMod}>
   <div class="mods-list" bind:this={listScrollEl}>
   {#if loading}
     <div class="loading">Loading {contentNoun}...</div>
@@ -2946,16 +2981,24 @@ import { trapFocus } from "../lib/focusTrap";
           class:has-update={mod.updateAvailable}
           class:disabled={mod.disabled}
           class:selected={!!selectedModIds[mod.id]}
+          class:focused={focusedModId === mod.id && !selectionMode}
           style="--i: {i}"
-          role={selectionMode ? "button" : undefined}
-          tabindex={selectionMode ? 0 : undefined}
+          role="button"
+          tabindex="0"
           oncontextmenu={(e) => onCardContextMenu(e, mod)}
           onclick={(e) => onCardClick(e, mod)}
           onkeydown={(e) => {
-            if (!selectionMode) return;
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              toggleModSelected(mod.id);
+              if (selectionMode) {
+                toggleModSelected(mod.id);
+              } else if (focusedModId === mod.id) {
+                clearFocusedMod();
+              } else {
+                focusedModId = mod.id;
+              }
+            } else if (e.key === "Escape" && focusedModId === mod.id) {
+              clearFocusedMod();
             }
           }}
         >
@@ -2984,11 +3027,14 @@ import { trapFocus } from "../lib/focusTrap";
               {#if mod.disabled}
                 <span class="disabled-badge">Disabled</span>
               {/if}
-              <code>{mod.id}</code>
             </div>
             <div class="installed-meta">
-              <span class="version">{mod.version}</span>
-              {#if mod.fileName}<span class="filename">{mod.fileName}{mod.disabled && !String(mod.fileName).endsWith('.disabled') ? '.disabled' : ''}</span>{/if}
+              <span
+                class="version"
+                title={mod.fileName
+                  ? `${mod.fileName}${mod.disabled && !String(mod.fileName).endsWith(".disabled") ? ".disabled" : ""}`
+                  : undefined}
+              >{mod.version}</span>
             </div>
           </div>
           <div class="installed-tags" aria-label="Mod labels">
@@ -3043,6 +3089,43 @@ import { trapFocus } from "../lib/focusTrap";
         </article>
       {/each}
     </div>
+  {/if}
+  </div>
+
+  {#if selectionMode}
+    <aside class="selection-inspector" aria-label="Bulk selection">
+      <header class="selection-inspector-header">
+        <div>
+          <h2>{selectedCount} selected</h2>
+          <p>Right-click cards to toggle. Bulk actions apply to the selection.</p>
+        </div>
+        <button type="button" class="icon-btn" onclick={clearSelection} title="Clear selection" aria-label="Clear selection">
+          <X size={18} />
+        </button>
+      </header>
+      <div class="selection-inspector-actions">
+        <button class="secondary" onclick={bulkUpdateSelected} disabled={mutating || !selectedMods.some((m) => m.updateAvailable)}>
+          <RotateCw size={14} /> Update
+        </button>
+        <button class="secondary" onclick={bulkDisableSelected} disabled={mutating || !selectedMods.some((m) => !m.disabled)}>
+          <PowerOff size={14} /> Disable
+        </button>
+        <button class="secondary" onclick={bulkEnableSelected} disabled={mutating || !selectedMods.some((m) => m.disabled)}>
+          <Power size={14} /> Enable
+        </button>
+        <button class="secondary danger" onclick={bulkDeleteSelected} disabled={mutating}>
+          <Trash2 size={14} /> Delete
+        </button>
+      </div>
+    </aside>
+  {:else if focusedMod}
+    {#key focusedMod.id}
+      <ModInspector
+        mod={focusedMod}
+        onclose={clearFocusedMod}
+        onopenlink={(url) => void openExternalUrl(url)}
+      />
+    {/key}
   {/if}
   </div>
 </div>
@@ -4091,8 +4174,18 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
   }
 
+  .mods-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow: hidden;
+  }
+
   .mods-list {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow: auto;
     scrollbar-gutter: stable;
@@ -4100,6 +4193,10 @@ import { trapFocus } from "../lib/focusTrap";
     padding-right: 10px;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-elevated) transparent;
+  }
+
+  .mods-body.has-side .mods-list {
+    padding-right: 8px;
   }
 
   .mods-list::-webkit-scrollbar {
@@ -4299,13 +4396,6 @@ import { trapFocus } from "../lib/focusTrap";
     margin-bottom: 8px;
   }
 
-  .toolbar-actions-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    align-items: center;
-  }
-
   .content-tabs {
     display: flex;
     gap: 8px;
@@ -4313,40 +4403,83 @@ import { trapFocus } from "../lib/focusTrap";
     padding-bottom: 2px;
   }
 
-  .toolbar-row {
+  .control-row {
     display: flex;
-    justify-content: flex-start;
-    gap: 4px;
     align-items: center;
-    flex-wrap: wrap;
-  }
-
-  .filters-search-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
     margin-bottom: 10px;
   }
 
-  .filters-search-row .quick-filters {
-    margin-bottom: 0;
+  .side-segment {
+    display: inline-flex;
+    align-items: stretch;
     flex-shrink: 0;
+    padding: 2px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    background: var(--bg-secondary);
+    gap: 0;
+  }
+
+  .side-segment button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 0;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+  }
+
+  .side-segment button:first-child {
+    border-radius: calc(var(--border-radius-md) - 2px) 0 0 calc(var(--border-radius-md) - 2px);
+  }
+
+  .side-segment button:last-child {
+    border-radius: 0 calc(var(--border-radius-md) - 2px) calc(var(--border-radius-md) - 2px) 0;
+  }
+
+  .side-segment button:only-child {
+    border-radius: calc(var(--border-radius-md) - 2px);
+  }
+
+  .side-segment button:hover {
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+  }
+
+  .side-segment button.active {
+    background: var(--accent-primary);
+    color: #04140a;
+  }
+
+  .side-segment button.active span {
+    color: rgba(4, 20, 10, 0.7);
+  }
+
+  .side-segment span {
+    margin-left: 4px;
+    font-weight: 500;
+    opacity: 0.75;
   }
 
   .toolbar-search-cluster {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-left: auto;
-    flex: 1 1 420px;
-    min-width: min(100%, 320px);
+    gap: 8px;
+    flex: 1 1 280px;
+    min-width: min(100%, 220px);
   }
 
   .toolbar-search {
     flex: 1 1 auto;
-    min-width: 240px;
+    min-width: 180px;
     max-width: none;
     position: relative;
   }
@@ -4357,93 +4490,159 @@ import { trapFocus } from "../lib/focusTrap";
 
   .toolbar-search input {
     width: 100%;
-    min-height: 46px;
+    min-height: 40px;
     box-sizing: border-box;
-    padding: 10px 14px 10px 44px;
+    padding: 8px 12px 8px 40px;
     border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg, 12px);
+    border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     color: var(--text-primary);
     font: inherit;
-    font-size: 15px;
+    font-size: 14px;
   }
 
   .toolbar-search input::placeholder {
     color: var(--text-muted);
   }
 
-  .toolbar-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    align-items: center;
-  }
-
-  .toolbar-search-cluster .primary-action {
-    padding: 11px 16px;
-    font-size: 14px;
-    min-height: 46px;
+  .control-row > .primary-action {
+    padding: 9px 14px;
+    font-size: 13px;
+    min-height: 40px;
     white-space: nowrap;
     flex-shrink: 0;
   }
 
-  .quiet-action {
-    padding: 6px 8px !important;
-    font-size: 12px !important;
-    font-weight: 500 !important;
-    gap: 5px !important;
-    color: var(--text-muted) !important;
-    background: transparent !important;
-    border: 1px solid transparent !important;
-    transform: none !important;
-    min-height: 30px;
+  .more-wrap {
+    position: relative;
+    flex-shrink: 0;
   }
 
-  .quiet-action:hover:not(:disabled) {
-    color: var(--text-secondary) !important;
-    background: var(--bg-hover) !important;
-    border-color: var(--border-color) !important;
-    transform: none !important;
-  }
-
-  .quiet-action.has-updates {
-    color: var(--accent-primary) !important;
-  }
-
-  .toolbar-quiet {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+  .more-toggle {
+    display: inline-flex;
     align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 8px 12px;
   }
 
-  .glow-btn {
-    border-color: rgba(27, 217, 106, 0.35) !important;
+  .more-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+
+  .more-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 50;
+    min-width: 200px;
+    background: var(--bg-secondary, #151922);
+    border: 1px solid var(--border-color, #2a2f3a);
+    border-radius: var(--border-radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .more-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary, #e8ecf4);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+
+  .more-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+
+  .more-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .more-item.has-updates {
+    color: var(--accent-primary);
+  }
+
+  .glow-btn,
+  .ideas-accent {
+    position: relative;
+    flex-shrink: 0;
+    min-height: 40px;
+    padding: 8px 12px !important;
+    border-color: rgba(27, 217, 106, 0.45) !important;
+    background:
+      linear-gradient(135deg, rgba(27, 217, 106, 0.18), rgba(56, 189, 248, 0.1)) !important;
+    color: var(--accent-primary) !important;
+    box-shadow:
+      0 0 0 1px rgba(27, 217, 106, 0.15),
+      0 0 14px rgba(27, 217, 106, 0.18);
+    font-weight: 600 !important;
+  }
+
+  .ideas-accent:hover:not(:disabled) {
+    border-color: rgba(27, 217, 106, 0.65) !important;
+    background:
+      linear-gradient(135deg, rgba(27, 217, 106, 0.28), rgba(56, 189, 248, 0.16)) !important;
+    box-shadow:
+      0 0 0 1px rgba(27, 217, 106, 0.28),
+      0 0 18px rgba(27, 217, 106, 0.28);
+  }
+
+  .ideas-accent:disabled {
+    opacity: 0.45;
+    box-shadow: none;
   }
 
   .ideas-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 4px 8px;
-    border-radius: 6px;
+    justify-content: center;
+    gap: 0;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 500;
     cursor: pointer;
     user-select: none;
+    flex-shrink: 0;
+    position: relative;
+  }
+  .ideas-toggle.often-together input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    margin: 0;
   }
   .ideas-toggle.on {
-    color: var(--text-secondary);
-    border-color: rgba(27, 217, 106, 0.28);
-    background: rgba(27, 217, 106, 0.06);
+    color: var(--accent-primary);
+    border-color: rgba(27, 217, 106, 0.35);
+    background: rgba(27, 217, 106, 0.1);
   }
-  .ideas-toggle input {
-    margin: 0;
-    width: 12px;
-    height: 12px;
+  .ideas-toggle:hover {
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+  }
+  .ideas-toggle.on:hover {
+    color: var(--accent-primary);
+    background: rgba(27, 217, 106, 0.16);
   }
   .ideas-dialog {
     max-width: 420px;
@@ -4574,35 +4773,6 @@ import { trapFocus } from "../lib/focusTrap";
     flex-wrap: wrap;
   }
 
-  .quick-filters {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 20px;
-  }
-
-  .quick-filters button {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    color: var(--text-secondary);
-    padding: 8px 12px;
-    transition: border-color .15s, background .15s, transform .15s;
-  }
-
-  .quick-filters button:hover {
-    transform: translateY(-1px);
-  }
-
-  .quick-filters button.active {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.1);
-    color: var(--accent-primary);
-  }
-
-  .quick-filters span {
-    margin-left: 6px;
-    color: var(--text-muted);
-  }
-
   .tabs .tab-count {
     margin-left: 6px;
     font-size: 11px;
@@ -4662,6 +4832,7 @@ import { trapFocus } from "../lib/focusTrap";
     background: linear-gradient(135deg, rgba(255,255,255,0.02), transparent 40%), var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
+    cursor: pointer;
   }
 
   .installed-card:hover {
@@ -4680,12 +4851,13 @@ import { trapFocus } from "../lib/focusTrap";
     border-style: dashed;
   }
 
-  .installed-card.selected {
+  .installed-card.selected,
+  .installed-card.focused {
     border-color: var(--accent-primary);
     background:
-      linear-gradient(90deg, rgba(27, 217, 106, 0.12), transparent 40%),
+      linear-gradient(90deg, color-mix(in srgb, var(--accent-primary) 16%, transparent), transparent 42%),
       var(--bg-secondary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.25);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .select-check {
@@ -4720,26 +4892,54 @@ import { trapFocus } from "../lib/focusTrap";
     border: 1px solid rgba(239, 68, 68, 0.3);
   }
 
-  .selection-bar {
+  .selection-inspector {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 12px;
-    padding: 10px 12px;
-    border-radius: var(--border-radius-md);
-    border: 1px solid rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.08);
+    flex-direction: column;
+    width: min(340px, 38vw);
+    min-width: 260px;
+    max-width: 380px;
+    height: 100%;
+    min-height: 0;
+    background: var(--bg-elevated, var(--bg-tertiary));
+    border-left: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+    padding: 16px;
+    gap: 16px;
+    flex-shrink: 0;
   }
-  .selection-count { font-weight: 700; font-size: 13px; color: var(--accent-primary); }
-  .selection-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .selection-actions .mini {
+
+  .selection-inspector-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .selection-inspector-header h2 {
+    margin: 0 0 4px;
+    font-size: 1.1rem;
+    color: var(--text-primary);
+  }
+
+  .selection-inspector-header p {
+    margin: 0;
+    font-size: 0.8rem;
+    line-height: 1.45;
+    color: var(--text-muted);
+  }
+
+  .selection-inspector-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .selection-inspector-actions .secondary {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
+    justify-content: flex-start;
+    gap: 8px;
   }
+
   .icon-btn.warn { color: #fbbf24; }
 
   .mod-icon {
@@ -4809,13 +5009,6 @@ import { trapFocus } from "../lib/focusTrap";
     color: var(--text-muted);
     font-size: 12px;
     min-width: 0;
-  }
-
-  .installed-meta .filename {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 280px;
   }
 
   /* Fixed columns so client / source / Update stay aligned across rows. */
@@ -5277,13 +5470,13 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 22px;
   }
 
-  /* Add content browser: near-fullscreen so the dimmed backdrop is a thin frame. */
+  /* Add content browser: ~95% viewport with ~24px blurred/dimmed frame around it. */
   .modal.add-mods-modal {
     position: relative;
-    width: calc(100vw - 12px);
-    height: calc(100vh - 12px);
-    max-width: none;
-    max-height: calc(100vh - 12px);
+    width: 95vw;
+    height: 95vh;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 48px);
     display: flex;
     flex-direction: column;
     overflow: hidden;

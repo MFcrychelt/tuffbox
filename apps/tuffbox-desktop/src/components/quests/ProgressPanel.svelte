@@ -126,9 +126,9 @@
   .prog-details {
     flex-shrink: 0;
     margin: 0 12px 8px;
-    border: 1px solid var(--ftbq-frame, #101014);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
-    background: var(--ftbq-bg-panel, #212126);
+    background: var(--ftbq-bg-panel);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
     padding: 0 8px;
   }
@@ -153,8 +153,8 @@
     margin-bottom: 8px;
     padding: 6px 10px;
     border-radius: 3px;
-    border: 1px solid var(--ftbq-frame, #101014);
-    background: var(--ftbq-bg-panel, #212126);
+    border: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-bg-panel);
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 11px;
@@ -178,8 +178,8 @@
     max-width: 360px;
     font-size: 12px;
     padding: 4px 6px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: inherit;
     border-radius: 3px;
   }

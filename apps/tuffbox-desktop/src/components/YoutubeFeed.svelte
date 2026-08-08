@@ -455,7 +455,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
-    transition: transform 0.2s ease;
+    transition: transform 0.2s var(--ease-hover-in, ease);
   }
 
   .chevron :global(svg) {
@@ -567,7 +567,7 @@
     text-align: left;
     cursor: pointer;
     color: inherit;
-    transition: transform 0.15s ease;
+    transition: transform var(--motion-med, 240ms) var(--ease-hover-in, ease);
   }
 
   .video-card-wrap {

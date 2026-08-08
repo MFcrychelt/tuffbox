@@ -170,6 +170,8 @@ export interface LauncherSettings {
   uiScaleMode: UiScaleMode;
   /** Round corners on panels/cards/buttons everywhere. */
   roundedCorners: boolean;
+  /** Hide InstanceHome (mods/packs/worlds) preview block on the home dashboard. */
+  hideInstanceHome: boolean;
 }
 
 export type SidebarMode = "full" | "icons" | "autoHide";

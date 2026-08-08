@@ -2304,7 +2304,14 @@
   {/if}
 
   {#if loading && !graph}
-    <div class="loading">Loading graph...</div>
+    <div class="graph-body">
+      <section class="graph-canvas" aria-busy="true" aria-label="Dependency graph canvas">
+        <div class="graph-loading-overlay" role="status">
+          <Loader2 size={20} class="spin" />
+          <span>Loading graph…</span>
+        </div>
+      </section>
+    </div>
   {:else if error}
     <EmptyState icon={AlertTriangle} title="Failed to load graph" description={error} />
   {:else if graph}
@@ -2616,6 +2623,12 @@
           </g>
         {/each}
       </svg>
+      {#if loading}
+        <div class="graph-loading-overlay" role="status">
+          <Loader2 size={20} class="spin" />
+          <span>Loading graph…</span>
+        </div>
+      {/if}
     </section>
 
     <aside class="details" aria-label="Selected node">
@@ -3111,6 +3124,7 @@
     width: 100%;
     scrollbar-gutter: stable;
     overscroll-behavior: contain;
+    container-type: size;
   }
 
   .graph-body {
@@ -3299,8 +3313,8 @@
   .graph-canvas {
     position: relative;
     flex: 0 0 auto;
-    height: min(62vh, 560px);
-    min-height: 360px;
+    height: calc(100cqh - 64px);
+    min-height: 420px;
     width: 100%;
     min-width: 0;
     display: flex;
@@ -3315,6 +3329,23 @@
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
+  }
+
+  .graph-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(9, 9, 11, 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 600;
   }
 
   .graph-canvas svg {
@@ -4627,11 +4658,6 @@
   .muted { color: var(--text-muted); font-size: 13px; }
 
   @media (max-width: 1180px) {
-    .graph-canvas {
-      height: min(72vh, 640px);
-      min-height: 420px;
-    }
-
     .graph-layout,
     .graph-list {
       flex-direction: column;

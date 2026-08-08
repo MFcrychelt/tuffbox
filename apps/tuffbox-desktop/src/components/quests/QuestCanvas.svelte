@@ -3,7 +3,6 @@
     SvelteFlow,
     Background,
     Controls,
-    MiniMap,
     BackgroundVariant,
     useSvelteFlow,
     type Node,
@@ -23,6 +22,7 @@
   import { projectPath } from "../../lib/store";
   import { preloadItemIcons } from "./iconCache";
   import QuestNode from "./QuestNode.svelte";
+  import { getWorldCoordinates, rectsIntersect } from "./coords";
 
   let {
     quests,
@@ -62,30 +62,20 @@
   let issueIds = $derived(new Set(issues.map((i) => i.questId)));
   let iconRevision = $state(0);
 
-  const { screenToFlowPosition, fitView: flowFitView } = useSvelteFlow();
+  const { screenToFlowPosition, fitView: flowFitView, getViewport } = useSvelteFlow();
 
   let nodes = $state<Node[]>([]);
   let edges = $state<Edge[]>([]);
+  let viewportEl = $state<HTMLDivElement | null>(null);
 
-  /** MiniMap cannot resolve CSS custom properties — use computed hex. */
-  function cssColor(name: string, fallback: string): string {
-    if (typeof document === "undefined") return fallback;
-    const el = document.querySelector(".qe.ftbq") ?? document.documentElement;
-    const v = getComputedStyle(el).getPropertyValue(name).trim();
-    return v || fallback;
-  }
-
-  function miniNodeColor(n: Node): string {
-    if (n.id.startsWith("ext:")) return cssColor("--ftbq-quest-locked", "#6b6b6b");
-    if (issueIds.has(n.id)) return cssColor("--ftbq-quest-started", "#f2c94c");
-    if (progressOverlay) {
-      const st = progressStatuses[n.id];
-      if (st === "completed") return cssColor("--ftbq-quest-completed", "#55c95a");
-      if (st === "locked") return cssColor("--ftbq-quest-locked", "#6b6b6b");
-      if (st === "started") return cssColor("--ftbq-quest-started", "#f2c94c");
-    }
-    return cssColor("--ftbq-node-fill", "#18181c");
-  }
+  /** Marquee in flow/world px (same space as node.position). */
+  let marqueeWorld = $state<null | { x1: number; y1: number; x2: number; y2: number }>(null);
+  /** Overlay box in container-local CSS px for drawing. */
+  let marqueeScreen = $state<null | { left: number; top: number; width: number; height: number }>(
+    null,
+  );
+  let marqueeOriginScreen = $state<null | { x: number; y: number }>(null);
+  let marqueeActive = $state(false);
 
   $effect(() => {
     if (quests && $projectPath) {
@@ -243,6 +233,142 @@
     return Math.round(v * 2) / 2;
   }
 
+  function flowContainer(): HTMLElement | null {
+    if (!viewportEl) return null;
+    return (
+      (viewportEl.querySelector(".svelte-flow") as HTMLElement | null) ??
+      (viewportEl.querySelector(".react-flow") as HTMLElement | null) ??
+      viewportEl
+    );
+  }
+
+  function isEmptyPaneTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return false;
+    if (target.closest(".xyflow__node, .svelte-flow__node, .react-flow__node")) return false;
+    if (target.closest(".xyflow__edge, .svelte-flow__edge, .react-flow__edge")) return false;
+    if (target.closest(".xyflow__controls, .svelte-flow__controls, .react-flow__controls"))
+      return false;
+    if (target.closest(".xyflow__minimap, .svelte-flow__minimap, button, a, input, textarea"))
+      return false;
+    return !!(
+      target.closest(".xyflow__pane, .svelte-flow__pane, .react-flow__pane") ||
+      target.closest(".svelte-flow, .react-flow") ||
+      target === viewportEl
+    );
+  }
+
+  function nodeFlowSize(n: Node): number {
+    const q = (n.data as { quest?: QuestData; baseSize?: number } | undefined)?.quest;
+    const base = (n.data as { baseSize?: number } | undefined)?.baseSize ?? BASE;
+    const scale = q?.size && q.size > 0 ? q.size : 1;
+    return base * scale;
+  }
+
+  function finishMarquee(additive: boolean) {
+    if (!marqueeWorld) {
+      marqueeActive = false;
+      marqueeScreen = null;
+      marqueeOriginScreen = null;
+      return;
+    }
+    const box = marqueeWorld;
+    const hit: string[] = [];
+    for (const n of nodes) {
+      if (n.id.startsWith("ext:")) continue;
+      const size = nodeFlowSize(n);
+      const nb = {
+        x1: n.position.x,
+        y1: n.position.y,
+        x2: n.position.x + size,
+        y2: n.position.y + size,
+      };
+      if (rectsIntersect(box, nb)) hit.push(n.id);
+    }
+    marqueeActive = false;
+    marqueeWorld = null;
+    marqueeScreen = null;
+    marqueeOriginScreen = null;
+    if (hit.length > 0) {
+      onSelectMultiple(hit);
+    } else if (!additive) {
+      onSelect(null);
+    }
+  }
+
+  function onMarqueePointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    if (!isEmptyPaneTarget(e.target)) return;
+    // Let middle/right pan alone; left on empty pane = marquee.
+    const container = flowContainer();
+    if (!container) return;
+    const { x: panX, y: panY, zoom } = getViewport();
+    const world = getWorldCoordinates(e, container, panX, panY, zoom);
+    const rect = container.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    marqueeActive = true;
+    marqueeWorld = { x1: world.x, y1: world.y, x2: world.x, y2: world.y };
+    marqueeOriginScreen = { x: sx, y: sy };
+    marqueeScreen = { left: sx, top: sy, width: 0, height: 0 };
+    try {
+      viewportEl?.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function onMarqueePointerMove(e: PointerEvent) {
+    if (!marqueeActive || !marqueeWorld || !marqueeOriginScreen) return;
+    const container = flowContainer();
+    if (!container) return;
+    const { x: panX, y: panY, zoom } = getViewport();
+    const world = getWorldCoordinates(e, container, panX, panY, zoom);
+    const rect = container.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const ox = marqueeOriginScreen.x;
+    const oy = marqueeOriginScreen.y;
+    marqueeWorld = { ...marqueeWorld, x2: world.x, y2: world.y };
+    marqueeScreen = {
+      left: Math.min(ox, sx),
+      top: Math.min(oy, sy),
+      width: Math.abs(sx - ox),
+      height: Math.abs(sy - oy),
+    };
+  }
+
+  function onMarqueePointerUp(e: PointerEvent) {
+    if (!marqueeActive) return;
+    try {
+      viewportEl?.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const dragged =
+      marqueeScreen != null && (marqueeScreen.width > 3 || marqueeScreen.height > 3);
+    if (dragged) {
+      finishMarquee(e.shiftKey || e.ctrlKey || e.metaKey);
+    } else {
+      marqueeActive = false;
+      marqueeWorld = null;
+      marqueeScreen = null;
+      marqueeOriginScreen = null;
+    }
+  }
+
+  function onCanvasDblClick(e: MouseEvent) {
+    if (!isEmptyPaneTarget(e.target)) return;
+    const container = flowContainer();
+    if (!container) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const { x: panX, y: panY, zoom } = getViewport();
+    const world = getWorldCoordinates(e, container, panX, panY, zoom);
+    onAddAt(snap(world.x / BASE), snap(world.y / BASE));
+  }
+
   function handleNodeDragStop({
     targetNode,
     nodes: flowNodes,
@@ -279,13 +405,10 @@
     }
   }
 
-  // No dedicated double-click pane event in @xyflow/svelte 1.x — detect via MouseEvent.detail.
   function handlePaneClick({ event }: { event: MouseEvent }) {
-    if (event.detail === 2) {
-      const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
-      return;
-    }
+    // Double-click create is handled via ondblclick on the viewport (getWorldCoordinates).
+    if (event.detail >= 2) return;
+    if (marqueeActive) return;
     onSelect(null, event);
   }
 
@@ -296,15 +419,20 @@
   }
 
   function addAtCenter() {
-    const viewportEl = document.querySelector(".ftbq-canvas .xyflow__viewport");
-    if (viewportEl) {
-      const rect = viewportEl.getBoundingClientRect();
+    const container = flowContainer();
+    if (container) {
+      const rect = container.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
-      const pos = screenToFlowPosition({ x: cx, y: cy });
-      onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
+      const { x: panX, y: panY, zoom } = getViewport();
+      const world = getWorldCoordinates({ clientX: cx, clientY: cy }, container, panX, panY, zoom);
+      onAddAt(snap(world.x / BASE), snap(world.y / BASE));
     } else {
-      onAddAt(0, 0);
+      const pos = screenToFlowPosition({
+        x: window.innerWidth / 2,
+        y: window.innerHeight / 2,
+      });
+      onAddAt(snap(pos.x / BASE), snap(pos.y / BASE));
     }
   }
 </script>
@@ -312,15 +440,25 @@
 <div class="canvas-wrap ftbq-canvas">
   <div class="canvas-toolbar">
     <button type="button" class="tb" title="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
-      <Maximize2 size={14} /> Fit
+      <Maximize2 size={14} class="flex-shrink-0" /> Fit
     </button>
     <button type="button" class="tb" title="Add quest at center" onclick={addAtCenter}>
-      <Plus size={14} /> Add quest
+      <Plus size={14} class="flex-shrink-0" /> Add quest
     </button>
     <span class="hint">Drag · Scroll zoom · Connect · Dbl-click add · Shift/Ctrl multi · Marquee</span>
   </div>
 
-  <div class="viewport">
+  <div
+    class="viewport"
+    role="application"
+    aria-label="Quest canvas"
+    bind:this={viewportEl}
+    onpointerdown={onMarqueePointerDown}
+    onpointermove={onMarqueePointerMove}
+    onpointerup={onMarqueePointerUp}
+    onpointercancel={onMarqueePointerUp}
+    ondblclick={onCanvasDblClick}
+  >
     {#if quests.length === 0}
       <div class="empty-hint">{emptyHint}</div>
     {/if}
@@ -330,7 +468,7 @@
       bind:edges
       {nodeTypes}
       panOnScroll
-      selectionOnDrag
+      selectionOnDrag={false}
       panOnDrag={[1, 2]}
       deleteKey={null}
       onnodeclick={handleNodeClick}
@@ -352,10 +490,15 @@
         patternColor="rgba(255,255,255,0.07)"
       />
       <Controls />
-      {#if quests.length > 0}
-        <MiniMap nodeColor={miniNodeColor} pannable zoomable />
-      {/if}
+      <!-- MiniMap hidden until dedicated logic lands -->
     </SvelteFlow>
+
+    {#if marqueeScreen && (marqueeScreen.width > 0 || marqueeScreen.height > 0)}
+      <div
+        class="marquee-box"
+        style="left:{marqueeScreen.left}px; top:{marqueeScreen.top}px; width:{marqueeScreen.width}px; height:{marqueeScreen.height}px;"
+      ></div>
+    {/if}
     <div class="vignette" aria-hidden="true"></div>
   </div>
 </div>
@@ -366,10 +509,10 @@
     flex-direction: column;
     min-height: 0;
     height: 100%;
-    background: var(--ftbq-bg-canvas, #2b2b30);
+    background: var(--ftbq-bg-canvas);
     border: none;
-    border-left: 1px solid #101014;
-    border-right: 1px solid #101014;
+    border-left: 1px solid var(--ftbq-frame);
+    border-right: 1px solid var(--ftbq-frame);
     overflow: hidden;
   }
   .canvas-toolbar {
@@ -377,9 +520,9 @@
     align-items: center;
     gap: 6px;
     padding: 5px 8px;
-    border-bottom: 1px solid #101014;
+    border-bottom: 1px solid var(--ftbq-frame);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2)),
-      var(--ftbq-bg-panel, #212126);
+      var(--ftbq-bg-panel);
     box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
     flex-shrink: 0;
   }
@@ -389,8 +532,8 @@
     gap: 4px;
     padding: 4px 10px;
     border-radius: 3px;
-    border: 1px solid #101014;
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     color: var(--ftbq-text, #e8e8e8);
     font-size: 11px;
     font-weight: 600;
@@ -401,9 +544,9 @@
       inset 0 -1px 0 rgba(0, 0, 0, 0.45);
   }
   .tb:hover {
-    border-color: #101014;
-    background: linear-gradient(180deg, #47503f, #32382d);
-    color: #d6f5d0;
+    border-color: var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+    color: var(--ftbq-accent-green);
   }
   .tb:active {
     box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
@@ -441,8 +584,21 @@
     box-shadow: inset 0 0 64px rgba(0, 0, 0, 0.38);
   }
 
+  .marquee-box {
+    position: absolute;
+    z-index: 8;
+    pointer-events: none;
+    border: 1px solid color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 85%, #fff);
+    background: color-mix(in srgb, var(--ftbq-accent-teal, #3db8a8) 18%, transparent);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+  }
+
+  :global(.flex-shrink-0) {
+    flex-shrink: 0;
+  }
+
   :global(.svelte-flow__background) {
-    background-color: var(--ftbq-bg-canvas, #2b2b30);
+    background-color: var(--ftbq-bg-canvas);
   }
   :global(.svelte-flow__edge path) {
     stroke-width: 3;
@@ -451,16 +607,10 @@
     stroke: var(--ftbq-line-hover, #7fb3c8);
   }
   :global(.svelte-flow__minimap) {
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-frame, #101014);
-    border-radius: 3px;
-    overflow: hidden;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 4px 10px rgba(0, 0, 0, 0.45);
+    display: none !important;
   }
   :global(.svelte-flow__controls) {
-    border: 1px solid #101014;
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     overflow: hidden;
     box-shadow:
@@ -468,15 +618,18 @@
       0 4px 10px rgba(0, 0, 0, 0.45);
   }
   :global(.svelte-flow__controls button) {
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     border: none;
-    border-bottom: 1px solid #101014;
+    border-bottom: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
   }
   :global(.svelte-flow__controls button:hover) {
-    background: linear-gradient(180deg, #46464f, #32323a);
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
   }
-  :global(.svelte-flow__controls button svg) {
+  :global(.svelte-flow__controls button svg),
+  :global(.ftbq-canvas .tb svg),
+  :global(.ftbq-canvas .flex-shrink-0) {
+    flex-shrink: 0;
     fill: var(--ftbq-text, #e8e8e8);
   }
   :global(.svelte-flow__attribution) {

@@ -223,14 +223,14 @@
     min-width: 100px;
     padding: 5px 7px;
     font-size: 12px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
   }
   .btn {
     padding: 6px 12px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
     color: var(--ftbq-text, #e8e8e8);
     font-size: 12px;
@@ -268,7 +268,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     border-radius: var(--border-radius-sm);
     padding: 6px;
     background: rgba(0, 0, 0, 0.2);

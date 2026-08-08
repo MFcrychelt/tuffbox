@@ -53,7 +53,7 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-    background: var(--ftbq-bg-panel, #212126);
+    background: var(--ftbq-bg-panel);
   }
   .raw-header {
     display: flex;
@@ -61,7 +61,7 @@
     justify-content: space-between;
     gap: 12px;
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     flex-shrink: 0;
   }
   .raw-header-text {
@@ -92,14 +92,14 @@
     font-size: 11px;
     line-height: 1.5;
     font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-    background: var(--ftbq-bg, #1a1a1e);
+    background: var(--ftbq-bg);
     color: var(--ftbq-text, #e8e8e8);
     white-space: pre;
     tab-size: 2;
   }
   .btn {
     padding: 4px 8px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: rgba(0,0,0,0.25);
     color: var(--ftbq-text, #e8e8e8);
     font-size: 11px;

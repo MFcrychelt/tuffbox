@@ -168,8 +168,8 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    background: var(--bg-secondary, #1a1a1e);
-    border: 1px solid var(--border-color, #3a3a42);
+    background: var(--bg-secondary, var(--ftbq-bg));
+    border: 1px solid var(--border-color, var(--ftbq-border));
     border-radius: var(--border-radius-lg);
     padding: 16px;
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
@@ -216,7 +216,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    border-right: 1px solid var(--border-color, #3a3a42);
+    border-right: 1px solid var(--border-color, var(--ftbq-border));
     padding-right: 8px;
   }
   .file-btn {
@@ -231,7 +231,7 @@
   }
   .file-btn:hover,
   .file-btn.active {
-    background: var(--bg-tertiary, #212126);
+    background: var(--bg-tertiary, var(--ftbq-bg-panel));
     border-color: rgba(61, 184, 168, 0.35);
     color: var(--text-primary, #e8e8e8);
   }
@@ -245,7 +245,7 @@
     padding: 12px;
     border-radius: var(--border-radius-md);
     background: #09090b;
-    border: 1px solid var(--border-color, #3a3a42);
+    border: 1px solid var(--border-color, var(--ftbq-border));
     font-family: ui-monospace, "Cascadia Code", "Fira Code", monospace;
     font-size: 11px;
     line-height: 1.45;
@@ -279,7 +279,7 @@
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    border: 1px solid var(--border-color, #3a3a42);
+    border: 1px solid var(--border-color, var(--ftbq-border));
   }
   .modal-actions .ghost {
     background: transparent;

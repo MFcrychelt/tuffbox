@@ -293,8 +293,8 @@
   .mode {
     margin-left: auto;
     font-size: 11px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: inherit;
     border-radius: 2px;
     padding: 3px 6px;
@@ -310,8 +310,8 @@
   textarea,
   select {
     font-size: 12px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: inherit;
     border-radius: 2px;
     padding: 6px 8px;
@@ -329,7 +329,7 @@
     align-items: center;
     justify-content: center;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;

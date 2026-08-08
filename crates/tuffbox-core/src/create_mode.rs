@@ -842,6 +842,8 @@ impl LiveCatalogSearch {
                     license: None,
                     client_side: None,
                     server_side: None,
+                    issues_url: None,
+                    source_url: None,
                 });
             }
         }
@@ -1543,6 +1545,8 @@ mod tests {
             license: None,
             client_side: None,
             server_side: None,
+            issues_url: None,
+            source_url: None,
         }
     }
 

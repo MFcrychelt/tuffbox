@@ -3,7 +3,6 @@
   import {
     Play,
     Square,
-    Plus,
     Settings,
     Workflow,
     LogIn,
@@ -38,9 +37,8 @@
     ideStageRequest,
     ideSuggestedStage,
     ideIssueCount,
+    launcherSettingsLive,
     type RecentProject,
-    type CapeProvider,
-    type CapeCatalog,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -94,20 +92,14 @@
   let selectedPath = $state<string | null>($projectPath);
   let showLoginModal = $state(false);
   let showAccountManager = $state(false);
-  let capeCatalog = $state<CapeCatalog | null>(null);
-  let capeBusy = $state(false);
-  let mojangCapeMenuOpen = $state(false);
   let potatoPc = $state(false);
-  const capeProviderOptions: { id: CapeProvider; label: string }[] = [
-    { id: "mojang", label: "Mojang" },
-    { id: "optifine", label: "OptiFine" },
-    { id: "tlauncher", label: "TLauncher" },
-    { id: "none", label: "None" },
-  ];
+  let accountSwitchBusy = $state(false);
+  let accountSkinPaths = $state<Record<string, string>>({});
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
   const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
+  const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
 
   // The sidebar rail switches instances through the global store — mirror it here.
   $effect(() => {
@@ -126,11 +118,6 @@
     if (n <= 20) return 9;
     return 8;
   });
-  const mojangCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider === "mojang"));
-  const otherCapeOffers = $derived((capeCatalog?.offers ?? []).filter((o) => o.provider !== "mojang"));
-  const canChangeMojangCape = $derived(
-    $authState.loginType === "microsoft" && mojangCapeOffers.some((o) => o.canActivate),
-  );
 
   type CrashFixBanner = {
     snapshotId: string;
@@ -171,78 +158,46 @@
     }
   }
 
-  async function refreshCapes() {
-    if (!$authState.loggedIn || !$authState.profile) {
-      capeCatalog = null;
-      return;
-    }
-    try {
-      capeCatalog = await api.mcAuth.listCapes();
-    } catch {
-      capeCatalog = null;
-    }
-  }
-
-  async function selectCapeProvider(provider: CapeProvider) {
-    if (capeBusy) return;
-    capeBusy = true;
-    try {
-      const state = await api.mcAuth.setCapeProvider(provider);
-      authState.set(state);
-      await refreshCapes();
-      // Only Mojang owns multiple switchable capes — open the change menu after catalog loads.
-      mojangCapeMenuOpen =
-        provider === "mojang" &&
-        state.loginType === "microsoft" &&
-        (capeCatalog?.offers ?? []).some((o) => o.provider === "mojang" && o.canActivate);
-      toasts.success(`Cape: ${provider === "none" ? "hidden" : provider}`);
-    } catch (e) {
-      toasts.error(String(e));
-    } finally {
-      capeBusy = false;
+  async function ensureAccountSkinPaths(uuids: string[]) {
+    for (const uuid of uuids) {
+      if (!uuid || accountSkinPaths[uuid]) continue;
+      try {
+        const path = await api.mcAuth.getSkinPath(uuid);
+        accountSkinPaths = { ...accountSkinPaths, [uuid]: path };
+      } catch {
+        /* ignore — HeadAvatar falls back */
+      }
     }
   }
 
-  async function activateMojangCape(capeId: string) {
-    if (capeBusy) return;
-    capeBusy = true;
+  $effect(() => {
+    void ensureAccountSkinPaths($authState.accounts.map((a) => a.uuid));
+  });
+
+  async function switchHomeAccount(uuid: string) {
+    if (accountSwitchBusy || uuid === $authState.activeAccountUuid) return;
+    accountSwitchBusy = true;
     try {
-      const state = await api.mcAuth.applyCape(capeId);
+      const state = await api.mcAuth.switchAccount(uuid);
       authState.set(state);
-      mojangCapeMenuOpen = true;
       if (state.profile) {
         try {
-          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
-        } catch {}
+          const path = await api.mcAuth.getSkinPath(state.profile.uuid);
+          skinPath.set(path);
+          accountSkinPaths = { ...accountSkinPaths, [state.profile.uuid]: path };
+        } catch {
+          skinPath.set(null);
+        }
+      } else {
+        skinPath.set(null);
       }
-      await refreshCapes();
-      toasts.success("Mojang cape activated");
+      toasts.success(`Switched to ${state.profile?.name ?? "account"}`);
     } catch (e) {
       toasts.error(String(e));
     } finally {
-      capeBusy = false;
+      accountSwitchBusy = false;
     }
   }
-
-  function openMojangCapeMenu() {
-    mojangCapeMenuOpen = true;
-    if (($authState.capeProvider ?? "mojang") !== "mojang") {
-      void selectCapeProvider("mojang");
-    }
-  }
-
-  let lastCapeRefreshKey = $state("");
-  const capeRefreshKey = $derived(
-    $authState.loggedIn
-      ? `${$authState.activeAccountUuid ?? ""}:${$authState.capeProvider ?? "mojang"}`
-      : "",
-  );
-  $effect(() => {
-    if (capeRefreshKey && capeRefreshKey !== lastCapeRefreshKey) {
-      lastCapeRefreshKey = capeRefreshKey;
-      void refreshCapes();
-    }
-  });
 
   onMount(() => {
     let cleanup: (() => void) | undefined;
@@ -362,26 +317,6 @@
   $effect(() => {
     ensureSizes($recentProjects.map((p) => p.path));
   });
-
-  async function handleLogout() {
-    try {
-      const state = await api.mcAuth.logout();
-      authState.set(state);
-      if (state.profile?.uuid) {
-        try {
-          skinPath.set(await api.mcAuth.getSkinPath(state.profile.uuid));
-        } catch {
-          skinPath.set(null);
-        }
-      } else {
-        skinPath.set(null);
-      }
-      capeCatalog = null;
-      toasts.info(state.loggedIn ? `Switched to ${state.profile?.name ?? "account"}` : "Logged out");
-    } catch (e) {
-      toasts.error(String(e));
-    }
-  }
 
   function openIdeStage(stage: string) {
     ideStageRequest.set(stage);
@@ -519,10 +454,6 @@
                   Folder
                 </button>
               {/if}
-              <button class="action-btn accent" onclick={() => (newProjectOpen.set(true))}>
-                <Plus size={15} />
-                New
-              </button>
             </div>
 
             {#if crashFixBanner}
@@ -568,9 +499,18 @@
                 <Gamepad2 size={14} />
                 <span>{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
               </div>
-              <div class="stat">
+              <div
+                class="stat size-stat"
+                title={instanceSizes[selectedProject.path] || "Calculating size…"}
+              >
                 <HardDrive size={14} />
-                <span>{instanceSizes[selectedProject.path] || "..."}</span>
+                {#if instanceSizes[selectedProject.path]}
+                  <span>{instanceSizes[selectedProject.path]}</span>
+                {:else if loadingSizes[selectedProject.path]}
+                  <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
+                {:else}
+                  <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
+                {/if}
               </div>
               {#if projectStats[selectedProject.path]?.playtime}
                 <div class="stat">
@@ -587,7 +527,7 @@
         {/if}
       </section>
 
-      {#if hasInstanceHome && selectedPath}
+      {#if hasInstanceHome && selectedPath && !hideInstanceHome}
         <InstanceHome
           projectPath={selectedPath}
           onOpenMods={() => openIdeStage("content")}
@@ -611,8 +551,8 @@
             <div class="skin-skel-cape">
               <span class="skeleton skeleton-block skeleton-line short" style="width: 90px; height: 10px; margin-bottom: 10px;"></span>
               <div class="skin-skel-cape-row home-skel-stagger">
-                {#each Array(4) as _, i (i)}
-                  <span class="skeleton skeleton-block skeleton-round" style={`--i: ${i}; width: 64px; height: 28px;`}></span>
+                {#each Array(3) as _, i (i)}
+                  <span class="skeleton skeleton-block skeleton-round" style={`--i: ${i}; width: 100%; height: 36px;`}></span>
                 {/each}
               </div>
             </div>
@@ -630,7 +570,7 @@
             accountKey={accountKey}
             playerName={$authState.profile.name}
             showName={false}
-            width={300}
+            width={318}
             height={400}
           />
           {/if}
@@ -650,9 +590,7 @@
             </div>
             <button class="change-skin-btn" onclick={() => (showAccountManager = true)}>
               <Users size={14} />
-              {$authState.accounts.length > 1
-                ? `${$authState.accounts.length} accounts`
-                : "Accounts"}
+              Manage
             </button>
           </div>
           <div
@@ -663,111 +601,30 @@
             {$authState.profile.name}
           </div>
 
-          <div class="cape-panel">
-            <div class="cape-row-label">Cape provider</div>
-            <div class="cape-provider-grid">
-              {#each capeProviderOptions as opt (opt.id)}
-                <button
-                  type="button"
-                  class="cape-provider-btn"
-                  class:active={($authState.capeProvider ?? "mojang") === opt.id}
-                  disabled={capeBusy}
-                  onclick={() => selectCapeProvider(opt.id)}
-                >
-                  {opt.label}
-                </button>
-              {/each}
+          {#if $authState.accounts.length > 0}
+            <div class="accounts-switcher">
+              <div class="accounts-switcher-label">Accounts</div>
+              <div class="accounts-switcher-list">
+                {#each $authState.accounts as account (account.uuid)}
+                  <button
+                    type="button"
+                    class="account-chip"
+                    class:active={account.uuid === $authState.activeAccountUuid}
+                    disabled={accountSwitchBusy}
+                    title={account.name}
+                    onclick={() => switchHomeAccount(account.uuid)}
+                  >
+                    <HeadAvatar
+                      skinSrc={accountSkinPaths[account.uuid] ?? null}
+                      size={22}
+                      alt={account.name}
+                    />
+                    <span class="account-chip-name">{account.name}</span>
+                  </button>
+                {/each}
+              </div>
             </div>
-
-            {#if canChangeMojangCape}
-              <div class="cape-mojang-actions">
-                <button
-                  type="button"
-                  class="cape-activate"
-                  disabled={capeBusy}
-                  onclick={() => (mojangCapeMenuOpen ? (mojangCapeMenuOpen = false) : openMojangCapeMenu())}
-                >
-                  {mojangCapeMenuOpen ? "Hide cape menu" : "Show cape"}
-                </button>
-              </div>
-            {/if}
-
-            {#if mojangCapeMenuOpen && canChangeMojangCape}
-              <div class="cape-row-label">Change Mojang cape</div>
-              <div class="cape-offers">
-                {#each mojangCapeOffers as offer (offer.id)}
-                  <div class="cape-offer" class:active={offer.active}>
-                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
-                    <div class="cape-offer-info">
-                      <strong>{offer.label}</strong>
-                      <span>mojang</span>
-                    </div>
-                    <button
-                      class="cape-activate"
-                      disabled={capeBusy || offer.active}
-                      onclick={() => activateMojangCape(offer.id)}
-                    >
-                      {offer.active ? "Active" : "Equip"}
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            {:else if mojangCapeOffers.length && !canChangeMojangCape}
-              <div class="cape-row-label">Mojang cape</div>
-              <div class="cape-offers">
-                {#each mojangCapeOffers as offer (offer.id)}
-                  <div
-                    class="cape-offer"
-                    class:active={($authState.capeProvider ?? "mojang") === "mojang"}
-                  >
-                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
-                    <div class="cape-offer-info">
-                      <strong>{offer.label}</strong>
-                      <span>mojang</span>
-                    </div>
-                    {#if ($authState.capeProvider ?? "mojang") !== "mojang"}
-                      <button
-                        class="cape-activate"
-                        disabled={capeBusy}
-                        onclick={() => selectCapeProvider("mojang")}
-                      >
-                        Show
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-
-            {#if otherCapeOffers.length}
-              <div class="cape-row-label">Other sources</div>
-              <div class="cape-offers">
-                {#each otherCapeOffers as offer (offer.provider + offer.id)}
-                  <div
-                    class="cape-offer"
-                    class:active={($authState.capeProvider ?? "mojang") === offer.provider}
-                  >
-                    <img src={offer.url} alt={offer.label} class="cape-thumb" />
-                    <div class="cape-offer-info">
-                      <strong>{offer.label}</strong>
-                      <span>{offer.provider}</span>
-                    </div>
-                    {#if ($authState.capeProvider ?? "mojang") !== offer.provider}
-                      <button
-                        class="cape-activate"
-                        disabled={capeBusy}
-                        onclick={() => selectCapeProvider(offer.provider)}
-                      >
-                        Show
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {:else if !mojangCapeOffers.length}
-              <p class="cape-empty">No capes found for this username on the selected sources.</p>
-            {/if}
-          </div>
+          {/if}
         {:else}
           <div class="skin-panel-empty">
             <User size={48} />
@@ -939,10 +796,21 @@
     flex-shrink: 0;
   }
 
-  /* Keep the canvas frame from being flexed/squashed inside the panel. */
+  /* Keep the canvas frame from being flexed/squashed inside the panel;
+     fill the panel width and drop nested rounding (panel already clips). */
   .skin-panel :global(.skin-3d-wrap),
   .skin-panel :global(.skin-3d-container) {
     flex-shrink: 0;
+    width: 100% !important;
+    max-width: 100%;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+  }
+
+  .skin-panel :global(.skin-3d-wrap) {
+    align-items: stretch;
   }
 
   .skin-panel-footer {
@@ -967,7 +835,7 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     padding: 3px 7px;
-    border-radius: 6px;
+    border-radius: 4px;
   }
   .type-badge.microsoft {
     color: #93c5fd;
@@ -1027,64 +895,73 @@
     color: var(--accent-primary);
   }
 
-  .cape-panel {
+  .accounts-switcher {
     padding: 12px 16px 16px;
     border-top: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  .cape-row-label {
+
+  .accounts-switcher-label {
     font-size: 11px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .cape-provider-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
+
+  .accounts-switcher-list {
+    display: flex;
+    flex-direction: column;
     gap: 6px;
+    max-height: 200px;
+    overflow: auto;
   }
-  .cape-provider-btn {
-    padding: 7px 4px;
+
+  .account-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-primary);
     color: var(--text-secondary);
-    font-size: 10px;
-    font-weight: 700;
     cursor: pointer;
+    text-align: left;
+    transition:
+      border-color var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      background var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      color var(--motion-fast, 160ms) var(--ease-hover-in, ease);
   }
-  .cape-provider-btn.active {
+
+  .account-chip:hover:not(:disabled) {
     border-color: var(--accent-primary);
-    color: var(--accent-primary);
+    color: var(--text-primary);
+  }
+
+  .account-chip.active {
+    border-color: var(--accent-primary);
     background: rgba(27, 217, 106, 0.08);
+    color: var(--accent-primary);
   }
-  .cape-provider-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .cape-mojang-actions { display: flex; }
-  .cape-offers { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow: auto; }
-  .cape-offer {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px; border-radius: var(--border-radius-sm);
-    border: 1px solid var(--border-color); background: var(--bg-primary);
+
+  .account-chip:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
-  .cape-offer.active { border-color: var(--accent-primary); }
-  .cape-thumb {
-    width: 36px; height: 28px; object-fit: contain;
-    image-rendering: pixelated; background: #111; border-radius: 4px;
+
+  .account-chip-name {
+    font-family: var(--font-minecraft);
+    font-size: 11px;
+    letter-spacing: 0.4px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .cape-offer-info { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .cape-offer-info strong { font-size: 12px; color: var(--text-primary); }
-  .cape-offer-info span { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
-  .cape-activate {
-    padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-color);
-    background: var(--bg-elevated); color: var(--text-secondary);
-    font-size: 11px; font-weight: 700; cursor: pointer;
-  }
-  .cape-activate:hover:not(:disabled) { border-color: var(--accent-primary); color: var(--accent-primary); }
-  .cape-activate:disabled { opacity: 0.55; cursor: default; }
-  .cape-empty { margin: 0; font-size: 11px; color: var(--text-muted); }
 
   .skin-panel-empty {
     display: flex;
@@ -1146,7 +1023,7 @@
 
   .skin-skel-cape-row {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
   }
 
@@ -1160,6 +1037,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    flex-wrap: wrap;
     padding: 24px 32px;
     background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
     border: 1px solid var(--border-color);
@@ -1191,11 +1069,14 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-shrink: 0;
   }
 
   .instance-stats {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .stat {
@@ -1207,6 +1088,18 @@
     background: var(--bg-secondary);
     padding: 6px 10px;
     border-radius: var(--border-radius-sm);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .stat span {
+    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .size-stat {
+    min-width: max-content;
   }
 
   .play-btn {

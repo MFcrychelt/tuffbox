@@ -279,7 +279,7 @@
     flex-direction: column;
     height: 100%;
     overflow: hidden;
-    background: var(--ftbq-bg-panel, #212126);
+    background: var(--ftbq-bg-panel);
     color: var(--ftbq-text, #e8e8e8);
   }
   .cm-header {
@@ -287,7 +287,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     flex-shrink: 0;
   }
   .cm-title {
@@ -301,7 +301,7 @@
   }
   .cm-search {
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -311,8 +311,8 @@
     width: 100%;
     padding: 6px 8px;
     font-size: 12px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
@@ -343,7 +343,7 @@
 
   .color-palette {
     padding: 8px 12px;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     flex-shrink: 0;
   }
   .palette-label {
@@ -364,9 +364,9 @@
     align-items: center;
     gap: 4px;
     padding: 3px 6px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     border-radius: 3px;
-    background: var(--ftbq-bg, #1a1a1e);
+    background: var(--ftbq-bg);
     cursor: pointer;
     font-size: 10px;
     color: var(--ftbq-text, #e8e8e8);
@@ -410,9 +410,9 @@
     flex-direction: column;
     gap: 4px;
     padding: 6px 8px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     border-radius: 3px;
-    background: var(--ftbq-bg, #1a1a1e);
+    background: var(--ftbq-bg);
     cursor: pointer;
     text-align: left;
     transition: border-color 0.15s;
@@ -476,8 +476,8 @@
   }
   .popup {
     position: fixed;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-border);
     border-radius: 3px;
     padding: 12px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.4);
@@ -512,7 +512,7 @@
   .popup-preview {
     font-size: 12px;
     padding: 6px 8px;
-    background: var(--ftbq-bg, #1a1a1e);
+    background: var(--ftbq-bg);
     border-radius: 3px;
     margin-bottom: 8px;
     min-height: 28px;
@@ -524,7 +524,7 @@
 
   .btn {
     padding: 6px 12px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: rgba(0,0,0,0.25);
     color: var(--ftbq-text, #e8e8e8);
     font-size: 12px;

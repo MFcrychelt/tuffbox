@@ -265,10 +265,10 @@
 
 <style>
   .review {
-    border: 1px solid #101014;
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     padding: 10px;
-    background: var(--ftbq-bg-panel, #212126);
+    background: var(--ftbq-bg-panel);
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
       0 2px 8px rgba(0, 0, 0, 0.4);

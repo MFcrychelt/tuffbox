@@ -163,8 +163,8 @@
     gap: 8px;
     padding: 0 0 16px;
     font-size: 12px;
-    background: var(--ftbq-bg-panel, #212126);
-    border-left: 1px solid #101014;
+    background: var(--ftbq-bg-panel);
+    border-left: 1px solid var(--ftbq-frame);
     box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
     max-height: 100%;
     overflow: auto;
@@ -181,12 +181,12 @@
     color: var(--ftbq-title-gold, #f2c94c);
     font-weight: 700;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
-    border-bottom: 1px solid #101014;
+    border-bottom: 1px solid var(--ftbq-frame);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
   }
   .ch-set h4:not(:first-child) {
-    border-top: 1px solid #101014;
+    border-top: 1px solid var(--ftbq-frame);
     color: var(--ftbq-accent-teal, #3db8a8);
   }
   .ch-set label {
@@ -204,8 +204,8 @@
   .ch-set input,
   .ch-set select {
     font-size: 12px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
@@ -228,18 +228,18 @@
   .extra-add input,
   .extra-add button {
     font-size: 11px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
   }
   .extra-add button {
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
     cursor: pointer;
   }
   .extra-add button:hover {
-    background: linear-gradient(180deg, #47503f, #32382d);
-    color: #d6f5d0;
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+    color: var(--ftbq-accent-green);
   }
 </style>

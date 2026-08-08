@@ -1397,6 +1397,8 @@ async fn get_catalog_project(
             "license": project.license,
             "clientSide": project.client_side,
             "serverSide": project.server_side,
+            "issuesUrl": project.issues_url,
+            "sourceUrl": project.source_url,
             "provider": "modrinth",
         }))
     })
@@ -13139,6 +13141,8 @@ fn project_info_from_mod(module: &ModSpec) -> tuffbox_core::ProjectInfo {
         license: None,
         client_side: None,
         server_side: None,
+        issues_url: None,
+        source_url: None,
     }
 }
 

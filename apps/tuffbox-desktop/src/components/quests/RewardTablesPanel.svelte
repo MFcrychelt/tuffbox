@@ -281,9 +281,9 @@
 <style>
   .rt {
     margin-top: 10px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     border-radius: 2px;
-    background: var(--ftbq-bg-panel, #212126);
+    background: var(--ftbq-bg-panel);
     padding: 0 10px 10px;
     color: var(--ftbq-text, #e8e8e8);
   }
@@ -310,7 +310,7 @@
     text-align: left;
     padding: 6px 8px;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 11px;
@@ -340,8 +340,8 @@
   .rt-edit select,
   .rt-edit textarea {
     font-size: 12px;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: inherit;
     border-radius: 2px;
     padding: 6px 8px;
@@ -358,7 +358,7 @@
     display: grid;
     gap: 6px;
     padding: 8px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     border-radius: 2px;
     background: rgba(0, 0, 0, 0.2);
   }
@@ -375,7 +375,7 @@
     justify-content: center;
     gap: 4px;
     border-radius: 2px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;

@@ -295,6 +295,13 @@
   function textareaVal(e: Event): string {
     return (e.currentTarget as HTMLTextAreaElement).value;
   }
+
+  function autoGrowDescription(e: Event) {
+    const el = e.currentTarget as HTMLTextAreaElement;
+    descText = el.value;
+    el.style.height = "auto";
+    el.style.height = `${Math.max(100, el.scrollHeight)}px`;
+  }
 </script>
 
 <aside class="insp ftbq-view">
@@ -363,7 +370,7 @@
             <textarea
               rows="4"
               value={descText}
-              oninput={(e) => (descText = textareaVal(e))}
+              oninput={autoGrowDescription}
               onchange={commitDescription}
               onblur={commitDescription}
               placeholder="One line per paragraph"
@@ -435,7 +442,7 @@
         <textarea
           rows="4"
           value={descText}
-          oninput={(e) => (descText = textareaVal(e))}
+          oninput={autoGrowDescription}
           onchange={commitDescription}
           onblur={commitDescription}
           placeholder="One line per paragraph · & codes · JSON text lines ok"
@@ -610,8 +617,8 @@
 
 <style>
   .insp {
-    background: var(--ftbq-bg-panel, #212126);
-    border-left: 1px solid #101014;
+    background: var(--ftbq-bg-panel);
+    border-left: 1px solid var(--ftbq-frame);
     box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.05);
     padding: 0;
     max-height: 100%;
@@ -628,7 +635,7 @@
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
-    border-bottom: 1px solid #101014;
+    border-bottom: 1px solid var(--ftbq-frame);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
     box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
   }
@@ -649,7 +656,7 @@
     margin: 0;
     padding: 4px 12px 8px;
     word-break: break-all;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
   }
   .val-warn {
     padding: 8px 10px;
@@ -696,16 +703,32 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
+  .insp :global(input:not([type="checkbox"]):not([type="radio"])),
+  .insp :global(textarea),
+  .insp :global(select) {
+    background: var(--ftbq-input-bg) !important;
+    border-color: var(--ftbq-frame);
+    color-scheme: dark;
+  }
+
   .fields input,
   .fields textarea,
   .fields select {
     font-size: 12px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg) !important;
+    border: 1px solid var(--ftbq-frame);
     box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
     text-transform: none;
+    color-scheme: dark;
+  }
+  .fields textarea {
+    min-height: 100px;
+    field-sizing: content;
+    resize: vertical;
+    line-height: 1.45;
+    overflow-y: hidden;
   }
   .checkbox {
     display: flex !important;
@@ -728,7 +751,7 @@
     text-align: left;
     padding: 6px 12px;
     cursor: pointer;
-    border-top: 1px solid var(--ftbq-border, #3a3a42);
+    border-top: 1px solid var(--ftbq-border);
   }
   .adv-tog:hover {
     color: var(--ftbq-text, #e8e8e8);
@@ -773,8 +796,8 @@
     align-items: center;
     gap: 6px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.22));
-    border-top: 1px solid #101014;
-    border-bottom: 1px solid #101014;
+    border-top: 1px solid var(--ftbq-frame);
+    border-bottom: 1px solid var(--ftbq-frame);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
     font-weight: 700;
@@ -791,8 +814,8 @@
     gap: 4px;
     padding: 2px 8px;
     border-radius: 3px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     box-shadow:
       inset 1px 1px 0 rgba(0, 0, 0, 0.5),
       inset -1px -1px 0 rgba(92, 138, 158, 0.35);
@@ -818,18 +841,20 @@
     width: 100%;
     font-size: 11px;
     padding: 5px 7px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg) !important;
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
+    color-scheme: dark;
   }
   .dep-add select {
     width: 100%;
     font-size: 11px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg) !important;
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
+    color-scheme: dark;
   }
   .dep-add .add-btn {
     align-self: flex-end;
@@ -838,8 +863,8 @@
     font-size: 11px;
     padding: 4px 10px;
     border-radius: 3px;
-    border: 1px solid #101014;
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.12),
       inset 0 -1px 0 rgba(0, 0, 0, 0.45);
@@ -847,7 +872,7 @@
     cursor: pointer;
   }
   .add-btn:hover:not(:disabled) {
-    background: linear-gradient(180deg, #3d5854, #2c423f);
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
     color: #c9f2ec;
   }
   .add-btn:disabled {
@@ -862,8 +887,8 @@
   .fmt-bar button {
     font-size: 10px;
     padding: 2px 6px;
-    border: 1px solid #101014;
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
     color: var(--ftbq-text, #e8e8e8);
     border-radius: 3px;
@@ -871,8 +896,8 @@
     cursor: pointer;
   }
   .fmt-bar button:hover {
-    background: linear-gradient(180deg, #47503f, #32382d);
-    color: #d6f5d0;
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+    color: var(--ftbq-accent-green);
   }
   .fmt-hint {
     color: var(--ftbq-text-muted, #9a9aa0);

@@ -118,7 +118,7 @@
   <div class="rail-h">
     <h3>Chapters</h3>
     <button type="button" class="ico" title="Add chapter" onclick={onCreate}>
-      <Plus size={14} />
+      <Plus size={14} class="flex-shrink-0" />
     </button>
   </div>
 
@@ -126,7 +126,7 @@
     {#each groups as g (g.key)}
       {#if groups.length > 1 || g.key}
         <button type="button" class="group-h" onclick={() => toggleGroup(g.key)}>
-          {#if collapsed.has(g.key)}<ChevronRight size={12} />{:else}<ChevronDown size={12} />{/if}
+          {#if collapsed.has(g.key)}<ChevronRight size={12} class="flex-shrink-0" />{:else}<ChevronDown size={12} class="flex-shrink-0" />{/if}
           <span>{g.label}</span>
         </button>
       {/if}
@@ -191,7 +191,7 @@
                     menuId = menuId === ch.id ? null : ch.id;
                   }}
                 >
-                  <MoreVertical size={12} />
+                  <MoreVertical size={12} class="flex-shrink-0" />
                 </button>
                 {#if menuId === ch.id}
                   <div class="ch-menu">
@@ -216,7 +216,7 @@
 
   {#if selectedChapter && dirtyIds.has(selectedChapter)}
     <button type="button" class="save-ch" disabled={saving} onclick={() => onSave(selectedChapter)}>
-      <Save size={14} /> Save chapter
+      <Save size={14} class="flex-shrink-0" /> Save chapter
     </button>
   {/if}
 </aside>
@@ -226,8 +226,8 @@
     display: flex;
     flex-direction: column;
     gap: 0;
-    background: var(--ftbq-bg-panel, #212126);
-    border-right: 1px solid #101014;
+    background: var(--ftbq-bg-panel);
+    border-right: 1px solid var(--ftbq-frame);
     box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.05);
     padding: 0;
     min-height: 0;
@@ -238,7 +238,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 7px 8px;
-    border-bottom: 1px solid #101014;
+    border-bottom: 1px solid var(--ftbq-frame);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.22));
     box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
   }
@@ -258,8 +258,8 @@
     align-items: center;
     justify-content: center;
     border-radius: 3px;
-    border: 1px solid #101014;
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.12),
       inset 0 -1px 0 rgba(0, 0, 0, 0.45);
@@ -268,8 +268,8 @@
   }
   .ico:hover {
     color: var(--ftbq-text, #e8e8e8);
-    border-color: #101014;
-    background: linear-gradient(180deg, #46464f, #32323a);
+    border-color: var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
     filter: brightness(1.08);
   }
   .ico:active {
@@ -310,12 +310,16 @@
     border-left: 3px solid transparent;
   }
   .ch-row-wrap.sel {
-    background: linear-gradient(90deg, rgba(85, 201, 90, 0.16), rgba(85, 201, 90, 0.05));
-    border-left-color: var(--ftbq-accent-green, #55c95a);
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ftbq-accent-green) 16%, transparent),
+      color-mix(in srgb, var(--ftbq-accent-green) 5%, transparent)
+    );
+    border-left-color: var(--ftbq-accent-green);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
   }
   .ch-row-wrap.dirty:not(.sel) {
-    border-left-color: rgba(242, 201, 76, 0.4);
+    border-left-color: color-mix(in srgb, var(--ftbq-quest-started) 40%, transparent);
   }
   .ch-row {
     display: flex;
@@ -357,8 +361,8 @@
     min-width: 120px;
     display: flex;
     flex-direction: column;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid #101014;
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
@@ -374,7 +378,7 @@
     cursor: pointer;
   }
   .ch-menu button:hover {
-    background: rgba(61, 184, 168, 0.12);
+    background: color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent);
   }
   .ch-menu button.danger {
     color: #f87171;
@@ -390,8 +394,8 @@
     height: 26px;
     flex-shrink: 0;
     border-radius: 3px;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -406,7 +410,7 @@
     box-shadow:
       inset 2px 2px 0 rgba(0, 0, 0, 0.55),
       inset -1px -1px 0 rgba(255, 255, 255, 0.08),
-      0 0 6px rgba(85, 201, 90, 0.45);
+      0 0 6px color-mix(in srgb, var(--ftbq-accent-green) 45%, transparent);
   }
   .ch-text {
     display: grid;
@@ -430,8 +434,8 @@
     font-weight: 600;
     padding: 2px 4px;
     width: 100%;
-    background: var(--ftbq-bg, #1a1a1e);
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    background: var(--ftbq-bg);
+    border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
   }
   .dot {
@@ -447,12 +451,16 @@
     gap: 6px;
     padding: 7px;
     border-radius: 3px;
-    border: 1px solid #12380f;
-    background: linear-gradient(180deg, #4fae53, #35833a);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, #000);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-primary) 88%, #fff 12%),
+      color-mix(in srgb, var(--accent-primary) 72%, #000 28%)
+    );
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.25),
       inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: #eaffe9;
+    color: var(--ftbq-text);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
     font-size: 11px;
     font-weight: 700;
@@ -464,5 +472,13 @@
   .save-ch:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .flex-shrink-0 {
+    flex-shrink: 0;
+  }
+
+  :global(.ftbq-rail svg) {
+    flex-shrink: 0;
   }
 </style>

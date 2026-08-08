@@ -586,7 +586,9 @@
 <div class="app-shell">
   <Sidebar bind:currentView />
   <div class="main">
-    <Header {currentView} />
+    {#if currentView !== "ide"}
+      <Header {currentView} />
+    {/if}
     <main
       class="content"
       class:ide-view={currentView === "ide"}

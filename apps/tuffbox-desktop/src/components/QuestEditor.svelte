@@ -140,6 +140,8 @@
   let clipboard = $state<QuestData[]>([]);
   let showShortcuts = $state(false);
   let panelTab = $state<"quest" | "info" | "batch" | "colors" | "raw">("info");
+  let railWidth = $state(180);
+  let inspWidth = $state(300);
   let validateTimer: ReturnType<typeof setTimeout> | null = null;
   let itemCatalogCache = $state<Set<string> | null>(null);
   let snbtDiffOpen = $state(false);
@@ -799,6 +801,45 @@
     chapters = [...chapters, n];
     selectChapter(n.id);
     markDirty(n.id);
+  }
+
+  function clampPanel(n: number, min: number, max: number): number {
+    return Math.max(min, Math.min(max, Math.round(n)));
+  }
+
+  function startColResize(which: "rail" | "insp", e: PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = which === "rail" ? railWidth : inspWidth;
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (which === "rail") {
+        railWidth = clampPanel(startW + dx, 140, 360);
+      } else {
+        // Dragging the left edge of the inspector: move left → wider.
+        inspWidth = clampPanel(startW - dx, 240, 520);
+      }
+    };
+    const onUp = (ev: PointerEvent) => {
+      try {
+        target.releasePointerCapture(ev.pointerId);
+      } catch {
+        /* ignore */
+      }
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    };
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
   }
 
   function addQuestAt(x: number, y: number) {
@@ -1841,7 +1882,11 @@
     </div>
   {:else}
     <div class="qe-body-row">
-    <div class="qe-lay" class:with-insp={!!selectedChapterObj}>
+    <div
+      class="qe-lay"
+      class:with-insp={!!selectedChapterObj}
+      style="--qe-rail: {railWidth}px; --qe-insp: {inspWidth}px;"
+    >
       <ChapterRail
         {chapters}
         {chapterGroups}
@@ -1855,6 +1900,13 @@
         onDelete={deleteChapter}
         onMove={moveChapter}
       />
+      <div
+        class="col-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chapters panel"
+        onpointerdown={(e) => startColResize("rail", e)}
+      ></div>
       <div class="canvas-wrap">
         <div class="canvas-tools">
           <input
@@ -1912,6 +1964,13 @@
         </SvelteFlowProvider>
       </div>
       {#if selectedChapterObj}
+        <div
+          class="col-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize quest inspector"
+          onpointerdown={(e) => startColResize("insp", e)}
+        ></div>
         <div class="side-panel">
           <div class="panel-tabs">
             <button type="button" class="tab" class:active={panelTab === "quest"} onclick={() => (panelTab = "quest")}
@@ -2035,26 +2094,6 @@
 />
 
 <style>
-  .qe.ftbq {
-    --ftbq-bg: #1a1a1e;
-    --ftbq-bg-panel: #212126;
-    --ftbq-bg-canvas: #2b2b30;
-    --ftbq-border: #3a3a42;
-    --ftbq-frame: #101014;
-    --ftbq-text: #e8e8e8;
-    --ftbq-text-muted: #9a9aa0;
-    --ftbq-quest-default: #ffffff;
-    --ftbq-quest-locked: #6b6b6b;
-    --ftbq-quest-started: #f2c94c;
-    --ftbq-quest-completed: #55c95a;
-    --ftbq-line: #5c8a9e;
-    --ftbq-line-hover: #7fb3c8;
-    --ftbq-line-done: #55c95a;
-    --ftbq-accent-teal: #3db8a8;
-    --ftbq-accent-green: #55c95a;
-    --ftbq-title-gold: #f2c94c;
-    --ftbq-node-fill: #18181c;
-  }
   .qe {
     max-width: none;
     width: 100%;
@@ -2064,7 +2103,7 @@
     flex-direction: column;
     background:
       radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.03), transparent 55%),
-      var(--ftbq-bg, #1a1a1e);
+      var(--ftbq-bg);
     color: var(--ftbq-text, #e8e8e8);
   }
   /* Isolate from global TuffBox green primary buttons */
@@ -2076,8 +2115,8 @@
   .qe.ftbq :global(button.ghost),
   .qe.ftbq :global(button.ico) {
     padding: 4px 10px;
-    border: 1px solid var(--ftbq-frame, #101014);
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.12),
       inset 0 -1px 0 rgba(0, 0, 0, 0.45);
@@ -2086,9 +2125,9 @@
   }
   .qe.ftbq :global(button.ghost:hover:not(:disabled)),
   .qe.ftbq :global(button.ico:hover:not(:disabled)) {
-    border-color: var(--ftbq-frame, #101014);
-    background: linear-gradient(180deg, #47503f, #32382d);
-    color: #d6f5d0;
+    border-color: var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+    color: var(--ftbq-accent-green);
   }
   .qe.ftbq :global(button.ghost:active:not(:disabled)),
   .qe.ftbq :global(button.ico:active:not(:disabled)) {
@@ -2097,12 +2136,16 @@
   .qe.ftbq :global(button.primary),
   .qe.ftbq :global(.qe-actions > button:not(.ghost)) {
     padding: 6px 12px;
-    border: 1px solid #12380f;
-    background: linear-gradient(180deg, #4fae53, #35833a);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, #000);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-primary) 88%, #fff 12%),
+      color-mix(in srgb, var(--accent-primary) 72%, #000 28%)
+    );
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.25),
       inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: #eaffe9;
+    color: var(--ftbq-text);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
   }
   .qe.ftbq :global(button.primary:hover:not(:disabled)),
@@ -2116,8 +2159,8 @@
   .qe.ftbq :global(select),
   .qe.ftbq :global(textarea) {
     border-radius: 3px;
-    border: 1px solid #0c0c0f;
-    background: #141419;
+    border: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-input-bg);
     box-shadow:
       inset 1px 1px 3px rgba(0, 0, 0, 0.55),
       inset -1px -1px 0 rgba(255, 255, 255, 0.05);
@@ -2128,10 +2171,10 @@
   .qe.ftbq :global(select:focus),
   .qe.ftbq :global(textarea:focus) {
     outline: none;
-    border-color: var(--ftbq-title-gold, #f2c94c);
+    border-color: var(--ftbq-title-gold);
     box-shadow:
       inset 1px 1px 3px rgba(0, 0, 0, 0.55),
-      0 0 6px rgba(242, 201, 76, 0.35);
+      0 0 6px color-mix(in srgb, var(--ftbq-title-gold) 35%, transparent);
   }
   .qe-tb,
   .qe-title,
@@ -2165,8 +2208,8 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-frame, #101014);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
@@ -2208,8 +2251,8 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-frame, #101014);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
@@ -2237,8 +2280,8 @@
     position: relative;
   }
   .issues-btn {
-    border: 1px solid var(--ftbq-frame, #101014);
-    background: linear-gradient(180deg, #3a3a42, #2a2a31);
+    border: 1px solid var(--ftbq-frame);
+    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.1),
       inset 0 -1px 0 rgba(0, 0, 0, 0.4);
@@ -2263,8 +2306,8 @@
     min-width: 320px;
     max-height: 240px;
     overflow: auto;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-frame, #101014);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.06),
@@ -2277,7 +2320,7 @@
     text-align: left;
     padding: 8px 10px;
     border: none;
-    border-bottom: 1px solid var(--ftbq-border, #3a3a42);
+    border-bottom: 1px solid var(--ftbq-border);
     background: transparent;
     color: var(--ftbq-text, #e8e8e8);
     font-size: 11px;
@@ -2294,8 +2337,8 @@
     min-height: 40px;
     max-height: 48px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.22)),
-      var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-frame, #101014);
+      var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.07),
@@ -2355,7 +2398,7 @@
     padding: 8px 12px;
     border-radius: 3px;
     margin-bottom: 8px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     flex-shrink: 0;
     font-size: 12px;
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
@@ -2374,8 +2417,8 @@
     color: var(--ftbq-text-muted, #9a9aa0);
     padding: 48px 32px;
     text-align: center;
-    background: var(--ftbq-bg-panel, #212126);
-    border: 1px solid var(--ftbq-frame, #101014);
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
@@ -2403,13 +2446,17 @@
     align-items: center;
     gap: 6px;
     padding: 10px 16px;
-    border: 1px solid #0f3a34;
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 50%, #000);
     border-radius: 3px;
-    background: linear-gradient(180deg, #3aa79a, #2a7d73);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-secondary) 88%, #fff 12%),
+      color-mix(in srgb, var(--accent-secondary) 72%, #000 28%)
+    );
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.22),
       inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: #e7fffb;
+    color: var(--ftbq-text);
     text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
     font-weight: 700;
     cursor: pointer;
@@ -2424,16 +2471,39 @@
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 180px 1fr;
+    grid-template-columns: var(--qe-rail, 180px) 4px 1fr;
     gap: 0;
-    border: 1px solid var(--ftbq-frame, #101014);
+    border: 1px solid var(--ftbq-frame);
     border-radius: 3px;
     overflow: hidden;
-    background: var(--ftbq-bg-canvas, #2b2b30);
+    background: var(--ftbq-bg-canvas);
     box-shadow:
       inset 0 0 0 1px rgba(255, 255, 255, 0.05),
       0 2px 8px rgba(0, 0, 0, 0.4);
     min-width: 0;
+  }
+  .qe-lay.with-insp {
+    grid-template-columns: var(--qe-rail, 180px) 4px 1fr 4px var(--qe-insp, 300px);
+  }
+  .col-resizer {
+    width: 4px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    cursor: col-resize;
+    background: var(--ftbq-frame);
+    position: relative;
+    z-index: 2;
+    touch-action: none;
+  }
+  .col-resizer::after {
+    content: "";
+    position: absolute;
+    inset: 0 -3px;
+  }
+  .col-resizer:hover,
+  .col-resizer:active {
+    background: var(--ftbq-accent-teal, #3db8a8);
   }
   .qe-body-row {
     display: flex;
@@ -2459,15 +2529,15 @@
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    border-bottom: 1px solid var(--ftbq-frame, #101014);
+    border-bottom: 1px solid var(--ftbq-frame);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2)),
-      var(--ftbq-bg-panel, #212126);
+      var(--ftbq-bg-panel);
     box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
   }
   .canvas-tools input {
     flex: 1;
-    background: #141419;
-    border: 1px solid #0c0c0f;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
     color: inherit;
     border-radius: 3px;
     padding: 4px 8px;
@@ -2485,7 +2555,7 @@
   .layout-btn {
     padding: 3px 8px;
     font-size: 11px;
-    border: 1px solid var(--ftbq-border, #3a3a42);
+    border: 1px solid var(--ftbq-border);
     background: rgba(0, 0, 0, 0.25);
     color: var(--ftbq-text-muted, #9a9aa0);
     border-radius: 3px;
@@ -2500,7 +2570,7 @@
     align-items: center;
     gap: 8px;
     padding: 6px 12px;
-    border-bottom: 1px solid var(--ftbq-frame, #101014);
+    border-bottom: 1px solid var(--ftbq-frame);
     background: linear-gradient(90deg, rgba(61, 184, 168, 0.12), rgba(0, 0, 0, 0.2));
     flex-shrink: 0;
   }
@@ -2511,8 +2581,8 @@
   }
   .search-panel {
     flex-shrink: 0;
-    border-bottom: 1px solid var(--ftbq-frame, #101014);
-    background: var(--ftbq-bg-panel, #212126);
+    border-bottom: 1px solid var(--ftbq-frame);
+    background: var(--ftbq-bg-panel);
   }
   .search-panel .search-bar {
     border-bottom: none;
@@ -2574,20 +2644,20 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
-    background: var(--ftbq-bg-panel, #212126);
-    border-left: 1px solid var(--ftbq-frame, #101014);
+    background: var(--ftbq-bg-panel);
+    border-left: 1px solid var(--ftbq-frame);
   }
   .panel-tabs {
     display: flex;
     flex-shrink: 0;
-    border-bottom: 1px solid var(--ftbq-frame, #101014);
+    border-bottom: 1px solid var(--ftbq-frame);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
   }
   .panel-tabs .tab {
     flex: 1;
     padding: 7px 4px;
     border: none;
-    border-right: 1px solid var(--ftbq-frame, #101014);
+    border-right: 1px solid var(--ftbq-frame);
     background: transparent;
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 11px;
@@ -2617,10 +2687,7 @@
     padding: 8px 12px 12px;
     font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
-    border-top: 1px solid var(--ftbq-frame, #101014);
-  }
-  .qe-lay.with-insp {
-    grid-template-columns: 200px 1fr 300px;
+    border-top: 1px solid var(--ftbq-frame);
   }
   .qe-footer {
     margin-top: 8px;
@@ -2643,12 +2710,11 @@
     }
   }
   @media (max-width: 900px) {
-    .qe-lay,
-    .qe-lay.with-insp {
-      grid-template-columns: 160px 1fr;
+    .qe-lay {
+      grid-template-columns: minmax(140px, 160px) 4px 1fr;
     }
     .qe-lay.with-insp {
-      grid-template-columns: 160px 1fr minmax(220px, 260px);
+      grid-template-columns: minmax(140px, 160px) 4px 1fr 4px minmax(220px, 260px);
     }
   }
 </style>

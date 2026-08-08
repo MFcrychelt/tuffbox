@@ -323,6 +323,8 @@
 :root {
   /* Structure / chrome leave */
   --ease-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Hover morph: slight slow-start, then normal settle */
+  --ease-hover-in: cubic-bezier(0.45, 0, 0.15, 1);
   /* Delight enter / hover (lighter bounce than typical “spring”) */
   --ease-spring: cubic-bezier(0.22, 1.15, 0.36, 1);
   --ease-soft: cubic-bezier(0.25, 1, 0.5, 1);
@@ -814,6 +816,11 @@ html[data-rounded-corners="on"][data-theme] :where(
   border-radius: var(--border-radius-lg);
 }
 
+/* Skin panel badges stay compact — forced lg looks wrong on tiny chips. */
+html[data-rounded-corners="on"][data-theme] .skin-panel .type-badge {
+  border-radius: 4px;
+}
+
 html[data-rounded-corners="on"][data-theme] :where(
   button,
   .action-btn,
@@ -882,4 +889,52 @@ html[data-rounded-corners="off"][data-theme] :where(
   button
 ) {
   border-radius: 0;
+}
+
+/* ── Quest editor (FTBQ) — follow active launcher theme ───────────────
+   Quest UI historically used a fixed dark slate palette via --ftbq-*.
+   Map those aliases to TuffBox theme tokens so every data-theme works
+   (including modals rendered outside .qe). */
+:root,
+html[data-theme] {
+  --ftbq-bg: var(--bg-primary);
+  --ftbq-bg-panel: var(--bg-secondary);
+  --ftbq-bg-canvas: var(--bg-tertiary);
+  --ftbq-border: var(--border-color);
+  --ftbq-frame: color-mix(in srgb, var(--border-color) 85%, var(--text-primary) 15%);
+  --ftbq-text: var(--text-primary);
+  --ftbq-text-muted: var(--text-muted);
+  --ftbq-quest-default: var(--text-primary);
+  --ftbq-quest-locked: var(--text-muted);
+  --ftbq-quest-started: var(--accent-warning);
+  --ftbq-quest-completed: var(--accent-primary);
+  --ftbq-line: color-mix(in srgb, var(--accent-secondary) 55%, var(--text-secondary));
+  --ftbq-line-hover: var(--accent-secondary);
+  --ftbq-line-done: var(--accent-primary);
+  --ftbq-accent-teal: var(--accent-secondary);
+  --ftbq-accent-green: var(--accent-primary);
+  --ftbq-title-gold: var(--accent-warning);
+  --ftbq-node-fill: var(--bg-elevated);
+  --ftbq-input-bg: var(--bg-primary);
+  --ftbq-btn-top: var(--bg-elevated);
+  --ftbq-btn-bottom: var(--bg-tertiary);
+  --ftbq-btn-hover-top: var(--bg-hover);
+  --ftbq-btn-hover-bottom: var(--bg-elevated);
+}
+
+.qe.ftbq {
+  color: var(--ftbq-text);
+  background: var(--ftbq-bg);
+}
+
+/* Inputs inside quest UI — kill leftover dark-only hex fills */
+.qe.ftbq :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+  background-color: var(--ftbq-input-bg);
+  border-color: var(--ftbq-frame);
+  color: var(--ftbq-text);
+  color-scheme: inherit;
+}
+
+.qe.ftbq :is(input, textarea, select):not([type="checkbox"]):not([type="radio"]):not([type="range"])::placeholder {
+  color: var(--ftbq-text-muted);
 }

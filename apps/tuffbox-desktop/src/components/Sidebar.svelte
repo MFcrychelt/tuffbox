@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
-  import { Home, Workflow, Plus, Settings, User } from "@lucide/svelte";
+  import { Home, Workflow, Plus, Settings, User, Play, Terminal } from "@lucide/svelte";
   import {
     newProjectOpen,
     projectPath,
@@ -10,8 +10,11 @@
     isProjectRunning,
     ideStageRequest,
     ideSuggestedStage,
+    openLaunchLog,
+    isLaunching,
   } from "../lib/store";
   import { api } from "../lib/api";
+  import { launchWithFeedback } from "../lib/launch";
 
   type View = "dashboard" | "ide" | "mods" | "graph" | "world" | "diagnostics" | "crash-votes" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "me" | "chats";
   let { currentView = $bindable() }: { currentView: View } = $props();
@@ -76,6 +79,15 @@
     newProjectOpen.set(true);
   }
 
+  async function playClient() {
+    if (!$projectPath || $isLaunching) return;
+    await launchWithFeedback({ path: $projectPath, profile: "client" });
+  }
+
+  function openLogs() {
+    if ($projectPath) openLaunchLog($projectPath);
+  }
+
   async function selectInstance(path: string) {
     if ($projectPath === path) {
       currentView = "dashboard";
@@ -100,6 +112,7 @@
 </script>
 
 <aside class="rail">
+  <!-- Brand mark — constant amber identity, not a nav button. -->
   <div class="rail-brand" title="TuffBox">
     <span class="brand-logo" aria-hidden="true">T</span>
   </div>
@@ -178,6 +191,30 @@
       <button
         type="button"
         class="rail-btn ghost"
+        title="Play"
+        aria-label="Play"
+        disabled={!$projectPath || $isLaunching}
+        onclick={playClient}
+      >
+        <Play size={21} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
+        title="Logs"
+        aria-label="Logs"
+        disabled={!$projectPath}
+        onclick={openLogs}
+      >
+        <Terminal size={21} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
         class:active={currentView === "settings"}
         title="Settings"
         aria-label="Settings"
@@ -229,7 +266,7 @@
   .brand-logo {
     width: 40px;
     height: 40px;
-    border-radius: 50%;
+    border-radius: var(--border-radius-lg);
     background: linear-gradient(135deg, #ffc500, #ff9500);
     color: #241703;
     font-weight: 900;
@@ -300,8 +337,8 @@
     box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 55%, transparent);
     opacity: 0;
     transition:
-      height var(--motion-fast, 160ms) var(--ease-out, ease),
-      opacity var(--motion-fast, 160ms) var(--ease-out, ease);
+      height var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      opacity var(--motion-fast, 160ms) var(--ease-hover-in, ease);
     pointer-events: none;
   }
 
@@ -319,6 +356,7 @@
      (html[data-rounded-corners] :where(button)) so the circle holds.
      One shape language: circle at rest → squircle on hover/active. */
   .rail .rail-btn {
+    position: relative;
     width: 48px;
     height: 48px;
     padding: 0;
@@ -336,9 +374,9 @@
     /* Kill the global button hover translate — it would desync the edge pill. */
     transform: none !important;
     transition:
-      border-radius var(--motion-med, 240ms) var(--ease-out, ease),
-      background-color var(--motion-fast, 160ms) var(--ease-out, ease),
-      color var(--motion-fast, 160ms) var(--ease-out, ease);
+      border-radius var(--motion-med, 240ms) var(--ease-hover-in, ease),
+      background-color var(--motion-fast, 160ms) var(--ease-hover-in, ease),
+      color var(--motion-fast, 160ms) var(--ease-hover-in, ease);
   }
 
   .rail .rail-btn:hover,
@@ -362,6 +400,17 @@
     color: var(--accent-primary);
   }
 
+  .rail .rail-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .rail .rail-btn:disabled:hover {
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 50%;
+  }
+
   /* Add instance: quiet amber plus. */
   .rail .rail-btn.add {
     background: transparent;
@@ -373,9 +422,15 @@
     color: var(--accent-primary);
   }
 
-  /* Instance avatars: brand gradient (inline) or the real pack icon. */
+  /* Instance avatars: brand gradient (inline) or the real pack icon.
+     `position: relative` on `.rail-btn` makes the abspos icon/running-dot
+     clip to the same circle → squircle mask as the letter fallback. */
   .rail .rail-btn.instance {
     color: #fff;
+  }
+
+  .rail .rail-btn.instance.has-icon {
+    background: transparent;
   }
 
   .rail .rail-btn.instance:hover,
@@ -391,6 +446,7 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+    border-radius: inherit;
     pointer-events: none;
   }
 

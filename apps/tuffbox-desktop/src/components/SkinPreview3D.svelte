@@ -80,8 +80,8 @@
         height,
         // Use skinview3d zoom (drives adjustCameraDistance). Manual
         // camera.position fights OrbitControls and breaks wheel zoom.
-        zoom: 0.55,
-        fov: 55,
+        zoom: 0.72,
+        fov: 50,
       });
 
       // Transparent WebGL clear — CSS .skin-bg paints the backdrop.
@@ -98,8 +98,8 @@
       viewer.controls.minDistance = 10;
       viewer.controls.maxDistance = 256;
       viewer.controls.autoRotate = false;
-      // Aim at torso so head + feet fit in frame.
-      viewer.controls.target.set(0, -6, 0);
+      // Aim at mid-torso so the model fills the frame.
+      viewer.controls.target.set(0, -4, 0);
       viewer.controls.update();
 
       const walk = new WalkingAnimation();
@@ -320,25 +320,41 @@
 
   async function applyTextures() {
     if (!viewer) return;
-    loading = true;
+    const skin = skinUrl;
+    const nextCape = capeKey(capeUrl);
+    const skinChanged = !!(skin && skin !== lastSkin);
+    const capeChanged = nextCape !== lastCape;
+    const hadSkin = !!lastSkin && lastSkin !== "";
+
+    // Quiet cape-only updates: keep the visible skin, no skeleton overlay.
+    const showOverlay = skinChanged || !hadSkin;
+    if (showOverlay) {
+      loading = true;
+    }
     loadError = "";
     try {
-      if (skinUrl && skinUrl !== lastSkin) {
-        const dataUrl = await toDataUrl(skinUrl);
-        await viewer.loadSkin(dataUrl, { model: "auto-detect" });
-        lastSkin = skinUrl;
+      const skinPromise =
+        skinChanged && skin
+          ? toDataUrl(skin)
+          : Promise.resolve(null as string | null);
+      const capePromise =
+        nextCape && capeChanged
+          ? toDataUrl(nextCape).then((raw) => extractCapeFrames(raw))
+          : Promise.resolve(null as HTMLCanvasElement[] | null);
+
+      const [skinData, capeFramesResult] = await Promise.all([skinPromise, capePromise]);
+
+      if (skinData) {
+        await viewer.loadSkin(skinData, { model: "auto-detect" });
+        lastSkin = skin!;
       }
 
-      const nextCape = capeKey(capeUrl);
-      if (nextCape && nextCape !== lastCape) {
+      if (nextCape && capeChanged) {
         stopCapeAnim();
-        const raw = await toDataUrl(nextCape);
-        const frames = await extractCapeFrames(raw);
-        if (frames.length) {
-          startCapeAnim(frames);
+        if (capeFramesResult && capeFramesResult.length) {
+          startCapeAnim(capeFramesResult);
           lastCape = nextCape;
         } else {
-          stopCapeAnim();
           viewer.loadCape(null);
           lastCape = "";
         }
@@ -415,6 +431,7 @@
   <!-- stopPropagation keeps the page from stealing wheel; OrbitControls still gets the event on canvas -->
   <div
     class="skin-3d-container"
+    class:is-loading={loading}
     style="width: {width}px; height: {height}px;"
     onwheel={(e) => e.stopPropagation()}
   >
@@ -457,6 +474,7 @@
       0 12px 28px rgba(0, 0, 0, 0.35);
     touch-action: none;
     overscroll-behavior: contain;
+    width: 100%;
   }
 
   .skin-bg {
@@ -480,6 +498,10 @@
     touch-action: none;
   }
 
+  .skin-3d-container.is-loading canvas {
+    opacity: 0;
+  }
+
   canvas:active {
     cursor: grabbing;
   }
@@ -490,8 +512,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(18, 20, 22, 0.18);
+    background: rgba(18, 20, 22, 0.92);
     pointer-events: none;
+    z-index: 2;
   }
 
   .error-overlay {
