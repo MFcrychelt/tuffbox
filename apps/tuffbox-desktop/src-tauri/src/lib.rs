@@ -4364,11 +4364,14 @@ const FORGE_PERF_CHECKS: &[(&str, fn(&str, &str, &mut Vec<serde_json::Value>))] 
 /// ── Ore generation scanner ──────────────────────────────────────────
 
 /// Scans the project configs for ore-generation settings using both the
-/// builtin knowledge base and heuristics, returning a list of detected
-/// ore gen toggle keys with estimated values.
+/// builtin knowledge base, per-mod overrides, and heuristics, returning a
+/// list of detected ore gen toggle keys with estimated values.
+///
+/// Priority: overrides (exact keys, high confidence) → heuristics (pattern
+/// matching, medium/low confidence) for mods without overrides.
 #[tauri::command(rename_all = "camelCase")]
 fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let _manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mut config_contents = Vec::new();
 
@@ -4401,14 +4404,73 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
         walk(&dir, &mut config_contents);
     }
 
-    // Run heuristics scan
+    // Build a content lookup map for reading override key values
+    let content_map: std::collections::HashMap<&str, &str> = config_contents
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+
+    // ── Pass 1: per-mod overrides (exact keys, highest confidence) ──
+    let registry = tuffbox_core::registry::AdapterRegistry::new();
+    let mut override_resources = std::collections::HashSet::new();
+    let mut results = Vec::new();
+
+    for mod_spec in &manifest.mods {
+        let Some(over) = registry.get_override(&mod_spec.id) else {
+            continue;
+        };
+        for mapping in over.ore_gen_config_keys() {
+            let Some(content) = content_map.get(mapping.config_file.as_str()) else {
+                continue;
+            };
+            // Read actual enabled value from the config file
+            let enabled_value = read_config_key(content, &mapping.enabled_key)
+                .unwrap_or_else(|| "true".to_string());
+            let vein_size = mapping
+                .vein_size_key
+                .as_deref()
+                .and_then(|k| read_config_key(content, k))
+                .map(|v| (mapping.vein_size_key.clone().unwrap_or_default(), v));
+            let min_height = mapping
+                .min_height_key
+                .as_deref()
+                .and_then(|k| read_config_key(content, k))
+                .map(|v| (mapping.min_height_key.clone().unwrap_or_default(), v));
+            let max_height = mapping
+                .max_height_key
+                .as_deref()
+                .and_then(|k| read_config_key(content, k))
+                .map(|v| (mapping.max_height_key.clone().unwrap_or_default(), v));
+
+            let kb_hint =
+                tuffbox_core::knowledge::builtin::ModKnowledgeEntry::lookup(&mapping.resource_name);
+            let confidence = if kb_hint.is_some() { "high" } else { "medium" };
+
+            override_resources.insert(mapping.resource_name.clone());
+            results.push(serde_json::json!({
+                "resource": mapping.resource_name,
+                "configFile": mapping.config_file,
+                "enabledKey": mapping.enabled_key,
+                "enabledValue": enabled_value,
+                "veinSize": vein_size,
+                "minHeight": min_height,
+                "maxHeight": max_height,
+                "spawnsPerChunk": null,
+                "confidence": confidence,
+                "knownMod": kb_hint.map(|k| k.name.clone()),
+            }));
+        }
+    }
+
+    // ── Pass 2: heuristics for mods without overrides ──
     let heuristic_hits =
         tuffbox_core::knowledge::heuristics::scan_configs_for_ore_gen(&config_contents);
 
-    // Cross-reference with builtin knowledge base
-    let mut results = Vec::new();
     for hit in &heuristic_hits {
-        // Check if knowledge base has this mod
+        // Skip if override already covers this resource
+        if override_resources.contains(&hit.resource_name) {
+            continue;
+        }
         let kb_hint =
             tuffbox_core::knowledge::builtin::ModKnowledgeEntry::lookup(&hit.resource_name);
         let confidence = match (hit.confidence, kb_hint.is_some()) {
@@ -4432,6 +4494,34 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
         }));
     }
     Ok(results)
+}
+
+/// Read a single key's value from a config file content string.
+fn read_config_key(content: &str, key: &str) -> Option<String> {
+    let key_lower = key.to_lowercase();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        // TOML: key = value
+        if let Some(eq) = trimmed.find('=') {
+            let k = trimmed[..eq].trim();
+            if k.eq_ignore_ascii_case(key) || k.to_lowercase() == key_lower {
+                let v = trimmed[eq + 1..].trim().trim_matches('"').trim_matches('\'');
+                return Some(v.to_string());
+            }
+        }
+        // JSON: "key": value
+        if let Some(colon) = trimmed.trim_end_matches(',').find(':') {
+            let k = trimmed[..colon].trim().trim_matches('"');
+            if k.eq_ignore_ascii_case(key) || k.to_lowercase() == key_lower {
+                let v = trimmed[colon + 1..].trim().trim_matches('"').trim_matches('\'');
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// ── Duplicate detection ─────────────────────────────────────────────
@@ -13836,18 +13926,26 @@ pub fn run() {
                     resources.join("mca-selector"),
                 );
             }
-            // Size the window to the current screen resolution: 95% of the
-            // monitor's width and 94% of its height, so it adapts to whatever
-            // display the app is launched on (and re-applies on monitor change).
+            // Size to ~95%×94% of the monitor's *logical* area
+            // (monitor.size() is physical pixels — convert via scale_factor).
             fn fit_to_screen(win: &tauri::WebviewWindow) {
-                if let Ok(Some(monitor)) = win.current_monitor() {
-                    let size = monitor.size();
-                    let (mw, mh) = (size.width as f64, size.height as f64);
-                    let w = (mw * 0.95).max(1100.0);
-                    let h = (mh * 0.94).max(700.0);
-                    let _ = win.set_size(tauri::LogicalSize::new(w, h));
-                    let _ = win.center();
-                }
+                let Ok(Some(monitor)) = win.current_monitor() else {
+                    let _ = win.unminimize();
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                    return;
+                };
+                let scale = monitor.scale_factor().max(0.5);
+                let phys = monitor.size();
+                let mw = (phys.width as f64 / scale).max(1.0);
+                let mh = (phys.height as f64 / scale).max(1.0);
+                let w = (mw * 0.95).clamp(800.0, mw);
+                let h = (mh * 0.94).clamp(600.0, mh);
+                let _ = win.set_size(tauri::LogicalSize::new(w, h));
+                let _ = win.center();
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
             }
             if let Some(win) = app.get_webview_window("main") {
                 fit_to_screen(&win);
