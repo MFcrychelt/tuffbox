@@ -11456,8 +11456,8 @@ fn create_project_desktop_shortcut(path: String) -> Result<String, String> {
         let shortcut = desktop.join(format!("TuffBox - {safe_name}.command"));
         let contents = format!(
             "#!/bin/bash\nexec {} --launch {}\n",
-            shell_escape(&exe.to_string_lossy()),
-            shell_escape(&manifest_str),
+            helpers::shell_escape(&exe.to_string_lossy()),
+            helpers::shell_escape(&manifest_str),
         );
         std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
         {
@@ -11476,8 +11476,8 @@ fn create_project_desktop_shortcut(path: String) -> Result<String, String> {
         let shortcut = desktop.join(format!("TuffBox - {safe_name}.desktop"));
         let contents = format!(
             "[Desktop Entry]\nType=Application\nName=TuffBox - {safe_name}\nExec={exe} --launch {manifest}\nTerminal=false\nCategories=Game;\n",
-            exe = shell_escape(&exe.to_string_lossy()),
-            manifest = shell_escape(&manifest_str),
+            exe = helpers::shell_escape(&exe.to_string_lossy()),
+            manifest = helpers::shell_escape(&manifest_str),
         );
         std::fs::write(&shortcut, contents).map_err(|e| e.to_string())?;
         {
