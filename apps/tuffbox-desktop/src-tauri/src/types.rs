@@ -359,5 +359,3 @@ pub struct LiveDebugStats {
 }
 
 // ── Localization ─────────────────────────────────────────────────
-
-pub type RecCandidate = (&'static str, &'static str, &'static str, &'static str);

@@ -12,10 +12,6 @@ use crate::types::LauncherDataState;
 
 // ── Global locks ─────────────────────────────────────────────────
 
-/// Serializes manifest + mods-folder mutations so background `sync_mods_folder`
-/// cannot overwrite an in-flight Update All / single update.
-pub(crate) static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
 /// Serializes FTB Quests book / chat disk mutations across Tauri commands.
 pub(crate) static QUEST_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
@@ -294,21 +290,6 @@ pub(crate) fn unified_text_diff(before: &str, after: &str) -> String {
     out
 }
 
-pub(crate) fn dir_size(path: &Path) -> u64 {
-    let mut total = 0;
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                total += dir_size(&p);
-            } else if let Ok(meta) = std::fs::metadata(&p) {
-                total += meta.len();
-            }
-        }
-    }
-    total
-}
-
 pub(crate) fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), String> {
     std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
     for entry in std::fs::read_dir(from).map_err(|e| e.to_string())? {
@@ -410,6 +391,7 @@ pub(crate) fn save_backup_index(
 
 // ── Shell / string helpers ───────────────────────────────────────
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn shell_escape(s: &str) -> String {
     if s.chars().all(|c| c.is_alphanumeric() || "-_.:/".contains(c)) {
         s.to_string()
