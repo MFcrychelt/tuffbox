@@ -96,9 +96,19 @@ pub struct GraphEdge {
 pub struct DependencyGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    #[serde(skip)]
+    node_index: HashMap<NodeId, usize>,
 }
 
 impl DependencyGraph {
+    /// Rebuild the O(1) node lookup index. Call after any bulk mutation.
+    pub fn rebuild_index(&mut self) {
+        self.node_index.clear();
+        for (i, node) in self.nodes.iter().enumerate() {
+            self.node_index.insert(node.id.clone(), i);
+        }
+    }
+
     pub fn from_manifest(manifest: &ProjectManifest) -> Self {
         let mut graph = Self::default();
 
@@ -387,15 +397,16 @@ impl DependencyGraph {
             }
         }
 
+        graph.rebuild_index();
         graph
     }
 
     pub fn has_node(&self, id: &NodeId) -> bool {
-        self.nodes.iter().any(|node| &node.id == id)
+        self.node_index.contains_key(id)
     }
 
     pub fn node(&self, id: &NodeId) -> Option<&GraphNode> {
-        self.nodes.iter().find(|node| &node.id == id)
+        self.node_index.get(id).and_then(|&i| self.nodes.get(i))
     }
 }
 

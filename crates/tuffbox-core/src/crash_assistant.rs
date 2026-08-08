@@ -69,6 +69,17 @@ pub struct AnalysisCtx {
     pub total_ram_mb: u64,
     pub is_offline: bool,
     pub win_events: Vec<String>,
+    /// Pre-split lines of the combined log text. Computed lazily by
+    /// `ensure_combined_lines()` to avoid re-splitting in 30+ check functions.
+    pub combined_lines: std::cell::OnceCell<Vec<String>>,
+}
+
+impl AnalysisCtx {
+    /// Return pre-split lines of the combined log text, computing on first call.
+    pub fn ensure_combined_lines(&self, combined: &str) -> &Vec<String> {
+        self.combined_lines
+            .get_or_init(|| combined.lines().map(String::from).collect())
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -228,7 +239,6 @@ fn first_evidence_line<'a>(combined: &'a str, needles: &[&str]) -> Option<&'a st
         if trimmed.len() < 8 {
             continue;
         }
-        // Skip Fabric/Quilt "Loading X mods: a, b, c, …" inventory dumps.
         if looks_like_mod_inventory_line(trimmed) {
             continue;
         }
@@ -383,15 +393,17 @@ fn check_mixins(ctx: &AnalysisCtx, combined: &str) -> Vec<CrashAnalysisFinding> 
             || combined.contains("Error")
             || combined.contains("Exception"))
     {
+        let lines = ctx.ensure_combined_lines(combined);
         // Only scan lines that actually mention mixin failure — not the
         // Fabric "Loading mods:" inventory that substring-matches short ids.
-        let mixin_lines: String = combined
-            .lines()
+        let mixin_lines: String = lines
+            .iter()
             .filter(|l| {
                 let lower = l.to_lowercase();
                 (lower.contains("mixin") || lower.contains("@inject") || lower.contains("@redirect"))
                     && !looks_like_mod_inventory_line(l)
             })
+            .cloned()
             .collect::<Vec<_>>()
             .join("\n");
         let search = if mixin_lines.is_empty() {
@@ -2413,6 +2425,7 @@ pub fn classify_launch_crash(
         total_ram_mb: 0,
         is_offline: false,
         win_events: Vec::new(),
+        combined_lines: std::cell::OnceCell::new(),
     };
 
     let report = run_full_analysis(&analysis_ctx);
@@ -2551,6 +2564,7 @@ mod tests {
             total_ram_mb: 32768,
             is_offline: false,
             win_events: vec![],
+            combined_lines: std::cell::OnceCell::new(),
         }
     }
     #[test]

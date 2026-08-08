@@ -21,6 +21,10 @@ pub struct RecipeScanResult {
     pub datapack_files: u32,
     pub truncated: bool,
     pub total_scanned: u32,
+    /// False when no installed vanilla client jar was found — the result then
+    /// only contains mod/datapack recipes (vanilla ones are missing).
+    #[serde(default)]
+    pub vanilla_jar_found: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -290,14 +294,15 @@ fn scan_project_recipes_uncached(
     }
 
     // 4) Vanilla client jar (fill remaining budget)
+    let vanilla_jars = crate::item_catalog::resolve_vanilla_client_jars(
+        &manifest.minecraft.version,
+        extra_vanilla_roots,
+    );
     if !truncated {
-        for jar in crate::item_catalog::resolve_vanilla_client_jars(
-            &manifest.minecraft.version,
-            extra_vanilla_roots,
-        ) {
+        for jar in &vanilla_jars {
             let (added, scanned) = scan_jar_recipes(
                 adapter,
-                &jar,
+                jar,
                 "minecraft",
                 &env.mc_version,
                 MAX_RECIPES.saturating_sub(recipes.len()),
@@ -319,11 +324,7 @@ fn scan_project_recipes_uncached(
     recipes.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Expand #tag ingredients into concrete item alts for icon cycling.
-    let extra_jars = crate::item_catalog::resolve_vanilla_client_jars(
-        &manifest.minecraft.version,
-        extra_vanilla_roots,
-    );
-    let tags = TagIndex::build(project_dir, loader, &extra_jars);
+    let tags = TagIndex::build(project_dir, loader, &vanilla_jars);
     for recipe in &mut recipes {
         expand_layout_tags(&mut recipe.layout, &tags);
         let (inputs, output) = collect_item_ids(&recipe.layout);
@@ -337,6 +338,7 @@ fn scan_project_recipes_uncached(
         datapack_files,
         truncated,
         total_scanned,
+        vanilla_jar_found: !vanilla_jars.is_empty(),
     })
 }
 

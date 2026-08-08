@@ -9,10 +9,9 @@
 use crate::action_plan::{parse_action_plan_value, ActionPlan, LauncherAction};
 use crate::ai_explanation::AiAction;
 use crate::crash_kb::{CrashFingerprint, SimilarCaseHit};
+use crate::http::{http, http_async};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
-const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -125,11 +124,7 @@ pub fn lookup_remote(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/lookup");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -158,11 +153,7 @@ pub fn diagnose_remote(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/diagnose");
-    let client = reqwest::blocking::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -218,11 +209,7 @@ pub async fn lookup_remote_async(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/lookup");
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -256,11 +243,7 @@ pub async fn diagnose_remote_async(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/diagnose");
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let mut req = client.post(&url).json(request);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -317,11 +300,7 @@ pub async fn publish_capsule_async(
         return Err("crash KB endpoint is not configured".into());
     }
     let url = join_url(base_url, "/v1/crash/capsules");
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let mut req = client.post(&url).json(capsule);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {
         req = req.bearer_auth(token);
@@ -355,11 +334,7 @@ pub async fn fetch_cooccurrence_async(
     if base_url.trim().is_empty() {
         return Err("crash KB endpoint is not configured".into());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
 
     let get_url = format!(
         "{}?version={}&loader={}&limit={}",
@@ -420,11 +395,7 @@ pub async fn fetch_modpacks_async(
     if base_url.trim().is_empty() {
         return Err("hub endpoint is not configured".into());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(45))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
 
     let mut url = format!(
         "{}?page={}&limit={}",
@@ -471,11 +442,7 @@ pub async fn fetch_modpack_categories_async(
     if base_url.trim().is_empty() {
         return Err("hub endpoint is not configured".into());
     }
-    let client = reqwest::Client::builder()
-        .user_agent(APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_async();
     let url = join_url(base_url, "/v1/mods/modpack-categories");
     let mut req = client.get(&url);
     if let Some(token) = token.filter(|t| !t.trim().is_empty()) {

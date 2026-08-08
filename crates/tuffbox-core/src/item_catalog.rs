@@ -13,7 +13,7 @@ use crate::manifest::ProjectManifest;
 /// Cached catalogs with very few entries usually mean the vanilla client jar was missing.
 const MIN_TRUSTED_CATALOG_ITEMS: usize = 64;
 
-const CATALOG_CACHE_VERSION: &str = "item-catalog-v3";
+const CATALOG_CACHE_VERSION: &str = "item-catalog-v4";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,6 +159,8 @@ fn catalog_jar_sources(
     mc_version: &str,
     extra_vanilla_roots: &[PathBuf],
 ) -> Vec<PathBuf> {
+    // Detection only — never download here. The desktop UI prompts the user
+    // and then calls [`download_vanilla_client_jar`] explicitly.
     let mut jars = vanilla_client_jars(mc_version, extra_vanilla_roots);
     let mods_dir = project_dir.join("mods");
     if mods_dir.is_dir() {
@@ -220,6 +222,216 @@ fn vanilla_client_jars(mc_version: &str, extra_roots: &[PathBuf]) -> Vec<PathBuf
         }
     }
     jars
+}
+
+#[derive(Debug, Deserialize)]
+struct VanillaVersionClientJson {
+    downloads: VanillaVersionDownloads,
+}
+
+#[derive(Debug, Deserialize)]
+struct VanillaVersionDownloads {
+    client: VanillaClientArtifact,
+}
+
+#[derive(Debug, Deserialize)]
+struct VanillaClientArtifact {
+    url: String,
+    sha1: String,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MojangVersionManifest {
+    versions: Vec<MojangVersionEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MojangVersionEntry {
+    id: String,
+    url: String,
+}
+
+/// Status of the installed vanilla client jar for a Minecraft version.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VanillaClientJarStatus {
+    pub found: bool,
+    /// Version id from the project manifest (may be an alias).
+    pub version: String,
+    /// Concrete version used for the jar path (aliases resolved).
+    pub resolved_version: String,
+    pub jar_path: Option<String>,
+    /// Approximate download size in bytes when known from a cached version JSON.
+    pub download_size: Option<u64>,
+}
+
+/// Look up whether the vanilla client jar for `mc_version` is already on disk.
+pub fn vanilla_client_jar_status(
+    mc_version: &str,
+    extra_roots: &[PathBuf],
+) -> VanillaClientJarStatus {
+    let roots = merge_vanilla_jar_roots(extra_roots);
+    let resolved = resolve_mc_version_for_jars(mc_version, &roots);
+    let jars = vanilla_client_jars(mc_version, extra_roots);
+    let jar_path = jars.first().map(|p| p.to_string_lossy().into_owned());
+    let download_size = if jar_path.is_none() {
+        read_client_size_hint(&resolved, &roots)
+    } else {
+        None
+    };
+    VanillaClientJarStatus {
+        found: jar_path.is_some(),
+        version: mc_version.to_string(),
+        resolved_version: resolved,
+        jar_path,
+        download_size,
+    }
+}
+
+fn read_client_size_hint(resolved: &str, roots: &[PathBuf]) -> Option<u64> {
+    for root in roots {
+        let json_path = root
+            .join("versions")
+            .join(resolved)
+            .join(format!("{resolved}.json"));
+        let Ok(raw) = std::fs::read_to_string(json_path) else {
+            continue;
+        };
+        if let Ok(meta) = serde_json::from_str::<VanillaVersionClientJson>(&raw) {
+            if let Some(size) = meta.downloads.client.size {
+                return Some(size);
+            }
+        }
+    }
+    None
+}
+
+fn load_or_fetch_client_meta(
+    resolved: &str,
+    version_dir: &Path,
+    search_roots: &[PathBuf],
+) -> Result<(String, String), String> {
+    let version_json = version_dir.join(format!("{resolved}.json"));
+    if version_json.is_file() {
+        let raw = std::fs::read_to_string(&version_json).map_err(|e| e.to_string())?;
+        let meta: VanillaVersionClientJson =
+            serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        return Ok((meta.downloads.client.url, meta.downloads.client.sha1));
+    }
+
+    for root in search_roots {
+        let candidate = root
+            .join("versions")
+            .join(resolved)
+            .join(format!("{resolved}.json"));
+        if candidate == version_json || !candidate.is_file() {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&candidate).map_err(|e| e.to_string())?;
+        let meta: VanillaVersionClientJson =
+            serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(version_dir).map_err(|e| e.to_string())?;
+        let _ = std::fs::write(&version_json, &raw);
+        return Ok((meta.downloads.client.url, meta.downloads.client.sha1));
+    }
+
+    const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+    let manifest: MojangVersionManifest = crate::http::get_json(MANIFEST_URL)
+        .map_err(|e| format!("failed to fetch Mojang version manifest: {e}"))?;
+    let entry = manifest
+        .versions
+        .into_iter()
+        .find(|v| v.id == resolved)
+        .ok_or_else(|| format!("Minecraft {resolved} not found in Mojang version manifest"))?;
+    let raw = crate::http::get_text(&entry.url)
+        .map_err(|e| format!("failed to fetch version JSON for {resolved}: {e}"))?;
+    let meta: VanillaVersionClientJson =
+        serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(version_dir).map_err(|e| e.to_string())?;
+    std::fs::write(&version_json, &raw).map_err(|e| e.to_string())?;
+    Ok((meta.downloads.client.url, meta.downloads.client.sha1))
+}
+
+/// Download (or resume) the vanilla client jar for `mc_version` into `install_root`.
+///
+/// Searches `extra_search_roots` first; if a jar is already present anywhere,
+/// returns that path without downloading. Otherwise writes under
+/// `{install_root}/versions/{resolved}/{resolved}.jar`, resuming any stranded
+/// `.tuffbox.part` via HTTP Range and verifying the Mojang sha1.
+pub fn download_vanilla_client_jar(
+    mc_version: &str,
+    install_root: &Path,
+    extra_search_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let mut search = vec![install_root.to_path_buf()];
+    for root in extra_search_roots {
+        if !search.iter().any(|p| p == root) {
+            search.push(root.clone());
+        }
+    }
+    let roots = merge_vanilla_jar_roots(&search);
+    let resolved = resolve_mc_version_for_jars(mc_version, &roots);
+
+    if let Some(existing) = vanilla_client_jars(mc_version, &search).into_iter().next() {
+        return Ok(existing);
+    }
+
+    let version_dir = install_root.join("versions").join(&resolved);
+    let jar = version_dir.join(format!("{resolved}.jar"));
+    let (url, sha1) = load_or_fetch_client_meta(&resolved, &version_dir, &roots)?;
+    crate::mc_install::download_with_sha1(&url, &jar, Some(&sha1))
+        .map_err(|e| format!("failed to download Minecraft {resolved} client jar: {e}"))?;
+    if !jar.is_file() {
+        return Err(format!(
+            "download finished but {} is missing",
+            jar.display()
+        ));
+    }
+    Ok(jar)
+}
+
+/// Best-effort download used by callers that prefer a Vec of jars over Result.
+/// Prefer [`download_vanilla_client_jar`] when the UI needs to surface errors.
+pub fn ensure_vanilla_client_jars(mc_version: &str, extra_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let jars = vanilla_client_jars(mc_version, extra_roots);
+    if !jars.is_empty() {
+        return jars;
+    }
+    let install_root = extra_roots
+        .first()
+        .cloned()
+        .or_else(|| default_vanilla_roots().into_iter().next());
+    let Some(root) = install_root else {
+        return Vec::new();
+    };
+    match download_vanilla_client_jar(mc_version, &root, extra_roots) {
+        Ok(jar) => vec![jar],
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Resolve project Minecraft version + jar status from a manifest path.
+pub fn vanilla_client_jar_status_for_manifest(
+    manifest_path: &Path,
+    extra_roots: &[PathBuf],
+) -> Result<VanillaClientJarStatus, String> {
+    let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    Ok(vanilla_client_jar_status(
+        &manifest.minecraft.version,
+        extra_roots,
+    ))
+}
+
+/// Download the client jar for the Minecraft version declared in a project manifest.
+pub fn download_vanilla_client_jar_for_manifest(
+    manifest_path: &Path,
+    install_root: &Path,
+    extra_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let manifest = ProjectManifest::load_from_path(manifest_path).map_err(|e| e.to_string())?;
+    download_vanilla_client_jar(&manifest.minecraft.version, install_root, extra_roots)
 }
 
 fn catalog_fingerprint(mc_version: &str, jars: &[PathBuf]) -> String {
@@ -330,20 +542,31 @@ fn collect_models_from_archive(
     let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
     for name in names {
         let normalized = normalize_zip_path(&name);
-        // assets/<ns>/models/item/<path>.json
+        // assets/<ns>/models/item/<path>.json — only flat item models.
+        // Nested paths like models/item/banner/skull/black.json are model
+        // variants (EBE etc.), not registry item ids.
         let parts: Vec<&str> = normalized.split('/').collect();
-        if parts.len() < 5 || parts[0] != "assets" || parts[2] != "models" || parts[3] != "item" {
+        if parts.len() != 5 || parts[0] != "assets" || parts[2] != "models" || parts[3] != "item" {
             continue;
         }
         if !normalized.ends_with(".json") {
             continue;
         }
         let ns = parts[1];
-        let path = parts[4..]
-            .join("/")
-            .trim_end_matches(".json")
-            .replace('\\', "/");
-        insert_catalog_entry(by_id, lang, ns, &path);
+        let path = parts[4].trim_end_matches(".json");
+        if path.is_empty() || path.contains('/') {
+            continue;
+        }
+        // Skip template / abstract models that are not real items.
+        if path.starts_with("template_")
+            || path == "generated"
+            || path == "handheld"
+            || path == "handheld_rod"
+            || path == "handheld_mace"
+        {
+            continue;
+        }
+        insert_catalog_entry(by_id, lang, ns, path);
     }
 }
 
@@ -357,18 +580,19 @@ fn collect_item_defs_from_archive(
     for name in names {
         let normalized = normalize_zip_path(&name);
         let parts: Vec<&str> = normalized.split('/').collect();
-        if parts.len() < 4 || parts[0] != "assets" || parts[2] != "items" {
+        // Only flat registry ids: assets/<ns>/items/<id>.json (no nested folders).
+        if parts.len() != 4 || parts[0] != "assets" || parts[2] != "items" {
             continue;
         }
         if !normalized.ends_with(".json") {
             continue;
         }
         let ns = parts[1];
-        let path = parts[3..]
-            .join("/")
-            .trim_end_matches(".json")
-            .replace('\\', "/");
-        insert_catalog_entry(by_id, lang, ns, &path);
+        let path = parts[3].trim_end_matches(".json");
+        if path.is_empty() {
+            continue;
+        }
+        insert_catalog_entry(by_id, lang, ns, path);
     }
 }
 
@@ -449,5 +673,61 @@ mod tests {
             mod_ns: "mod".into(),
         }];
         assert!(catalog_cache_is_trustworthy(&items, &[]));
+    }
+
+    // A version id that can never exist in the machine's real launcher roots,
+    // so tests stay hermetic even on a box with Minecraft installed.
+    const TEST_VERSION: &str = "0.0.0-tuffbox-test";
+
+    #[test]
+    fn ensure_returns_existing_jar_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let vdir = dir.path().join("versions").join(TEST_VERSION);
+        std::fs::create_dir_all(&vdir).unwrap();
+        let jar = vdir.join(format!("{TEST_VERSION}.jar"));
+        std::fs::write(&jar, b"fake").unwrap();
+        let roots = [dir.path().to_path_buf()];
+        let found = ensure_vanilla_client_jars(TEST_VERSION, &roots);
+        assert_eq!(found, vec![jar]);
+    }
+
+    #[test]
+    fn ensure_swallows_failed_download_and_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let vdir = dir.path().join("versions").join(TEST_VERSION);
+        std::fs::create_dir_all(&vdir).unwrap();
+        // Cached version JSON whose URL refuses connections instantly (port 1).
+        std::fs::write(
+            vdir.join(format!("{TEST_VERSION}.json")),
+            r#"{"downloads":{"client":{"url":"http://127.0.0.1:1/client.jar","sha1":"deadbeef"}}}"#,
+        )
+        .unwrap();
+        let roots = [dir.path().to_path_buf()];
+        let found = ensure_vanilla_client_jars(TEST_VERSION, &roots);
+        assert!(found.is_empty());
+        assert!(!vdir.join(format!("{TEST_VERSION}.jar")).exists());
+    }
+
+    #[test]
+    fn status_reports_missing_jar() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = [dir.path().to_path_buf()];
+        let status = vanilla_client_jar_status(TEST_VERSION, &roots);
+        assert!(!status.found);
+        assert_eq!(status.resolved_version, TEST_VERSION);
+        assert!(status.jar_path.is_none());
+    }
+
+    #[test]
+    fn status_reports_found_jar() {
+        let dir = tempfile::tempdir().unwrap();
+        let vdir = dir.path().join("versions").join(TEST_VERSION);
+        std::fs::create_dir_all(&vdir).unwrap();
+        let jar = vdir.join(format!("{TEST_VERSION}.jar"));
+        std::fs::write(&jar, b"fake").unwrap();
+        let roots = [dir.path().to_path_buf()];
+        let status = vanilla_client_jar_status(TEST_VERSION, &roots);
+        assert!(status.found);
+        assert_eq!(status.jar_path.as_deref(), Some(jar.to_str().unwrap()));
     }
 }

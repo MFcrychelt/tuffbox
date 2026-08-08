@@ -38,6 +38,7 @@
     Eraser,
   } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
+  import VanillaClientJarPrompt from "./VanillaClientJarPrompt.svelte";
 
   type FocusMode = "recipes" | "uses";
   type ItemEntry = {
@@ -124,6 +125,13 @@
   let tagRemove = $state<string[]>([]);
   let tagRemoveAll = $state(false);
   let tagLoadingMembers = $state(false);
+
+  const dismissedVanillaPrompt = new Set<string>();
+  let vanillaPromptOpen = $state(false);
+  let vanillaPromptVersion = $state("");
+  let vanillaPromptSize = $state<number | null>(null);
+  let vanillaDownloading = $state(false);
+  let vanillaDownloadError = $state<string | null>(null);
 
   type IconState = "loading" | "missing" | string;
   let iconCache = $state<Record<string, IconState>>({});
@@ -275,6 +283,43 @@
     }
   }
 
+  async function maybeOfferVanillaJar(vanillaJarFound?: boolean) {
+    if (!$projectPath || vanillaJarFound !== false) return;
+    if (dismissedVanillaPrompt.has($projectPath)) return;
+    try {
+      const status = await api.minecraft.clientJarStatus($projectPath);
+      if (status.found) return;
+      vanillaPromptVersion = status.resolvedVersion || status.version;
+      vanillaPromptSize = status.downloadSize ?? null;
+      vanillaDownloadError = null;
+      vanillaPromptOpen = true;
+    } catch {
+      // Badge already surfaces the missing jar; skip the modal.
+    }
+  }
+
+  async function downloadVanillaJar() {
+    if (!$projectPath) return;
+    vanillaDownloading = true;
+    vanillaDownloadError = null;
+    try {
+      await api.minecraft.downloadClientJar($projectPath);
+      vanillaPromptOpen = false;
+      dismissedVanillaPrompt.delete($projectPath);
+      message = `Downloaded Minecraft ${vanillaPromptVersion} client jar. Rescanning…`;
+      await loadRecipes(false, true);
+    } catch (e) {
+      vanillaDownloadError = String(e);
+    } finally {
+      vanillaDownloading = false;
+    }
+  }
+
+  function dismissVanillaPrompt() {
+    if ($projectPath) dismissedVanillaPrompt.add($projectPath);
+    vanillaPromptOpen = false;
+  }
+
   async function loadRecipes(preferLive = true, preserveSelection = false) {
     if (!$projectPath) return;
     loading = true;
@@ -306,6 +351,7 @@
           datapackFiles: result.datapackFiles,
           truncated: result.truncated,
           totalScanned: result.totalScanned,
+          vanillaJarFound: result.vanillaJarFound,
         };
         if (result.truncated) {
           message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
@@ -313,6 +359,7 @@
           message = `Indexed ${recipes.length} recipes from ${result.jarCount} jars` +
             (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
         }
+        await maybeOfferVanillaJar(result.vanillaJarFound);
       }
       await tick();
       await loadFullItemCatalog(recipes);
@@ -336,11 +383,13 @@
             datapackFiles: fallback.datapackFiles,
             truncated: fallback.truncated,
             totalScanned: fallback.totalScanned,
+            vanillaJarFound: fallback.vanillaJarFound,
           };
           await tick();
           await loadFullItemCatalog(recipes);
           lastLoadedPath = $projectPath;
           message = `Live JEI disconnected; showing offline recipes. ${String(e)}`;
+          await maybeOfferVanillaJar(fallback.vanillaJarFound);
         } catch (fallbackError) {
           error = String(fallbackError);
         }
@@ -361,6 +410,7 @@
       datapackFiles: result.datapackFiles,
       truncated: result.truncated,
       totalScanned: result.totalScanned,
+      vanillaJarFound: result.vanillaJarFound,
     };
     if (result.truncated) {
       message = `Indexed ${recipes.length} recipes (limit reached; ${result.totalScanned} files scanned).`;
@@ -369,6 +419,7 @@
         (result.datapackFiles ? ` + ${result.datapackFiles} datapack files` : "") + ".";
     }
     void tick().then(() => loadFullItemCatalog(recipes));
+    void maybeOfferVanillaJar(result.vanillaJarFound);
   }
 
   async function checkRuntimeTransition() {
@@ -830,28 +881,40 @@
     editGrid = next;
   }
 
+  let suppressSlotClickUntil = 0;
+
   function onDragStartItem(e: DragEvent, id: string) {
     if (!e.dataTransfer) return;
-    e.dataTransfer.setData(DRAG_MIME, id);
+    // text/plain first — WebView2 often refuses drops that only carry a custom MIME.
     e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.setData(DRAG_MIME, id);
     e.dataTransfer.effectAllowed = "copy";
   }
 
-  function onDragOverSlot(e: DragEvent) {
+  /** Must call preventDefault on dragenter + dragover or the OS shows the "no drop" cursor. */
+  function allowEditorDrop(e: DragEvent) {
     if (!editorOpen) return;
     e.preventDefault();
+    e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
   }
 
   function readDragId(e: DragEvent): string | null {
     const raw = e.dataTransfer?.getData(DRAG_MIME) || e.dataTransfer?.getData("text/plain") || "";
-    const id = raw.trim();
+    const id = raw.trim().split(/\r?\n/)[0]?.trim() ?? "";
     return id || null;
+  }
+
+  function markDropJustHappened() {
+    // Chromium fires a click after drop on <button> targets — ignore it briefly.
+    suppressSlotClickUntil = Date.now() + 250;
   }
 
   function onDropGrid(e: DragEvent, index: number) {
     if (!editorOpen || editorKind !== "crafting") return;
     e.preventDefault();
+    e.stopPropagation();
+    markDropJustHappened();
     const id = readDragId(e);
     if (id) setEditSlot(index, id);
   }
@@ -859,6 +922,8 @@
   function onDropOutput(e: DragEvent) {
     if (!editorOpen || editorKind === "tags") return;
     e.preventDefault();
+    e.stopPropagation();
+    markDropJustHappened();
     const id = readDragId(e);
     if (!id || id.startsWith("#")) {
       message = "Output must be an item id (not a tag).";
@@ -870,6 +935,8 @@
   function onDropSingleInput(e: DragEvent) {
     if (!editorOpen) return;
     e.preventDefault();
+    e.stopPropagation();
+    markDropJustHappened();
     const id = readDragId(e);
     if (id) editInput = id;
   }
@@ -877,6 +944,8 @@
   function onDropSmithing(e: DragEvent, slot: "template" | "base" | "addition") {
     if (!editorOpen || editorKind !== "smithing") return;
     e.preventDefault();
+    e.stopPropagation();
+    markDropJustHappened();
     const id = readDragId(e);
     if (!id) return;
     if (slot === "template") editTemplate = id;
@@ -887,10 +956,29 @@
   function onDropTagAdd(e: DragEvent) {
     if (!editorOpen || editorKind !== "tags") return;
     e.preventDefault();
+    e.stopPropagation();
+    markDropJustHappened();
     const id = readDragId(e);
     if (!id) return;
     if (!tagAdd.includes(id)) tagAdd = [...tagAdd, id];
     tagRemove = tagRemove.filter((x) => x !== id);
+  }
+
+  function clearEditSlotIfClick(index: number) {
+    if (Date.now() < suppressSlotClickUntil) return;
+    setEditSlot(index, null);
+  }
+
+  function clearInputIfClick() {
+    if (Date.now() < suppressSlotClickUntil) return;
+    editInput = null;
+  }
+
+  function clearSmithingIfClick(slot: "template" | "base" | "addition") {
+    if (Date.now() < suppressSlotClickUntil) return;
+    if (slot === "template") editTemplate = null;
+    else if (slot === "base") editBase = null;
+    else editAddition = null;
   }
 
   function toggleTagRemove(id: string) {
@@ -904,6 +992,7 @@
   }
 
   function onOutputClick(e: MouseEvent) {
+    if (Date.now() < suppressSlotClickUntil) return;
     if (!editorOpen || !editOutput || editorKind === "tags") return;
     if (e.shiftKey) {
       e.preventDefault();
@@ -1181,6 +1270,17 @@
             {#if recipeSource === "offline"} · {scanMeta.jarCount} jars{/if}
             {#if recipeSource === "offline" && scanMeta.datapackFiles} · {scanMeta.datapackFiles} datapacks{/if}
             {#if scanMeta.truncated} · truncated{/if}
+            {#if recipeSource === "offline" && scanMeta.vanillaJarFound === false}
+              · <button
+                type="button"
+                class="tag warn vanilla-missing-btn"
+                title="Download the vanilla client jar"
+                onclick={() => {
+                  if ($projectPath) dismissedVanillaPrompt.delete($projectPath);
+                  void maybeOfferVanillaJar(false);
+                }}
+              >no vanilla jar</button>
+            {/if}
           {:else}
             Recipe browser for your modpack
           {/if}
@@ -1264,7 +1364,14 @@
     <div class="empty">
       <Grid3x3 size={40} />
       <h3>No recipes found</h3>
-      <p>Put mods in <code>mods/</code> or datapacks under <code>datapacks/</code>.</p>
+      {#if scanMeta?.vanillaJarFound === false}
+        <p>
+          The vanilla client jar for this Minecraft version isn't installed.
+          Download it when prompted (or press <b>Scan now</b> again to reopen the prompt).
+        </p>
+      {:else}
+        <p>Put mods in <code>mods/</code> or datapacks under <code>datapacks/</code>.</p>
+      {/if}
       <div class="empty-actions">
         <button onclick={() => loadRecipes()}>Scan now</button>
         <button class="secondary" onclick={() => openNewRecipeEditor("crafting")}><Plus size={14} /> New recipe</button>
@@ -1355,7 +1462,12 @@
               <div class="mc-panel" data-cat="crafting">
                 <div class="panel-title">Crafting Table {#if !editShaped}<span class="badge shapeless">Shapeless</span>{/if}</div>
                 <div class="panel-body craft">
-                  <div class="craft-grid">
+                  <div
+                    class="craft-grid"
+                    role="presentation"
+                    ondragenter={allowEditorDrop}
+                    ondragover={allowEditorDrop}
+                  >
                     {#each editGrid as slotId, i (i)}
                       <button
                         type="button"
@@ -1365,10 +1477,11 @@
                         class:drop-target={true}
                         style="--hue: {itemHue(slotId ?? '')}"
                         title={slotId ?? "Drop ingredient"}
-                        ondragover={onDragOverSlot}
+                        ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                         ondrop={(e) => onDropGrid(e, i)}
                         oncontextmenu={(e) => { e.preventDefault(); setEditSlot(i, null); } }
-                        onclick={() => setEditSlot(i, null)}
+                        onclick={() => clearEditSlotIfClick(i)}
                       >
                         {#if slotId && iconSrc(slotId)}
                           <img src={iconSrc(slotId)} alt="" class="slot-icon" onerror={() => onIconError(slotId)} />
@@ -1386,7 +1499,8 @@
                     class:drop-target={true}
                     style="--hue: {itemHue(editOutput ?? '')}"
                     title={editOutput ? `${editOutput}\nShift+click: stack count` : "Drop output item"}
-                    ondragover={onDragOverSlot}
+                    ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                     ondrop={onDropOutput}
                     oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
                     onclick={onOutputClick}
@@ -1416,10 +1530,11 @@
                     class:drop-target={true}
                     style="--hue: {itemHue(editInput ?? '')}"
                     title={editInput ?? "Drop input"}
-                    ondragover={onDragOverSlot}
+                    ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                     ondrop={onDropSingleInput}
                     oncontextmenu={(e) => { e.preventDefault(); (editInput = null); } }
-                    onclick={() => (editInput = null)}
+                    onclick={clearInputIfClick}
                   >
                     {#if editInput && iconSrc(editInput)}
                       <img src={iconSrc(editInput)} alt="" class="slot-icon" onerror={() => onIconError(editInput)} />
@@ -1444,7 +1559,8 @@
                     class:drop-target={true}
                     style="--hue: {itemHue(editOutput ?? '')}"
                     title={editOutput ? `${editOutput}\nShift+click: stack` : "Drop output"}
-                    ondragover={onDragOverSlot}
+                    ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                     ondrop={onDropOutput}
                     oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
                     onclick={onOutputClick}
@@ -1476,7 +1592,8 @@
                       class:drop-target={true}
                       style="--hue: {itemHue(slot.val ?? '')}"
                       title={slot.val ?? slot.label}
-                      ondragover={onDragOverSlot}
+                      ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                       ondrop={(e) => onDropSmithing(e, slot.key as "template" | "base" | "addition")}
                       oncontextmenu={(e) => {
                         e.preventDefault();
@@ -1484,11 +1601,7 @@
                         else if (slot.key === "base") editBase = null;
                         else editAddition = null;
                       }}
-                      onclick={() => {
-                        if (slot.key === "template") editTemplate = null;
-                        else if (slot.key === "base") editBase = null;
-                        else editAddition = null;
-                      }}
+                      onclick={() => clearSmithingIfClick(slot.key as "template" | "base" | "addition")}
                     >
                       {#if slot.val && iconSrc(slot.val)}
                         <img src={iconSrc(slot.val)} alt="" class="slot-icon" onerror={() => onIconError(slot.val)} />
@@ -1507,7 +1620,8 @@
                     class:empty={!editOutput}
                     class:drop-target={true}
                     style="--hue: {itemHue(editOutput ?? '')}"
-                    ondragover={onDragOverSlot}
+                    ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                     ondrop={onDropOutput}
                     oncontextmenu={(e) => { e.preventDefault(); editOutput = null; editCount = 1; }}
                     onclick={onOutputClick}
@@ -1542,7 +1656,8 @@
                     class="tag-drop-zone"
                     role="region"
                     aria-label="Drop items to add to tag"
-                    ondragover={onDragOverSlot}
+                    ondragenter={allowEditorDrop}
+                        ondragover={allowEditorDrop}
                     ondrop={onDropTagAdd}
                   >
                     Drop items/tags here to <strong>add</strong>
@@ -2010,7 +2125,7 @@
                 class:sel={selectedItem === item.id}
                 class:bookmarked={bookmarks.includes(item.id)}
                 style="--hue: {itemHue(item.id)}"
-                title="{item.id}\nR: {item.recipeCount} · U: {item.useCount}"
+                title="{item.id} — R: {item.recipeCount} · U: {item.useCount}"
                 draggable={editorOpen ? "true" : "false"}
                 ondragstart={(e) => editorOpen && onDragStartItem(e, item.id)}
                 onclick={() => !editorOpen && selectItem(item.id, "recipes")}
@@ -2083,6 +2198,16 @@
     </div>
   {/if}
 </div>
+
+<VanillaClientJarPrompt
+  open={vanillaPromptOpen}
+  version={vanillaPromptVersion || "?"}
+  downloadSize={vanillaPromptSize}
+  downloading={vanillaDownloading}
+  error={vanillaDownloadError}
+  ondownload={downloadVanillaJar}
+  ondismiss={dismissVanillaPrompt}
+/>
 
 <style>
   .jei {
@@ -2364,6 +2489,13 @@
   .tag.type { background: rgba(103, 232, 249, 0.12); color: #67e8f9; }
   .tag.mod { background: var(--bg-tertiary); color: var(--text-muted); max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tag.warn { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+  .vanilla-missing-btn {
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    padding: 2px 8px;
+  }
+  .vanilla-missing-btn:hover { filter: brightness(1.1); }
   .recipe-id {
     font-size: 10px; color: var(--text-muted); word-break: break-all;
     text-align: center; max-width: 520px;

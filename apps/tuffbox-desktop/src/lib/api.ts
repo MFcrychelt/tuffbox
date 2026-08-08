@@ -431,6 +431,16 @@ export interface RecipeScanResult {
   datapackFiles: number;
   truncated: boolean;
   totalScanned: number;
+  /** False when no installed vanilla client jar was found (vanilla recipes missing). */
+  vanillaJarFound?: boolean;
+}
+
+export interface VanillaClientJarStatus {
+  found: boolean;
+  version: string;
+  resolvedVersion: string;
+  jarPath?: string | null;
+  downloadSize?: number | null;
 }
 
 export interface RecipeRuntimeStatus {
@@ -1891,6 +1901,16 @@ export const api = {
         newItem: newItem ?? null,
         count: count ?? null,
       });
+    },
+  },
+
+  // ── Vanilla Minecraft client jar (recipes / quests catalog) ─────
+  minecraft: {
+    clientJarStatus(p?: string) {
+      return cmd<VanillaClientJarStatus>("get_vanilla_client_jar_status", pathArg(p));
+    },
+    downloadClientJar(p?: string) {
+      return cmd<string>("download_vanilla_client_jar", pathArg(p));
     },
   },
 

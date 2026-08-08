@@ -21,6 +21,7 @@
   import ProgressPanel from "./quests/ProgressPanel.svelte";
   import ShortcutsModal from "./ui/ShortcutsModal.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import VanillaClientJarPrompt from "./VanillaClientJarPrompt.svelte";
   import { wouldCreateQuestCycle } from "./quests/deps";
   import type { QuestRewardTable } from "../lib/api";
   import { snbtTextsEqual, type SnbtDiffFile } from "../lib/snbtDiff";
@@ -206,6 +207,13 @@
   let reloadGen = 0;
   let pathSwitchGen = 0;
 
+  const dismissedVanillaPrompt = new Set<string>();
+  let vanillaPromptOpen = $state(false);
+  let vanillaPromptVersion = $state("");
+  let vanillaPromptSize = $state<number | null>(null);
+  let vanillaDownloading = $state(false);
+  let vanillaDownloadError = $state<string | null>(null);
+
   const PANEL_TABS = ["quest", "info", "batch", "colors", "raw"] as const;
   type PanelTab = (typeof PANEL_TABS)[number];
 
@@ -254,6 +262,49 @@
     const r = confirmResolver;
     confirmResolver = null;
     r?.(ok);
+  }
+
+  async function maybeOfferVanillaJar() {
+    if (!$projectPath) return;
+    if (dismissedVanillaPrompt.has($projectPath)) return;
+    try {
+      const status = await api.minecraft.clientJarStatus($projectPath);
+      if (status.found) return;
+      vanillaPromptVersion = status.resolvedVersion || status.version;
+      vanillaPromptSize = status.downloadSize ?? null;
+      vanillaDownloadError = null;
+      vanillaPromptOpen = true;
+    } catch {
+      // Catalog still works with mod-only items; skip the modal.
+    }
+  }
+
+  async function downloadVanillaJar() {
+    if (!$projectPath) return;
+    vanillaDownloading = true;
+    vanillaDownloadError = null;
+    try {
+      await api.minecraft.downloadClientJar($projectPath);
+      vanillaPromptOpen = false;
+      dismissedVanillaPrompt.delete($projectPath);
+      flashNotice("success", `Downloaded Minecraft ${vanillaPromptVersion} client jar.`);
+      try {
+        const catalog = await api.quests.itemCatalog($projectPath);
+        itemCatalogCache = new Set(catalog ?? []);
+      } catch {
+        itemCatalogCache = null;
+      }
+      scheduleLiveValidate();
+    } catch (e) {
+      vanillaDownloadError = String(e);
+    } finally {
+      vanillaDownloading = false;
+    }
+  }
+
+  function dismissVanillaPrompt() {
+    if ($projectPath) dismissedVanillaPrompt.add($projectPath);
+    vanillaPromptOpen = false;
   }
 
   function scheduleLiveValidate() {
@@ -331,6 +382,10 @@
       } catch {
         if (gen !== reloadGen) return;
         itemCatalogCache = null;
+      }
+      if (gen === reloadGen) {
+        await maybeOfferVanillaJar();
+        if (gen !== reloadGen) return;
       }
       validationIssues = await api.quests.validate($projectPath);
       if (gen !== reloadGen) return;
@@ -2476,6 +2531,16 @@
     oncancel={() => closeConfirm(false)}
   />
 {/if}
+
+<VanillaClientJarPrompt
+  open={vanillaPromptOpen}
+  version={vanillaPromptVersion || "?"}
+  downloadSize={vanillaPromptSize}
+  downloading={vanillaDownloading}
+  error={vanillaDownloadError}
+  ondownload={downloadVanillaJar}
+  ondismiss={dismissVanillaPrompt}
+/>
 
 <style>
   .qe {

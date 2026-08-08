@@ -147,12 +147,13 @@ pub(crate) fn auto_snapshot_detailed(
         changed_files,
         meta,
     )?;
-    let _ = pack_events::append_from_snapshot(
+    let _ = pack_events::append_from_snapshot_with_summary(
         project_dir,
         operation,
         &snapshot.id,
         changed_files,
         &reason,
+        &snapshot.actions_summary,
     );
     Ok(snapshot)
 }
