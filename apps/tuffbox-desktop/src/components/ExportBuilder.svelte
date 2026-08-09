@@ -218,12 +218,12 @@
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 22px; display: grid; gap: 18px; }
   .format-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
   .format-card { gap: 14px; padding: 18px; text-align: left; justify-content: flex-start; color: var(--text-secondary); border-radius: var(--border-radius-lg); background: var(--bg-tertiary); border: 1px solid var(--border-color); transform: none; }
-  .format-card.active { background: radial-gradient(circle at top left, rgba(27, 217, 106, 0.12), transparent 45%), var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.45); color: var(--text-primary); }
+  .format-card.active { background: radial-gradient(circle at top left, color-mix(in srgb, var(--accent-primary) 12%, transparent), transparent 45%), var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); color: var(--text-primary); }
   .format-card.planned { opacity: .76; }
   .format-card h2 { margin: 0 0 4px; }
   .format-card p, .checks span { color: var(--text-muted); }
@@ -238,7 +238,7 @@
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue span { color: var(--text-muted); }
   code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
-  .publish-section { padding: 16px; border: 1px solid rgba(27,217,106,.25); border-radius: var(--border-radius-lg); background: rgba(27,217,106,.03); }
+  .publish-section { padding: 16px; border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); border-radius: var(--border-radius-lg); background: color-mix(in srgb, var(--accent-primary) 3%, transparent); }
   .publish-section h3 { color: var(--text-primary); font-size: 14px; margin: 0 0 4px; }
   .publish-section p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
 

@@ -34,13 +34,22 @@ Context → Proposal → Review (чекбоксы / risk) → Confirm → valida
 | **`local`** | `POST /v1/crash/lookup` → top-N similar cases в prompt → Ollama / openai-compatible → тот же `ActionPlan`. |
 | **`kb_only`** | Только matched case → plan из `actions` кейса, без LLM. |
 
+При `swarm.enabled` + `p2p_enabled` между сильным KB/capsule short-circuit (L1) и LLM (L3)
+вставляется **L2 Fog volunteer** (см. Crash Diagnose Cascade в [`13-tuffswarm-network.md`](13-tuffswarm-network.md)).
+Режим `kb_only` остаётся без L2/L3 LLM.
+
+**L3 draft→verify (opt-in):** `ai.speculativeDecoding` + `ai.draftModel` (Settings → AI).
+Маленькая локальная draft-модель предлагает ActionPlan JSON → основная модель валидирует/переписывает.
+Не token-level `llama-cpp-2` (это отдельный будущий cargo feature); не в Fog node.
+
 Приватный корпус KB **никогда не шипится** в лаунчер. Builtin seed в клиенте — тонкий offline fallback.
 
 ```text
 Crash logs
 → local fingerprint + inventory
-→ DiagnoseMode router
-→ ActionPlan JSON (единый контракт)
+→ L1 strong KB/capsule hit? → ActionPlan
+→ else L2 Fog volunteer (opt-in P2P)? → ActionPlan
+→ else DiagnoseMode router (L3 server/local/heuristics) → ActionPlan
 → validate → UI confirm → snapshot → apply
 ```
 

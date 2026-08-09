@@ -471,8 +471,8 @@
   }
   .tabs button.active {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
-    border-color: rgba(27, 217, 106, 0.25);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
   .tabs button:hover:not(.active) { color: var(--text-primary); background: var(--bg-hover); }
   .tabs-spacer { flex: 1; }
@@ -552,8 +552,8 @@
     background: var(--bg-elevated); color: var(--text-secondary);
     font-size: 11px; font-weight: 700; cursor: pointer;
   }
-  .toggle.on { color: var(--accent-primary); border-color: rgba(27, 217, 106, 0.35); }
-  .accent { background: var(--accent-primary); color: #000; border-color: transparent; }
+  .toggle.on { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+  .accent { background: var(--accent-primary); color: var(--on-accent, #000); border-color: transparent; }
   .danger:hover { color: #ef4444; border-color: rgba(239, 68, 68, 0.35); }
   .ghost:hover { color: var(--text-primary); }
 

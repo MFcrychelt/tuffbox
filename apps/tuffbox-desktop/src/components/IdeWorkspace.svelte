@@ -585,7 +585,7 @@
     display: flex;
     flex-direction: column;
     background:
-      radial-gradient(circle at top right, rgba(27, 217, 106, 0.06), transparent 32%),
+      radial-gradient(circle at top right, color-mix(in srgb, var(--accent-primary) 6%, transparent), transparent 32%),
       rgba(255, 255, 255, 0.015);
     overflow: hidden;
   }
@@ -747,7 +747,7 @@
   .stage-tab.active {
     transform: none;
     background: var(--bg-tertiary);
-    border-color: rgba(27, 217, 106, 0.35);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--text-primary);
   }
 
@@ -824,8 +824,8 @@
 
   .inline-success {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
-    border-color: rgba(27, 217, 106, 0.25);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
   .brief-grid {

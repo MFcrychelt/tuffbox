@@ -965,7 +965,7 @@
     position: relative;
     padding: 22px 20px 16px;
     background:
-      radial-gradient(ellipse at 20% 0%, rgba(27, 217, 106, 0.28), transparent 55%),
+      radial-gradient(ellipse at 20% 0%, color-mix(in srgb, var(--accent-primary) 28%, transparent), transparent 55%),
       radial-gradient(ellipse at 90% 40%, rgba(59, 130, 246, 0.18), transparent 50%),
       linear-gradient(160deg, #12161c 0%, #1a222c 100%);
     border-bottom: 1px solid var(--border-color);
@@ -995,8 +995,8 @@
     padding: 8px 12px; border-radius: 999px; font-weight: 600;
   }
   .tabs button.active {
-    border-color: rgba(27,217,106,.35);
-    background: rgba(27,217,106,.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
   }
   .modal-body { padding: 8px 20px 16px; display: flex; flex-direction: column; gap: 14px; }
@@ -1034,7 +1034,7 @@
     font-size: 22px;
     font-weight: 800;
     color: #04140a;
-    background: linear-gradient(135deg, #1bd96a, #0ea5e9);
+    background: linear-gradient(135deg, var(--accent-primary), #0ea5e9);
     flex-shrink: 0;
     border: 1px solid transparent;
     padding: 0;
@@ -1042,7 +1042,7 @@
     overflow: hidden;
   }
   .pack-icon:hover {
-    outline: 2px solid rgba(27, 217, 106, 0.45);
+    outline: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
     outline-offset: 1px;
   }
   .pack-icon.has-img {
@@ -1104,8 +1104,8 @@
     cursor: pointer;
   }
   .loader-chip.active {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.14);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
   }
   .mem-slider { display: grid; gap: 8px; margin-top: 8px; }
@@ -1161,7 +1161,7 @@
     background: var(--accent-primary);
     border: 2px solid #0b1a10;
     cursor: pointer;
-    box-shadow: 0 0 0 3px rgba(27, 217, 106, 0.25);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
   .mem-range::-moz-range-thumb {
     width: 18px;
@@ -1186,7 +1186,7 @@
   }
   .notice {
     padding: 10px 12px; border-radius: 10px;
-    background: rgba(27,217,106,.08); border: 1px solid rgba(27,217,106,.25); color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); color: var(--accent-primary);
   }
   .muted { color: var(--text-muted); font-size: 13px; }
   .path-hint { font-size: 11px; color: var(--text-muted); }
@@ -1215,7 +1215,7 @@
     padding: 10px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-secondary);
   }
-  .cf-row.active, .cf-row:hover { border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.06); }
+  .cf-row.active, .cf-row:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 6%, transparent); }
   .cf-row img, .cf-icon {
     width: 40px; height: 40px; border-radius: 10px; object-fit: cover;
     background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;

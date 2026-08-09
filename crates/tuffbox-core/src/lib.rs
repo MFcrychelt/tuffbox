@@ -36,6 +36,7 @@ pub mod mod_files;
 pub mod mod_index_cache;
 pub mod quest_plan;
 pub mod quest_chat;
+pub mod quest_kubejs;
 pub mod mod_scan;
 pub mod murmur2;
 pub mod process;
@@ -53,6 +54,7 @@ pub mod ai_explanation;
 pub mod api_cache;
 pub mod crash_assistant;
 pub mod crash_kb;
+pub mod creation_marketplace;
 pub mod swarm;
 pub mod swarm_supabase;
 pub mod task_progress;
@@ -71,6 +73,7 @@ pub mod properties_parser;
 pub mod recipe_layout;
 pub mod recipe_runtime;
 pub mod cosmetics_runtime;
+pub mod overlay_runtime;
 pub mod recipe_scan;
 pub mod registry;
 pub mod tag_normalizer;
@@ -108,6 +111,9 @@ pub use recipe_runtime::*;
 pub use cosmetics_runtime::{
     prepare_cosmetics_bridge, resolve_cosmetics_artifact, CosmeticsBridgeLaunch,
     CosmeticsLaunchExtras, COSMETICS_ANCHORS, McVersion,
+};
+pub use overlay_runtime::{
+    prepare_overlay_bridge, resolve_overlay_artifact, OverlayBridgeLaunch, OVERLAY_ANCHORS,
 };
 pub use resolver::*;
 pub use snapshot::*;

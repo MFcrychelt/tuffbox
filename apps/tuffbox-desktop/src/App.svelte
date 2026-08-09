@@ -133,6 +133,7 @@
   let shareCapsuleExplanation = $state("");
   let shareResolutionId = $state<string | null>(null);
   let shareBusy = $state(false);
+  let shareError = $state<string | null>(null);
   /** 1 = deeper in nav (slide from right), -1 = back (from left). */
   let viewDir = $state(1);
   let prevViewForDir = $state<View>("dashboard");
@@ -316,6 +317,11 @@
     };
     window.addEventListener("tuffbox:open-library", onOpenLibrary);
 
+    const onOpenCrashVotes = () => {
+      currentView = "crash-votes";
+    };
+    window.addEventListener("tuffbox:open-crash-votes", onOpenCrashVotes);
+
     const onShowShortcuts = () => {
       showShortcuts = true;
     };
@@ -413,6 +419,7 @@
       window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
       window.removeEventListener("tuffbox:open-library", onOpenLibrary);
+      window.removeEventListener("tuffbox:open-crash-votes", onOpenCrashVotes);
       window.removeEventListener("tuffbox:show-shortcuts", onShowShortcuts);
       window.removeEventListener("tuffbox:share-capsule", onShareCapsule);
       window.removeEventListener("tuffbox:launcher-settings", onLauncherSettings);
@@ -432,6 +439,8 @@
     shareCapsulePath = opts.path;
     shareCapsuleExplanation = opts.explanation;
     shareResolutionId = opts.resolutionId;
+    shareError = null;
+    shareBusy = false;
     shareCapsuleOpen = true;
   }
 
@@ -461,6 +470,7 @@
       return;
     }
     shareBusy = true;
+    shareError = null;
     try {
       const result: any = await invoke("publish_experience_capsule", {
         path: shareCapsulePath,
@@ -469,21 +479,35 @@
         actions: payload.actions ?? null,
       });
       if (result?.published) {
-        toasts.success("Fix shared with the swarm hub — other clients can reuse it");
+        if (result?.supabaseOk) {
+          toasts.success("Fix shared with the community network — other clients can reuse it");
+        } else if (result?.p2pGossipOk === false) {
+          toasts.success(
+            `Saved on this PC and local P2P node; gossip to peers failed: ${result?.p2pGossipError ?? "no mesh peers"}`,
+          );
+        } else if (result?.p2pConfigured) {
+          toasts.success("Fix shared with TuffSwarm peers — other clients can reuse it");
+        } else if (result?.hubConfigured) {
+          toasts.success("Fix shared with the swarm hub — other clients can reuse it");
+        } else {
+          toasts.success("Fix shared on the network — other clients can reuse it");
+        }
       } else if (result?.sharedLocal) {
         toasts.success(
-          result?.hubConfigured
-            ? `Saved on this PC; hub publish failed: ${result?.error ?? "unknown"}`
-            : "Saved to shared local capsule store (set Swarm hub URL to sync with other PCs)",
+          result?.hubConfigured || result?.p2pConfigured || result?.supabaseConfigured
+            ? `Saved on this PC; remote publish failed: ${result?.error ?? "unknown"}`
+            : "Saved to shared local capsule store (enable TuffSwarm / P2P or set hub URL to sync)",
         );
       } else {
         toasts.success("Capsule saved");
       }
+      shareCapsuleOpen = false;
     } catch (err) {
-      toasts.error(String(err));
+      const msg = String(err);
+      shareError = msg;
+      toasts.error(msg);
     } finally {
       shareBusy = false;
-      shareCapsuleOpen = false;
     }
   }
 
@@ -495,6 +519,8 @@
         // ignore
       }
     }
+    shareError = null;
+    shareBusy = false;
     shareCapsuleOpen = false;
   }
 
@@ -669,6 +695,8 @@
     path={shareCapsulePath}
     resolutionId={shareResolutionId}
     seedExplanation={shareCapsuleExplanation}
+    {shareBusy}
+    {shareError}
     onconfirm={shareCapsule}
     ondismiss={dismissShareCapsule}
   />
@@ -767,7 +795,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: var(--bg-primary);
+    background: var(--app-shell-bg, var(--bg-primary));
     color: var(--text-primary);
     pointer-events: auto;
     /* UI scale: zoom on <html> via applyUiScale — not on this shell. */

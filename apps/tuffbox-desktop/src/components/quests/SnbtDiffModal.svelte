@@ -259,7 +259,7 @@
   .added {
     display: block;
     color: #86efac;
-    background: rgba(27, 217, 106, 0.08);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
   .removed {
     display: block;

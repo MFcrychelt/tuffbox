@@ -1,0 +1,1158 @@
+<script lang="ts">
+  import { onDestroy, onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import {
+    AlertTriangle,
+    CheckCircle2,
+    Download,
+    FileUp,
+    FolderOpen,
+    KeyRound,
+    Plug,
+    RefreshCw,
+    Search,
+    Trash2,
+  } from "@lucide/svelte";
+  import {
+    fitLabel,
+    formatBytes,
+    type AiProvider,
+    type OllamaDetect,
+    type OllamaModelInfo,
+    type OllamaPullProgress,
+    type OllamaStorage,
+    type SuggestedModel,
+  } from "../lib/api";
+
+  let {
+    onsaved,
+  }: {
+    onsaved?: () => void;
+  } = $props();
+
+  type IntegrationStatus = {
+    settings: {
+      githubRepository: string;
+      ai: {
+        provider: string;
+        endpoint: string;
+        model: string;
+        diagnoseMode?: string;
+        crashKbEndpoint?: string;
+        ollamaBinaryPath?: string;
+        ollamaModelsPath?: string;
+        speculativeDecoding?: boolean;
+        draftModel?: string;
+      };
+      swarm?: Record<string, unknown>;
+    };
+    aiApiKeySet: boolean;
+    crashKbTokenSet?: boolean;
+  };
+
+  type PresetId = "gemini" | "openai" | "openrouter" | "hermes" | "custom";
+  type Surface = "local" | "cloud";
+
+  const CLOUD_PRESETS: {
+    id: PresetId;
+    label: string;
+    endpoint: string;
+    model: string;
+    needsKey: boolean;
+  }[] = [
+    {
+      id: "gemini",
+      label: "Gemini",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
+      model: "gemini-flash-latest",
+      needsKey: true,
+    },
+    {
+      id: "openai",
+      label: "OpenAI",
+      endpoint: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      needsKey: true,
+    },
+    {
+      id: "openrouter",
+      label: "OpenRouter",
+      endpoint: "https://openrouter.ai/api/v1",
+      model: "openai/gpt-4o-mini",
+      needsKey: true,
+    },
+    {
+      id: "hermes",
+      label: "Local API",
+      endpoint: "http://127.0.0.1:8000/v1",
+      model: "hermes",
+      needsKey: false,
+    },
+    {
+      id: "custom",
+      label: "Custom",
+      endpoint: "",
+      model: "",
+      needsKey: false,
+    },
+  ];
+
+  let surface = $state<Surface>("local");
+  let preset = $state<PresetId>("gemini");
+  let provider = $state<AiProvider>("ollama");
+  let endpoint = $state("http://127.0.0.1:11434");
+  let model = $state("");
+  let ollamaBinaryPath = $state("");
+  let ollamaModelsPath = $state("");
+  let diagnoseMode = $state<"server" | "local" | "kb_only">("server");
+  let speculativeDecoding = $state(false);
+  let draftModel = $state("qwen2.5-coder:0.5b");
+  let crashKbEndpoint = $state("");
+  let crashKbTokenDraft = $state("");
+  let crashKbTokenSet = $state(false);
+  let apiKeyDraft = $state("");
+  let apiKeySet = $state(false);
+  let loading = $state(false);
+  let saving = $state(false);
+  let testing = $state(false);
+  let detecting = $state(false);
+  let scanningDisk = $state(false);
+  let pulling = $state(false);
+  let importing = $state(false);
+  let deleting = $state("");
+  let advancedOpen = $state(false);
+  let error = $state("");
+  let message = $state("");
+  let testResult = $state("");
+  let models = $state.raw<OllamaModelInfo[]>([]);
+  let suggestions = $state.raw<SuggestedModel[]>([]);
+  let detect = $state.raw<OllamaDetect | null>(null);
+  let storage = $state.raw<OllamaStorage | null>(null);
+  let pullName = $state("qwen2.5:7b");
+  let ggufName = $state("");
+  let pullProgress = $state.raw<OllamaPullProgress | null>(null);
+  let hostRamBytes = $state(0);
+
+  let unlistenPull: UnlistenFn | null = null;
+
+  const pullPct = $derived.by(() => {
+    const p = pullProgress;
+    if (!p || !p.total) return null;
+    return Math.min(100, Math.round((p.completed / p.total) * 100));
+  });
+
+  const statusText = $derived.by(() => {
+    if (surface === "cloud") {
+      const label = CLOUD_PRESETS.find((p) => p.id === preset)?.label ?? "API";
+      return `${label} · ${model || "—"} · ${apiKeySet ? "key set" : "no key"}`;
+    }
+    if (!detect) return "Detecting Ollama…";
+    if (detect.running) return `Ollama running · ${models.length} model${models.length === 1 ? "" : "s"} · ${model || "—"}`;
+    if (detect.installed) return "Ollama installed · API not responding";
+    return "Ollama not found";
+  });
+
+  const statusKind = $derived.by(() => {
+    if (surface === "cloud") return apiKeySet || endpoint.includes("127.0.0.1") ? "ok" : "warn";
+    if (detect?.running) return "ok";
+    if (detect?.installed) return "warn";
+    return "bad";
+  });
+
+  onMount(() => {
+    void load();
+  });
+
+  onDestroy(() => {
+    void unlistenPull?.();
+  });
+
+  async function ensurePullListener() {
+    if (unlistenPull) return;
+    unlistenPull = await listen<OllamaPullProgress>("ollama-pull-progress", (ev) => {
+      pullProgress = ev.payload;
+    });
+  }
+
+  async function load() {
+    loading = true;
+    error = "";
+    message = "";
+    testResult = "";
+    try {
+      const status = await invoke<IntegrationStatus>("get_integration_status");
+      const ai = status.settings?.ai;
+      provider = ai?.provider === "openai-compatible" ? "openai-compatible" : "ollama";
+      endpoint =
+        ai?.endpoint || (provider === "ollama" ? "http://127.0.0.1:11434" : "");
+      model = ai?.model || "";
+      ollamaBinaryPath = ai?.ollamaBinaryPath ?? "";
+      ollamaModelsPath = ai?.ollamaModelsPath ?? "";
+      const dm = ai?.diagnoseMode ?? "server";
+      diagnoseMode = dm === "local" || dm === "kb_only" ? dm : "server";
+      speculativeDecoding = !!ai?.speculativeDecoding;
+      draftModel = ai?.draftModel?.trim() || "qwen2.5-coder:0.5b";
+      crashKbEndpoint = ai?.crashKbEndpoint ?? "";
+      crashKbTokenSet = !!status.crashKbTokenSet;
+      crashKbTokenDraft = "";
+      apiKeySet = !!status.aiApiKeySet;
+      apiKeyDraft = "";
+      surface = provider === "ollama" ? "local" : "cloud";
+      preset = detectCloudPreset(endpoint);
+      if (!model.trim() && provider === "ollama") model = "qwen2.5:7b";
+      if (provider === "ollama") {
+        await probeOllama();
+        await refreshStorage();
+      } else {
+        detect = null;
+        models = [];
+        storage = null;
+      }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function detectCloudPreset(ep: string): PresetId {
+    const e = ep.trim().replace(/\/$/, "");
+    if (e.includes("generativelanguage.googleapis.com") || e.includes("/v1beta/openai")) return "gemini";
+    if (e.includes("api.openai.com")) return "openai";
+    if (e.includes("openrouter.ai")) return "openrouter";
+    if (e.includes("127.0.0.1") || e.includes("localhost")) return "hermes";
+    return e ? "custom" : "custom";
+  }
+
+  function setSurface(next: Surface) {
+    surface = next;
+    error = "";
+    message = "";
+    if (next === "local") {
+      provider = "ollama";
+      if (!endpoint.trim() || !endpoint.includes("11434")) {
+        endpoint = "http://127.0.0.1:11434";
+      }
+      void probeOllama();
+      void refreshStorage();
+    } else {
+      provider = "openai-compatible";
+      detect = null;
+      applyCloudPreset(preset);
+    }
+  }
+
+  function applyCloudPreset(id: PresetId) {
+    preset = id;
+    provider = "openai-compatible";
+    const p = CLOUD_PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    if (p.endpoint) endpoint = p.endpoint;
+    if (p.model) model = p.model;
+  }
+
+  async function probeOllama() {
+    detecting = true;
+    try {
+      const result = await invoke<OllamaDetect>("detect_ollama", {
+        endpoint: endpoint || null,
+        binaryPath: ollamaBinaryPath || null,
+      });
+      detect = result;
+      models = result.models ?? [];
+      suggestions = result.suggestedModels ?? [];
+      hostRamBytes = result.hostRamBytes ?? 0;
+      if (result.binaryPath && !ollamaBinaryPath.trim()) {
+        ollamaBinaryPath = result.binaryPath;
+      }
+      if (result.suggestedModels?.length && !pullName.trim()) {
+        pullName = result.suggestedModels[0].name;
+      }
+      if (result.defaultModel && !model.trim()) {
+        model = result.defaultModel;
+        pullName = result.defaultModel;
+      }
+      if (!model.trim() && models.length > 0) {
+        model = models[0].name;
+      }
+      if (result.installed && result.needsModel) {
+        message = "Install a model below to get started.";
+      }
+    } catch (e) {
+      detect = null;
+      models = [];
+      error = String(e);
+    } finally {
+      detecting = false;
+    }
+  }
+
+  async function refreshStorage() {
+    try {
+      storage = await invoke<OllamaStorage>("get_ollama_storage", {
+        modelsPath: ollamaModelsPath.trim() || null,
+      });
+      if (storage?.hostRamBytes) hostRamBytes = storage.hostRamBytes;
+    } catch {
+      storage = null;
+    }
+  }
+
+  async function persistAiSettings(activeModel: string) {
+    const status = await invoke<IntegrationStatus>("get_integration_status");
+    await invoke("save_integration_settings", {
+      settings: {
+        githubRepository: status.settings?.githubRepository ?? "",
+        swarm: status.settings?.swarm,
+        ai: {
+          provider,
+          endpoint: endpoint.trim(),
+          model: activeModel.trim() || "qwen2.5:7b",
+          diagnoseMode,
+          crashKbEndpoint: crashKbEndpoint.trim(),
+          ollamaBinaryPath: ollamaBinaryPath.trim(),
+          ollamaModelsPath: ollamaModelsPath.trim(),
+          speculativeDecoding,
+          draftModel: draftModel.trim() || "qwen2.5-coder:0.5b",
+        },
+      },
+    });
+  }
+
+  async function save() {
+    saving = true;
+    error = "";
+    message = "";
+    try {
+      await persistAiSettings(model.trim());
+      if (apiKeyDraft.trim()) {
+        await invoke("set_integration_secret", { kind: "ai", value: apiKeyDraft.trim() });
+        apiKeyDraft = "";
+        apiKeySet = true;
+      }
+      if (crashKbTokenDraft.trim()) {
+        await invoke("set_integration_secret", {
+          kind: "crash_kb",
+          value: crashKbTokenDraft.trim(),
+        });
+        crashKbTokenDraft = "";
+        crashKbTokenSet = true;
+      }
+      message = "Saved.";
+      await load();
+      onsaved?.();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function test() {
+    testing = true;
+    error = "";
+    testResult = "";
+    try {
+      await save();
+      const result = await invoke<string>("test_integration", { provider: "ai" });
+      testResult = result;
+      message = result;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      testing = false;
+    }
+  }
+
+  async function clearKey() {
+    try {
+      await invoke("clear_integration_secret", { kind: "ai" });
+      apiKeySet = false;
+      message = "API key cleared.";
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function clearCrashKbToken() {
+    try {
+      await invoke("clear_integration_secret", { kind: "crash_kb" });
+      crashKbTokenSet = false;
+      message = "Crash KB token cleared.";
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function selectModel(name: string) {
+    model = name;
+    try {
+      await persistAiSettings(name);
+      message = `Active model: ${name}`;
+      onsaved?.();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function deleteModel(name: string) {
+    if (!confirm(`Delete model “${name}”?`)) return;
+    deleting = name;
+    error = "";
+    try {
+      const result = await invoke<{
+        ok: boolean;
+        models: OllamaModelInfo[];
+        activeModel?: string;
+      }>("delete_ollama_model", {
+        model: name,
+        endpoint: endpoint || null,
+        binaryPath: ollamaBinaryPath || null,
+      });
+      models = result.models ?? [];
+      if (result.activeModel) model = result.activeModel;
+      message = `Deleted ${name}`;
+      await refreshStorage();
+      onsaved?.();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      deleting = "";
+    }
+  }
+
+  async function installModel(tag?: string) {
+    const name = (tag || pullName || model).trim();
+    if (!name) {
+      error = "Enter a model tag (e.g. qwen2.5:7b).";
+      return;
+    }
+    pulling = true;
+    pullProgress = null;
+    error = "";
+    message = `Downloading ${name}…`;
+    try {
+      await ensurePullListener();
+      await persistAiSettings(name);
+      const result = await invoke<{
+        ok: boolean;
+        model: string;
+        models: OllamaModelInfo[];
+        modelsPath?: string;
+      }>("pull_ollama_model", {
+        model: name,
+        endpoint: endpoint || null,
+        binaryPath: ollamaBinaryPath || null,
+        modelsPath: ollamaModelsPath.trim() || null,
+      });
+      model = result.model;
+      pullName = result.model;
+      models = result.models ?? [];
+      message = result.modelsPath
+        ? `Installed ${result.model} → ${result.modelsPath}`
+        : `Installed ${result.model}`;
+      await probeOllama();
+      await refreshStorage();
+      onsaved?.();
+    } catch (e) {
+      error = String(e);
+      message = "";
+    } finally {
+      pulling = false;
+      pullProgress = null;
+    }
+  }
+
+  async function pickGgufAndImport() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: "Select local model file (.gguf)",
+        filters: [
+          { name: "GGUF model", extensions: ["gguf"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+      if (typeof selected !== "string" || !selected) return;
+
+      importing = true;
+      error = "";
+      const stem =
+        ggufName.trim() ||
+        selected
+          .replace(/^.*[\\/]/, "")
+          .replace(/\.gguf$/i, "")
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-") ||
+        "local-model";
+      message = `Importing as “${stem}”…`;
+      await persistAiSettings(stem);
+      const result = await invoke<{ ok: boolean; model: string; models: OllamaModelInfo[] }>(
+        "import_ollama_gguf",
+        {
+          filePath: selected,
+          modelName: stem,
+          binaryPath: ollamaBinaryPath || null,
+        },
+      );
+      model = result.model;
+      ggufName = result.model;
+      models = result.models ?? [];
+      message = `Imported ${result.model}`;
+      await probeOllama();
+      await refreshStorage();
+      onsaved?.();
+    } catch (e) {
+      error = String(e);
+      message = "";
+    } finally {
+      importing = false;
+    }
+  }
+
+  async function scanDiskForOllama() {
+    scanningDisk = true;
+    error = "";
+    message = "Scanning C:\\…";
+    try {
+      const scan = await invoke<{
+        bestBinary?: string | null;
+        bestModelsDir?: string | null;
+        models?: string[];
+        visited?: number;
+        truncated?: boolean;
+      }>("scan_ollama_disk", { root: "C:\\" });
+
+      if (scan.bestBinary) ollamaBinaryPath = scan.bestBinary;
+      if (scan.bestModelsDir) ollamaModelsPath = scan.bestModelsDir;
+      const diskModels = scan.models ?? [];
+      if (diskModels.length > 0 && (!model.trim() || !diskModels.includes(model))) {
+        const prefer =
+          diskModels.find((m) => /qwen2\.5:7b/i.test(m)) ||
+          diskModels.find((m) => /:8b\b/i.test(m)) ||
+          diskModels[0];
+        model = prefer;
+        pullName = prefer;
+      }
+      message =
+        diskModels.length || scan.bestBinary
+          ? `Found · ${diskModels.length} tag(s)${scan.truncated ? " (scan capped)" : ""}`
+          : "Nothing found on C:\\";
+      await persistAiSettings(model || pullName || "qwen2.5:7b");
+      await probeOllama();
+      await refreshStorage();
+      onsaved?.();
+    } catch (e) {
+      error = String(e);
+      message = "";
+    } finally {
+      scanningDisk = false;
+    }
+  }
+
+  async function pickOllamaPath() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        title: "Select ollama executable",
+        filters: [
+          { name: "Ollama", extensions: ["exe"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+      if (typeof selected === "string" && selected) {
+        ollamaBinaryPath = selected;
+        await probeOllama();
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function pickOllamaFolder() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        title: "Select Ollama install folder",
+      });
+      if (typeof selected === "string" && selected) {
+        ollamaBinaryPath = selected;
+        await probeOllama();
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function pickOllamaModelsFolder() {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        directory: true,
+        title: "Select Ollama models folder",
+      });
+      if (typeof selected === "string" && selected) {
+        ollamaModelsPath = selected;
+        await persistAiSettings(model || pullName || "qwen2.5:7b");
+        await refreshStorage();
+        message = "Models folder updated.";
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function suggestionFit(s: SuggestedModel): string {
+    if (!hostRamBytes) return "unknown";
+    const need = s.minRamGb * 1024 ** 3;
+    if (need <= hostRamBytes * 0.55) return "ok";
+    if (need <= hostRamBytes * 0.85) return "tight";
+    return "heavy";
+  }
+</script>
+
+<div class="ai-panel">
+  {#if loading}
+    <p class="muted">Loading…</p>
+  {:else}
+    {#if error}<div class="notice error"><AlertTriangle size={14} /> {error}</div>{/if}
+    {#if message}<div class="notice ok"><CheckCircle2 size={14} /> {message}</div>{/if}
+
+    <div class="seg" role="tablist" aria-label="AI provider">
+      <button type="button" class:on={surface === "local"} onclick={() => setSurface("local")}>Local</button>
+      <button type="button" class:on={surface === "cloud"} onclick={() => setSurface("cloud")}>Cloud</button>
+    </div>
+
+    <div class="status" class:ok={statusKind === "ok"} class:warn={statusKind === "warn"} class:bad={statusKind === "bad"}>
+      <span class="status-text">{statusText}</span>
+      <div class="status-actions">
+        {#if surface === "local"}
+          <button
+            class="ghost mini"
+            type="button"
+            title="Refresh"
+            onclick={() => { void probeOllama(); void refreshStorage(); }}
+            disabled={detecting || scanningDisk}
+          >
+            <RefreshCw size={14} class={detecting ? "spin" : ""} />
+          </button>
+        {/if}
+        <button
+          class="ghost mini"
+          type="button"
+          onclick={test}
+          disabled={testing || saving || pulling || importing}
+        >
+          <Plug size={14} />
+          {testing ? "Testing…" : "Test"}
+        </button>
+      </div>
+    </div>
+
+    {#if surface === "local"}
+      <section class="block">
+        <div class="block-head">
+          <strong>Models</strong>
+          {#if hostRamBytes}
+            <small>Host RAM {formatBytes(hostRamBytes)}</small>
+          {/if}
+        </div>
+
+        {#if models.length === 0}
+          <p class="muted tight">No models installed yet.</p>
+        {:else}
+          <div class="model-table" role="list">
+            {#each models as m (m.name)}
+              <div
+                class="model-row"
+                class:active={model === m.name}
+                role="listitem"
+              >
+                <button type="button" class="model-main" onclick={() => selectModel(m.name)}>
+                  <span class="name">{m.name}</span>
+                  <span class="meta">
+                    <span>{m.parameterSize || "—"}</span>
+                    <span>{m.quantization || "—"}</span>
+                    <span>{formatBytes(m.sizeBytes)}</span>
+                    <span class="fit" data-fit={m.fit}>{fitLabel(m.fit)}</span>
+                  </span>
+                </button>
+                <button
+                  class="ghost mini danger"
+                  type="button"
+                  title="Delete"
+                  disabled={!!deleting || pulling}
+                  onclick={() => deleteModel(m.name)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <div class="install">
+          <div class="field-row">
+            <input bind:value={pullName} placeholder="qwen2.5:7b" autocomplete="off" />
+            <button type="button" onclick={() => installModel()} disabled={pulling || importing || !pullName.trim()}>
+              <Download size={14} />
+              {pulling ? (pullPct != null ? `${pullPct}%` : "Installing…") : "Install"}
+            </button>
+            <button class="ghost" type="button" onclick={pickGgufAndImport} disabled={pulling || importing}>
+              <FileUp size={14} />
+              .gguf
+            </button>
+          </div>
+          {#if pulling && pullProgress}
+            <div class="progress">
+              <div class="bar" style:width="{pullPct ?? 8}%"></div>
+              <small>{pullProgress.status || "downloading"} · {formatBytes(pullProgress.completed)} / {formatBytes(pullProgress.total)}</small>
+            </div>
+          {/if}
+
+          {#if suggestions.length}
+            <div class="suggestions">
+              {#each suggestions as s (s.name)}
+                {@const fit = suggestionFit(s)}
+                <button
+                  type="button"
+                  class="sug"
+                  class:on={pullName === s.name}
+                  onclick={() => (pullName = s.name)}
+                  disabled={pulling || importing}
+                >
+                  <span class="sug-name">{s.name}</span>
+                  <span class="sug-meta">
+                    ~{formatBytes(s.approxSizeBytes)} · ≥{s.minRamGb} GB RAM · ≥{s.minVramGb} GB VRAM
+                    <span class="fit" data-fit={fit}>{fitLabel(fit)}</span>
+                  </span>
+                  <span class="sug-note">{s.note}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </section>
+
+      <div class="storage">
+        <span>Used {formatBytes(storage?.usedBytes)}</span>
+        <span>Free {formatBytes(storage?.availableBytes)}</span>
+        <span class="path" title={storage?.path || ollamaModelsPath || ""}>{storage?.path || ollamaModelsPath || "default models path"}</span>
+      </div>
+    {:else}
+      <section class="block">
+        <div class="presets">
+          {#each CLOUD_PRESETS as p (p.id)}
+            <button type="button" class="preset" class:on={preset === p.id} onclick={() => applyCloudPreset(p.id)}>
+              {p.label}
+            </button>
+          {/each}
+        </div>
+
+        <label>
+          Model
+          <input bind:value={model} placeholder="gemini-flash-latest" autocomplete="off" />
+        </label>
+
+        {#if preset === "custom" || preset === "hermes"}
+          <label>
+            Endpoint
+            <input bind:value={endpoint} placeholder="https://api.example.com/v1" autocomplete="off" />
+          </label>
+        {/if}
+
+        <label>
+          <span class="lab"><KeyRound size={12} /> API key {apiKeySet ? "(saved)" : ""}</span>
+          <input
+            type="password"
+            bind:value={apiKeyDraft}
+            placeholder={apiKeySet ? "•••••••• (enter new to replace)" : "API key"}
+            autocomplete="new-password"
+          />
+        </label>
+        {#if apiKeySet}
+          <button class="ghost mini" type="button" onclick={clearKey}>Clear key</button>
+        {/if}
+      </section>
+    {/if}
+
+    <details class="advanced" bind:open={advancedOpen}>
+      <summary>Advanced</summary>
+      <div class="adv-body">
+        {#if surface === "local"}
+          <label>
+            Ollama binary
+            <div class="field-row">
+              <input bind:value={ollamaBinaryPath} placeholder="auto-detect" autocomplete="off" />
+              <button class="ghost mini" type="button" onclick={pickOllamaPath}><FolderOpen size={14} /></button>
+              <button class="ghost mini" type="button" onclick={pickOllamaFolder}>Folder</button>
+            </div>
+          </label>
+          <label>
+            Models folder
+            <div class="field-row">
+              <input bind:value={ollamaModelsPath} placeholder={detect?.modelsPath || "default"} autocomplete="off" />
+              <button class="ghost mini" type="button" onclick={pickOllamaModelsFolder}><FolderOpen size={14} /></button>
+              <button class="ghost mini" type="button" onclick={scanDiskForOllama} disabled={scanningDisk}>
+                <Search size={14} class={scanningDisk ? "spin" : ""} />
+                {scanningDisk ? "Scanning…" : "Scan C:"}
+              </button>
+            </div>
+          </label>
+          <label>
+            Endpoint
+            <input bind:value={endpoint} placeholder="http://127.0.0.1:11434" autocomplete="off" />
+          </label>
+        {:else if preset !== "custom" && preset !== "hermes"}
+          <label>
+            Endpoint
+            <input bind:value={endpoint} autocomplete="off" />
+          </label>
+        {/if}
+
+        <label>
+          Diagnose mode
+          <select bind:value={diagnoseMode}>
+            <option value="server">Server (Crash KB)</option>
+            <option value="local">Local LLM</option>
+            <option value="kb_only">KB only</option>
+          </select>
+        </label>
+        <label class="check-row">
+          <input type="checkbox" bind:checked={speculativeDecoding} />
+          Draft→verify (small local draft, then main model)
+        </label>
+        {#if speculativeDecoding}
+          <label>
+            Draft model
+            <input
+              bind:value={draftModel}
+              placeholder="qwen2.5-coder:0.5b"
+              autocomplete="off"
+            />
+          </label>
+          <p class="hint">
+            Opt-in L3 assist: draft ActionPlan with a tiny model, then your main model validates.
+            Pull the draft tag in Ollama first. Not used on Fog L2.
+          </p>
+        {/if}
+        <label>
+          Crash KB URL
+          <input bind:value={crashKbEndpoint} placeholder="https://kb.example.com" autocomplete="off" />
+        </label>
+        <label>
+          Crash KB token
+          <div class="field-row">
+            <input
+              type="password"
+              bind:value={crashKbTokenDraft}
+              placeholder={crashKbTokenSet ? "•••••••• (set)" : "optional"}
+              autocomplete="off"
+            />
+            <button
+              class="ghost mini"
+              type="button"
+              disabled={!crashKbTokenSet}
+              onclick={clearCrashKbToken}
+            >
+              Clear
+            </button>
+          </div>
+        </label>
+      </div>
+    </details>
+
+    <footer>
+      {#if testResult}<small class="test-ok">{testResult}</small>{/if}
+      <div class="spacer"></div>
+      <button type="button" onclick={save} disabled={saving || scanningDisk || !endpoint.trim() || (surface === "cloud" && !model.trim())}>
+        {saving ? "Saving…" : "Save"}
+      </button>
+    </footer>
+  {/if}
+</div>
+
+<style>
+  .ai-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .muted { color: var(--text-muted); margin: 0; font-size: 13px; }
+  .muted.tight { font-size: 12px; }
+  .seg {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 3px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+  }
+  .seg button {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: var(--border-radius-sm);
+    cursor: pointer;
+  }
+  .seg button.on {
+    background: var(--bg-elevated, var(--bg-secondary));
+    color: var(--text-primary);
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .status.ok { border-color: rgba(34, 197, 94, 0.35); color: #86efac; }
+  .status.warn { border-color: rgba(251, 191, 36, 0.4); color: #fde68a; }
+  .status.bad { border-color: rgba(239, 68, 68, 0.35); color: #fca5a5; }
+  .status-text { flex: 1; min-width: 0; word-break: break-word; }
+  .status-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .block-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .block-head strong { font-size: 13px; color: var(--text-primary); }
+  .block-head small { font-size: 11px; color: var(--text-muted); }
+  .model-table {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    overflow: hidden;
+  }
+  .model-row {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-color);
+  }
+  .model-row:last-child { border-bottom: none; }
+  .model-row.active { background: rgba(251, 191, 36, 0.08); }
+  .model-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 8px 10px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .model-main .name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .fit {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .fit[data-fit="ok"] { color: #86efac; }
+  .fit[data-fit="tight"] { color: #fde68a; }
+  .fit[data-fit="heavy"] { color: #fca5a5; }
+  .install { display: flex; flex-direction: column; gap: 8px; }
+  .field-row { display: flex; gap: 6px; align-items: center; }
+  .field-row input { flex: 1; min-width: 0; }
+  .progress {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .progress .bar {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(145deg, #fbbf24, #d97706);
+    transition: width 0.2s ease;
+  }
+  .progress small { font-size: 11px; color: var(--text-muted); }
+  .suggestions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sug {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+  }
+  .sug.on {
+    border-color: rgba(251, 191, 36, 0.5);
+    background: rgba(251, 191, 36, 0.08);
+  }
+  .sug-name { font-size: 12px; font-weight: 700; color: var(--text-primary); }
+  .sug-meta { font-size: 11px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sug-note { font-size: 11px; color: var(--text-secondary); }
+  .storage {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 6px 2px;
+  }
+  .storage .path {
+    flex: 1 1 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, monospace;
+  }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; }
+  .preset {
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 5px 10px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .preset.on {
+    background: linear-gradient(145deg, #fbbf24, #d97706);
+    color: #1a1200;
+    border-color: transparent;
+    font-weight: 700;
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .lab { display: inline-flex; align-items: center; gap: 4px; }
+  input, select {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    padding: 8px 10px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .advanced {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 0;
+    background: var(--bg-primary);
+  }
+  .advanced summary {
+    cursor: pointer;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    list-style: none;
+  }
+  .advanced summary::-webkit-details-marker { display: none; }
+  .adv-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 10px 10px;
+  }
+  footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+  }
+  .spacer { flex: 1; }
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--border-radius-sm);
+    padding: 8px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: linear-gradient(145deg, #fbbf24, #d97706);
+    color: #1a1200;
+    font-weight: 700;
+  }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  button.ghost {
+    background: var(--bg-tertiary);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+  button.mini { padding: 6px 8px; }
+  button.danger { color: #fca5a5; }
+  .check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .check-row input { margin: 0; }
+  .hint {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .notice {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    font-size: 12px;
+    line-height: 1.35;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+  }
+  .notice.error { background: rgba(239, 68, 68, 0.12); color: #fca5a5; }
+  .notice.ok { background: rgba(34, 197, 94, 0.12); color: #86efac; }
+  .test-ok { color: #86efac; font-size: 11px; }
+  :global(.spin) { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>

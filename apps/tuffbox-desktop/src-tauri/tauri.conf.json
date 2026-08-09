@@ -57,7 +57,8 @@
     "targets": "all",
     "resources": {
       "../../../bridges/jei-runtime/prebuilt/": "jei-bridge/",
-      "../../../bridges/mca-selector/prebuilt/": "mca-selector/"
+      "../../../bridges/mca-selector/prebuilt/": "mca-selector/",
+      "binaries/": "tuffswarm-bin/"
     },
     "icon": [
       "icons/32x32.png",

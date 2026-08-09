@@ -610,7 +610,7 @@
     background: var(--accent-primary);
     border-radius: 50%;
     cursor: pointer;
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.4);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
 
   .memory-slider::-moz-range-thumb {
@@ -665,5 +665,5 @@
   .schema-row span { color: var(--text-muted); font-size: 13px; }
   .schema-row code { font-family: ui-monospace, monospace; font-size: 14px; color: var(--accent-primary); }
   .schema-warning { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 10px; background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); color: #fcd34d; font-size: 13px; }
-  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: rgba(27,217,106,0.06); border-radius: 10px; border: 1px solid rgba(27,217,106,0.20); }
+  .schema-ok { color: var(--accent-primary); font-size: 13px; padding: 10px 14px; background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-radius: 10px; border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent); }
 </style>

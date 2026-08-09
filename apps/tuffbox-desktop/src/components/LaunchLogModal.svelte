@@ -378,7 +378,7 @@
   }
 
   :global(.live-icon) {
-    color: #1bd96a;
+    color: var(--accent-primary);
   }
 
   .modal-header-right {
@@ -488,8 +488,8 @@
   }
 
   .log-select-btn.active {
-    background: rgba(27, 217, 106, 0.12);
-    border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: #fff;
     transform: scale(1.03);
   }

@@ -482,7 +482,7 @@
     background: var(--bg-primary); border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md); transition: all 0.15s;
   }
-  .account-item.active { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.04); }
+  .account-item.active { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 4%, transparent); }
 
   .account-avatar {
     width: 36px; height: 36px; border-radius: var(--border-radius-sm);
@@ -491,8 +491,14 @@
     flex-shrink: 0;
   }
   .account-avatar.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
-  .account-avatar.off { border: 1px solid rgba(245, 158, 11, 0.35); color: #fde68a; }
-  .account-avatar.ygg { background: rgba(168, 85, 247, 0.18); color: #e9d5ff; }
+  .account-avatar.off {
+    border: 1px solid var(--badge-offline-border, rgba(245, 158, 11, 0.35));
+    color: var(--badge-offline-fg, #fde68a);
+  }
+  .account-avatar.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.18));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
 
   .account-info { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .account-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
@@ -500,7 +506,8 @@
     font-family: var(--font-minecraft);
     font-size: 10px;
     letter-spacing: 0.4px;
-    text-shadow: 1px 1px 0 #3f3f3f;
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
   .account-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
@@ -508,14 +515,23 @@
     font-size: 10px; font-weight: 800; text-transform: uppercase;
     padding: 1px 6px; border-radius: 4px;
   }
-  .type-pill.mojang { color: #93c5fd; background: rgba(59, 130, 246, 0.15); }
-  .type-pill.offline { color: #fde68a; background: rgba(245, 158, 11, 0.12); }
-  .type-pill.ygg { color: #e9d5ff; background: rgba(168, 85, 247, 0.15); }
+  .type-pill.mojang {
+    color: var(--badge-ms-fg, #93c5fd);
+    background: var(--badge-ms-bg, rgba(59, 130, 246, 0.15));
+  }
+  .type-pill.offline {
+    color: var(--badge-offline-fg, #fde68a);
+    background: var(--badge-offline-bg, rgba(245, 158, 11, 0.12));
+  }
+  .type-pill.ygg {
+    color: var(--badge-ygg-fg, #e9d5ff);
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
+  }
   .skin-src { font-size: 10px; color: var(--text-muted); }
 
   .active-badge {
     font-size: 10px; font-weight: 700; color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.12); padding: 1px 5px; border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent); padding: 1px 5px; border-radius: 4px;
   }
 
   .account-actions { display: flex; gap: 4px; }
@@ -541,7 +557,7 @@
     border-radius: var(--border-radius-lg); cursor: pointer; text-align: left;
     transition: all 0.15s ease; width: 100%; color: var(--text-primary);
   }
-  .add-option:hover { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.04); }
+  .add-option:hover { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 4%, transparent); }
   .add-option:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .option-icon {
@@ -550,7 +566,10 @@
   }
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
-  .option-icon.ygg { background: rgba(168, 85, 247, 0.2); color: #e9d5ff; }
+  .option-icon.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.2));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
 
   .ygg-presets { grid-template-columns: repeat(3, 1fr); margin-bottom: 4px; }
 
@@ -582,7 +601,7 @@
   .source-option:hover { border-color: var(--text-muted); color: var(--text-primary); }
   .source-option.active {
     border-color: var(--accent-primary); color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.06);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .error-msg {
@@ -595,7 +614,7 @@
   .accent-btn {
     display: flex; align-items: center; justify-content: center; gap: 6px;
     padding: 10px 16px; border-radius: var(--border-radius-md);
-    background: var(--accent-primary); color: #000; border: none;
+    background: var(--accent-primary); color: var(--on-accent, #000); border: none;
     font-size: 13px; font-weight: 700; cursor: pointer;
     transition: all 0.15s;
   }

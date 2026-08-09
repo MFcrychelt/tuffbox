@@ -49,16 +49,32 @@
   });
 
   /**
-   * Fallback identity when a pack has no icon: dark-chocolate → amber
-   * gradients (brand palette), hashed by name so each instance stays stable.
+   * Fallback identity when a pack has no icon: theme-token gradients
+   * (accent + surfaces), hashed by name so each instance stays stable and
+   * follows the active data-theme without a JS subscription.
    */
-  function brandGradient(name: string): [string, string] {
+  function themeGradient(name: string): [string, string] {
     const pairs: [string, string][] = [
-      ["#241708", "#b07800"],
-      ["#2e1f0c", "#ffc500"],
-      ["#1f150a", "#8a5a19"],
-      ["#33220f", "#e6a700"],
-      ["#2a1a08", "#c98f1b"],
+      [
+        "color-mix(in srgb, var(--accent-primary) 32%, var(--bg-primary))",
+        "color-mix(in srgb, var(--accent-primary) 82%, var(--bg-secondary))",
+      ],
+      [
+        "color-mix(in srgb, var(--accent-secondary) 28%, var(--bg-primary))",
+        "color-mix(in srgb, var(--accent-primary) 72%, var(--bg-tertiary))",
+      ],
+      [
+        "color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary))",
+        "color-mix(in srgb, var(--accent-hover) 78%, var(--bg-primary))",
+      ],
+      [
+        "color-mix(in srgb, var(--bg-tertiary) 45%, var(--accent-primary))",
+        "color-mix(in srgb, var(--accent-primary) 88%, var(--accent-secondary))",
+      ],
+      [
+        "color-mix(in srgb, var(--accent-secondary) 22%, var(--bg-primary))",
+        "color-mix(in srgb, var(--accent-secondary) 65%, var(--accent-primary))",
+      ],
     ];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
@@ -173,7 +189,7 @@
     {#each $recentProjects as instance (instance.path)}
       {@const icon = instanceIcons[instance.path]}
       {@const running = isProjectRunning(instance.path, $runningInstances)}
-      {@const [g0, g1] = brandGradient(instance.info.name)}
+      {@const [g0, g1] = themeGradient(instance.info.name)}
       <div class="rail-item">
         <button
           type="button"
@@ -257,9 +273,11 @@
     height: 100%;
     min-height: 0;
     box-sizing: border-box;
-    /* Slightly darker than the workspace + hairline edge for depth. */
-    background: color-mix(in srgb, var(--bg-secondary) 84%, #000);
-    border-right: 1px solid color-mix(in srgb, var(--text-primary) 6%, transparent);
+    /* Themes (esp. Minimal) override via --rail-* tokens. */
+    background: var(--rail-bg, color-mix(in srgb, var(--bg-secondary) 92%, var(--bg-tertiary)));
+    border-right: 1px solid var(--rail-border, var(--border-color));
+    -webkit-backdrop-filter: var(--rail-backdrop, none);
+    backdrop-filter: var(--rail-backdrop, none);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -279,14 +297,14 @@
     width: 40px;
     height: 40px;
     border-radius: var(--border-radius-lg);
-    background: linear-gradient(135deg, #ffc500, #ff9500);
-    color: #241703;
+    background: var(--brand-mark-gradient, linear-gradient(135deg, #ffc500, #ff9500));
+    color: var(--brand-mark-fg, #241703);
     font-weight: 900;
     font-size: 19px;
     display: flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 14px rgba(255, 197, 0, 0.28);
+    box-shadow: var(--brand-mark-shadow, 0 4px 14px rgba(255, 197, 0, 0.28));
     animation: tb-logo-reveal 1.15s cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
@@ -353,7 +371,7 @@
     transform: translateY(-50%);
     width: 4px;
     height: 0;
-    border-radius: 0 4px 4px 0;
+    border-radius: var(--rail-indicator-radius, 0 4px 4px 0);
     background: var(--accent-primary);
     box-shadow: 0 0 10px color-mix(in srgb, var(--accent-primary) 55%, transparent);
     opacity: 0;
@@ -374,8 +392,9 @@
   }
 
   /* `.rail` prefix lifts specificity above the global themed button radius
-     (html[data-rounded-corners] :where(button)) so the circle holds.
-     One shape language: circle at rest → squircle on hover/active. */
+     (html[data-rounded-corners] :where(button)) so the shape holds.
+     Default: circle at rest → squircle on hover/active.
+     Sharp themes override via --rail-btn-radius* → hard squares. */
   .rail .rail-btn {
     position: relative;
     width: 48px;
@@ -386,7 +405,7 @@
     align-items: center;
     justify-content: center;
     border: none;
-    border-radius: 50%;
+    border-radius: var(--rail-btn-radius, 50%);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
     font-size: 14px;
@@ -402,7 +421,7 @@
 
   .rail .rail-btn:hover,
   .rail .rail-btn.active {
-    border-radius: var(--border-radius-lg);
+    border-radius: var(--rail-btn-radius-active, var(--border-radius-lg));
   }
 
   /* Ghost nav (Home / IDE / Settings / Profile): quiet until touched. */
@@ -429,7 +448,7 @@
   .rail .rail-btn:disabled:hover {
     background: transparent;
     color: var(--text-muted);
-    border-radius: 50%;
+    border-radius: var(--rail-btn-radius, 50%);
   }
 
   /* Add instance: quiet amber plus. */
@@ -443,11 +462,11 @@
     color: var(--accent-primary);
   }
 
-  /* Instance avatars: brand gradient (inline) or the real pack icon.
+  /* Instance avatars: theme-token gradient (inline) or the real pack icon.
      `position: relative` on `.rail-btn` makes the abspos icon/running-dot
      clip to the same circle → squircle mask as the letter fallback. */
   .rail .rail-btn.instance {
-    color: #fff;
+    color: var(--text-primary);
   }
 
   .rail .rail-btn.instance.has-icon {
@@ -457,7 +476,7 @@
   .rail .rail-btn.instance:hover,
   .rail .rail-btn.instance.active {
     background-color: transparent;
-    color: #fff;
+    color: var(--text-primary);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
 
@@ -476,8 +495,8 @@
     font-size: 18px;
     line-height: 1;
     text-transform: uppercase;
-    color: #ffedd0;
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+    color: color-mix(in srgb, var(--accent-primary) 18%, var(--text-primary));
+    text-shadow: 0 1px 2px color-mix(in srgb, var(--bg-primary) 55%, transparent);
     pointer-events: none;
   }
 
@@ -488,10 +507,10 @@
     bottom: -1px;
     width: 13px;
     height: 13px;
-    border-radius: 50%;
-    background: #22c55e;
+    border-radius: var(--rail-btn-radius, 50%);
+    background: var(--accent-primary);
     border: 3px solid var(--bg-primary);
-    box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 60%, transparent);
     pointer-events: none;
   }
 </style>

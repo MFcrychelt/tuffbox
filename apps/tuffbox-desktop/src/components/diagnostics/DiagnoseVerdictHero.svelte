@@ -252,8 +252,8 @@
     background: linear-gradient(135deg, rgba(245, 158, 11, 0.11), var(--bg-secondary) 65%);
   }
   .dx-verdict.ok {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: linear-gradient(135deg, rgba(27, 217, 106, 0.08), var(--bg-secondary) 65%);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 8%, transparent), var(--bg-secondary) 65%);
   }
   .dx-verdict-icon {
     display: grid;
@@ -265,7 +265,7 @@
     background: var(--bg-tertiary);
   }
   .dx-verdict.warn .dx-verdict-icon { color: var(--accent-warning); background: rgba(245, 158, 11, 0.13); }
-  .dx-verdict.ok .dx-verdict-icon { color: var(--accent-primary); background: rgba(27, 217, 106, 0.13); }
+  .dx-verdict.ok .dx-verdict-icon { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 13%, transparent); }
   .dx-verdict-body { min-width: 0; }
   .dx-verdict-body h1 { margin: 0; color: var(--text-primary); font-size: 20px; line-height: 1.3; }
   .dx-verdict-copy { margin: 6px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
@@ -273,8 +273,8 @@
     margin: 10px 0 0;
     padding: 10px 12px;
     border-radius: var(--border-radius-sm);
-    background: rgba(27, 217, 106, 0.08);
-    border: 1px solid rgba(27, 217, 106, 0.22);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
     color: var(--text-primary);
     font-size: 13px;
     line-height: 1.4;

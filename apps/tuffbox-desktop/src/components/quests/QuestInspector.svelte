@@ -25,6 +25,7 @@
     onRemove,
     onAddDep,
     onRemoveDep,
+    onOpenKubeJs,
   }: {
     quest: QuestData;
     chapterQuests: QuestData[];
@@ -42,6 +43,7 @@
     onRemove: () => void;
     onAddDep: (depId: string) => void;
     onRemoveDep: (depId: string) => void;
+    onOpenKubeJs?: (id: string) => void;
   } = $props();
 
   let depPick = $state("");
@@ -397,10 +399,10 @@
           <label
             >Description
             <div class="fmt-bar">
-              <button type="button" class="ghost" onclick={() => wrapFmt("&l")}>Bold</button>
-              <button type="button" class="ghost" onclick={() => wrapFmt("&a")}>Green</button>
-              <button type="button" class="ghost" onclick={() => wrapFmt("&7")}>Gray</button>
-              <button type="button" class="ghost" onclick={() => wrapFmt("&e")}>Gold</button>
+              <button type="button" onclick={() => wrapFmt("&l")}>Bold</button>
+              <button type="button" onclick={() => wrapFmt("&a")}>Green</button>
+              <button type="button" onclick={() => wrapFmt("&7")}>Gray</button>
+              <button type="button" onclick={() => wrapFmt("&e")}>Gold</button>
             </div>
             <textarea
               rows="4"
@@ -467,12 +469,12 @@
       <label
         >Description
         <div class="fmt-bar">
-          <button type="button" class="ghost" onclick={() => wrapFmt("&l")}>Bold</button>
-          <button type="button" class="ghost" onclick={() => wrapFmt("&a")}>Green</button>
-          <button type="button" class="ghost" onclick={() => wrapFmt("&7")}>Gray</button>
-          <button type="button" class="ghost" onclick={() => wrapFmt("&e")}>Gold</button>
-          <button type="button" class="ghost" onclick={() => insertTemplate("objective")}>Objective</button>
-          <button type="button" class="ghost" onclick={() => insertTemplate("story")}>Story</button>
+          <button type="button" onclick={() => wrapFmt("&l")}>Bold</button>
+          <button type="button" onclick={() => wrapFmt("&a")}>Green</button>
+          <button type="button" onclick={() => wrapFmt("&7")}>Gray</button>
+          <button type="button" onclick={() => wrapFmt("&e")}>Gold</button>
+          <button type="button" onclick={() => insertTemplate("objective")}>Objective</button>
+          <button type="button" onclick={() => insertTemplate("story")}>Story</button>
         </div>
         <textarea
           rows="4"
@@ -616,7 +618,7 @@
     </div>
   {/if}
 
-  <TaskRewardEditor {quest} {onDirty} {rewardTableIds} />
+  <TaskRewardEditor {quest} {onDirty} {rewardTableIds} {onOpenKubeJs} />
 
   <h4><Link2 size={12} /> Dependencies</h4>
   <p class="hint">Quest or task id (FTB allows both).</p>
@@ -677,18 +679,17 @@
     gap: 8px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+    background: var(--ftbq-bg-panel);
   }
   .insp-h h3 {
     margin: 0;
     font-size: 14px;
-    font-weight: 700;
-    color: var(--ftbq-title-gold, #f2c94c);
+    font-weight: 600;
+    color: var(--text-primary, var(--ftbq-text, #212529));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.65);
+    text-shadow: none;
   }
   .qid {
     display: flex;
@@ -770,7 +771,7 @@
   .insp :global(select) {
     background: var(--ftbq-input-bg) !important;
     border-color: var(--ftbq-frame);
-    color-scheme: dark;
+    color-scheme: inherit;
   }
 
   .fields input,
@@ -779,11 +780,21 @@
     font-size: 12px;
     background: var(--ftbq-input-bg) !important;
     border: 1px solid var(--ftbq-frame);
-    box-shadow: inset 1px 1px 3px rgba(0, 0, 0, 0.55);
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 3px;
+    border-radius: 6px;
     text-transform: none;
-    color-scheme: dark;
+    color-scheme: inherit;
+    outline: none;
+    transition:
+      border-color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+  .fields input:focus,
+  .fields textarea:focus,
+  .fields select:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .fields textarea {
     min-height: 100px;
@@ -857,12 +868,11 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.22));
+    background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
     border-top: 1px solid var(--ftbq-frame);
     border-bottom: 1px solid var(--ftbq-frame);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
-    font-weight: 700;
+    text-shadow: none;
+    font-weight: 600;
   }
   .deps {
     display: flex;
@@ -875,12 +885,10 @@
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
-    border-radius: 3px;
+    border-radius: 6px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
-    box-shadow:
-      inset 1px 1px 0 rgba(0, 0, 0, 0.5),
-      inset -1px -1px 0 rgba(92, 138, 158, 0.35);
+    box-shadow: none;
     font-size: 11px;
     color: var(--ftbq-text, #e8e8e8);
   }
@@ -906,8 +914,14 @@
     background: var(--ftbq-input-bg) !important;
     border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 3px;
-    color-scheme: dark;
+    border-radius: 6px;
+    box-shadow: none;
+    color-scheme: inherit;
+    outline: none;
+  }
+  .dep-filter:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .dep-add select {
     width: 100%;
@@ -915,8 +929,14 @@
     background: var(--ftbq-input-bg) !important;
     border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 3px;
-    color-scheme: dark;
+    border-radius: 6px;
+    box-shadow: none;
+    color-scheme: inherit;
+    outline: none;
+  }
+  .dep-add select:focus {
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .dep-add .add-btn {
     align-self: flex-end;
@@ -924,41 +944,50 @@
   .add-btn {
     font-size: 11px;
     padding: 4px 10px;
-    border-radius: 3px;
+    border-radius: 6px;
     border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
     cursor: pointer;
+    text-shadow: none;
   }
   .add-btn:hover:not(:disabled) {
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-    color: #c9f2ec;
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text, #e8e8e8);
   }
   .add-btn:disabled {
     opacity: 0.4;
   }
   .fmt-bar {
-    display: flex;
+    display: inline-flex;
     flex-wrap: wrap;
-    gap: 4px;
+    align-items: stretch;
+    gap: 0;
     margin-bottom: 6px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
   }
   .fmt-bar button {
     font-size: 10px;
-    padding: 2px 6px;
-    border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    padding: 4px 8px;
+    border: none;
+    border-right: 1px solid var(--ftbq-frame);
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
-    border-radius: 3px;
     font-weight: 600;
     cursor: pointer;
+    text-shadow: none;
+  }
+  .fmt-bar button:last-child {
+    border-right: none;
   }
   .fmt-bar button:hover {
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
     color: var(--ftbq-accent-green);
   }
   .fmt-hint {

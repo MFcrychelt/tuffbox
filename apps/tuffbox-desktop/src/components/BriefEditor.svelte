@@ -1221,14 +1221,14 @@
   }
 
   .cat-chip:hover {
-    border-color: rgba(27, 217, 106, 0.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--text-primary);
     transform: none !important;
   }
 
   .cat-chip.on {
-    border-color: rgba(27, 217, 106, 0.5);
-    background: rgba(27, 217, 106, 0.12);
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
 
@@ -1465,8 +1465,8 @@
 
   .inline-success {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
-    border-color: rgba(27, 217, 106, 0.25);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
   @media (max-width: 1100px) {

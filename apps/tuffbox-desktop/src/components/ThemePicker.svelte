@@ -36,15 +36,25 @@
 <div class="theme-grid">
   {#each THEMES as theme (theme.id)}
     {@const badge = badgeFor(theme.id)}
+    {@const minimal = MINIMAL_THEMES.has(theme.id)}
+    {@const sharp = SHARP_THEMES.has(theme.id)}
     <button
       type="button"
       class="theme-swatch"
       class:active={value === theme.id}
-      class:sharp={SHARP_THEMES.has(theme.id)}
-      class:minimal={MINIMAL_THEMES.has(theme.id)}
-      style={MINIMAL_THEMES.has(theme.id)
-        ? `background: linear-gradient(160deg, ${theme.shades[0]} 0%, ${theme.shades[1]} 42%, ${theme.shades[2]} 100%)`
-        : `background: ${theme.shades[0]}`}
+      class:sharp
+      class:minimal
+      style={minimal
+        ? `background:
+            radial-gradient(ellipse 70% 55% at 18% 12%, ${theme.shades[1]}55, transparent 58%),
+            radial-gradient(ellipse 60% 50% at 88% 18%, ${theme.shades[2]}40, transparent 55%),
+            linear-gradient(160deg, ${theme.shades[0]} 0%, color-mix(in srgb, ${theme.shades[0]} 70%, ${theme.shades[1]}) 55%, ${theme.shades[0]} 100%)`
+        : sharp
+          ? `background:
+              linear-gradient(90deg, ${theme.shades[1]} 0 22%, transparent 22%),
+              linear-gradient(180deg, ${theme.shades[0]} 0%, ${theme.shades[0]} 100%);
+            background-color: ${theme.shades[0]}`
+          : `background: ${theme.shades[0]}`}
       onclick={() => select(theme.id)}
       onmouseenter={() => previewTheme(theme.id)}
       onmouseleave={() => restoreCommittedTheme()}
@@ -52,18 +62,65 @@
       onblur={() => restoreCommittedTheme()}
     >
       <div class="mini-ui" aria-hidden="true">
-        <div class="bar" style="background: {theme.shades[1]}"></div>
+        <div
+          class="bar"
+          style={minimal
+            ? `background: linear-gradient(90deg, ${theme.shades[1]}33, ${theme.shades[0]}cc); backdrop-filter: blur(6px)`
+            : sharp
+              ? `background: ${theme.shades[2]}; opacity: 1`
+              : `background: ${theme.shades[1]}`}
+        ></div>
         <div class="body">
-          <div class="sidebar" style="background: {theme.shades[1]}"></div>
-          <div class="panel" style="background: {theme.shades[1]}">
-            <span class="dot" style="background: {theme.shades[2]}"></span>
-            <span class="line" style="background: {theme.shades[2]}; opacity: 0.45"></span>
-            <span class="line short" style="background: {theme.shades[2]}; opacity: 0.25"></span>
+          <div
+            class="sidebar"
+            style={minimal
+              ? `background: linear-gradient(180deg, ${theme.shades[1]}40, ${theme.shades[0]}99)`
+              : sharp
+                ? `background: ${theme.shades[1]}; box-shadow: inset -2px 0 0 ${theme.shades[2]}66`
+                : `background: ${theme.shades[1]}`}
+          ></div>
+          <div
+            class="panel"
+            style={minimal
+              ? `background: color-mix(in srgb, ${theme.shades[0]} 70%, transparent)`
+              : `background: ${theme.shades[1]}`}
+          >
+            <span
+              class="dot"
+              style={minimal
+                ? `background: linear-gradient(135deg, ${theme.shades[1]}, ${theme.shades[2]})`
+                : sharp
+                  ? `background: ${theme.shades[2]}; box-shadow: 2px 2px 0 #0006`
+                  : `background: ${theme.shades[2]}`}
+            ></span>
+            <span
+              class="line"
+              style={minimal
+                ? `background: linear-gradient(90deg, ${theme.shades[1]}, ${theme.shades[2]}); opacity: 0.7`
+                : sharp
+                  ? `background: ${theme.shades[2]}; opacity: 0.85`
+                  : `background: ${theme.shades[2]}; opacity: 0.45`}
+            ></span>
+            <span
+              class="line short"
+              style={minimal
+                ? `background: ${theme.shades[2]}; opacity: 0.35`
+                : sharp
+                  ? `background: ${theme.shades[2]}; opacity: 0.5`
+                  : `background: ${theme.shades[2]}; opacity: 0.25`}
+            ></span>
           </div>
         </div>
       </div>
       {#if value === theme.id}
-        <div class="check" style="background: {theme.shades[2]}">
+        <div
+          class="check"
+          style={minimal
+            ? `background: linear-gradient(135deg, ${theme.shades[1]}, ${theme.shades[2]})`
+            : sharp
+              ? `background: ${theme.shades[2]}; box-shadow: 3px 3px 0 #0008`
+              : `background: ${theme.shades[2]}`}
+        >
           <Check size={14} />
         </div>
       {/if}
@@ -102,14 +159,12 @@
 
   .theme-swatch.sharp {
     border-radius: 0;
+    box-shadow: 3px 3px 0 color-mix(in srgb, var(--text-primary) 18%, transparent);
   }
 
   .theme-swatch.minimal {
     border-radius: 18px;
-  }
-
-  .theme-swatch.minimal .mini-ui {
-    border-radius: var(--border-radius-md);
+    border-color: color-mix(in srgb, var(--accent-primary) 18%, var(--border-color));
   }
 
   .theme-swatch:hover {
@@ -123,6 +178,12 @@
       var(--shadow-md);
   }
 
+  .theme-swatch.sharp.active {
+    box-shadow:
+      0 0 0 2px var(--accent-primary),
+      4px 4px 0 color-mix(in srgb, var(--accent-primary) 40%, transparent);
+  }
+
   .mini-ui {
     height: 92px;
     border-radius: var(--border-radius-sm);
@@ -132,6 +193,13 @@
 
   .theme-swatch.sharp .mini-ui {
     border-radius: 0;
+    border-color: rgba(255, 255, 255, 0.16);
+  }
+
+  .theme-swatch.minimal .mini-ui {
+    border-radius: var(--border-radius-md);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
 
   .bar {
@@ -167,6 +235,10 @@
     border-radius: 0;
   }
 
+  .theme-swatch.minimal .dot {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  }
+
   .line {
     height: 6px;
     border-radius: 3px;
@@ -175,6 +247,10 @@
 
   .theme-swatch.sharp .line {
     border-radius: 0;
+  }
+
+  .theme-swatch.minimal .line {
+    border-radius: 999px;
   }
 
   .line.short {

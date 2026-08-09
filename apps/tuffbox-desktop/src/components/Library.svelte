@@ -28,6 +28,7 @@
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import LibraryInstancesPane from "./LibraryInstancesPane.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
+  import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
   let { currentView = $bindable() }: { currentView: "dashboard" | "ide" | "mods" | "graph" | "diagnostics" | "snapshots" | "configs" | "settings" | "project-settings" | "ore-gen" | "recipes" | "quests" | "library" | "chats" | "me" | "world" } = $props();
 
@@ -35,16 +36,48 @@
 
   let tab = $state<Tab>("yours");
   let swarmEnabled = $state(false);
+  let p2pEnabled = $state(false);
+  let kudosBalance = $state<{ totalKudos?: number; rac?: number } | null>(null);
+  let kudosLoading = $state(false);
   let importing = $state(false);
   let importMenuOpen = $state(false);
 
   async function loadSwarm() {
     try {
-      const s = await invoke<{ enabled?: boolean }>("get_swarm_settings");
+      const s = await invoke<{ enabled?: boolean; p2pEnabled?: boolean }>("get_swarm_settings");
       swarmEnabled = !!s?.enabled;
+      p2pEnabled = !!s?.p2pEnabled;
     } catch {
       swarmEnabled = false;
+      p2pEnabled = false;
     }
+    if (swarmEnabled) {
+      await loadKudos();
+    } else {
+      kudosBalance = null;
+    }
+  }
+
+  async function loadKudos() {
+    if (!swarmEnabled) {
+      kudosBalance = null;
+      return;
+    }
+    kudosLoading = true;
+    try {
+      kudosBalance = await invoke<{ totalKudos?: number; rac?: number }>("get_local_kudos_balance");
+    } catch {
+      kudosBalance = null;
+    } finally {
+      kudosLoading = false;
+    }
+  }
+
+  function focusCreationPeerGen() {
+    tab = "create";
+    queueMicrotask(() => {
+      document.querySelector(".create-trends .peer-gen")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function openNewPack() {
@@ -279,7 +312,7 @@
   }
 
   function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
+    const colors = ["var(--accent-primary)", "var(--accent-secondary)", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -691,8 +724,22 @@
   <div class="tab-scroll">
     <div class="create-pane">
       <header class="create-hero">
-        <h2>Start a pack</h2>
-        <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
+        <div class="create-hero-top">
+          <div>
+            <h2>Start a pack</h2>
+            <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
+          </div>
+          {#if swarmEnabled && (kudosLoading || kudosBalance)}
+            <KudosBalanceStrip
+              compact
+              title="Kudos"
+              total={Number(kudosBalance?.totalKudos ?? 0)}
+              rac={Number(kudosBalance?.rac ?? 0)}
+              loading={kudosLoading && !kudosBalance}
+              onclick={focusCreationPeerGen}
+            />
+          {/if}
+        </div>
       </header>
       <div class="create-actions">
         <button type="button" class="create-plus" onclick={openNewPack}>
@@ -716,7 +763,7 @@
         </button>
       </div>
       <div class="create-trends">
-        <CreationTrends {swarmEnabled} />
+        <CreationTrends {swarmEnabled} {p2pEnabled} />
       </div>
     </div>
   </div>
@@ -791,8 +838,8 @@
     gap: 6px;
     padding: 8px 14px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
     font-size: 13px;
     font-weight: 700;
@@ -830,7 +877,7 @@
     cursor: pointer;
   }
   .import-menu button:hover {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .title-row {
@@ -876,10 +923,10 @@
     transform: scale(0.96);
   }
   .tabs button.active {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.12), 0 6px 16px rgba(27, 217, 106, 0.08);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 12%, transparent), 0 6px 16px color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .pack-grid {
@@ -905,7 +952,7 @@
   }
   .pack-card:hover {
     background: var(--bg-tertiary);
-    border-color: rgba(27, 217, 106, 0.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .pack-cover {
@@ -986,6 +1033,13 @@
     flex-direction: column;
     gap: 20px;
   }
+  .create-hero-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
   .create-hero h2 {
     margin: 0 0 4px;
     font-size: 20px;
@@ -1010,9 +1064,9 @@
     min-height: 0;
     padding: 18px 16px;
     border-radius: var(--border-radius-xl);
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     background:
-      linear-gradient(135deg, rgba(27, 217, 106, 0.1), transparent 55%),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 55%),
       var(--bg-secondary);
     color: var(--text-secondary);
     cursor: pointer;
@@ -1034,7 +1088,7 @@
     border-color: rgba(59, 130, 246, 0.35);
   }
   .create-plus:hover {
-    border-color: rgba(27, 217, 106, 0.55);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     color: var(--text-primary);
     transform: translateY(-1px);
   }
@@ -1067,9 +1121,9 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     flex-shrink: 0;
   }
   .create-trends {
@@ -1081,7 +1135,7 @@
     }
   }
   .mini-spinner.dark {
-    border-color: rgba(27, 217, 106, 0.25);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
     border-top-color: var(--accent-primary);
   }
 
@@ -1174,7 +1228,7 @@
     cursor: pointer;
   }
   .provider-toggle button.active {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--text-primary);
   }
   .search {
@@ -1252,8 +1306,8 @@
     font-weight: 600;
   }
   .path-btn.save {
-    background: rgba(27, 217, 106, 0.12);
-    border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
   }
 
@@ -1284,8 +1338,8 @@
     flex-shrink: 0;
   }
   .provider-badge.modrinth {
-    background: rgba(27, 217, 106, 0.18);
-    color: #1bd96a;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
   }
   .provider-badge.curseforge {
     background: rgba(241, 100, 54, 0.18);

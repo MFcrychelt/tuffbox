@@ -329,7 +329,7 @@
       aiReadyHint = result;
       return true;
     } catch (e) {
-      error = `AI not ready: ${String(e)}. Open Settings → Integrations and configure Ollama / OpenAI-compatible.`;
+      error = `AI not ready: ${String(e)}. Open Settings → AI and configure Ollama / a cloud API.`;
       return false;
     }
   }
@@ -982,7 +982,7 @@
     box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.4), inset -1px -1px 0 rgba(255, 255, 255, 0.04);
   }
   .msg.user {
-    background: linear-gradient(180deg, rgba(27, 217, 106, 0.12), rgba(27, 217, 106, 0.05));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 12%, transparent), color-mix(in srgb, var(--accent-primary) 5%, transparent));
     border-color: #1f5a2c;
   }
   .msg p {
@@ -1151,7 +1151,7 @@
     cursor: pointer;
   }
   .review-plan:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
   .review-plan:disabled {
     opacity: 0.5;

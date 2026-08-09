@@ -12,6 +12,9 @@
     sessionOk = false,
     loading = false,
     analyzing = false,
+    cascadeStage = null,
+    cascadeLabel = null,
+    cascadeDetail = null,
     sourceLabel = "Game log",
     onScrollToWarnings,
   }: {
@@ -19,6 +22,9 @@
     sessionOk?: boolean;
     loading?: boolean;
     analyzing?: boolean;
+    cascadeStage?: string | null;
+    cascadeLabel?: string | null;
+    cascadeDetail?: string | null;
     sourceLabel?: string;
     onScrollToWarnings?: () => void;
   } = $props();
@@ -26,6 +32,27 @@
   const counts = $derived(countBySeverity(problems));
   const blocking = $derived(hasBlockingProblems(problems));
   const warnOnly = $derived(!blocking && counts.warning + counts.info > 0);
+
+  const cascadeHint = $derived.by(() => {
+    switch (cascadeStage) {
+      case "l1_searching":
+        return "Searching known fixes…";
+      case "l1_hit":
+        return "Known fix from network/KB";
+      case "l2_asking":
+        return "Asking a community volunteer…";
+      case "l2_hit":
+        return "Plan from community volunteer";
+      case "l3_asking":
+        return "Generating with AI…";
+      case "l3_hit":
+        return "AI-generated plan";
+      case "heuristic":
+        return "Local heuristic plan";
+      default:
+        return null;
+    }
+  });
 </script>
 
 <div
@@ -52,7 +79,7 @@
       <span>Reading logs and pack graph</span>
     {:else if analyzing}
       <strong>Analyzing…</strong>
-      <span>Rules and AI are scanning this source</span>
+      <span>{cascadeHint ?? "Rules and AI are scanning this source"}</span>
     {:else if sessionOk && !blocking}
       <strong>Healthy</strong>
       <span>
@@ -83,6 +110,11 @@
       <strong>No clear signal yet</strong>
       <span>Re-analyze or Test launch · {sourceLabel}</span>
     {/if}
+    {#if !analyzing && !loading && cascadeLabel}
+      <span class="cascade-chip" title={cascadeDetail ?? undefined}>
+        {cascadeLabel}{#if cascadeDetail}<span class="cascade-detail"> · {cascadeDetail}</span>{/if}
+      </span>
+    {/if}
   </div>
 </div>
 
@@ -103,8 +135,8 @@
   }
   .dx-status.ok,
   .dx-status.soft {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: linear-gradient(135deg, rgba(27, 217, 106, 0.08), var(--bg-secondary) 70%);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 8%, transparent), var(--bg-secondary) 70%);
   }
   .dx-status-icon {
     display: grid;
@@ -118,10 +150,24 @@
   }
   .dx-status.warn .dx-status-icon { color: var(--accent-warning); background: rgba(245, 158, 11, 0.14); }
   .dx-status.ok .dx-status-icon,
-  .dx-status.soft .dx-status-icon { color: var(--accent-primary); background: rgba(27, 217, 106, 0.14); }
+  .dx-status.soft .dx-status-icon { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
   .dx-status-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .dx-status-body strong { font-size: 13px; color: var(--text-primary); }
   .dx-status-body span { font-size: 12px; color: var(--text-muted); }
+  .cascade-chip {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px !important;
+    font-weight: 700;
+    color: var(--accent-primary) !important;
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+  .cascade-detail { font-weight: 500; opacity: 0.85; }
   .linkish {
     border: none;
     background: none;

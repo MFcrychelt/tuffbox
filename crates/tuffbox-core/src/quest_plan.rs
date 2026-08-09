@@ -72,8 +72,11 @@ JSON shape:
   }]
 }
 
-Allowed task types: item, checkmark, kill, dimension, biome, xp, advancement, stat, stage, fluid, location, observation, structure, custom.
-Allowed reward types: item, xp, xp_levels, command, random, choice, stage, toast, custom.
+Allowed task types: item, checkmark, kill, dimension, biome, xp, advancement, stat, gamestage (alias stage), fluid, location, observation, structure, forge_energy, techreborn_energy, custom.
+  For item tasks use properties.item + properties.count; completion flags: consume_items, only_from_crafting, task_screen_only.
+  For observation (look at block/entity) use properties.observation_type (block|block_tag|block_state|block_entity|block_entity_type|entity_type|entity_type_tag), properties.to_observe, properties.timer.
+Allowed reward types: item, xp, xp_levels, command, random, choice, loot, all_table, gamestage (alias stage), toast, advancement, currency, custom.
+  For item rewards use properties.item + properties.count (+ optional random_bonus, only_one).
 Chapter mode: "upsert" (default, merge by id) or "replace" (replace quests list for that chapter id).
 
 When the user writes Russian/casual names, map to vanilla ids, e.g.:
@@ -910,11 +913,41 @@ pub struct QuestPlanMergeResult {
 }
 
 const KNOWN_TASK_TYPES: &[&str] = &[
-    "item", "checkmark", "kill", "dimension", "biome", "xp", "advancement", "stat", "stage",
-    "fluid", "location", "observation", "structure", "custom",
+    "item",
+    "checkmark",
+    "kill",
+    "dimension",
+    "biome",
+    "xp",
+    "advancement",
+    "stat",
+    "gamestage",
+    "stage",
+    "fluid",
+    "location",
+    "observation",
+    "structure",
+    "forge_energy",
+    "techreborn_energy",
+    "energy",
+    "custom",
 ];
 const KNOWN_REWARD_TYPES: &[&str] = &[
-    "item", "xp", "xp_levels", "command", "random", "choice", "stage", "toast", "custom",
+    "item",
+    "xp",
+    "xp_levels",
+    "command",
+    "random",
+    "choice",
+    "loot",
+    "all_table",
+    "all_tables",
+    "gamestage",
+    "stage",
+    "toast",
+    "advancement",
+    "currency",
+    "custom",
 ];
 
 pub fn parse_quest_plan(json_str: &str) -> Result<QuestPlan, String> {

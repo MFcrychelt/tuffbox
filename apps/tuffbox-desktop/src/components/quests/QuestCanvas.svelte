@@ -601,9 +601,7 @@
     gap: 6px;
     padding: 5px 8px;
     border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.2)),
-      var(--ftbq-bg-panel);
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+    background: var(--ftbq-bg-panel);
     flex-shrink: 0;
   }
   .tb {
@@ -611,25 +609,24 @@
     align-items: center;
     gap: 4px;
     padding: 4px 10px;
-    border-radius: 3px;
+    border-radius: 6px;
     border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     color: var(--ftbq-text, #e8e8e8);
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+    text-shadow: none;
+    box-shadow: none;
   }
   .tb:hover {
     border-color: var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-    color: var(--ftbq-accent-green);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text, #e8e8e8);
   }
   .tb:active {
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+    background: var(--bg-active, var(--ftbq-btn-hover-bottom));
+    box-shadow: none;
   }
   .hint {
     margin-left: auto;
@@ -663,7 +660,7 @@
     color: var(--ftbq-text-muted, #9a9aa0);
     font-size: 12px;
     font-weight: 600;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+    text-shadow: none;
   }
   .empty-add {
     pointer-events: auto;

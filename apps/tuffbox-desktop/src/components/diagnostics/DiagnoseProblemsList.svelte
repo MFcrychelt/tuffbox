@@ -259,15 +259,15 @@
   .install-chip {
     padding: 5px 10px;
     border-radius: var(--border-radius-sm);
-    border: 1px solid rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.08);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     color: var(--accent-primary);
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
   }
   .install-chip:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.16);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
   }
   .install-chip:disabled {
     opacity: 0.55;

@@ -560,7 +560,7 @@
   .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
   .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .layout { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 16px; }
   .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .panel { padding: 18px; }
@@ -582,10 +582,10 @@
   .release-checklist h3, .artifact-list h3, .publish-targets h3, .publish-config h3 { margin: 0; color: var(--text-secondary); font-size: 14px; }
   .config-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .release-checklist label { display: flex; align-items: center; gap: 8px; padding: 9px 10px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--border-radius-md); text-transform: none; letter-spacing: 0; }
-  .release-checklist label.done { border-color: rgba(27, 217, 106, .28); }
+  .release-checklist label.done { border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent); }
   .release-checklist input { width: auto; }
   .ready { padding: 9px 10px; border-radius: var(--border-radius-md); color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .ready.ok { color: var(--accent-primary); border-color: rgba(27, 217, 106, .35); }
+  .ready.ok { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); }
   .publish-target { display: grid; gap: 8px; padding: 10px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
   .publish-target > div:first-child { display: grid; gap: 3px; }
   .target-actions, .export-btns { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -606,7 +606,7 @@
   .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
   .issue.error { border-color: rgba(239, 68, 68, 0.3); }
   .issue.ok { color: var(--accent-primary); display: flex; align-items: center; gap: 8px; }
-  .github-preview { margin-top: 14px; padding: 14px; border: 1px solid rgba(139,92,246,.25); border-radius: var(--border-radius-lg); background: rgba(139,92,246,.03); }
+  .github-preview { margin-top: 14px; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent-secondary) 25%, transparent); border-radius: var(--border-radius-lg); background: color-mix(in srgb, var(--accent-secondary) 3%, transparent); }
   .github-preview h4 { color: var(--accent-secondary); margin: 0 0 8px; font-size: 14px; }
   .github-actions { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
   .gh-meta { color: var(--text-muted); font-size: 11px; }

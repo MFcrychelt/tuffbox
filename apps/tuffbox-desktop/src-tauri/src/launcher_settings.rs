@@ -71,6 +71,9 @@ pub struct LauncherSettings {
     /// Hide InstanceHome preview block on the home dashboard.
     #[serde(default)]
     pub hide_instance_home: bool,
+    /// Inject the in-game overlay bridge (YouTube player + friends/chat) on launch.
+    #[serde(default = "default_ingame_overlay")]
+    pub ingame_overlay: bool,
 }
 
 fn default_theme() -> String {
@@ -92,6 +95,9 @@ fn default_ui_scale_percent() -> u32 {
     100
 }
 fn default_rounded_corners() -> bool {
+    true
+}
+fn default_ingame_overlay() -> bool {
     true
 }
 
@@ -133,6 +139,7 @@ impl Default for LauncherSettings {
             ui_scale_mode: "auto".into(),
             rounded_corners: default_rounded_corners(),
             hide_instance_home: false,
+            ingame_overlay: default_ingame_overlay(),
         }
     }
 }
@@ -184,6 +191,11 @@ pub fn default_runtime_path() -> PathBuf {
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("TuffBox")
+}
+
+/// Whether the in-game overlay bridge should be injected on launch.
+pub fn overlay_enabled() -> bool {
+    load_launcher_settings().ingame_overlay
 }
 
 pub fn resolve_runtime_path() -> PathBuf {

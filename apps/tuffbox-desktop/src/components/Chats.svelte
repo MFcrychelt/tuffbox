@@ -2005,9 +2005,9 @@
     border-radius: 2px;
   }
   .kind-badge.create {
-    color: var(--accent-primary, #1bd96a);
-    background: rgba(27, 217, 106, 0.12);
-    border: 1px solid rgba(27, 217, 106, 0.25);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
   .kind-badge.quest {
     color: var(--ftbq-title-gold, #f2c94c);
@@ -2252,8 +2252,8 @@
     cursor: not-allowed;
   }
   .btn.primary {
-    background: #1bd96a;
-    border-color: #1bd96a;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
     color: #0b1a10;
     font-weight: 600;
   }
@@ -2388,7 +2388,7 @@
     border: 1px solid var(--border-color, #2a2f3a);
   }
   .chip.locked {
-    color: #34d399;
+    color: var(--accent-primary);
     border-color: rgba(52, 211, 153, 0.35);
   }
   .chip button {
@@ -2493,7 +2493,7 @@
   .lock-icon {
     display: inline-flex;
     align-items: center;
-    color: #34d399;
+    color: var(--accent-primary);
     flex-shrink: 0;
   }
   .mod-meta {
@@ -2696,7 +2696,7 @@
     padding: 1px 6px;
     border-radius: 999px;
   }
-  .preview-meta .pill.ok { background: color-mix(in srgb, var(--accent-primary, #1bd96a) 22%, transparent); color: var(--accent-primary, #1bd96a); }
+  .preview-meta .pill.ok { background: color-mix(in srgb, var(--accent-primary) 22%, transparent); color: var(--accent-primary); }
   .preview-meta .pill.skip { background: rgba(154, 163, 181, 0.2); color: var(--text-muted, #9aa3b5); }
   .preview-meta .pill.fail { background: rgba(229, 72, 77, 0.2); color: #ff8b8b; }
   .preview-meta .hash { font-size: 10px; color: var(--text-muted, #9aa3b5); }

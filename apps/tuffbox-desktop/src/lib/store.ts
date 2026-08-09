@@ -193,6 +193,8 @@ export interface LauncherSettings {
   defaultMemoryMb: number;
   /** Litube-style in-app player (default on). false = thumbnail preview → system browser. */
   youtubeInlinePlayer: boolean;
+  /** Inject the in-game overlay bridge (YouTube player + friends/chat) on launch. */
+  ingameOverlay: boolean;
   /** Hide IDE bottom workflow rail until cursor hits the window bottom edge. */
   autoHideWorkflowRail: boolean;
   /** Left nav: full labels | icons (button toggle) | autoHide (left-edge hover). */
@@ -603,11 +605,23 @@ export const questChatFocusId = writable<string | null>(null);
 /** Focus a History event id after navigating to History stage. Cleared by ChangeHistory. */
 export const historyFocusEventId = writable<string | null>(null);
 
+/** Focus History episode by crash fingerprint (cleared by ChangeHistory). */
+export const historyFocusFingerprintKey = writable<string | null>(null);
+
 /** Focus History entries linked to this snapshot id (cleared by ChangeHistory). */
 export const historyFocusSnapshotId = writable<string | null>(null);
 
 /** Optional paths to highlight when opening Diagnose from History. */
 export const diagnoseFocusPaths = writable<string[] | null>(null);
+
+/** Rich History → Diagnose handoff (paths + crash fingerprint / log). Cleared by Diagnostics. */
+export type DiagnoseFocus = {
+  paths?: string[] | null;
+  fingerprintKey?: string | null;
+  logPath?: string | null;
+  episodeId?: string | null;
+};
+export const diagnoseFocus = writable<DiagnoseFocus | null>(null);
 
 /** True while Tune/ConfigEditor has unsaved edits — IdeWorkspace confirms leave. */
 export const tuneDirty = writable(false);

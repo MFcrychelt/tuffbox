@@ -5,10 +5,21 @@
   import { Sparkles, RefreshCw, Download, AlertTriangle } from "@lucide/svelte";
   import { projectPath } from "../lib/store";
   import { toasts } from "../lib/toast";
+  import { getAuthSnapshot } from "../lib/supabaseAuth";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import { trapFocus } from "../lib/focusTrap";
+  import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
-  let { swarmEnabled = false }: { swarmEnabled?: boolean } = $props();
+  let { swarmEnabled = false, p2pEnabled = false }: { swarmEnabled?: boolean; p2pEnabled?: boolean } =
+    $props();
+
+  const creationReady = $derived(swarmEnabled && p2pEnabled);
+
+  type KudosBalance = {
+    beneficiaryKey?: string;
+    totalKudos?: number;
+    rac?: number;
+  };
 
   type Pair = { modA: string; modB: string; count: number };
   type Group = { mods: string[]; score: number };
@@ -81,7 +92,345 @@
   } | null>(null);
   let catalogInstalling = $state(false);
 
+  const CREATION_KINDS_FALLBACK = [
+    "kubejs_ore_gen",
+    "quest_scripts",
+    "recipe_balance",
+    "mod_configs",
+    "full_pack_scaffold",
+  ] as const;
+
+  let creationKinds = $state<string[]>([...CREATION_KINDS_FALLBACK]);
+  let creationKind = $state<string>("kubejs_ore_gen");
+  let creationBrief = $state("");
+  let creationMc = $state("");
+  let creationLoader = $state("");
+  let creationModIds = $state<string[]>([]);
+  let creationBusy = $state(false);
+  let creationError = $state("");
+  let creationOutcome = $state<{
+    result: {
+      ok: boolean;
+      jobId?: string;
+      artifacts: { path: string; content: string }[];
+      error?: string | null;
+      claimedConfidence?: number;
+      workerSignerPublicKey?: string | null;
+    };
+    verification: {
+      passed: boolean;
+      checks: { name: string; ok: boolean; detail: string }[];
+      rewardGranted?: boolean;
+    };
+  } | null>(null);
+  let creationAccepted = $state(false);
+  let creationApplied = $state(false);
+  let creationAppliedCount = $state(0);
+  let creationJobId = $state("");
+  let accessToken = $state("");
+  let authUserEmail = $state("");
+  let kudosBalance = $state<KudosBalance | null>(null);
+  let kudosLoading = $state(false);
+
   const packThemeCategories = $derived(packCategories.filter((c) => c.kind === "modpack"));
+
+  const canAccept = $derived(
+    !!creationOutcome?.verification.passed &&
+      !!creationOutcome?.result.workerSignerPublicKey?.trim() &&
+      !!accessToken &&
+      !creationAccepted &&
+      !creationBusy,
+  );
+
+  const acceptDisabledReason = $derived.by(() => {
+    if (creationAccepted || creationOutcome?.verification.rewardGranted) {
+      return "Already accepted — reward granted";
+    }
+    if (creationBusy) return "Busy…";
+    if (!creationOutcome?.verification.passed) return "Verification must pass first";
+    if (!creationOutcome?.result.workerSignerPublicKey?.trim()) {
+      return "Worker did not report a device signer key";
+    }
+    if (!accessToken) return "Sign in on Crash Votes to Accept and award Kudos";
+    return "";
+  });
+
+  const claimedConfidenceLabel = $derived.by(() => {
+    const c = creationOutcome?.result.claimedConfidence;
+    if (c == null || Number.isNaN(c)) return null;
+    const frac = c <= 1 ? c : c / 100;
+    const pct = Math.round(frac * 100);
+    const scaffold = frac < 0.45 ? " (likely scaffold)" : "";
+    return `${pct}% (${frac.toFixed(2)})${scaffold}`;
+  });
+
+  async function refreshAuth() {
+    try {
+      const snap = await getAuthSnapshot();
+      accessToken = snap.session?.access_token ?? "";
+      authUserEmail = snap.user?.email?.trim() ?? "";
+    } catch {
+      accessToken = "";
+      authUserEmail = "";
+    }
+  }
+
+  async function loadKudos() {
+    if (!swarmEnabled) {
+      kudosBalance = null;
+      return;
+    }
+    kudosLoading = true;
+    try {
+      kudosBalance = await invoke<KudosBalance>("get_local_kudos_balance");
+    } catch {
+      kudosBalance = null;
+    } finally {
+      kudosLoading = false;
+    }
+  }
+
+  function humanizeCreationError(raw: string): string {
+    const s = String(raw ?? "").trim();
+    const lower = s.toLowerCase();
+    if (lower.includes("p2p not enabled")) {
+      return "Enable Prefer local P2P in Settings.";
+    }
+    if (lower.includes("no creation worker available") || lower.includes("no creation worker")) {
+      return "No Creation worker peer online. Enable Creation worker on another node or wait.";
+    }
+    if (lower.includes("timed out") || lower.includes("timeout")) {
+      return "Worker timed out. Try again or shorten the brief.";
+    }
+    if (lower.includes("brief too short")) {
+      return "Brief must be at least 8 characters.";
+    }
+    if (
+      lower.includes("ollama") ||
+      lower.includes("connection refused") ||
+      lower.includes("ai unavailable") ||
+      lower.includes("model missing") ||
+      lower.includes("used scaffold")
+    ) {
+      return s.replace(/^error:\s*/i, "").trim() || s;
+    }
+    return s.replace(/^error:\s*/i, "").trim() || s;
+  }
+
+  const softAiFallback = $derived.by(() => {
+    const err = creationOutcome?.result.error?.trim() ?? "";
+    if (!err) return false;
+    const lower = err.toLowerCase();
+    return (
+      lower.includes("used scaffold") ||
+      lower.includes("ai unavailable") ||
+      lower.includes("ai output failed")
+    );
+  });
+
+  async function loadCreationDefaults() {
+    const path = $projectPath;
+    if (!path) {
+      creationMc = "";
+      creationLoader = "";
+      creationModIds = [];
+      return;
+    }
+    try {
+      const d = await invoke<{
+        mcVersion?: string;
+        loader?: string;
+        modIds?: string[];
+        kinds?: string[];
+      }>("creation_job_defaults", { path });
+      creationMc = d.mcVersion ?? "";
+      creationLoader = d.loader ?? "";
+      creationModIds = d.modIds ?? [];
+      if (d.kinds?.length) {
+        creationKinds = d.kinds;
+        if (!creationKinds.includes(creationKind)) creationKind = creationKinds[0]!;
+      }
+    } catch {
+      /* optional when no project */
+    }
+  }
+
+  async function submitCreation() {
+    creationError = "";
+    creationOutcome = null;
+    creationAccepted = false;
+    creationApplied = false;
+    creationAppliedCount = 0;
+    creationJobId = "";
+    const brief = creationBrief.trim();
+    if (!brief) {
+      creationError = "Brief is required.";
+      return;
+    }
+    if (brief.length < 8) {
+      creationError = "Brief must be at least 8 characters.";
+      return;
+    }
+    if (!swarmEnabled) {
+      creationError = "Enable TuffSwarm in Settings.";
+      return;
+    }
+    if (!p2pEnabled) {
+      creationError = "Enable Prefer local P2P in Settings.";
+      return;
+    }
+    creationBusy = true;
+    try {
+      await loadCreationDefaults();
+      const jobId =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `creation-${Date.now()}`;
+      creationJobId = jobId;
+      const outcome = await invoke<{
+        result: {
+          ok: boolean;
+          jobId?: string;
+          artifacts: { path: string; content: string }[];
+          error?: string | null;
+          claimedConfidence?: number;
+          workerSignerPublicKey?: string | null;
+        };
+        verification: {
+          passed: boolean;
+          checks: { name: string; ok: boolean; detail: string }[];
+          rewardGranted?: boolean;
+        };
+      }>("submit_creation_job", {
+        job: {
+          schemaVersion: 1,
+          jobId,
+          kind: creationKind,
+          constraints: {
+            mcVersion: creationMc.trim(),
+            loader: creationLoader.trim(),
+            modIds: creationModIds,
+          },
+          brief,
+          reward: { kind: "kudos", amount: 50 },
+          verify: { syntax: true, testLaunch: false },
+          deadlineMs: 120_000,
+        },
+      });
+      creationOutcome = outcome;
+      await refreshAuth();
+      if (outcome.verification.passed) {
+        toasts.success("CreationJob verified — review artifacts before apply.");
+      } else {
+        toasts.error("CreationJob returned but verification failed.");
+      }
+    } catch (e) {
+      creationError = humanizeCreationError(String(e));
+      toasts.error(creationError);
+    } finally {
+      creationBusy = false;
+    }
+  }
+
+  async function applyCreation() {
+    if (!creationOutcome?.result.artifacts.length) return;
+    if (!$projectPath) {
+      toasts.error("Open a project first.");
+      return;
+    }
+    if (!creationOutcome.verification.passed) {
+      toasts.error("Cannot apply: verification failed.");
+      return;
+    }
+    const n = creationOutcome.result.artifacts.length;
+    if (!confirm(`Write ${n} artifact(s) into the open project?`)) return;
+    creationBusy = true;
+    try {
+      const res = await invoke<{ written: string[] }>("apply_creation_artifacts", {
+        path: $projectPath,
+        artifacts: creationOutcome.result.artifacts,
+      });
+      creationApplied = true;
+      creationAppliedCount = res.written.length;
+      toasts.success(`Applied ${res.written.length} file(s).`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      creationBusy = false;
+    }
+  }
+
+  async function acceptCreation() {
+    if (!creationOutcome?.verification.passed) {
+      toasts.error("Cannot accept: verification failed.");
+      return;
+    }
+    const workerPk = creationOutcome.result.workerSignerPublicKey?.trim() ?? "";
+    if (!workerPk) {
+      toasts.error("Worker did not report a device signer key.");
+      return;
+    }
+    const jobId =
+      creationOutcome.result.jobId?.trim() || creationJobId.trim();
+    if (!jobId) {
+      toasts.error("Missing jobId.");
+      return;
+    }
+    await refreshAuth();
+    if (!accessToken) {
+      toasts.error("Sign in (Crash Votes) to accept and award Kudos.");
+      return;
+    }
+    if (
+      !confirm(
+        "Accept this result and award Kudos to the worker? This cannot be undone for this job.",
+      )
+    ) {
+      return;
+    }
+    creationBusy = true;
+    try {
+      const body = await invoke<{
+        ok?: boolean;
+        kudos?: { awarded?: boolean; amount?: number; totalKudos?: number; rac?: number };
+      }>("accept_creation_result", {
+        jobId,
+        workerSignerPublicKey: workerPk,
+        accessToken,
+        amount: 50,
+      });
+      creationAccepted = true;
+      if (creationOutcome) {
+        creationOutcome = {
+          ...creationOutcome,
+          verification: { ...creationOutcome.verification, rewardGranted: true },
+        };
+      }
+      const k = body.kudos;
+      if (k?.awarded) {
+        toasts.success(
+          `Accepted — awarded ${k.amount ?? 50} Kudos (total ${k.totalKudos ?? "—"} · RAC ${k.rac != null ? Number(k.rac).toFixed(1) : "—"}).`,
+        );
+        if (k.totalKudos != null || k.rac != null) {
+          kudosBalance = {
+            totalKudos: k.totalKudos ?? kudosBalance?.totalKudos,
+            rac: k.rac ?? kudosBalance?.rac,
+          };
+        }
+      } else {
+        toasts.success("Accepted (Kudos already awarded for this job).");
+      }
+      await loadKudos();
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      creationBusy = false;
+    }
+  }
+  function truncateArt(s: string, max = 280): string {
+    const t = s.replace(/\r\n/g, "\n");
+    return t.length <= max ? t : `${t.slice(0, max)}…`;
+  }
 
   function formatCount(n?: number | null): string {
     if (n == null) return "—";
@@ -193,6 +542,14 @@
   onMount(() => {
     void loadCategories();
     void refresh();
+    void refreshAuth();
+    if (swarmEnabled) {
+      void loadCreationDefaults();
+      void loadKudos();
+    }
+    return projectPath.subscribe(() => {
+      if (swarmEnabled) void loadCreationDefaults();
+    });
   });
 
   onDestroy(() => {
@@ -399,6 +756,151 @@
 
   {#if error}<div class="err">{error}</div>{/if}
 
+  {#if swarmEnabled}
+    <section class="peer-gen">
+      <h3>Request peer generation</h3>
+      {#if kudosLoading || kudosBalance}
+        <div class="kudos-wrap">
+          <KudosBalanceStrip
+            title="Your Kudos"
+            total={Number(kudosBalance?.totalKudos ?? 0)}
+            rac={Number(kudosBalance?.rac ?? 0)}
+            loading={kudosLoading && !kudosBalance}
+            hint="Same device wallet — worker Accept awards here too"
+          />
+        </div>
+      {/if}
+      {#if !p2pEnabled}
+        <p class="muted p2p-cta">
+          Enable Prefer local P2P in Settings to request peer generation.
+        </p>
+      {:else if creationReady}
+        <p class="muted">
+          Submit a CreationJob to a TuffSwarm creation worker. Review artifacts, then apply to the open
+          project (never auto-applied).
+        </p>
+        <div class="peer-form">
+          <label>
+            Kind
+            <select bind:value={creationKind} disabled={creationBusy}>
+              {#each creationKinds as k (k)}
+                <option value={k}>{k}</option>
+              {/each}
+            </select>
+          </label>
+          <label>
+            Minecraft
+            <input bind:value={creationMc} placeholder="1.20.1" disabled={creationBusy} />
+          </label>
+          <label>
+            Loader
+            <input bind:value={creationLoader} placeholder="fabric" disabled={creationBusy} />
+          </label>
+          <label class="span-2">
+            Brief
+            <textarea
+              bind:value={creationBrief}
+              rows="3"
+              placeholder="Describe what to generate…"
+              disabled={creationBusy}
+            ></textarea>
+          </label>
+          {#if creationModIds.length > 0}
+            <p class="muted span-2">Constraints: {creationModIds.length} mod id(s) from inventory</p>
+          {/if}
+          <div class="row span-2">
+            <button
+              type="button"
+              class="primary"
+              disabled={creationBusy || !creationBrief.trim() || creationBrief.trim().length < 8}
+              onclick={submitCreation}
+            >
+              {creationBusy ? "Waiting for worker…" : "Submit CreationJob"}
+            </button>
+          </div>
+        </div>
+        {#if creationError}<div class="err">{creationError}</div>{/if}
+        {#if creationOutcome}
+          <div class="peer-result" class:pass={creationOutcome.verification.passed}>
+            <strong>
+              Verification {creationOutcome.verification.passed ? "passed" : "failed"}
+            </strong>
+            <p class="muted order-hint">
+              Suggested: Apply → try in pack → Accept result (awards Kudos).
+            </p>
+            {#if claimedConfidenceLabel}
+              <p class="muted">Claimed confidence: {claimedConfidenceLabel}</p>
+            {/if}
+            {#if creationOutcome.result.error}
+              <p class={softAiFallback ? "muted warn-line" : "err"}>
+                {#if softAiFallback}<strong>Scaffold fallback:</strong> {/if}
+                {creationOutcome.result.error}
+              </p>
+            {/if}
+            {#if creationOutcome.verification.checks?.length}
+              <ul class="check-list">
+                {#each creationOutcome.verification.checks as check, i (check.name + String(i))}
+                  <li class:ok={check.ok} class:fail={!check.ok}>
+                    <span class="check-status">{check.ok ? "ok" : "fail"}</span>
+                    <span>{check.name}{check.detail ? ` — ${check.detail}` : ""}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+            <ul class="art-list">
+              {#each creationOutcome.result.artifacts as art, i (art.path + String(i))}
+                <li>
+                  <code>{art.path}</code>
+                  <pre>{truncateArt(art.content)}</pre>
+                </li>
+              {/each}
+            </ul>
+            {#if creationOutcome.result.artifacts.length === 0}
+              <p class="muted">No artifacts returned.</p>
+            {/if}
+            {#if creationApplied}
+              <p class="muted">Applied {creationAppliedCount} file(s).</p>
+            {/if}
+            <p class="muted auth-line">
+              {#if accessToken}
+                Signed in{authUserEmail ? ` as ${authUserEmail}` : ""}.
+              {:else}
+                Sign in on Crash Votes to Accept and award Kudos.
+              {/if}
+            </p>
+            {#if creationAccepted || creationOutcome.verification.rewardGranted}
+              <p class="muted reward-granted">Reward granted</p>
+            {/if}
+            <div class="row">
+              <button
+                type="button"
+                class="primary"
+                disabled={
+                  creationBusy ||
+                  !creationOutcome.verification.passed ||
+                  creationOutcome.result.artifacts.length === 0
+                }
+                onclick={applyCreation}
+              >
+                Apply to project
+              </button>
+              <button
+                type="button"
+                disabled={!canAccept}
+                onclick={acceptCreation}
+                title={acceptDisabledReason || "Award Kudos to the worker"}
+              >
+                {creationAccepted || creationOutcome.verification.rewardGranted
+                  ? "Accepted"
+                  : "Accept result"}
+              </button>
+            </div>
+          </div>
+        {/if}
+      {/if}
+    </section>
+  {/if}
+
   <section>
     <h3>{packQuery.trim() ? "Search results" : "Popular modpacks · Modpack Index"}</h3>
     {#if packThemeCategories.length > 0}
@@ -604,6 +1106,74 @@
   .creation-head button {
     margin-left: auto;
   }
+  .peer-gen {
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .kudos-wrap {
+    margin: 8px 0 10px;
+  }
+  .peer-gen h3 {
+    margin: 0 0 4px;
+    font-size: 14px;
+  }
+  .peer-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .peer-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .peer-form .span-2 {
+    grid-column: 1 / -1;
+  }
+  .peer-form input,
+  .peer-form select,
+  .peer-form textarea {
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    padding: 6px 8px;
+  }
+  .peer-result {
+    margin-top: 12px;
+    padding: 10px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+  }
+  .peer-result.pass {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  }
+  .art-list {
+    margin-top: 8px;
+  }
+  .art-list li {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+  }
+  .art-list pre {
+    margin: 0;
+    padding: 8px;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius-sm);
+    max-height: 140px;
+    overflow: auto;
+  }
   .tag-row {
     display: flex;
     flex-wrap: wrap;
@@ -621,12 +1191,12 @@
   }
   .tag-chip:hover {
     color: var(--text-secondary);
-    border-color: rgba(27, 217, 106, 0.35);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .tag-chip.active {
     color: var(--text-primary);
-    border-color: rgba(27, 217, 106, 0.5);
-    background: rgba(27, 217, 106, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
   .pack-search {
     margin: 0 0 10px;
@@ -673,6 +1243,11 @@
     margin-bottom: 10px;
     font-size: 13px;
   }
+  .warn-line {
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: color-mix(in srgb, var(--accent-warning, #f59e0b) 80%, #fde68a);
+  }
   section {
     margin-top: 16px;
   }
@@ -712,8 +1287,8 @@
     grid-template-columns: 36px 1fr;
   }
   .hit-card:hover {
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.06);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
   .hit-card img,
   .hit-fallback {
@@ -778,6 +1353,41 @@
     color: var(--text-muted);
     font-size: 12px;
   }
+  .p2p-cta {
+    margin: 8px 0 0;
+    padding: 10px;
+    background: var(--bg-elevated);
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+  }
+  .order-hint {
+    margin: 6px 0 0;
+  }
+  .check-list {
+    margin: 8px 0;
+  }
+  .check-list li {
+    font-size: 12px;
+  }
+  .check-list li.ok .check-status {
+    color: color-mix(in srgb, var(--accent-primary) 80%, #86efac);
+  }
+  .check-list li.fail .check-status {
+    color: #fecaca;
+  }
+  .check-status {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+  }
+  .auth-line,
+  .reward-granted {
+    margin: 8px 0;
+  }
+  .reward-granted {
+    color: color-mix(in srgb, var(--accent-primary) 70%, #86efac);
+  }
   .suggest-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -797,6 +1407,23 @@
   .row {
     display: flex;
     gap: 6px;
+  }
+  button.primary {
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  button.primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  }
+  button.primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .mini {
     font-size: 12px;

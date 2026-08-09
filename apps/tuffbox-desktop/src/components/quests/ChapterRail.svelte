@@ -270,17 +270,16 @@
     justify-content: space-between;
     padding: 7px 8px;
     border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.22));
-    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+    background: var(--ftbq-bg-panel);
   }
   .rail-h h3 {
     margin: 0;
-    color: var(--ftbq-title-gold, #f2c94c);
+    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    font-weight: 700;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.7);
+    font-weight: 600;
+    text-shadow: none;
   }
   .ico {
     width: 24px;
@@ -288,23 +287,22 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 3px;
+    border-radius: 6px;
     border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    box-shadow: none;
     color: var(--ftbq-text-muted, #9a9aa0);
     cursor: pointer;
   }
   .ico:hover {
     color: var(--ftbq-text, #e8e8e8);
     border-color: var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-    filter: brightness(1.08);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    filter: none;
   }
   .ico:active {
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+    background: var(--bg-active, var(--ftbq-btn-hover-bottom));
+    box-shadow: none;
   }
   .rail-list {
     flex: 1;
@@ -341,13 +339,9 @@
     border-left: 3px solid transparent;
   }
   .ch-row-wrap.sel {
-    background: linear-gradient(
-      90deg,
-      color-mix(in srgb, var(--ftbq-accent-green) 16%, transparent),
-      color-mix(in srgb, var(--ftbq-accent-green) 5%, transparent)
-    );
+    background: color-mix(in srgb, var(--ftbq-accent-green) 10%, transparent);
     border-left-color: var(--ftbq-accent-green);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), inset 0 -1px 0 rgba(0, 0, 0, 0.3);
+    box-shadow: none;
   }
   .ch-row-wrap.dirty:not(.sel) {
     border-left-color: color-mix(in srgb, var(--ftbq-quest-started) 40%, transparent);
@@ -370,7 +364,7 @@
     box-shadow: none;
   }
   .ch-row:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-hover, color-mix(in srgb, var(--ftbq-text) 6%, transparent));
   }
   .ch-row-wrap.sel .ch-row {
     color: var(--ftbq-text, #e8e8e8);
@@ -424,7 +418,7 @@
     width: 26px;
     height: 26px;
     flex-shrink: 0;
-    border-radius: 3px;
+    border-radius: 6px;
     background: var(--ftbq-input-bg);
     border: 1px solid var(--ftbq-frame);
     display: flex;
@@ -433,15 +427,10 @@
     font-size: 11px;
     font-weight: 800;
     color: var(--ftbq-text, #e8e8e8);
-    box-shadow:
-      inset 2px 2px 0 rgba(0, 0, 0, 0.55),
-      inset -1px -1px 0 rgba(255, 255, 255, 0.08);
+    box-shadow: none;
   }
   .ch-row-wrap.sel .glyph {
-    box-shadow:
-      inset 2px 2px 0 rgba(0, 0, 0, 0.55),
-      inset -1px -1px 0 rgba(255, 255, 255, 0.08),
-      0 0 6px color-mix(in srgb, var(--ftbq-accent-green) 45%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ftbq-accent-green) 35%, transparent);
   }
   .ch-text {
     display: grid;
@@ -481,24 +470,19 @@
     justify-content: center;
     gap: 6px;
     padding: 7px;
-    border-radius: 3px;
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, #000);
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent-primary) 88%, #fff 12%),
-      color-mix(in srgb, var(--accent-primary) 72%, #000 28%)
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.25),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: var(--ftbq-text);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    background: var(--accent-primary);
+    box-shadow: none;
+    color: #fff;
+    text-shadow: none;
     font-size: 11px;
     font-weight: 700;
     cursor: pointer;
   }
   .save-ch:hover:not(:disabled) {
-    filter: brightness(1.12);
+    filter: none;
+    background: var(--accent-hover, var(--accent-primary));
   }
   .save-ch:disabled {
     opacity: 0.5;

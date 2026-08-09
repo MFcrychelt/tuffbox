@@ -19,6 +19,7 @@
     aiFeedbackBusy = false,
     aiFeedbackMsg = null,
     applyingHintId = null,
+    cascadeLabel = null,
     onApplyFindingFix,
     onRetryAi,
     onApplyAiPlan,
@@ -33,6 +34,7 @@
     aiFeedbackBusy?: boolean;
     aiFeedbackMsg?: string | null;
     applyingHintId?: string | null;
+    cascadeLabel?: string | null;
     onApplyFindingFix?: (payload: { finding: any; action: FixAction }) => void;
     onRetryAi?: () => void;
     onApplyAiPlan?: () => void;
@@ -40,6 +42,7 @@
   } = $props();
 
   let detailTab: "rules" | "ai" = $state("rules");
+  const sourceBadge = $derived(cascadeLabel || aiAnalysis?.source || null);
 
   function severityChip(sev: string): string {
     if (sev === "critical") return "Fix this first";
@@ -113,7 +116,7 @@
       onclick={() => (detailTab = "ai")}
     >
       <MessageCircle size={14} /> AI
-      {#if aiAnalysis?.source}<span class="ai-source-badge">{aiAnalysis.source}</span>{/if}
+      {#if sourceBadge}<span class="ai-source-badge">{sourceBadge}</span>{/if}
       {#if aiLoading}<span class="analyzing-pill">…</span>{/if}
     </button>
   </div>
@@ -155,7 +158,11 @@
           <div class="muted-box">AI is reading this crash…</div>
         {:else if !aiAnalysis}
           <div class="muted-box">
-            {aiSoftError ? "AI failed — use Rules, or fix Ollama." : "No AI result yet."}
+            {#if aiSoftError}
+              AI failed — {aiSoftError}
+            {:else}
+              No AI result yet.
+            {/if}
             <button class="ghost mini" type="button" onclick={() => onRetryAi?.()}>Retry AI</button>
           </div>
         {:else}
@@ -231,7 +238,7 @@
     align-items: center;
     padding: 2px 8px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
     font-size: 11px;
     font-weight: 700;
@@ -301,7 +308,6 @@
   }
   .finding-card header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
   .finding-card header strong { color: var(--text-primary); }
-  .finding-card header code { color: var(--text-muted); font-size: 11px; }
   .finding-card p { margin: 0 0 6px; color: var(--text-secondary); font-size: 13px; line-height: 1.45; }
   .finding-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .ai-hint, .auto-fix { font-size: 12px; color: var(--text-muted); }
@@ -309,7 +315,7 @@
     display: inline-flex;
     padding: 2px 7px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
     font-size: 10px;
     font-weight: 800;

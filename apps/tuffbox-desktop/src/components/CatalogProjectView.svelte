@@ -334,7 +334,7 @@
     letter-spacing: 0.05em;
     padding: 2px 7px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .provider.cf { background: rgba(245, 158, 11, 0.14); color: #fbbf24; }

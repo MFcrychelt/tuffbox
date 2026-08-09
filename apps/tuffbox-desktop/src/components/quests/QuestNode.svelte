@@ -251,14 +251,21 @@
     font-size: clamp(8px, 10px, 11px);
     line-height: 1.15;
     max-width: calc(100% + 24px);
-    min-width: 100%;
+    min-width: 0;
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    color: var(--text-primary, var(--ftbq-text, #212529));
+    font-weight: 500;
     pointer-events: none;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
+    text-shadow: none;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-secondary, #fff) 80%, transparent);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-color, #dee2e6) 55%, transparent);
   }
   .ch-badge {
     font-size: 8px;
@@ -269,19 +276,24 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--ftbq-accent-teal, #3db8a8);
+    font-weight: 500;
     pointer-events: none;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.9);
-    padding: 1px 4px;
+    text-shadow: none;
+    padding: 1px 6px;
     border: 1px dashed var(--ftbq-border);
-    border-radius: 2px;
-    background: rgba(0, 0, 0, 0.35);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--bg-secondary, #fff) 75%, transparent);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
   }
   .node-wrap:hover .node-label {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-primary, var(--ftbq-text, #212529));
+    background: color-mix(in srgb, var(--bg-secondary, #fff) 92%, transparent);
   }
   .node-wrap.sel .node-label {
-    color: var(--ftbq-title-gold, #f2c94c);
-    font-weight: 700;
+    color: var(--text-primary, var(--ftbq-text, #212529));
+    font-weight: 600;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
   .opt {
     position: absolute;
@@ -290,7 +302,7 @@
     font-size: 9px;
     color: var(--ftbq-quest-started, #f2c94c);
     font-weight: 900;
-    text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+    text-shadow: none;
   }
   .check {
     position: absolute;

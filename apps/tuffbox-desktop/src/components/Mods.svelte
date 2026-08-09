@@ -4374,8 +4374,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .stat-pill.accent {
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
 
   .stat-pill.accent strong { color: var(--accent-primary); }
@@ -4385,8 +4385,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   @keyframes pulse-glow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0); }
-    50% { box-shadow: 0 0 18px 2px rgba(27, 217, 106, 0.25); }
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 18px 2px color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   }
 
   .toolbar {
@@ -4583,23 +4583,23 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
     min-height: 40px;
     padding: 8px 12px !important;
-    border-color: rgba(27, 217, 106, 0.45) !important;
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent) !important;
     background:
-      linear-gradient(135deg, rgba(27, 217, 106, 0.18), rgba(56, 189, 248, 0.1)) !important;
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 18%, transparent), rgba(56, 189, 248, 0.1)) !important;
     color: var(--accent-primary) !important;
     box-shadow:
-      0 0 0 1px rgba(27, 217, 106, 0.15),
-      0 0 14px rgba(27, 217, 106, 0.18);
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 15%, transparent),
+      0 0 14px color-mix(in srgb, var(--accent-primary) 18%, transparent);
     font-weight: 600 !important;
   }
 
   .ideas-accent:hover:not(:disabled) {
-    border-color: rgba(27, 217, 106, 0.65) !important;
+    border-color: color-mix(in srgb, var(--accent-primary) 65%, transparent) !important;
     background:
-      linear-gradient(135deg, rgba(27, 217, 106, 0.28), rgba(56, 189, 248, 0.16)) !important;
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 28%, transparent), rgba(56, 189, 248, 0.16)) !important;
     box-shadow:
-      0 0 0 1px rgba(27, 217, 106, 0.28),
-      0 0 18px rgba(27, 217, 106, 0.28);
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 28%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .ideas-accent:disabled {
@@ -4633,8 +4633,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .ideas-toggle.on {
     color: var(--accent-primary);
-    border-color: rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
   .ideas-toggle:hover {
     color: var(--text-secondary);
@@ -4642,7 +4642,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .ideas-toggle.on:hover {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.16);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
   }
   .ideas-dialog {
     max-width: 420px;
@@ -4807,9 +4807,9 @@ import { trapFocus } from "../lib/focusTrap";
     text-transform: uppercase;
     padding: 1px 7px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
-    color: #1bd96a;
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    color: var(--accent-primary);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     flex-shrink: 0;
   }
 
@@ -4955,7 +4955,7 @@ import { trapFocus } from "../lib/focusTrap";
     color: #fff;
     font-weight: 900;
     flex-shrink: 0;
-    box-shadow: 0 4px 14px rgba(27, 217, 106, 0.15);
+    box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-primary) 15%, transparent);
   }
 
   .mod-icon img {
@@ -5074,9 +5074,9 @@ import { trapFocus } from "../lib/focusTrap";
     display: flex;
     flex-direction: column;
     background:
-      radial-gradient(ellipse 90% 60% at 50% -10%, rgba(27, 217, 106, 0.18), transparent 55%),
+      radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--accent-primary) 18%, transparent), transparent 55%),
       var(--bg-secondary);
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     border-radius: 20px;
     box-shadow: 0 30px 100px rgba(0, 0, 0, 0.55);
     padding: 22px;
@@ -5143,10 +5143,10 @@ import { trapFocus } from "../lib/focusTrap";
   .download-stage {
     margin-bottom: 14px;
     padding: 12px 14px;
-    border: 1px solid rgba(27, 217, 106, 0.24);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 24%, transparent);
     border-radius: 14px;
     background:
-      linear-gradient(135deg, rgba(27, 217, 106, 0.1), rgba(110, 231, 168, 0.025)),
+      linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 10%, transparent), rgba(110, 231, 168, 0.025)),
       rgba(255, 255, 255, 0.02);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
@@ -5185,8 +5185,8 @@ import { trapFocus } from "../lib/focusTrap";
   .download-fill {
     height: 100%;
     border-radius: 999px;
-    background: linear-gradient(90deg, var(--accent-primary), #6ee7a8);
-    box-shadow: 0 0 12px rgba(27, 217, 106, 0.45);
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-hover));
+    box-shadow: 0 0 12px color-mix(in srgb, var(--accent-primary) 45%, transparent);
     transition: width 0.12s linear;
   }
 
@@ -5213,12 +5213,12 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .download-row.active {
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.06);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .download-row.done {
-    border-color: rgba(27, 217, 106, 0.25);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
     opacity: 0.85;
   }
 
@@ -5305,12 +5305,12 @@ import { trapFocus } from "../lib/focusTrap";
   .ver-old { opacity: 0.7; }
   .ver-new {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
 
   .update-all-btn {
-    background: linear-gradient(135deg, var(--accent-primary), #14b355) !important;
-    box-shadow: 0 6px 20px rgba(27, 217, 106, 0.3);
+    background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover)) !important;
+    box-shadow: 0 6px 20px color-mix(in srgb, var(--accent-primary) 30%, transparent);
   }
 
   .installed-meta span:last-child {
@@ -5376,12 +5376,12 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .tag.side-both {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
 
   .tag.side-client {
-    background: rgba(139, 92, 246, 0.12);
+    background: color-mix(in srgb, var(--accent-secondary) 12%, transparent);
     color: var(--accent-secondary);
   }
 
@@ -5415,9 +5415,9 @@ import { trapFocus } from "../lib/focusTrap";
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: #1bd96a;
+    color: var(--accent-primary);
   }
-  .update-btn.hot { background: rgba(27, 217, 106, 0.12); border-radius: var(--border-radius-sm); }
+  .update-btn.hot { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); border-radius: var(--border-radius-sm); }
 
   .empty,
   .loading,
@@ -5620,7 +5620,7 @@ import { trapFocus } from "../lib/focusTrap";
   .modal.add-mods-modal .filter-collapse-toggle:hover {
     color: var(--text-primary);
     background: var(--bg-elevated);
-    border-color: rgba(27, 217, 106, 0.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
     transform: none !important;
   }
 
@@ -5764,8 +5764,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .modal-tabs button.active {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.1);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--text-primary);
   }
 
@@ -5809,7 +5809,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .provider-toggle button.active {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--text-primary);
   }
 
@@ -5827,8 +5827,8 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
   }
   .provider-badge.modrinth {
-    background: rgba(27, 217, 106, 0.18);
-    color: #1bd96a;
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    color: var(--accent-primary);
   }
   .provider-badge.curseforge {
     background: rgba(241, 100, 54, 0.18);
@@ -5922,7 +5922,7 @@ import { trapFocus } from "../lib/focusTrap";
   .filter-collapse-toggle:hover {
     color: var(--text-primary);
     background: var(--bg-elevated);
-    border-color: rgba(27, 217, 106, 0.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
     transform: none !important;
   }
 
@@ -5989,7 +5989,7 @@ import { trapFocus } from "../lib/focusTrap";
   .loader-row.active,
   .cat-row.active {
     background: var(--bg-tertiary);
-    border-color: rgba(27,217,106,.28);
+    border-color: color-mix(in srgb, var(--accent-primary) 28%, transparent);
     color: var(--text-primary);
   }
 
@@ -6047,7 +6047,7 @@ import { trapFocus } from "../lib/focusTrap";
     flex-shrink: 0;
   }
   .view-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
-  .view-toggle.active { color: var(--accent-primary); border-color: rgba(27,217,106,.4); background: rgba(27,217,106,.08); }
+  .view-toggle.active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .view-toggle :global(svg) { width: 16px; height: 16px; flex-shrink: 0; }
 
   .size-select {
@@ -6079,8 +6079,8 @@ import { trapFocus } from "../lib/focusTrap";
   .size-toggle:hover { color: var(--text-primary); background: var(--bg-elevated); }
   .size-toggle.active {
     color: var(--accent-primary);
-    border-color: rgba(27, 217, 106, 0.4);
-    background: rgba(27, 217, 106, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .pagination {
@@ -6196,18 +6196,18 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .result-card.installed {
-    border-color: rgba(27, 217, 106, 0.34);
+    border-color: color-mix(in srgb, var(--accent-primary) 34%, transparent);
     background:
-      linear-gradient(145deg, rgba(27, 217, 106, 0.09) 0%, rgba(27, 217, 106, 0.03) 38%, var(--bg-secondary) 72%);
+      linear-gradient(145deg, color-mix(in srgb, var(--accent-primary) 9%, transparent) 0%, color-mix(in srgb, var(--accent-primary) 3%, transparent) 38%, var(--bg-secondary) 72%);
     box-shadow:
-      0 0 0 1px rgba(27, 217, 106, 0.1) inset,
-      0 0 0 1px rgba(27, 217, 106, 0.06);
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent) inset,
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .result-card.installed:hover {
-    border-color: rgba(27, 217, 106, 0.42);
+    border-color: color-mix(in srgb, var(--accent-primary) 42%, transparent);
     background:
-      linear-gradient(145deg, rgba(27, 217, 106, 0.11) 0%, rgba(27, 217, 106, 0.04) 38%, var(--bg-elevated, var(--bg-tertiary)) 72%);
+      linear-gradient(145deg, color-mix(in srgb, var(--accent-primary) 11%, transparent) 0%, color-mix(in srgb, var(--accent-primary) 4%, transparent) 38%, var(--bg-elevated, var(--bg-tertiary)) 72%);
   }
 
   .results.card-size-s .result-card {
@@ -6241,8 +6241,8 @@ import { trapFocus } from "../lib/focusTrap";
   }
 
   .result-card.selected {
-    border-color: rgba(139, 92, 246, 0.65);
-    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.18) inset;
+    border-color: color-mix(in srgb, var(--accent-secondary) 65%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-secondary) 18%, transparent) inset;
   }
 
   .select-result {
@@ -6437,8 +6437,8 @@ import { trapFocus } from "../lib/focusTrap";
     transform: none;
     flex-shrink: 0;
   }
-  .qa:hover { color: var(--text-primary); border-color: rgba(27,217,106,.35); background: var(--bg-hover); }
-  .qa.active { color: var(--accent-primary); border-color: rgba(27,217,106,.5); background: rgba(27,217,106,.12); }
+  .qa:hover { color: var(--text-primary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); background: var(--bg-hover); }
+  .qa.active { color: var(--accent-primary); border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent); background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
   .qa :global(svg) { width: 15px; height: 15px; flex-shrink: 0; }
 
   .save-wrapper { position: relative; }
@@ -6455,7 +6455,7 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 8px 10px; border-radius: 6px; background: transparent; border: none;
     color: var(--text-primary); text-align: left; font-size: 13px; cursor: pointer;
   }
-  .save-dropdown-item:hover { background: rgba(27,217,106,0.08); }
+  .save-dropdown-item:hover { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
   .save-check { width: 16px; text-align: center; color: var(--accent-primary); font-weight: 700; }
   .save-dropdown-new { display: flex; gap: 4px; padding: 6px 4px 2px; border-top: 1px solid var(--border-color); margin-top: 4px; }
   .save-dropdown-new input { flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; }
@@ -6519,7 +6519,7 @@ import { trapFocus } from "../lib/focusTrap";
     gap: 16px;
     align-items: center;
     background: linear-gradient(180deg, rgba(24,24,27,.96), rgba(9,9,11,.98));
-    border-top: 1px solid rgba(27,217,106,.28);
+    border-top: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .plan-eyebrow {
@@ -6547,7 +6547,7 @@ import { trapFocus } from "../lib/focusTrap";
   .conflict-warning strong { color: #fecaca; }
   .conflict-warning span { color: var(--text-muted); font-size: 12px; }
   .dep-node { position: relative; display: flex; gap: 8px; align-items: center; margin-left: 14px; padding-left: 14px; color: var(--text-muted); font-size: 12px; }
-  .dep-node::before { content: ""; position: absolute; left: 0; top: -6px; bottom: 50%; width: 10px; border-left: 1px solid rgba(27,217,106,.35); border-bottom: 1px solid rgba(27,217,106,.35); }
+  .dep-node::before { content: ""; position: absolute; left: 0; top: -6px; bottom: 50%; width: 10px; border-left: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 
   .plan-modal { max-width: 540px; }
   .plan-details { padding: 12px 0; display: grid; gap: 16px; }
@@ -6571,9 +6571,9 @@ import { trapFocus } from "../lib/focusTrap";
   .recs-panel {
     margin-bottom: 12px;
     padding: 14px;
-    border: 1px solid rgba(139, 92, 246, 0.25);
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 25%, transparent);
     border-radius: var(--border-radius-lg);
-    background: rgba(139, 92, 246, 0.02);
+    background: color-mix(in srgb, var(--accent-secondary) 2%, transparent);
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -6619,10 +6619,10 @@ import { trapFocus } from "../lib/focusTrap";
   .recs-main strong { color: var(--text-primary); font-size: 13px; }
   .recs-main span { color: var(--text-muted); font-size: 11px; }
   .recs-meta { opacity: 0.8; }
-  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: rgba(139,92,246,.12); color: #c4b5fd; }
+  .recs-source { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); color: var(--accent-secondary); }
   .recs-prio { font-size: 9px; text-transform: uppercase; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
   .recs-prio.critical { background: rgba(239,68,68,.15); color: #fca5a5; }
-  .recs-prio.high { background: rgba(27,217,106,.12); color: var(--accent-primary); }
+  .recs-prio.high { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); color: var(--accent-primary); }
   .recs-prio.medium { background: rgba(96,165,250,.12); color: #93c5fd; }
   .recs-prio.low { background: var(--bg-elevated); color: var(--text-muted); }
 
@@ -6651,9 +6651,9 @@ import { trapFocus } from "../lib/focusTrap";
     padding: 12px 14px;
     border-radius: var(--border-radius-lg);
     margin-bottom: 14px;
-    border: 1px solid rgba(27, 217, 106, 0.25);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .version-modal { max-width: min(920px, 94vw); width: 920px; }
@@ -6665,7 +6665,7 @@ import { trapFocus } from "../lib/focusTrap";
   }
   .version-toolbar .search { flex: 1; }
   .version-toolbar .secondary.mini.active {
-    border-color: rgba(27,217,106,.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--accent-primary);
   }
   .version-picker-body {
@@ -6689,8 +6689,8 @@ import { trapFocus } from "../lib/focusTrap";
     width: 100%; transform: none;
   }
   .version-row:hover, .version-row.current, .version-row.selected {
-    border-color: rgba(27,217,106,.35);
-    background: rgba(27,217,106,.06);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
   .version-row.incompatible { opacity: 0.78; }
   .version-row:disabled { opacity: .5; cursor: wait; }
@@ -6701,7 +6701,7 @@ import { trapFocus } from "../lib/focusTrap";
   .version-loaders { color: var(--text-muted); font-size: 12px; }
   .channel-dot {
     width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-    background: #22c55e;
+    background: var(--accent-primary);
   }
   .channel-dot.channel-beta { background: #3b82f6; }
   .channel-dot.channel-alpha { background: #f59e0b; }
@@ -6725,8 +6725,8 @@ import { trapFocus } from "../lib/focusTrap";
     line-height: 1.45; color: var(--text-secondary); padding-right: 4px;
   }
   .version-detail-actions { display: flex; justify-content: flex-end; padding-top: 8px; }
-  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: rgba(27,217,106,.15); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
-  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: rgba(139,92,246,.12); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+  .current-badge { font-size: 11px; font-weight: 800; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 15%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
+  .install-badge { font-size: 11px; font-weight: 700; color: var(--accent-secondary); background: color-mix(in srgb, var(--accent-secondary) 12%, transparent); padding: 4px 10px; border-radius: 999px; flex-shrink: 0; }
 
   @media (max-width: 820px) {
     .version-picker-body { grid-template-columns: 1fr; max-height: none; }
@@ -6740,7 +6740,7 @@ import { trapFocus } from "../lib/focusTrap";
     width: 100%; padding: 16px 18px; border-radius: 14px; text-align: left; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-primary); transform: none;
   }
-  .dep-dialog-actions button:hover { border-color: rgba(27,217,106,.4); }
+  .dep-dialog-actions button:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); }
   .dep-dialog-actions button span { grid-column: 2; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
   .dep-dialog-footer { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border-color); }
 </style>

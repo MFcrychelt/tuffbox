@@ -6,20 +6,25 @@
     TASK_TYPE_OPTIONS,
     TASK_TYPES,
     REWARD_TYPES,
+    OBSERVATION_TYPE_OPTIONS,
+    ITEM_COMPLETE_OPTIONS,
     rewardTypeLabel,
     taskTypeLabel,
   } from "../../lib/questTypeLabels";
   import type { ItemValue } from "../../lib/itemStack";
+  import { isItemObject, readCount, stackDisplayId } from "../../lib/itemStack";
   import ItemStackEditor from "./ItemStackEditor.svelte";
 
   let {
     quest,
     onDirty,
     rewardTableIds = [],
+    onOpenKubeJs,
   }: {
     quest: QuestData;
     onDirty: () => void;
     rewardTableIds?: string[];
+    onOpenKubeJs?: (id: string) => void;
   } = $props();
 
   function newId(len = 12) {
@@ -39,6 +44,7 @@
     onDirty();
   }
 
+  /** FTB stores item count as a sibling `count` field, not ItemStack.Count. */
   function setItemValue(
     obj: { properties?: Record<string, unknown> },
     next: ItemValue | null,
@@ -46,11 +52,19 @@
     const p = ensureProps(obj);
     if (next == null || next === "") {
       delete p.item;
+    } else if (typeof next === "string") {
+      p.item = next;
+    } else if (isItemObject(next)) {
+      const cleaned = { ...next };
+      const embedded = cleaned.Count ?? cleaned.count;
+      if (typeof embedded === "number" && Number.isFinite(embedded) && embedded > 0) {
+        if (p.count == null) p.count = embedded;
+      }
+      delete cleaned.Count;
+      delete cleaned.count;
+      p.item = cleaned;
     } else {
       p.item = next;
-      if (typeof next === "object" && (next.Count != null || next.count != null)) {
-        delete p.count;
-      }
     }
     obj.properties = { ...p };
     onDirty();
@@ -63,25 +77,188 @@
     return null;
   }
 
+  function itemCountOf(props: Record<string, unknown> | undefined): number {
+    const c = props?.count;
+    if (typeof c === "number" && Number.isFinite(c) && c > 0) return c;
+    if (typeof c === "string" && c !== "" && !Number.isNaN(Number(c))) {
+      const n = Number(c);
+      if (n > 0) return n;
+    }
+    const item = itemValueOf(props);
+    if (item) return readCount(item, 1);
+    return 1;
+  }
+
+  function setItemCount(obj: { properties?: Record<string, unknown> }, n: number) {
+    const count = Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+    const p = ensureProps(obj);
+    p.count = count;
+    const item = p.item;
+    if (isItemObject(item)) {
+      const cleaned = { ...item };
+      delete cleaned.Count;
+      delete cleaned.count;
+      p.item = cleaned;
+    }
+    obj.properties = { ...p };
+    onDirty();
+  }
+
+  type ItemCompleteMode = "inventory" | "consume" | "craft" | "task_screen";
+
+  function itemCompleteMode(props: Record<string, unknown> | undefined): ItemCompleteMode {
+    if (props?.task_screen_only === true || props?.task_screen_only === "true") {
+      return "task_screen";
+    }
+    const craft = props?.only_from_crafting;
+    if (craft === true || craft === "TRUE" || craft === "true") return "craft";
+    const consume = props?.consume_items;
+    if (consume === true || consume === "TRUE" || consume === "true") return "consume";
+    return "inventory";
+  }
+
+  function setItemCompleteMode(
+    task: QuestTask,
+    mode: ItemCompleteMode,
+  ) {
+    const p = ensureProps(task);
+    delete p.consume_items;
+    delete p.only_from_crafting;
+    delete p.task_screen_only;
+    if (mode === "consume") p.consume_items = true;
+    else if (mode === "craft") p.only_from_crafting = true;
+    else if (mode === "task_screen") p.task_screen_only = true;
+    task.properties = { ...p };
+    onDirty();
+  }
+
+  /** User-facing choice: obtain item vs target a block (observation). */
+  type GoalKind = "item" | "block";
+
+  function goalKind(task: QuestTask): GoalKind {
+    return task.type === "observation" ? "block" : "item";
+  }
+
+  function setGoalKind(task: QuestTask, kind: GoalKind) {
+    if (kind === "block" && task.type !== "observation") {
+      const fromItem =
+        stackDisplayId(itemValueOf(task.properties)) ??
+        String(task.properties?.to_observe ?? "minecraft:stone");
+      task.type = "observation";
+      task.properties = {
+        timer: 0,
+        observation_type: "block",
+        to_observe: fromItem.replace(/^#/, "") || "minecraft:stone",
+      };
+      onDirty();
+      return;
+    }
+    if (kind === "item" && task.type === "observation") {
+      const block = String(task.properties?.to_observe ?? "minecraft:stone");
+      task.type = "item";
+      task.properties = {
+        item: block.startsWith("#") ? "minecraft:stone" : block,
+        count: 1,
+      };
+      onDirty();
+    }
+  }
+
+  function defaultsForTask(type: string): Partial<QuestTask> {
+    switch (type) {
+      case "item":
+        return { properties: { item: "minecraft:stone", count: 1 } };
+      case "kill":
+        return { properties: { entity: "minecraft:zombie", value: 1 } };
+      case "dimension":
+        return { properties: { dimension: "minecraft:overworld" } };
+      case "biome":
+        return { properties: { biome: "minecraft:plains" } };
+      case "advancement":
+        return { properties: { advancement: "minecraft:story/root" } };
+      case "stat":
+        return { properties: { stat: "minecraft:walk_one_cm", value: 100 } };
+      case "fluid":
+        return { properties: { fluid: "minecraft:water", amount: 1000 } };
+      case "location":
+        return {
+          properties: {
+            dimension: "minecraft:overworld",
+            ignore_dimension: false,
+            x: 0,
+            y: 64,
+            z: 0,
+            w: 1,
+            h: 1,
+            d: 1,
+          },
+        };
+      case "structure":
+        return { properties: { structure: "minecraft:village" } };
+      case "gamestage":
+      case "stage":
+        return { properties: { stage: "" } };
+      case "observation":
+        return {
+          properties: {
+            timer: 0,
+            observation_type: "block",
+            to_observe: "minecraft:stone",
+          },
+        };
+      case "xp":
+        return { value: 1, properties: { points: false } };
+      case "forge_energy":
+      case "techreborn_energy":
+      case "energy":
+        return { value: 1000 };
+      case "custom":
+        return { properties: { max_progress: 1, enable_button: false } };
+      default:
+        return { properties: {} };
+    }
+  }
+
+  function defaultsForReward(type: string): Record<string, unknown> {
+    switch (type) {
+      case "item":
+        return { item: "minecraft:diamond", count: 1 };
+      case "xp":
+        return { xp: 10 };
+      case "xp_levels":
+        return { xp_levels: 1 };
+      case "command":
+        return { command: "say hello", permission_level: 0, silent: false };
+      case "random":
+      case "choice":
+        return { table: rewardTableIds[0] ?? "" };
+      case "loot":
+        return { loot_crate: "" };
+      case "all_table":
+      case "all_tables":
+        return {};
+      case "gamestage":
+      case "stage":
+        return { stage: "" };
+      case "toast":
+        return { description: "" };
+      case "advancement":
+        return { advancement: "minecraft:story/root", criterion: "" };
+      case "currency":
+        return { currency: "", amount: 1 };
+      default:
+        return {};
+    }
+  }
+
   function addTask(type = "item") {
+    const defaults = defaultsForTask(type);
     const t: QuestTask = {
       id: newId(),
       type,
-      properties: type === "item" ? { item: "minecraft:stone", count: 1 } : {},
+      properties: defaults.properties ?? {},
+      ...(defaults.value != null ? { value: defaults.value } : {}),
     };
-    if (type === "kill") t.properties = { entity: "minecraft:zombie", value: 1 };
-    if (type === "dimension") t.properties = { dimension: "minecraft:overworld" };
-    if (type === "biome") t.properties = { biome: "minecraft:plains" };
-    if (type === "advancement") t.properties = { advancement: "minecraft:story/root" };
-    if (type === "stat") t.properties = { stat: "minecraft:walk_one_cm", value: 100 };
-    if (type === "fluid") t.properties = { fluid: "minecraft:water", amount: 1000 };
-    if (type === "location") {
-      t.properties = { dimension: "minecraft:overworld", x: 0, y: 64, z: 0 };
-    }
-    if (type === "structure") t.properties = { structure: "minecraft:village" };
-    if (type === "stage") t.properties = { stage: "" };
-    if (type === "observation") t.properties = { timer: 0 };
-    if (type === "xp") t.value = 1;
     quest.tasks = [...quest.tasks, t];
     onDirty();
   }
@@ -91,30 +268,20 @@
     onDirty();
   }
 
+  function changeTaskType(task: QuestTask, type: string) {
+    const defaults = defaultsForTask(type);
+    task.type = type;
+    task.properties = { ...(defaults.properties ?? {}) };
+    if (defaults.value != null) task.value = defaults.value;
+    else delete task.value;
+    onDirty();
+  }
+
   function addReward(type = "item") {
     const r: QuestReward = {
       id: newId(),
       type,
-      properties:
-        type === "item"
-          ? { item: "minecraft:diamond", count: 1 }
-          : type === "xp"
-            ? { xp: 10 }
-            : type === "xp_levels"
-              ? { xp_levels: 1 }
-              : type === "command"
-                ? { command: "say hello" }
-                : type === "random" || type === "choice"
-                  ? { table: rewardTableIds[0] ?? "" }
-                  : type === "loot"
-                    ? { loot_crate: "" }
-                    : type === "all_tables"
-                      ? {}
-                      : type === "stage"
-                        ? { stage: "" }
-                        : type === "toast"
-                          ? { description: "" }
-                          : {},
+      properties: defaultsForReward(type),
     };
     quest.rewards = [...quest.rewards, r];
     onDirty();
@@ -125,11 +292,22 @@
     onDirty();
   }
 
+  function changeRewardType(reward: QuestReward, type: string) {
+    reward.type = type;
+    reward.properties = defaultsForReward(type);
+    onDirty();
+  }
+
   function numProp(props: Record<string, unknown> | undefined, key: string, fallback = 1): number {
     const v = props?.[key];
     if (typeof v === "number") return v;
     if (typeof v === "string" && v !== "" && !Number.isNaN(Number(v))) return Number(v);
     return fallback;
+  }
+
+  function boolProp(props: Record<string, unknown> | undefined, key: string): boolean {
+    const v = props?.[key];
+    return v === true || v === "true" || v === "TRUE";
   }
 
   function inputVal(e: Event): string {
@@ -163,6 +341,26 @@
       el.value = "";
     }
   }
+
+  function isItemishTask(type: string) {
+    return type === "item" || type === "observation";
+  }
+
+  function isEnergyTask(type: string) {
+    return type === "forge_energy" || type === "techreborn_energy" || type === "energy";
+  }
+
+  function isStageTask(type: string) {
+    return type === "gamestage" || type === "stage";
+  }
+
+  function isStageReward(type: string) {
+    return type === "gamestage" || type === "stage";
+  }
+
+  function isAllTablesReward(type: string) {
+    return type === "all_table" || type === "all_tables";
+  }
 </script>
 
 <section class="tr ftbq-tr">
@@ -183,10 +381,7 @@
       <div class="card-h">
         <select
           value={task.type}
-          onchange={(e) => {
-            task.type = selectVal(e);
-            onDirty();
-          }}
+          onchange={(e) => changeTaskType(task, selectVal(e))}
         >
           {#each TASK_TYPE_OPTIONS as t (t.id)}
             <option value={t.id}>{t.label}</option>
@@ -200,12 +395,92 @@
         >
       </div>
 
+      {#if isItemishTask(task.type)}
+        <label
+          >Complete by
+          <select
+            value={goalKind(task)}
+            onchange={(e) => setGoalKind(task, selectVal(e) as GoalKind)}
+          >
+            <option value="item">Obtain item in inventory</option>
+            <option value="block">Observe / target a block</option>
+          </select>
+        </label>
+      {/if}
+
       {#if task.type === "item"}
         <ItemStackEditor
           value={itemValueOf(task.properties)}
           allowFilters={true}
           onChange={(v) => setItemValue(task, v)}
         />
+        <label
+          >Count<input
+            type="number"
+            min="1"
+            value={itemCountOf(task.properties)}
+            oninput={(e) => setItemCount(task, inputNum(e) || 1)}
+          /></label
+        >
+        <label
+          >Completion mode
+          <select
+            value={itemCompleteMode(task.properties)}
+            onchange={(e) => setItemCompleteMode(task, selectVal(e) as ItemCompleteMode)}
+          >
+            {#each ITEM_COMPLETE_OPTIONS as opt (opt.id)}
+              <option value={opt.id}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+        <p class="hint">
+          Tip: “mine N blocks” in FTB Quests is usually an Item task with Count = N (drops enter
+          inventory). Native break-block tracking needs an addon (e.g. QNaturals).
+        </p>
+        <label
+          >Match components
+          <select
+            value={String(task.properties?.match_components ?? "none")}
+            onchange={(e) => {
+              const v = selectVal(e);
+              setProp(task, "match_components", v === "none" ? null : v);
+            }}
+          >
+            <option value="none">None / default</option>
+            <option value="fuzzy">Fuzzy</option>
+            <option value="strict">Strict</option>
+          </select>
+        </label>
+      {:else if task.type === "observation"}
+        <label
+          >Observation type
+          <select
+            value={String(task.properties?.observation_type ?? "block")}
+            onchange={(e) => setProp(task, "observation_type", selectVal(e))}
+          >
+            {#each OBSERVATION_TYPE_OPTIONS as opt (opt.id)}
+              <option value={opt.id}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+        <label
+          >Target (to_observe)<input
+            value={String(task.properties?.to_observe ?? "")}
+            oninput={(e) => setProp(task, "to_observe", inputVal(e))}
+            placeholder="minecraft:stone or #minecraft:logs"
+          /></label
+        >
+        <label
+          >Timer (ticks)<input
+            type="number"
+            min="0"
+            value={numProp(task.properties, "timer", 0)}
+            oninput={(e) => setProp(task, "timer", inputNum(e) || 0)}
+          /></label
+        >
+        <label
+          >Title<input bind:value={task.title} oninput={onDirty} placeholder="Look at…" /></label
+        >
       {:else if task.type === "kill"}
         <label
           >Entity<input
@@ -215,11 +490,32 @@
           /></label
         >
         <label
+          >Entity type tag<input
+            value={String(task.properties?.entityTypeTag ?? "")}
+            oninput={(e) => setProp(task, "entityTypeTag", inputVal(e))}
+            placeholder="minecraft:zombies (optional)"
+          /></label
+        >
+        <label
           >Count<input
             type="number"
             min="1"
             value={numProp(task.properties, "value", 1)}
             oninput={(e) => setProp(task, "value", inputNum(e) || 1)}
+          /></label
+        >
+        <label
+          >Custom name<input
+            value={String(task.properties?.custom_name ?? "")}
+            oninput={(e) => setProp(task, "custom_name", inputVal(e))}
+            placeholder="Optional name tag / player name"
+          /></label
+        >
+        <label
+          >NBT filter<input
+            value={String(task.properties?.nbt_filter ?? "")}
+            oninput={(e) => setProp(task, "nbt_filter", inputVal(e))}
+            placeholder={'{CustomName:"…"}'}
           /></label
         >
       {:else if task.type === "dimension"}
@@ -240,19 +536,30 @@
         >
       {:else if task.type === "xp"}
         <label
-          >XP<input
+          >Amount<input
             type="number"
             min="1"
-            value={typeof task.value === "number" ? task.value : Number(task.value) || 1}
+            value={typeof task.value === "number"
+              ? task.value
+              : numProp(task.properties, "value", Number(task.value) || 1)}
             oninput={(e) => {
-              task.value = inputNum(e) || 1;
-              onDirty();
+              const n = inputNum(e) || 1;
+              task.value = n;
+              setProp(task, "value", n);
             }}
           /></label
         >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(task.properties, "points")}
+            onchange={(e) => setProp(task, "points", inputChecked(e))}
+          />
+          Consume XP points (not levels)
+        </label>
       {:else if task.type === "checkmark"}
-        <p class="hint">Manual checkmark — no extra fields.</p>
-      {:else if task.type === "stage"}
+        <p class="hint">Manual checkmark — player clicks to complete. No extra fields.</p>
+      {:else if isStageTask(task.type)}
         <label
           >Stage<input
             value={String(task.properties?.stage ?? "")}
@@ -278,6 +585,7 @@
         <label
           >Value<input
             type="number"
+            min="1"
             value={numProp(task.properties, "value", 1)}
             oninput={(e) => setProp(task, "value", inputNum(e) || 1)}
           /></label
@@ -293,6 +601,7 @@
         <label
           >Amount (mB)<input
             type="number"
+            min="1"
             value={numProp(task.properties, "amount", 1000)}
             oninput={(e) => setProp(task, "amount", inputNum(e) || 1)}
           /></label
@@ -305,8 +614,16 @@
             placeholder="minecraft:overworld"
           /></label
         >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(task.properties, "ignore_dimension")}
+            onchange={(e) => setProp(task, "ignore_dimension", inputChecked(e))}
+          />
+          Ignore dimension
+        </label>
         <label
-          >Position
+          >Position (x y z)
           <div class="item-row">
             <input
               type="number"
@@ -328,21 +645,32 @@
             />
           </div>
         </label>
-      {:else if task.type === "observation"}
         <label
-          >Observe timer (ticks)<input
-            type="number"
-            value={numProp(task.properties, "timer", 0)}
-            oninput={(e) => setProp(task, "timer", inputNum(e) || 0)}
-          /></label
-        >
-        <label
-          >Title<input
-            bind:value={task.title}
-            oninput={onDirty}
-            placeholder="Look at…"
-          /></label
-        >
+          >Size (w h d)
+          <div class="item-row">
+            <input
+              type="number"
+              min="1"
+              title="w"
+              value={numProp(task.properties, "w", 1)}
+              oninput={(e) => setProp(task, "w", inputNum(e) || 1)}
+            />
+            <input
+              type="number"
+              min="1"
+              title="h"
+              value={numProp(task.properties, "h", 1)}
+              oninput={(e) => setProp(task, "h", inputNum(e) || 1)}
+            />
+            <input
+              type="number"
+              min="1"
+              title="d"
+              value={numProp(task.properties, "d", 1)}
+              oninput={(e) => setProp(task, "d", inputNum(e) || 1)}
+            />
+          </div>
+        </label>
       {:else if task.type === "structure"}
         <label
           >Structure<input
@@ -351,10 +679,54 @@
             placeholder="minecraft:village"
           /></label
         >
+      {:else if isEnergyTask(task.type)}
+        <label
+          >Energy amount<input
+            type="number"
+            min="1"
+            value={typeof task.value === "number"
+              ? task.value
+              : numProp(task.properties, "value", Number(task.value) || 1000)}
+            oninput={(e) => {
+              const n = inputNum(e) || 1;
+              task.value = n;
+              setProp(task, "value", n);
+            }}
+          /></label
+        >
+        <p class="hint">Submitted via Task Screen (FE/RF or Tech Reborn energy).</p>
       {:else if task.type === "custom"}
         <label
           >Title<input bind:value={task.title} oninput={onDirty} placeholder="Custom task" /></label
         >
+        <label
+          >Max progress<input
+            type="number"
+            min="1"
+            value={numProp(task.properties, "max_progress", 1)}
+            oninput={(e) => setProp(task, "max_progress", inputNum(e) || 1)}
+          /></label
+        >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(task.properties, "enable_button")}
+            onchange={(e) => setProp(task, "enable_button", inputChecked(e))}
+          />
+          Enable button
+        </label>
+        {#if onOpenKubeJs}
+          <div class="kjs-row">
+            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(task.id)}
+              >Open in KubeJS</button
+            >
+            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(task.id)}
+              >Generate handler</button
+            >
+          </div>
+        {:else}
+          <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customTask).</p>
+        {/if}
       {:else}
         <label
           >Title<input
@@ -363,17 +735,6 @@
             placeholder="Optional title"
           /></label
         >
-      {/if}
-
-      {#if task.type === "item"}
-        <label class="checkbox">
-          <input
-            type="checkbox"
-            checked={!!task.properties?.consume_items}
-            onchange={(e) => setProp(task, "consume_items", inputChecked(e))}
-          />
-          Consume items
-        </label>
       {/if}
 
       <details class="raw">
@@ -411,10 +772,7 @@
       <div class="card-h">
         <select
           value={reward.type}
-          onchange={(e) => {
-            reward.type = selectVal(e);
-            onDirty();
-          }}
+          onchange={(e) => changeRewardType(reward, selectVal(e))}
         >
           {#each REWARD_TYPE_OPTIONS as t (t.id)}
             <option value={t.id}>{t.label}</option>
@@ -434,6 +792,30 @@
           allowFilters={true}
           onChange={(v) => setItemValue(reward, v)}
         />
+        <label
+          >Count<input
+            type="number"
+            min="1"
+            value={itemCountOf(reward.properties)}
+            oninput={(e) => setItemCount(reward, inputNum(e) || 1)}
+          /></label
+        >
+        <label
+          >Random bonus<input
+            type="number"
+            min="0"
+            value={numProp(reward.properties, "random_bonus", 0)}
+            oninput={(e) => setProp(reward, "random_bonus", inputNum(e) || 0)}
+          /></label
+        >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(reward.properties, "only_one")}
+            onchange={(e) => setProp(reward, "only_one", inputChecked(e))}
+          />
+          Only one (skip if already owned)
+        </label>
       {:else if reward.type === "xp"}
         <label
           >XP<input
@@ -460,6 +842,29 @@
             placeholder="/say hi"
           /></label
         >
+        <label
+          >Permission level<input
+            type="number"
+            min="0"
+            max="4"
+            value={numProp(reward.properties, "permission_level", 0)}
+            oninput={(e) => setProp(reward, "permission_level", inputNum(e) || 0)}
+          /></label
+        >
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={boolProp(reward.properties, "silent")}
+            onchange={(e) => setProp(reward, "silent", inputChecked(e))}
+          />
+          Silent
+        </label>
+        <label
+          >Feedback message<input
+            value={String(reward.properties?.feedback_message ?? "")}
+            oninput={(e) => setProp(reward, "feedback_message", inputVal(e))}
+          /></label
+        >
       {:else if reward.type === "random" || reward.type === "choice"}
         <label
           >Reward table
@@ -483,9 +888,9 @@
             placeholder="crate_id"
           /></label
         >
-      {:else if reward.type === "all_tables"}
+      {:else if isAllTablesReward(reward.type)}
         <p class="hint">Grants a roll from every reward table in the book.</p>
-      {:else if reward.type === "stage"}
+      {:else if isStageReward(reward.type)}
         <label
           >Stage<input
             value={String(reward.properties?.stage ?? "")}
@@ -499,6 +904,59 @@
             oninput={(e) => setProp(reward, "description", inputVal(e))}
           /></label
         >
+      {:else if reward.type === "advancement"}
+        <label
+          >Advancement<input
+            value={String(reward.properties?.advancement ?? "")}
+            oninput={(e) => setProp(reward, "advancement", inputVal(e))}
+            placeholder="minecraft:story/root"
+          /></label
+        >
+        <label
+          >Criterion<input
+            value={String(reward.properties?.criterion ?? "")}
+            oninput={(e) => setProp(reward, "criterion", inputVal(e))}
+            placeholder="Optional criterion id"
+          /></label
+        >
+      {:else if reward.type === "currency"}
+        <label
+          >Currency id<input
+            value={String(reward.properties?.currency ?? "")}
+            oninput={(e) => setProp(reward, "currency", inputVal(e))}
+          /></label
+        >
+        <label
+          >Amount<input
+            type="number"
+            min="1"
+            value={numProp(reward.properties, "amount", 1)}
+            oninput={(e) => setProp(reward, "amount", inputNum(e) || 1)}
+          /></label
+        >
+      {:else if reward.type === "custom"}
+        <label
+          >Title<input bind:value={reward.title} oninput={onDirty} placeholder="Custom reward" /></label
+        >
+        <label
+          >Description<input
+            value={String(reward.properties?.description ?? "")}
+            oninput={(e) => setProp(reward, "description", inputVal(e))}
+            placeholder="Optional note for stub"
+          /></label
+        >
+        {#if onOpenKubeJs}
+          <div class="kjs-row">
+            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(reward.id)}
+              >Open in KubeJS</button
+            >
+            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(reward.id)}
+              >Generate handler</button
+            >
+          </div>
+        {:else}
+          <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customReward).</p>
+        {/if}
       {:else}
         <label
           >Title<input bind:value={reward.title} oninput={onDirty} placeholder="Optional" /></label
@@ -561,7 +1019,7 @@
   }
   .add-row select {
     font-size: 10px;
-    max-width: 130px;
+    max-width: 160px;
     background: var(--ftbq-bg);
     border: 1px solid var(--ftbq-border);
     color: var(--ftbq-text, #e8e8e8);
@@ -664,5 +1122,22 @@
     gap: 6px;
     text-transform: none;
     color: var(--ftbq-text, #e8e8e8);
+  }
+  .kjs-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .kjs-btn {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 2px;
+    border: 1px solid rgba(61, 184, 168, 0.4);
+    background: rgba(61, 184, 168, 0.12);
+    color: var(--ftbq-accent-teal, #3db8a8);
+    cursor: pointer;
+  }
+  .kjs-btn:hover {
+    background: rgba(61, 184, 168, 0.22);
   }
 </style>

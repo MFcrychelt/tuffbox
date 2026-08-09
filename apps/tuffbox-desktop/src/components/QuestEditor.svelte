@@ -19,6 +19,7 @@
   import BookSettingsPanel from "./quests/BookSettingsPanel.svelte";
   import ChapterGroupsPanel from "./quests/ChapterGroupsPanel.svelte";
   import ProgressPanel from "./quests/ProgressPanel.svelte";
+  import QuestKubeJsPanel from "./quests/QuestKubeJsPanel.svelte";
   import ShortcutsModal from "./ui/ShortcutsModal.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import VanillaClientJarPrompt from "./VanillaClientJarPrompt.svelte";
@@ -160,6 +161,8 @@
   let showGroupsPanel = $state(false);
   let showTablesPanel = $state(false);
   let showLocalePanel = $state(false);
+  let showKubeJsPanel = $state(false);
+  let kubeJsFocusId = $state<string | null>(null);
   let bookMenuOpen = $state(false);
   let issuesOpen = $state(false);
   let progressOpen = $state(false);
@@ -582,6 +585,50 @@
 
   function markLocaleDirty(code: string) {
     dirtyLocales = new Set([...dirtyLocales, code]);
+  }
+
+  function openKubeJsForId(id: string) {
+    kubeJsFocusId = id;
+    showKubeJsPanel = true;
+    showBookPanel = false;
+    showGroupsPanel = false;
+    showTablesPanel = false;
+    showLocalePanel = false;
+    bookMenuOpen = true;
+  }
+
+  function createCustomForKubeJs(
+    kind: "task" | "reward",
+    opts?: { title?: string; maxProgress?: number },
+  ): string | null {
+    if (!selectedQuest || !selectedChapter) return null;
+    if (!dirtyChapters.has(selectedChapter)) pushHistory();
+    const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase();
+    if (kind === "task") {
+      selectedQuest.tasks = [
+        ...selectedQuest.tasks,
+        {
+          id,
+          type: "custom",
+          title: opts?.title ?? "Custom task",
+          properties: { max_progress: opts?.maxProgress ?? 1 },
+        },
+      ];
+    } else {
+      selectedQuest.rewards = [
+        ...selectedQuest.rewards,
+        {
+          id,
+          type: "custom",
+          title: opts?.title ?? "Custom reward",
+          properties: {},
+        },
+      ];
+    }
+    selectedQuest = { ...selectedQuest };
+    markDirty(selectedChapter);
+    kubeJsFocusId = id;
+    return id;
   }
 
   async function saveLocaleIfNeeded() {
@@ -1465,11 +1512,12 @@
         issuesOpen = false;
         return;
       }
-      if (showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel) {
+      if (showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel) {
         showBookPanel = false;
         showGroupsPanel = false;
         showTablesPanel = false;
         showLocalePanel = false;
+        showKubeJsPanel = false;
         return;
       }
       if (aiSidebarOpen) {
@@ -1790,7 +1838,7 @@
       issuesOpen = false;
     }
     if (
-      (bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel) &&
+      (bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel) &&
       !t.closest(".tb-pop")
     ) {
       bookMenuOpen = false;
@@ -1798,6 +1846,7 @@
       showGroupsPanel = false;
       showTablesPanel = false;
       showLocalePanel = false;
+      showKubeJsPanel = false;
     }
   }
 </script>
@@ -1840,6 +1889,7 @@
             showBookPanel = false;
             showGroupsPanel = false;
             showTablesPanel = false;
+            showKubeJsPanel = false;
             bookMenuOpen = true;
           }}
         >Locales</button>
@@ -1848,9 +1898,9 @@
         <button
           type="button"
           class="ghost"
-          class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel}
+          class:active={bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel}
           class:has-dirty={bookDirty || groupsDirty || rewardTablesDirty || dirtyLocales.size > 0}
-          title="Book, groups, reward tables, locales"
+          title="Book, groups, reward tables, locales, KubeJS"
           aria-haspopup="menu"
           aria-expanded={bookMenuOpen}
           aria-controls="quest-book-menu"
@@ -1861,6 +1911,7 @@
               showGroupsPanel = false;
               showTablesPanel = false;
               showLocalePanel = false;
+              showKubeJsPanel = false;
             }
           }}
         >
@@ -1877,6 +1928,7 @@
                 showGroupsPanel = false;
                 showTablesPanel = false;
                 showLocalePanel = false;
+                showKubeJsPanel = false;
               }}
             >
               Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
@@ -1890,6 +1942,7 @@
                 showBookPanel = false;
                 showTablesPanel = false;
                 showLocalePanel = false;
+                showKubeJsPanel = false;
               }}
             >
               Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
@@ -1903,6 +1956,7 @@
                 showBookPanel = false;
                 showGroupsPanel = false;
                 showLocalePanel = false;
+                showKubeJsPanel = false;
               }}
             >
               Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
@@ -1916,9 +1970,24 @@
                 showBookPanel = false;
                 showGroupsPanel = false;
                 showTablesPanel = false;
+                showKubeJsPanel = false;
               }}
             >
               Locales{#if dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              class:active={showKubeJsPanel}
+              onclick={() => {
+                showKubeJsPanel = true;
+                showBookPanel = false;
+                showGroupsPanel = false;
+                showTablesPanel = false;
+                showLocalePanel = false;
+              }}
+            >
+              KubeJS
             </button>
           </div>
         {/if}
@@ -2021,6 +2090,46 @@
               }}
             />
           </div>
+        {/if}
+        {#if showKubeJsPanel && $projectPath}
+          <QuestKubeJsPanel
+            {chapters}
+            {selectedQuest}
+            bind:focusId={kubeJsFocusId}
+            onclose={() => {
+              showKubeJsPanel = false;
+              bookMenuOpen = false;
+            }}
+            onjumpquest={(questId, chapterId) => {
+              if (chapterId && chapters.some((c) => c.id === chapterId)) {
+                selectedChapter = chapterId;
+              } else {
+                for (const ch of chapters) {
+                  if (ch.quests.some((q) => q.id === questId)) {
+                    selectedChapter = ch.id;
+                    break;
+                  }
+                }
+              }
+              const q = chapters
+                .flatMap((c) => c.quests.map((quest) => ({ quest, ch: c.id })))
+                .find((x) => x.quest.id === questId);
+              if (q) {
+                selectedChapter = q.ch;
+                selectedQuest = q.quest;
+                selection = selectSingle(selection, q.quest.id);
+                panelTab = "quest";
+              }
+              showKubeJsPanel = false;
+              bookMenuOpen = false;
+            }}
+            oncreatecustom={(kind, opts) => createCustomForKubeJs(kind, opts)}
+            ondirtyquest={() => {
+              if (selectedChapter && !dirtyChapters.has(selectedChapter)) pushHistory();
+              if (selectedChapter) markDirty(selectedChapter);
+              if (selectedQuest) selectedQuest = { ...selectedQuest };
+            }}
+          />
         {/if}
       </div>
       <button
@@ -2441,6 +2550,7 @@
                   onRemoveDep={(id) => {
                     if (selectedQuest) removeDep(selectedQuest, id);
                   }}
+                  onOpenKubeJs={(id) => openKubeJsForId(id)}
                 />
               {:else}
                 <div class="sel-empty">
@@ -2550,56 +2660,65 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    background:
-      radial-gradient(ellipse at 50% 0%, rgba(255, 255, 255, 0.03), transparent 55%),
-      var(--ftbq-bg);
+    background: var(--ftbq-bg);
     color: var(--ftbq-text, #e8e8e8);
   }
-  /* Isolate from global TuffBox green primary buttons */
+  /* Isolate from global TuffBox green primary buttons — flat chrome */
   .qe.ftbq :global(button) {
-    border-radius: 3px;
+    border-radius: 6px;
     font-weight: 600;
     box-shadow: none;
+    text-shadow: none;
+  }
+  .qe.ftbq :global(.fmt-bar button) {
+    border-radius: 0;
+    border: none;
+    border-right: 1px solid var(--ftbq-frame);
+    background: transparent;
+    box-shadow: none;
+    text-shadow: none;
+    padding: 4px 8px;
+  }
+  .qe.ftbq :global(.fmt-bar button:last-child) {
+    border-right: none;
+  }
+  .qe.ftbq :global(.fmt-bar button:hover:not(:disabled)) {
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-accent-green);
   }
   .qe.ftbq :global(button.ghost),
   .qe.ftbq :global(button.ico) {
     padding: 4px 10px;
     border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.45);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+    text-shadow: none;
   }
   .qe.ftbq :global(button.ghost:hover:not(:disabled)),
   .qe.ftbq :global(button.ico:hover:not(:disabled)) {
     border-color: var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-btn-hover-top), var(--ftbq-btn-hover-bottom));
-    color: var(--ftbq-accent-green);
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
+    color: var(--ftbq-text, #e8e8e8);
   }
   .qe.ftbq :global(button.ghost:active:not(:disabled)),
   .qe.ftbq :global(button.ico:active:not(:disabled)) {
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+    background: var(--bg-active, var(--ftbq-btn-hover-bottom));
+    box-shadow: none;
   }
   .qe.ftbq :global(button.primary),
   .qe.ftbq :global(.qe-actions > button:not(.ghost)) {
     padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent-primary) 50%, #000);
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent-primary) 88%, #fff 12%),
-      color-mix(in srgb, var(--accent-primary) 72%, #000 28%)
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.25),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: var(--ftbq-text);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    background: var(--accent-primary);
+    box-shadow: none;
+    color: #fff;
+    text-shadow: none;
   }
   .qe.ftbq :global(button.primary:hover:not(:disabled)),
   .qe.ftbq :global(.qe-actions > button:not(.ghost):hover:not(:disabled)) {
-    filter: brightness(1.12);
+    filter: none;
+    background: var(--accent-hover, var(--accent-primary));
   }
   .qe.ftbq :global(button:disabled) {
     opacity: 0.5;
@@ -2607,23 +2726,24 @@
   .qe.ftbq :global(input),
   .qe.ftbq :global(select),
   .qe.ftbq :global(textarea) {
-    border-radius: 3px;
+    border-radius: 6px;
     border: 1px solid var(--ftbq-frame);
     background: var(--ftbq-input-bg);
-    box-shadow:
-      inset 1px 1px 3px rgba(0, 0, 0, 0.55),
-      inset -1px -1px 0 rgba(255, 255, 255, 0.05);
+    box-shadow: none;
     color: var(--ftbq-text, #e8e8e8);
     min-width: 0;
+    outline: none;
+    color-scheme: inherit;
+    transition:
+      border-color 0.12s ease,
+      box-shadow 0.12s ease;
   }
   .qe.ftbq :global(input:focus),
   .qe.ftbq :global(select:focus),
   .qe.ftbq :global(textarea:focus) {
     outline: none;
-    border-color: var(--ftbq-title-gold);
-    box-shadow:
-      inset 1px 1px 3px rgba(0, 0, 0, 0.55),
-      0 0 6px color-mix(in srgb, var(--ftbq-title-gold) 35%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--ftbq-frame));
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
   .qe-tb,
   .qe-title,
@@ -2657,12 +2777,10 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    background: var(--ftbq-bg-panel);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 12px 28px rgba(0, 0, 0, 0.55);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.12));
   }
   .book-menu button {
     display: flex;
@@ -2673,7 +2791,7 @@
     text-align: left;
     padding: 8px 10px;
     border: none;
-    border-radius: 3px;
+    border-radius: 6px;
     background: transparent;
     color: var(--ftbq-text, #e8e8ea);
     font-size: 12px;
@@ -2682,8 +2800,8 @@
   }
   .book-menu button:hover,
   .book-menu button.active {
-    background: rgba(61, 184, 168, 0.12);
-    color: var(--ftbq-accent-teal, #3db8a8);
+    background: var(--bg-hover, color-mix(in srgb, var(--ftbq-accent-teal) 12%, transparent));
+    color: var(--text-primary, var(--ftbq-text));
   }
   .dot-mini {
     color: var(--ftbq-quest-started, #f2c94c);
@@ -2730,16 +2848,14 @@
   }
   .issues-btn {
     border: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, var(--ftbq-border), var(--ftbq-btn-bottom));
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    box-shadow: none;
     color: var(--ftbq-quest-completed, #55c95a);
-    border-radius: 3px;
+    border-radius: 6px;
     padding: 2px 8px;
     font-size: 12px;
     cursor: pointer;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+    text-shadow: none;
   }
   .issues-btn.warn {
     color: #fbbf24;
@@ -2785,24 +2901,21 @@
     padding: 6px 10px;
     min-height: 40px;
     max-height: 48px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.22)),
-      var(--ftbq-bg-panel);
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
     border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.07),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.4),
-      0 2px 6px rgba(0, 0, 0, 0.35);
+    border-radius: 6px;
+    box-shadow: none;
   }
   .qe-title {
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-weight: 700;
+    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
+    font-weight: 600;
     font-size: 13px;
     letter-spacing: 0.02em;
   }
   .qe-title .book-name {
-    color: var(--ftbq-title-gold, #f2c94c);
-    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.65);
+    color: var(--text-primary, #1e293b);
+    font-weight: 600;
+    text-shadow: none;
   }
   .qe-stats {
     display: flex;
@@ -2813,7 +2926,7 @@
     flex-shrink: 0;
     flex-wrap: wrap;
     padding: 2px 6px;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
+    text-shadow: none;
   }
   .qe-stats .warn {
     color: var(--ftbq-quest-started, #f2c94c);
@@ -2823,13 +2936,13 @@
   }
   .dirty-badge {
     font-size: 10px;
-    color: #ffd971;
+    color: var(--accent-warning, #d97706);
     padding: 3px 8px;
-    border-radius: 3px;
-    background: rgba(242, 201, 76, 0.14);
-    border: 1px solid rgba(242, 201, 76, 0.3);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6);
-    animation: badge-glow 2s ease-in-out infinite;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent-warning) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-warning) 30%, transparent);
+    text-shadow: none;
+    animation: none;
   }
   @keyframes badge-glow {
     0%,
@@ -2845,12 +2958,12 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    border-radius: 3px;
+    border-radius: 6px;
     margin-bottom: 8px;
     border: 1px solid var(--ftbq-border);
     flex-shrink: 0;
     font-size: 12px;
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    text-shadow: none;
   }
   .notice-text {
     flex: 1;
@@ -2896,9 +3009,10 @@
   }
   .empty h3 {
     margin: 0;
-    color: var(--ftbq-title-gold, #f2c94c);
+    color: var(--text-primary, var(--ftbq-text));
     font-size: 16px;
-    text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.65);
+    font-weight: 600;
+    text-shadow: none;
   }
   .empty p {
     margin: 0;
@@ -2912,18 +3026,12 @@
     align-items: center;
     gap: 6px;
     padding: 10px 16px;
-    border: 1px solid color-mix(in srgb, var(--accent-secondary) 50%, #000);
-    border-radius: 3px;
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent-secondary) 88%, #fff 12%),
-      color-mix(in srgb, var(--accent-secondary) 72%, #000 28%)
-    );
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.22),
-      inset 0 -1px 0 rgba(0, 0, 0, 0.35);
-    color: var(--ftbq-text);
-    text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.5);
+    border: 1px solid color-mix(in srgb, var(--accent-secondary) 45%, var(--ftbq-frame));
+    border-radius: 6px;
+    background: var(--accent-secondary);
+    box-shadow: none;
+    color: #fff;
+    text-shadow: none;
     font-weight: 700;
     cursor: pointer;
   }
@@ -3125,18 +3233,21 @@
   .panel-tabs {
     display: flex;
     flex-shrink: 0;
+    gap: 2px;
+    padding: 4px 4px 0;
     border-bottom: 1px solid var(--ftbq-frame);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(0, 0, 0, 0.25));
+    background: var(--bg-tertiary, var(--ftbq-bg));
   }
   .panel-tabs .tab {
     flex: 1;
-    padding: 7px 4px;
-    border: none;
-    border-right: 1px solid var(--ftbq-frame);
-    background: transparent;
-    color: var(--ftbq-text-muted, #9a9aa0);
+    padding: 8px 4px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: color-mix(in srgb, var(--bg-elevated, var(--ftbq-bg-canvas)) 85%, transparent);
+    color: var(--text-muted, var(--ftbq-text-muted, #868e96));
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     cursor: pointer;
@@ -3145,17 +3256,22 @@
     border-right: none;
   }
   .panel-tabs .tab:hover {
-    color: var(--ftbq-text, #e8e8e8);
+    color: var(--text-secondary, var(--ftbq-text, #495057));
+    background: color-mix(in srgb, var(--bg-hover, #dee2e6) 70%, transparent);
   }
   .panel-tabs .tab.active {
-    color: var(--ftbq-title-gold, #f2c94c);
-    background: rgba(242, 201, 76, 0.08);
-    box-shadow: inset 0 -2px 0 var(--ftbq-title-gold, #f2c94c);
+    color: var(--text-primary, var(--ftbq-text, #212529));
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
+    border-color: var(--ftbq-frame);
+    border-bottom-color: var(--bg-secondary, var(--ftbq-bg-panel));
+    margin-bottom: -1px;
+    box-shadow: none;
   }
   .panel-content {
     flex: 1;
     min-height: 0;
     overflow: auto;
+    background: var(--bg-secondary, var(--ftbq-bg-panel));
   }
   .sel-hint {
     margin: 0;
@@ -3185,8 +3301,9 @@
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .qe-actions .active {
-    color: var(--ftbq-title-gold, #f2c94c);
-    border-color: var(--ftbq-accent-green, #55c95a);
+    color: var(--text-primary, var(--ftbq-text));
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--ftbq-frame));
+    background: var(--bg-hover, var(--ftbq-btn-hover-top));
   }
   :global(.spin) {
     animation: spin 0.8s linear infinite;

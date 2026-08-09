@@ -30,11 +30,12 @@
   import {
     readStoredTheme, commitTheme, type ThemeId,
   } from "../lib/themes";
-  import AiConnectionModal from "./AiConnectionModal.svelte";
+  import AiSettingsPanel from "./AiSettingsPanel.svelte";
   import ThemePicker from "./ThemePicker.svelte";
   import JavaPickerModal from "./JavaPickerModal.svelte";
+  import { copyText } from "../lib/clipboard";
 
-  type SettingsTab = "general" | "appearance" | "java" | "commands" | "runtime" | "integrations" | "about";
+  type SettingsTab = "general" | "appearance" | "java" | "commands" | "runtime" | "ai" | "integrations" | "about";
   let tab = $state<SettingsTab>("appearance");
 
   type AiSettings = {
@@ -45,6 +46,8 @@
     crashKbEndpoint?: string;
     ollamaBinaryPath?: string;
     ollamaModelsPath?: string;
+    speculativeDecoding?: boolean;
+    draftModel?: string;
   };
   type SwarmSettings = {
     enabled?: boolean;
@@ -54,6 +57,11 @@
     hubUrl?: string;
     p2pEnabled?: boolean;
     p2pControlUrl?: string;
+    p2pBootstrap?: string;
+    p2pRelayServer?: boolean;
+    volunteerDiagnose?: boolean;
+    creationWorker?: boolean;
+    advertisedVramMb?: number;
   };
   type IntegrationSettings = { githubRepository: string; ai: AiSettings; swarm?: SwarmSettings };
   type IntegrationStatus = {
@@ -124,7 +132,18 @@
   let swarmHubUrl = $state("");
   let swarmP2pEnabled = $state(false);
   let swarmP2pControlUrl = $state("http://127.0.0.1:8790");
+  let swarmP2pBootstrap = $state("");
+  let swarmP2pListenAddrs = $state<string[]>([]);
+  let swarmP2pCopyMsg = $state("");
   let swarmP2pStatus = $state("");
+  let swarmP2pHint = $state("");
+  let swarmP2pRelayStatus = $state("");
+  let swarmP2pGossipStatus = $state("");
+  let swarmP2pWorkerStubStatus = $state("");
+  let swarmP2pRelayServer = $state(false);
+  let swarmVolunteerDiagnose = $state(false);
+  let swarmCreationWorker = $state(false);
+  let swarmAdvertisedVramMb = $state(0);
   let swarmSaving = $state(false);
 
   let savingSettings = $state(false);
@@ -138,15 +157,6 @@
   let discordSaving = $state(false);
   let discordMessage = $state("");
   let discordError = $state("");
-  let aiModalOpen = $state(false);
-  let savingGemini = $state(false);
-
-  const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai";
-  const GEMINI_DEFAULT_MODEL = "gemini-flash-latest";
-
-  const isGeminiEndpoint = $derived(
-    aiEndpoint.includes("generativelanguage.googleapis.com") || aiEndpoint.includes("/v1beta/openai"),
-  );
 
   // Launcher settings
   let launcher = $state<LauncherSettings>({
@@ -164,6 +174,7 @@
     javaCustomArgs: null,
     defaultMemoryMb: 4096,
     youtubeInlinePlayer: true,
+    ingameOverlay: true,
     autoHideWorkflowRail: false,
     sidebarMode: "full",
     uiScalePercent: 100,
@@ -198,6 +209,7 @@
     { id: "java", label: "Java", icon: Coffee },
     { id: "commands", label: "Commands", icon: Terminal },
     { id: "runtime", label: "Runtime", icon: HardDrive },
+    { id: "ai", label: "AI", icon: Bot },
     { id: "integrations", label: "Integrations", icon: Plug },
     { id: "about", label: "About", icon: Info },
   ];
@@ -483,8 +495,13 @@
       swarmSupabaseConfigured = !!status.swarmSupabaseConfigured;
       swarmHubUrl = status.settings?.swarm?.hubUrl ?? "";
       swarmP2pEnabled = !!status.settings?.swarm?.p2pEnabled;
+      swarmVolunteerDiagnose = !!status.settings?.swarm?.volunteerDiagnose;
+      swarmCreationWorker = !!status.settings?.swarm?.creationWorker;
+      swarmAdvertisedVramMb = Number(status.settings?.swarm?.advertisedVramMb ?? 0) || 0;
+      swarmP2pRelayServer = !!status.settings?.swarm?.p2pRelayServer;
       swarmP2pControlUrl =
         status.settings?.swarm?.p2pControlUrl?.trim() || "http://127.0.0.1:8790";
+      swarmP2pBootstrap = status.settings?.swarm?.p2pBootstrap?.trim() || "";
       githubTokenDraft = "";
       modrinthTokenDraft = "";
       curseforgeTokenDraft = "";
@@ -493,8 +510,23 @@
       swarmSupabaseAnonDraft = "";
       if (swarmEnabled && swarmP2pEnabled) {
         void refreshP2pStatus();
+      } else if (swarmEnabled && !swarmP2pEnabled) {
+        swarmP2pStatus =
+          "Enable Prefer local P2P to use Fog / Creation workers";
+        swarmP2pHint = "";
+        swarmP2pRelayStatus = "";
+        swarmP2pGossipStatus = "";
+        swarmP2pWorkerStubStatus = "";
+        swarmP2pListenAddrs = [];
+        swarmP2pCopyMsg = "";
       } else {
         swarmP2pStatus = "";
+        swarmP2pHint = "";
+        swarmP2pRelayStatus = "";
+        swarmP2pGossipStatus = "";
+        swarmP2pWorkerStubStatus = "";
+        swarmP2pListenAddrs = [];
+        swarmP2pCopyMsg = "";
       }
     } catch (e) {
       integrationsError = String(e);
@@ -508,10 +540,12 @@
     integrationsError = "";
     integrationsMessage = "";
     try {
+      // Preserve AI settings (edited on the AI tab) while saving integrations/swarm.
+      const status = await ipc<IntegrationStatus>("get_integration_status");
       await ipc("save_integration_settings", {
         settings: {
           githubRepository: githubRepository.trim(),
-          ai: {
+          ai: status.settings?.ai ?? {
             provider: aiProvider,
             endpoint: aiEndpoint.trim(),
             model: aiModel.trim(),
@@ -528,6 +562,11 @@
             hubUrl: swarmHubUrl.trim(),
             p2pEnabled: swarmP2pEnabled,
             p2pControlUrl: swarmP2pControlUrl.trim() || "http://127.0.0.1:8790",
+            p2pBootstrap: swarmP2pBootstrap.trim(),
+            p2pRelayServer: swarmP2pRelayServer,
+            volunteerDiagnose: swarmVolunteerDiagnose,
+            creationWorker: swarmCreationWorker,
+            advertisedVramMb: swarmAdvertisedVramMb,
           },
         },
       });
@@ -595,61 +634,7 @@
     }
   }
 
-  /** Switch AI to Gemini OpenAI-compat + save API key (for quick testing). */
-  async function useGeminiForTesting() {
-    savingGemini = true;
-    integrationsError = "";
-    integrationsMessage = "";
-    try {
-      const model =
-        aiModel.trim().toLowerCase().includes("gemini") && aiModel.trim()
-          ? aiModel.trim()
-          : GEMINI_DEFAULT_MODEL;
-      aiProvider = "openai-compatible";
-      aiEndpoint = GEMINI_ENDPOINT;
-      aiModel = model;
-      await ipc("save_integration_settings", {
-        settings: {
-          githubRepository: githubRepository.trim(),
-          ai: {
-            provider: "openai-compatible",
-            endpoint: GEMINI_ENDPOINT,
-            model,
-            diagnoseMode,
-            crashKbEndpoint: crashKbEndpoint.trim(),
-            ollamaBinaryPath: ollamaBinaryPath.trim(),
-            ollamaModelsPath: ollamaModelsPath.trim(),
-          },
-          swarm: {
-            enabled: swarmEnabled,
-            onboardingDone: true,
-            sharePromptsEnabled: swarmSharePrompts,
-            supabaseUrl: swarmSupabaseUrl.trim(),
-            hubUrl: swarmHubUrl.trim(),
-            p2pEnabled: swarmP2pEnabled,
-            p2pControlUrl: swarmP2pControlUrl.trim() || "http://127.0.0.1:8790",
-          },
-        },
-      });
-      if (aiApiKeyDraft.trim()) {
-        await ipc("set_integration_secret", { kind: "ai", value: aiApiKeyDraft.trim() });
-        aiApiKeyDraft = "";
-      } else if (!aiApiKeySet) {
-        integrationsError = "Enter a Gemini API key first (Google AI Studio).";
-        await loadIntegrations();
-        return;
-      }
-      integrationsMessage = `Gemini ready · model ${model}`;
-      await loadIntegrations();
-    } catch (e) {
-      integrationsError = String(e);
-    } finally {
-      savingGemini = false;
-    }
-  }
-
-  async function toggleSwarmEnabled() {
-    swarmSaving = true;
+  async function toggleSwarmEnabled() {    swarmSaving = true;
     integrationsError = "";
     try {
       const next = !swarmEnabled;
@@ -704,13 +689,127 @@
       const s = await ipc<SwarmSettings>("set_swarm_p2p", {
         enabled: next,
         controlUrl: swarmP2pControlUrl.trim() || null,
+        bootstrap: swarmP2pBootstrap.trim() || null,
       });
       swarmP2pEnabled = !!s.p2pEnabled;
       swarmP2pControlUrl = s.p2pControlUrl?.trim() || "http://127.0.0.1:8790";
+      swarmP2pBootstrap = s.p2pBootstrap?.trim() || "";
       if (swarmP2pEnabled) {
         await ensureP2pNode();
       } else {
-        swarmP2pStatus = "P2P off — hub HTTP fallback only";
+        const vol = await ipc<SwarmSettings>("set_swarm_volunteer_diagnose", {
+          enabled: false,
+        });
+        swarmVolunteerDiagnose = !!vol.volunteerDiagnose;
+        const cre = await ipc<SwarmSettings>("set_swarm_creation_worker", {
+          enabled: false,
+        });
+        swarmCreationWorker = !!cre.creationWorker;
+        const rel = await ipc<SwarmSettings>("set_swarm_p2p_relay_server", {
+          enabled: false,
+        });
+        swarmP2pRelayServer = !!rel.p2pRelayServer;
+        swarmP2pStatus =
+          "Enable Prefer local P2P to use Fog / Creation workers";
+        swarmP2pHint = "";
+        swarmP2pRelayStatus = "";
+        swarmP2pGossipStatus = "";
+        swarmP2pWorkerStubStatus = "";
+        swarmP2pListenAddrs = [];
+        swarmP2pCopyMsg = "";
+      }
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      swarmSaving = false;
+    }
+  }
+
+  async function toggleVolunteerDiagnose() {
+    swarmSaving = true;
+    integrationsError = "";
+    try {
+      const next = !swarmVolunteerDiagnose;
+      const s = await ipc<SwarmSettings>("set_swarm_volunteer_diagnose", {
+        enabled: next,
+      });
+      swarmVolunteerDiagnose = !!s.volunteerDiagnose;
+      if (swarmP2pEnabled) {
+        await ipc("restart_p2p_node");
+        await refreshP2pStatus();
+        integrationsMessage = swarmVolunteerDiagnose
+          ? "Fog volunteer enabled — P2P node restarted."
+          : "Fog volunteer disabled — P2P node restarted.";
+      }
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      swarmSaving = false;
+    }
+  }
+
+  async function toggleCreationWorker() {
+    swarmSaving = true;
+    integrationsError = "";
+    try {
+      const next = !swarmCreationWorker;
+      const s = await ipc<SwarmSettings>("set_swarm_creation_worker", {
+        enabled: next,
+      });
+      swarmCreationWorker = !!s.creationWorker;
+      if (swarmP2pEnabled) {
+        await ipc("restart_p2p_node");
+        await refreshP2pStatus();
+        integrationsMessage = swarmCreationWorker
+          ? "Creation worker enabled — P2P node restarted."
+          : "Creation worker disabled — P2P node restarted.";
+      }
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      swarmSaving = false;
+    }
+  }
+
+  async function applyAdvertisedVramMb(raw: string) {
+    const parsed = Math.max(0, Math.floor(Number(raw) || 0));
+    if (parsed === swarmAdvertisedVramMb) return;
+    swarmSaving = true;
+    integrationsError = "";
+    try {
+      const s = await ipc<SwarmSettings>("set_swarm_advertised_vram_mb", {
+        vramMb: parsed,
+      });
+      swarmAdvertisedVramMb = Number(s.advertisedVramMb ?? 0) || 0;
+      if (swarmP2pEnabled) {
+        await ipc("restart_p2p_node");
+        await refreshP2pStatus();
+        integrationsMessage = `Advertised VRAM set to ${swarmAdvertisedVramMb} MB (stub) — P2P node restarted.`;
+      } else {
+        integrationsMessage = `Advertised VRAM set to ${swarmAdvertisedVramMb} MB (stub).`;
+      }
+    } catch (e) {
+      integrationsError = String(e);
+    } finally {
+      swarmSaving = false;
+    }
+  }
+
+  async function toggleP2pRelayServer() {
+    swarmSaving = true;
+    integrationsError = "";
+    try {
+      const next = !swarmP2pRelayServer;
+      const s = await ipc<SwarmSettings>("set_swarm_p2p_relay_server", {
+        enabled: next,
+      });
+      swarmP2pRelayServer = !!s.p2pRelayServer;
+      if (swarmP2pEnabled) {
+        await ipc("restart_p2p_node");
+        await refreshP2pStatus();
+        integrationsMessage = swarmP2pRelayServer
+          ? "Circuit Relay server enabled — P2P node restarted."
+          : "Circuit Relay server disabled — P2P node restarted.";
       }
     } catch (e) {
       integrationsError = String(e);
@@ -721,22 +820,134 @@
 
   async function refreshP2pStatus() {
     try {
-      const st = await ipc<{ enabled?: boolean; healthy?: boolean; controlUrl?: string; node?: { peers?: number; capsuleCount?: number } }>(
-        "get_p2p_node_status",
-      );
-      if (!st.enabled) {
-        swarmP2pStatus = "P2P disabled";
+      if (!swarmEnabled) {
+        swarmP2pStatus = "TuffSwarm off";
+        swarmP2pHint = "";
+        swarmP2pRelayStatus = "";
+        swarmP2pGossipStatus = "";
+        swarmP2pWorkerStubStatus = "";
+        swarmP2pListenAddrs = [];
+        swarmP2pCopyMsg = "";
         return;
       }
-      if (st.healthy) {
-        const peers = st.node?.peers ?? 0;
-        const caps = st.node?.capsuleCount ?? 0;
-        swarmP2pStatus = `Node healthy · ${peers} peer(s) · ${caps} capsule(s)`;
+      const st = await ipc<{
+        enabled?: boolean;
+        healthy?: boolean;
+        authorized?: boolean;
+        controlUrl?: string;
+        node?: {
+          peers?: number;
+          capsuleCount?: number;
+          creationPeers?: string[];
+          volunteerPeers?: string[];
+          listenAddrs?: string[];
+          relayServer?: boolean;
+          circuitListenAddrs?: string[];
+          gossipPublished?: number;
+          gossipReceived?: number;
+          gossipLastError?: string;
+          vramMb?: number;
+          maxJobs?: number;
+        };
+      }>("get_p2p_node_status");
+      if (!st.enabled) {
+        swarmP2pStatus =
+          "Enable Prefer local P2P to use Fog / Creation workers";
+        swarmP2pHint = "";
+        swarmP2pRelayStatus = "";
+        swarmP2pGossipStatus = "";
+        swarmP2pWorkerStubStatus = "";
+        swarmP2pListenAddrs = [];
+        swarmP2pCopyMsg = "";
+        return;
+      }
+
+      const peers = st.node?.peers ?? 0;
+      const caps = st.node?.capsuleCount ?? 0;
+      const creationPeers = st.node?.creationPeers ?? [];
+      const volunteerPeers = st.node?.volunteerPeers ?? [];
+      const creationCount = creationPeers.length;
+      const volunteerCount = volunteerPeers.length;
+      const circuitAddrs = st.node?.circuitListenAddrs ?? [];
+      const relayOn = !!st.node?.relayServer;
+      const gossipPub = st.node?.gossipPublished ?? 0;
+      const gossipRecv = st.node?.gossipReceived ?? 0;
+      const gossipErr = (st.node?.gossipLastError ?? "").trim();
+      const nodeVramMb = Number(st.node?.vramMb ?? swarmAdvertisedVramMb) || 0;
+
+      const raw = st.node?.listenAddrs ?? [];
+      const preferred = raw.filter(
+        (a) =>
+          !a.includes("/ip4/127.0.0.1/") &&
+          !a.includes("/ip6/::1/") &&
+          !a.includes("/ip4/0.0.0.0/") &&
+          !a.includes("p2p-circuit"),
+      );
+      swarmP2pListenAddrs = (preferred.length ? preferred : raw.filter((a) => !a.includes("p2p-circuit"))).slice(0, 2);
+
+      if (st.authorized === false) {
+        swarmP2pStatus = st.healthy
+          ? "Node unauthorized — use Start / attach node (reachable)"
+          : "Node unauthorized — use Start / attach node";
+      } else if (st.healthy) {
+        swarmP2pStatus = `Healthy · ${peers} peer(s) · ${caps} capsule(s) · creation workers: ${creationCount} · fog volunteers: ${volunteerCount}`;
       } else {
         swarmP2pStatus = "Node not reachable — will try hub fallback";
       }
+
+      if (relayOn) {
+        swarmP2pRelayStatus = "Relay server on — share listen address as Bootstrap for NAT peers.";
+      } else if (circuitAddrs.length > 0) {
+        swarmP2pRelayStatus = `Circuit: ${circuitAddrs.length} addr(s) via relay.`;
+      } else if (swarmP2pBootstrap.trim()) {
+        swarmP2pRelayStatus = "Bootstrap set — waiting for circuit reservation (Refresh status).";
+      } else {
+        swarmP2pRelayStatus = "";
+      }
+
+      if (st.healthy && st.authorized !== false) {
+        swarmP2pGossipStatus = gossipErr
+          ? `Gossip · pub ${gossipPub} · recv ${gossipRecv} · last error: ${gossipErr}`
+          : `Gossip · pub ${gossipPub} · recv ${gossipRecv}`;
+      } else {
+        swarmP2pGossipStatus = "";
+      }
+
+      if (swarmCreationWorker && st.healthy && st.authorized !== false) {
+        swarmP2pWorkerStubStatus = `Worker stub · VRAM ${nodeVramMb} MB`;
+      } else {
+        swarmP2pWorkerStubStatus = "";
+      }
+
+      const hints: string[] = [];
+      if (!swarmCreationWorker) {
+        hints.push("Turn on Creation worker below to accept peer jobs.");
+      } else if (creationCount === 0) {
+        hints.push(`No Creation workers seen yet (peers: ${peers}).`);
+      }
+      if (!swarmVolunteerDiagnose) {
+        hints.push("Fog volunteer off.");
+      } else if (volunteerCount === 0) {
+        hints.push("No Fog volunteers seen yet.");
+      }
+      swarmP2pHint = hints.join(" ");
     } catch (e) {
       swarmP2pStatus = String(e);
+      swarmP2pHint = "";
+      swarmP2pRelayStatus = "";
+      swarmP2pGossipStatus = "";
+      swarmP2pWorkerStubStatus = "";
+      swarmP2pListenAddrs = [];
+      swarmP2pCopyMsg = "";
+    }
+  }
+
+  async function copyP2pListenAddr(addr: string) {
+    try {
+      await copyText(addr);
+      swarmP2pCopyMsg = "Copied listen address.";
+    } catch {
+      swarmP2pCopyMsg = "Copy failed.";
     }
   }
 
@@ -744,6 +955,14 @@
     swarmSaving = true;
     integrationsError = "";
     try {
+      const s = await ipc<SwarmSettings>("set_swarm_p2p", {
+        enabled: true,
+        controlUrl: swarmP2pControlUrl.trim() || null,
+        bootstrap: swarmP2pBootstrap.trim(),
+      });
+      swarmP2pEnabled = !!s.p2pEnabled;
+      swarmP2pControlUrl = s.p2pControlUrl?.trim() || "http://127.0.0.1:8790";
+      swarmP2pBootstrap = s.p2pBootstrap?.trim() || "";
       await ipc("ensure_p2p_node");
       await refreshP2pStatus();
       integrationsMessage = "tuffswarm-node attached (P2P preferred; hub remains fallback).";
@@ -963,6 +1182,39 @@
                 onclick={() => void persistLauncher({ youtubeInlinePlayer: false })}
               >
                 Preview only
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-row">
+          <div class="settings-row-text">
+            <strong>In-game overlay</strong>
+            <p>
+              Discord/Steam-style overlay inside Minecraft (F8): YouTube player that keeps
+              playing with the GUI closed, friends presence and chat. Minecraft 1.21.1,
+              Fabric/NeoForge instances launched from TuffBox.
+            </p>
+          </div>
+          <div class="settings-row-control">
+            <div class="chip-row tight">
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.ingameOverlay !== false}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ ingameOverlay: true })}
+              >
+                Enabled
+              </button>
+              <button
+                type="button"
+                class="chip press-effect"
+                class:active={launcher.ingameOverlay === false}
+                disabled={launcherSaving}
+                onclick={() => void persistLauncher({ ingameOverlay: false })}
+              >
+                Disabled
               </button>
             </div>
           </div>
@@ -1305,6 +1557,17 @@
       </section>
     {/if}
 
+    {#if tab === "ai"}
+      <section class="card card-wide">
+        <div class="card-title">
+          <Bot size={18} />
+          <h3>AI</h3>
+        </div>
+        <p class="hint">Local Ollama models or a cloud API. Diagnose / Crash KB live under Advanced.</p>
+        <AiSettingsPanel onsaved={loadIntegrations} />
+      </section>
+    {/if}
+
     {#if tab === "integrations"}
       <section class="card card-wide">
         <div class="card-title">
@@ -1411,15 +1674,7 @@
             <div class="provider-head">
               <strong>AI</strong>
               <span class:ok={aiProvider === "ollama" || aiApiKeySet}>
-                {aiProvider === "ollama"
-                  ? "Ollama"
-                  : isGeminiEndpoint
-                    ? aiApiKeySet
-                      ? "Gemini · key set"
-                      : "Gemini · no key"
-                    : aiApiKeySet
-                      ? "API key set"
-                      : "API (no key)"}
+                {aiProvider === "ollama" ? "Ollama" : aiApiKeySet ? "Cloud · key set" : "Cloud · no key"}
               </span>
             </div>
             <p class="hint">
@@ -1427,52 +1682,11 @@
               {#if aiProvider === "ollama"}
                 · models <code>{ollamaModelsPath || "default"}</code>
               {/if}
+              · diagnose <code>{diagnoseMode}</code>
             </p>
-
-            <label>
-              Gemini model
-              <input
-                bind:value={aiModel}
-                placeholder={GEMINI_DEFAULT_MODEL}
-                autocomplete="off"
-              />
-            </label>
-            <label>
-              <KeyRound size={12} /> Gemini API key
-              <input
-                type="password"
-                bind:value={aiApiKeyDraft}
-                placeholder={aiApiKeySet ? "•••••••• (enter new to replace)" : "AIza… from Google AI Studio"}
-                autocomplete="new-password"
-              />
-            </label>
-            <p class="hint">Gemini key from AI Studio — routed via OpenAI-compat endpoint.</p>
-
             <div class="row-actions">
-              <button
-                type="button"
-                class="secondary mini"
-                onclick={useGeminiForTesting}
-                disabled={savingGemini || !!savingSecret}
-              >
-                {savingGemini ? "Saving…" : "Use Gemini"}
-              </button>
-              <button
-                class="ghost mini"
-                onclick={() => saveSecret("ai", aiApiKeyDraft)}
-                disabled={!!savingSecret || !aiApiKeyDraft.trim()}
-              >
-                {savingSecret === "ai" ? "Saving…" : "Save key only"}
-              </button>
-              <button
-                class="ghost mini"
-                onclick={() => clearSecret("ai")}
-                disabled={!aiApiKeySet || !!clearingSecret}
-              >
-                {clearingSecret === "ai" ? "Clearing…" : "Clear key"}
-              </button>
-              <button type="button" class="ghost mini" onclick={() => (aiModalOpen = true)}>
-                <Bot size={14} /> More…
+              <button type="button" class="secondary mini" onclick={() => (tab = "ai")}>
+                <Bot size={14} /> Open AI settings
               </button>
               <button
                 class="ghost mini"
@@ -1490,7 +1704,6 @@
               <strong><Network size={14} /> TuffSwarm</strong>
               <span class:ok={swarmEnabled}>{swarmEnabled ? "enabled" : "off"}</span>
             </div>
-            <p class="hint">Share crash fix capsules (signatures + plans, not raw logs). Built-in community backend — enable to join.</p>
             <label class="check-row">
               <input
                 type="checkbox"
@@ -1509,6 +1722,7 @@
             {:else}
               <small class="test-ok" style="opacity:0.8">Supabase backend not configured</small>
             {/if}
+            <p class="hint layer-label"><strong>Network</strong> — Share capsules via community Supabase (not raw logs).</p>
             <button
               type="button"
               class="ghost mini"
@@ -1581,6 +1795,7 @@
                 autocomplete="off"
               />
             </label>
+            <p class="hint layer-label"><strong>Local P2P</strong> — Talk to nearby TuffBox nodes.</p>
             <label class="check-row">
               <input
                 type="checkbox"
@@ -1588,7 +1803,7 @@
                 disabled={swarmSaving || !swarmEnabled}
                 onchange={toggleP2pEnabled}
               />
-              Prefer local P2P node (Phase C)
+              Prefer local P2P node
             </label>
             <label>
               P2P control URL
@@ -1599,6 +1814,16 @@
                 autocomplete="off"
               />
             </label>
+            <label>
+              Bootstrap peer multiaddr (optional)
+              <input
+                bind:value={swarmP2pBootstrap}
+                placeholder="/ip4/192.168.x.x/tcp/…/p2p/…"
+                disabled={!swarmEnabled || !swarmP2pEnabled}
+                autocomplete="off"
+              />
+            </label>
+            <p class="hint">Paste a peer listen multiaddr when mDNS fails. Save integrations, then Start / attach (or restart) so the node dials --bootstrap.</p>
             <div class="row-actions">
               <button
                 type="button"
@@ -1620,6 +1845,74 @@
             {#if swarmP2pStatus}
               <small class="test-ok">{swarmP2pStatus}</small>
             {/if}
+            {#if swarmP2pHint}
+              <small class="hint">{swarmP2pHint}</small>
+            {/if}
+            {#if swarmP2pRelayStatus}
+              <small class="hint">{swarmP2pRelayStatus}</small>
+            {/if}
+            {#if swarmP2pGossipStatus}
+              <small class="hint">{swarmP2pGossipStatus}</small>
+            {/if}
+            {#if swarmP2pWorkerStubStatus}
+              <small class="hint">{swarmP2pWorkerStubStatus}</small>
+            {/if}
+            {#if swarmP2pListenAddrs.length}
+              <div class="p2p-listen-addrs">
+                <small class="hint">Listen addresses (share with peer Bootstrap):</small>
+                {#each swarmP2pListenAddrs as addr (addr)}
+                  <div class="row-actions p2p-addr-row">
+                    <code class="p2p-addr">{addr}</code>
+                    <button type="button" class="ghost mini" onclick={() => copyP2pListenAddr(addr)}>Copy</button>
+                  </div>
+                {/each}
+                {#if swarmP2pCopyMsg}
+                  <small class="test-ok">{swarmP2pCopyMsg}</small>
+                {/if}
+              </div>
+            {/if}
+            <label class="check-row">
+              <input
+                type="checkbox"
+                checked={swarmP2pRelayServer}
+                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
+                onchange={toggleP2pRelayServer}
+              />
+              Act as Circuit Relay (public IP / VPS — peers use your listen address as Bootstrap)
+            </label>
+            <p class="hint">Relay accepts reservations for NAT peers. Toggling restarts the P2P node. Do not enable on a typical home PC behind CGNAT unless you port-forward.</p>
+            <p class="hint layer-label"><strong>Workers</strong> — Opt-in help for peers (Fog diagnose / Creation jobs).</p>
+            <label class="check-row">
+              <input
+                type="checkbox"
+                checked={swarmVolunteerDiagnose}
+                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
+                onchange={toggleVolunteerDiagnose}
+              />
+              Help community diagnose crashes (Fog volunteer — uses local AI when idle)
+            </label>
+            <label class="check-row">
+              <input
+                type="checkbox"
+                checked={swarmCreationWorker}
+                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
+                onchange={toggleCreationWorker}
+              />
+              Accept Creation Marketplace jobs (AI for kubejs/quest/recipe + scaffold fallback)
+            </label>
+            <label>
+              Advertised VRAM (MB, stub)
+              <input
+                type="number"
+                min="0"
+                step="256"
+                value={swarmAdvertisedVramMb}
+                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
+                onchange={(e) => applyAdvertisedVramMb((e.currentTarget as HTMLInputElement).value)}
+              />
+            </label>
+            <p class="hint">Routing preference only — not measured from your GPU. Changing restarts the P2P node (`--vram-mb`).</p>
+            <p class="hint">Advisory: 16GB+ RAM recommended. Toggling restarts the P2P node so peers see your capability.</p>
             <label class="check-row">
               <input
                 type="checkbox"
@@ -1629,38 +1922,6 @@
               />
               Ask to share capsule after a successful relaunch
             </label>
-          </div>
-
-          <div class="provider-block">
-            <div class="provider-head">
-              <strong>Crash KB</strong>
-              <span class:ok={!!crashKbEndpoint}>{crashKbEndpoint ? diagnoseMode : "offline seed"}</span>
-            </div>
-            <p class="hint">Private crash knowledge base. Full corpus stays on your server; launcher only gets matched plans/hits.</p>
-            <label>
-              Diagnose mode
-              <select bind:value={diagnoseMode}>
-                <option value="server">server (default) — remote diagnose + LLM</option>
-                <option value="local">local — remote lookup + your Ollama/API</option>
-                <option value="kb_only">kb_only — matched case actions, no LLM</option>
-              </select>
-            </label>
-            <label>
-              Crash KB API base URL
-              <input bind:value={crashKbEndpoint} placeholder="https://kb.example.com" />
-            </label>
-            <label>
-              Crash KB token
-              <input type="password" bind:value={crashKbTokenDraft} placeholder={crashKbTokenSet ? "•••••••• (set)" : "optional bearer token"} autocomplete="off" />
-            </label>
-            <div class="row-actions">
-              <button class="mini" disabled={savingSecret === "crash_kb" || !crashKbTokenDraft.trim()} onclick={() => saveSecret("crash_kb", crashKbTokenDraft)}>
-                {savingSecret === "crash_kb" ? "Saving…" : "Save token"}
-              </button>
-              <button class="ghost mini" disabled={clearingSecret === "crash_kb" || !crashKbTokenSet} onclick={() => clearSecret("crash_kb")}>
-                Clear
-              </button>
-            </div>
           </div>
         </div>
 
@@ -1750,8 +2011,6 @@
     {/if}
   </div>
 </div>
-
-<AiConnectionModal bind:open={aiModalOpen} onsaved={loadIntegrations} />
 
 {#if showJavaPicker}
   <JavaPickerModal
@@ -2045,7 +2304,7 @@
     font-weight: 900;
     font-size: 32px;
     color: #000;
-    box-shadow: 0 8px 24px rgba(27, 217, 106, 0.25);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
   .logo-big-img {
@@ -2170,8 +2429,7 @@
   .provider-block label {
     min-width: 0;
   }
-  .provider-block input,
-  .provider-block select {
+  .provider-block input {
     min-width: 0;
   }
   .provider-block .hint,
@@ -2188,6 +2446,7 @@
   .save-row { margin-top: 16px; }
   .mini { padding: 5px 8px; font-size: 11px; }
   .hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+  .layer-label { margin-top: 10px; margin-bottom: 8px; }
   .check-row {
     display: flex;
     flex-direction: row;
@@ -2220,9 +2479,18 @@
     font-size: 11px;
   }
   .test-ok { color: var(--accent-primary); font-size: 11px; }
+  .p2p-listen-addrs { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .p2p-addr-row { align-items: flex-start; }
+  .p2p-addr {
+    font-size: 10px;
+    word-break: break-all;
+    flex: 1;
+    min-width: 0;
+    color: var(--text-secondary, inherit);
+  }
   .notice { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 10px; margin-bottom: 12px; border: 1px solid var(--border-color); font-size: 12px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .inline-status { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 12px; margin-bottom: 10px; }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

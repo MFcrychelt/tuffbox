@@ -25,9 +25,13 @@ pub const MAX_CAPSULE_GOSSIP_BYTES: usize = 64 * 1024;
 /// Built-in TuffSwarm Supabase project (community inbox). Publishable/anon key is
 /// public by design (RLS + Edge Function); never ship the service role.
 pub const BUILTIN_SUPABASE_URL: &str = "https://vsoqnwknpueuubiovyjd.supabase.co";
-/// Publishable key (`sb_publishable_…` / legacy anon). Safe to embed in the client.
+/// Publishable key for PostgREST (`rest/v1/*`). Safe to embed in the client.
 pub const BUILTIN_SUPABASE_ANON_KEY: &str =
     "sb_publishable_b0ICBMz_HvyRa8GioadWcg_Co5Vjljr";
+/// Legacy JWT anon (`role=anon`) for Edge Functions gateway (`functions/v1/*`).
+/// Prefer over publishable `sb_publishable_…` — gateway accepts JWT reliably.
+pub const BUILTIN_SUPABASE_EDGE_ANON_KEY: &str =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzb3Fud2tucHVldXViaW92eWpkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4MTEwMDYsImV4cCI6MjEwMDM4NzAwNn0.E9L11ipWyNiSchUx6pxT3HOVxu_vHtYDUOnNTixqJaI";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +59,21 @@ pub struct SwarmSettings {
     /// Local control URL of tuffswarm-node (default http://127.0.0.1:8790).
     #[serde(default = "default_p2p_control_url")]
     pub p2p_control_url: String,
+    /// Optional peer multiaddr for `--bootstrap` when mDNS fails (`/ip4/…/tcp/…/p2p/…`).
+    #[serde(default)]
+    pub p2p_bootstrap: String,
+    /// Opt-in: accept Circuit Relay v2 reservations (`--relay-server`; public IP / VPS).
+    #[serde(default)]
+    pub p2p_relay_server: bool,
+    /// Opt-in: accept Fog diagnose jobs (local Ollama) for other players.
+    #[serde(default)]
+    pub volunteer_diagnose: bool,
+    /// Opt-in: accept Creation Marketplace jobs (scaffold / GPU later) for peers.
+    #[serde(default)]
+    pub creation_worker: bool,
+    /// Stub advertised VRAM (MB) for Creation routing (`--vram-mb`). Not measured.
+    #[serde(default)]
+    pub advertised_vram_mb: u32,
 }
 
 fn default_true() -> bool {
@@ -75,6 +94,11 @@ impl Default for SwarmSettings {
             hub_url: String::new(),
             p2p_enabled: false,
             p2p_control_url: default_p2p_control_url(),
+            p2p_bootstrap: String::new(),
+            p2p_relay_server: false,
+            volunteer_diagnose: false,
+            creation_worker: false,
+            advertised_vram_mb: 0,
         }
     }
 }
@@ -698,6 +722,15 @@ pub fn sign_capsule_with_device_key(capsule: &mut ExperienceCapsule) -> Result<S
     let (sk, device_id) = load_or_create_device_signing_key()?;
     capsule.sign_ed25519(&sk, &device_id)?;
     Ok(device_id)
+}
+
+/// Base64 (standard) Ed25519 public key for this device — matches capsule `signerPublicKey`.
+pub fn device_signer_public_key_b64() -> Result<String, String> {
+    let (sk, _) = load_or_create_device_signing_key()?;
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        sk.verifying_key().as_bytes(),
+    ))
 }
 
 /// Canonical vote message — must match Edge Function `vote-capsule`.

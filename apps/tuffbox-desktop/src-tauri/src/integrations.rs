@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter};
 use tuffbox_core::ProjectManifest;
 
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
@@ -10,6 +11,172 @@ const DEFAULT_GITHUB_REPOSITORY: &str = "MFcrychelt/tuffbox";
 const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 /// Default Ollama tag for crash plans (smarter; user still must pull once).
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:7b";
+const OLLAMA_PULL_PROGRESS_EVENT: &str = "ollama-pull-progress";
+
+/// Installed Ollama model metadata from `/api/tags`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaModelInfo {
+    pub name: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    #[serde(default)]
+    pub parameter_size: String,
+    #[serde(default)]
+    pub quantization: String,
+    #[serde(default)]
+    pub family: String,
+    /// Heuristic fit vs host RAM: `ok` | `tight` | `heavy` | `unknown`.
+    #[serde(default)]
+    pub fit: String,
+}
+
+/// Curated install suggestion with size / hardware hints.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedModel {
+    pub name: String,
+    pub note: String,
+    pub approx_size_bytes: u64,
+    pub min_ram_gb: f64,
+    pub min_vram_gb: f64,
+}
+
+fn suggested_model_catalog() -> Vec<SuggestedModel> {
+    vec![
+        SuggestedModel {
+            name: DEFAULT_OLLAMA_MODEL.into(),
+            note: "Default — better crash plans".into(),
+            approx_size_bytes: 4_700_000_000,
+            min_ram_gb: 8.0,
+            min_vram_gb: 6.0,
+        },
+        SuggestedModel {
+            name: "llama3.1:8b".into(),
+            note: "Strong alternative".into(),
+            approx_size_bytes: 4_900_000_000,
+            min_ram_gb: 10.0,
+            min_vram_gb: 7.0,
+        },
+        SuggestedModel {
+            name: "llama3.2:3b".into(),
+            note: "Fast / weaker plans".into(),
+            approx_size_bytes: 2_000_000_000,
+            min_ram_gb: 6.0,
+            min_vram_gb: 3.0,
+        },
+        SuggestedModel {
+            name: "phi3:mini".into(),
+            note: "Fast / weaker plans".into(),
+            approx_size_bytes: 2_300_000_000,
+            min_ram_gb: 6.0,
+            min_vram_gb: 3.5,
+        },
+    ]
+}
+
+fn host_ram_bytes() -> u64 {
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    sys.total_memory()
+}
+
+fn parse_param_billions(text: &str) -> Option<f64> {
+    let lower = text.to_ascii_lowercase();
+    // Prefer explicit "7B" / "3.2B" tokens.
+    for token in lower
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_')
+        .filter(|t| !t.is_empty())
+    {
+        if let Some(num) = token.strip_suffix('b') {
+            if let Ok(v) = num.parse::<f64>() {
+                if v > 0.0 && v < 10_000.0 {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn quant_bytes_per_param(quant: &str) -> f64 {
+    let q = quant.to_ascii_lowercase();
+    if q.contains("q2") {
+        0.3
+    } else if q.contains("q3") {
+        0.4
+    } else if q.contains("q4") {
+        0.55
+    } else if q.contains("q5") {
+        0.7
+    } else if q.contains("q6") {
+        0.8
+    } else if q.contains("q8") {
+        1.0
+    } else if q.contains("f16") || q.contains("fp16") {
+        2.0
+    } else if q.contains("f32") || q.contains("fp32") {
+        4.0
+    } else {
+        0.55 // typical Ollama default quant
+    }
+}
+
+fn estimate_fit(size_bytes: u64, parameter_size: &str, quantization: &str, name: &str) -> String {
+    let ram = host_ram_bytes();
+    if ram == 0 {
+        return "unknown".into();
+    }
+    let params_b = parse_param_billions(parameter_size)
+        .or_else(|| parse_param_billions(name))
+        .unwrap_or(0.0);
+    let estimated = if size_bytes > 0 {
+        size_bytes as f64
+    } else if params_b > 0.0 {
+        params_b * 1e9 * quant_bytes_per_param(quantization)
+    } else {
+        return "unknown".into();
+    };
+    // Runtime working set ~1.2× weights for KV/context headroom.
+    let need = estimated * 1.2;
+    let ram_f = ram as f64;
+    if need <= ram_f * 0.55 {
+        "ok".into()
+    } else if need <= ram_f * 0.85 {
+        "tight".into()
+    } else {
+        "heavy".into()
+    }
+}
+
+fn disk_space_for_path(path: &Path) -> (u64, u64) {
+    use sysinfo::Disks;
+    let disks = Disks::new_with_refreshed_list();
+    let abs = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf());
+    let abs_s = abs.to_string_lossy().to_ascii_lowercase();
+    let mut best: Option<(usize, u64, u64)> = None;
+    for disk in disks.list() {
+        let mount = disk.mount_point().to_string_lossy().to_ascii_lowercase();
+        if mount.is_empty() {
+            continue;
+        }
+        if abs_s.starts_with(&mount) {
+            let len = mount.len();
+            let avail = disk.available_space();
+            let total = disk.total_space();
+            if best.map(|(l, _, _)| len > l).unwrap_or(true) {
+                best = Some((len, avail, total));
+            }
+        }
+    }
+    best.map(|(_, a, t)| (a, t)).unwrap_or((0, 0))
+}
+
+fn model_info_names(models: &[OllamaModelInfo]) -> Vec<String> {
+    models.iter().map(|m| m.name.clone()).collect()
+}
 
 /// Pick full vs compact crash Explain prompt for the configured AI settings.
 pub fn crash_explain_prompt_for(
@@ -53,10 +220,20 @@ pub struct AiSettings {
     /// (`~/.ollama/models` / `%USERPROFILE%\.ollama\models`).
     #[serde(default)]
     pub ollama_models_path: String,
+    /// Opt-in L3 draft→verify: small local draft model proposes ActionPlan, main model validates.
+    #[serde(default)]
+    pub speculative_decoding: bool,
+    /// Draft model id/tag (Ollama or OpenAI-compatible). Empty → `qwen2.5-coder:0.5b`.
+    #[serde(default = "default_draft_model")]
+    pub draft_model: String,
 }
 
 fn default_diagnose_mode() -> String {
     "server".into()
+}
+
+fn default_draft_model() -> String {
+    crate::speculative::DEFAULT_DRAFT_MODEL.into()
 }
 
 impl Default for AiSettings {
@@ -69,6 +246,8 @@ impl Default for AiSettings {
             crash_kb_endpoint: String::new(),
             ollama_binary_path: String::new(),
             ollama_models_path: String::new(),
+            speculative_decoding: false,
+            draft_model: default_draft_model(),
         }
     }
 }
@@ -247,7 +426,7 @@ pub fn swarm_supabase_url() -> Option<String> {
     swarm_settings().effective_supabase_url()
 }
 
-/// Anon/publishable key: keyring override, else built-in (public by design).
+/// Anon/publishable key for PostgREST: keyring override, else built-in publishable.
 pub fn swarm_supabase_anon_key() -> Option<String> {
     if let Some(k) = secret_optional("swarm_supabase") {
         return Some(k);
@@ -260,9 +439,28 @@ pub fn swarm_supabase_anon_key() -> Option<String> {
     }
 }
 
+/// JWT anon for Edge `functions/v1/*`. Keyring override only when it looks like a JWT
+/// (`eyJ…`); otherwise always the built-in legacy anon (publishable keys fail the gateway).
+pub fn swarm_supabase_edge_anon_key() -> Option<String> {
+    if let Some(k) = secret_optional("swarm_supabase") {
+        let t = k.trim();
+        if t.starts_with("eyJ") {
+            return Some(t.to_string());
+        }
+    }
+    let builtin = tuffbox_core::swarm::BUILTIN_SUPABASE_EDGE_ANON_KEY.trim();
+    if builtin.is_empty() {
+        None
+    } else {
+        Some(builtin.to_string())
+    }
+}
+
 /// True when effective URL + anon key resolve (built-in counts).
 pub fn swarm_supabase_configured() -> bool {
-    swarm_supabase_url().is_some() && swarm_supabase_anon_key().is_some()
+    swarm_supabase_url().is_some()
+        && swarm_supabase_anon_key().is_some()
+        && swarm_supabase_edge_anon_key().is_some()
 }
 
 /// Whether the client is using the shipped community Supabase defaults (no overrides).
@@ -355,20 +553,73 @@ pub fn set_swarm_supabase_url(
 pub fn set_swarm_p2p(
     enabled: bool,
     control_url: Option<String>,
+    bootstrap: Option<String>,
 ) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
     let mut settings = read_settings();
     settings.swarm.p2p_enabled = enabled;
     settings.swarm.onboarding_done = true;
+    if !enabled {
+        settings.swarm.volunteer_diagnose = false;
+        settings.swarm.creation_worker = false;
+        settings.swarm.p2p_relay_server = false;
+    }
     if let Some(url) = control_url {
         let url = url.trim().trim_end_matches('/').to_string();
         if !url.is_empty() {
             settings.swarm.p2p_control_url = url;
         }
     }
+    if let Some(boot) = bootstrap {
+        settings.swarm.p2p_bootstrap = boot.trim().to_string();
+    }
     if settings.swarm.p2p_control_url.trim().is_empty() {
         settings.swarm.p2p_control_url = tuffbox_core::swarm::SwarmSettings::default()
             .p2p_control_url;
     }
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_volunteer_diagnose(
+    enabled: bool,
+) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.volunteer_diagnose = enabled;
+    settings.swarm.onboarding_done = true;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_creation_worker(
+    enabled: bool,
+) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.creation_worker = enabled;
+    settings.swarm.onboarding_done = true;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_p2p_relay_server(
+    enabled: bool,
+) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.p2p_relay_server = enabled;
+    settings.swarm.onboarding_done = true;
+    write_settings(&settings)?;
+    Ok(settings.swarm)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_swarm_advertised_vram_mb(
+    vram_mb: u32,
+) -> Result<tuffbox_core::swarm::SwarmSettings, String> {
+    let mut settings = read_settings();
+    settings.swarm.advertised_vram_mb = vram_mb;
+    settings.swarm.onboarding_done = true;
     write_settings(&settings)?;
     Ok(settings.swarm)
 }
@@ -893,7 +1144,31 @@ async fn publish_curseforge(
     })
 }
 
+fn body_looks_like_html_edge_block(body: &Value) -> bool {
+    let raw = body
+        .pointer("/error")
+        .and_then(Value::as_str)
+        .or_else(|| body.get("error").and_then(Value::as_str))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| body.to_string());
+    let lower = raw.to_ascii_lowercase();
+    lower.contains("<!doctype html")
+        || lower.contains("<html")
+        || lower.contains("error 403 (forbidden)")
+}
+
 fn api_error(service: &str, status: reqwest::StatusCode, body: &Value) -> String {
+    // Google edge/WAF often returns an HTML 403 page for blocked VPN/datacenter IPs
+    // before the Generative Language API sees the request (not an API-key failure).
+    if status.as_u16() == 403 && body_looks_like_html_edge_block(body) {
+        return format!(
+            "{service} returned 403 Forbidden from Google's edge (HTML error page) — \
+             your network/VPN egress IP is likely blocked. Try another VPN server, \
+             split-tunnel generativelanguage.googleapis.com, or disable VPN; this is \
+             usually not an API key problem"
+        );
+    }
+
     let message = body
         .get("message")
         .or_else(|| body.get("description"))
@@ -917,8 +1192,10 @@ fn api_error(service: &str, status: reqwest::StatusCode, body: &Value) -> String
             }
         });
     let mut out = format!("{service} returned {status}: {message}");
-    if status == reqwest::StatusCode::UNAUTHORIZED || status.as_u16() == 403 {
-        out.push_str(" — check the AI API key in Settings → Integrations → AI");
+    if status == reqwest::StatusCode::UNAUTHORIZED
+        || (status.as_u16() == 403 && !message.to_ascii_lowercase().contains("<!doctype"))
+    {
+        out.push_str(" — check the AI API key in Settings → AI");
     }
     out
 }
@@ -953,7 +1230,7 @@ async fn call_gemini_generate_content(
     json_mode: bool,
 ) -> Result<(String, Option<tuffbox_core::AiTokenUsage>), String> {
     if api_key.trim().is_empty() {
-        return Err("Gemini API key is not set — paste it in Settings → Integrations → AI".into());
+        return Err("Gemini API key is not set — paste it in Settings → AI".into());
     }
     if gemini_model_id(model).is_empty() {
         return Err("Gemini model is empty — set e.g. gemini-2.0-flash or gemini-flash-latest".into());
@@ -1118,7 +1395,7 @@ fn model_name_matches(installed: &str, wanted: &str) -> bool {
     false
 }
 
-async fn ollama_list_models(root: &str) -> Result<Vec<String>, String> {
+async fn ollama_list_models(root: &str) -> Result<Vec<OllamaModelInfo>, String> {
     let url = format!("{root}/api/tags");
     let response = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
@@ -1132,15 +1409,49 @@ async fn ollama_list_models(root: &str) -> Result<Vec<String>, String> {
         return Err(format!("Ollama /api/tags failed ({})", response.status()));
     }
     let body: Value = response.json().await.map_err(|e| e.to_string())?;
-    let mut names = Vec::new();
-    if let Some(models) = body.get("models").and_then(Value::as_array) {
-        for m in models {
-            if let Some(name) = m.get("name").and_then(Value::as_str) {
-                names.push(name.to_string());
-            }
+    let mut models = Vec::new();
+    if let Some(arr) = body.get("models").and_then(Value::as_array) {
+        for m in arr {
+            let Some(name) = m.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let size_bytes = m.get("size").and_then(Value::as_u64).unwrap_or(0);
+            let details = m.get("details");
+            let parameter_size = details
+                .and_then(|d| d.get("parameter_size"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let quantization = details
+                .and_then(|d| d.get("quantization_level"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let family = details
+                .and_then(|d| d.get("family"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    details
+                        .and_then(|d| d.get("families"))
+                        .and_then(Value::as_array)
+                        .and_then(|a| a.first())
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("")
+                .to_string();
+            let fit = estimate_fit(size_bytes, &parameter_size, &quantization, name);
+            models.push(OllamaModelInfo {
+                name: name.to_string(),
+                size_bytes,
+                parameter_size,
+                quantization,
+                family,
+                fit,
+            });
         }
     }
-    Ok(names)
+    models.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(models)
 }
 
 fn try_start_ollama(binary_hint: &str, models_path: &str) {
@@ -1540,30 +1851,94 @@ fn default_ollama_binary_candidates() -> Vec<PathBuf> {
     out
 }
 
-async fn ollama_pull_model(root: &str, model: &str) -> Result<(), String> {
+async fn ollama_pull_model(
+    app: Option<&AppHandle>,
+    root: &str,
+    model: &str,
+) -> Result<(), String> {
     let url = format!("{root}/api/pull");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60 * 45))
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client
+    let mut response = client
         .post(&url)
-        .json(&json!({ "name": model, "stream": false }))
+        .json(&json!({ "name": model, "stream": true }))
         .send()
         .await
         .map_err(|e| format!("Ollama pull failed for '{model}': {e}"))?;
     let status = response.status();
-    let body: Value = response
-        .json()
-        .await
-        .unwrap_or_else(|_| json!({ "error": "empty response" }));
     if !status.is_success() {
+        let body: Value = response
+            .json()
+            .await
+            .unwrap_or_else(|_| json!({ "error": "empty response" }));
         return Err(api_error("Ollama pull", status, &body));
     }
-    if let Some(err) = body.get("error").and_then(Value::as_str) {
-        if !err.is_empty() {
-            return Err(format!("Ollama pull error: {err}"));
+
+    let mut buf = String::new();
+    let mut last_emit = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(1))
+        .unwrap_or_else(std::time::Instant::now);
+    loop {
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|e| format!("Ollama pull stream error: {e}"))?;
+        let Some(bytes) = chunk else {
+            break;
+        };
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+        while let Some(idx) = buf.find('\n') {
+            let line = buf[..idx].trim().to_string();
+            buf = buf[idx + 1..].to_string();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(evt) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if let Some(err) = evt.get("error").and_then(Value::as_str) {
+                if !err.is_empty() {
+                    return Err(format!("Ollama pull error: {err}"));
+                }
+            }
+            if let Some(handle) = app {
+                let now = std::time::Instant::now();
+                let status_s = evt
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let completed = evt.get("completed").and_then(Value::as_u64).unwrap_or(0);
+                let total = evt.get("total").and_then(Value::as_u64).unwrap_or(0);
+                let done = status_s.eq_ignore_ascii_case("success")
+                    || (total > 0 && completed >= total && completed > 0);
+                if done || now.duration_since(last_emit).as_millis() >= 250 {
+                    last_emit = now;
+                    let _ = handle.emit(
+                        OLLAMA_PULL_PROGRESS_EVENT,
+                        json!({
+                            "model": model,
+                            "status": status_s,
+                            "completed": completed,
+                            "total": total,
+                        }),
+                    );
+                }
+            }
         }
+    }
+    if let Some(handle) = app {
+        let _ = handle.emit(
+            OLLAMA_PULL_PROGRESS_EVENT,
+            json!({
+                "model": model,
+                "status": "success",
+                "completed": 1u64,
+                "total": 1u64,
+            }),
+        );
     }
     Ok(())
 }
@@ -1622,7 +1997,7 @@ pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String
     let wanted_raw = settings.model.trim();
     if wanted_raw.is_empty() {
         if let Some(first) = installed.first() {
-            return Ok(first.clone());
+            return Ok(first.name.clone());
         }
         return Err(
             "Ollama is running but no model is installed. Open Settings → AI, enter a model name (or pick a .gguf file), and click Install model."
@@ -1630,24 +2005,27 @@ pub async fn ensure_ollama_ready(settings: &AiSettings) -> Result<String, String
         );
     }
 
-    let has = |list: &[String], name: &str| list.iter().any(|m| model_name_matches(m, name));
+    let has = |list: &[OllamaModelInfo], name: &str| {
+        list.iter().any(|m| model_name_matches(&m.name, name))
+    };
     if has(&installed, wanted_raw) {
         return Ok(wanted_raw.to_string());
     }
     if let Some(local) = installed
         .iter()
-        .find(|m| model_name_matches(m, wanted_raw))
-        .cloned()
+        .find(|m| model_name_matches(&m.name, wanted_raw))
+        .map(|m| m.name.clone())
     {
         return Ok(local);
     }
 
+    let names = model_info_names(&installed);
     Err(format!(
         "Model '{wanted_raw}' is not installed in Ollama. Open Settings → AI, enter the model name you want (e.g. qwen2.5:7b), and click Install model. Installed: {}.",
-        if installed.is_empty() {
+        if names.is_empty() {
             "none".into()
         } else {
-            installed.join(", ")
+            names.join(", ")
         }
     ))
 }
@@ -1733,24 +2111,15 @@ pub async fn detect_ollama(
         "models": models,
         "needsModel": running && models.is_empty(),
         "error": api_error,
-        "suggestedModels": [
-            DEFAULT_OLLAMA_MODEL,
-            "llama3.1:8b",
-            "llama3.2:3b",
-            "phi3:mini"
-        ],
-        "suggestedModelNotes": {
-            "qwen2.5:7b": "Default — better crash plans",
-            "llama3.1:8b": "Strong alternative",
-            "llama3.2:3b": "Fast / weaker plans",
-            "phi3:mini": "Fast / weaker plans"
-        },
+        "suggestedModels": suggested_model_catalog(),
+        "hostRamBytes": host_ram_bytes(),
     }))
 }
 
 /// Explicitly pull a model the user chose (by Ollama tag name).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pull_ollama_model(
+    app: AppHandle,
     model: String,
     endpoint: Option<String>,
     binary_path: Option<String>,
@@ -1815,7 +2184,7 @@ pub async fn pull_ollama_model(
         .trim_start_matches("https://");
 
     // Prefer HTTP pull against the daemon that has OLLAMA_MODELS; CLI is a backup.
-    match ollama_pull_model(&pull_root, &name).await {
+    match ollama_pull_model(Some(&app), &pull_root, &name).await {
         Ok(()) => {}
         Err(api_err) => {
             if let Err(cli_err) =
@@ -2517,8 +2886,74 @@ where
     Ok((finalize_ai_content(full, json_mode)?, usage))
 }
 
+/// Result of crash Explain, including optional draft→verify metadata.
+#[derive(Debug, Clone, Default)]
+pub struct CrashExplainDetailed {
+    pub value: Value,
+    pub speculative: crate::speculative::SpeculativeMeta,
+}
+
 /// Call AI and ensure the response parses as ActionPlan; one repair retry on failure.
 pub async fn call_ai_crash_explain(settings: &AiSettings, prompt: &str) -> Result<Value, String> {
+    Ok(call_ai_crash_explain_detailed(settings, prompt).await?.value)
+}
+
+/// Same as [`call_ai_crash_explain`], plus whether draft→verify ran.
+pub async fn call_ai_crash_explain_detailed(
+    settings: &AiSettings,
+    prompt: &str,
+) -> Result<CrashExplainDetailed, String> {
+    if crate::speculative::should_run(settings) {
+        match try_speculative_crash_explain(settings, prompt).await {
+            Ok(detailed) => return Ok(detailed),
+            Err(e) => {
+                eprintln!(
+                    "[ai] speculative draft→verify skipped ({e}); falling back to single-shot"
+                );
+            }
+        }
+    }
+    let value = call_ai_crash_explain_single(settings, prompt).await?;
+    Ok(CrashExplainDetailed {
+        value,
+        speculative: crate::speculative::SpeculativeMeta::default(),
+    })
+}
+
+async fn try_speculative_crash_explain(
+    settings: &AiSettings,
+    prompt: &str,
+) -> Result<CrashExplainDetailed, String> {
+    let draft_model = crate::speculative::resolve_draft_model(settings);
+    let mut draft_settings = settings.clone();
+    draft_settings.model = draft_model.clone();
+
+    let draft_prompt = crate::speculative::build_draft_prompt(prompt);
+    let draft_value = call_ai_once(&draft_settings, &draft_prompt)
+        .await
+        .map_err(|e| format!("draft model `{draft_model}`: {e}"))?;
+    let draft_raw = serde_json::to_string(&draft_value).unwrap_or_default();
+    // Soft-check: prefer a parseable ActionPlan as draft; otherwise still pass text through.
+    let draft_json = match tuffbox_core::action_plan::parse_action_plan(&draft_raw) {
+        Ok(plan) => serde_json::to_string(&plan).unwrap_or(draft_raw),
+        Err(_) => draft_raw,
+    };
+
+    let verify_prompt = crate::speculative::build_verify_prompt(prompt, &draft_json);
+    let value = call_ai_crash_explain_single(settings, &verify_prompt).await?;
+    Ok(CrashExplainDetailed {
+        value,
+        speculative: crate::speculative::SpeculativeMeta {
+            used: true,
+            draft_model: Some(draft_model),
+        },
+    })
+}
+
+async fn call_ai_crash_explain_single(
+    settings: &AiSettings,
+    prompt: &str,
+) -> Result<Value, String> {
     match call_ai_once(settings, prompt).await {
         Ok(value) => {
             let raw = serde_json::to_string(&value).unwrap_or_default();
@@ -2647,18 +3082,147 @@ async fn call_ai_once(settings: &AiSettings, prompt: &str) -> Result<Value, Stri
     }
 }
 
-/// List local Ollama model names via `/api/tags`.
+/// List local Ollama models via `/api/tags` (with size / quant / fit metadata).
 #[tauri::command(rename_all = "camelCase")]
-pub async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<String>, String> {
+pub async fn list_ollama_models(endpoint: Option<String>) -> Result<Vec<OllamaModelInfo>, String> {
     let settings = read_settings();
     let base = endpoint
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| settings.ai.endpoint.clone());
     let root = ollama_root(&base);
-    ollama_list_models(&root).await.map(|mut names| {
-        names.sort();
-        names
-    })
+    ollama_list_models(&root).await
+}
+
+/// Disk usage for the Ollama models folder + free space on that volume.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_ollama_storage(models_path: Option<String>) -> Result<Value, String> {
+    let settings = read_settings();
+    let path = models_path
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            let custom = settings.ai.ollama_models_path.trim();
+            if custom.is_empty() {
+                default_ollama_models_dir().to_string_lossy().to_string()
+            } else {
+                custom.to_string()
+            }
+        });
+    let dir = PathBuf::from(&path);
+    let (files, used_bytes) = ollama_storage_stats(&dir);
+    let (available_bytes, total_bytes) = disk_space_for_path(&dir);
+    Ok(json!({
+        "path": path,
+        "files": files,
+        "usedBytes": used_bytes,
+        "availableBytes": available_bytes,
+        "totalBytes": total_bytes,
+        "hostRamBytes": host_ram_bytes(),
+    }))
+}
+
+/// Delete an installed Ollama model by tag.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_ollama_model(
+    model: String,
+    endpoint: Option<String>,
+    binary_path: Option<String>,
+) -> Result<Value, String> {
+    let name = model.trim().to_string();
+    if name.is_empty() {
+        return Err("Enter a model name to delete".into());
+    }
+    let settings = read_settings();
+    let hint = binary_path.unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
+    let root = ollama_root(
+        &endpoint
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| settings.ai.endpoint.clone()),
+    );
+
+    // Prefer HTTP delete; CLI fallback.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{root}/api/delete");
+    let api_result = client
+        .post(&url)
+        .json(&json!({ "name": name }))
+        .send()
+        .await;
+    let api_ok = match api_result {
+        Ok(resp) if resp.status().is_success() => true,
+        Ok(resp) => {
+            let status = resp.status();
+            let body: Value = resp.json().await.unwrap_or_else(|_| json!({}));
+            // Older Ollama used DELETE; try once more.
+            let del = client
+                .delete(&url)
+                .json(&json!({ "name": name }))
+                .send()
+                .await;
+            match del {
+                Ok(r) if r.status().is_success() => true,
+                _ => {
+                    eprintln!(
+                        "[tuffbox] ollama delete API failed ({status}): {body}"
+                    );
+                    false
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[tuffbox] ollama delete API error: {e}");
+            false
+        }
+    };
+
+    if !api_ok {
+        let exe = resolve_ollama_binary(&hint);
+        let mut cmd = tokio::process::Command::new(&exe);
+        cmd.arg("rm").arg(&name);
+        let models = settings.ai.ollama_models_path.trim();
+        if !models.is_empty() {
+            cmd.env("OLLAMA_MODELS", models);
+        }
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000);
+        }
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run ollama rm: {e}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!(
+                "Failed to delete model '{name}': {}",
+                if stderr.trim().is_empty() {
+                    stdout.trim()
+                } else {
+                    stderr.trim()
+                }
+            ));
+        }
+    }
+
+    let models = ollama_list_models(&root).await.unwrap_or_default();
+    let mut next = read_settings();
+    if model_name_matches(&next.ai.model, &name) {
+        next.ai.model = models
+            .first()
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let _ = write_settings(&next);
+    }
+
+    Ok(json!({
+        "ok": true,
+        "model": name,
+        "models": models,
+        "activeModel": next.ai.model,
+    }))
 }
 
 fn is_ollama_models_dir(path: &Path) -> bool {
@@ -2909,6 +3473,18 @@ mod tests {
         let msg = api_error("Gemini", reqwest::StatusCode::UNAUTHORIZED, &body);
         assert!(msg.contains("API key"), "{msg}");
         assert!(msg.contains("Settings"), "{msg}");
+    }
+
+    #[test]
+    fn api_error_html_403_hints_vpn_not_api_key() {
+        let html = "<!DOCTYPE html>\n<html lang=en>\n<title>Error 403 (Forbidden)!!1</title>";
+        let body = json!({ "error": html });
+        let msg = api_error("Gemini", reqwest::StatusCode::FORBIDDEN, &body);
+        assert!(msg.contains("VPN") || msg.contains("egress"), "{msg}");
+        assert!(
+            !msg.contains("check the AI API key"),
+            "must not blame API key for HTML edge 403: {msg}"
+        );
     }
 
     #[test]

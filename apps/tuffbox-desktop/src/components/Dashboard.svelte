@@ -136,6 +136,16 @@
   };
   let crashFixBanner = $state<CrashFixBanner | null>(null);
   let crashFixBusy = $state(false);
+  let softVerifyNowUnix = $state(Math.floor(Date.now() / 1000));
+
+  const softVerifyRemainingSecs = $derived.by(() => {
+    const b = crashFixBanner;
+    if (!b?.softVerifyStartedUnix) return null;
+    const min = Number(b.minPlaytimeSecs ?? 180);
+    const started = Number(b.softVerifyStartedUnix);
+    const elapsed = Math.max(0, softVerifyNowUnix - started);
+    return Math.max(0, min - elapsed);
+  });
 
   async function refreshCrashFixBanner(path: string | null) {
     if (!path) {
@@ -147,6 +157,16 @@
 
   $effect(() => {
     void refreshCrashFixBanner(selectedPath);
+  });
+
+  $effect(() => {
+    const started = crashFixBanner?.softVerifyStartedUnix;
+    if (!started) return;
+    softVerifyNowUnix = Math.floor(Date.now() / 1000);
+    const id = setInterval(() => {
+      softVerifyNowUnix = Math.floor(Date.now() / 1000);
+    }, 1000);
+    return () => clearInterval(id);
   });
 
   async function onRollbackCrashFix() {
@@ -465,9 +485,11 @@
                 <div class="crash-fix-banner-body">
                   <strong>Crash fix applied</strong>
                   <span>
-                    {crashFixBanner.softVerifyStartedUnix
-                      ? `Soft-verify in progress (≥${crashFixBanner.minPlaytimeSecs}s stable play)…`
-                      : "Launch to soft-verify. One-click restore available."}
+                    {#if crashFixBanner.softVerifyStartedUnix}
+                      Soft-verify: ~{softVerifyRemainingSecs ?? 0}s left (≥{crashFixBanner.minPlaytimeSecs}s stable play)
+                    {:else}
+                      Launch to soft-verify. One-click restore available.
+                    {/if}
                   </span>
                   {#if crashFixBanner.actionsSummary?.length}
                     <span class="crash-fix-actions">
@@ -718,7 +740,7 @@
 
   .account-avatar-btn:hover {
     border-color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.04);
+    background: color-mix(in srgb, var(--accent-primary) 4%, transparent);
   }
 
   .avatar-name {
@@ -841,19 +863,19 @@
     border-radius: 4px;
   }
   .type-badge.microsoft {
-    color: #93c5fd;
-    background: rgba(59, 130, 246, 0.15);
-    border: 1px solid rgba(59, 130, 246, 0.35);
+    color: var(--badge-ms-fg, #93c5fd);
+    background: var(--badge-ms-bg, rgba(59, 130, 246, 0.15));
+    border: 1px solid var(--badge-ms-border, rgba(59, 130, 246, 0.35));
   }
   .type-badge.offline {
-    color: #fde68a;
-    background: rgba(245, 158, 11, 0.12);
-    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--badge-offline-fg, #fde68a);
+    background: var(--badge-offline-bg, rgba(245, 158, 11, 0.12));
+    border: 1px solid var(--badge-offline-border, rgba(245, 158, 11, 0.3));
   }
   .type-badge.ygg {
-    color: #e9d5ff;
-    background: rgba(168, 85, 247, 0.15);
-    border: 1px solid rgba(168, 85, 247, 0.35);
+    color: var(--badge-ygg-fg, #e9d5ff);
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.15));
+    border: 1px solid var(--badge-ygg-border, rgba(168, 85, 247, 0.35));
   }
 
   .skin-player-name {
@@ -862,13 +884,15 @@
     font-size: 12px;
     line-height: 1.4;
     letter-spacing: 0.5px;
-    color: var(--text-primary);
-    text-shadow:
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(
+      --mc-nick-shadow,
       2px 2px 0 color-mix(in srgb, var(--text-primary) 18%, #3f3f3f),
       -1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
       1px 0 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
       0 -1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000),
-      0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000);
+      0 1px 0 color-mix(in srgb, var(--bg-primary) 70%, #000)
+    );
     text-align: center;
     padding: 0 10px 12px;
     margin-top: -4px;
@@ -947,7 +971,7 @@
 
   .account-chip.active {
     border-color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     color: var(--accent-primary);
   }
 
@@ -1042,7 +1066,7 @@
     align-items: center;
     flex-wrap: wrap;
     padding: 24px 32px;
-    background: linear-gradient(135deg, rgba(27, 217, 106, 0.06), rgba(139, 92, 246, 0.04));
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 6%, transparent), color-mix(in srgb, var(--accent-secondary) 4%, transparent));
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
     margin-bottom: 0;
@@ -1114,13 +1138,13 @@
     gap: 10px;
     font-size: 18px;
     border-radius: var(--border-radius-lg);
-    box-shadow: 0 8px 24px rgba(27, 217, 106, 0.3);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 30%, transparent);
     padding: 0 24px;
     flex-shrink: 0;
   }
 
   .play-btn:hover {
-    box-shadow: 0 12px 32px rgba(27, 217, 106, 0.4);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
 
   .play-btn:disabled {
@@ -1190,8 +1214,8 @@
     margin-top: 12px;
     padding: 10px 12px;
     border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--accent-primary, #1bd96a) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-primary, #1bd96a) 10%, var(--bg-secondary));
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-secondary));
     max-width: 560px;
   }
 
@@ -1240,7 +1264,7 @@
   }
 
   .action-btn.primary:hover {
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
 
   .ide-open-btn {
@@ -1265,7 +1289,7 @@
 
   .action-btn.accent {
     background: var(--accent-primary);
-    color: #000;
+    color: var(--on-accent, #000);
     border-color: transparent;
   }
 

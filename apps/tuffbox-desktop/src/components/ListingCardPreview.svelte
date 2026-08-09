@@ -362,7 +362,7 @@
     font-size: 13px;
     cursor: default;
     pointer-events: none;
-    background: #1bd96a;
+    background: var(--accent-primary);
     color: #04140a;
   }
 
@@ -697,7 +697,7 @@
   }
 
   .prose :global(a) {
-    color: #1bd96a;
+    color: var(--accent-primary);
   }
 
   .cf-page .prose :global(a) {

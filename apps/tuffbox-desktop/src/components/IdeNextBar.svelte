@@ -210,7 +210,7 @@
     font-weight: 700;
   }
   .pill.ok {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .pill.warn {
@@ -278,8 +278,8 @@
     justify-content: space-between;
     gap: 8px;
     padding: 8px 12px;
-    border-bottom: 1px solid rgba(27, 217, 106, 0.25);
-    background: rgba(27, 217, 106, 0.08);
+    border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     font-size: 12px;
     flex-shrink: 0;
   }

@@ -11,6 +11,7 @@ mod pack_events;
 mod presence;
 mod quest_chat_api;
 mod snbt_parser;
+mod speculative;
 mod swarm_api;
 mod swarm_node;
 mod task_progress_api;
@@ -5401,7 +5402,15 @@ fn delete_backup(path: String, backup_id: String) -> Result<(), String> {
 fn prepare_ai_crash_context(
     path: &str,
     report_id: Option<&str>,
-) -> Result<(tuffbox_core::ai_explanation::CrashAiContext, usize), String> {
+) -> Result<
+    (
+        tuffbox_core::ai_explanation::CrashAiContext,
+        tuffbox_core::crash_kb::CrashFingerprint,
+        String,
+        usize,
+    ),
+    String,
+> {
     let manifest_path = resolve_manifest_path(path)?;
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(path)?;
@@ -5565,7 +5574,7 @@ fn prepare_ai_crash_context(
         inventory: Some(inventory),
     };
 
-    Ok((ai_ctx, report.findings.len()))
+    Ok((ai_ctx, fingerprint, haystack, report.findings.len()))
 }
 
 fn recent_crash_history_lines(project_dir: &Path, limit: usize) -> Vec<String> {
@@ -5594,7 +5603,7 @@ fn build_ai_crash_context(
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let (ai_ctx, findings_count) =
+    let (ai_ctx, _fingerprint, _haystack, findings_count) =
         prepare_ai_crash_context(&path, report_id.as_deref())?;
     let prompt = tuffbox_core::ai_explanation::build_crash_prompt(&ai_ctx);
     let triage = tuffbox_core::ai_explanation::build_triage_prompt(&ai_ctx);
@@ -5639,31 +5648,17 @@ fn build_ai_crash_context(
 
 #[tauri::command(rename_all = "camelCase")]
 async fn analyze_crash_with_ai(
+    app: tauri::AppHandle,
     path: String,
     report_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Build structured context directly — avoid JSON round-trip panics / lossy deserialize.
-    let (mut ai_ctx, _findings_count) =
+    // Fingerprint MUST match prepare (with_blame) for the whole cascade.
+    let (mut ai_ctx, fingerprint, haystack, _findings_count) =
         prepare_ai_crash_context(&path, report_id.as_deref())?;
     let settings = integrations::get_integration_status().settings;
     let mode = tuffbox_core::action_plan::DiagnoseMode::parse(&settings.ai.diagnose_mode);
-    let similar_count = ai_ctx.similar_cases.len() as u64;
-
     let project_dir = manifest_parent(&path)?;
-    let crash_content =
-        load_scoped_crash_report(&project_dir, report_id.as_deref()).unwrap_or_default();
-    let latest = project_dir.join("logs").join("latest.log");
-    let latest_log = if latest.is_file() {
-        tuffbox_core::process::read_log_tail(&latest, 900).unwrap_or_default()
-    } else {
-        String::new()
-    };
-    let haystack = format!("{crash_content}\n{latest_log}");
-    let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
-        &haystack,
-        &ai_ctx.mc_version,
-        &ai_ctx.loader,
-    );
 
     let swarm_on = integrations::swarm_enabled();
     let transport_bases = if swarm_on {
@@ -5675,8 +5670,15 @@ async fn analyze_crash_with_ai(
     let mut network_used = false;
     let mut compact_prompt_used = false;
     let mut kb_short_circuit = false;
+    let mut speculative_used = false;
+    let mut speculative_draft_model: Option<String> = None;
     let mut fallback_notes: Vec<String> = Vec::new();
+    let mut cascade_stage = String::new();
+    let mut cascade_tried: Vec<String> = vec!["l1".into()];
 
+    emit_diagnose_cascade(&app, "l1_searching");
+
+    // Enrich similar_cases from local capsule library + remote lookup (read-only).
     if swarm_on {
         let global_hits =
             integrations::global_capsule_library().lookup(&fingerprint, &haystack, 5);
@@ -5688,7 +5690,25 @@ async fn analyze_crash_with_ai(
             ai_ctx.similar_cases = merged;
         }
     }
+    if online_kb && !matches!(mode, tuffbox_core::action_plan::DiagnoseMode::KbOnly) {
+        network_used = true;
+        let req = tuffbox_core::crash_remote::CrashLookupRequest {
+            fingerprint: fingerprint.clone(),
+            excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
+            mc_version: Some(ai_ctx.mc_version.clone()),
+            loader: Some(ai_ctx.loader.clone()),
+            limit: 5,
+        };
+        if let Some(resp) = swarm_node::lookup_across_transports(&req).await {
+            let mut remote = tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
+            remote.extend(ai_ctx.similar_cases.drain(..));
+            let mut seen = std::collections::HashSet::new();
+            remote.retain(|h| seen.insert(h.id.clone()));
+            ai_ctx.similar_cases = remote;
+        }
+    }
 
+    let similar_count = ai_ctx.similar_cases.len() as u64;
     let inventory_ids: Vec<String> = ai_ctx
         .inventory
         .as_ref()
@@ -5697,149 +5717,53 @@ async fn analyze_crash_with_ai(
     let missing_ids =
         tuffbox_core::ai_explanation::missing_dep_hints_from_graph(&ai_ctx.graph_diagnostics);
 
-    let mut plan = match mode {
-        tuffbox_core::action_plan::DiagnoseMode::Server if online_kb => {
+    // ── L1: strong KB / capsule hit (free) ──────────────────────────
+    let l1_plan = try_l1_strong_plan(&fingerprint, &haystack, &ai_ctx, swarm_on);
+
+    let mut plan = if let Some(plan) = l1_plan {
+        cascade_stage = "l1_hit".into();
+        kb_short_circuit = true;
+        network_used = swarm_on || network_used;
+        plan
+    } else if matches!(mode, tuffbox_core::action_plan::DiagnoseMode::KbOnly) {
+        // KbOnly: L1 enrichment via remote lookup only — no L2/L3 LLM.
+        cascade_tried.push("kb_only".into());
+        if online_kb {
             network_used = true;
-            let req = tuffbox_core::crash_remote::CrashDiagnoseRequest {
+            let req = tuffbox_core::crash_remote::CrashLookupRequest {
                 fingerprint: fingerprint.clone(),
-                context: Some(serde_json::to_value(&ai_ctx).unwrap_or_default()),
-                excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
-                prefer_kb_only: false,
+                excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
+                mc_version: Some(ai_ctx.mc_version.clone()),
+                loader: Some(ai_ctx.loader.clone()),
+                limit: 1,
             };
-            match swarm_node::diagnose_across_transports(&req).await {
-                Ok(resp) => {
-                    // Explain may read the network; MUST NOT persist peer capsules here.
-                    resp.plan
-                }
-                Err(remote_err) => {
-                    if let Some(plan) = integrations::global_capsule_library()
-                        .diagnose_best(&fingerprint, &haystack)
-                    {
-                        kb_short_circuit = true;
-                        plan
-                    } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
-                        kb_short_circuit = true;
-                        plan
-                    } else {
-                        let (p, compact, note) =
-                            ai_plan_with_fallback(&settings.ai, &ai_ctx).await.map_err(|e| {
-                                format!("server diagnose failed ({remote_err}); {e}")
-                            })?;
-                        compact_prompt_used = compact;
-                        if let Some(n) = note {
-                            fallback_notes.push(n);
-                        }
-                        p
-                    }
-                }
-            }
-        }
-        tuffbox_core::action_plan::DiagnoseMode::Local => {
-            let mut ctx = ai_ctx.clone();
-            if online_kb {
-                network_used = true;
-                let req = tuffbox_core::crash_remote::CrashLookupRequest {
-                    fingerprint: fingerprint.clone(),
-                    excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
-                    mc_version: Some(ctx.mc_version.clone()),
-                    loader: Some(ctx.loader.clone()),
-                    limit: 5,
-                };
-                if let Some(resp) = swarm_node::lookup_across_transports(&req).await {
-                    let mut remote =
-                        tuffbox_core::crash_remote::hits_to_similar_cases(&resp.hits);
-                    remote.extend(ctx.similar_cases.drain(..));
-                    let mut seen = std::collections::HashSet::new();
-                    remote.retain(|h| seen.insert(h.id.clone()));
-                    ctx.similar_cases = remote;
-                }
-            }
-            // Prefer strong KB/capsule hit before tiny Ollama models.
-            if let Some(plan) = integrations::global_capsule_library()
-                .diagnose_best(&fingerprint, &haystack)
-                .filter(|p| p.confidence >= tuffbox_core::swarm::STRONG_MATCH_THRESHOLD)
-            {
-                network_used = swarm_on || network_used;
-                kb_short_circuit = true;
-                plan
-            } else if let Some(plan) = strong_plan_from_similar(&ctx) {
-                kb_short_circuit = true;
-                plan
-            } else {
-                let (p, compact, note) = ai_plan_with_fallback(&settings.ai, &ctx).await?;
-                compact_prompt_used = compact;
-                if let Some(n) = note {
-                    fallback_notes.push(n);
-                }
-                p
-            }
-        }
-        tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
-            if online_kb {
-                network_used = true;
-                let req = tuffbox_core::crash_remote::CrashLookupRequest {
-                    fingerprint: fingerprint.clone(),
-                    excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 2000)),
-                    mc_version: Some(ai_ctx.mc_version.clone()),
-                    loader: Some(ai_ctx.loader.clone()),
-                    limit: 1,
-                };
-                match swarm_node::lookup_across_transports(&req).await {
-                    Some(resp) => {
-                        let hit = resp.hits.first().ok_or_else(|| {
-                            "no remote KB hits for this fingerprint".to_string()
-                        })?;
-                        kb_short_circuit = true;
-                        tuffbox_core::action_plan::plan_from_launcher_actions(
-                            &hit.solution,
-                            &hit.suspected_mods,
-                            hit.actions.clone(),
-                            &hit.id,
-                            hit.score,
-                        )
-                    }
-                    None => {
-                        if let Some(plan) = integrations::global_capsule_library()
-                            .diagnose_best(&fingerprint, &haystack)
-                        {
-                            kb_short_circuit = true;
-                            plan
-                        } else {
-                            let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
-                            let similar = tuffbox_core::crash_kb::search_similar(
-                                &cases,
-                                &fingerprint,
-                                &haystack,
-                                1,
-                            );
-                            let hit = similar.first().ok_or_else(|| {
-                                "no local KB hits for this fingerprint".to_string()
-                            })?;
-                            kb_short_circuit = true;
-                            tuffbox_core::action_plan::plan_from_kb_hit(
-                                &hit.solution,
-                                &hit.suspected_mods,
-                                &hit.actions,
-                                &hit.id,
-                                hit.score,
-                            )
-                        }
-                    }
-                }
-            } else if swarm_on {
-                if let Some(plan) = integrations::global_capsule_library()
-                    .diagnose_best(&fingerprint, &haystack)
-                {
-                    network_used = true;
+            match swarm_node::lookup_across_transports(&req).await {
+                Some(resp) => {
+                    let hit = resp.hits.first().ok_or_else(|| {
+                        "no remote KB hits for this fingerprint".to_string()
+                    })?;
+                    cascade_stage = "l1_hit".into();
                     kb_short_circuit = true;
-                    plan
-                } else {
+                    tuffbox_core::action_plan::plan_from_launcher_actions(
+                        &hit.solution,
+                        &hit.suspected_mods,
+                        hit.actions.clone(),
+                        &hit.id,
+                        hit.score,
+                    )
+                }
+                None => {
                     let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
-                    let similar =
-                        tuffbox_core::crash_kb::search_similar(&cases, &fingerprint, &haystack, 1);
-                    let hit = similar
-                        .first()
-                        .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
+                    let similar = tuffbox_core::crash_kb::search_similar(
+                        &cases,
+                        &fingerprint,
+                        &haystack,
+                        1,
+                    );
+                    let hit = similar.first().ok_or_else(|| {
+                        "no local KB hits for this fingerprint".to_string()
+                    })?;
+                    cascade_stage = "l1_hit".into();
                     kb_short_circuit = true;
                     tuffbox_core::action_plan::plan_from_kb_hit(
                         &hit.solution,
@@ -5849,66 +5773,111 @@ async fn analyze_crash_with_ai(
                         hit.score,
                     )
                 }
-            } else {
-                let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
-                let similar =
-                    tuffbox_core::crash_kb::search_similar(&cases, &fingerprint, &haystack, 1);
-                let hit = similar
-                    .first()
-                    .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
-                kb_short_circuit = true;
-                tuffbox_core::action_plan::plan_from_kb_hit(
-                    &hit.solution,
-                    &hit.suspected_mods,
-                    &hit.actions,
-                    &hit.id,
-                    hit.score,
-                )
             }
+        } else {
+            let cases = tuffbox_core::crash_kb::load_all_cases(&project_dir);
+            let similar =
+                tuffbox_core::crash_kb::search_similar(&cases, &fingerprint, &haystack, 1);
+            let hit = similar
+                .first()
+                .ok_or_else(|| "no local KB hits for this fingerprint".to_string())?;
+            cascade_stage = "l1_hit".into();
+            kb_short_circuit = true;
+            tuffbox_core::action_plan::plan_from_kb_hit(
+                &hit.solution,
+                &hit.suspected_mods,
+                &hit.actions,
+                &hit.id,
+                hit.score,
+            )
         }
-        // Server mode without network → strong KB first, else local LLM / heuristic.
-        tuffbox_core::action_plan::DiagnoseMode::Server => {
-            if swarm_on {
-                if let Some(plan) = integrations::global_capsule_library()
-                    .diagnose_best(&fingerprint, &haystack)
-                {
-                    if plan.confidence >= tuffbox_core::swarm::STRONG_MATCH_THRESHOLD {
-                        network_used = true;
-                        kb_short_circuit = true;
-                        plan
-                    } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
-                        kb_short_circuit = true;
-                        plan
-                    } else {
-                        let (p, compact, note) =
-                            ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
-                        compact_prompt_used = compact;
-                        if let Some(n) = note {
-                            fallback_notes.push(n);
+    } else {
+        // ── L2: Fog volunteer (opt-in P2P) — best-effort; miss → L3 ──
+        cascade_tried.push("l2".into());
+        emit_diagnose_cascade(&app, "l2_asking");
+        let l2 = if swarm_on && settings.swarm.p2p_enabled {
+            swarm_node::diagnose_via_volunteer(
+                &fingerprint,
+                &ai_ctx,
+                &tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000),
+            )
+            .await
+        } else {
+            Err("fog volunteer unavailable".into())
+        };
+
+        match l2 {
+            Ok(mut volunteer_plan) => {
+                cascade_stage = "l2_hit".into();
+                network_used = true;
+                volunteer_plan.source = Some("swarm_volunteer".into());
+                volunteer_plan
+            }
+            Err(miss) => {
+                cascade_tried.push(format!("l2_miss:{}", truncate_cascade_miss(&miss)));
+                // ── L3: existing DiagnoseMode LLM / server path ──────────
+                cascade_tried.push("l3".into());
+                emit_diagnose_cascade(&app, "l3_asking");
+                match mode {
+                tuffbox_core::action_plan::DiagnoseMode::Server if online_kb => {
+                    network_used = true;
+                    let req = tuffbox_core::crash_remote::CrashDiagnoseRequest {
+                        fingerprint: fingerprint.clone(),
+                        context: Some(serde_json::to_value(&ai_ctx).unwrap_or_default()),
+                        excerpt: Some(tuffbox_core::crash_kb::smart_excerpt(&haystack, 4000)),
+                        prefer_kb_only: false,
+                    };
+                    match swarm_node::diagnose_across_transports(&req).await {
+                        Ok(resp) => {
+                            // Explain may read the network; MUST NOT persist peer capsules here.
+                            cascade_stage = "l3_hit".into();
+                            resp.plan
                         }
-                        p
+                        Err(remote_err) => {
+                            let (p, compact, note, spec) =
+                                ai_plan_with_fallback(&settings.ai, &ai_ctx).await.map_err(
+                                    |e| format!("server diagnose failed ({remote_err}); {e}"),
+                                )?;
+                            compact_prompt_used = compact;
+                            speculative_used |= spec.used;
+                            if let Some(m) = spec.draft_model {
+                                speculative_draft_model = Some(m);
+                            }
+                            if let Some(n) = note {
+                                fallback_notes.push(n);
+                            }
+                            cascade_stage = if note_is_heuristic(&fallback_notes) {
+                                "heuristic".into()
+                            } else {
+                                "l3_hit".into()
+                            };
+                            p
+                        }
                     }
-                } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
-                    kb_short_circuit = true;
-                    plan
-                } else {
-                    let (p, compact, note) = ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
+                }
+                tuffbox_core::action_plan::DiagnoseMode::Local
+                | tuffbox_core::action_plan::DiagnoseMode::Server => {
+                    let (p, compact, note, spec) =
+                        ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
                     compact_prompt_used = compact;
+                    speculative_used |= spec.used;
+                    if let Some(m) = spec.draft_model {
+                        speculative_draft_model = Some(m);
+                    }
                     if let Some(n) = note {
                         fallback_notes.push(n);
                     }
+                    cascade_stage = if note_is_heuristic(&fallback_notes) {
+                        "heuristic".into()
+                    } else {
+                        "l3_hit".into()
+                    };
                     p
                 }
-            } else if let Some(plan) = strong_plan_from_similar(&ai_ctx) {
-                kb_short_circuit = true;
-                plan
-            } else {
-                let (p, compact, note) = ai_plan_with_fallback(&settings.ai, &ai_ctx).await?;
-                compact_prompt_used = compact;
-                if let Some(n) = note {
-                    fallback_notes.push(n);
+                tuffbox_core::action_plan::DiagnoseMode::KbOnly => {
+                    unreachable!("KbOnly handled above")
                 }
-                p
+            }
             }
         }
     };
@@ -5928,6 +5897,8 @@ async fn analyze_crash_with_ai(
     if plan.source.is_none() {
         plan.source = Some(if kb_short_circuit {
             "kb".into()
+        } else if cascade_stage == "l2_hit" {
+            "swarm_volunteer".into()
         } else {
             "ai".into()
         });
@@ -5967,9 +5938,59 @@ async fn analyze_crash_with_ai(
         "networkUsed": network_used,
         "compactPromptUsed": compact_prompt_used,
         "kbShortCircuit": kb_short_circuit,
+        "cascadeStage": cascade_stage,
+        "cascadeTried": cascade_tried,
+        "speculativeUsed": speculative_used,
+        "speculativeDraftModel": speculative_draft_model,
         "normalizeNotes": normalize_notes,
         "pendingPlanPath": pending_path.map(|p| p.to_string_lossy().to_string()),
     }))
+}
+
+fn emit_diagnose_cascade(app: &tauri::AppHandle, stage: &str) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "diagnose-cascade",
+        serde_json::json!({ "stage": stage }),
+    );
+}
+
+fn truncate_cascade_miss(msg: &str) -> String {
+    let flat: String = msg
+        .chars()
+        .map(|c| if c.is_control() || c == '\n' || c == '\r' { ' ' } else { c })
+        .collect();
+    let flat = flat.trim();
+    const MAX: usize = 96;
+    if flat.chars().count() <= MAX {
+        flat.to_string()
+    } else {
+        format!("{}…", flat.chars().take(MAX).collect::<String>())
+    }
+}
+
+fn try_l1_strong_plan(
+    fingerprint: &tuffbox_core::crash_kb::CrashFingerprint,
+    haystack: &str,
+    ai_ctx: &tuffbox_core::ai_explanation::CrashAiContext,
+    swarm_on: bool,
+) -> Option<tuffbox_core::action_plan::ActionPlan> {
+    if swarm_on {
+        if let Some(plan) = integrations::global_capsule_library()
+            .diagnose_best(fingerprint, haystack)
+            .filter(|p| p.confidence >= tuffbox_core::swarm::STRONG_MATCH_THRESHOLD)
+        {
+            return Some(plan);
+        }
+    }
+    strong_plan_from_similar(ai_ctx)
+}
+
+fn note_is_heuristic(notes: &[String]) -> bool {
+    notes.iter().any(|n| {
+        let lower = n.to_lowercase();
+        lower.contains("heuristic") || lower.contains("fallback")
+    })
 }
 
 fn strong_plan_from_similar(
@@ -6070,13 +6091,21 @@ fn heuristic_plan_from_context(
 async fn ai_plan_with_fallback(
     settings: &integrations::AiSettings,
     ctx: &tuffbox_core::ai_explanation::CrashAiContext,
-) -> Result<(tuffbox_core::action_plan::ActionPlan, bool /*compact*/, Option<String>), String> {
+) -> Result<
+    (
+        tuffbox_core::action_plan::ActionPlan,
+        bool, /*compact*/
+        Option<String>,
+        speculative::SpeculativeMeta,
+    ),
+    String,
+> {
     let (prompt, compact) = integrations::crash_explain_prompt_for(settings, ctx);
-    match integrations::call_ai_crash_explain(settings, &prompt).await {
-        Ok(value) => {
-            let raw = serde_json::to_string(&value).unwrap_or_default();
+    match integrations::call_ai_crash_explain_detailed(settings, &prompt).await {
+        Ok(detailed) => {
+            let raw = serde_json::to_string(&detailed.value).unwrap_or_default();
             let plan = tuffbox_core::action_plan::parse_action_plan(&raw)?;
-            Ok((plan, compact, None))
+            Ok((plan, compact, None, detailed.speculative))
         }
         Err(ai_err) => {
             if let Some(plan) = strong_plan_from_similar(ctx) {
@@ -6084,6 +6113,7 @@ async fn ai_plan_with_fallback(
                     plan,
                     compact,
                     Some(format!("AI unavailable ({ai_err}); used strong KB match")),
+                    speculative::SpeculativeMeta::default(),
                 ));
             }
             if let Some(plan) = heuristic_plan_from_context(ctx) {
@@ -6091,6 +6121,7 @@ async fn ai_plan_with_fallback(
                     plan,
                     compact,
                     Some(format!("AI unavailable ({ai_err}); used local crash heuristics")),
+                    speculative::SpeculativeMeta::default(),
                 ));
             }
             Err(format!(
@@ -7812,6 +7843,63 @@ fn simulate_quest_progress(
     serde_json::to_value(snap).map_err(|e| e.to_string())
 }
 
+/// ── Quests · KubeJS bridge ──────────────────────────────────────
+
+#[tauri::command(rename_all = "camelCase")]
+fn quest_kubejs_list_scripts(path: String) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let scripts = tuffbox_core::quest_kubejs::list_quest_scripts(&project_dir);
+    serde_json::to_value(scripts).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn quest_kubejs_audit(path: String, book: serde_json::Value) -> Result<serde_json::Value, String> {
+    let project_dir = manifest_parent(&path)?;
+    let audit = tuffbox_core::quest_kubejs::audit_bindings(&project_dir, &book);
+    serde_json::to_value(audit).map_err(|e| e.to_string())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn quest_kubejs_read_script(path: String, relative_path: String) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::quest_kubejs::read_script(&project_dir, &relative_path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn quest_kubejs_ensure_managed(path: String) -> Result<String, String> {
+    let project_dir = manifest_parent(&path)?;
+    tuffbox_core::quest_kubejs::ensure_managed_script(&project_dir)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn quest_kubejs_render_template(
+    params: tuffbox_core::quest_kubejs::QuestKubeJsTemplateParams,
+) -> Result<String, String> {
+    tuffbox_core::quest_kubejs::render_template(&params)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn quest_kubejs_append_handler(
+    path: String,
+    snippet: String,
+) -> Result<serde_json::Value, String> {
+    let manifest_path = PathBuf::from(&path);
+    let project_dir = manifest_parent(&path)?;
+    let relative = tuffbox_core::quest_kubejs::MANAGED_RELATIVE;
+    let snap = auto_snapshot_detailed(
+        &manifest_path,
+        "quest-kubejs",
+        &[PathBuf::from(relative)],
+        &["Append FTB Quests KubeJS handler".into()],
+    )
+    .map_err(|e| e.to_string())?;
+    let written = tuffbox_core::quest_kubejs::append_handler(&project_dir, &snippet)?;
+    Ok(serde_json::json!({
+        "relativePath": written,
+        "snapshotId": snap.id,
+    }))
+}
+
 /// ── World management ────────────────────────────────────────────
 
 /// Lists Minecraft worlds in the project's saves/ folder.
@@ -9482,7 +9570,600 @@ fn update_history_settings(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, String> {
+fn history_episode_fields(
+    fingerprint: &Option<String>,
+    plan_source: &Option<String>,
+    episode_id: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let episode = episode_id.or_else(|| {
+        fingerprint
+            .as_ref()
+            .filter(|k| !k.trim().is_empty() && *k != "unknown")
+            .map(|k| pack_events::episode_id_for_fingerprint(k))
+    });
+    let method = pack_events::normalize_fix_method(plan_source.as_deref());
+    let fix_method = if method == "unknown" {
+        None
+    } else {
+        Some(method.to_string())
+    };
+    (episode, fix_method)
+}
+
+fn is_crash_history_entry(entry: &ProjectChangeEntry) -> bool {
+    entry.episode_id.is_some()
+        || entry.crash_fingerprint_key.is_some()
+        || entry.op.contains("crash")
+        || entry.kind.contains("crash")
+        || entry
+            .tags
+            .iter()
+            .any(|t| t.contains("crash") || t == "crash_fix")
+}
+
+#[allow(dead_code)]
+fn entry_group_key(entry: &ProjectChangeEntry) -> Option<String> {
+    if let Some(ep) = entry
+        .episode_id
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        return Some(ep.to_string());
+    }
+    if let Some(fp) = entry
+        .crash_fingerprint_key
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "unknown")
+    {
+        return Some(pack_events::episode_id_for_fingerprint(fp));
+    }
+    None
+}
+
+fn is_crash_detected_entry(e: &ProjectChangeEntry) -> bool {
+    e.op == "crash_detected" || e.kind == "crash_detected"
+}
+
+fn outcome_is_closed(outcome: &str) -> bool {
+    matches!(outcome, "fixed" | "broke" | "rolled_back")
+}
+
+fn episode_id_for_segment(fp: Option<&str>, started_at: &str, first_id: &str) -> String {
+    let ts_suffix = if started_at.len() >= 16 {
+        started_at[0..16].replace(':', "").replace('T', "-")
+    } else {
+        first_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(12).collect()
+    };
+    match fp {
+        Some(fp) if !fp.trim().is_empty() && fp != "unknown" => {
+            format!("{}-{}", pack_events::episode_id_for_fingerprint(fp), ts_suffix)
+        }
+        _ => format!("ep-orphan-{ts_suffix}"),
+    }
+}
+
+fn finalize_episode_segment(
+    entries: &[ProjectChangeEntry],
+    idxs: &[usize],
+) -> Option<HistoryEpisode> {
+    if idxs.is_empty() {
+        return None;
+    }
+    let mut idxs = idxs.to_vec();
+    idxs.sort_by(|&a, &b| {
+        entries[a]
+            .created_at
+            .cmp(&entries[b].created_at)
+            .then_with(|| a.cmp(&b))
+    });
+    let refs: Vec<&ProjectChangeEntry> = idxs.iter().map(|&i| &entries[i]).collect();
+    let outcome = episode_outcome_for(&refs);
+    let fix_method = episode_fix_method_for(&refs);
+    let fingerprint_key = refs
+        .iter()
+        .find_map(|e| e.crash_fingerprint_key.clone())
+        .filter(|s| !s.is_empty());
+    let plan_source = refs.iter().rev().find_map(|e| e.plan_source.clone());
+    let snapshot_id = refs.iter().rev().find_map(|e| {
+        if e.snapshot_id.is_empty() {
+            None
+        } else {
+            Some(e.snapshot_id.clone())
+        }
+    });
+    let log_path = refs.iter().find_map(|e| e.log_path.clone());
+    let resolution_summary = refs.iter().rev().find_map(|e| {
+        if e.op == "crash_resolved"
+            || e.kind == "crash_resolved"
+            || e.tags.iter().any(|t| t == "crash_resolved")
+        {
+            let text = if !e.preview.trim().is_empty() {
+                e.preview.as_str()
+            } else {
+                e.operation.as_str()
+            };
+            let trimmed = tuffbox_core::crash_kb::truncate_at_char_boundary(text, 280);
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        } else {
+            None
+        }
+    });
+    let started_at = refs.first().map(|e| e.created_at.clone()).unwrap_or_default();
+    let ended_at = if outcome_is_closed(&outcome) {
+        refs.last().map(|e| e.created_at.clone())
+    } else {
+        None
+    };
+    let summary = episode_summary_for(&outcome, &fix_method, &refs);
+    let id = episode_id_for_segment(
+        fingerprint_key.as_deref(),
+        &started_at,
+        &refs.first().map(|e| e.id.as_str()).unwrap_or("x"),
+    );
+    let action_ids = idxs.iter().map(|&i| entries[i].id.clone()).collect();
+    Some(HistoryEpisode {
+        id,
+        outcome,
+        fix_method,
+        fingerprint_key,
+        started_at,
+        ended_at,
+        summary,
+        action_ids,
+        plan_source,
+        snapshot_id,
+        resolution_summary,
+        log_path,
+    })
+}
+
+/// Group crash-related history entries into time-bounded episodes.
+fn build_history_episodes(entries: &[ProjectChangeEntry]) -> Vec<HistoryEpisode> {
+    use std::collections::BTreeMap;
+
+    let mut by_fp: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if !is_crash_history_entry(entry) {
+            continue;
+        }
+        let key = entry
+            .crash_fingerprint_key
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s != "unknown")
+            .unwrap_or_else(|| "_orphan_".into());
+        by_fp.entry(key).or_default().push(idx);
+    }
+
+    let orphan_idxs = by_fp.remove("_orphan_").unwrap_or_default();
+    let mut segments: Vec<Vec<usize>> = Vec::new();
+
+    for (_fp, mut bucket) in by_fp {
+        bucket.sort_by(|&a, &b| {
+            entries[a]
+                .created_at
+                .cmp(&entries[b].created_at)
+                .then_with(|| a.cmp(&b))
+        });
+        let mut current: Vec<usize> = Vec::new();
+        for i in bucket {
+            let e = &entries[i];
+            if is_crash_detected_entry(e) && !current.is_empty() {
+                let current_refs: Vec<&ProjectChangeEntry> =
+                    current.iter().map(|&j| &entries[j]).collect();
+                let cur_outcome = episode_outcome_for(&current_refs);
+                if outcome_is_closed(&cur_outcome) {
+                    segments.push(std::mem::take(&mut current));
+                    current.push(i);
+                    continue;
+                }
+                let mut provisional = current_refs;
+                provisional.push(e);
+                if episode_outcome_for(&provisional) == "broke" {
+                    current.push(i);
+                    segments.push(std::mem::take(&mut current));
+                    continue;
+                }
+            }
+            current.push(i);
+        }
+        if !current.is_empty() {
+            segments.push(current);
+        }
+    }
+
+    // Attach orphans only to open episodes within ±2h; else provisional segment.
+    for idx in orphan_idxs {
+        let ts = &entries[idx].created_at;
+        let mut attached = false;
+        for seg in &mut segments {
+            let refs: Vec<&ProjectChangeEntry> = seg.iter().map(|&j| &entries[j]).collect();
+            if episode_outcome_for(&refs) != "open" {
+                continue;
+            }
+            if seg
+                .iter()
+                .any(|&j| timestamps_within_hours(ts, &entries[j].created_at, 2))
+            {
+                seg.push(idx);
+                attached = true;
+                break;
+            }
+        }
+        if !attached {
+            segments.push(vec![idx]);
+        }
+    }
+
+    let mut episodes: Vec<HistoryEpisode> = segments
+        .iter()
+        .filter_map(|idxs| finalize_episode_segment(entries, idxs))
+        .collect();
+    episodes.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.id.cmp(&b.id)));
+    episodes
+}
+
+fn episode_outcome_for(entries: &[&ProjectChangeEntry]) -> String {
+    let has_resolved = entries.iter().any(|e| {
+        e.op == "crash_resolved"
+            || e.kind == "crash_resolved"
+            || e.tags.iter().any(|t| t == "crash_resolved")
+    });
+    if has_resolved {
+        return "fixed".into();
+    }
+    let has_rollback = entries.iter().any(|e| {
+        e.op.contains("rollback")
+            || e.kind.contains("rollback")
+            || e.tags.iter().any(|t| t.contains("rollback"))
+    });
+    if has_rollback {
+        return "rolled_back".into();
+    }
+    let has_reject = entries.iter().any(|e| {
+        e.op.contains("reject")
+            || e.kind.contains("reject")
+            || e.tags.iter().any(|t| t.contains("reject"))
+    });
+    let has_fix = entries.iter().any(|e| {
+        e.op == "crash_fix"
+            || e.kind == "crash_fix"
+            || e.tags.iter().any(|t| t == "crash_fix")
+            || matches!(
+                e.op.as_str(),
+                "mod_removed" | "mod_added" | "mod_updated" | "file_changed" | "file_edit"
+            )
+    });
+    let has_detected = entries
+        .iter()
+        .any(|e| e.op == "crash_detected" || e.kind == "crash_detected");
+
+    // Chronological: if a crash lands after fix/actions without resolve → broke.
+    let mut chrono: Vec<_> = entries.to_vec();
+    chrono.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    let mut saw_actions = false;
+    for e in &chrono {
+        let is_detected = e.op == "crash_detected" || e.kind == "crash_detected";
+        let is_action = e.op == "crash_fix"
+            || e.kind == "crash_fix"
+            || e.tags.iter().any(|t| t == "crash_fix")
+            || matches!(
+                e.op.as_str(),
+                "mod_removed" | "mod_added" | "mod_updated" | "file_changed" | "file_edit"
+            );
+        if is_action {
+            saw_actions = true;
+        } else if is_detected && saw_actions {
+            return "broke".into();
+        }
+    }
+    if has_reject && has_fix {
+        return "broke".into();
+    }
+    if has_detected || has_fix {
+        return "open".into();
+    }
+    "open".into()
+}
+
+fn episode_fix_method_for(entries: &[&ProjectChangeEntry]) -> String {
+    for e in entries.iter().rev() {
+        if let Some(m) = e.fix_method.as_ref().filter(|s| !s.is_empty() && *s != "unknown") {
+            return m.clone();
+        }
+        let from_plan = pack_events::normalize_fix_method(e.plan_source.as_deref());
+        if from_plan != "unknown" {
+            return from_plan.to_string();
+        }
+    }
+    // Manual: user actor edits without plan source.
+    if entries.iter().any(|e| e.actor == "user") {
+        return "manual".into();
+    }
+    "unknown".into()
+}
+
+fn episode_summary_for(outcome: &str, method: &str, entries: &[&ProjectChangeEntry]) -> String {
+    let method_label = match method {
+        "ai" => "AI",
+        "heuristic" => "Heuristic",
+        "kb" => "KB",
+        "swarm" => "Swarm",
+        "manual" => "Manual",
+        _ => "Unknown",
+    };
+    let top = entries
+        .iter()
+        .find(|e| {
+            e.op == "crash_fix"
+                || e.kind == "crash_fix"
+                || e.op == "crash_resolved"
+                || e.kind == "crash_resolved"
+                || e.op == "crash_detected"
+        })
+        .or_else(|| entries.first())
+        .map(|e| {
+            let s = if e.operation.trim().is_empty() {
+                e.preview.as_str()
+            } else {
+                e.operation.as_str()
+            };
+            tuffbox_core::crash_kb::truncate_at_char_boundary(s, 120).to_string()
+        })
+        .unwrap_or_else(|| "Crash episode".into());
+    match outcome {
+        "fixed" => format!("{method_label} plan fixed · {top}"),
+        "broke" => format!("{method_label} changes → next launch crashed · {top}"),
+        "rolled_back" => format!("{method_label} fix rolled back · {top}"),
+        _ => format!("{method_label} · open · {top}"),
+    }
+}
+
+fn timestamps_within_hours(a: &str, b: &str, hours: i64) -> bool {
+    fn parse_approx(s: &str) -> Option<i64> {
+        // Accept RFC3339-ish: take YYYY-MM-DDTHH:MM
+        if s.len() < 16 {
+            return None;
+        }
+        let date = &s[0..10];
+        let hour: i64 = s[11..13].parse().ok()?;
+        let min: i64 = s[14..16].parse().ok()?;
+        let y: i64 = date[0..4].parse().ok()?;
+        let m: i64 = date[5..7].parse().ok()?;
+        let d: i64 = date[8..10].parse().ok()?;
+        Some((((y * 12 + m) * 31 + d) * 24 + hour) * 60 + min)
+    }
+    match (parse_approx(a), parse_approx(b)) {
+        (Some(x), Some(y)) => (x - y).abs() <= hours * 60,
+        _ => a.get(0..10) == b.get(0..10),
+    }
+}
+
+#[cfg(test)]
+mod history_episode_tests {
+    use super::*;
+
+    fn entry(
+        id: &str,
+        op: &str,
+        created_at: &str,
+        fingerprint: Option<&str>,
+        plan_source: Option<&str>,
+        actor: &str,
+    ) -> ProjectChangeEntry {
+        let fingerprint = fingerprint.map(|s| s.to_string());
+        let plan_source = plan_source.map(|s| s.to_string());
+        let (episode_id, fix_method) = history_episode_fields(&fingerprint, &plan_source, None);
+        ProjectChangeEntry {
+            id: id.into(),
+            snapshot_id: String::new(),
+            operation: op.into(),
+            reason: String::new(),
+            created_at: created_at.into(),
+            path: String::new(),
+            category: "Resolutions".into(),
+            kind: op.into(),
+            preview: op.into(),
+            diff: String::new(),
+            can_open: false,
+            tags: vec!["crash".into()],
+            crash_fingerprint_key: fingerprint,
+            plan_source,
+            actor: actor.into(),
+            op: op.into(),
+            episode_id,
+            fix_method,
+            log_path: None,
+        }
+    }
+
+    #[test]
+    fn episode_ai_fixed_path() {
+        let entries = vec![
+            entry(
+                "1",
+                "crash_detected",
+                "2026-08-01T10:00:00Z",
+                Some("fp-mixin"),
+                None,
+                "launcher",
+            ),
+            entry(
+                "2",
+                "crash_fix",
+                "2026-08-01T10:05:00Z",
+                Some("fp-mixin"),
+                Some("ai"),
+                "ai",
+            ),
+            entry(
+                "3",
+                "crash_resolved",
+                "2026-08-01T10:10:00Z",
+                Some("fp-mixin"),
+                Some("ai"),
+                "ai",
+            ),
+        ];
+        let eps = build_history_episodes(&entries);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].outcome, "fixed");
+        assert_eq!(eps[0].fix_method, "ai");
+        assert_eq!(eps[0].action_ids.len(), 3);
+    }
+
+    #[test]
+    fn episode_heuristic_open_then_broke() {
+        let open_entries = vec![
+            entry(
+                "1",
+                "crash_detected",
+                "2026-08-01T10:00:00Z",
+                Some("fp-h"),
+                None,
+                "launcher",
+            ),
+            entry(
+                "2",
+                "crash_fix",
+                "2026-08-01T10:05:00Z",
+                Some("fp-h"),
+                Some("heuristic"),
+                "launcher",
+            ),
+        ];
+        let open_eps = build_history_episodes(&open_entries);
+        assert_eq!(open_eps[0].outcome, "open");
+        assert_eq!(open_eps[0].fix_method, "heuristic");
+
+        let broke_entries = vec![
+            entry(
+                "1",
+                "crash_detected",
+                "2026-08-01T10:00:00Z",
+                Some("fp-h"),
+                None,
+                "launcher",
+            ),
+            entry(
+                "2",
+                "crash_fix",
+                "2026-08-01T10:05:00Z",
+                Some("fp-h"),
+                Some("heuristic"),
+                "launcher",
+            ),
+            entry(
+                "3",
+                "crash_detected",
+                "2026-08-01T10:20:00Z",
+                Some("fp-h"),
+                None,
+                "launcher",
+            ),
+        ];
+        let broke_eps = build_history_episodes(&broke_entries);
+        assert_eq!(broke_eps[0].outcome, "broke");
+    }
+
+    #[test]
+    fn episode_manual_actor_and_rollback() {
+        let entries = vec![
+            entry(
+                "1",
+                "crash_detected",
+                "2026-08-01T11:00:00Z",
+                Some("fp-m"),
+                None,
+                "launcher",
+            ),
+            entry(
+                "2",
+                "mod_removed",
+                "2026-08-01T11:05:00Z",
+                Some("fp-m"),
+                None,
+                "user",
+            ),
+            entry(
+                "3",
+                "crash_fix_rollback",
+                "2026-08-01T11:10:00Z",
+                Some("fp-m"),
+                Some("manual"),
+                "user",
+            ),
+        ];
+        let eps = build_history_episodes(&entries);
+        assert_eq!(eps.len(), 1);
+        assert_eq!(eps[0].outcome, "rolled_back");
+        assert_eq!(eps[0].fix_method, "manual");
+    }
+
+    #[test]
+    fn recurring_crash_splits_episodes() {
+        let entries = vec![
+            entry(
+                "1",
+                "crash_detected",
+                "2026-08-01T10:00:00Z",
+                Some("fp-recur"),
+                None,
+                "launcher",
+            ),
+            entry(
+                "2",
+                "crash_fix",
+                "2026-08-01T10:05:00Z",
+                Some("fp-recur"),
+                Some("ai"),
+                "ai",
+            ),
+            entry(
+                "3",
+                "crash_resolved",
+                "2026-08-01T10:10:00Z",
+                Some("fp-recur"),
+                Some("ai"),
+                "ai",
+            ),
+            entry(
+                "4",
+                "crash_detected",
+                "2026-08-02T12:00:00Z",
+                Some("fp-recur"),
+                None,
+                "launcher",
+            ),
+            entry(
+                "5",
+                "crash_fix",
+                "2026-08-02T12:05:00Z",
+                Some("fp-recur"),
+                Some("heuristic"),
+                "launcher",
+            ),
+        ];
+        let eps = build_history_episodes(&entries);
+        assert_eq!(eps.len(), 2, "expected split after closed fix");
+        let fixed = eps.iter().find(|e| e.outcome == "fixed").expect("fixed");
+        let open = eps.iter().find(|e| e.outcome == "open").expect("open");
+        assert_eq!(fixed.fix_method, "ai");
+        assert_eq!(open.fix_method, "heuristic");
+        assert_ne!(fixed.id, open.id);
+        assert!(fixed.id.contains("2026-08-01"), "{}", fixed.id);
+        assert!(open.id.contains("2026-08-02"), "{}", open.id);
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn list_project_change_history(path: String) -> Result<HistoryListResult, String> {
     let manifest_path = PathBuf::from(&path);
     let project_dir = manifest_parent(&path)?;
     let store = SnapshotStore::new(&project_dir);
@@ -9518,6 +10199,18 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 .collect::<Vec<_>>()
                 .join("\n")
         });
+        let crash_fingerprint_key = pack_events::meta_str(&ev.meta, "fingerprintKey")
+            .or_else(|| pack_events::meta_str(&ev.meta, "fingerprint"));
+        let plan_source = pack_events::meta_str(&ev.meta, "planSource");
+        let episode_from_meta = pack_events::meta_str(&ev.meta, "episodeId");
+        let (episode_id, fix_method) =
+            history_episode_fields(&crash_fingerprint_key, &plan_source, episode_from_meta);
+        let fix_method = fix_method.or_else(|| {
+            pack_events::meta_str(&ev.meta, "fixMethod").map(|m| {
+                pack_events::normalize_fix_method(Some(&m)).to_string()
+            })
+        });
+        let log_path = pack_events::meta_str(&ev.meta, "logPath");
         entries.push(ProjectChangeEntry {
             id: ev.id.clone(),
             snapshot_id: ev.snapshot_id.clone().unwrap_or_default(),
@@ -9531,10 +10224,13 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
             diff,
             can_open,
             tags: ev.tags.clone(),
-            crash_fingerprint_key: None,
-            plan_source: None,
+            crash_fingerprint_key,
+            plan_source,
             actor: ev.actor.clone(),
             op: ev.op.clone(),
+            episode_id,
+            fix_method,
+            log_path,
         });
     }
 
@@ -9557,6 +10253,11 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                     rec.actions_summary.join(", ")
                 )
             };
+            let fingerprint = Some(rec.fingerprint_key.clone());
+            let plan_source = rec.plan_source.clone();
+            let (episode_id, fix_method) =
+                history_episode_fields(&fingerprint, &plan_source, None);
+            let actor = pack_events::actor_for_plan_source(plan_source.as_deref()).to_string();
             entries.push(ProjectChangeEntry {
                 id: rec.id.clone(),
                 snapshot_id: rec.snapshot_id.clone(),
@@ -9571,10 +10272,13 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 diff: summary,
                 can_open: false,
                 tags: vec!["crash_resolved".into(), "crash_fix".into()],
-                crash_fingerprint_key: Some(rec.fingerprint_key),
-                plan_source: rec.plan_source,
-                actor: "ai".into(),
+                crash_fingerprint_key: fingerprint,
+                plan_source,
+                actor,
                 op: "crash_resolved".into(),
+                episode_id,
+                fix_method,
+                log_path: None,
             });
         }
     }
@@ -9601,6 +10305,13 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 .map(|k| !seen_resolution_keys.contains(k))
                 .unwrap_or(true)
         {
+            let (episode_id, fix_method) = history_episode_fields(
+                &snapshot.crash_fingerprint_key,
+                &snapshot.plan_source,
+                None,
+            );
+            let actor =
+                pack_events::actor_for_plan_source(snapshot.plan_source.as_deref()).to_string();
             entries.push(ProjectChangeEntry {
                 id: format!("{}:crash-resolved", snapshot.id),
                 snapshot_id: snapshot.id.clone(),
@@ -9616,8 +10327,11 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
-                actor: "ai".into(),
+                actor,
                 op: "crash_resolved".into(),
+                episode_id,
+                fix_method,
+                log_path: None,
             });
         }
 
@@ -9640,6 +10354,16 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
             let before_text = read_small_text_file(&before_path).unwrap_or_default();
             let after_text = read_small_text_file(&after_path).unwrap_or_default();
             let diff = unified_text_diff(&before_text, &after_text);
+            let actor = if snapshot.plan_source.is_some() {
+                pack_events::actor_for_plan_source(snapshot.plan_source.as_deref()).to_string()
+            } else {
+                pack_events::actor_for_operation(&snapshot.name).into()
+            };
+            let (episode_id, fix_method) = history_episode_fields(
+                &snapshot.crash_fingerprint_key,
+                &snapshot.plan_source,
+                None,
+            );
             entries.push(ProjectChangeEntry {
                 id: format!("{}:{}", snapshot.id, relative_text),
                 snapshot_id: snapshot.id.clone(),
@@ -9655,8 +10379,11 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
-                actor: pack_events::actor_for_operation(&snapshot.name).into(),
+                actor,
                 op: "file_changed".into(),
+                episode_id,
+                fix_method,
+                log_path: None,
             });
         }
     }
@@ -9666,7 +10393,22 @@ fn list_project_change_history(path: String) -> Result<Vec<ProjectChangeEntry>, 
             .cmp(&a.created_at)
             .then_with(|| a.path.cmp(&b.path))
     });
-    Ok(entries)
+    let episodes = build_history_episodes(&entries);
+    // Backfill episode_id on entries from grouped episodes when missing.
+    let mut entries = entries;
+    for ep in &episodes {
+        for action_id in &ep.action_ids {
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == *action_id) {
+                if entry.episode_id.is_none() {
+                    entry.episode_id = Some(ep.id.clone());
+                }
+                if entry.fix_method.is_none() && ep.fix_method != "unknown" {
+                    entry.fix_method = Some(ep.fix_method.clone());
+                }
+            }
+        }
+    }
+    Ok(HistoryListResult { entries, episodes })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -9748,6 +10490,95 @@ fn explain_pack_change(path: String, event_id: String) -> Result<serde_json::Val
         "neighbors": neighbors,
         "canOpenDiagnose": ev.tags.iter().any(|t| t == "crash_fix" || t == "crash_resolved")
             || ev.op.contains("crash"),
+    }))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn explain_history_episode(path: String, episode_id: String) -> Result<serde_json::Value, String> {
+    let list = list_project_change_history(path)?;
+    let Some(episode) = list
+        .episodes
+        .iter()
+        .find(|e| e.id == episode_id)
+        .cloned()
+    else {
+        return Err(format!("episode {episode_id} not found"));
+    };
+    let actions: Vec<&ProjectChangeEntry> = episode
+        .action_ids
+        .iter()
+        .filter_map(|id| list.entries.iter().find(|e| e.id == *id))
+        .collect();
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "Episode {} · outcome {} · method {}.",
+        episode.id, episode.outcome, episode.fix_method
+    ));
+    if let Some(fp) = episode.fingerprint_key.as_ref() {
+        lines.push(format!("Fingerprint: {fp}"));
+    }
+    if let Some(ps) = episode.plan_source.as_ref() {
+        lines.push(format!("Plan source: {ps}"));
+    }
+    if let Some(rs) = episode.resolution_summary.as_ref() {
+        lines.push(format!("Resolution: {rs}"));
+    }
+    lines.push(format!("Summary: {}", episode.summary));
+    lines.push("Actions:".into());
+    for (i, a) in actions.iter().take(8).enumerate() {
+        let label = if a.operation.trim().is_empty() {
+            a.preview.as_str()
+        } else {
+            a.operation.as_str()
+        };
+        let short = tuffbox_core::crash_kb::truncate_at_char_boundary(label, 140);
+        lines.push(format!(
+            "  {}. [{}] {} — {}",
+            i + 1,
+            a.op,
+            a.actor,
+            short
+        ));
+    }
+    if actions.len() > 8 {
+        lines.push(format!("  …and {} more", actions.len() - 8));
+    }
+    let neighbors: Vec<_> = list
+        .episodes
+        .iter()
+        .filter(|e| e.id != episode.id)
+        .take(4)
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "outcome": e.outcome,
+                "summary": e.summary,
+                "startedAt": e.started_at,
+            })
+        })
+        .collect();
+    let excerpts: Vec<_> = actions
+        .iter()
+        .filter(|a| a.can_open)
+        .take(3)
+        .map(|a| {
+            serde_json::json!({
+                "path": a.path,
+                "excerpt": tuffbox_core::crash_kb::truncate_at_char_boundary(&a.diff, 400),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "episodeId": episode.id,
+        "explanation": lines.join("\n"),
+        "outcome": episode.outcome,
+        "fixMethod": episode.fix_method,
+        "fingerprintKey": episode.fingerprint_key,
+        "logPath": episode.log_path,
+        "resolutionSummary": episode.resolution_summary,
+        "excerpts": excerpts,
+        "neighbors": neighbors,
+        "canOpenDiagnose": true,
     }))
 }
 
@@ -10926,6 +11757,27 @@ fn build_and_spawn(
                 progress.log(&format!("# WARNING: cosmetics inject: {error}"));
             }
         }
+
+        // In-game overlay (YouTube + friends/chat) — same identity & write secret
+        if launcher_settings::overlay_enabled() {
+            let overlay_secret = cosmetics_local::active_extras(uid).write_secret;
+            match tuffbox_core::prepare_overlay_bridge(
+                &manifest,
+                &game_dir,
+                uname,
+                uid,
+                &overlay_secret,
+            ) {
+                Ok(Some(ov)) => {
+                    progress.log(&format!("# Overlay: {}", ov.message));
+                    cleanup_paths.extend(ov.cleanup_paths);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    progress.log(&format!("# WARNING: overlay inject: {error}"));
+                }
+            }
+        }
     }
 
     // authlib-injector for Yggdrasil accounts
@@ -11014,8 +11866,30 @@ fn build_and_spawn(
         if exit.code == Some(0) {
             return;
         }
-        let _ = record_crash(stats_path_for_exit);
+        let _ = record_crash(stats_path_for_exit.clone());
         let info = classify_crash(&crash_ctx, exit.code);
+        // Start / continue a History episode for this crash.
+        if let Ok(project_dir) = manifest_parent(&stats_path_for_exit) {
+            let log_for_fp = info
+                .log_path
+                .as_deref()
+                .map(PathBuf::from)
+                .filter(|p| p.is_file())
+                .unwrap_or_else(|| crash_ctx.log_path.clone());
+            let log_text = tuffbox_core::process::read_log_tail(&log_for_fp, 1200).unwrap_or_default();
+            let fp = tuffbox_core::crash_kb::fingerprint_from_text(
+                &log_text,
+                &crash_ctx.mc_version,
+                &crash_ctx.loader_kind,
+            );
+            let _ = pack_events::append_crash_detected(
+                &project_dir,
+                &fp.key,
+                exit.code,
+                info.log_path.as_deref(),
+                &info.message,
+            );
+        }
         let _ = app_for_exit.emit("launch-crashed", info);
     }));
 
@@ -12695,6 +13569,17 @@ fn mod_change_entries(
     let after_mods: std::collections::HashMap<_, _> =
         after.mods.iter().map(|m| (m.id.as_str(), m)).collect();
 
+    let actor = if snapshot.plan_source.is_some() {
+        pack_events::actor_for_plan_source(snapshot.plan_source.as_deref()).to_string()
+    } else {
+        pack_events::actor_for_operation(&snapshot.name).to_string()
+    };
+    let (episode_id, fix_method) = history_episode_fields(
+        &snapshot.crash_fingerprint_key,
+        &snapshot.plan_source,
+        None,
+    );
+
     for (id, module) in &after_mods {
         if !before_mods.contains_key(*id) {
             entries.push(ProjectChangeEntry {
@@ -12715,8 +13600,11 @@ fn mod_change_entries(
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
-                actor: "launcher".into(),
+                actor: actor.clone(),
                 op: "mod_added".into(),
+                episode_id: episode_id.clone(),
+                fix_method: fix_method.clone(),
+                log_path: None,
             });
         }
     }
@@ -12741,8 +13629,11 @@ fn mod_change_entries(
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
-                actor: "launcher".into(),
+                actor: actor.clone(),
                 op: "mod_removed".into(),
+                episode_id: episode_id.clone(),
+                fix_method: fix_method.clone(),
+                log_path: None,
             });
         }
     }
@@ -12781,8 +13672,11 @@ fn mod_change_entries(
                 tags: snapshot.tags.clone(),
                 crash_fingerprint_key: snapshot.crash_fingerprint_key.clone(),
                 plan_source: snapshot.plan_source.clone(),
-                actor: "launcher".into(),
+                actor: actor.clone(),
                 op: "mod_updated".into(),
+                episode_id: episode_id.clone(),
+                fix_method: fix_method.clone(),
+                log_path: None,
             });
         }
     }
@@ -14299,6 +15193,11 @@ pub fn run() {
                 fit_to_screen(&win);
             }
             launcher_presence::start_presence_loop();
+            let swarm = integrations::swarm_settings();
+            if swarm.enabled && swarm.p2p_enabled {
+                swarm_node::maybe_start_volunteer_poller();
+                swarm_node::maybe_start_creation_poller();
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -14418,6 +15317,8 @@ pub fn run() {
             swarm_api::publish_experience_capsule,
             swarm_api::list_community_crash_capsules,
             swarm_api::vote_community_crash_capsule,
+            swarm_api::accept_creation_result,
+            swarm_api::get_local_kudos_balance,
             swarm_api::propose_community_capsule_plan,
             swarm_api::record_project_cooccurrence,
             swarm_api::report_mod_cooccurrence,
@@ -14432,8 +15333,16 @@ pub fn run() {
             integrations::set_swarm_hub_url,
             integrations::set_swarm_supabase_url,
             integrations::set_swarm_p2p,
+            integrations::set_swarm_volunteer_diagnose,
+            integrations::set_swarm_creation_worker,
+            integrations::set_swarm_p2p_relay_server,
+            integrations::set_swarm_advertised_vram_mb,
             swarm_node::get_p2p_node_status,
             swarm_node::ensure_p2p_node,
+            swarm_node::restart_p2p_node,
+            swarm_node::submit_creation_job,
+            swarm_node::creation_job_defaults,
+            swarm_node::apply_creation_artifacts,
             task_progress_api::list_background_tasks,
             task_progress_api::dismiss_background_task,
             task_progress_api::start_background_task,
@@ -14486,6 +15395,12 @@ pub fn run() {
             list_quest_progress_teams,
             load_quest_progress,
             simulate_quest_progress,
+            quest_kubejs_list_scripts,
+            quest_kubejs_audit,
+            quest_kubejs_read_script,
+            quest_kubejs_ensure_managed,
+            quest_kubejs_render_template,
+            quest_kubejs_append_handler,
             list_worlds,
             mca_selector::open_mca_selector,
             list_content_packs,
@@ -14514,6 +15429,8 @@ pub fn run() {
             integrations::pull_ollama_model,
             integrations::import_ollama_gguf,
             integrations::ensure_ollama_model,
+            integrations::get_ollama_storage,
+            integrations::delete_ollama_model,
             integrations::get_publish_config,
             integrations::save_publish_config,
             integrations::publish_release,
@@ -14571,6 +15488,7 @@ pub fn run() {
             scan_project_changes,
             list_recent_pack_events,
             explain_pack_change,
+            explain_history_episode,
             read_project_history_file,
             create_tracked_history_snapshot,
             rollback_history_file,

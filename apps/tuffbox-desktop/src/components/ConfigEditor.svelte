@@ -828,7 +828,7 @@
   }
   .notice { gap: 8px; padding: 8px 10px; border-radius: var(--border-radius-md); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .trail-actions { gap: 6px; }
   .mini { padding: 4px 8px; font-size: 11px; }
   .lint-bad { border-color: rgba(239, 68, 68, 0.45) !important; color: #fca5a5 !important; }
@@ -854,7 +854,7 @@
     padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border-color);
     background: var(--bg-tertiary); color: var(--text-muted); cursor: pointer;
   }
-  .chip.active, .chip:hover { border-color: rgba(27, 217, 106, 0.4); color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); }
+  .chip.active, .chip:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
 
   .layout {
     flex: 1;
@@ -935,7 +935,7 @@
   .search-status { color: var(--text-muted); }
   .search-results { max-height: 140px; overflow: auto; margin-top: 6px; }
   .search-hit { width: 100%; display: grid; gap: 2px; text-align: left; padding: 5px 6px; margin-bottom: 2px; background: transparent; border: 1px solid transparent; color: var(--text-secondary); transform: none; }
-  .search-hit:hover { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.25); }
+  .search-hit:hover { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .hit-path { font-size: 11px; color: var(--accent-primary); font-family: ui-monospace, monospace; }
   .hit-text { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .search-truncated { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
@@ -958,7 +958,7 @@
   .tree-dir { font-weight: 600; color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
   .tree-dir.root { color: var(--accent-primary); opacity: 0.9; }
   .tree-dir:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: rgba(27,217,106,0.35); color: var(--text-primary); }
+  .tree-file:hover, .tree-file.selected { background: var(--bg-tertiary); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent); color: var(--text-primary); }
   .tree-dir :global(.folder-icon) { color: var(--accent-primary); opacity: 0.7; }
   .tree-dir-name, .tree-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tree-file-name { font-weight: 500; }
@@ -972,12 +972,12 @@
   .editor-header p { margin: 0; font-size: 12px; color: var(--text-muted); }
   .editor-stats { gap: 10px; white-space: nowrap; }
   .editor-stats strong { color: var(--accent-warning); font-size: 12px; }
-  .lang-badge { background: rgba(139,92,246,0.15); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
+  .lang-badge { background: color-mix(in srgb, var(--accent-secondary) 15%, transparent); color: var(--accent-secondary); padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 11px; text-transform: uppercase; }
 
   .cm-wrapper { flex: 1; min-height: 0; overflow: hidden; }
   .cm-wrapper :global(.cm-editor) { height: 100%; }
   .cm-wrapper :global(.cm-scroller) { overflow: auto; }
-  .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: rgba(27, 217, 106, 0.22) !important; }
+  .cm-wrapper.line-hl :global(.cm-selectionBackground) { background: color-mix(in srgb, var(--accent-primary) 22%, transparent) !important; }
 
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

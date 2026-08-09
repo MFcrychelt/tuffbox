@@ -262,7 +262,7 @@
 
   .runtime.active {
     border-color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
 
   .runtime-info {

@@ -46,17 +46,21 @@
     path = "",
     resolutionId = null,
     seedExplanation = "",
+    shareBusy = false,
+    shareError = null,
     onconfirm,
     ondismiss,
   }: {
     path?: string;
     resolutionId?: string | null;
     seedExplanation?: string;
+    shareBusy?: boolean;
+    shareError?: string | null;
     onconfirm?: (detail: {
       humanExplanation: string;
       actions: DistillAction[];
       fingerprintKey: string | null;
-    }) => void;
+    }) => void | Promise<void>;
     ondismiss?: () => void;
   } = $props();
 
@@ -73,7 +77,7 @@
   const validationErrors = $derived(plan?.validation?.errors ?? []);
   const validationWarnings = $derived(plan?.validation?.warnings ?? []);
   const canConfirm = $derived(
-    !!plan && !confirmBusy && !loading && validationOk && !error,
+    !!plan && !confirmBusy && !shareBusy && !loading && validationOk && !error,
   );
 
   onMount(() => {
@@ -166,12 +170,13 @@
     if (!plan || !canConfirm) return;
     confirmBusy = true;
     try {
-      onconfirm?.({
+      await onconfirm?.({
         humanExplanation: plan.humanExplanation ?? "",
         actions: plan.actions ?? [],
         fingerprintKey: plan.fingerprintKey ?? null,
       });
     } finally {
+      // Parent owns shareBusy while the dialog stays open on error.
       confirmBusy = false;
     }
   }
@@ -233,6 +238,13 @@
         </div>
       {:else}
         <div class="sc-excerpt">{plan?.humanExplanation || seedExplanation}</div>
+        {#if (plan?.groundingNotes ?? []).length}
+          <ul class="sc-notes">
+            {#each plan?.groundingNotes ?? [] as note, ni (ni)}
+              <li>{note}</li>
+            {/each}
+          </ul>
+        {/if}
         {#if validationErrors.length}
           <ul class="sc-validation err">
             {#each validationErrors as err (err)}
@@ -251,7 +263,10 @@
           <ul class="sc-actions-list">
             {#each plan?.actions ?? [] as a, i (i)}
               <li>
-                <code>{actionLabel(a)}</code>
+                <div class="sc-action-top">
+                  <code>{actionLabel(a)}</code>
+                  {#if a.risk}<span class="sc-risk">{a.risk}</span>{/if}
+                </div>
                 {#if a.reason}
                   <span class="sc-reason">{a.reason}</span>
                 {/if}
@@ -261,6 +276,9 @@
         {:else}
           <p class="sc-muted">No structured actions — explanation only will be shared.</p>
         {/if}
+        {#if shareError}
+          <p class="sc-error">{shareError}</p>
+        {/if}
         <div class="sc-actions">
           <button class="ghost" type="button" onclick={() => ondismiss?.()}>
             <X size={14} /> Not now
@@ -269,7 +287,7 @@
             <Pencil size={14} /> Edit
           </button>
           <button type="button" disabled={!canConfirm} onclick={onConfirm}>
-            <Check size={14} /> {confirmBusy ? "Sharing…" : "Confirm & share"}
+            <Check size={14} /> {confirmBusy || shareBusy ? "Sharing…" : "Confirm & share"}
           </button>
         </div>
       {/if}
@@ -358,6 +376,31 @@
     font-size: 12px;
     color: #fdba74;
   }
+  .sc-action-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .sc-risk {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+  }
+  .sc-notes {
+    list-style: disc;
+    padding-left: 18px;
+    margin: 0 0 12px;
+    text-align: left;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .sc-notes li { margin-bottom: 4px; }
   .sc-reason {
     display: block;
     margin-top: 4px;

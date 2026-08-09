@@ -253,7 +253,7 @@
                     setField(entry, "loot_crate", (e.currentTarget as HTMLInputElement).value)}
                 /></label
               >
-            {:else if entryType(entry) === "all_tables"}
+            {:else if entryType(entry) === "all_tables" || entryType(entry) === "all_table"}
               <p class="muted">All tables — no extra fields.</p>
             {/if}
             <details class="extra">

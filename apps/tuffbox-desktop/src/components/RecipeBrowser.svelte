@@ -2267,7 +2267,7 @@
 
   .notice { padding: 10px 14px; border-radius: 10px; font-size: 13px; }
   .notice.error { background: rgba(239, 68, 68, 0.08); color: #fecaca; border: 1px solid rgba(239, 68, 68, 0.25); }
-  .notice.ok { background: rgba(27, 217, 106, 0.08); color: var(--accent-primary); border: 1px solid rgba(27, 217, 106, 0.25); }
+  .notice.ok { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); color: var(--accent-primary); border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent); }
 
   .jei-search-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .jei-search { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-muted); position: relative; }
@@ -2368,11 +2368,11 @@
   .focus-tabs button:hover { transform: none; background: var(--bg-hover); color: var(--text-secondary); }
   .focus-tabs button em { font-style: normal; opacity: 0.7; margin-left: 4px; }
   .focus-tabs button.active {
-    background: rgba(27, 217, 106, 0.1); border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary); font-weight: 700;
   }
   .focus-tabs button.active:hover {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
   }
   .focus-item { display: flex; align-items: center; gap: 10px; margin-left: auto; }

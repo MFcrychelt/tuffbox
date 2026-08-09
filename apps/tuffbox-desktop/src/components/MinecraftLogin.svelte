@@ -685,25 +685,29 @@
     color: var(--text-primary); cursor: pointer;
   }
   .account-row:hover { border-color: var(--accent-primary); }
-  .account-row.active { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.05); }
+  .account-row.active { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 5%, transparent); }
   .account-ico {
     width: 32px; height: 32px; border-radius: var(--border-radius-sm);
     display: flex; align-items: center; justify-content: center;
     background: var(--bg-elevated); color: var(--text-muted);
   }
   .account-ico.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
-  .account-ico.ygg { background: rgba(168, 85, 247, 0.18); color: #e9d5ff; }
+  .account-ico.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.18));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
   .account-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .mc-nick {
     font-family: var(--font-minecraft);
     font-size: 10px;
     letter-spacing: 0.4px;
-    text-shadow: 1px 1px 0 #3f3f3f;
+    color: var(--mc-nick-color, var(--text-primary));
+    text-shadow: var(--mc-nick-shadow-soft, 1px 1px 0 #3f3f3f);
   }
   .account-type { font-size: 10px; font-weight: 800; text-transform: uppercase; }
-  .account-type.mojang { color: #93c5fd; }
-  .account-type.offline { color: #fde68a; }
-  .account-type.ygg { color: #e9d5ff; }
+  .account-type.mojang { color: var(--badge-ms-fg, #93c5fd); }
+  .account-type.offline { color: var(--badge-offline-fg, #fde68a); }
+  .account-type.ygg { color: var(--badge-ygg-fg, #e9d5ff); }
   :global(.check) { color: var(--accent-primary); }
   .divider {
     display: flex; align-items: center; gap: 10px; margin: 14px 0;
@@ -735,7 +739,7 @@
     border-radius: var(--border-radius-lg); cursor: pointer; text-align: left;
     transition: all 0.15s ease; width: 100%;
   }
-  .login-option:hover { border-color: var(--accent-primary); background: rgba(27, 217, 106, 0.04); }
+  .login-option:hover { border-color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 4%, transparent); }
 
   .option-icon {
     width: 40px; height: 40px; border-radius: 10px;
@@ -744,7 +748,10 @@
   .option-icon.ms { background: linear-gradient(135deg, #0078d4, #00a4ef); color: #fff; }
   .option-icon.ms-url { background: linear-gradient(135deg, #0ea5e9, #2563eb); color: #fff; }
   .option-icon.offline { background: var(--bg-elevated); color: var(--text-muted); border: 1px solid var(--border-color); }
-  .option-icon.ygg { background: rgba(168, 85, 247, 0.2); color: #e9d5ff; }
+  .option-icon.ygg {
+    background: var(--badge-ygg-bg, rgba(168, 85, 247, 0.2));
+    color: var(--badge-ygg-fg, #e9d5ff);
+  }
 
   .option-info { flex: 1; display: flex; flex-direction: column; gap: 2px; }
   .option-title { font-weight: 700; font-size: 14px; color: var(--text-primary); }
@@ -770,7 +777,7 @@
     width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center;
     border-radius: var(--border-radius-sm); background: var(--bg-hover); color: var(--text-secondary); border: none;
   }
-  .copy-btn:hover { background: var(--accent-primary); color: #000; }
+  .copy-btn:hover { background: var(--accent-primary); color: var(--on-accent, #000); }
 
   .instruction { color: var(--text-secondary); font-size: 13px; text-align: center; line-height: 1.6; }
   .instruction a { color: var(--accent-primary); text-decoration: none; font-weight: 600; }
@@ -823,7 +830,7 @@
   .source-option:hover { border-color: var(--text-muted); color: var(--text-primary); }
   .source-option.active {
     border-color: var(--accent-primary); color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.06);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   }
 
   .error-msg {

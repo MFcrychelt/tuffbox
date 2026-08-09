@@ -10,6 +10,7 @@
     canApply = false,
     selectedCount = 0,
     busy = false,
+    networkTrust = null,
     onCancel,
     onConfirm,
   }: {
@@ -35,9 +36,26 @@
     canApply?: boolean;
     selectedCount?: number;
     busy?: boolean;
+    networkTrust?: {
+      trustPercent: number | null;
+      keeps: number | null;
+      discards: number | null;
+      mc: string | null;
+      loader: string | null;
+    } | null;
     onCancel?: () => void;
     onConfirm?: () => void;
   } = $props();
+
+  const showTrust = $derived(
+    source === "network" &&
+      !!networkTrust &&
+      (networkTrust.trustPercent != null ||
+        networkTrust.keeps != null ||
+        networkTrust.discards != null ||
+        networkTrust.mc != null ||
+        networkTrust.loader != null),
+  );
 </script>
 
 {#if open}
@@ -57,6 +75,25 @@
         <button class="icon-btn" type="button" onclick={() => onCancel?.()} aria-label="Close">×</button>
       </div>
       <p class="plan-review-expl">{explanation}</p>
+      {#if showTrust && networkTrust}
+        <div class="trust-card-line">
+          {#if networkTrust.trustPercent != null}
+            <span class="trust-chip">Trust {networkTrust.trustPercent}%</span>
+          {/if}
+          {#if networkTrust.keeps != null}
+            <span class="trust-chip">Keeps {networkTrust.keeps}</span>
+          {/if}
+          {#if networkTrust.discards != null}
+            <span class="trust-chip">Discards {networkTrust.discards}</span>
+          {/if}
+          {#if networkTrust.mc}
+            <span class="trust-chip">MC {networkTrust.mc}</span>
+          {/if}
+          {#if networkTrust.loader}
+            <span class="trust-chip">{networkTrust.loader}</span>
+          {/if}
+        </div>
+      {/if}
       {#if source === "network" && hasDestructive}
         <p class="plan-review-warn">
           This plan includes destructive actions (disable/remove). A snapshot will be created first — use Restore on the home screen if something breaks.
@@ -157,6 +194,26 @@
   .plan-review-modal h2 { margin: 0 0 4px; font-size: 16px; }
   .plan-review-modal p { margin: 0; font-size: 13px; color: var(--text-muted); }
   .plan-review-expl { margin: 0 0 12px !important; color: var(--text-secondary) !important; }
+  .trust-card-line {
+    font-size: 12px;
+    color: var(--text-secondary);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 12px;
+  }
+  .trust-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+  }
   .plan-review-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
   .plan-review-row {
     display: flex;

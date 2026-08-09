@@ -227,6 +227,49 @@ export interface QuestBook {
   loadWarnings?: string[];
 }
 
+export interface QuestKubeJsHandler {
+  kind: string;
+  id: string;
+  relativePath: string;
+  line: number;
+}
+
+export interface QuestKubeJsScriptFile {
+  relativePath: string;
+  name: string;
+  managed: boolean;
+}
+
+export interface QuestKubeJsBinding {
+  kind: string;
+  id: string;
+  questId: string;
+  questTitle: string;
+  chapterId: string;
+  title?: string | null;
+  status: "linked" | "missing" | string;
+  handlers: QuestKubeJsHandler[];
+}
+
+export interface QuestKubeJsAudit {
+  linked: number;
+  missing: number;
+  orphan: number;
+  bindings: QuestKubeJsBinding[];
+  orphanHandlers: QuestKubeJsHandler[];
+  scripts: QuestKubeJsScriptFile[];
+}
+
+export interface QuestKubeJsTemplateParams {
+  kind: string;
+  id: string;
+  maxProgress?: number | null;
+  blockId?: string | null;
+  itemId?: string | null;
+  count?: number | null;
+  title?: string | null;
+}
+
 export interface QuestRewardTable {
   id: string;
   title?: string | null;
@@ -624,6 +667,30 @@ export interface ProjectChangeEntry {
   planSource?: string | null;
   actor?: string;
   op?: string;
+  episodeId?: string | null;
+  fixMethod?: string | null;
+  logPath?: string | null;
+}
+
+/** Crash → actions → outcome grouping for Smart History. */
+export interface HistoryEpisode {
+  id: string;
+  outcome: "open" | "fixed" | "broke" | "rolled_back" | string;
+  fixMethod: "ai" | "heuristic" | "kb" | "swarm" | "manual" | "unknown" | string;
+  fingerprintKey?: string | null;
+  startedAt: string;
+  endedAt?: string | null;
+  summary: string;
+  actionIds: string[];
+  planSource?: string | null;
+  snapshotId?: string | null;
+  resolutionSummary?: string | null;
+  logPath?: string | null;
+}
+
+export interface HistoryListResult {
+  entries: ProjectChangeEntry[];
+  episodes: HistoryEpisode[];
 }
 
 export interface PackEvent {
@@ -1597,7 +1664,7 @@ export const api = {
   history: {
     getSettings(p?: string) { return cmd<HistorySettings>("get_history_settings", pathArg(p)); },
     updateSettings(settings: HistorySettings, p?: string) { return cmd<HistorySettings>("update_history_settings", { ...pathArg(p), settings }); },
-    list(p?: string) { return cmd<ProjectChangeEntry[]>("list_project_change_history", pathArg(p)); },
+    list(p?: string) { return cmd<HistoryListResult>("list_project_change_history", pathArg(p)); },
     readFile(relativePath: string, p?: string) { return cmd<HistoryFileContent>("read_project_history_file", { ...pathArg(p), relativePath }); },
     createSnapshot(roots: string[], p?: string) { return cmd<Snapshot>("create_tracked_history_snapshot", { ...pathArg(p), roots }); },
     rollbackFile(snapshotId: string, relativePath: string, p?: string) { return cmd<void>("rollback_history_file", { ...pathArg(p), snapshotId, relativePath }); },
@@ -1607,6 +1674,9 @@ export const api = {
     },
     explain(eventId: string, p?: string) {
       return cmd<Record<string, unknown>>("explain_pack_change", { ...pathArg(p), eventId });
+    },
+    explainEpisode(episodeId: string, p?: string) {
+      return cmd<Record<string, unknown>>("explain_history_episode", { ...pathArg(p), episodeId });
     },
   },
 
@@ -2154,6 +2224,36 @@ export const api = {
     planSystemPrompt() {
       return cmd<string>("quest_plan_system_prompt");
     },
+    kubejs: {
+      listScripts(p?: string) {
+        return cmd<QuestKubeJsScriptFile[]>("quest_kubejs_list_scripts", pathArg(p));
+      },
+      audit(book: QuestBook, p?: string) {
+        return cmd<QuestKubeJsAudit>("quest_kubejs_audit", { ...pathArg(p), book });
+      },
+      readScript(relativePath: string, p?: string) {
+        return cmd<string>("quest_kubejs_read_script", { ...pathArg(p), relativePath });
+      },
+      ensureManaged(p?: string) {
+        return cmd<string>("quest_kubejs_ensure_managed", pathArg(p));
+      },
+      renderTemplate(params: QuestKubeJsTemplateParams) {
+        return cmd<string>("quest_kubejs_render_template", { params });
+      },
+      appendHandler(snippet: string, p?: string) {
+        return cmd<{ relativePath: string; snapshotId: string }>("quest_kubejs_append_handler", {
+          ...pathArg(p),
+          snippet,
+        });
+      },
+      writeScript(relativePath: string, content: string, p?: string) {
+        return cmd<{ snapshotId: string }>("write_config_file", {
+          ...pathArg(p),
+          relativePath,
+          content,
+        });
+      },
+    },
   },
 
   // ── Export ────────────────────────────────────────────────────────
@@ -2422,3 +2522,94 @@ export const api = {
     },
   },
 };
+
+// ─── AI / Ollama settings ───────────────────────────────────────────
+
+export type AiProvider = "ollama" | "openai-compatible";
+
+export interface AiSettings {
+  provider: string;
+  endpoint: string;
+  model: string;
+  diagnoseMode?: string;
+  crashKbEndpoint?: string;
+  ollamaBinaryPath?: string;
+  ollamaModelsPath?: string;
+  speculativeDecoding?: boolean;
+  draftModel?: string;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  sizeBytes: number;
+  parameterSize: string;
+  quantization: string;
+  family: string;
+  fit: string;
+}
+
+export interface SuggestedModel {
+  name: string;
+  note: string;
+  approxSizeBytes: number;
+  minRamGb: number;
+  minVramGb: number;
+}
+
+export interface OllamaDetect {
+  installed: boolean;
+  running: boolean;
+  binaryPath: string;
+  modelsPath?: string;
+  modelsPathConfigured?: boolean;
+  defaultModel?: string;
+  endpoint: string;
+  models: OllamaModelInfo[];
+  needsModel: boolean;
+  error?: string | null;
+  suggestedModels: SuggestedModel[];
+  hostRamBytes?: number;
+}
+
+export interface OllamaStorage {
+  path: string;
+  files: number;
+  usedBytes: number;
+  availableBytes: number;
+  totalBytes: number;
+  hostRamBytes?: number;
+}
+
+export interface OllamaPullProgress {
+  model: string;
+  status: string;
+  completed: number;
+  total: number;
+}
+
+export function formatBytes(bytes: number | null | undefined): string {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = n;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const digits = i === 0 ? 0 : v >= 10 ? 1 : 2;
+  return `${v.toFixed(digits)} ${units[i]}`;
+}
+
+export function fitLabel(fit: string | undefined): string {
+  switch ((fit || "").toLowerCase()) {
+    case "ok":
+      return "OK";
+    case "tight":
+      return "Tight";
+    case "heavy":
+      return "Heavy";
+    default:
+      return "—";
+  }
+}

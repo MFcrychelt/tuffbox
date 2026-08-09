@@ -30,6 +30,7 @@
     supabase,
   } from "../lib/supabaseAuth";
   import EmptyState from "./EmptyState.svelte";
+  import KudosBalanceStrip from "./KudosBalanceStrip.svelte";
 
   type StatusFilter = "all" | "open" | "saved";
 
@@ -61,6 +62,9 @@
     failCount: number;
     createdAt?: string | null;
     updatedAt?: string | null;
+    signerPublicKey?: string | null;
+    authorTotalKudos?: number | null;
+    authorRac?: number | null;
   };
 
   type VoteResponse = {
@@ -71,6 +75,19 @@
     rejectCount?: number;
     successCount?: number;
     failCount?: number;
+    kudos?: {
+      ok?: boolean;
+      awarded?: boolean;
+      amount?: number;
+      totalKudos?: number;
+      rac?: number;
+    } | null;
+  };
+
+  type KudosBalance = {
+    beneficiaryKey?: string;
+    totalKudos?: number;
+    rac?: number;
   };
 
   let swarmEnabled = $state(false);
@@ -81,6 +98,7 @@
   let capsules = $state<CommunityCapsule[]>([]);
   let statusFilter = $state<StatusFilter>("all");
   let expandedId = $state<string | null>(null);
+  let kudosBalance = $state<KudosBalance | null>(null);
 
   let authUser = $state<User | null>(null);
   let accessToken = $state("");
@@ -112,7 +130,22 @@
   async function init() {
     await loadSwarm();
     await loadAuth();
-    if (swarmEnabled) await refresh();
+    if (swarmEnabled) {
+      await refresh();
+      await loadKudos();
+    }
+  }
+
+  async function loadKudos() {
+    if (!swarmEnabled) {
+      kudosBalance = null;
+      return;
+    }
+    try {
+      kudosBalance = await invoke<KudosBalance>("get_local_kudos_balance");
+    } catch {
+      kudosBalance = null;
+    }
   }
 
   async function loadAuth() {
@@ -150,6 +183,7 @@
       ) {
         expandedId = null;
       }
+      await loadKudos();
     } catch (e) {
       error = String(e);
       capsules = [];
@@ -274,7 +308,24 @@
       });
       const patched = patchFromVote(c.contentHash, res);
       if (!patched) await refresh();
-      toasts.success(voteKind === "confirm" ? "Voted Keep" : "Voted Discard");
+      if (voteKind === "confirm" && res.kudos?.awarded) {
+        toasts.success(
+          `Voted Keep — author +${res.kudos.amount ?? 10} Kudos (RAC ${Number(res.kudos.rac ?? 0).toFixed(1)})`,
+        );
+        void loadKudos();
+        // Refresh author totals on the voted card without a full list round-trip.
+        capsules = capsules.map((cap) =>
+          cap.contentHash === c.contentHash
+            ? {
+                ...cap,
+                authorTotalKudos: Number(res.kudos?.totalKudos ?? cap.authorTotalKudos ?? 0),
+                authorRac: Number(res.kudos?.rac ?? cap.authorRac ?? 0),
+              }
+            : cap,
+        );
+      } else {
+        toasts.success(voteKind === "confirm" ? "Voted Keep" : "Voted Discard");
+      }
     } catch (e) {
       error = String(e);
       toasts.error(String(e));
@@ -371,6 +422,15 @@
       </button>
     </div>
   </header>
+
+  {#if swarmEnabled && kudosBalance}
+    <KudosBalanceStrip
+      title="Your author Kudos"
+      total={Number(kudosBalance.totalKudos ?? 0)}
+      rac={Number(kudosBalance.rac ?? 0)}
+      hint="Manual Keep awards author Kudos · Soft-verify playtime also votes Keep when signed in"
+    />
+  {/if}
 
   {#if swarmEnabled}
     <section class="auth-panel compact tb-card" aria-label="Account">
@@ -498,6 +558,13 @@
             </div>
 
             <span class="solution-preview">{truncate(c.solution, 140)}</span>
+
+            {#if c.signerPublicKey}
+              <div class="author-kudos" title="Author Kudos / RAC (soft-verify Keep)">
+                Author Kudos <strong>{Number(c.authorTotalKudos ?? 0).toFixed(0)}</strong>
+                · RAC <strong>{Number(c.authorRac ?? 0).toFixed(1)}</strong>
+              </div>
+            {/if}
 
             <div class="trust-block">
               <div class="trust-head">
@@ -706,6 +773,15 @@
     padding-bottom: 4px;
   }
 
+  .author-kudos {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .author-kudos strong {
+    color: var(--text-secondary);
+  }
+
   .title-row {
     display: flex;
     align-items: center;
@@ -901,7 +977,7 @@
   }
 
   .status-chip.saved {
-    background: rgba(27, 217, 106, 0.14);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
   }
 
@@ -1107,9 +1183,9 @@
   }
 
   .vote.keep {
-    background: rgba(27, 217, 106, 0.16);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
     color: var(--accent-primary);
-    border: 1px solid rgba(27, 217, 106, 0.35);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
   }
 
   .vote.keep:hover:not(:disabled) {

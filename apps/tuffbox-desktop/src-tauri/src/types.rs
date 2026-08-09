@@ -151,6 +151,45 @@ pub struct ProjectChangeEntry {
     pub actor: String,
     #[serde(default)]
     pub op: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub episode_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub fix_method: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub log_path: Option<String>,
+}
+
+/// Crash → actions → outcome grouping for Smart History.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEpisode {
+    pub id: String,
+    /// open | fixed | broke | rolled_back
+    pub outcome: String,
+    /// ai | heuristic | kb | swarm | manual | unknown
+    pub fix_method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint_key: Option<String>,
+    pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    pub summary: String,
+    pub action_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolution_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryListResult {
+    pub entries: Vec<ProjectChangeEntry>,
+    pub episodes: Vec<HistoryEpisode>,
 }
 
 #[derive(serde::Serialize)]

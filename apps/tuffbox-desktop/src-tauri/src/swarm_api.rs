@@ -77,6 +77,9 @@ pub struct LastCrashFixMarker {
     /// Whether UI already received a soft-verify outcome event for this marker.
     #[serde(default)]
     pub vote_emitted: bool,
+    /// History episode id linking crash_detected → fix → outcome.
+    #[serde(default)]
+    pub episode_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -399,10 +402,12 @@ pub fn maybe_confirm_crash_resolution(
         matched_case_ids: rec.matched_case_ids.clone(),
         operation: "crash_resolved".into(),
         actions_summary: rec.actions_summary.clone(),
-        actor: Some("ai".into()),
+        actor: Some(
+            crate::pack_events::actor_for_plan_source(rec.plan_source.as_deref()).to_string(),
+        ),
     };
     let store = SnapshotStore::new(project_dir);
-    let _ = store.create_with_meta(
+    let resolved_snap = store.create_with_meta(
         format!("crash-resolved-{fp_prefix}"),
         format!(
             "Resolved crash ({verified_by}): {}",
@@ -413,9 +418,36 @@ pub fn maybe_confirm_crash_resolution(
         &[] as &[std::path::PathBuf],
         meta,
     );
+    let episode_id = marker
+        .episode_id
+        .clone()
+        .unwrap_or_else(|| crate::pack_events::episode_id_for_fingerprint(&rec.fingerprint_key));
+    if let Ok(ref snap) = resolved_snap {
+        let _ = crate::pack_events::append_from_snapshot_with_episode(
+            project_dir,
+            "crash_resolved",
+            &snap.id,
+            &[] as &[std::path::PathBuf],
+            &format!("Crash resolved ({verified_by})"),
+            &rec.actions_summary,
+            Some(&episode_id),
+            Some(&rec.fingerprint_key),
+            rec.plan_source.as_deref(),
+        );
+    }
+    let _ = crate::pack_events::append_crash_outcome_event(
+        project_dir,
+        "crash_resolved",
+        &episode_id,
+        &rec.fingerprint_key,
+        rec.plan_source.as_deref(),
+        resolved_snap.as_ref().ok().map(|s| s.id.as_str()),
+        &format!("Crash resolved ({verified_by}): {}", tuffbox_core::crash_kb::truncate_at_char_boundary(&how, 120)),
+    );
 
     marker.resolved = true;
     marker.resolved_at = Some(now_rfc);
+    marker.episode_id = Some(episode_id);
     save_crash_fix_marker(project_dir, &marker)?;
 
     Ok(Some(rec))
@@ -443,6 +475,29 @@ pub fn fail_soft_verify(
     } else {
         marker.soft_verify_failed = true;
     }
+    let episode_id = marker
+        .episode_id
+        .clone()
+        .unwrap_or_else(|| crate::pack_events::episode_id_for_fingerprint(&marker.fingerprint_key));
+    marker.episode_id = Some(episode_id.clone());
+    let outcome_op = if reason == "rollback" {
+        "crash_fix_rollback"
+    } else {
+        "crash_fix_rejected"
+    };
+    let _ = crate::pack_events::append_crash_outcome_event(
+        project_dir,
+        outcome_op,
+        &episode_id,
+        &marker.fingerprint_key,
+        marker.plan_source.as_deref(),
+        Some(&marker.snapshot_id),
+        &format!(
+            "Crash fix {} ({})",
+            if reason == "rollback" { "rolled back" } else { "rejected" },
+            reason
+        ),
+    );
     if !marker.vote_emitted {
         marker.vote_emitted = true;
         save_crash_fix_marker(project_dir, &marker)?;
@@ -781,6 +836,8 @@ pub fn record_user_fix_attempt(
         actions,
         additional_context: None,
     };
+    let actor = crate::pack_events::actor_for_plan_source(Some(source)).to_string();
+    let episode_id = crate::pack_events::episode_id_for_fingerprint(&fp);
     let snapshot = Snapshot {
         id: existing_snapshot_id
             .unwrap_or_else(|| format!("user-fix-{}", tuffbox_core::time_util::compact_now())),
@@ -801,9 +858,15 @@ pub fn record_user_fix_attempt(
             .iter()
             .map(format_launcher_action_summary)
             .collect(),
-        actor: Some("ai".into()),
+        actor: Some(actor),
     };
-    write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)
+    write_last_crash_fix_marker(project_dir, &snapshot, &plan, &fp)?;
+    // Ensure marker carries episode id for History grouping.
+    if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {
+        marker.episode_id = Some(episode_id);
+        let _ = save_crash_fix_marker(project_dir, &marker);
+    }
+    Ok(())
 }
 
 pub fn write_last_crash_fix_marker(
@@ -835,6 +898,7 @@ pub fn write_last_crash_fix_marker(
         rolled_back: false,
         soft_verify_failed: false,
         vote_emitted: false,
+        episode_id: Some(crate::pack_events::episode_id_for_fingerprint(fingerprint_key)),
     };
     save_crash_fix_marker(project_dir, &marker)
 }
@@ -869,15 +933,18 @@ pub fn auto_snapshot_crash_fix(
     if actions_summary.is_empty() && !plan.human_explanation.trim().is_empty() {
         actions_summary.push(plan.human_explanation.clone());
     }
+    let plan_source = plan.source.clone().or_else(|| Some("manual".into()));
+    let actor = crate::pack_events::actor_for_plan_source(plan_source.as_deref()).to_string();
+    let episode_id = crate::pack_events::episode_id_for_fingerprint(fp);
     let meta = SnapshotMeta {
         tags: vec!["crash_fix".into()],
         crash_fingerprint_key: fingerprint_key.map(|s| s.to_string()),
         report_id: None,
-        plan_source: plan.source.clone().or_else(|| Some("manual".into())),
+        plan_source: plan_source.clone(),
         matched_case_ids: plan.matched_case_ids.clone(),
         operation: "crash_fix".into(),
         actions_summary: actions_summary.clone(),
-        actor: Some("ai".into()),
+        actor: Some(actor),
     };
     let store = SnapshotStore::new(project_dir);
     let snapshot = store
@@ -891,14 +958,22 @@ pub fn auto_snapshot_crash_fix(
         )
         .map_err(|e| e.to_string())?;
     write_snapshot_plan_json(&store, &snapshot.id, plan)?;
-    let _ = crate::pack_events::append_from_snapshot(
+    let _ = crate::pack_events::append_from_snapshot_with_episode(
         project_dir,
         "crash_fix",
         &snapshot.id,
         &[] as &[std::path::PathBuf],
         &reason,
+        &actions_summary,
+        Some(&episode_id),
+        Some(fp),
+        plan_source.as_deref(),
     );
     let _ = write_last_crash_fix_marker(project_dir, &snapshot, plan, fp);
+    if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {
+        marker.episode_id = Some(episode_id);
+        let _ = save_crash_fix_marker(project_dir, &marker);
+    }
     Ok(snapshot)
 }
 
@@ -922,7 +997,7 @@ pub fn auto_snapshot_crash_fix_heuristic(
     let fp = fingerprint_key.unwrap_or("unknown");
     let fp_prefix: String = fp.chars().take(24).collect();
     let name = format!("auto-before-crash-fix-{fp_prefix}");
-    let reason = format!("Auto snapshot before crash fix (manual): {summary}");
+    let reason = format!("Auto snapshot before crash fix (heuristic): {summary}");
     let actions_summary: Vec<String> = actions
         .iter()
         .map(format_launcher_action_summary)
@@ -935,13 +1010,16 @@ pub fn auto_snapshot_crash_fix_heuristic(
         tags: vec!["crash_fix".into()],
         crash_fingerprint_key: fingerprint_key.map(|s| s.to_string()),
         report_id: report_id.map(|s| s.to_string()),
-        plan_source: Some("manual".into()),
+        plan_source: Some("heuristic".into()),
         matched_case_ids: Vec::new(),
         operation: "crash_fix".into(),
         actions_summary: actions_summary.clone(),
-        actor: Some("ai".into()),
+        actor: Some(
+            crate::pack_events::actor_for_plan_source(Some("heuristic")).to_string(),
+        ),
     };
     let store = SnapshotStore::new(project_dir);
+    let episode_id = crate::pack_events::episode_id_for_fingerprint(fp);
     let snapshot = store
         .create_with_meta(
             &name,
@@ -958,20 +1036,29 @@ pub fn auto_snapshot_crash_fix_heuristic(
         confidence: 0.6,
         suspected_mods: Vec::new(),
         needs_user_review: true,
-        source: Some("manual".into()),
+        source: Some("heuristic".into()),
         matched_case_ids: Vec::new(),
         actions,
         additional_context: None,
     };
     write_snapshot_plan_json(&store, &snapshot.id, &plan)?;
-    let _ = crate::pack_events::append_from_snapshot(
+    let _ = crate::pack_events::append_from_snapshot_with_episode(
         project_dir,
         "crash_fix",
         &snapshot.id,
         &[] as &[std::path::PathBuf],
         &reason,
+        &actions_summary,
+        Some(&episode_id),
+        Some(fp),
+        Some("heuristic"),
     );
     let _ = write_last_crash_fix_marker(project_dir, &snapshot, &plan, fp);
+    if let Ok(Some(mut marker)) = load_crash_fix_marker(project_dir) {
+        marker.episode_id = Some(episode_id);
+        marker.plan_source = Some("heuristic".into());
+        let _ = save_crash_fix_marker(project_dir, &marker);
+    }
     Ok(snapshot)
 }
 
@@ -1138,13 +1225,58 @@ pub async fn vote_community_crash_capsule(
         return Err("login required — register and sign in to vote".into());
     }
     let url = integrations::swarm_supabase_url().unwrap();
-    let anon = integrations::swarm_supabase_anon_key().unwrap();
+    let edge = integrations::swarm_supabase_edge_anon_key().unwrap();
     tuffbox_core::swarm_supabase::vote_capsule_supabase(
         &url,
-        &anon,
+        &edge,
         &content_hash,
         &vote,
         &access_token,
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_local_kudos_balance() -> Result<serde_json::Value, String> {
+    integrations::require_swarm_enabled()?;
+    if !integrations::swarm_supabase_configured() {
+        return Err("Community Supabase backend is not available".into());
+    }
+    let pk = tuffbox_core::swarm::device_signer_public_key_b64()?;
+    let url = integrations::swarm_supabase_url().unwrap();
+    let anon = integrations::swarm_supabase_anon_key().unwrap();
+    tuffbox_core::swarm_supabase::fetch_kudos_balance_supabase(&url, &anon, &pk).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn accept_creation_result(
+    job_id: String,
+    worker_signer_public_key: String,
+    access_token: String,
+    amount: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    integrations::require_swarm_enabled()?;
+    if !integrations::swarm_supabase_configured() {
+        return Err("Community Supabase backend is not available".into());
+    }
+    if access_token.trim().is_empty() {
+        return Err("login required — register and sign in to accept".into());
+    }
+    if job_id.trim().is_empty() {
+        return Err("jobId required".into());
+    }
+    if worker_signer_public_key.trim().is_empty() {
+        return Err("workerSignerPublicKey required — worker did not report a device key".into());
+    }
+    let url = integrations::swarm_supabase_url().unwrap();
+    let edge = integrations::swarm_supabase_edge_anon_key().unwrap();
+    tuffbox_core::swarm_supabase::accept_creation_supabase(
+        &url,
+        &edge,
+        &job_id,
+        &worker_signer_public_key,
+        &access_token,
+        amount,
     )
     .await
 }
@@ -1335,15 +1467,18 @@ pub async fn publish_experience_capsule(
         fail_count: 0,
     };
     let mut capsule = ExperienceCapsule::from_crash_case(&case).sanitized_for_network();
-    // Soft-sign with persistent device key (required for Supabase; also helps hub/P2P).
-    let device_id = match tuffbox_core::swarm::sign_capsule_with_device_key(&mut capsule) {
-        Ok(id) => Some(id),
-        Err(e) => {
-            // Still allow local-only share if signing fails, but remote Supabase will reject.
-            eprintln!("tuffswarm: device sign failed: {e}");
-            None
-        }
-    };
+    // Soft-sign with persistent device key — required for Supabase Kudos beneficiary + Edge verify.
+    let device_id = tuffbox_core::swarm::sign_capsule_with_device_key(&mut capsule)
+        .map_err(|e| format!("Cannot publish unsigned capsule: {e}"))?;
+    if capsule
+        .signer_public_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return Err("signer_public_key missing after device sign".into());
+    }
     let public = capsule.to_public_json();
 
     // Project-local authored export (pack author).
@@ -1368,14 +1503,18 @@ pub async fn publish_experience_capsule(
     let mut published_remote = false;
     let mut remote_results = Vec::new();
     let mut remote_error: Option<String> = None;
+    let mut supabase_ok = false;
+    let mut p2p_gossip_ok: Option<bool> = None;
+    let mut p2p_gossip_error: Option<String> = None;
 
     // Preferred transport: Supabase Edge Function (signed capsules only).
     if integrations::swarm_supabase_configured() {
         let url = integrations::swarm_supabase_url().unwrap();
-        let anon = integrations::swarm_supabase_anon_key().unwrap();
-        match tuffbox_core::swarm_supabase::publish_capsule_supabase(&url, &anon, &capsule).await {
+        let edge = integrations::swarm_supabase_edge_anon_key().unwrap();
+        match tuffbox_core::swarm_supabase::publish_capsule_supabase(&url, &edge, &capsule).await {
             Ok(body) => {
                 published_remote = true;
+                supabase_ok = true;
                 remote_results.push(json!({
                     "transport": "supabase",
                     "ok": true,
@@ -1402,8 +1541,26 @@ pub async fn publish_experience_capsule(
             .await
         {
             Ok(body) => {
+                let gossip_ok = body
+                    .pointer("/gossip/ok")
+                    .and_then(|v| v.as_bool());
+                if let Some(ok) = gossip_ok {
+                    p2p_gossip_ok = Some(ok);
+                    if !ok {
+                        p2p_gossip_error = body
+                            .pointer("/gossip/error")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                    }
+                }
+                // HTTP stored on node/hub counts as remote even if gossip mesh failed.
                 published_remote = true;
-                remote_results.push(json!({ "base": base, "ok": true, "body": body }));
+                remote_results.push(json!({
+                    "base": base,
+                    "ok": true,
+                    "gossipOk": gossip_ok,
+                    "body": body,
+                }));
             }
             Err(e) => {
                 remote_results.push(json!({ "base": base, "ok": false, "error": e.clone() }));
@@ -1428,6 +1585,9 @@ pub async fn publish_experience_capsule(
         "signed": stored_global.signature.is_some(),
         "remote": remote_results,
         "error": remote_error,
+        "supabaseOk": supabase_ok,
+        "p2pGossipOk": p2p_gossip_ok,
+        "p2pGossipError": p2p_gossip_error,
         "privacy": { "rawLogs": false, "notesIncluded": false },
         "capsule": public,
         "supabaseConfigured": integrations::swarm_supabase_configured(),

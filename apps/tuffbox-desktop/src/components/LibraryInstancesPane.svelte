@@ -187,7 +187,7 @@
   ));
 
   function gradientFrom(name: string) {
-    const colors = ["#1bd96a", "#8b5cf6", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
+    const colors = ["var(--accent-primary)", "var(--accent-secondary)", "#3b82f6", "#f59e0b", "#ec4899", "#06b6d4", "#ef4444"];
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -1340,12 +1340,12 @@
     transform: scale(0.94);
   }
   .tb-btn.primary {
-    background: rgba(27, 217, 106, 0.14);
-    border-color: rgba(27, 217, 106, 0.35);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
     color: var(--accent-primary);
   }
   .tb-btn.primary:hover {
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.25), 0 6px 16px rgba(27, 217, 106, 0.12);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent), 0 6px 16px color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
   .tb-btn:disabled { opacity: 0.5; cursor: default; }
   .tb-add-wrap,
@@ -1385,7 +1385,7 @@
     cursor: pointer;
   }
   .tb-menu button:hover {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .tb-account {
@@ -1486,9 +1486,9 @@
   }
   .group-header:hover { color: var(--text-primary); transform: translateX(2px); }
   .group-header.drop-target {
-    background: rgba(27, 217, 106, 0.18);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.4);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent);
     animation: lib-drop-pulse 0.9s ease-in-out infinite;
   }
   .group-count {
@@ -1528,15 +1528,15 @@
     box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
   }
   .inst-tile.selected {
-    background: rgba(27, 217, 106, 0.16);
-    border-color: rgba(27, 217, 106, 0.35);
-    box-shadow: 0 0 0 1px rgba(27, 217, 106, 0.18);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
   .inst-tile.selected .inst-icon {
     animation: lib-select-ring 1.8s var(--ease-out) infinite;
   }
   .inst-tile.running .inst-icon {
-    box-shadow: 0 0 0 2px rgba(27, 217, 106, 0.55);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
     animation: lib-running-glow 2.2s ease-in-out infinite;
   }
   .inst-tile.dragging {
@@ -1545,8 +1545,8 @@
     filter: saturate(0.7);
   }
   .inst-tile.drop-target {
-    background: rgba(27, 217, 106, 0.22);
-    border-color: rgba(27, 217, 106, 0.55);
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     transform: scale(1.08);
     z-index: 2;
     animation: lib-drop-pulse 0.85s ease-in-out infinite;
@@ -1665,7 +1665,7 @@
     font-weight: 900;
     color: #fff;
     pointer-events: none;
-    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(27, 217, 106, 0.35);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
     animation: lib-ghost-in 220ms var(--ease-spring) both;
     will-change: transform, left, top;
   }
@@ -1674,7 +1674,7 @@
     position: absolute;
     inset: -6px;
     border-radius: 50%;
-    border: 2px solid rgba(27, 217, 106, 0.45);
+    border: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
     animation: lib-ghost-ring 1s ease-out infinite;
   }
 
@@ -1755,20 +1755,20 @@
       border-color var(--motion-fast) var(--ease-out);
   }
   .side-btn:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
     transform: translateX(3px);
   }
   .side-btn:active:not(:disabled) { transform: scale(0.97) translateX(2px); }
   .side-btn:disabled { opacity: 0.4; cursor: default; }
   .side-btn.launch {
-    background: rgba(27, 217, 106, 0.16);
-    border-color: rgba(27, 217, 106, 0.3);
+    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
     color: var(--accent-primary);
     margin-bottom: 4px;
   }
   .side-btn.launch:hover:not(:disabled) {
-    box-shadow: 0 6px 16px rgba(27, 217, 106, 0.18);
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
   .side-btn.danger:hover:not(:disabled) {
     background: rgba(239, 68, 68, 0.12);
@@ -1842,7 +1842,7 @@
     text-align: left;
   }
   .pack-ctx-menu button:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
   .pack-ctx-menu button:disabled { opacity: 0.45; cursor: default; }
@@ -1894,9 +1894,9 @@
   }
   .chip.active,
   .chip:hover {
-    border-color: rgba(27, 217, 106, 0.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   }
   .group-new-label {
     display: block;
@@ -1946,7 +1946,7 @@
   .mini-spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(27, 217, 106, 0.25);
+    border: 2px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
     border-top-color: var(--accent-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -1993,25 +1993,25 @@
     to { opacity: 1; transform: none; }
   }
   @keyframes lib-group-celebrate {
-    0% { box-shadow: inset 0 0 0 0 rgba(27, 217, 106, 0); }
-    35% { box-shadow: inset 0 0 0 2px rgba(27, 217, 106, 0.35); }
-    100% { box-shadow: inset 0 0 0 0 rgba(27, 217, 106, 0); }
+    0% { box-shadow: inset 0 0 0 0 transparent; }
+    35% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+    100% { box-shadow: inset 0 0 0 0 transparent; }
   }
   @keyframes lib-jiggle {
     0%, 100% { transform: rotate(-1.4deg); }
     50% { transform: rotate(1.4deg); }
   }
   @keyframes lib-drop-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0.35); }
-    50% { box-shadow: 0 0 0 8px rgba(27, 217, 106, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+    50% { box-shadow: 0 0 0 8px transparent; }
   }
   @keyframes lib-select-ring {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(27, 217, 106, 0.35); }
-    50% { box-shadow: 0 0 0 6px rgba(27, 217, 106, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+    50% { box-shadow: 0 0 0 6px transparent; }
   }
   @keyframes lib-running-glow {
-    0%, 100% { filter: brightness(1); box-shadow: 0 0 0 2px rgba(27, 217, 106, 0.45); }
-    50% { filter: brightness(1.08); box-shadow: 0 0 12px 2px rgba(27, 217, 106, 0.55); }
+    0%, 100% { filter: brightness(1); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 45%, transparent); }
+    50% { filter: brightness(1.08); box-shadow: 0 0 12px 2px color-mix(in srgb, var(--accent-primary) 55%, transparent); }
   }
   @keyframes lib-tile-celebrate {
     0% { transform: scale(1); }
@@ -2045,7 +2045,7 @@
   }
 
   .drag-mode .prism-grid-pane {
-    background: radial-gradient(ellipse at center, rgba(27, 217, 106, 0.04), transparent 70%);
+    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent-primary) 4%, transparent), transparent 70%);
   }
 
   :global(.potato-pc) .lib-motion::before,

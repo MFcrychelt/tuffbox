@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { launchWithFeedback } from "../lib/launch";
   import { onMount, tick } from "svelte";
   import {
@@ -23,7 +24,18 @@
     Share2,
     ArrowDownToLine,
   } from "@lucide/svelte";
-  import { diagnoseFocusPaths, historyFocusEventId, ideStageRequest, projectPath, pushWorkTrail, ideNeedsHealth, requestIdeIssuesRefresh } from "../lib/store";
+  import {
+    diagnoseFocus,
+    diagnoseFocusPaths,
+    historyFocusEventId,
+    ideStageRequest,
+    projectPath,
+    pushWorkTrail,
+    ideNeedsHealth,
+    requestIdeIssuesRefresh,
+    historyFocusFingerprintKey,
+    type DiagnoseFocus,
+  } from "../lib/store";
   import { shareCrashLogWithFeedback } from "../lib/mclogs";
   import EmptyState from "./EmptyState.svelte";
   import AiConnectionModal from "./AiConnectionModal.svelte";
@@ -35,6 +47,7 @@
   import DiagnoseVerdictHero from "./diagnostics/DiagnoseVerdictHero.svelte";
   import DiagnoseProblemsList from "./diagnostics/DiagnoseProblemsList.svelte";
   import DiagnoseStatusBar from "./diagnostics/DiagnoseStatusBar.svelte";
+  import { formatCascadeLabel } from "./diagnostics/cascadeLabel";
   import {
     buildUnifiedProblems,
     hasBlockingProblems,
@@ -42,6 +55,10 @@
     type Problem,
   } from "./diagnostics/problemModel";
   import { open as openShell } from "@tauri-apps/plugin-shell";
+  import {
+    fetchCrashFixBanner,
+    type SoftVerifyOutcome,
+  } from "../lib/softVerify";
 
   type Diagnostic = {
     severity: string;
@@ -260,6 +277,7 @@
     preferLatestLog = true;
     selectedReportId = "";
     void load(true);
+    void refreshSoftVerifyStatus(path);
   }
 
   async function chooseReport(reportId: string) {
@@ -717,6 +735,7 @@
 
   // AI context state
   let aiLoading = $state(false);
+  let cascadeLiveStage = $state<string | null>(null);
   let aiContext = $state<any>(null);
   let aiPrompt = $state("");
   let aiShowPrompt = $state(false);
@@ -728,6 +747,10 @@
   let pendingPlan = $state<any>(null);
   let pendingBusy = $state(false);
   let swarmEnabled = $state(false);
+  let softVerifyStatus = $state<null | {
+    kind: "pending" | "confirmed" | "rejected";
+    detail?: string;
+  }>(null);
 
   /** ActionPlan review modal (replaces window.confirm). */
   let planReviewOpen = $state(false);
@@ -775,6 +798,7 @@
     op: string;
     summary: string;
     paths?: string[];
+    meta?: { fingerprintKey?: string; episodeId?: string } | null;
   }[]>([]);
 
   async function loadRecentPackEvents() {
@@ -789,8 +813,9 @@
     }
   }
 
-  function openHistoryEvent(eventId: string) {
+  function openHistoryEvent(eventId: string, fingerprintKey?: string | null) {
     historyFocusEventId.set(eventId);
+    if (fingerprintKey) historyFocusFingerprintKey.set(fingerprintKey);
     ideStageRequest.set("history");
   }
 
@@ -802,41 +827,83 @@
     }
   });
   $effect(() => {
+    const focus = $diagnoseFocus;
+    if (!focus) return;
+    diagnoseFocus.set(null);
+    void applyHistoryFocus(focus);
+  });
+
+  $effect(() => {
     if ($diagnoseFocusPaths?.length) {
       const paths = $diagnoseFocusPaths;
       diagnoseFocusPaths.set(null);
-      void applyHistoryFocus(paths);
+      void applyHistoryFocus({ paths });
     }
   });
 
-  async function applyHistoryFocus(paths: string[]) {
-    message = `Focus from History: ${paths.join(", ")}`;
+  async function applyHistoryFocus(focus: DiagnoseFocus) {
+    const paths = focus.paths?.filter(Boolean) ?? [];
+    const bits = [
+      paths.length ? `paths ${paths.join(", ")}` : null,
+      focus.fingerprintKey ? `fp ${focus.fingerprintKey.slice(0, 24)}` : null,
+      focus.logPath ? `log ${focus.logPath}` : null,
+    ].filter(Boolean);
+    message = bits.length ? `Focus from History: ${bits.join(" · ")}` : "Focus from History";
     if (!diagnosis && $projectPath) await load(true);
     const d = diagnosis;
     if (!d) return;
-    const joined = paths.join(" ").toLowerCase().replace(/\\/g, "/");
-    const matchReport = d.reports.find((r) => {
-      const id = r.id.toLowerCase();
-      const name = r.name.toLowerCase();
-      const path = (r.path || "").toLowerCase().replace(/\\/g, "/");
-      return paths.some((p) => {
-        const n = p.toLowerCase().replace(/\\/g, "/");
-        return id.includes(n) || name.includes(n) || path.includes(n) || n.includes(name);
+
+    if (focus.logPath) {
+      const lp = focus.logPath.toLowerCase().replace(/\\/g, "/");
+      const matchReport = d.reports.find((r) => {
+        const path = (r.path || "").toLowerCase().replace(/\\/g, "/");
+        const name = r.name.toLowerCase();
+        return path.includes(lp) || lp.includes(path) || lp.endsWith(name) || (name && lp.includes(name));
       });
-    });
-    if (matchReport) {
-      await chooseReport(matchReport.id);
-    } else if (joined.includes("launcher")) {
-      await chooseLauncherLog();
-    } else if (joined.includes("latest.log") || joined.includes("/logs/")) {
-      await chooseLatestLog();
+      if (matchReport) {
+        await chooseReport(matchReport.id);
+        setTimeout(() => void openEvidence(), 250);
+        return;
+      }
+      if (lp.includes("launcher")) {
+        await chooseLauncherLog();
+        setTimeout(() => void openEvidence(), 250);
+        return;
+      }
+      if (lp.includes("latest.log") || lp.includes("/logs/")) {
+        await chooseLatestLog();
+        setTimeout(() => void openEvidence(), 250);
+        return;
+      }
     }
+
+    if (paths.length) {
+      const joined = paths.join(" ").toLowerCase().replace(/\\/g, "/");
+      const matchReport = d.reports.find((r) => {
+        const id = r.id.toLowerCase();
+        const name = r.name.toLowerCase();
+        const path = (r.path || "").toLowerCase().replace(/\\/g, "/");
+        return paths.some((p) => {
+          const n = p.toLowerCase().replace(/\\/g, "/");
+          return id.includes(n) || name.includes(n) || path.includes(n) || n.includes(name);
+        });
+      });
+      if (matchReport) {
+        await chooseReport(matchReport.id);
+      } else if (joined.includes("launcher")) {
+        await chooseLauncherLog();
+      } else if (joined.includes("latest.log") || joined.includes("/logs/")) {
+        await chooseLatestLog();
+      }
+    }
+
     setTimeout(() => void openEvidence(), 250);
   }
 
   async function runAiExplain(opts: { quiet?: boolean } = {}) {
     if (!$projectPath) return;
     aiLoading = true;
+    cascadeLiveStage = "l1_searching";
     if (!opts.quiet) error = null;
     aiSoftError = null;
     aiFeedbackMsg = null;
@@ -877,7 +944,16 @@
       if (!opts.quiet) {
         const similar = context.similarCaseCount ?? 0;
         const model = context.aiModel ?? aiAnalysis?.model ?? "AI";
-        message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}). Review before applying.`;
+        const cascade = formatCascadeLabel(
+          aiAnalysis?.cascadeStage ?? aiAnalysis?.source,
+          Array.isArray(aiAnalysis?.cascadeTried) ? aiAnalysis.cascadeTried.map(String) : [],
+        );
+        const stage = cascade.label ? ` · ${cascade.label}` : "";
+        const miss = cascade.detail ? ` · ${cascade.detail}` : "";
+        const spec = aiAnalysis?.speculativeUsed
+          ? ` · draft→verify${aiAnalysis?.speculativeDraftModel ? ` (${aiAnalysis.speculativeDraftModel})` : ""}`
+          : "";
+        message = `AI analysis ready (${model}${similar ? `, ${similar} KB hit(s)` : ""}${stage}${miss}${spec}). Review before applying.`;
       }
     } catch (e) {
       const msg = String(e);
@@ -887,7 +963,7 @@
         throw e;
       }
       if (/not installed|Install model|no model|Settings → AI/i.test(msg)) {
-        error = `${msg} Open Settings → Integrations → Configure AI to install a model.`;
+        error = `${msg} Open Settings → AI to install a model.`;
         aiModalOpen = true;
       } else if (/model.*(not found)|pull|download/i.test(msg)) {
         error = `Local AI model missing: ${msg}`;
@@ -898,6 +974,7 @@
       }
     } finally {
       aiLoading = false;
+      cascadeLiveStage = null;
     }
   }
 
@@ -1086,7 +1163,42 @@
   }
 
   const networkTrust = $derived(pendingPlan ? parseNetworkTrust(pendingPlan) : null);
+  const hasNetworkTrust = $derived(
+    !!networkTrust &&
+      (networkTrust.trustPercent != null ||
+        networkTrust.keeps != null ||
+        networkTrust.discards != null ||
+        networkTrust.mc != null ||
+        networkTrust.loader != null),
+  );
+  const cascadeFormatted = $derived(
+    aiAnalysis
+      ? formatCascadeLabel(
+          aiAnalysis.cascadeStage ?? aiAnalysis.source,
+          Array.isArray(aiAnalysis.cascadeTried) ? aiAnalysis.cascadeTried.map(String) : [],
+        )
+      : { label: "", detail: null as string | null },
+  );
   const planReviewHasDestructive = $derived(planReviewRows.some((r: any) => r.destructive));
+
+  async function refreshSoftVerifyStatus(path: string | null) {
+    if (!path) {
+      softVerifyStatus = null;
+      return;
+    }
+    const banner = await fetchCrashFixBanner(path);
+    if (!banner) {
+      softVerifyStatus = null;
+      return;
+    }
+    if (banner.rolledBack) {
+      softVerifyStatus = { kind: "rejected", detail: "rolled back" };
+    } else if (banner.resolved) {
+      softVerifyStatus = { kind: "confirmed" };
+    } else {
+      softVerifyStatus = { kind: "pending" };
+    }
+  }
 
   function openAiPlanReview() {
     if (!$projectPath || !aiAnalysis) return;
@@ -1662,39 +1774,26 @@
     );
   }
 
-  /// Launches the client (Test) profile so the user can reproduce a crash,
-  /// then soft-verifies a pending crash-fix if the session looks healthy.
+  /// Launches the client (Test) profile so the user can reproduce a crash.
+  /// Soft-verify is started by `launchWithFeedback` → `confirm_crash_resolution_after_launch`
+  /// (do not invoke confirm again here).
   async function runTest() {
     if (!$projectPath || launching) return;
     launching = true;
     error = null;
     message = "Launching Test profile — reproduce the crash, then come back.";
-    const path = $projectPath;
     const result = await launchWithFeedback(
-      { path, profile: "client" },
+      { path: $projectPath, profile: "client" },
       {
         onStarted: () => {
-          message = "Test launch started. If it stays healthy, soft-verify will confirm the fix.";
+          message =
+            "Test launch started. Soft-verify runs in the background (≥180s healthy play + latest.log). Watch Home banner countdown.";
         },
       },
     );
     if (result) {
-      message = "Test launch started. Waiting for a healthy session to soft-verify…";
-      try {
-        const rec = await invoke<{ id?: string; humanExplanation?: string } | null>(
-          "confirm_crash_resolution_after_launch",
-          { path },
-        );
-        if (rec) {
-          message = `Fix verified${rec.humanExplanation ? `: ${rec.humanExplanation}` : ""}. You can share it if prompted.`;
-          await load(true);
-        } else {
-          message =
-            "Test launch started. Soft-verify will confirm after latest.log shows a healthy post-fix session (or re-run Diagnose).";
-        }
-      } catch {
-        message = "Test launch started. Re-run Diagnose after it crashes/closes.";
-      }
+      message =
+        "Test launch started. Soft-verify continues until a healthy post-fix session passes the playtime gate (or the game crashes / you Restore).";
     }
     launching = false;
   }
@@ -2133,7 +2232,11 @@
     diagnosis?.hsErrLogs?.find((h) => h.id === selectedReportId)?.kind ?? (isHsErr ? "native" : null),
   );
   $effect(() => {
-    onProjectPathChange($projectPath);
+    const path = $projectPath;
+    if (!path) {
+      softVerifyStatus = null;
+    }
+    onProjectPathChange(path);
   });
 
   onMount(() => {
@@ -2148,8 +2251,38 @@
     if ($projectPath) {
       void load(true);
       void loadPendingPlan();
+      void refreshSoftVerifyStatus($projectPath);
     }
-    return () => window.removeEventListener("tuffbox:open-diagnostics", reload);
+    let unlistenCascade: UnlistenFn | undefined;
+    let unlistenSoftVerify: UnlistenFn | undefined;
+    void listen<{ stage?: string }>("diagnose-cascade", (ev) => {
+      const stage = ev.payload?.stage;
+      if (stage) cascadeLiveStage = stage;
+    }).then((u) => {
+      unlistenCascade = u;
+    });
+    void listen<SoftVerifyOutcome>("tuffbox:soft-verify-outcome", (ev) => {
+      const payload = ev.payload ?? {};
+      const path = $projectPath;
+      if (!path) return;
+      if (payload.path && payload.path !== path) return;
+      const outcome = String(payload.outcome ?? "").toLowerCase();
+      if (outcome === "confirm") {
+        softVerifyStatus = { kind: "confirmed" };
+      } else if (outcome === "reject") {
+        softVerifyStatus = {
+          kind: "rejected",
+          detail: payload.reason ? String(payload.reason) : undefined,
+        };
+      }
+    }).then((u) => {
+      unlistenSoftVerify = u;
+    });
+    return () => {
+      window.removeEventListener("tuffbox:open-diagnostics", reload);
+      unlistenCascade?.();
+      unlistenSoftVerify?.();
+    };
   });
 </script>
 
@@ -2248,6 +2381,7 @@
     {#if aiSoftError}
       <div class="notice warning">
         AI unavailable — rules still work on Problems.
+        <span class="soft-ai-detail">{aiSoftError}</span>
         <button class="ghost mini" type="button" onclick={() => (aiModalOpen = true)}>AI settings</button>
       </div>
     {/if}
@@ -2259,6 +2393,35 @@
             {pendingBusy ? "Applying…" : "Review & apply"}
           </button>
         </div>
+        {#if hasNetworkTrust && networkTrust}
+          <div class="trust-card-line">
+            {#if networkTrust.trustPercent != null}
+              <span class="diff-chip">Trust {networkTrust.trustPercent}%</span>
+            {/if}
+            {#if networkTrust.keeps != null}
+              <span class="diff-chip">Keeps {networkTrust.keeps}</span>
+            {/if}
+            {#if networkTrust.discards != null}
+              <span class="diff-chip">Discards {networkTrust.discards}</span>
+            {/if}
+            {#if networkTrust.mc}
+              <span class="diff-chip">MC {networkTrust.mc}</span>
+            {/if}
+            {#if networkTrust.loader}
+              <span class="diff-chip">{networkTrust.loader}</span>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+    {#if softVerifyStatus}
+      <div
+        class="notice soft-verify-notice"
+        class:warning={softVerifyStatus.kind === "pending"}
+        class:success={softVerifyStatus.kind === "confirmed"}
+        class:error={softVerifyStatus.kind === "rejected"}
+      >
+        Soft-verify: {softVerifyStatus.kind}{#if softVerifyStatus.detail} ({softVerifyStatus.detail}){/if}
       </div>
     {/if}
   </div>
@@ -2272,7 +2435,7 @@
       </div>
       <div class="recent-list">
         {#each recentPackEvents as ev (ev.id)}
-          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id)}>
+          <button type="button" class="recent-row" onclick={() => openHistoryEvent(ev.id, ev.meta?.fingerprintKey ?? null)}>
             <span class="recent-actor">{ev.actor}</span>
             <span class="recent-sum">{ev.summary}</span>
             <small>{ev.ts?.slice(0, 19) ?? ""}</small>
@@ -2292,6 +2455,11 @@
       sessionOk={sessionOk}
       loading={loading}
       analyzing={analysisBusy || crashLoading || aiLoading}
+      cascadeStage={aiLoading
+        ? (cascadeLiveStage ?? "l1_searching")
+        : (aiAnalysis?.cascadeStage ?? null)}
+      cascadeLabel={aiAnalysis && cascadeFormatted.label ? cascadeFormatted.label : null}
+      cascadeDetail={aiAnalysis ? cascadeFormatted.detail : null}
       sourceLabel={sourceLabel}
       onScrollToWarnings={scrollToPackWarnings}
     />
@@ -2457,6 +2625,7 @@
         aiFeedbackBusy={aiFeedbackBusy}
         aiFeedbackMsg={aiFeedbackMsg}
         applyingHintId={applyingHintId}
+        cascadeLabel={aiAnalysis && cascadeFormatted.label ? cascadeFormatted.label : null}
         onApplyFindingFix={({ finding, action }) => applyCrashFindingFix(finding, action)}
         onRetryAi={() => runAiExplain()}
         onApplyAiPlan={applyAiPlan}
@@ -2617,6 +2786,7 @@
   canApply={planReviewCanApply}
   selectedCount={planReviewSelectedCount}
   busy={aiApplyBusy || pendingBusy}
+  networkTrust={planReviewSource === "network" ? networkTrust : null}
   onCancel={() => (planReviewOpen = false)}
   onConfirm={confirmPlanReviewApply}
 />
@@ -2709,7 +2879,7 @@
   .dx-main-tab .count {
     padding: 1px 6px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.15);
+    background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
     color: var(--accent-primary);
     font-size: 10px;
   }
@@ -2939,7 +3109,7 @@
   h2 { display: flex; font-size: 14px; margin: 0 0 12px; }
   .notice { padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
+  .notice.success { color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
   .stat-card, .panel, .empty, .loading { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .muted-box, .report-card span, .log-status, .snapshot-row span, .snapshot-row small, .suspect-head span { color: var(--text-muted); font-size: 12px; }
   .panel { padding: 16px; min-width: 0; }
@@ -2949,12 +3119,20 @@
     align-items: center;
     padding: 2px 8px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
     font-size: 11px;
     font-weight: 700;
   }
   .notice.warning { color: #fde68a; background: rgba(245, 158, 11, 0.08); border-color: rgba(245, 158, 11, 0.28); }
+  .soft-ai-detail {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    opacity: 0.9;
+    word-break: break-word;
+  }
+  .soft-verify-notice { font-size: 12px; padding: 8px 12px; }
   .network-pending { display: flex; flex-direction: column; gap: 8px; }
   .network-pending-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: space-between; }
   .trust-card-line { font-size: 12px; color: var(--text-secondary); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

@@ -303,7 +303,7 @@
   }
   .log-match-count { font-size: 11px; color: var(--text-muted); min-width: 36px; text-align: center; }
   .log-viewer-actions .ghost.mini.active {
-    border-color: rgba(27, 217, 106, 0.45);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
     color: var(--accent-primary);
   }
   .log-stage {

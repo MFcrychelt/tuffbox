@@ -145,9 +145,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1px solid var(--border-color);
-    background: rgba(18, 18, 20, 0.8);
-    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--header-border, var(--border-color));
+    background: var(--header-bg, rgba(18, 18, 20, 0.8));
+    -webkit-backdrop-filter: var(--header-backdrop, blur(12px));
+    backdrop-filter: var(--header-backdrop, blur(12px));
     flex-shrink: 0;
   }
 
@@ -223,7 +224,7 @@
     box-shadow: none;
   }
   .online-dot.on {
-    background: #22c55e;
+    background: var(--accent-primary);
     box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.22);
   }
   .online-label {

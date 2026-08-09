@@ -11,7 +11,7 @@
     return Info;
   }
   function clr(t: string): string {
-    if (t === "success") return "#1bd96a";
+    if (t === "success") return "var(--accent-primary)";
     if (t === "error") return "#f87171";
     if (t === "warning") return "#fbbf24";
     return "#93c5fd";

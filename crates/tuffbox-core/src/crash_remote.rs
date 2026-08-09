@@ -163,6 +163,7 @@ pub fn diagnose_remote(
         .map_err(|e| format!("crash KB diagnose failed: {e}"))?;
     let status = response.status();
     let body: Value = response.json().map_err(|e| e.to_string())?;
+    let body = unwrap_n8n_diagnose_body(body);
     if !status.is_success() {
         let msg = body
             .get("message")
@@ -173,30 +174,7 @@ pub fn diagnose_remote(
     }
 
     // Accept either { plan: {...} } or a bare ActionPlan object.
-    if body.get("plan").is_some() {
-        let mut resp: CrashDiagnoseResponse =
-            serde_json::from_value(body).map_err(|e| format!("invalid diagnose response: {e}"))?;
-        // Re-normalize via parser for legacy fields inside plan.
-        if let Ok(normalized) =
-            parse_action_plan_value(&serde_json::to_value(&resp.plan).unwrap_or(json!({})))
-        {
-            resp.plan = normalized;
-        }
-        Ok(resp)
-    } else {
-        let plan = parse_action_plan_value(&body)?;
-        Ok(CrashDiagnoseResponse {
-            plan,
-            kb_version: body
-                .get("kbVersion")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            used_llm: body
-                .get("usedLlm")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-        })
-    }
+    parse_diagnose_response_body(body)
 }
 
 /// Async wrappers for Tauri (uses reqwest async).
@@ -257,6 +235,7 @@ pub async fn diagnose_remote_async(
         .json()
         .await
         .map_err(|e| e.to_string())?;
+    let body = unwrap_n8n_diagnose_body(body);
     if !status.is_success() {
         let msg = body
             .get("message")
@@ -265,6 +244,23 @@ pub async fn diagnose_remote_async(
             .unwrap_or("request rejected");
         return Err(format!("crash KB diagnose {status}: {msg}"));
     }
+    parse_diagnose_response_body(body)
+}
+
+/// n8n Webhook Response Mode often wraps payloads as `[{ "json": { ... } }]`.
+pub fn unwrap_n8n_diagnose_body(body: Value) -> Value {
+    if let Some(arr) = body.as_array() {
+        if let Some(first) = arr.first() {
+            if let Some(inner) = first.get("json") {
+                return inner.clone();
+            }
+            return first.clone();
+        }
+    }
+    body
+}
+
+fn parse_diagnose_response_body(body: Value) -> Result<CrashDiagnoseResponse, String> {
     if body.get("plan").is_some() {
         let mut resp: CrashDiagnoseResponse =
             serde_json::from_value(body).map_err(|e| format!("invalid diagnose response: {e}"))?;
@@ -474,4 +470,34 @@ fn urlencoding_simple(s: &str) -> String {
             _ => format!("%{b:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unwraps_n8n_array_wrapper() {
+        let wrapped = json!([{
+            "json": {
+                "schemaVersion": 1,
+                "humanExplanation": "from n8n",
+                "confidence": 0.9,
+                "actions": [],
+                "suspectedMods": [],
+                "needsUserReview": true
+            }
+        }]);
+        let body = unwrap_n8n_diagnose_body(wrapped);
+        assert_eq!(body["humanExplanation"], "from n8n");
+        let plan = parse_action_plan_value(&body).expect("parse plan");
+        assert_eq!(plan.human_explanation, "from n8n");
+    }
+
+    #[test]
+    fn unwrap_n8n_passthrough_object() {
+        let body = json!({"plan": {"schemaVersion": 1, "humanExplanation": "direct", "confidence": 0.5, "actions": [], "suspectedMods": [], "needsUserReview": false}});
+        let out = unwrap_n8n_diagnose_body(body.clone());
+        assert_eq!(out, body);
+    }
 }

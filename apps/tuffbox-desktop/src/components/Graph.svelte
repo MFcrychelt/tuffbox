@@ -1053,7 +1053,7 @@
     {
       key: "rendering",
       label: "Optimization",
-      color: "rgba(139,92,246,0.5)",
+      color: "color-mix(in srgb, var(--accent-secondary) 50%, transparent)",
       matches: (id, label) =>
         /(sodium|iris|lithium|ferrite|phosphor|embeddium|oculus|voxy|entityculling|rubidium|canary|immediatelyfast|starlight|noisium|dynamic-fps|lazydfu|etf|entity.?texture|dashloader|smoothboot|memoryleakfix|modernfix|krypton|shader|exordium|optifine|performance|fps|distanthorizons)/i.test(
           id + " " + label
@@ -3161,8 +3161,8 @@
 
   .notice.success {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
-    border-color: rgba(27, 217, 106, 0.25);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
   .graph-status {
@@ -3214,9 +3214,9 @@
     gap: 8px;
     margin-bottom: 8px;
     padding: 8px 12px;
-    border: 1px solid rgba(27, 217, 106, .28);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     border-radius: var(--border-radius-lg);
-    background: radial-gradient(circle at top left, rgba(27,217,106,.09), transparent 42%), var(--bg-secondary);
+    background: radial-gradient(circle at top left, color-mix(in srgb, var(--accent-primary) 9%, transparent), transparent 42%), var(--bg-secondary);
     flex-shrink: 0;
   }
   .change-plan-panel.loading {
@@ -3321,7 +3321,7 @@
     flex-direction: column;
     margin-bottom: 0;
     background:
-      radial-gradient(circle at 78% 18%, rgba(27,217,106,.08), transparent 28%),
+      radial-gradient(circle at 78% 18%, color-mix(in srgb, var(--accent-primary) 8%, transparent), transparent 28%),
       #09090b;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-lg);
@@ -3422,9 +3422,9 @@
   }
 
   .canvas-controls .mini.active {
-    background: rgba(139, 92, 246, 0.18);
-    border-color: rgba(139, 92, 246, 0.45);
-    color: #c4b5fd;
+    background: color-mix(in srgb, var(--accent-secondary) 18%, transparent);
+    border-color: color-mix(in srgb, var(--accent-secondary) 45%, transparent);
+    color: var(--accent-secondary);
   }
 
   .canvas-controls .hl-btn.conflicts.active {
@@ -3660,9 +3660,9 @@
     border: 1.6px solid; display: inline-block;
     background: #18181b;
   }
-  .lg-dot.client { border-color: rgba(139,92,246,.8); }
+  .lg-dot.client { border-color: color-mix(in srgb, var(--accent-secondary) 80%, transparent); }
   .lg-dot.server { border-color: rgba(59,130,246,.8); }
-  .lg-dot.both { border-color: rgba(27,217,106,.8); }
+  .lg-dot.both { border-color: color-mix(in srgb, var(--accent-primary) 80%, transparent); }
   .lg-dot.dep { border-color: rgba(245,158,11,.8); border-style: dashed; }
   .lg-dot.missing { border-color: rgba(113,113,122,.9); border-style: dashed; }
   .legend-groups { max-width: 240px; }
@@ -3753,13 +3753,13 @@
 
   .svg-node.selected rect,
   .svg-node:hover rect {
-    stroke: rgba(27,217,106,.85);
-    fill: rgba(27,217,106,.18);
+    stroke: color-mix(in srgb, var(--accent-primary) 85%, transparent);
+    fill: color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
 
-  .svg-node.tone-client rect { stroke: rgba(139,92,246,.7); }
+  .svg-node.tone-client rect { stroke: color-mix(in srgb, var(--accent-secondary) 70%, transparent); }
   .svg-node.tone-server rect { stroke: rgba(59,130,246,.7); }
-  .svg-node.tone-both rect { stroke: rgba(27,217,106,.65); }
+  .svg-node.tone-both rect { stroke: color-mix(in srgb, var(--accent-primary) 65%, transparent); }
   .svg-node.tone-runtime rect { stroke: rgba(245,158,11,.7); }
   .svg-node.tone-profile rect { stroke: rgba(96,165,250,.7); }
   .svg-node.tone-ghost rect {
@@ -3796,8 +3796,8 @@
     cursor: pointer;
   }
   .svg-node.tone-ghost:hover rect {
-    stroke: rgba(27,217,106,.85);
-    fill: rgba(27,217,106,.12);
+    stroke: color-mix(in srgb, var(--accent-primary) 85%, transparent);
+    fill: color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
 
   .remove-btn {
@@ -3863,8 +3863,8 @@
   }
 
   .stat-card.accent {
-    border-color: rgba(27, 217, 106, 0.32);
-    background: linear-gradient(135deg, rgba(27, 217, 106, 0.12), var(--bg-secondary));
+    border-color: color-mix(in srgb, var(--accent-primary) 32%, transparent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 12%, transparent), var(--bg-secondary));
   }
 
   .stat-card.danger {
@@ -3876,7 +3876,7 @@
     cursor: pointer;
   }
   .stat-card.clickable:hover {
-    border-color: rgba(27, 217, 106, 0.55);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
   }
 
   .stat-value {
@@ -3984,8 +3984,8 @@
     background: rgba(24, 24, 27, 0.85);
   }
   .missing-card:hover {
-    border-color: rgba(27, 217, 106, 0.55);
-    background: rgba(27, 217, 106, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   }
   .missing-fallback {
     background: linear-gradient(135deg, #27272a, #18181b);
@@ -4127,14 +4127,14 @@
     width: 28px;
     height: 28px;
     border-radius: var(--border-radius-sm);
-    border: 1px solid rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.1);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
     flex-shrink: 0;
   }
 
   .card-install-deps:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.18);
+    background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
 
   .card-install-btn {
@@ -4145,8 +4145,8 @@
     height: 30px;
     padding: 0 10px;
     border-radius: var(--border-radius-sm);
-    border: 1px solid rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.14);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     color: var(--accent-primary);
     font-size: 12px;
     font-weight: 700;
@@ -4162,8 +4162,8 @@
     margin-top: 4px;
   }
   .card-install-btn.all {
-    border-color: rgba(27, 217, 106, 0.7);
-    background: rgba(27, 217, 106, 0.22);
+    border-color: color-mix(in srgb, var(--accent-primary) 70%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
   }
   .card-install-btn :global(svg) {
     fill: none !important;
@@ -4173,7 +4173,7 @@
     flex-shrink: 0;
   }
   .card-install-btn:hover:not(:disabled) {
-    background: rgba(27, 217, 106, 0.24);
+    background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
     border-color: var(--accent-primary);
   }
   .card-install-btn:disabled {
@@ -4223,7 +4223,7 @@
     background: rgba(239, 68, 68, 0.08);
   }
   .conflict-card.known {
-    box-shadow: inset 0 0 0 1px rgba(27, 217, 106, 0.12);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 12%, transparent);
   }
   .conflict-card-top {
     display: flex;
@@ -4289,8 +4289,8 @@
 
   .node-card:hover,
   .node-card.selected {
-    border-color: rgba(27, 217, 106, 0.45);
-    background: rgba(27, 217, 106, 0.08);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     color: var(--text-primary);
   }
 
@@ -4311,7 +4311,7 @@
   }
 
   .side-client {
-    box-shadow: inset 3px 0 rgba(139, 92, 246, 0.75);
+    box-shadow: inset 3px 0 color-mix(in srgb, var(--accent-secondary) 75%, transparent);
   }
 
   .side-server {
@@ -4319,7 +4319,7 @@
   }
 
   .side-both {
-    box-shadow: inset 3px 0 rgba(27, 217, 106, 0.75);
+    box-shadow: inset 3px 0 color-mix(in srgb, var(--accent-primary) 75%, transparent);
   }
 
   .details-header {
@@ -4419,7 +4419,7 @@
     height: 24px;
     padding: 0 9px;
     border-radius: 999px;
-    background: rgba(27, 217, 106, 0.12);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
     font-size: 11px;
     font-weight: 800;
@@ -4444,7 +4444,7 @@
   }
 
   .relation.incoming .relation-kind {
-    background: rgba(139, 92, 246, 0.12);
+    background: color-mix(in srgb, var(--accent-secondary) 12%, transparent);
     color: var(--accent-secondary);
   }
 
@@ -4483,8 +4483,8 @@
   }
 
   .missing-row:hover:not(:disabled) {
-    border-color: rgba(27, 217, 106, 0.35);
-    background: rgba(27, 217, 106, 0.05);
+    border-color: color-mix(in srgb, var(--accent-primary) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
   }
 
   .missing-row:disabled {
@@ -4518,8 +4518,8 @@
     animation: ghost-pulse 2s ease-in-out infinite;
   }
   .ghost-node:hover {
-    fill: rgba(27,217,106,0.18);
-    stroke: rgba(27,217,106,0.85);
+    fill: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+    stroke: color-mix(in srgb, var(--accent-primary) 85%, transparent);
     r: 16;
   }
   .ghost-label {
@@ -4605,10 +4605,10 @@
     align-items: flex-start;
     gap: 9px;
     padding: 10px 12px;
-    border: 1px solid rgba(27, 217, 106, 0.28);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
     border-radius: 10px;
     color: var(--text-secondary);
-    background: rgba(27, 217, 106, 0.06);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
     font-size: 13px;
   }
   .install-transfer.failed {
@@ -4642,7 +4642,7 @@
     font-size: 13px;
     border-left: 3px solid;
   }
-  .dep-entry.required { background: rgba(27,217,106,0.08); border-left-color: rgba(27,217,106,0.6); }
+  .dep-entry.required { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-left-color: color-mix(in srgb, var(--accent-primary) 60%, transparent); }
   .dep-entry.optional { background: rgba(245,158,11,0.08); border-left-color: rgba(245,158,11,0.6); }
   .dep-target { font-weight: 600; }
   .dep-entry small { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }

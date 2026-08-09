@@ -439,8 +439,17 @@
     <canvas bind:this={canvas} width={width} height={height}></canvas>
     {#if loading}
       <div class="loading-overlay" aria-hidden="true">
-        <div class="loading-shimmer">
-          <div class="loading-figure skeleton skeleton-block"></div>
+        <div class="loading-figure" aria-hidden="true">
+          <div class="lf-head"></div>
+          <div class="lf-torso-row">
+            <div class="lf-arm"></div>
+            <div class="lf-body"></div>
+            <div class="lf-arm"></div>
+          </div>
+          <div class="lf-legs">
+            <div class="lf-leg"></div>
+            <div class="lf-leg"></div>
+          </div>
         </div>
       </div>
     {/if}
@@ -512,7 +521,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: rgba(18, 20, 22, 0.92);
+    background: rgba(18, 20, 22, 0.72);
     pointer-events: none;
     z-index: 2;
   }
@@ -539,7 +548,7 @@
 
   .retry-btn {
     padding: 6px 12px;
-    border-radius: var(--border-radius-sm, 6px);
+    border-radius: var(--border-radius-sm);
     border: 1px solid var(--border-color);
     background: var(--bg-elevated, var(--bg-secondary));
     color: var(--accent-primary);
@@ -552,31 +561,121 @@
     border-color: var(--accent-primary);
   }
 
-  .loading-shimmer {
+  /* Blocky Minecraft-style player silhouette (no rounded sausage / skeleton shimmer). */
+  .loading-figure {
+    --lf-unit: 10px;
     display: flex;
-    align-items: flex-end;
-    justify-content: center;
-    height: 55%;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    animation: lf-pulse 1.35s ease-in-out infinite;
   }
 
-  .loading-figure {
-    width: 72px;
-    height: 160px;
-    border-radius: 36px 36px 12px 12px;
-    opacity: 0.55;
+  .lf-head {
+    width: calc(var(--lf-unit) * 4);
+    height: calc(var(--lf-unit) * 4);
+    background: rgba(180, 188, 198, 0.42);
+    border-radius: 0;
+  }
+
+  .lf-torso-row {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+  }
+
+  .lf-body {
+    width: calc(var(--lf-unit) * 4);
+    height: calc(var(--lf-unit) * 6);
+    background: rgba(160, 170, 182, 0.38);
+    border-radius: 0;
+  }
+
+  .lf-arm {
+    width: calc(var(--lf-unit) * 2);
+    height: calc(var(--lf-unit) * 6);
+    background: rgba(170, 178, 188, 0.34);
+    border-radius: 0;
+  }
+
+  .lf-legs {
+    display: flex;
+    flex-direction: row;
+  }
+
+  .lf-leg {
+    width: calc(var(--lf-unit) * 2);
+    height: calc(var(--lf-unit) * 6);
+    background: rgba(150, 158, 170, 0.36);
+    border-radius: 0;
+  }
+
+  @keyframes lf-pulse {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 0.9;
+    }
+  }
+
+  /* Light themes: soft studio backdrop + matching chrome / overlays. */
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .skin-3d-container {
+    border-color: color-mix(in srgb, var(--text-primary) 12%, transparent);
+    box-shadow:
+      inset 0 -36px 52px color-mix(in srgb, var(--accent-primary) 6%, transparent),
+      0 10px 24px color-mix(in srgb, var(--text-primary) 8%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .skin-bg {
+    background:
+      radial-gradient(ellipse 50% 40% at 50% 36%, rgba(255, 255, 255, 0.8), transparent 58%),
+      radial-gradient(ellipse 70% 45% at 50% 100%, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 60%),
+      radial-gradient(ellipse 100% 80% at 50% 50%, transparent 42%, color-mix(in srgb, var(--bg-tertiary) 55%, transparent) 100%),
+      linear-gradient(180deg, #eef2ec 0%, #e0e7de 48%, #d4ddd2 100%);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .loading-overlay {
+    background: color-mix(in srgb, #eef2ec 78%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"]))
+    .error-overlay {
+    background: color-mix(in srgb, #e0e7de 82%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-head {
+    background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-body {
+    background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-arm {
+    background: color-mix(in srgb, var(--text-secondary) 16%, transparent);
+  }
+
+  :global(:is([data-theme="tuffbox-light"], [data-theme="light"], [data-theme="win95"])) .lf-leg {
+    background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
   }
 
   .mc-nick {
     font-family: var(--font-minecraft);
     font-size: 12px;
     line-height: 1.4;
-    color: #fff;
-    text-shadow:
+    color: var(--mc-nick-color, #fff);
+    text-shadow: var(
+      --mc-nick-shadow,
       2px 2px 0 #3f3f3f,
       -1px 0 0 #000,
       1px 0 0 #000,
       0 -1px 0 #000,
-      0 1px 0 #000;
+      0 1px 0 #000
+    );
     letter-spacing: 0.5px;
     max-width: 100%;
     overflow: hidden;

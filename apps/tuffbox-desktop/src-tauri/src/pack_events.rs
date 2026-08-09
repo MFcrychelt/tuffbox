@@ -95,18 +95,93 @@ pub fn category_for_path(path: &str) -> &'static str {
 
 pub fn actor_for_operation(operation: &str) -> &'static str {
     let op = operation.to_lowercase();
-    if op.contains("crash") || op.contains("action-plan") || op.contains("action_plan") || op.contains("swarm")
+    if op.contains("crash_detected") {
+        "launcher"
+    } else if op.contains("crash_fix")
+        || op.contains("crash-fix")
+        || op.contains("action-plan")
+        || op.contains("action_plan")
+        || op.contains("swarm")
     {
-        "ai"
+        // Prefer plan_source via actor_for_plan_source when known; this is a
+        // coarse fallback for snapshot names that still say "crash_fix".
+        "launcher"
     } else if op.contains("track-history") || op.contains("scan") {
         "scan"
+    } else if op.contains("add-mod")
+        || op.contains("remove-mod")
+        || op.contains("disable-mod")
+        || op.contains("enable-mod")
+        || op.contains("update-mod")
+        || op.contains("edit-config")
+        || op.contains("save-quest")
+    {
+        "user"
     } else {
         "launcher"
     }
 }
 
+/// Map ActionPlan / snapshot `planSource` to History fixMethod + actor.
+pub fn normalize_fix_method(plan_source: Option<&str>) -> &'static str {
+    let raw = plan_source.unwrap_or("").trim().to_ascii_lowercase();
+    match raw.as_str() {
+        "ai" | "ai_action_plan" | "llm" | "local" | "server" => "ai",
+        "heuristic" | "crash_assistant" | "assistant" => "heuristic",
+        "kb" | "kb_only" | "distill" => "kb",
+        "swarm" => "swarm",
+        "manual" | "user" => "manual",
+        "" => "unknown",
+        _ => "unknown",
+    }
+}
+
+pub fn actor_for_plan_source(plan_source: Option<&str>) -> &'static str {
+    match normalize_fix_method(plan_source) {
+        "ai" | "kb" | "swarm" => "ai",
+        "heuristic" => "launcher",
+        "manual" => "user",
+        _ => "launcher",
+    }
+}
+
+pub fn episode_id_for_fingerprint(fingerprint_key: &str) -> String {
+    let key = fingerprint_key.trim();
+    if key.is_empty() || key == "unknown" {
+        format!("ep-{}", now_id_suffix())
+    } else {
+        let compact: String = key
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(48)
+            .collect();
+        if compact.is_empty() {
+            format!("ep-{}", now_id_suffix())
+        } else {
+            format!("ep-{compact}")
+        }
+    }
+}
+
+pub fn meta_str(meta: &Option<serde_json::Value>, key: &str) -> Option<String> {
+    meta.as_ref()
+        .and_then(|m| m.get(key))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+}
+
 pub fn op_for_operation(operation: &str, paths: &[String]) -> String {
     let op = operation.to_lowercase();
+    if op.contains("crash_detected") || op == "crash-detected" {
+        return "crash_detected".into();
+    }
+    if op.contains("crash_fix_rejected") || op.contains("crash-fix-rejected") {
+        return "crash_fix_rejected".into();
+    }
+    if op.contains("crash_fix_rollback") || op.contains("crash-fix-rollback") {
+        return "crash_fix_rollback".into();
+    }
     if op.contains("crash_fix") || op.contains("crash-fix") {
         return "crash_fix".into();
     }
@@ -149,6 +224,7 @@ pub fn append_pack_event(project_dir: &Path, mut event: PackEvent) -> Result<(),
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn append_from_snapshot(
     project_dir: &Path,
     operation: &str,
@@ -169,14 +245,44 @@ pub fn append_from_snapshot_with_summary(
     reason: &str,
     actions_summary: &[String],
 ) -> Result<(), String> {
+    append_from_snapshot_with_episode(
+        project_dir,
+        operation,
+        snapshot_id,
+        changed_files,
+        reason,
+        actions_summary,
+        None,
+        None,
+        None,
+    )
+}
+
+/// Snapshot journal write with optional crash-episode linkage.
+pub fn append_from_snapshot_with_episode(
+    project_dir: &Path,
+    operation: &str,
+    snapshot_id: &str,
+    changed_files: &[PathBuf],
+    reason: &str,
+    actions_summary: &[String],
+    episode_id: Option<&str>,
+    fingerprint_key: Option<&str>,
+    plan_source: Option<&str>,
+) -> Result<(), String> {
     let paths: Vec<String> = changed_files
         .iter()
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .collect();
     let category = if paths.iter().any(|p| category_for_path(p) == "Mods")
         || operation.to_lowercase().contains("mod")
+        || operation.to_lowercase().contains("crash")
     {
-        "Mods".into()
+        if operation.to_lowercase().contains("crash") {
+            "Resolutions".into()
+        } else {
+            "Mods".into()
+        }
     } else {
         paths
             .first()
@@ -205,29 +311,149 @@ pub fn append_from_snapshot_with_summary(
     };
     let mut tags = Vec::new();
     let op_l = operation.to_lowercase();
-    if op_l.contains("crash_fix") {
+    if op_l.contains("crash_fix") && !op_l.contains("rejected") && !op_l.contains("rollback") {
         tags.push("crash_fix".into());
     }
     if op_l.contains("crash_resolved") {
         tags.push("crash_resolved".into());
+    }
+    if op_l.contains("crash_detected") {
+        tags.push("crash".into());
+    }
+    let actor = if plan_source.is_some() {
+        actor_for_plan_source(plan_source).to_string()
+    } else {
+        actor_for_operation(operation).to_string()
+    };
+    let ep = episode_id
+        .map(|s| s.to_string())
+        .or_else(|| fingerprint_key.map(episode_id_for_fingerprint));
+    let mut meta = serde_json::json!({
+        "reason": reason,
+        "operation": operation,
+        "actionsSummary": actions_summary,
+    });
+    if let Some(obj) = meta.as_object_mut() {
+        if let Some(ep) = &ep {
+            obj.insert("episodeId".into(), serde_json::json!(ep));
+        }
+        if let Some(fp) = fingerprint_key.filter(|s| !s.trim().is_empty()) {
+            obj.insert("fingerprintKey".into(), serde_json::json!(fp));
+        }
+        if let Some(ps) = plan_source.filter(|s| !s.trim().is_empty()) {
+            obj.insert("planSource".into(), serde_json::json!(ps));
+            obj.insert(
+                "fixMethod".into(),
+                serde_json::json!(normalize_fix_method(Some(ps))),
+            );
+        }
     }
     append_pack_event(
         project_dir,
         PackEvent {
             id: format!("evt-{}-{}", snapshot_id, now_id_suffix() % 10_000),
             ts: now_rfc3339(),
-            actor: actor_for_operation(operation).into(),
+            actor,
             op: op_for_operation(operation, &paths),
             paths,
             category,
             summary,
             snapshot_id: Some(snapshot_id.to_string()),
             tags,
-            meta: Some(serde_json::json!({
-                "reason": reason,
-                "operation": operation,
-                "actionsSummary": actions_summary,
-            })),
+            meta: Some(meta),
+        },
+    )
+}
+
+/// Record that a launch ended in a crash — starts / continues a History episode.
+pub fn append_crash_detected(
+    project_dir: &Path,
+    fingerprint_key: &str,
+    exit_code: Option<i32>,
+    log_path: Option<&str>,
+    message: &str,
+) -> Result<String, String> {
+    let episode_id = episode_id_for_fingerprint(fingerprint_key);
+    let summary = if message.trim().is_empty() {
+        format!("Launch crashed · fingerprint {}", &fingerprint_key.chars().take(24).collect::<String>())
+    } else {
+        let short: String = message.chars().take(160).collect();
+        format!("Launch crashed: {short}")
+    };
+    let mut meta = serde_json::json!({
+        "episodeId": episode_id,
+        "fingerprintKey": fingerprint_key,
+        "exitCode": exit_code,
+    });
+    if let Some(lp) = log_path.filter(|s| !s.is_empty()) {
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("logPath".into(), serde_json::json!(lp));
+        }
+    }
+    let id = format!("evt-crash-{}-{}", now_id_suffix() % 100_000, now_id_suffix() % 997);
+    append_pack_event(
+        project_dir,
+        PackEvent {
+            id,
+            ts: now_rfc3339(),
+            actor: "launcher".into(),
+            op: "crash_detected".into(),
+            paths: Vec::new(),
+            category: "Resolutions".into(),
+            summary,
+            snapshot_id: None,
+            tags: vec!["crash".into(), "crash_detected".into()],
+            meta: Some(meta),
+        },
+    )?;
+    Ok(episode_id)
+}
+
+/// Soft-verify / rollback outcomes as journal events (same episode).
+pub fn append_crash_outcome_event(
+    project_dir: &Path,
+    op: &str,
+    episode_id: &str,
+    fingerprint_key: &str,
+    plan_source: Option<&str>,
+    snapshot_id: Option<&str>,
+    summary: &str,
+) -> Result<(), String> {
+    let mut tags = vec!["crash".into()];
+    let op_l = op.to_ascii_lowercase();
+    if op_l.contains("resolved") {
+        tags.push("crash_resolved".into());
+        tags.push("crash_fix".into());
+    } else if op_l.contains("reject") {
+        tags.push("crash_fix".into());
+        tags.push("crash_fix_rejected".into());
+    } else if op_l.contains("rollback") {
+        tags.push("crash_fix".into());
+        tags.push("crash_fix_rollback".into());
+    }
+    let mut meta = serde_json::json!({
+        "episodeId": episode_id,
+        "fingerprintKey": fingerprint_key,
+        "fixMethod": normalize_fix_method(plan_source),
+    });
+    if let Some(ps) = plan_source.filter(|s| !s.is_empty()) {
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("planSource".into(), serde_json::json!(ps));
+        }
+    }
+    append_pack_event(
+        project_dir,
+        PackEvent {
+            id: format!("evt-{}-{}", op, now_id_suffix() % 100_000),
+            ts: now_rfc3339(),
+            actor: actor_for_plan_source(plan_source).into(),
+            op: op_for_operation(op, &[]),
+            paths: Vec::new(),
+            category: "Resolutions".into(),
+            summary: summary.to_string(),
+            snapshot_id: snapshot_id.map(|s| s.to_string()),
+            tags,
+            meta: Some(meta),
         },
     )
 }
@@ -968,5 +1194,32 @@ mod tests {
             "  keep = 1\n- enabled = false\n+ enabled = true\n- [section]\n+ [section]\n",
         );
         assert!(preview.contains("enabled"), "{preview}");
+    }
+
+    #[test]
+    fn normalize_fix_method_mapping() {
+        assert_eq!(normalize_fix_method(Some("ai_action_plan")), "ai");
+        assert_eq!(normalize_fix_method(Some("heuristic")), "heuristic");
+        assert_eq!(normalize_fix_method(Some("kb_only")), "kb");
+        assert_eq!(normalize_fix_method(Some("swarm")), "swarm");
+        assert_eq!(normalize_fix_method(Some("manual")), "manual");
+        assert_eq!(normalize_fix_method(None), "unknown");
+        assert_eq!(actor_for_plan_source(Some("heuristic")), "launcher");
+        assert_eq!(actor_for_plan_source(Some("ai")), "ai");
+        assert_eq!(actor_for_plan_source(Some("manual")), "user");
+    }
+
+    #[test]
+    fn crash_detected_writes_episode_meta() {
+        let dir = temp_project();
+        let ep = append_crash_detected(&dir, "fp-test-key", Some(1), Some("logs/latest.log"), "boom")
+            .unwrap();
+        assert!(ep.starts_with("ep-"));
+        let events = list_pack_events(&dir, Some(10));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].op, "crash_detected");
+        assert_eq!(meta_str(&events[0].meta, "fingerprintKey").as_deref(), Some("fp-test-key"));
+        assert_eq!(meta_str(&events[0].meta, "episodeId").as_deref(), Some(ep.as_str()));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
