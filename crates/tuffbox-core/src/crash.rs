@@ -1750,7 +1750,7 @@ pub fn create_crash_fix_plan(
         .any(|signal| signal.kind == CrashSignalKind::OpenGl)
     {
         return ChangePlan {
-            summary: "OpenGL render pipeline errors detected (`GL_INVALID_OPERATION`). Treat this as a graphics/rendering compatibility issue first: update GPU drivers, disable shaders, then test without render optimization or visual mods such as Sodium/Iris/Voxy/ETF/MCEF/Litematica one group at a time.".to_string(),
+            summary: "Graphics / resource-pack shader failure detected (OpenGL errors, missing `minecraft:core/rendertype_*` shaders, or resource packs stripped on load). Disable resource packs and shader packs first, update GPU drivers, then test without render mods such as Sodium/Iris/Oculus/Voxy one group at a time. Do not install invented mods named after vanilla resource paths.".to_string(),
             risk: ChangeRisk::Medium,
             actions: Vec::new(),
             requires_snapshot: true,
@@ -2010,6 +2010,11 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
         || lower.contains("gl_invalid_operation")
         || lower.contains("gl_invalid_")
         || lower.contains("blaze3d.opengl.gldebug")
+        || lower.contains("failed to load required shader programs")
+        || lower.contains("could not find shader:")
+        || lower.contains("caught error loading resourcepacks")
+        || (lower.contains("removing all selected resourcepacks")
+            && (lower.contains("error") || lower.contains("failed")))
     {
         return Some(CrashSignalKind::OpenGl);
     }
@@ -3395,6 +3400,19 @@ mod tests {
         let (signals, suspects) = analyze_text_for_suspects(text, "logs/latest.log", &manifest());
         assert_eq!(signals[0].kind, CrashSignalKind::OpenGl);
         assert!(suspects.is_empty());
+    }
+
+    #[test]
+    fn detects_shader_resourcepack_failure_as_render_signal() {
+        let text = "Caught error loading resourcepacks, removing all selected resourcepacks\n\
+Failed to load required shader programs:\n\
+ - minecraft:core/rendertype_entity_translucent: Could not find shader: minecraft:rendertype_entity_translucent (VERTEX)";
+        let (signals, _) = analyze_text_for_suspects(text, "logs/latest.log", &manifest());
+        assert!(
+            signals.iter().any(|s| s.kind == CrashSignalKind::OpenGl),
+            "expected OpenGl signal, got {:?}",
+            signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
     }
 
     #[test]

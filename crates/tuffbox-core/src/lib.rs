@@ -113,7 +113,8 @@ pub use cosmetics_runtime::{
     CosmeticsLaunchExtras, COSMETICS_ANCHORS, McVersion,
 };
 pub use overlay_runtime::{
-    prepare_overlay_bridge, resolve_overlay_artifact, OverlayBridgeLaunch, OVERLAY_ANCHORS,
+    prepare_overlay_bridge, resolve_overlay_artifact, write_overlay_session, OverlayBridgeLaunch,
+    OverlaySessionFile, OVERLAY_ANCHORS,
 };
 pub use resolver::*;
 pub use snapshot::*;

@@ -659,7 +659,8 @@
   }
 
   .video-card:hover .thumb {
-    border-color: var(--accent-primary);
+    border-color: var(--border-color);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--accent-primary) 28%, transparent);
   }
 
   .thumb {
@@ -669,7 +670,7 @@
     overflow: hidden;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    transition: border-color 0.15s ease;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
 
   .thumb img {

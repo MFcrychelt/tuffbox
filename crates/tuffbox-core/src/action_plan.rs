@@ -393,6 +393,19 @@ pub fn ground_action_plan(
             .map(|s| s.trim().to_ascii_lowercase())
             .filter(|s| !s.is_empty());
 
+        // AI sometimes invents install targets from vanilla resource locations
+        // (e.g. minecraft:builtin/entity → minecraftbuiltinentity).
+        if a.op == "install_mod" {
+            if let Some(ref id) = id_l {
+                if is_invented_vanilla_resource_mod_id(id) {
+                    notes.push(format!(
+                        "dropped install_mod:{id} — looks like a vanilla resource path, not a mod"
+                    ));
+                    continue;
+                }
+            }
+        }
+
         if a.op == "install_mod" {
             if let Some(ref id) = id_l {
                 let is_suspect = suspected.iter().any(|s| s == id);
@@ -593,6 +606,22 @@ fn is_invented_mod_path(path: Option<&str>) -> bool {
     segs.len() >= 3
         && segs.iter().any(|s| s.eq_ignore_ascii_case("mods"))
         && segs.iter().any(|s| is_placeholder_version(Some(s)))
+}
+
+/// Compacted vanilla resource locations mistaken for Modrinth slugs
+/// (`minecraft:builtin/entity` → `minecraftbuiltinentity`).
+fn is_invented_vanilla_resource_mod_id(id: &str) -> bool {
+    let compact: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if !compact.starts_with("minecraft") || compact == "minecraft" {
+        return false;
+    }
+    compact.contains("builtin")
+        || compact.contains("rendertype")
+        || (compact.contains("core") && compact.contains("entity"))
 }
 
 /// Structural validation before apply. Unknown ops are errors (not applied).
@@ -1219,6 +1248,59 @@ mod tests {
             &["indium".into()],
         );
         assert_eq!(grounded.plan.actions[0].op, "install_mod");
+    }
+
+    #[test]
+    fn drops_invented_vanilla_resource_install_ids() {
+        assert!(is_invented_vanilla_resource_mod_id("minecraftbuiltinentity"));
+        assert!(is_invented_vanilla_resource_mod_id("minecraft-rendertype-text"));
+        assert!(!is_invented_vanilla_resource_mod_id("minecraft"));
+        assert!(!is_invented_vanilla_resource_mod_id("indium"));
+
+        // Bypass parse_action_plan (it already grounds via normalize_plan).
+        let plan = ActionPlan {
+            schema_version: 1,
+            human_explanation: "Shaders failed".into(),
+            confidence: 0.6,
+            suspected_mods: vec![],
+            needs_user_review: true,
+            source: None,
+            matched_case_ids: vec![],
+            actions: vec![
+                LauncherAction {
+                    op: "install_mod".into(),
+                    mod_id: Some("minecraftbuiltinentity".into()),
+                    provider: None,
+                    project_id: None,
+                    version: None,
+                    path: None,
+                    patch_type: None,
+                    patch: None,
+                    reason: Some("Missing entity shader".into()),
+                    risk: "low".into(),
+                },
+                LauncherAction {
+                    op: "install_mod".into(),
+                    mod_id: Some("indium".into()),
+                    provider: None,
+                    project_id: None,
+                    version: None,
+                    path: None,
+                    patch_type: None,
+                    patch: None,
+                    reason: Some("Real missing dep".into()),
+                    risk: "low".into(),
+                },
+            ],
+            additional_context: None,
+        };
+        let grounded = ground_action_plan(plan, &["sodium".into()], &["indium".into()]);
+        assert_eq!(grounded.plan.actions.len(), 1);
+        assert_eq!(grounded.plan.actions[0].mod_id.as_deref(), Some("indium"));
+        assert!(grounded
+            .notes
+            .iter()
+            .any(|n| n.contains("minecraftbuiltinentity") && n.contains("vanilla resource")));
     }
 
     #[test]

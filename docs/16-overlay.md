@@ -1,33 +1,62 @@
-# TuffBox Overlay (in-game)
+# TuffBox Overlay (universal GL hook)
 
-Discord/Steam-style overlay inside Minecraft: **F8** opens a full-screen overlay over the running game (never pauses singleplayer). Apps on the left rail:
+Steam-style overlay for **any Minecraft version / any loader**: a native DLL is injected into
+the game process and detours `opengl32!wglSwapBuffers`, drawing UI into the game framebuffer
+(works in **exclusive fullscreen**).
 
-1. **YouTube** — search/browse the shared Minecraft feed (`youtube_feed`, same data as the desktop home feed) or paste any URL; playback via WATERMeDIA (LibVLC). Closing the overlay does **not** stop audio; a PiP widget in the HUD corner keeps the video visible. Media keybinds: F9 play/pause, F10 stop, PgUp/PgDn volume, F7 PiP toggle (all rebindable under Controls → TuffBox Overlay).
-2. **Friends** — add by username, incoming requests, presence (online / pack / server), presence opt-out toggle.
-3. **Chat** — DM conversations with unread badges (rail + conversation list), ~4s polling.
+## Architecture
 
-## Layers
+Two processes, no Chromium inside the game:
 
-1. **In-game overlay mod** — [`bridges/overlay`](../bridges/overlay) (`core` Java 8 protocol + `common` loader-neutral UI + `fabric`/`neoforge` 1.21.1 anchors). See [`bridges/overlay/MATRIX.md`](../bridges/overlay/MATRIX.md).
-2. **Launch inject** — [`overlay_runtime.rs`](../crates/tuffbox-core/src/overlay_runtime.rs) copies the nearest anchor jar into `mods/`, provisions WATERMeDIA 2.1.1 (pinned URL + sha256, download cache, cleanup on exit), writes `.tuffbox/overlay-session.json` (identity + Supabase creds + the same `writeSecret` the cosmetics profile uses).
-3. **Supabase** — `player_presence` (heartbeat 30s, stale >2min = offline), `player_friendships` (pending/accepted), `chat_messages` (30d retention); edge functions `overlay-friends` / `overlay-presence` / `overlay-chat-send` / `overlay-chat-poll` (service role; writeSecret ownership against `cosmetics_profiles`, first social write binds a non-public stub profile).
-4. **Desktop toggle** — Settings → General → "In-game overlay" (`ingameOverlay`, default on) gates the inject.
+| Process | Role |
+|---------|------|
+| **TuffBox launcher (Tauri)** | Backend / IPC proxy — Supabase friends/chat, `youtube_feed`, session |
+| **Game JVM + `tuffbox_overlay_hook.dll`** | Frontend — OpenGL present-hook, immediate UI, LRU GPU thumbnails, optional libmpv |
 
-## Version matrix
+```
+Play → write .tuffbox/overlay-session.json
+     → start localhost IPC (TUFFBOX_OVERLAY_IPC)
+     → spawn JVM with env
+     → inject tuffbox_overlay_hook.dll
+     → detour wglSwapBuffers → F8 UI
+```
 
-| MC | Fabric | NeoForge |
-|----|--------|----------|
-| 1.21.1 | full | full |
+### IPC endpoints (`http://127.0.0.1:{port}`)
 
-Other versions/loaders: inject silently skips (game launches without the overlay).
+- `GET /health`
+- `GET /session`
+- `GET /youtube-feed`
+- `GET /friends`
+- `GET /chat`
+- `GET /youtube-resolve?id=`
 
-## Privacy
+### Hook UI (F8)
 
-- Presence is opt-in (`presenceOptIn`, toggle on the Friends page); opting out deletes the presence row.
-- Chat requires an accepted friendship; messages are only readable via edge functions by the two participants (direct table access denied by RLS).
-- WATERMeDIA is a runtime dependency (Polyform Strict license) — fetched from the official Modrinth CDN, never vendored.
+- Rail: YouTube / Friends / Chat
+- YouTube: feed JSON + LRU texture cache (~30) for thumbnails
+- Click: libmpv `loadfile` (needs `mpv-2.dll` on PATH / next to the DLL); audio works with `vo=null`; full in-framebuffer video frames are a follow-up
+- Esc / F8 closes; keyboard LL-hook swallows input while open
 
-## Deploy
+## Legacy JVM mod
+
+[`bridges/overlay`](../bridges/overlay) Fabric/NeoForge **1.21.1** jar is **not** injected by default.
+Set `TUFFBOX_OVERLAY_JVM=1` to also copy the old jar + WATERMeDIA (exact 1.21.1 only).
+
+## Build hook DLL
+
+```powershell
+cargo build -p tuffbox-overlay-hook --release
+# → target/release/tuffbox_overlay_hook.dll
+# Copy next to the desktop binary or set TUFFBOX_OVERLAY_HOOK_DLL
+```
+
+Optional: copy `mpv-2.dll` (from an mpv Windows build) beside the hook for playback.
+
+## Settings
+
+Settings → General → **In-game overlay** (`ingameOverlay`) gates session + IPC + inject.
+
+## Deploy (social backend)
 
 ```bash
 supabase db push   # 016_overlay_social.sql
@@ -37,16 +66,6 @@ supabase functions deploy overlay-chat-send --no-verify-jwt
 supabase functions deploy overlay-chat-poll --no-verify-jwt
 ```
 
-## Build
+## Privacy
 
-```powershell
-cd bridges/overlay
-$env:JAVA_HOME = "<JDK 21>"; .\gradlew.bat build syncDesktopResources
-```
-
-## Known limits / next steps
-
-- PiP is display-only (no in-HUD click handling — transport via keybinds or the overlay).
-- Overlay↔desktop IPC (e.g. "now playing" in the launcher, remote control) is planned through the localhost pattern of `bridges/jei-runtime`.
-- YouTube signature breakage is handled by repinning WATERMeDIA (`TUFFBOX_OVERLAY_WATERMEDIA_URL` / `_SHA256` env overrides allow an emergency repin without a launcher release).
-- VLC natives: auto-extract on Windows x64; macOS/Linux need system VLC (panel shows a hint, social features unaffected).
+Unchanged: presence opt-in, chat requires friendship, edge functions own writes via `writeSecret`.

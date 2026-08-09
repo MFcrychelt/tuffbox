@@ -7,6 +7,7 @@ mod launcher_presence;
 mod launcher_settings;
 mod listing_api;
 mod mca_selector;
+mod overlay_hook;
 mod pack_events;
 mod presence;
 mod quest_chat_api;
@@ -6141,16 +6142,29 @@ async fn apply_action_plan(
 ) -> Result<serde_json::Value, String> {
     let manifest_path = resolve_manifest_path(&path)?;
     let path_str = manifest_path.to_string_lossy().to_string();
-    let inventory_ids = {
-        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
-        tuffbox_core::swarm::pack_mod_ids(&manifest)
+    let (inventory_ids, missing_ids) = {
+        let manifest =
+            ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+        let inventory_ids = tuffbox_core::swarm::pack_mod_ids(&manifest);
+        let graph = DependencyGraph::from_manifest(&manifest);
+        let diagnostics = Resolver::analyze_project(&manifest, &graph);
+        let mut missing_ids = diagnostics
+            .iter()
+            .filter(|d| d.code == "MISSING_DEPENDENCY")
+            .filter_map(|d| d.related_nodes.last())
+            .filter_map(|id| id.0.strip_prefix("mod:").map(|s| s.to_string()))
+            .collect::<Vec<_>>();
+        missing_ids.sort();
+        missing_ids.dedup();
+        (inventory_ids, missing_ids)
     };
-    let grounded = tuffbox_core::action_plan::ground_action_plan(plan, &inventory_ids, &[]);
+    let grounded =
+        tuffbox_core::action_plan::ground_action_plan(plan, &inventory_ids, &missing_ids);
     let plan = grounded.plan;
     let validation = tuffbox_core::action_plan::validate_action_plan_with_inventory(
         &plan,
         &inventory_ids,
-        &[],
+        &missing_ids,
     );
     if !validation.ok {
         return Err(format!(
@@ -9921,8 +9935,84 @@ fn episode_summary_for(outcome: &str, method: &str, entries: &[&ProjectChangeEnt
         "fixed" => format!("{method_label} plan fixed · {top}"),
         "broke" => format!("{method_label} changes → next launch crashed · {top}"),
         "rolled_back" => format!("{method_label} fix rolled back · {top}"),
+        "activity" => top,
         _ => format!("{method_label} · open · {top}"),
     }
+}
+
+/// Day-bucketed non-crash pack edits so Episodes mode is not empty when Flat has data.
+fn build_activity_episodes(entries: &[ProjectChangeEntry]) -> Vec<HistoryEpisode> {
+    use std::collections::BTreeMap;
+
+    let mut by_day: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, entry) in entries.iter().enumerate() {
+        if is_crash_history_entry(entry) {
+            continue;
+        }
+        let day = if entry.created_at.len() >= 10 {
+            entry.created_at[..10].to_string()
+        } else {
+            "unknown".into()
+        };
+        by_day.entry(day).or_default().push(idx);
+    }
+
+    let mut out = Vec::new();
+    for (day, mut idxs) in by_day {
+        idxs.sort_by(|&a, &b| {
+            entries[a]
+                .created_at
+                .cmp(&entries[b].created_at)
+                .then_with(|| a.cmp(&b))
+        });
+        for chunk in idxs.chunks(40) {
+            let refs: Vec<&ProjectChangeEntry> = chunk.iter().map(|&i| &entries[i]).collect();
+            let started_at = refs
+                .first()
+                .map(|e| e.created_at.clone())
+                .unwrap_or_default();
+            let ended_at = refs.last().map(|e| e.created_at.clone());
+            let n = chunk.len();
+            let top = refs
+                .first()
+                .map(|e| {
+                    let s = if e.operation.trim().is_empty() {
+                        e.preview.as_str()
+                    } else {
+                        e.operation.as_str()
+                    };
+                    tuffbox_core::crash_kb::truncate_at_char_boundary(s, 100).to_string()
+                })
+                .unwrap_or_default();
+            let summary = if n == 1 {
+                format!("Pack change · {top}")
+            } else {
+                format!("Pack activity · {n} changes · {top}")
+            };
+            let first_id = refs.first().map(|e| e.id.as_str()).unwrap_or("x");
+            out.push(HistoryEpisode {
+                id: format!("ep-activity-{day}-{first_id}"),
+                outcome: "activity".into(),
+                fix_method: "unknown".into(),
+                fingerprint_key: None,
+                started_at,
+                ended_at,
+                summary,
+                action_ids: chunk.iter().map(|&i| entries[i].id.clone()).collect(),
+                plan_source: None,
+                snapshot_id: refs.iter().rev().find_map(|e| {
+                    if e.snapshot_id.is_empty() {
+                        None
+                    } else {
+                        Some(e.snapshot_id.clone())
+                    }
+                }),
+                resolution_summary: None,
+                log_path: None,
+            });
+        }
+    }
+    out
 }
 
 fn timestamps_within_hours(a: &str, b: &str, hours: i64) -> bool {
@@ -10160,6 +10250,47 @@ mod history_episode_tests {
         assert!(fixed.id.contains("2026-08-01"), "{}", fixed.id);
         assert!(open.id.contains("2026-08-02"), "{}", open.id);
     }
+
+    #[test]
+    fn activity_episodes_group_non_crash_pack_edits() {
+        let pack = |id: &str, op: &str, at: &str, actor: &str| ProjectChangeEntry {
+            id: id.into(),
+            snapshot_id: String::new(),
+            operation: op.into(),
+            reason: String::new(),
+            created_at: at.into(),
+            path: format!("{op}.txt"),
+            category: "Configs".into(),
+            kind: op.into(),
+            preview: op.into(),
+            diff: String::new(),
+            can_open: false,
+            tags: vec![],
+            crash_fingerprint_key: None,
+            plan_source: None,
+            actor: actor.into(),
+            op: op.into(),
+            episode_id: None,
+            fix_method: None,
+            log_path: None,
+        };
+        let entries = vec![
+            pack("a1", "config_changed", "2026-08-03T09:00:00Z", "scan"),
+            pack("a2", "mod_added", "2026-08-03T09:05:00Z", "user"),
+            entry(
+                "c1",
+                "crash_detected",
+                "2026-08-03T10:00:00Z",
+                Some("fp-x"),
+                None,
+                "launcher",
+            ),
+        ];
+        let activity = build_activity_episodes(&entries);
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].outcome, "activity");
+        assert_eq!(activity[0].action_ids, vec!["a1".to_string(), "a2".to_string()]);
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -10393,7 +10524,9 @@ fn list_project_change_history(path: String) -> Result<HistoryListResult, String
             .cmp(&a.created_at)
             .then_with(|| a.path.cmp(&b.path))
     });
-    let episodes = build_history_episodes(&entries);
+    let mut episodes = build_history_episodes(&entries);
+    episodes.extend(build_activity_episodes(&entries));
+    episodes.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.id.cmp(&b.id)));
     // Backfill episode_id on entries from grouped episodes when missing.
     let mut entries = entries;
     for ep in &episodes {
@@ -11711,6 +11844,7 @@ fn build_and_spawn(
         launch_settings.java_custom_args.as_deref(),
     ));
     let mut cleanup_paths = Vec::new();
+    let mut overlay_env: Option<(String, String)> = None;
 
     if !skip_client_bridges {
         let bridge = match tuffbox_core::prepare_recipe_bridge(&manifest, &game_dir) {
@@ -11758,7 +11892,7 @@ fn build_and_spawn(
             }
         }
 
-        // In-game overlay (YouTube + friends/chat) — same identity & write secret
+        // In-game overlay — session for GL hook IPC (+ optional legacy JVM jar).
         if launcher_settings::overlay_enabled() {
             let overlay_secret = cosmetics_local::active_extras(uid).write_secret;
             match tuffbox_core::prepare_overlay_bridge(
@@ -11771,10 +11905,17 @@ fn build_and_spawn(
                 Ok(Some(ov)) => {
                     progress.log(&format!("# Overlay: {}", ov.message));
                     cleanup_paths.extend(ov.cleanup_paths);
+                    match overlay_hook::ensure_ipc_server(&ov.session_path) {
+                        Ok(ep) => {
+                            progress.log(&format!("# Overlay IPC: {ep}"));
+                            overlay_env = Some((ep, ov.session_path.display().to_string()));
+                        }
+                        Err(e) => progress.log(&format!("# WARNING: overlay IPC: {e}")),
+                    }
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    progress.log(&format!("# WARNING: overlay inject: {error}"));
+                    progress.log(&format!("# WARNING: overlay session: {error}"));
                 }
             }
         }
@@ -11821,7 +11962,11 @@ fn build_and_spawn(
         cmd.arg("--height").arg(res.height.to_string());
     }
 
-    let cmd = launcher_settings::wrap_java_command(cmd, launch_settings.wrapper_command.as_deref());
+    let mut cmd = launcher_settings::wrap_java_command(cmd, launch_settings.wrapper_command.as_deref());
+    if let Some((ep, session)) = &overlay_env {
+        cmd.env("TUFFBOX_OVERLAY_IPC", ep);
+        cmd.env("TUFFBOX_OVERLAY_SESSION", session);
+    }
 
     progress.log("# Starting Java process...");
 
@@ -11863,6 +12008,7 @@ fn build_and_spawn(
                 "code": exit.code,
             }),
         );
+        overlay_hook::stop_ipc_server();
         if exit.code == Some(0) {
             return;
         }
@@ -11918,6 +12064,18 @@ fn build_and_spawn(
             "startedAt": running.started_at,
         }),
     );
+
+    if overlay_env.is_some() {
+        let pid = running.pid;
+        std::thread::spawn(move || {
+            // Wait until opengl32 is likely loaded.
+            std::thread::sleep(std::time::Duration::from_secs(8));
+            match overlay_hook::inject_hook_dll(pid) {
+                Ok(msg) => eprintln!("[overlay-hook] {msg}"),
+                Err(e) => eprintln!("[overlay-hook] inject failed: {e}"),
+            }
+        });
+    }
 
     Ok(())
 }
@@ -14015,9 +14173,12 @@ fn apply_change_action(
 ) -> Result<(), String> {
     match action {
         tuffbox_core::ChangeAction::InstallMod { project_id, .. } => {
-            add_mod_from_modrinth(manifest, &project_id, Some("auto".to_string()))
-                .map_err(|e| e.to_string())?;
-            applied.push(format!("installed {project_id}"));
+            // Soft-fail: missing Modrinth builds (e.g. celestial on 1.21) must not
+            // abort the rest of a resolve plan or wipe the graph UI.
+            match add_mod_from_modrinth(manifest, &project_id, Some("auto".to_string())) {
+                Ok(()) => applied.push(format!("installed {project_id}")),
+                Err(e) => applied.push(format!("skipped {project_id}: {e}")),
+            }
         }
         tuffbox_core::ChangeAction::RemoveMod { node_id } => {
             let mod_id = node_id
@@ -14209,11 +14370,12 @@ fn add_mod_from_modrinth(
         loader: Some(tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind).to_string()),
         ..Default::default()
     };
+    let loader = tuffbox_core::graph::loader_kind_slug(&manifest.loader.kind);
+    let mc = manifest.minecraft.version.as_str();
     let versions = provider.get_versions(mod_id, &query)?;
-    let version = versions
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("no compatible version found for {mod_id}"))?;
+    let version = versions.into_iter().next().ok_or_else(|| {
+        anyhow::anyhow!("{mod_id}: no Modrinth build for Minecraft {mc} / {loader}")
+    })?;
 
     let file = ProviderFileInfo::select_file_for_loader(
         &version,

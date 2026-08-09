@@ -128,7 +128,8 @@
   let swarmSupabaseAnonSet = $state(false);
   let swarmSupabaseUsingBuiltin = $state(true);
   let swarmSupabaseConfigured = $state(false);
-  let swarmSupabaseAdvanced = $state(false);
+  /** Collapsed power-user swarm fields (hub, control URL, relay, VRAM, Supabase override). */
+  let swarmAdvanced = $state(false);
   let swarmHubUrl = $state("");
   let swarmP2pEnabled = $state(false);
   let swarmP2pControlUrl = $state("http://127.0.0.1:8790");
@@ -511,8 +512,7 @@
       if (swarmEnabled && swarmP2pEnabled) {
         void refreshP2pStatus();
       } else if (swarmEnabled && !swarmP2pEnabled) {
-        swarmP2pStatus =
-          "Enable Prefer local P2P to use Fog / Creation workers";
+        swarmP2pStatus = "";
         swarmP2pHint = "";
         swarmP2pRelayStatus = "";
         swarmP2pGossipStatus = "";
@@ -634,15 +634,14 @@
     }
   }
 
-  async function toggleSwarmEnabled() {    swarmSaving = true;
+  async function toggleSwarmEnabled() {
+    swarmSaving = true;
     integrationsError = "";
     try {
       const next = !swarmEnabled;
       const s = await ipc<SwarmSettings>("set_swarm_enabled", { enabled: next });
       swarmEnabled = !!s.enabled;
-      integrationsMessage = swarmEnabled
-        ? "TuffSwarm network enabled — Fix Mode (network) and Creation Mode available."
-        : "Network disabled — Creation Mode and network Fix Mode are blocked.";
+      integrationsMessage = swarmEnabled ? "TuffSwarm on" : "TuffSwarm off";
     } catch (e) {
       integrationsError = String(e);
     } finally {
@@ -709,8 +708,7 @@
           enabled: false,
         });
         swarmP2pRelayServer = !!rel.p2pRelayServer;
-        swarmP2pStatus =
-          "Enable Prefer local P2P to use Fog / Creation workers";
+        swarmP2pStatus = "";
         swarmP2pHint = "";
         swarmP2pRelayStatus = "";
         swarmP2pGossipStatus = "";
@@ -737,9 +735,7 @@
       if (swarmP2pEnabled) {
         await ipc("restart_p2p_node");
         await refreshP2pStatus();
-        integrationsMessage = swarmVolunteerDiagnose
-          ? "Fog volunteer enabled — P2P node restarted."
-          : "Fog volunteer disabled — P2P node restarted.";
+        integrationsMessage = swarmVolunteerDiagnose ? "Fog on · node restarted" : "Fog off · node restarted";
       }
     } catch (e) {
       integrationsError = String(e);
@@ -761,8 +757,8 @@
         await ipc("restart_p2p_node");
         await refreshP2pStatus();
         integrationsMessage = swarmCreationWorker
-          ? "Creation worker enabled — P2P node restarted."
-          : "Creation worker disabled — P2P node restarted.";
+          ? "Creation on · node restarted"
+          : "Creation off · node restarted";
       }
     } catch (e) {
       integrationsError = String(e);
@@ -784,9 +780,9 @@
       if (swarmP2pEnabled) {
         await ipc("restart_p2p_node");
         await refreshP2pStatus();
-        integrationsMessage = `Advertised VRAM set to ${swarmAdvertisedVramMb} MB (stub) — P2P node restarted.`;
+        integrationsMessage = `VRAM ${swarmAdvertisedVramMb} MB · node restarted`;
       } else {
-        integrationsMessage = `Advertised VRAM set to ${swarmAdvertisedVramMb} MB (stub).`;
+        integrationsMessage = `VRAM ${swarmAdvertisedVramMb} MB`;
       }
     } catch (e) {
       integrationsError = String(e);
@@ -807,9 +803,7 @@
       if (swarmP2pEnabled) {
         await ipc("restart_p2p_node");
         await refreshP2pStatus();
-        integrationsMessage = swarmP2pRelayServer
-          ? "Circuit Relay server enabled — P2P node restarted."
-          : "Circuit Relay server disabled — P2P node restarted.";
+        integrationsMessage = swarmP2pRelayServer ? "Relay on · node restarted" : "Relay off · node restarted";
       }
     } catch (e) {
       integrationsError = String(e);
@@ -821,7 +815,7 @@
   async function refreshP2pStatus() {
     try {
       if (!swarmEnabled) {
-        swarmP2pStatus = "TuffSwarm off";
+        swarmP2pStatus = "";
         swarmP2pHint = "";
         swarmP2pRelayStatus = "";
         swarmP2pGossipStatus = "";
@@ -851,8 +845,7 @@
         };
       }>("get_p2p_node_status");
       if (!st.enabled) {
-        swarmP2pStatus =
-          "Enable Prefer local P2P to use Fog / Creation workers";
+        swarmP2pStatus = "P2P off";
         swarmP2pHint = "";
         swarmP2pRelayStatus = "";
         swarmP2pGossipStatus = "";
@@ -862,12 +855,16 @@
         return;
       }
 
+      // Prefer live control URL from the sidecar when attached.
+      const liveControl = st.controlUrl?.trim();
+      if (liveControl) {
+        swarmP2pControlUrl = liveControl;
+      }
+
       const peers = st.node?.peers ?? 0;
       const caps = st.node?.capsuleCount ?? 0;
-      const creationPeers = st.node?.creationPeers ?? [];
-      const volunteerPeers = st.node?.volunteerPeers ?? [];
-      const creationCount = creationPeers.length;
-      const volunteerCount = volunteerPeers.length;
+      const creationCount = (st.node?.creationPeers ?? []).length;
+      const volunteerCount = (st.node?.volunteerPeers ?? []).length;
       const circuitAddrs = st.node?.circuitListenAddrs ?? [];
       const relayOn = !!st.node?.relayServer;
       const gossipPub = st.node?.gossipPublished ?? 0;
@@ -886,51 +883,43 @@
       swarmP2pListenAddrs = (preferred.length ? preferred : raw.filter((a) => !a.includes("p2p-circuit"))).slice(0, 2);
 
       if (st.authorized === false) {
-        swarmP2pStatus = st.healthy
-          ? "Node unauthorized — use Start / attach node (reachable)"
-          : "Node unauthorized — use Start / attach node";
+        swarmP2pStatus = "Unauthorized — Start / attach";
       } else if (st.healthy) {
-        swarmP2pStatus = `Healthy · ${peers} peer(s) · ${caps} capsule(s) · creation workers: ${creationCount} · fog volunteers: ${volunteerCount}`;
+        swarmP2pStatus = `Online · ${peers} peers · ${caps} capsules`;
       } else {
-        swarmP2pStatus = "Node not reachable — will try hub fallback";
+        swarmP2pStatus = "Node offline";
       }
 
+      // Compact extras — only when Advanced is open or something noteworthy.
       if (relayOn) {
-        swarmP2pRelayStatus = "Relay server on — share listen address as Bootstrap for NAT peers.";
+        swarmP2pRelayStatus = "Relay on";
       } else if (circuitAddrs.length > 0) {
-        swarmP2pRelayStatus = `Circuit: ${circuitAddrs.length} addr(s) via relay.`;
-      } else if (swarmP2pBootstrap.trim()) {
-        swarmP2pRelayStatus = "Bootstrap set — waiting for circuit reservation (Refresh status).";
+        swarmP2pRelayStatus = `Circuit · ${circuitAddrs.length}`;
       } else {
         swarmP2pRelayStatus = "";
       }
 
-      if (st.healthy && st.authorized !== false) {
+      if (st.healthy && st.authorized !== false && (gossipPub || gossipRecv || gossipErr)) {
         swarmP2pGossipStatus = gossipErr
-          ? `Gossip · pub ${gossipPub} · recv ${gossipRecv} · last error: ${gossipErr}`
-          : `Gossip · pub ${gossipPub} · recv ${gossipRecv}`;
+          ? `Gossip ${gossipPub}/${gossipRecv} · ${gossipErr}`
+          : `Gossip ${gossipPub}/${gossipRecv}`;
       } else {
         swarmP2pGossipStatus = "";
       }
 
-      if (swarmCreationWorker && st.healthy && st.authorized !== false) {
-        swarmP2pWorkerStubStatus = `Worker stub · VRAM ${nodeVramMb} MB`;
-      } else {
-        swarmP2pWorkerStubStatus = "";
-      }
+      swarmP2pWorkerStubStatus =
+        swarmCreationWorker && st.healthy && st.authorized !== false && nodeVramMb > 0
+          ? `VRAM ${nodeVramMb} MB`
+          : "";
 
       const hints: string[] = [];
-      if (!swarmCreationWorker) {
-        hints.push("Turn on Creation worker below to accept peer jobs.");
-      } else if (creationCount === 0) {
-        hints.push(`No Creation workers seen yet (peers: ${peers}).`);
+      if (swarmCreationWorker && creationCount === 0 && st.healthy) {
+        hints.push("No Creation peers yet");
       }
-      if (!swarmVolunteerDiagnose) {
-        hints.push("Fog volunteer off.");
-      } else if (volunteerCount === 0) {
-        hints.push("No Fog volunteers seen yet.");
+      if (swarmVolunteerDiagnose && volunteerCount === 0 && st.healthy) {
+        hints.push("No Fog peers yet");
       }
-      swarmP2pHint = hints.join(" ");
+      swarmP2pHint = hints.join(" · ");
     } catch (e) {
       swarmP2pStatus = String(e);
       swarmP2pHint = "";
@@ -945,9 +934,9 @@
   async function copyP2pListenAddr(addr: string) {
     try {
       await copyText(addr);
-      swarmP2pCopyMsg = "Copied listen address.";
+      swarmP2pCopyMsg = "Copied";
     } catch {
-      swarmP2pCopyMsg = "Copy failed.";
+      swarmP2pCopyMsg = "Copy failed";
     }
   }
 
@@ -965,7 +954,7 @@
       swarmP2pBootstrap = s.p2pBootstrap?.trim() || "";
       await ipc("ensure_p2p_node");
       await refreshP2pStatus();
-      integrationsMessage = "tuffswarm-node attached (P2P preferred; hub remains fallback).";
+      integrationsMessage = "P2P node attached";
     } catch (e) {
       integrationsError = String(e);
       swarmP2pStatus = String(e);
@@ -1191,9 +1180,8 @@
           <div class="settings-row-text">
             <strong>In-game overlay</strong>
             <p>
-              Discord/Steam-style overlay inside Minecraft (F8): YouTube player that keeps
-              playing with the GUI closed, friends presence and chat. Minecraft 1.21.1,
-              Fabric/NeoForge instances launched from TuffBox.
+              F8 fullscreen overlay (OpenGL hook) — any MC version / loader. Friends, chat,
+              YouTube feed via launcher IPC. Place <code>mpv-2.dll</code> next to the hook for video.
             </p>
           </div>
           <div class="settings-row-control">
@@ -1702,7 +1690,7 @@
           <div class="provider-block">
             <div class="provider-head">
               <strong><Network size={14} /> TuffSwarm</strong>
-              <span class:ok={swarmEnabled}>{swarmEnabled ? "enabled" : "off"}</span>
+              <span class:ok={swarmEnabled}>{swarmEnabled ? "on" : "off"}</span>
             </div>
             <label class="check-row">
               <input
@@ -1711,217 +1699,209 @@
                 disabled={swarmSaving}
                 onchange={toggleSwarmEnabled}
               />
-              Use TuffSwarm network
+              Network
             </label>
-            {#if swarmSupabaseConfigured}
+            {#if swarmEnabled}
               <small class="test-ok">
-                {swarmSupabaseUsingBuiltin
-                  ? "Community Supabase: connected (built-in)"
-                  : "Supabase: using custom URL / key override"}
-              </small>
-            {:else}
-              <small class="test-ok" style="opacity:0.8">Supabase backend not configured</small>
-            {/if}
-            <p class="hint layer-label"><strong>Network</strong> — Share capsules via community Supabase (not raw logs).</p>
-            <button
-              type="button"
-              class="ghost mini"
-              disabled={!swarmEnabled}
-              onclick={() => (swarmSupabaseAdvanced = !swarmSupabaseAdvanced)}
-            >
-              {swarmSupabaseAdvanced ? "Hide advanced backend" : "Advanced backend override…"}
-            </button>
-            {#if swarmSupabaseAdvanced}
-            <label>
-              Supabase URL override (empty = built-in)
-              <input
-                bind:value={swarmSupabaseUrl}
-                placeholder="https://xxxx.supabase.co"
-                disabled={!swarmEnabled}
-                autocomplete="off"
-              />
-            </label>
-            <div class="row-actions">
-              <button
-                type="button"
-                class="mini"
-                disabled={swarmSaving || !swarmEnabled}
-                onclick={saveSupabaseUrl}
-              >
-                Save Supabase URL
-              </button>
-            </div>
-            <label>
-              Supabase anon key override
-              <input
-                type="password"
-                bind:value={swarmSupabaseAnonDraft}
-                placeholder={swarmSupabaseAnonSet ? "•••••••• (custom set)" : "leave empty for built-in"}
-                disabled={!swarmEnabled}
-                autocomplete="off"
-              />
-            </label>
-            <div class="row-actions">
-              <button
-                class="mini"
-                disabled={
-                  swarmSaving ||
-                  savingSecret === "swarm_supabase" ||
-                  !swarmSupabaseAnonDraft.trim()
-                }
-                onclick={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
-              >
-                {savingSecret === "swarm_supabase" ? "Saving…" : "Save anon key"}
-              </button>
-              <button
-                class="ghost mini"
-                disabled={
-                  swarmSaving ||
-                  clearingSecret === "swarm_supabase" ||
-                  !swarmSupabaseAnonSet
-                }
-                onclick={() => clearSecret("swarm_supabase")}
-              >
-                Clear override
-              </button>
-            </div>
-            {/if}
-            <label>
-              Swarm hub URL (optional fallback)
-              <input
-                bind:value={swarmHubUrl}
-                placeholder="http://192.168.1.10:8787"
-                disabled={!swarmEnabled}
-                autocomplete="off"
-              />
-            </label>
-            <p class="hint layer-label"><strong>Local P2P</strong> — Talk to nearby TuffBox nodes.</p>
-            <label class="check-row">
-              <input
-                type="checkbox"
-                checked={swarmP2pEnabled}
-                disabled={swarmSaving || !swarmEnabled}
-                onchange={toggleP2pEnabled}
-              />
-              Prefer local P2P node
-            </label>
-            <label>
-              P2P control URL
-              <input
-                bind:value={swarmP2pControlUrl}
-                placeholder="http://127.0.0.1:8790"
-                disabled={!swarmEnabled || !swarmP2pEnabled}
-                autocomplete="off"
-              />
-            </label>
-            <label>
-              Bootstrap peer multiaddr (optional)
-              <input
-                bind:value={swarmP2pBootstrap}
-                placeholder="/ip4/192.168.x.x/tcp/…/p2p/…"
-                disabled={!swarmEnabled || !swarmP2pEnabled}
-                autocomplete="off"
-              />
-            </label>
-            <p class="hint">Paste a peer listen multiaddr when mDNS fails. Save integrations, then Start / attach (or restart) so the node dials --bootstrap.</p>
-            <div class="row-actions">
-              <button
-                type="button"
-                class="secondary mini"
-                disabled={!swarmEnabled || !swarmP2pEnabled || swarmSaving}
-                onclick={ensureP2pNode}
-              >
-                Start / attach node
-              </button>
-              <button
-                type="button"
-                class="ghost mini"
-                disabled={!swarmEnabled || !swarmP2pEnabled || swarmSaving}
-                onclick={refreshP2pStatus}
-              >
-                Refresh status
-              </button>
-            </div>
-            {#if swarmP2pStatus}
-              <small class="test-ok">{swarmP2pStatus}</small>
-            {/if}
-            {#if swarmP2pHint}
-              <small class="hint">{swarmP2pHint}</small>
-            {/if}
-            {#if swarmP2pRelayStatus}
-              <small class="hint">{swarmP2pRelayStatus}</small>
-            {/if}
-            {#if swarmP2pGossipStatus}
-              <small class="hint">{swarmP2pGossipStatus}</small>
-            {/if}
-            {#if swarmP2pWorkerStubStatus}
-              <small class="hint">{swarmP2pWorkerStubStatus}</small>
-            {/if}
-            {#if swarmP2pListenAddrs.length}
-              <div class="p2p-listen-addrs">
-                <small class="hint">Listen addresses (share with peer Bootstrap):</small>
-                {#each swarmP2pListenAddrs as addr (addr)}
-                  <div class="row-actions p2p-addr-row">
-                    <code class="p2p-addr">{addr}</code>
-                    <button type="button" class="ghost mini" onclick={() => copyP2pListenAddr(addr)}>Copy</button>
-                  </div>
-                {/each}
-                {#if swarmP2pCopyMsg}
-                  <small class="test-ok">{swarmP2pCopyMsg}</small>
+                {#if swarmSupabaseConfigured}
+                  {swarmSupabaseUsingBuiltin ? "Community backend · ready" : "Custom backend · ready"}
+                {:else}
+                  Backend not configured
                 {/if}
-              </div>
+              </small>
+              <label class="check-row">
+                <input
+                  type="checkbox"
+                  checked={swarmSharePrompts}
+                  disabled={swarmSaving}
+                  onchange={toggleSharePrompts}
+                />
+                Ask to share after fix
+              </label>
+
+              <label class="check-row">
+                <input
+                  type="checkbox"
+                  checked={swarmP2pEnabled}
+                  disabled={swarmSaving}
+                  onchange={toggleP2pEnabled}
+                />
+                Local P2P
+              </label>
+              {#if swarmP2pEnabled}
+                <div class="row-actions">
+                  <button
+                    type="button"
+                    class="secondary mini"
+                    disabled={swarmSaving}
+                    onclick={ensureP2pNode}
+                  >
+                    Start / attach
+                  </button>
+                  <button
+                    type="button"
+                    class="ghost mini"
+                    disabled={swarmSaving}
+                    onclick={refreshP2pStatus}
+                  >
+                    Refresh
+                  </button>
+                </div>
+                {#if swarmP2pStatus}
+                  <small class="test-ok">{swarmP2pStatus}</small>
+                {/if}
+                {#if swarmP2pHint}
+                  <small class="hint">{swarmP2pHint}</small>
+                {/if}
+                {#if swarmP2pListenAddrs.length}
+                  <div class="p2p-listen-addrs">
+                    {#each swarmP2pListenAddrs as addr (addr)}
+                      <div class="row-actions p2p-addr-row">
+                        <code class="p2p-addr">{addr}</code>
+                        <button type="button" class="ghost mini" onclick={() => copyP2pListenAddr(addr)}>Copy</button>
+                      </div>
+                    {/each}
+                    {#if swarmP2pCopyMsg}
+                      <small class="test-ok">{swarmP2pCopyMsg}</small>
+                    {/if}
+                  </div>
+                {/if}
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    checked={swarmVolunteerDiagnose}
+                    disabled={swarmSaving}
+                    onchange={toggleVolunteerDiagnose}
+                  />
+                  Fog volunteer
+                </label>
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    checked={swarmCreationWorker}
+                    disabled={swarmSaving}
+                    onchange={toggleCreationWorker}
+                  />
+                  Creation worker
+                </label>
+              {/if}
+
+              <button
+                type="button"
+                class="ghost mini"
+                onclick={() => (swarmAdvanced = !swarmAdvanced)}
+              >
+                {swarmAdvanced ? "Hide advanced" : "Advanced…"}
+              </button>
+              {#if swarmAdvanced}
+                <label>
+                  Hub URL
+                  <input
+                    bind:value={swarmHubUrl}
+                    placeholder="http://192.168.1.10:8787"
+                    autocomplete="off"
+                  />
+                </label>
+                <label>
+                  P2P control URL
+                  <input
+                    bind:value={swarmP2pControlUrl}
+                    placeholder="http://127.0.0.1:8790"
+                    disabled={!swarmP2pEnabled}
+                    autocomplete="off"
+                  />
+                </label>
+                <label>
+                  Bootstrap multiaddr
+                  <input
+                    bind:value={swarmP2pBootstrap}
+                    placeholder="/ip4/…/tcp/…/p2p/…"
+                    disabled={!swarmP2pEnabled}
+                    autocomplete="off"
+                  />
+                </label>
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    checked={swarmP2pRelayServer}
+                    disabled={swarmSaving || !swarmP2pEnabled}
+                    onchange={toggleP2pRelayServer}
+                  />
+                  Circuit Relay (VPS)
+                </label>
+                {#if swarmCreationWorker}
+                  <label>
+                    Advertised VRAM (MB)
+                    <input
+                      type="number"
+                      min="0"
+                      step="256"
+                      value={swarmAdvertisedVramMb}
+                      disabled={swarmSaving || !swarmP2pEnabled}
+                      onchange={(e) => applyAdvertisedVramMb((e.currentTarget as HTMLInputElement).value)}
+                    />
+                  </label>
+                {/if}
+                {#if swarmP2pRelayStatus || swarmP2pGossipStatus || swarmP2pWorkerStubStatus}
+                  <small class="hint">
+                    {[swarmP2pRelayStatus, swarmP2pGossipStatus, swarmP2pWorkerStubStatus]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                {/if}
+                <label>
+                  Supabase URL override
+                  <input
+                    bind:value={swarmSupabaseUrl}
+                    placeholder="https://xxxx.supabase.co"
+                    autocomplete="off"
+                  />
+                </label>
+                <div class="row-actions">
+                  <button
+                    type="button"
+                    class="mini"
+                    disabled={swarmSaving}
+                    onclick={saveSupabaseUrl}
+                  >
+                    Save URL
+                  </button>
+                </div>
+                <label>
+                  Supabase anon key override
+                  <input
+                    type="password"
+                    bind:value={swarmSupabaseAnonDraft}
+                    placeholder={swarmSupabaseAnonSet ? "••••••••" : "built-in"}
+                    autocomplete="off"
+                  />
+                </label>
+                <div class="row-actions">
+                  <button
+                    class="mini"
+                    disabled={
+                      swarmSaving ||
+                      savingSecret === "swarm_supabase" ||
+                      !swarmSupabaseAnonDraft.trim()
+                    }
+                    onclick={() => saveSecret("swarm_supabase", swarmSupabaseAnonDraft)}
+                  >
+                    {savingSecret === "swarm_supabase" ? "Saving…" : "Save key"}
+                  </button>
+                  <button
+                    class="ghost mini"
+                    disabled={
+                      swarmSaving ||
+                      clearingSecret === "swarm_supabase" ||
+                      !swarmSupabaseAnonSet
+                    }
+                    onclick={() => clearSecret("swarm_supabase")}
+                  >
+                    Clear
+                  </button>
+                </div>
+              {/if}
             {/if}
-            <label class="check-row">
-              <input
-                type="checkbox"
-                checked={swarmP2pRelayServer}
-                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
-                onchange={toggleP2pRelayServer}
-              />
-              Act as Circuit Relay (public IP / VPS — peers use your listen address as Bootstrap)
-            </label>
-            <p class="hint">Relay accepts reservations for NAT peers. Toggling restarts the P2P node. Do not enable on a typical home PC behind CGNAT unless you port-forward.</p>
-            <p class="hint layer-label"><strong>Workers</strong> — Opt-in help for peers (Fog diagnose / Creation jobs).</p>
-            <label class="check-row">
-              <input
-                type="checkbox"
-                checked={swarmVolunteerDiagnose}
-                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
-                onchange={toggleVolunteerDiagnose}
-              />
-              Help community diagnose crashes (Fog volunteer — uses local AI when idle)
-            </label>
-            <label class="check-row">
-              <input
-                type="checkbox"
-                checked={swarmCreationWorker}
-                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
-                onchange={toggleCreationWorker}
-              />
-              Accept Creation Marketplace jobs (AI for kubejs/quest/recipe + scaffold fallback)
-            </label>
-            <label>
-              Advertised VRAM (MB, stub)
-              <input
-                type="number"
-                min="0"
-                step="256"
-                value={swarmAdvertisedVramMb}
-                disabled={swarmSaving || !swarmEnabled || !swarmP2pEnabled}
-                onchange={(e) => applyAdvertisedVramMb((e.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
-            <p class="hint">Routing preference only — not measured from your GPU. Changing restarts the P2P node (`--vram-mb`).</p>
-            <p class="hint">Advisory: 16GB+ RAM recommended. Toggling restarts the P2P node so peers see your capability.</p>
-            <label class="check-row">
-              <input
-                type="checkbox"
-                checked={swarmSharePrompts}
-                disabled={swarmSaving || !swarmEnabled}
-                onchange={toggleSharePrompts}
-              />
-              Ask to share capsule after a successful relaunch
-            </label>
           </div>
         </div>
 
@@ -2446,7 +2426,6 @@
   .save-row { margin-top: 16px; }
   .mini { padding: 5px 8px; font-size: 11px; }
   .hint { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
-  .layer-label { margin-top: 10px; margin-bottom: 8px; }
   .check-row {
     display: flex;
     flex-direction: row;

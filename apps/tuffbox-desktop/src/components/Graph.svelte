@@ -49,6 +49,8 @@
   let graph = $state<GraphModel | null>(null);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  /** Apply / install failures — keep the graph visible (do not reuse `error`). */
+  let planError = $state<string | null>(null);
   let selectedId = $state<string | null>(null);
   let lastLoadedPath = $state<string | null>(null);
   let resolving = $state(false);
@@ -247,14 +249,16 @@
       // Don't pre-select a node — otherwise every unrelated edge is dimmed
       // to near-invisible and the graph looks disconnected.
       lastLoadedPath = $projectPath;
+      // Paint local/cache graph immediately — network enrich runs in background.
+      loading = false;
 
       // Local/cache graphs can disagree with the post-refresh Modrinth-enriched
-      // plan. Never paint an interim plan — wait for network when needed.
+      // plan. Keep the change-plan panel in loading until network (or local fallback).
       if (raw.source === "network") {
         await loadChangePlan(gen);
         changePlanLoading = false;
       } else {
-        await refreshGraph(false, gen);
+        void refreshGraph(false, gen);
       }
     } catch (e) {
       if (gen !== changePlanGen) return;
@@ -499,16 +503,40 @@
     }
   }
 
+  function summarizePlanResults(applied: string[]): { message: string | null; planError: string | null } {
+    const skipped = applied.filter((s) => s.startsWith("skipped "));
+    const ok = applied.filter((s) => !s.startsWith("skipped "));
+    if (skipped.length && ok.length) {
+      return {
+        message: `Applied: ${ok.join(", ")}`,
+        planError: skipped.join("; "),
+      };
+    }
+    if (skipped.length) {
+      return { message: null, planError: skipped.join("; ") };
+    }
+    if (ok.length) {
+      return { message: `Applied plan: ${ok.join(", ")}`, planError: null };
+    }
+    return { message: "No deterministic actions were applied.", planError: null };
+  }
+
   async function applyAction(index: number) {
     if (!$projectPath || !changePlan) return;
     resolving = true;
-    error = null;
+    planError = null;
     message = null;
     try {
       const applied: string[] = await invoke("apply_resolve_action", { path: $projectPath, actionIndex: index });
-      message = applied.length ? `Applied action: ${applied.join(", ")}` : "No deterministic action was applied.";
+      const summary = summarizePlanResults(applied);
+      message = summary.message
+        ? summary.message.replace(/^Applied plan:/, "Applied action:")
+        : applied.length
+          ? null
+          : "No deterministic action was applied.";
+      planError = summary.planError;
       await load(true);
-      if (applied.length) {
+      if (applied.some((s) => !s.startsWith("skipped "))) {
         pushWorkTrail(`Applied resolve action · ${applied.join(", ")}`, [
           { id: "test", label: "Test launch", kind: "play" },
           { id: "dismiss", label: "Dismiss", kind: "dismiss" },
@@ -516,7 +544,7 @@
         requestIdeIssuesRefresh();
       }
     } catch (e) {
-      error = String(e);
+      planError = String(e);
     } finally {
       resolving = false;
     }
@@ -525,21 +553,23 @@
   async function applyChangePlan() {
     if (!$projectPath || !changePlan) return;
     resolving = true;
-    error = null;
+    planError = null;
     message = null;
     try {
       const applied: string[] = await invoke("apply_resolve_change_plan", { path: $projectPath });
-      message = applied.length ? `Applied plan: ${applied.join(", ")}` : "No deterministic actions were applied.";
+      const summary = summarizePlanResults(applied);
+      message = summary.message;
+      planError = summary.planError;
       await load(true);
-      if (applied.length) {
-        pushWorkTrail(`Applied resolve plan (${applied.length})`, [
+      if (applied.some((s) => !s.startsWith("skipped "))) {
+        pushWorkTrail(`Applied resolve plan (${applied.filter((s) => !s.startsWith("skipped ")).length})`, [
           { id: "test", label: "Test launch", kind: "play" },
           { id: "dismiss", label: "Dismiss", kind: "dismiss" },
         ]);
         requestIdeIssuesRefresh();
       }
     } catch (e) {
-      error = String(e);
+      planError = String(e);
     } finally {
       resolving = false;
     }
@@ -560,7 +590,7 @@
   async function installMissingDependencies() {
     if (!$projectPath || !hasMissingSpotlight) return;
     resolving = true;
-    error = null;
+    planError = null;
     message = null;
     try {
       const installed: string[] = await invoke("resolve_missing_dependencies", { path: $projectPath });
@@ -574,7 +604,7 @@
         requestIdeIssuesRefresh();
       }
     } catch (e) {
-      error = String(e);
+      planError = String(e);
     } finally {
       resolving = false;
     }
@@ -2288,6 +2318,7 @@
   </div>
 
   {#if message}<div class="notice success">{message}</div>{/if}
+  {#if planError}<div class="notice plan-error" role="alert">{planError}</div>{/if}
   {#if graph}
     <div class="graph-status" class:stale={graphSource === "local"} class:error={!!refreshError}>
       {#if graphRefreshing}
@@ -3163,6 +3194,12 @@
     color: var(--accent-primary);
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+  }
+
+  .notice.plan-error {
+    color: var(--danger, #ef4444);
+    background: color-mix(in srgb, var(--danger, #ef4444) 8%, transparent);
+    border-color: color-mix(in srgb, var(--danger, #ef4444) 30%, transparent);
   }
 
   .graph-status {
@@ -4548,16 +4585,6 @@
   .error {
     color: #fecaca;
     border-color: rgba(239, 68, 68, 0.35);
-  }
-
-  :global(.spin) {
-    animation: spin 900ms linear infinite;
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   .modal-backdrop {

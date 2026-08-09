@@ -93,6 +93,7 @@
       case "broke": return "Broke";
       case "open": return "Open";
       case "rolled_back": return "Rolled back";
+      case "activity": return "Activity";
       default: return outcome || "Open";
     }
   }
@@ -103,6 +104,7 @@
       case "broke": return "broke";
       case "open": return "open";
       case "rolled_back": return "rolled-back";
+      case "activity": return "activity";
       default: return "open";
     }
   }
@@ -464,7 +466,7 @@
 
   const categories = $derived(["All", ...Array.from(new Set(entries.map((e) => e.category)))]);
   const actors = $derived(["All", "launcher", "scan", "ai", "user"]);
-  const outcomes = $derived(["All", "fixed", "broke", "open", "rolled_back"]);
+  const outcomes = $derived(["All", "fixed", "broke", "open", "rolled_back", "activity"]);
   const methods = $derived(["All", "ai", "heuristic", "kb", "swarm", "manual", "unknown"]);
 
   const visible = $derived(entries.filter((entry) => {
@@ -623,6 +625,22 @@
   {:else if !hasHistory}
     <EmptyState icon={History} title="No changes yet" description="Run Scan now to capture external edits, or edit via Tune / Content." />
   {:else if viewMode === "episodes"}
+    {#if visibleEpisodes.length === 0}
+      <EmptyState
+        icon={History}
+        title={episodes.length === 0 ? "No episodes yet" : "No episodes match filters"}
+        description={episodes.length === 0 && entries.length > 0
+          ? "Crash→fix episodes appear after a launch crash and fix. Pack file edits are also grouped as Activity episodes — try Scan now, or switch to Flat."
+          : episodes.length === 0
+            ? "Run Scan now after editing the pack, or fix a crash to create a crash episode."
+            : "Clear search / outcome / method filters to see episodes again."}
+      />
+      {#if episodes.length === 0 && entries.length > 0}
+        <div class="empty-actions-row">
+          <button class="secondary" onclick={() => (viewMode = "flat")}>Open Flat timeline</button>
+        </div>
+      {/if}
+    {:else}
     <div class="history-layout">
       <aside class="change-tree">
         <div class="timeline-line"></div>
@@ -632,6 +650,7 @@
             {#each episodesByDay[day] as episode (episode.id)}
               <div class="timeline-item">
                 <button
+                  type="button"
                   class="file-strip episode"
                   class:selected={selectedId === episode.id}
                   onclick={() => {
@@ -659,7 +678,9 @@
                 <div>
                   <span class="eyebrow">Episode · {dayKey(episode.startedAt)}</span>
                   <span class="outcome-badge {outcomeClass(episode.outcome)}">{outcomeLabel(episode.outcome)}</span>
-                  <span class="method-badge {methodClass(episode.fixMethod)}">{methodLabel(episode.fixMethod)}</span>
+                  {#if episode.outcome !== "activity"}
+                    <span class="method-badge {methodClass(episode.fixMethod)}">{methodLabel(episode.fixMethod)}</span>
+                  {/if}
                   {#if episode.planSource}
                     <span class="plan-source-badge">{episode.planSource}</span>
                   {/if}
@@ -673,18 +694,22 @@
                   {/if}
                 </div>
                 <div class="preview-actions">
-                  <button class="secondary" onclick={() => explainEpisode(episode)} title="Explain this episode">
-                    <Sparkles size={16} /> Explain
-                  </button>
-                  <button
-                    class="secondary"
-                    onclick={() => openDiagnoseEpisode(episode)}
-                    title="Open Diagnose"
-                  >
-                    <Stethoscope size={16} /> Diagnose
-                  </button>
+                  {#if episode.outcome !== "activity"}
+                    <button type="button" class="secondary" onclick={() => explainEpisode(episode)} title="Explain this episode">
+                      <Sparkles size={16} /> Explain
+                    </button>
+                    <button
+                      type="button"
+                      class="secondary"
+                      onclick={() => openDiagnoseEpisode(episode)}
+                      title="Open Diagnose"
+                    >
+                      <Stethoscope size={16} /> Diagnose
+                    </button>
+                  {/if}
                   {#if episode.snapshotId}
                     <button
+                      type="button"
                       class="secondary"
                       onclick={() => openEpisodeSnapshot(episode)}
                       title="Open related snapshot"
@@ -725,16 +750,16 @@
                         </div>
                         <pre class="mini-preview nested">{entry.preview || "No preview available."}</pre>
                         <div class="preview-actions nested">
-                          <button class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
+                          <button type="button" class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
                             <Sparkles size={14} /> Explain
                           </button>
-                          <button class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
+                          <button type="button" class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
                             <Stethoscope size={14} /> Diagnose
                           </button>
-                          <button class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
+                          <button type="button" class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
                             <RotateCcw size={14} /> Rollback
                           </button>
-                          <button class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                          <button type="button" class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
                             <Maximize2 size={14} /> Open
                           </button>
                         </div>
@@ -747,7 +772,7 @@
           {/each}
           {#if hasMoreVisible}
             <div class="show-more-row">
-              <button class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
+              <button type="button" class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
                 Show more ({remainingVisible} remaining)
               </button>
             </div>
@@ -755,6 +780,7 @@
         </div>
       </section>
     </div>
+    {/if}
   {:else}
     <div class="history-layout">
       <aside class="change-tree">
@@ -1024,6 +1050,17 @@
     color: var(--text-muted);
     border-color: var(--border-color);
     background: rgba(255, 255, 255, 0.04);
+  }
+  .outcome-badge.activity {
+    color: var(--text-secondary);
+    border-color: color-mix(in srgb, var(--accent-secondary) 35%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-secondary) 10%, transparent);
+  }
+  .empty-actions-row {
+    display: flex;
+    justify-content: center;
+    margin-top: -24px;
+    margin-bottom: 24px;
   }
   .method-badge.ai { color: #c4b5fd; border-color: rgba(196,181,253,.4); }
   .method-badge.heuristic { color: #93c5fd; border-color: rgba(147,197,253,.35); }

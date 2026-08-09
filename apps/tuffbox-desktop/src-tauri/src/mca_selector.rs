@@ -9,21 +9,36 @@
 //! No network download is required at runtime. When the host JRE lacks JavaFX
 //! (e.g. GraalVM), we pass `--module-path` to the bundled OpenJFX `lib` folder.
 
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 
 const MCA_VERSION: &str = "2.8";
 const MCA_JAR_NAME: &str = "mcaselector-2.8.jar";
-/// GitHub release asset digest for mcaselector-2.8.jar (integrity check only).
-const MCA_JAR_SHA256: &str = "64505f39edf9c9b5d47e666981f81e3c3a889d4f122b3065af7e269f48e53423";
 const MIN_JAVA_MAJOR: u32 = 21;
+/// Minimum plausible size for the bundled MCA Selector JAR (rejects stubs).
+const MIN_JAR_BYTES: u64 = 1_000_000;
+
+/// Cached JAR path so repeated opens skip filesystem root scanning.
+static CACHED_JAR: OnceLock<PathBuf> = OnceLock::new();
+/// Cached Java binary after first successful resolve (skips `find_all_runtimes` / `C:\` scan).
+static CACHED_JAVA: Mutex<Option<String>> = Mutex::new(None);
 
 /// Tauri entry: resolve bundled JAR + JavaFX, patch settings, spawn the GUI.
+///
+/// Heavy work (Java scan, settings I/O, process spawn) runs on a blocking pool so
+/// the UI/main thread stays responsive. We only wait until the child is spawned,
+/// not until MCA Selector exits.
 #[tauri::command]
-pub fn open_mca_selector(path: String, world_name: String) -> Result<(), String> {
+pub async fn open_mca_selector(path: String, world_name: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || open_mca_selector_blocking(path, world_name))
+        .await
+        .map_err(|e| format!("MCA Selector launch task failed: {e}"))?
+}
+
+fn open_mca_selector_blocking(path: String, world_name: String) -> Result<(), String> {
     let project_dir = crate::manifest_parent(&path)?;
     let saves_dir = project_dir.join("saves");
     let world_dir = saves_dir.join(&world_name);
@@ -54,14 +69,15 @@ pub fn open_mca_selector(path: String, world_name: String) -> Result<(), String>
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
-    // Detach so closing TuffBox does not wait on the JavaFX process.
+    // Independent GUI child: do NOT use DETACHED_PROCESS — that flag can make the
+    // parent briefly unresponsive and reset the Windows taskbar icon to the default.
+    // CREATE_BREAKAWAY_FROM_JOB keeps the JavaFX window alive if TuffBox is in a job.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS — keep the GUI visible.
+        const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP);
     }
 
     cmd.spawn()
@@ -142,27 +158,26 @@ fn bundled_roots() -> Vec<PathBuf> {
     roots
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let digest = Sha256::digest(&bytes);
-    Ok(hex::encode(digest))
-}
-
-fn jar_ok(path: &Path) -> bool {
+fn jar_size_ok(path: &Path) -> bool {
     path.is_file()
-        && sha256_file(path)
-            .map(|h| h.eq_ignore_ascii_case(MCA_JAR_SHA256))
+        && path
+            .metadata()
+            .map(|m| m.len() > MIN_JAR_BYTES)
             .unwrap_or(false)
 }
 
+/// Resolve the bundled JAR with a cheap size gate (no full-file SHA on the open path).
 fn resolve_mca_jar() -> Result<PathBuf, String> {
+    if let Some(cached) = CACHED_JAR.get() {
+        if jar_size_ok(cached) {
+            return Ok(cached.clone());
+        }
+    }
+
     for root in bundled_roots() {
         let jar = root.join(MCA_JAR_NAME);
-        if jar_ok(&jar) {
-            return Ok(jar);
-        }
-        // Accept a present jar even if checksum file drifted (dev copies).
-        if jar.is_file() && jar.metadata().map(|m| m.len() > 1_000_000).unwrap_or(false) {
+        if jar_size_ok(&jar) {
+            let _ = CACHED_JAR.set(jar.clone());
             return Ok(jar);
         }
     }
@@ -187,19 +202,27 @@ fn javafx_lib_looks_valid(dir: &Path) -> bool {
     })
 }
 
-/// Returns `Some(module_path)` when we must inject OpenJFX; `None` if Java already has it.
-fn resolve_javafx_lib(java_path: &str) -> Result<Option<PathBuf>, String> {
-    if java_has_javafx(java_path) {
-        return Ok(None);
-    }
-
+fn find_bundled_javafx_lib() -> Option<PathBuf> {
     for root in bundled_roots() {
         for rel in ["javafx-lib", "javafx/lib", "lib"] {
             let candidate = root.join(rel);
             if javafx_lib_looks_valid(&candidate) {
-                return Ok(Some(candidate));
+                return Some(candidate);
             }
         }
+    }
+    None
+}
+
+/// Returns `Some(module_path)` when we must inject OpenJFX; `None` if Java already has it.
+fn resolve_javafx_lib(java_path: &str) -> Result<Option<PathBuf>, String> {
+    // Disk probe only — avoid spawning `java --list-modules` on the open path.
+    if java_has_javafx_on_disk(java_path) {
+        return Ok(None);
+    }
+
+    if let Some(fx) = find_bundled_javafx_lib() {
+        return Ok(Some(fx));
     }
 
     Err(format!(
@@ -209,7 +232,30 @@ fn resolve_javafx_lib(java_path: &str) -> Result<Option<PathBuf>, String> {
     ))
 }
 
+fn java_bin_ok(path: &str) -> bool {
+    let p = Path::new(path);
+    p.is_file()
+}
+
+fn cache_java_path(path: String) -> String {
+    if let Ok(mut guard) = CACHED_JAVA.lock() {
+        *guard = Some(path.clone());
+    }
+    path
+}
+
 fn resolve_java_for_mca() -> Result<String, String> {
+    // Fast path: reuse last successful Java 21+ binary when it still exists.
+    if let Ok(mut guard) = CACHED_JAVA.lock() {
+        if let Some(cached) = guard.as_ref() {
+            if java_bin_ok(cached) {
+                return Ok(cached.clone());
+            }
+        }
+        // Stale cache (binary moved/uninstalled) — force a rescan.
+        *guard = None;
+    }
+
     // Prefer any already-installed Java 21+ (with or without JavaFX —
     // bundled OpenJFX covers the latter). If nothing is on the machine,
     // download the latest GraalVM Community JDK into the managed folder.
@@ -220,13 +266,26 @@ fn resolve_java_for_mca() -> Result<String, String> {
         .filter(|r| r.major >= MIN_JAVA_MAJOR)
         .collect();
 
-    for rt in &candidates {
-        if java_has_javafx(&rt.path) {
-            return Ok(rt.path.clone());
+    let bundled_fx = find_bundled_javafx_lib().is_some();
+
+    // With bundled OpenJFX, any Java 21+ works — skip per-runtime `--list-modules`.
+    if bundled_fx {
+        if let Some(rt) = candidates
+            .iter()
+            .find(|rt| java_has_javafx_on_disk(&rt.path))
+            .or_else(|| candidates.first())
+        {
+            return Ok(cache_java_path(rt.path.clone()));
         }
-    }
-    if let Some(rt) = candidates.first() {
-        return Ok(rt.path.clone());
+    } else {
+        for rt in &candidates {
+            if java_has_javafx(&rt.path) {
+                return Ok(cache_java_path(rt.path.clone()));
+            }
+        }
+        if let Some(rt) = candidates.first() {
+            return Ok(cache_java_path(rt.path.clone()));
+        }
     }
 
     let installed = tuffbox_core::jre::ensure_java().map_err(|e| e.to_string())?;
@@ -236,10 +295,47 @@ fn resolve_java_for_mca() -> Result<String, String> {
             installed.major
         ));
     }
-    Ok(installed.path)
+    Ok(cache_java_path(installed.path))
+}
+
+fn java_home_from_bin(java_path: &str) -> Option<PathBuf> {
+    let bin = Path::new(java_path);
+    let parent = bin.parent()?;
+    // …/bin/java(.exe) → JAVA_HOME; also accept a bare java path.
+    if parent
+        .file_name()
+        .map(|n| n.eq_ignore_ascii_case("bin"))
+        .unwrap_or(false)
+    {
+        parent.parent().map(|p| p.to_path_buf())
+    } else {
+        Some(parent.to_path_buf())
+    }
+}
+
+/// Fast path: detect JavaFX on disk next to the JRE (no process spawn).
+fn java_has_javafx_on_disk(java_path: &str) -> bool {
+    let Some(home) = java_home_from_bin(java_path) else {
+        return false;
+    };
+    let jmod = home.join("jmods").join("javafx.base.jmod");
+    if jmod.is_file() {
+        return true;
+    }
+    for rel in ["lib", "jmods"] {
+        let dir = home.join(rel);
+        if javafx_lib_looks_valid(&dir) {
+            return true;
+        }
+    }
+    false
 }
 
 fn java_has_javafx(java_path: &str) -> bool {
+    if java_has_javafx_on_disk(java_path) {
+        return true;
+    }
+
     let mut c = Command::new(java_path);
     c.arg("--list-modules")
         .stdin(Stdio::null())

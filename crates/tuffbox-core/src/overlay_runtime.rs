@@ -1,8 +1,8 @@
-//! Launch-time in-game overlay stack: tuffbox-overlay jar + session JSON.
+//! Overlay launch support: session JSON for the GL-hook DLL (+ optional legacy JVM jar).
 //!
-//! Mirrors the cosmetics bridge: copy the nearest anchor jar into mods/ as a
-//! runtime artifact, write `.tuffbox/overlay-session.json` (identity +
-//! Supabase credentials), clean everything up when the game exits.
+//! Primary path (any MC / any loader): write `.tuffbox/overlay-session.json` and let the
+//! desktop inject `tuffbox_overlay_hook.dll`. The Fabric/NeoForge jar is **not** injected
+//! by default (set `TUFFBOX_OVERLAY_JVM=1` to force the old 1.21.1 jar path).
 
 use crate::{LoaderKind, McVersion, ProjectManifest};
 use serde::Serialize;
@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 pub const BUILTIN_OVERLAY_API_BASE: &str = crate::swarm::BUILTIN_SUPABASE_URL;
 pub const BUILTIN_OVERLAY_ANON_KEY: &str = crate::swarm::BUILTIN_SUPABASE_ANON_KEY;
 
-/// Override via env if the built-in anon key is wrong for the linked project.
 fn overlay_anon_key() -> String {
     std::env::var("TUFFBOX_OVERLAY_ANON_KEY")
         .or_else(|_| std::env::var("TUFFBOX_COSMETICS_ANON_KEY"))
@@ -27,23 +26,33 @@ fn overlay_api_base() -> String {
         .unwrap_or_else(|_| BUILTIN_OVERLAY_API_BASE.to_string())
 }
 
+/// When true, also copy the legacy 1.21.1 Fabric/NeoForge overlay jar (WATERMeDIA path).
+fn jvm_jar_inject_enabled() -> bool {
+    matches!(
+        std::env::var("TUFFBOX_OVERLAY_JVM").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct OverlayBridgeLaunch {
     pub cleanup_paths: Vec<PathBuf>,
     pub message: String,
+    /// Absolute path to `.tuffbox/overlay-session.json` (hook + proxy read this).
+    pub session_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OverlaySessionFile {
-    username: String,
-    uuid: String,
-    api_base: String,
-    anon_key: String,
+pub struct OverlaySessionFile {
+    pub username: String,
+    pub uuid: String,
+    pub api_base: String,
+    pub anon_key: String,
     #[serde(default)]
-    write_secret: String,
+    pub write_secret: String,
     #[serde(default)]
-    pack_name: String,
+    pub pack_name: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,7 +61,7 @@ pub struct OverlayAnchor {
     pub loaders: &'static [&'static str],
 }
 
-/// Overlay anchors. v1 ships 1.21.1 only; older/newer packs silently skip.
+/// Legacy JVM overlay anchors (opt-in via `TUFFBOX_OVERLAY_JVM=1`). Exact match only.
 pub const OVERLAY_ANCHORS: &[OverlayAnchor] = &[OverlayAnchor {
     version: "1.21.1",
     loaders: &["fabric", "neoforge"],
@@ -66,29 +75,23 @@ fn overlay_loader_tag(loader: &LoaderKind) -> Option<&'static str> {
     }
 }
 
-/// Resolve overlay artifact: highest anchor ≤ `mc` that supports `loader`.
+/// Exact MC 1.21.1 + Fabric/Quilt/NeoForge only (no silent fallback to newer MC).
 pub fn resolve_overlay_artifact(
     mc: &str,
     loader: &LoaderKind,
 ) -> Option<(&'static str, &'static str)> {
     let want = McVersion::parse(mc)?;
     let tag = overlay_loader_tag(loader)?;
-    let mut best: Option<(&'static str, McVersion)> = None;
     for a in OVERLAY_ANCHORS {
         if !a.loaders.contains(&tag) {
             continue;
         }
         let av = McVersion::parse(a.version)?;
-        if av > want {
-            continue;
-        }
-        match best {
-            None => best = Some((a.version, av)),
-            Some((_, bv)) if av > bv => best = Some((a.version, av)),
-            _ => {}
+        if av == want {
+            return Some((a.version, tag));
         }
     }
-    best.map(|(v, _)| (v, tag))
+    None
 }
 
 fn find_overlay_jar(mc: &str, loader: &LoaderKind) -> Option<(PathBuf, &'static str)> {
@@ -130,8 +133,6 @@ fn find_overlay_jar(mc: &str, loader: &LoaderKind) -> Option<(PathBuf, &'static 
     None
 }
 
-/// Pinned WATERMeDIA runtime (universal all-loader jar, MC 1.21.1 line).
-/// Update the pair together; env overrides exist for emergency repins.
 const WATERMEDIA_URL: &str =
     "https://cdn.modrinth.com/data/G922NeHS/versions/xp27BzFX/watermedia-2.1.1.jar";
 const WATERMEDIA_SHA256: &str =
@@ -154,7 +155,6 @@ fn overlay_cache_root() -> PathBuf {
         .join("overlay")
 }
 
-/// True when the instance already ships any watermedia jar (pack-provided).
 fn watermedia_present(mods_dir: &Path) -> bool {
     if let Ok(rd) = fs::read_dir(mods_dir) {
         for ent in rd.flatten() {
@@ -167,8 +167,6 @@ fn watermedia_present(mods_dir: &Path) -> bool {
     false
 }
 
-/// Download (cached, hash-pinned) and copy WATERMeDIA into mods/.
-/// Errors degrade to a note — the overlay itself still works without video.
 fn ensure_watermedia(
     mods_dir: &Path,
     cleanup: &mut Vec<PathBuf>,
@@ -198,56 +196,16 @@ fn ensure_watermedia(
     }
 }
 
-/// Prepare the overlay inject for a launch. Returns None when the pack's
-/// MC/loader has no overlay anchor — caller should still launch the game.
-pub fn prepare_overlay_bridge(
+/// Write overlay session for the GL-hook / IPC proxy. Always succeeds for any MC/loader.
+pub fn write_overlay_session(
     manifest: &ProjectManifest,
     game_dir: &Path,
     username: &str,
     uuid: &str,
     write_secret: &str,
-) -> Result<Option<OverlayBridgeLaunch>, String> {
-    let mc = manifest.minecraft.version.as_str();
-    let loader = &manifest.loader.kind;
-    if resolve_overlay_artifact(mc, loader).is_none() {
-        return Ok(None);
-    }
-
-    let mods_dir = game_dir.join("mods");
-    fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
+) -> Result<PathBuf, String> {
     let runtime_dir = game_dir.join(".tuffbox");
     fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
-
-    let mut cleanup = Vec::new();
-    let mut notes = Vec::new();
-
-    let mut overlay_injected = false;
-    match find_overlay_jar(mc, loader) {
-        Some((src, anchor)) => {
-            let dest = mods_dir.join("tuffbox-overlay.runtime.jar");
-            fs::copy(&src, &dest).map_err(|e| format!("copy overlay jar: {e}"))?;
-            cleanup.push(dest);
-            overlay_injected = true;
-            if anchor == mc {
-                notes.push(format!("tuffbox-overlay injected ({anchor})"));
-            } else {
-                notes.push(format!("tuffbox-overlay injected (anchor {anchor} for {mc})"));
-            }
-        }
-        None => {
-            if let Some((anchor, tag)) = resolve_overlay_artifact(mc, loader) {
-                notes.push(format!(
-                    "tuffbox-overlay jar missing for anchor {anchor}/{tag} — build bridges/overlay"
-                ));
-            }
-        }
-    }
-
-    // Video engine for the YouTube app (best-effort; overlay works without it).
-    if overlay_injected {
-        ensure_watermedia(&mods_dir, &mut cleanup, &mut notes);
-    }
-
     let session_path = runtime_dir.join("overlay-session.json");
     let session = OverlaySessionFile {
         username: username.to_string(),
@@ -259,11 +217,48 @@ pub fn prepare_overlay_bridge(
     };
     let body = serde_json::to_vec_pretty(&session).map_err(|e| e.to_string())?;
     fs::write(&session_path, body).map_err(|e| e.to_string())?;
-    cleanup.push(session_path);
+    Ok(session_path)
+}
+
+/// Prepare overlay for launch: **always** write session; optional legacy JVM jar.
+pub fn prepare_overlay_bridge(
+    manifest: &ProjectManifest,
+    game_dir: &Path,
+    username: &str,
+    uuid: &str,
+    write_secret: &str,
+) -> Result<Option<OverlayBridgeLaunch>, String> {
+    let session_path = write_overlay_session(manifest, game_dir, username, uuid, write_secret)?;
+    let mut cleanup = vec![session_path.clone()];
+    let mut notes = vec!["overlay session ready (GL hook)".to_string()];
+
+    if jvm_jar_inject_enabled() {
+        let mc = manifest.minecraft.version.as_str();
+        let loader = &manifest.loader.kind;
+        if resolve_overlay_artifact(mc, loader).is_some() {
+            let mods_dir = game_dir.join("mods");
+            fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
+            match find_overlay_jar(mc, loader) {
+                Some((src, anchor)) => {
+                    let dest = mods_dir.join("tuffbox-overlay.runtime.jar");
+                    fs::copy(&src, &dest).map_err(|e| format!("copy overlay jar: {e}"))?;
+                    cleanup.push(dest);
+                    notes.push(format!("legacy JVM overlay jar ({anchor})"));
+                    ensure_watermedia(&mods_dir, &mut cleanup, &mut notes);
+                }
+                None => notes.push(
+                    "TUFFBOX_OVERLAY_JVM set but jar missing — build bridges/overlay".into(),
+                ),
+            }
+        } else {
+            notes.push("TUFFBOX_OVERLAY_JVM set but MC/loader is not exact 1.21.1 Fabric/NeoForge".into());
+        }
+    }
 
     Ok(Some(OverlayBridgeLaunch {
         cleanup_paths: cleanup,
         message: notes.join("; "),
+        session_path,
     }))
 }
 
@@ -272,25 +267,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_anchor_fallbacks() {
+    fn resolve_exact_only_no_fallback() {
         assert_eq!(
             resolve_overlay_artifact("1.21.1", &LoaderKind::Fabric),
             Some(("1.21.1", "fabric"))
         );
         assert_eq!(
-            resolve_overlay_artifact("1.21.4", &LoaderKind::Neoforge),
+            resolve_overlay_artifact("1.21.1", &LoaderKind::Neoforge),
             Some(("1.21.1", "neoforge"))
         );
-        // Quilt maps to the fabric jar
         assert_eq!(
-            resolve_overlay_artifact("1.21.4", &LoaderKind::Quilt),
+            resolve_overlay_artifact("1.21.1", &LoaderKind::Quilt),
             Some(("1.21.1", "fabric"))
         );
-        // Below the only anchor → skip
+        // No silent fallback for newer MC
+        assert_eq!(resolve_overlay_artifact("1.21.4", &LoaderKind::Neoforge), None);
+        assert_eq!(resolve_overlay_artifact("1.21.4", &LoaderKind::Quilt), None);
         assert_eq!(resolve_overlay_artifact("1.21", &LoaderKind::Fabric), None);
-        // No forge anchor in v1
         assert_eq!(resolve_overlay_artifact("1.21.1", &LoaderKind::Forge), None);
-        // Below the only anchor → skip
         assert_eq!(resolve_overlay_artifact("1.20.1", &LoaderKind::Fabric), None);
     }
 }

@@ -417,6 +417,24 @@ html.potato-pc *::after {
   scroll-behavior: auto !important;
 }
 
+/* Keep indeterminate loaders spinning even in potato-pc / reduced-motion.
+   !important: many Svelte components redefine :global(.spin) with scoped
+   @keyframes names that never match, which freezes the icon. */
+@keyframes tb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: tb-spin 900ms linear infinite !important;
+}
+
+html.potato-pc .spin,
+html.potato-pc .spin * {
+  animation: tb-spin 900ms linear infinite !important;
+}
+
 /* Subtle press feedback on interactive controls (calm: delayed hover, instant press). */
 button {
   transition: transform var(--motion-fast, 160ms) var(--ease-spring, ease),

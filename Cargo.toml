@@ -4,7 +4,8 @@ members = [
   "crates/tuffbox-cli",
   "crates/tuffswarm-hub",
   "crates/tuffswarm-node",
-  "apps/tuffbox-desktop/src-tauri"
+  "apps/tuffbox-desktop/src-tauri",
+  "bridges/overlay-hook",
 ]
 resolver = "2"
 
