@@ -43,10 +43,13 @@
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { launchWithFeedback, killWithFeedback, registerLaunchCrashListener } from "../lib/launch";
+  import { fetchCrashFixBanner, rollbackLastCrashFix } from "../lib/softVerify";
   import {
-    fetchCrashFixBanner,
-    rollbackLastCrashFix,
-  } from "../lib/softVerify";
+    homeCrashFixBanner,
+    homeSizes,
+    homeSkinPaths,
+    homeStats,
+  } from "../lib/homeBootstrap";
   import AddInstanceModal from "./AddInstanceModal.svelte";
   import MinecraftLogin from "./MinecraftLogin.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
@@ -60,43 +63,16 @@
 
   let authReady = $state(false);
 
-  type ProjectStatBrief = { playtime: number; lastLaunch: string | null };
-  let projectStats = $state<Record<string, ProjectStatBrief>>({});
-
-  async function loadProjectStats(path: string) {
-    try {
-      const s = await api.stats.get(path);
-      projectStats[path] = {
-        playtime: s.totalPlaytimeSeconds ?? 0,
-        lastLaunch: s.lastLaunch ?? null,
-      };
-      projectStats = { ...projectStats };
-    } catch {
-      projectStats[path] = { playtime: 0, lastLaunch: null };
-      projectStats = { ...projectStats };
-    }
-  }
-
-  const statsRequested = new Set<string>();
-
-  function ensureStats(paths: string[]) {
-    for (const path of paths) {
-      if (statsRequested.has(path) || projectStats[path] !== undefined) continue;
-      statsRequested.add(path);
-      void loadProjectStats(path);
-    }
-  }
-
-  $effect(() => {
-    ensureStats($recentProjects.map((p) => p.path));
-  });
+  const projectStats = $derived($homeStats);
+  const instanceSizes = $derived($homeSizes);
+  const accountSkinPaths = $derived($homeSkinPaths);
+  const crashFixBanner = $derived($homeCrashFixBanner);
 
   let selectedPath = $state<string | null>($projectPath);
   let showLoginModal = $state(false);
   let showAccountManager = $state(false);
   let potatoPc = $state(false);
   let accountSwitchBusy = $state(false);
-  let accountSkinPaths = $state<Record<string, string>>({});
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
@@ -121,22 +97,9 @@
     return 8;
   });
 
-  type CrashFixBanner = {
-    snapshotId: string;
-    fingerprintKey: string;
-    planSource?: string | null;
-    humanExplanation: string;
-    matchedCaseIds: string[];
-    actionsSummary: string[];
-    createdAt: string;
-    resolved: boolean;
-    rolledBack: boolean;
-    softVerifyStartedUnix?: number | null;
-    minPlaytimeSecs: number;
-  };
-  let crashFixBanner = $state<CrashFixBanner | null>(null);
   let crashFixBusy = $state(false);
   let softVerifyNowUnix = $state(Math.floor(Date.now() / 1000));
+  let sizeLoading = $state(false);
 
   const softVerifyRemainingSecs = $derived.by(() => {
     const b = crashFixBanner;
@@ -149,14 +112,44 @@
 
   async function refreshCrashFixBanner(path: string | null) {
     if (!path) {
-      crashFixBanner = null;
+      homeCrashFixBanner.set(null);
       return;
     }
-    crashFixBanner = await fetchCrashFixBanner(path);
+    try {
+      homeCrashFixBanner.set(await fetchCrashFixBanner(path));
+    } catch {
+      homeCrashFixBanner.set(null);
+    }
   }
 
   $effect(() => {
     void refreshCrashFixBanner(selectedPath);
+  });
+
+  $effect(() => {
+    // Selected size only — never walk every recent instance on home.
+    const path = selectedPath;
+    if (!path) return;
+    if ($homeSizes[path]) return;
+    let cancelled = false;
+    sizeLoading = true;
+    void (async () => {
+      try {
+        const label = await api.instance.getSize(path);
+        if (!cancelled) {
+          homeSizes.update((m) => ({ ...m, [path]: label }));
+        }
+      } catch {
+        if (!cancelled) {
+          homeSizes.update((m) => ({ ...m, [path]: "?" }));
+        }
+      } finally {
+        if (!cancelled) sizeLoading = false;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   });
 
   $effect(() => {
@@ -180,20 +173,18 @@
     }
   }
 
-  async function ensureAccountSkinPaths(uuids: string[]) {
-    for (const uuid of uuids) {
-      if (!uuid || accountSkinPaths[uuid]) continue;
-      try {
-        const path = await api.mcAuth.getSkinPath(uuid);
-        accountSkinPaths = { ...accountSkinPaths, [uuid]: path };
-      } catch {
-        /* ignore — HeadAvatar falls back */
-      }
-    }
-  }
-
   $effect(() => {
-    void ensureAccountSkinPaths($authState.accounts.map((a) => a.uuid));
+    const uuids = $authState.accounts.map((a) => a.uuid).filter(Boolean);
+    const missing = uuids.filter((u) => !$homeSkinPaths[u]);
+    if (!missing.length) return;
+    void api.home
+      .accountSkinPaths(missing)
+      .then((map) => {
+        if (map && Object.keys(map).length) {
+          homeSkinPaths.update((prev) => ({ ...prev, ...map }));
+        }
+      })
+      .catch(() => {});
   });
 
   async function switchHomeAccount(uuid: string) {
@@ -206,7 +197,7 @@
         try {
           const path = await api.mcAuth.getSkinPath(state.profile.uuid);
           skinPath.set(path);
-          accountSkinPaths = { ...accountSkinPaths, [state.profile.uuid]: path };
+          homeSkinPaths.update((prev) => ({ ...prev, [state.profile!.uuid]: path }));
         } catch {
           skinPath.set(null);
         }
@@ -225,17 +216,26 @@
     let cleanup: (() => void) | undefined;
     void (async () => {
       potatoPc = document.documentElement.classList.contains("potato-pc");
-      try {
-        const status = await api.mcAuth.getAuthStatus();
-        authState.set(status);
-        if (status.loggedIn && status.profile) {
-          try {
-            const path = await api.mcAuth.getSkinPath(status.profile.uuid);
-            skinPath.set(path);
-          } catch {}
+      // Auth usually arrives via home bootstrap; refresh only if still empty.
+      if (!$authState.loggedIn && !$authState.profile) {
+        try {
+          const status = await api.mcAuth.getAuthStatus();
+          authState.set(status);
+          if (status.loggedIn && status.profile) {
+            try {
+              const path = await api.mcAuth.getSkinPath(status.profile.uuid);
+              skinPath.set(path);
+              homeSkinPaths.update((prev) => ({
+                ...prev,
+                [status.profile!.uuid]: path,
+              }));
+            } catch {}
+          }
+        } catch {
+        } finally {
+          authReady = true;
         }
-      } catch {
-      } finally {
+      } else {
         authReady = true;
       }
 
@@ -251,7 +251,18 @@
       const { listen } = await import("@tauri-apps/api/event");
       const unlistenExit = await listen<{ id: string }>("process-exited", (event) => {
         const id = event.payload?.id;
-        if (id) void loadProjectStats(id);
+        if (id) {
+          void api.stats.get(id).then((s) => {
+            homeStats.update((prev) => ({
+              ...prev,
+              [id]: {
+                playtime: s.totalPlaytimeSeconds ?? 0,
+                lastLaunch: s.lastLaunch ?? null,
+              },
+            }));
+          }).catch(() => {});
+          void api.home.invalidateCache(id).catch(() => {});
+        }
       });
       const unlistenSoft = await listen("tuffbox:soft-verify-outcome", () => {
         void refreshCrashFixBanner(selectedPath);
@@ -298,7 +309,15 @@
     await launchWithFeedback({ path: selectedPath, profile: "client" });
     const project = $recentProjects.find((p) => p.path === selectedPath);
     if (project) recentProjects.add(project);
-    void loadProjectStats(selectedPath);
+    void api.stats.get(selectedPath).then((s) => {
+      homeStats.update((prev) => ({
+        ...prev,
+        [selectedPath!]: {
+          playtime: s.totalPlaytimeSeconds ?? 0,
+          lastLaunch: s.lastLaunch ?? null,
+        },
+      }));
+    }).catch(() => {});
   }
 
   async function stopGame() {
@@ -311,35 +330,6 @@
     currentView = "ide";
   }
 
-  let instanceSizes = $state<Record<string, string>>({});
-  let loadingSizes = $state<Record<string, boolean>>({});
-  const sizeRequested = new Set<string>();
-
-  async function loadSize(projectPath: string) {
-    if (sizeRequested.has(projectPath)) return;
-    sizeRequested.add(projectPath);
-    loadingSizes[projectPath] = true;
-    loadingSizes = { ...loadingSizes };
-    try {
-      instanceSizes[projectPath] = await api.instance.getSize(projectPath);
-      instanceSizes = { ...instanceSizes };
-    } catch {
-      instanceSizes[projectPath] = "?";
-      instanceSizes = { ...instanceSizes };
-    } finally {
-      loadingSizes[projectPath] = false;
-      loadingSizes = { ...loadingSizes };
-    }
-  }
-
-  function ensureSizes(paths: string[]) {
-    for (const path of paths) void loadSize(path);
-  }
-
-  $effect(() => {
-    ensureSizes($recentProjects.map((p) => p.path));
-  });
-
   function openIdeStage(stage: string) {
     ideStageRequest.set(stage);
     currentView = "ide";
@@ -349,28 +339,6 @@
     ideStageRequest.set($ideSuggestedStage || "content");
     currentView = "ide";
   }
-
-  async function refreshIdeIssueBadge() {
-    if (!$projectPath) {
-      ideIssueCount.set(0);
-      return;
-    }
-    try {
-      const diags: { severity?: string }[] = await invoke("get_diagnostics", { path: $projectPath });
-      const blocking = (diags ?? []).filter((d) => {
-        const sev = String(d.severity ?? "");
-        return sev === "Error" || sev === "error" || sev === "critical";
-      });
-      ideIssueCount.set(blocking.length);
-    } catch {
-      /* keep last */
-    }
-  }
-
-  $effect(() => {
-    void $projectPath;
-    void refreshIdeIssueBadge();
-  });
 </script>
 
 <div class="home fade-slide-in">
@@ -531,7 +499,7 @@
                 <HardDrive size={14} />
                 {#if instanceSizes[selectedProject.path]}
                   <span>{instanceSizes[selectedProject.path]}</span>
-                {:else if loadingSizes[selectedProject.path]}
+                {:else if sizeLoading}
                   <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>
                 {:else}
                   <span class="skeleton skeleton-block skeleton-line short" style="width: 48px; height: 12px;"></span>

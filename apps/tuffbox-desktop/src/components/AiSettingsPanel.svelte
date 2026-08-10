@@ -10,6 +10,8 @@
     FileUp,
     FolderOpen,
     KeyRound,
+    Pause,
+    Play,
     Plug,
     RefreshCw,
     Search,
@@ -25,6 +27,7 @@
     type OllamaStorage,
     type SuggestedModel,
   } from "../lib/api";
+  import { toasts } from "../lib/toast";
 
   let {
     onsaved,
@@ -120,6 +123,8 @@
   let detecting = $state(false);
   let scanningDisk = $state(false);
   let pulling = $state(false);
+  let pullPaused = $state(false);
+  let pausedModel = $state("");
   let importing = $state(false);
   let deleting = $state("");
   let advancedOpen = $state(false);
@@ -136,12 +141,17 @@
   let hostRamBytes = $state(0);
 
   let unlistenPull: UnlistenFn | null = null;
+  let unlistenPullDone: UnlistenFn | null = null;
 
   const pullPct = $derived.by(() => {
     const p = pullProgress;
     if (!p || !p.total) return null;
     return Math.min(100, Math.round((p.completed / p.total) * 100));
   });
+
+  const canResumePull = $derived(
+    pullPaused && !!pausedModel && pullName.trim() === pausedModel,
+  );
 
   const statusText = $derived.by(() => {
     if (surface === "cloud") {
@@ -163,17 +173,117 @@
 
   onMount(() => {
     void load();
+    void ensurePullListener().then(() => restorePullStatus());
   });
 
   onDestroy(() => {
     void unlistenPull?.();
+    void unlistenPullDone?.();
   });
 
+  async function restorePullStatus() {
+    try {
+      const snap = await invoke<{
+        phase: string;
+        model: string;
+        completed: number;
+        total: number;
+        error?: string | null;
+      }>("get_ollama_pull_status");
+      if (!snap?.phase || snap.phase === "idle" || snap.phase === "succeeded") return;
+      if (snap.model) {
+        pullName = snap.model;
+        if (snap.phase === "paused") pausedModel = snap.model;
+      }
+      if (snap.total > 0 || snap.completed > 0 || snap.phase === "running" || snap.phase === "paused") {
+        pullProgress = {
+          model: snap.model || pullName,
+          status: snap.phase === "paused" ? "paused" : "downloading",
+          completed: snap.completed || 0,
+          total: snap.total || 0,
+        };
+      }
+      pulling = snap.phase === "running";
+      pullPaused = snap.phase === "paused";
+      if (snap.phase === "running") {
+        message = `Downloading ${snap.model} in background…`;
+      } else if (snap.phase === "paused") {
+        message = `Paused ${snap.model} — Resume continues from the same place`;
+      } else if (snap.phase === "failed" && snap.error) {
+        error = snap.error;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function ensurePullListener() {
-    if (unlistenPull) return;
-    unlistenPull = await listen<OllamaPullProgress>("ollama-pull-progress", (ev) => {
-      pullProgress = ev.payload;
-    });
+    if (!unlistenPull) {
+      unlistenPull = await listen<OllamaPullProgress>("ollama-pull-progress", (ev) => {
+        pullProgress = ev.payload;
+        if (ev.payload.status === "paused") {
+          pulling = false;
+          pullPaused = true;
+          pausedModel = ev.payload.model || pausedModel;
+        } else if (ev.payload.model) {
+          pulling = true;
+          pullPaused = false;
+        }
+      });
+    }
+    if (!unlistenPullDone) {
+      unlistenPullDone = await listen<{
+        ok: boolean;
+        paused?: boolean;
+        model: string;
+        error?: string;
+        result?: {
+          model: string;
+          models?: OllamaModelInfo[];
+          modelsPath?: string;
+        };
+        completed?: number;
+        total?: number;
+      }>("ollama-pull-finished", (ev) => {
+        const p = ev.payload;
+        if (p.paused) {
+          pulling = false;
+          pullPaused = true;
+          pausedModel = p.model;
+          if (pullProgress) {
+            pullProgress = {
+              ...pullProgress,
+              status: "paused",
+              completed: p.completed ?? pullProgress.completed,
+              total: p.total ?? pullProgress.total,
+            };
+          }
+          message = `Paused ${p.model} — Resume continues from the same place`;
+          return;
+        }
+        pulling = false;
+        if (p.ok && p.result) {
+          pullPaused = false;
+          pausedModel = "";
+          pullProgress = null;
+          model = p.result.model;
+          pullName = p.result.model;
+          if (p.result.models) models = p.result.models;
+          message = p.result.modelsPath
+            ? `Installed ${p.result.model} → ${p.result.modelsPath}`
+            : `Installed ${p.result.model}`;
+          void probeOllama();
+          void refreshStorage();
+          onsaved?.();
+        } else {
+          pullPaused = false;
+          pausedModel = "";
+          pullProgress = null;
+          error = p.error || "Model download failed";
+          message = "";
+        }
+      });
+    }
   }
 
   async function load() {
@@ -423,45 +533,75 @@
     }
   }
 
+  async function pauseModelPull() {
+    try {
+      await invoke("pause_ollama_model_pull");
+      message = "Pausing download…";
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
   async function installModel(tag?: string) {
     const name = (tag || pullName || model).trim();
     if (!name) {
       error = "Enter a model tag (e.g. qwen2.5:7b).";
       return;
     }
+    if (pulling) {
+      error = "A model download is already running in the background.";
+      return;
+    }
+    const resuming = pullPaused && name === pausedModel;
     pulling = true;
-    pullProgress = null;
+    pullPaused = false;
+    if (!resuming) {
+      pullProgress = null;
+      pausedModel = "";
+    }
     error = "";
-    message = `Downloading ${name}…`;
+    message = resuming
+      ? `Resuming ${name} in background…`
+      : `Downloading ${name} in background…`;
     try {
       await ensurePullListener();
       await persistAiSettings(name);
       const result = await invoke<{
+        started?: boolean;
         ok: boolean;
         model: string;
-        models: OllamaModelInfo[];
-        modelsPath?: string;
+        taskId?: string;
       }>("pull_ollama_model", {
         model: name,
         endpoint: endpoint || null,
         binaryPath: ollamaBinaryPath || null,
         modelsPath: ollamaModelsPath.trim() || null,
       });
+      // Background job: keep `pulling` true until ollama-pull-finished.
+      if (result.started) {
+        toasts.info(
+          resuming
+            ? `Resumed ${result.model} in background`
+            : `Downloading ${result.model} in background — keep using the launcher`,
+          5000,
+        );
+        return;
+      }
+      // Legacy sync response (should not happen).
+      pulling = false;
       model = result.model;
       pullName = result.model;
-      models = result.models ?? [];
-      message = result.modelsPath
-        ? `Installed ${result.model} → ${result.modelsPath}`
-        : `Installed ${result.model}`;
+      message = `Installed ${result.model}`;
       await probeOllama();
       await refreshStorage();
       onsaved?.();
     } catch (e) {
+      pulling = false;
+      pullPaused = false;
+      pausedModel = "";
+      pullProgress = null;
       error = String(e);
       message = "";
-    } finally {
-      pulling = false;
-      pullProgress = null;
     }
   }
 
@@ -698,20 +838,48 @@
 
         <div class="install">
           <div class="field-row">
-            <input bind:value={pullName} placeholder="qwen2.5:7b" autocomplete="off" />
-            <button type="button" onclick={() => installModel()} disabled={pulling || importing || !pullName.trim()}>
-              <Download size={14} />
-              {pulling ? (pullPct != null ? `${pullPct}%` : "Installing…") : "Install"}
-            </button>
+            <input
+              bind:value={pullName}
+              placeholder="qwen2.5:7b"
+              autocomplete="off"
+              disabled={pulling}
+            />
+            {#if pulling}
+              <button type="button" class="ghost" onclick={pauseModelPull} title="Pause download">
+                <Pause size={14} />
+                {pullPct != null ? `Pause ${pullPct}%` : "Pause"}
+              </button>
+            {:else}
+              <button
+                type="button"
+                onclick={() => installModel()}
+                disabled={importing || !pullName.trim()}
+                title={canResumePull ? "Resume download from the same place" : "Install model"}
+              >
+                {#if canResumePull}
+                  <Play size={14} />
+                  Resume
+                {:else}
+                  <Download size={14} />
+                  Install
+                {/if}
+              </button>
+            {/if}
             <button class="ghost" type="button" onclick={pickGgufAndImport} disabled={pulling || importing}>
               <FileUp size={14} />
               .gguf
             </button>
           </div>
-          {#if pulling && pullProgress}
-            <div class="progress">
+          {#if (pulling || pullPaused) && pullProgress}
+            <div class="progress" class:paused={pullPaused}>
               <div class="bar" style:width="{pullPct ?? 8}%"></div>
-              <small>{pullProgress.status || "downloading"} · {formatBytes(pullProgress.completed)} / {formatBytes(pullProgress.total)}</small>
+              <small>
+                {pullPaused ? "paused" : pullProgress.status || "downloading"}
+                · {formatBytes(pullProgress.completed)} / {formatBytes(pullProgress.total)}
+                {#if pulling}
+                  · runs in background
+                {/if}
+              </small>
             </div>
           {/if}
 
@@ -1001,6 +1169,9 @@
     border-radius: 2px;
     background: linear-gradient(145deg, #fbbf24, #d97706);
     transition: width 0.2s ease;
+  }
+  .progress.paused .bar {
+    background: linear-gradient(145deg, #94a3b8, #64748b);
   }
   .progress small { font-size: 11px; color: var(--text-muted); }
   .suggestions {

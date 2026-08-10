@@ -2,6 +2,7 @@ mod auth;
 mod cosmetics_local;
 mod create_mode_api;
 mod helpers;
+mod home_bootstrap;
 mod integrations;
 mod launcher_presence;
 mod launcher_settings;
@@ -39,8 +40,8 @@ static MODS_IO_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 use types::*;
 
 pub(crate) use helpers::{
-    auto_snapshot, auto_snapshot_detailed, auto_snapshot_with_changed_files,
-    backup_dir, copy_dir_recursive,
+    auto_snapshot, auto_snapshot_before_mod_op, auto_snapshot_detailed,
+    auto_snapshot_with_changed_files, backup_dir, copy_dir_recursive,
     find_manifest_in_project_dir, is_editable_config_path,
     load_backup_index, load_launcher_data, load_stats,
     manifest_parent, resolve_manifest_path, safe_project_file,
@@ -1148,17 +1149,12 @@ async fn add_curseforge_mod(
     let path_for_stats = path.clone();
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary = vec![format!("Install CurseForge {mod_id} (+ dependencies)")];
-        let mut snapshot = auto_snapshot_detailed(
-            &manifest_path,
-            "add-curseforge-mod",
-            &[],
-            &summary,
-        )
-        .map_err(|e| e.to_string())?;
+        let mut snapshot = auto_snapshot_before_mod_op(&manifest_path, "add-curseforge-mod")
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+        let requested = vec![mod_id];
         let installed =
-            install_curseforge_with_dependencies_rounds(&mut manifest, &[mod_id], &side, 50)
+            install_curseforge_with_dependencies_rounds(&mut manifest, &requested, &side, 50)
                 .map_err(|e| e.to_string())?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
@@ -1170,10 +1166,7 @@ async fn add_curseforge_mod(
                 })
             })
             .collect();
-        let lines: Vec<String> = related
-            .iter()
-            .map(|m| mod_history_line("Install", m))
-            .collect();
+        let lines = mod_install_history_lines(&related, &requested);
         finalize_mod_history(
             &manifest_path,
             &mut snapshot,
@@ -1200,25 +1193,9 @@ async fn add_curseforge_mods_with_dependencies(
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary: Vec<String> = if mod_ids.is_empty() {
-            vec!["Bulk install CurseForge mods (+ dependencies)".into()]
-        } else {
-            mod_ids
-                .iter()
-                .take(20)
-                .map(|id| format!("Install CurseForge {id}"))
-                .chain(
-                    (mod_ids.len() > 20)
-                        .then(|| format!("…and {} more", mod_ids.len() - 20))
-                        .into_iter(),
-                )
-                .collect()
-        };
-        let mut snapshot = auto_snapshot_detailed(
+        let mut snapshot = auto_snapshot_before_mod_op(
             &manifest_path,
             "bulk-add-curseforge-mods-with-dependencies",
-            &[],
-            &summary,
         )
         .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
@@ -1235,10 +1212,7 @@ async fn add_curseforge_mods_with_dependencies(
                 })
             })
             .collect();
-        let lines: Vec<String> = related
-            .iter()
-            .map(|m| mod_history_line("Install", m))
-            .collect();
+        let lines = mod_install_history_lines(&related, &mod_ids);
         finalize_mod_history(
             &manifest_path,
             &mut snapshot,
@@ -1253,6 +1227,30 @@ async fn add_curseforge_mods_with_dependencies(
     .map_err(|e| e.to_string())??;
     swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
     Ok(installed)
+}
+
+/// Whether `target` (slug or provider project id) is already in the manifest.
+fn manifest_has_dependency_target(manifest: &ProjectManifest, target: &str) -> bool {
+    manifest.mods.iter().any(|m| {
+        m.id == target || m.source.project_id.as_deref() == Some(target)
+    })
+}
+
+fn installed_dependency_targets(
+    manifest: &ProjectManifest,
+    dependencies: &[tuffbox_core::ModDependencySpec],
+) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for dep in dependencies {
+        if !seen.insert(dep.target.as_str()) {
+            continue;
+        }
+        if manifest_has_dependency_target(manifest, &dep.target) {
+            out.push(dep.target.clone());
+        }
+    }
+    out
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1284,6 +1282,7 @@ async fn preview_modrinth_install(
         let dependencies = provider
             .resolve_dependencies(&version.id)
             .unwrap_or_default();
+        let installed_dependencies = installed_dependency_targets(&manifest, &dependencies);
         let dependents = provider
             .search_dependents(&project.id, 8)
             .into_iter()
@@ -1302,6 +1301,7 @@ async fn preview_modrinth_install(
             file_name,
             side,
             dependencies,
+            installed_dependencies,
             dependents,
         })
     })
@@ -1345,6 +1345,7 @@ async fn preview_curseforge_install(
         };
         let dependencies =
             tuffbox_core::provider::curseforge::cf_deps_to_specs(&file.dependencies);
+        let installed_dependencies = installed_dependency_targets(&manifest, &dependencies);
         Ok(ModInstallPreview {
             project_id: project_id.to_string(),
             slug,
@@ -1353,6 +1354,7 @@ async fn preview_curseforge_install(
             file_name: Some(file.file_name),
             side: "both".into(),
             dependencies,
+            installed_dependencies,
             dependents: Vec::new(),
         })
     })
@@ -1792,8 +1794,7 @@ async fn add_modrinth_mod(
 ) -> Result<(), String> {
     let path_for_stats = path.clone();
     tokio::task::spawn_blocking(move || {
-        let summary = vec![format!("Install {mod_id}")];
-        let mut snapshot = auto_snapshot_detailed(&PathBuf::from(&path), "add-mod", &[], &summary)
+        let mut snapshot = auto_snapshot_before_mod_op(&PathBuf::from(&path), "add-mod")
             .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         add_mod_from_modrinth(&mut manifest, &mod_id, Some(side)).map_err(|e| e.to_string())?;
@@ -1817,6 +1818,7 @@ async fn add_modrinth_mod(
     })
     .await
     .map_err(|e| e.to_string())??;
+    helpers::invalidate_recent_home_cache(&path_for_stats);
     swarm_api::spawn_pack_cooccurrence(path_for_stats, "mod_install");
     Ok(())
 }
@@ -1831,12 +1833,11 @@ async fn add_modrinth_mod_with_dependencies(
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary = vec![format!("Install {mod_id} (+ dependencies)")];
         let mut snapshot =
-            auto_snapshot_detailed(&manifest_path, "add-mod-with-dependencies", &[], &summary)
+            auto_snapshot_before_mod_op(&manifest_path, "add-mod-with-dependencies")
                 .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id], &side)?;
+        let installed = install_modrinth_with_dependencies(&mut manifest, &[mod_id.clone()], &side)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
         download_project_mods_tracked(&app, &manifest_path, &manifest, None, true);
         let related: Vec<&ModSpec> = installed
@@ -1847,10 +1848,7 @@ async fn add_modrinth_mod_with_dependencies(
                 })
             })
             .collect();
-        let lines: Vec<String> = related
-            .iter()
-            .map(|m| mod_history_line("Install", m))
-            .collect();
+        let lines = mod_install_history_lines(&related, &[mod_id]);
         finalize_mod_history(
             &manifest_path,
             &mut snapshot,
@@ -1877,27 +1875,9 @@ async fn add_modrinth_mods_with_dependencies(
     let path_for_stats = path.clone();
     let installed = tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary: Vec<String> = if mod_ids.is_empty() {
-            vec!["Bulk install mods (+ dependencies)".into()]
-        } else {
-            mod_ids
-                .iter()
-                .take(20)
-                .map(|id| format!("Install {id}"))
-                .chain(
-                    (mod_ids.len() > 20)
-                        .then(|| format!("…and {} more", mod_ids.len() - 20))
-                        .into_iter(),
-                )
-                .collect()
-        };
-        let mut snapshot = auto_snapshot_detailed(
-            &manifest_path,
-            "bulk-add-mods-with-dependencies",
-            &[],
-            &summary,
-        )
-        .map_err(|e| e.to_string())?;
+        let mut snapshot =
+            auto_snapshot_before_mod_op(&manifest_path, "bulk-add-mods-with-dependencies")
+                .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let installed = install_modrinth_with_dependencies(&mut manifest, &mod_ids, &side)?;
         save_manifest(&manifest_path, &manifest).map_err(|e| e.to_string())?;
@@ -1910,10 +1890,7 @@ async fn add_modrinth_mods_with_dependencies(
                 })
             })
             .collect();
-        let lines: Vec<String> = related
-            .iter()
-            .map(|m| mod_history_line("Install", m))
-            .collect();
+        let lines = mod_install_history_lines(&related, &mod_ids);
         finalize_mod_history(
             &manifest_path,
             &mut snapshot,
@@ -1934,8 +1911,7 @@ async fn add_modrinth_mods_with_dependencies(
 async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary = vec![format!("Remove {mod_id}")];
-        let mut snapshot = auto_snapshot_detailed(&manifest_path, "remove-mod", &[], &summary)
+        let mut snapshot = auto_snapshot_before_mod_op(&manifest_path, "remove-mod")
             .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let removed_idx = manifest
@@ -2026,6 +2002,7 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
             &[],
             &removed_paths,
         );
+        helpers::invalidate_recent_home_cache(&path);
         Ok(())
     })
     .await
@@ -2038,8 +2015,7 @@ async fn remove_project_mod(path: String, mod_id: String) -> Result<(), String> 
 async fn disable_project_mod(path: String, mod_id: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary = vec![format!("Disable {mod_id}")];
-        let mut snapshot = auto_snapshot_detailed(&manifest_path, "disable-mod", &[], &summary)
+        let mut snapshot = auto_snapshot_before_mod_op(&manifest_path, "disable-mod")
             .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let idx = manifest
@@ -2132,10 +2108,8 @@ async fn disable_project_mod(path: String, mod_id: String) -> Result<serde_json:
 async fn enable_project_mod(path: String, mod_id: String) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         let manifest_path = PathBuf::from(&path);
-        let summary = vec![format!("Enable {mod_id}")];
-        let mut snapshot =
-            auto_snapshot_detailed(&manifest_path, "enable-mod", &[], &summary)
-                .map_err(|e| e.to_string())?;
+        let mut snapshot = auto_snapshot_before_mod_op(&manifest_path, "enable-mod")
+            .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let idx = manifest
             .mods
@@ -2226,11 +2200,7 @@ async fn update_project_mod(
             Some(&mod_id),
         );
         let manifest_path = PathBuf::from(&path);
-        let summary = vec![match &version_id {
-            Some(v) => format!("Update {mod_id} → {v}"),
-            None => format!("Update {mod_id}"),
-        }];
-        let mut snapshot = auto_snapshot_detailed(&manifest_path, "update-mod", &[], &summary)
+        let mut snapshot = auto_snapshot_before_mod_op(&manifest_path, "update-mod")
             .map_err(|e| e.to_string())?;
         let mut manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let old_mod = manifest
@@ -3437,7 +3407,10 @@ fn record_launch(path: String) -> Result<(), String> {
     let entry = stats.instances.entry("client".into()).or_default();
     entry.launches += 1;
     entry.last_launch = Some(tuffbox_core::time_util::rfc3339_now());
-    save_stats(&project_dir, &stats)
+    save_stats(&project_dir, &stats)?;
+    // Size / playtime cache must refresh after a session.
+    helpers::invalidate_recent_home_cache(&path);
+    Ok(())
 }
 
 /// Records a crash event in the project stats.
@@ -3447,7 +3420,9 @@ fn record_crash(path: String) -> Result<(), String> {
     let mut stats = load_stats(&project_dir);
     let entry = stats.instances.entry("client".into()).or_default();
     entry.crashes += 1;
-    save_stats(&project_dir, &stats)
+    save_stats(&project_dir, &stats)?;
+    helpers::invalidate_recent_home_cache(&path);
+    Ok(())
 }
 
 /// Returns launch/crash statistics for the project.
@@ -3828,26 +3803,7 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
             12,
             None,
         );
-        let summary: Vec<String> = if pending.is_empty() {
-            vec!["Batch update all mods (nothing pending)".into()]
-        } else {
-            pending
-                .iter()
-                .take(20)
-                .map(|(idx, latest)| {
-                    format!(
-                        "Update {} → {}",
-                        manifest.mods[*idx].name, latest.version_number
-                    )
-                })
-                .chain(
-                    (pending.len() > 20)
-                        .then(|| format!("…and {} more", pending.len() - 20))
-                        .into_iter(),
-                )
-                .collect()
-        };
-        let mut snapshot = auto_snapshot_detailed(&manifest_path, "batch-update-all", &[], &summary)
+        let mut snapshot = auto_snapshot_before_mod_op(&manifest_path, "batch-update-all")
             .map_err(|e| e.to_string())?;
 
         let scope_mod_ids: Vec<String> = pending
@@ -4594,38 +4550,48 @@ const FORGE_PERF_CHECKS: &[(&str, fn(&str, &str, &mut Vec<serde_json::Value>))] 
 /// Priority: overrides (exact keys, high confidence) → heuristics (pattern
 /// matching, medium/low confidence) for mods without overrides.
 #[tauri::command(rename_all = "camelCase")]
-fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
+async fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(move || scan_ore_generation_blocking(path))
+        .await
+        .map_err(|e| format!("ore scan task failed: {e}"))?
+}
+
+fn scan_ore_generation_blocking(path: String) -> Result<Vec<serde_json::Value>, String> {
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     let project_dir = manifest_parent(&path)?;
     let mut config_contents = Vec::new();
 
-    // Gather all config files
+    // Gather config files (skip huge / irrelevant trees for heuristics).
     for root in &["config", "defaultconfigs"] {
         let dir = project_dir.join(root);
         if !dir.is_dir() {
             continue;
         }
-        fn walk(dir: &std::path::Path, acc: &mut Vec<(String, String)>) {
+        fn walk(dir: &std::path::Path, root_parent: &std::path::Path, acc: &mut Vec<(String, String)>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
                 let p = entry.path();
                 if p.is_dir() {
-                    walk(&p, acc);
+                    walk(&p, root_parent, acc);
                     continue;
                 }
                 if let Some(ext) = p.extension() {
                     if ext == "toml" || ext == "json" || ext == "cfg" || ext == "json5" {
+                        let Ok(rel) = p.strip_prefix(root_parent) else {
+                            continue;
+                        };
+                        let rel_str = rel.to_string_lossy().to_string();
+                        // Still collect override-target files even if heuristics would skip them.
                         if let Ok(content) = std::fs::read_to_string(&p) {
-                            if content.len() < 512 * 1024 {
-                                if let Ok(rel) = p.strip_prefix(dir.parent().unwrap_or(&dir)) {
-                                    acc.push((rel.to_string_lossy().to_string(), content));
-                                }
+                            if content.len() < 256 * 1024 {
+                                acc.push((rel_str, content));
                             }
                         }
                     }
                 }
             }
         }
-        walk(&dir, &mut config_contents);
+        let root_parent = dir.parent().unwrap_or(&dir).to_path_buf();
+        walk(&dir, &root_parent, &mut config_contents);
     }
 
     // Build a content lookup map for reading override key values
@@ -4692,13 +4658,27 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
         }
     }
 
-    // ── Pass 2: heuristics for mods without overrides ──
+    // ── Pass 2: heuristics for mods without overrides (skip junk paths) ──
+    let heuristic_inputs: Vec<(String, String)> = config_contents
+        .iter()
+        .filter(|(p, _)| tuffbox_core::knowledge::heuristics::is_plausible_ore_config_path(p))
+        .cloned()
+        .collect();
     let heuristic_hits =
-        tuffbox_core::knowledge::heuristics::scan_configs_for_ore_gen(&config_contents);
+        tuffbox_core::knowledge::heuristics::scan_configs_for_ore_gen(&heuristic_inputs);
 
     for hit in &heuristic_hits {
         // Skip if override already covers this resource
         if override_resources.contains(&hit.resource_name) {
+            continue;
+        }
+        // Drop low-confidence hits with no height/vein signal — they are almost always noise.
+        if hit.confidence == tuffbox_core::knowledge::heuristics::HeuristicConfidence::Low
+            && hit.min_height.is_none()
+            && hit.max_height.is_none()
+            && hit.vein_size.is_none()
+            && hit.spawns_per_chunk.is_none()
+        {
             continue;
         }
         let kb_hint =
@@ -4723,6 +4703,21 @@ fn scan_ore_generation(path: String) -> Result<Vec<serde_json::Value>, String> {
             "knownMod": kb_hint.map(|k| k.name.clone()),
         }));
     }
+
+    // Stable, readable order: known materials first, then by name.
+    results.sort_by(|a, b| {
+        let ar = a.get("resource").and_then(|v| v.as_str()).unwrap_or("");
+        let br = b.get("resource").and_then(|v| v.as_str()).unwrap_or("");
+        let ac = a.get("confidence").and_then(|v| v.as_str()).unwrap_or("low");
+        let bc = b.get("confidence").and_then(|v| v.as_str()).unwrap_or("low");
+        let rank = |c: &str| match c {
+            "high" => 0,
+            "medium" => 1,
+            _ => 2,
+        };
+        rank(ac).cmp(&rank(bc)).then_with(|| ar.cmp(br))
+    });
+
     Ok(results)
 }
 
@@ -8819,11 +8814,18 @@ fn export_graph_dot(path: String) -> Result<String, String> {
     for node in &graph.nodes {
         let color = match node.kind {
             tuffbox_core::graph::NodeKind::Mod => "#1bd96a22",
+            tuffbox_core::graph::NodeKind::ResourcePack => "#38bdf822",
+            tuffbox_core::graph::NodeKind::ShaderPack => "#c084fc22",
             tuffbox_core::graph::NodeKind::Profile => "#8b5cf622",
             _ => "#f59e0b22",
         };
         let shape = if node.kind == tuffbox_core::graph::NodeKind::Profile {
             "ellipse"
+        } else if matches!(
+            node.kind,
+            tuffbox_core::graph::NodeKind::ResourcePack | tuffbox_core::graph::NodeKind::ShaderPack
+        ) {
+            "folder"
         } else {
             "box"
         };
@@ -8939,16 +8941,25 @@ fn get_graph(path: String) -> Result<serde_json::Value, String> {
     let manifest_path = PathBuf::from(&path);
     let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
     match tuffbox_core::GraphCache::load_if_current(&manifest_path, &manifest) {
-        Ok(Some(cache)) => Ok(graph_payload(
-            cache.graph,
-            "cache",
-            Some(cache.generated_at),
-        )),
+        Ok(Some(mut cache)) => {
+            if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+                cache.graph.attach_disk_content_packs(&instance_dir);
+            }
+            Ok(graph_payload(
+                cache.graph,
+                "cache",
+                Some(cache.generated_at),
+            ))
+        }
         _ => {
             let mut local = manifest;
             tuffbox_core::enrich_manifest_from_installed_jars(&manifest_path, &mut local);
+            let mut graph = DependencyGraph::from_manifest(&local);
+            if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+                graph.attach_disk_content_packs(&instance_dir);
+            }
             Ok(graph_payload(
-                DependencyGraph::from_manifest(&local),
+                graph,
                 "local",
                 None,
             ))
@@ -8971,7 +8982,10 @@ async fn refresh_graph(app: tauri::AppHandle, path: String) -> Result<serde_json
         let mut enriched = base.clone();
         tuffbox_core::enrich_manifest_from_installed_jars(&manifest_path, &mut enriched);
         enrich_manifest_for_graph(&mut enriched)?;
-        let cache = tuffbox_core::GraphCache::new(&base, enriched);
+        let mut cache = tuffbox_core::GraphCache::new(&base, enriched);
+        if let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(&manifest_path) {
+            cache.graph.attach_disk_content_packs(&instance_dir);
+        }
         cache.save(&manifest_path)?;
         Ok::<_, String>(graph_payload(
             cache.graph,
@@ -10300,13 +10314,27 @@ fn list_project_change_history(path: String) -> Result<HistoryListResult, String
     let store = SnapshotStore::new(&project_dir);
     let snapshots = store.list().map_err(|e| e.to_string())?;
     let mut entries = Vec::new();
+    let manifest_mods = ProjectManifest::load_from_path(&path)
+        .map(|m| m.mods)
+        .unwrap_or_default();
 
     // Pack activity journal (launcher + external scan + AI).
     for ev in pack_events::list_pack_events(&project_dir, Some(500)) {
-        let path_text = ev.paths.first().cloned().unwrap_or_else(|| ev.op.clone());
+        let path_text = ev
+            .paths
+            .first()
+            .cloned()
+            .filter(|p| !p.is_empty() && *p != ev.op)
+            .unwrap_or_else(|| {
+                if ev.op == "mod_change" {
+                    String::new()
+                } else {
+                    ev.op.clone()
+                }
+            });
         let can_open = {
             let p = project_dir.join(&path_text);
-            p.is_file() && is_editable_config_path(&p)
+            !path_text.is_empty() && p.is_file() && is_editable_config_path(&p)
         };
         let meta_diff = ev
             .meta
@@ -10320,15 +10348,20 @@ fn list_project_change_history(path: String) -> Result<HistoryListResult, String
             .and_then(|m| m.get("preview"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let summary = humanize_history_summary(&ev.summary, &manifest_mods);
         let preview = meta_preview
-            .clone()
-            .unwrap_or_else(|| ev.summary.clone());
+            .map(|p| humanize_history_summary(&p, &manifest_mods))
+            .unwrap_or_else(|| summary.clone());
         let diff = meta_diff.unwrap_or_else(|| {
-            ev.paths
-                .iter()
-                .map(|p| format!("• {p}"))
-                .collect::<Vec<_>>()
-                .join("\n")
+            if !ev.paths.is_empty() {
+                ev.paths
+                    .iter()
+                    .map(|p| format!("• {p}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                summary.clone()
+            }
         });
         let crash_fingerprint_key = pack_events::meta_str(&ev.meta, "fingerprintKey")
             .or_else(|| pack_events::meta_str(&ev.meta, "fingerprint"));
@@ -10342,13 +10375,26 @@ fn list_project_change_history(path: String) -> Result<HistoryListResult, String
             })
         });
         let log_path = pack_events::meta_str(&ev.meta, "logPath");
+        let actor_lc = ev.actor.to_lowercase();
+        let actor_label = match actor_lc.as_str() {
+            "scan" => "Disk",
+            "ai" => "AI",
+            "user" => "You",
+            "launcher" => "Launcher",
+            other if other.is_empty() => "Launcher",
+            other => other,
+        };
         entries.push(ProjectChangeEntry {
             id: ev.id.clone(),
             snapshot_id: ev.snapshot_id.clone().unwrap_or_default(),
-            operation: ev.summary.clone(),
-            reason: format!("{} · {}", ev.actor, ev.op),
+            operation: summary,
+            reason: format!("{} · {}", actor_label, humanize_history_op(&ev.op)),
             created_at: ev.ts.clone(),
-            path: path_text,
+            path: if path_text.is_empty() {
+                ev.paths.first().cloned().unwrap_or_default()
+            } else {
+                path_text
+            },
             category: ev.category.clone(),
             kind: ev.op.clone(),
             preview,
@@ -13185,44 +13231,10 @@ fn read_instance_log(path: String, log_name: String) -> Result<String, String> {
 /// Returns the total size of the instance on disk (mods, configs,
 /// resourcepacks, etc.), useful for UI display like NitroLaunch.
 #[tauri::command(rename_all = "camelCase")]
-fn get_instance_size(path: String) -> Result<String, String> {
-    let project_dir = manifest_parent(&path)?;
-    let mut total: u64 = 0;
-    fn walk(dir: &std::path::Path, total: &mut u64) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                walk(&p, total);
-            } else if let Ok(meta) = p.metadata() {
-                *total += meta.len();
-            }
-        }
-    }
-    for sub in &[
-        "mods",
-        "config",
-        "resourcepacks",
-        "shaderpacks",
-        "datapacks",
-        "scripts",
-        "logs",
-    ] {
-        walk(&project_dir.join(sub), &mut total);
-    }
-    // Human-readable size
-    if total < 1024 {
-        Ok(format!("{} B", total))
-    } else if total < 1024 * 1024 {
-        Ok(format!("{:.1} KB", total as f64 / 1024.0))
-    } else if total < 1024 * 1024 * 1024 {
-        Ok(format!("{:.1} MB", total as f64 / 1024.0 / 1024.0))
-    } else {
-        Ok(format!("{:.1} GB", total as f64 / 1024.0 / 1024.0 / 1024.0))
-    }
+async fn get_instance_size(path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || home_bootstrap::instance_size_label(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -13900,6 +13912,127 @@ fn existing_mod_file_path(manifest_path: &Path, module: &ModSpec) -> Option<Path
     disabled.is_file().then_some(disabled)
 }
 
+/// Prefer a human display name over Modrinth/CF provider ids.
+fn mod_display_name(module: &ModSpec) -> String {
+    let name = module.name.trim();
+    if !name.is_empty() && !looks_like_provider_id(name) {
+        return name.to_string();
+    }
+    let id = module.id.trim();
+    if !id.is_empty() && !looks_like_provider_id(id) {
+        return id.to_string();
+    }
+    if let Some(file) = module.file_name.as_deref().filter(|s| !s.is_empty()) {
+        return file.trim_end_matches(".jar").trim_end_matches(".disabled").to_string();
+    }
+    if !name.is_empty() {
+        return name.to_string();
+    }
+    if !id.is_empty() {
+        return id.to_string();
+    }
+    "Unknown mod".into()
+}
+
+/// Modrinth project ids are typically 8-char base62; CF numeric ids are all digits.
+fn looks_like_provider_id(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    if s.chars().all(|c| c.is_ascii_digit()) && s.len() >= 4 {
+        return true;
+    }
+    s.len() == 8 && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn mod_matches_ref(module: &ModSpec, id: &str) -> bool {
+    module.id == id
+        || module.source.project_id.as_deref() == Some(id)
+        || module.file_name.as_deref() == Some(id)
+}
+
+fn mod_history_line(verb: &str, module: &ModSpec) -> String {
+    let name = mod_display_name(module);
+    if module.version.trim().is_empty() {
+        format!("{verb} {name}")
+    } else {
+        format!("{verb} {name} {}", module.version)
+    }
+}
+
+/// Human-readable install summary: primary mods first, then dependencies.
+fn mod_install_history_lines(related: &[&ModSpec], requested_ids: &[String]) -> Vec<String> {
+    if related.is_empty() {
+        return vec!["Install mod(s)".into()];
+    }
+    let (primaries, deps): (Vec<&ModSpec>, Vec<&ModSpec>) = related.iter().copied().partition(|m| {
+        requested_ids.iter().any(|id| mod_matches_ref(m, id))
+    });
+    let primaries = if primaries.is_empty() {
+        related.to_vec()
+    } else {
+        primaries
+    };
+    let mut lines: Vec<String> = primaries
+        .iter()
+        .map(|m| mod_history_line("Install", m))
+        .collect();
+    if !deps.is_empty() && primaries.len() < related.len() {
+        if deps.len() <= 4 {
+            for m in &deps {
+                lines.push(mod_history_line("Install dependency", m));
+            }
+        } else {
+            let names: Vec<String> = deps.iter().take(3).map(|m| mod_display_name(m)).collect();
+            lines.push(format!(
+                "Install {} dependencies ({}, …)",
+                deps.len(),
+                names.join(", ")
+            ));
+        }
+    }
+    lines
+}
+
+/// Rewrite legacy History text that still embeds raw Modrinth/CF ids.
+fn humanize_history_summary(text: &str, mods: &[ModSpec]) -> String {
+    if text.is_empty() || mods.is_empty() {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for module in mods {
+        let name = mod_display_name(module);
+        if let Some(pid) = module.source.project_id.as_deref() {
+            if looks_like_provider_id(pid) && out.contains(pid) {
+                out = out.replace(pid, &name);
+            }
+        }
+        if module.id != name && looks_like_provider_id(&module.id) && out.contains(&module.id) {
+            out = out.replace(&module.id, &name);
+        }
+    }
+    out.replace("Install CurseForge ", "Install ")
+}
+
+fn humanize_history_op(op: &str) -> String {
+    match op {
+        "mod_change" => "Mod change".into(),
+        "mod_added" => "Mod added".into(),
+        "mod_removed" => "Mod removed".into(),
+        "external_add" => "External add".into(),
+        "external_edit" => "External edit".into(),
+        "external_remove" => "External remove".into(),
+        "file_edit" => "File edit".into(),
+        "crash_detected" => "Crash detected".into(),
+        "crash_fix" => "Crash fix".into(),
+        "crash_resolved" => "Crash resolved".into(),
+        "snapshot" => "Snapshot".into(),
+        "rollback" => "Rollback".into(),
+        other => other.replace('_', " "),
+    }
+}
+
 /// After a launcher mod install/remove, write concrete History events and keep
 /// the disk baseline in sync so the next scan does not flag launcher jars as
 /// external adds/removes.
@@ -13943,10 +14076,6 @@ fn finalize_mod_history(
         action_lines,
         &paths,
     );
-}
-
-fn mod_history_line(verb: &str, module: &ModSpec) -> String {
-    format!("{verb} {} {}", module.name, module.version)
 }
 
 /// Removes jars superseded by an update: the previous filename and any file
@@ -14327,9 +14456,7 @@ pub(crate) fn install_modrinth_with_dependencies_rounds(
             .filter(|dep| dep.kind == tuffbox_core::DependencyKind::Requires)
             .map(|dep| dep.target.clone())
             .filter(|target| {
-                !manifest.mods.iter().any(|m| {
-                    m.id == *target || m.source.project_id.as_deref() == Some(target.as_str())
-                }) && !failed.contains(target)
+                !manifest_has_dependency_target(manifest, target) && !failed.contains(target)
             })
             .collect::<Vec<_>>();
 
@@ -14521,9 +14648,7 @@ pub(crate) fn install_curseforge_with_dependencies_rounds(
             .filter(|dep| dep.kind == tuffbox_core::DependencyKind::Requires)
             .map(|dep| dep.target.clone())
             .filter(|target| {
-                !manifest.mods.iter().any(|m| {
-                    m.id == *target || m.source.project_id.as_deref() == Some(target.as_str())
-                }) && !failed.contains(target)
+                !manifest_has_dependency_target(manifest, target) && !failed.contains(target)
             })
             .collect::<Vec<_>>();
 
@@ -15589,6 +15714,8 @@ pub fn run() {
             integrations::detect_ollama,
             integrations::scan_ollama_disk,
             integrations::pull_ollama_model,
+            integrations::pause_ollama_model_pull,
+            integrations::get_ollama_pull_status,
             integrations::import_ollama_gguf,
             integrations::ensure_ollama_model,
             integrations::get_ollama_storage,
@@ -15718,6 +15845,10 @@ pub fn run() {
             list_instance_logs,
             read_instance_log,
             get_instance_size,
+            home_bootstrap::get_home_bootstrap,
+            home_bootstrap::get_home_project_briefs,
+            home_bootstrap::get_account_skin_paths,
+            home_bootstrap::invalidate_home_project_cache,
             pin_project,
             is_project_pinned,
             set_last_opened_project,

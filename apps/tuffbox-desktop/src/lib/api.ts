@@ -597,6 +597,9 @@ export interface ModInstallPreview {
   fileName: string | null;
   side: string;
   dependencies: ModDependencySpec[];
+  /** Dependency targets already present in the project (slug or provider id). */
+  installedDependencies?: string[];
+  dependents?: { id: string; slug: string; name: string }[];
 }
 
 export interface GraphNode {
@@ -2420,6 +2423,31 @@ export const api = {
     },
     saveRecentProjects(projects: Array<{ path: string; info: Record<string, unknown> }>) {
       return cmd<void>("save_recent_projects", { projects });
+    },
+  },
+
+  // ── Home bootstrap pipeline ───────────────────────────────────────
+  home: {
+    bootstrap(selectedPath?: string | null) {
+      return cmd<import("./homeBootstrap").HomeSnapshot>("get_home_bootstrap", {
+        request: { selectedPath: selectedPath ?? null },
+      });
+    },
+    projectBriefs(paths: string[]) {
+      return cmd<
+        Array<{
+          path: string;
+          stats: { playtime: number; lastLaunch: string | null };
+          sizeLabel?: string | null;
+          iconDataUrl?: string | null;
+        }>
+      >("get_home_project_briefs", { paths });
+    },
+    accountSkinPaths(uuids: string[]) {
+      return cmd<Record<string, string>>("get_account_skin_paths", { uuids });
+    },
+    invalidateCache(p?: string) {
+      return cmd<void>("invalidate_home_project_cache", pathArg(p));
     },
   },
 

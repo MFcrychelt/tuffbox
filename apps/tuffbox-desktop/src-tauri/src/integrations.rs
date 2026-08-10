@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use tauri::{AppHandle, Emitter};
 use tuffbox_core::ProjectManifest;
 
@@ -12,6 +14,135 @@ const APP_USER_AGENT: &str = "TuffBox-IDE/0.1";
 /// Default Ollama tag for crash plans (smarter; user still must pull once).
 pub const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:7b";
 const OLLAMA_PULL_PROGRESS_EVENT: &str = "ollama-pull-progress";
+const OLLAMA_PULL_FINISHED_EVENT: &str = "ollama-pull-finished";
+/// Distinct error returned when the user pauses an in-flight model pull.
+/// Partial blobs stay on disk; a later pull of the same tag resumes.
+pub const OLLAMA_PULL_PAUSED_MSG: &str = "OLLAMA_PULL_PAUSED";
+
+static OLLAMA_PULL_CANCEL: AtomicBool = AtomicBool::new(false);
+static OLLAMA_PULL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OllamaPullSnapshot {
+    /// `idle` | `running` | `paused` | `failed` | `succeeded`
+    pub phase: String,
+    pub model: String,
+    pub completed: u64,
+    pub total: u64,
+    pub task_id: String,
+    pub error: Option<String>,
+    pub models_path: Option<String>,
+}
+
+static OLLAMA_PULL_SNAPSHOT: LazyLock<Mutex<OllamaPullSnapshot>> =
+    LazyLock::new(|| Mutex::new(OllamaPullSnapshot {
+        phase: "idle".into(),
+        ..Default::default()
+    }));
+
+fn is_ollama_pull_paused(err: &str) -> bool {
+    err.contains(OLLAMA_PULL_PAUSED_MSG)
+}
+
+fn ollama_pull_task_id(model: &str) -> String {
+    format!("ollama-pull-{model}")
+}
+
+fn set_ollama_pull_snapshot(mut next: OllamaPullSnapshot) {
+    if next.phase.is_empty() {
+        next.phase = "idle".into();
+    }
+    if let Ok(mut g) = OLLAMA_PULL_SNAPSHOT.lock() {
+        *g = next;
+    }
+}
+
+fn patch_ollama_pull_progress(model: &str, status: &str, completed: u64, total: u64) {
+    if let Ok(mut g) = OLLAMA_PULL_SNAPSHOT.lock() {
+        g.model = model.to_string();
+        g.completed = completed;
+        g.total = total;
+        if status.eq_ignore_ascii_case("paused") {
+            g.phase = "paused".into();
+        } else if g.phase != "paused" {
+            g.phase = "running".into();
+        }
+    }
+}
+
+fn emit_ollama_pull_progress(
+    app: Option<&AppHandle>,
+    task_id: Option<&str>,
+    model: &str,
+    status: &str,
+    completed: u64,
+    total: u64,
+) {
+    patch_ollama_pull_progress(model, status, completed, total);
+    if let Some(tid) = task_id {
+        let pct = if total > 0 {
+            (completed as f64 / total as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let detail = if total > 0 {
+            format!("{status} · {completed}/{total}")
+        } else if status.is_empty() {
+            "downloading…".into()
+        } else {
+            status.to_string()
+        };
+        tuffbox_core::task_progress::set_progress(tid, pct, Some(detail));
+    }
+    if let Some(handle) = app {
+        let _ = handle.emit(
+            OLLAMA_PULL_PROGRESS_EVENT,
+            json!({
+                "model": model,
+                "status": status,
+                "completed": completed,
+                "total": total,
+            }),
+        );
+    }
+}
+
+fn emit_ollama_pull_paused(
+    app: Option<&AppHandle>,
+    task_id: Option<&str>,
+    model: &str,
+    completed: u64,
+    total: u64,
+) {
+    emit_ollama_pull_progress(app, task_id, model, "paused", completed, total);
+    if let Some(tid) = task_id {
+        tuffbox_core::task_progress::pause(
+            tid,
+            Some("Paused — resume anytime; download continues from here".into()),
+        );
+    }
+}
+
+/// Snapshot of the current / last AI model download (for UI restore).
+#[tauri::command(rename_all = "camelCase")]
+pub fn get_ollama_pull_status() -> OllamaPullSnapshot {
+    OLLAMA_PULL_SNAPSHOT
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default()
+}
+
+/// Pause the active Ollama model download. Incomplete layers are kept so Resume
+/// (another `pull_ollama_model` of the same tag) continues from the same place.
+#[tauri::command(rename_all = "camelCase")]
+pub fn pause_ollama_model_pull() -> Result<(), String> {
+    if !OLLAMA_PULL_IN_FLIGHT.load(Ordering::SeqCst) {
+        return Err("No model download is in progress".into());
+    }
+    OLLAMA_PULL_CANCEL.store(true, Ordering::SeqCst);
+    Ok(())
+}
 
 /// Installed Ollama model metadata from `/api/tags`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1738,6 +1869,9 @@ async fn ollama_pull_model_cli(
     model: &str,
     host: Option<&str>,
 ) -> Result<(), String> {
+    if OLLAMA_PULL_CANCEL.load(Ordering::SeqCst) {
+        return Err(OLLAMA_PULL_PAUSED_MSG.into());
+    }
     let exe = resolve_ollama_binary(binary_hint);
     let mut cmd = tokio::process::Command::new(&exe);
     cmd.arg("pull").arg(model);
@@ -1751,25 +1885,35 @@ async fn ollama_pull_model_cli(
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
-    let output = cmd
-        .output()
-        .await
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to run ollama pull: {e}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
-            "ollama pull failed: {}",
-            if stderr.trim().is_empty() {
-                stdout.trim()
-            } else {
-                stderr.trim()
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_millis(250), child.wait()).await {
+            Ok(Ok(status)) => {
+                if status.success() {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "ollama pull failed with exit code {}",
+                    status.code().unwrap_or(-1)
+                ));
             }
-        ));
+            Ok(Err(e)) => {
+                return Err(format!("ollama pull process error: {e}"));
+            }
+            Err(_elapsed) => {
+                if OLLAMA_PULL_CANCEL.load(Ordering::SeqCst) {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return Err(OLLAMA_PULL_PAUSED_MSG.into());
+                }
+            }
+        }
     }
-    Ok(())
 }
 
 /// Default Ollama models directory when `OLLAMA_MODELS` is unset.
@@ -1853,9 +1997,14 @@ fn default_ollama_binary_candidates() -> Vec<PathBuf> {
 
 async fn ollama_pull_model(
     app: Option<&AppHandle>,
+    task_id: Option<&str>,
     root: &str,
     model: &str,
 ) -> Result<(), String> {
+    if OLLAMA_PULL_CANCEL.load(Ordering::SeqCst) {
+        emit_ollama_pull_paused(app, task_id, model, 0, 0);
+        return Err(OLLAMA_PULL_PAUSED_MSG.into());
+    }
     let url = format!("{root}/api/pull");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60 * 45))
@@ -1880,7 +2029,14 @@ async fn ollama_pull_model(
     let mut last_emit = std::time::Instant::now()
         .checked_sub(std::time::Duration::from_secs(1))
         .unwrap_or_else(std::time::Instant::now);
+    let mut last_completed: u64 = 0;
+    let mut last_total: u64 = 0;
     loop {
+        if OLLAMA_PULL_CANCEL.load(Ordering::SeqCst) {
+            // Returning drops `response` and aborts the HTTP pull; Ollama keeps blobs.
+            emit_ollama_pull_paused(app, task_id, model, last_completed, last_total);
+            return Err(OLLAMA_PULL_PAUSED_MSG.into());
+        }
         let chunk = response
             .chunk()
             .await
@@ -1903,43 +2059,38 @@ async fn ollama_pull_model(
                     return Err(format!("Ollama pull error: {err}"));
                 }
             }
-            if let Some(handle) = app {
-                let now = std::time::Instant::now();
-                let status_s = evt
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let completed = evt.get("completed").and_then(Value::as_u64).unwrap_or(0);
-                let total = evt.get("total").and_then(Value::as_u64).unwrap_or(0);
-                let done = status_s.eq_ignore_ascii_case("success")
-                    || (total > 0 && completed >= total && completed > 0);
-                if done || now.duration_since(last_emit).as_millis() >= 250 {
-                    last_emit = now;
-                    let _ = handle.emit(
-                        OLLAMA_PULL_PROGRESS_EVENT,
-                        json!({
-                            "model": model,
-                            "status": status_s,
-                            "completed": completed,
-                            "total": total,
-                        }),
-                    );
-                }
+            let status_s = evt
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let completed = evt.get("completed").and_then(Value::as_u64).unwrap_or(0);
+            let total = evt.get("total").and_then(Value::as_u64).unwrap_or(0);
+            if completed > 0 || total > 0 {
+                last_completed = completed;
+                last_total = total;
+            }
+            let now = std::time::Instant::now();
+            let done = status_s.eq_ignore_ascii_case("success")
+                || (total > 0 && completed >= total && completed > 0);
+            if done || now.duration_since(last_emit).as_millis() >= 250 {
+                last_emit = now;
+                emit_ollama_pull_progress(
+                    app,
+                    task_id,
+                    model,
+                    &status_s,
+                    completed,
+                    total,
+                );
+            }
+            if OLLAMA_PULL_CANCEL.load(Ordering::SeqCst) {
+                emit_ollama_pull_paused(app, task_id, model, last_completed, last_total);
+                return Err(OLLAMA_PULL_PAUSED_MSG.into());
             }
         }
     }
-    if let Some(handle) = app {
-        let _ = handle.emit(
-            OLLAMA_PULL_PROGRESS_EVENT,
-            json!({
-                "model": model,
-                "status": "success",
-                "completed": 1u64,
-                "total": 1u64,
-            }),
-        );
-    }
+    emit_ollama_pull_progress(app, task_id, model, "success", 1, 1);
     Ok(())
 }
 
@@ -2116,7 +2267,9 @@ pub async fn detect_ollama(
     }))
 }
 
-/// Explicitly pull a model the user chose (by Ollama tag name).
+/// Start an Ollama model pull in the background so the user can keep using the launcher.
+/// Re-pulling the same tag after pause resumes from already-downloaded blobs.
+/// Returns immediately with `{ started: true, model, taskId }`.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn pull_ollama_model(
     app: AppHandle,
@@ -2136,6 +2289,15 @@ pub async fn pull_ollama_model(
                 .into(),
         );
     }
+
+    if OLLAMA_PULL_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return Err(
+            "A model download is already running in the background. Pause it or wait for it to finish."
+                .into(),
+        );
+    }
+
+    OLLAMA_PULL_CANCEL.store(false, Ordering::SeqCst);
 
     let settings = read_settings();
     let hint = binary_path.unwrap_or_else(|| settings.ai.ollama_binary_path.clone());
@@ -2165,6 +2327,137 @@ pub async fn pull_ollama_model(
         let _ = write_settings(&disk);
     }
 
+    let task_id = tuffbox_core::task_progress::start_task(
+        ollama_pull_task_id(&name),
+        format!("AI model · {name}"),
+    );
+    tuffbox_core::task_progress::set_progress(&task_id, 0.0, Some("Starting download…".into()));
+    set_ollama_pull_snapshot(OllamaPullSnapshot {
+        phase: "running".into(),
+        model: name.clone(),
+        completed: 0,
+        total: 0,
+        task_id: task_id.clone(),
+        error: None,
+        models_path: if models_path.is_empty() {
+            None
+        } else {
+            Some(models_path.clone())
+        },
+    });
+    emit_ollama_pull_progress(Some(&app), Some(&task_id), &name, "starting", 0, 0);
+
+    let app_bg = app.clone();
+    let name_bg = name.clone();
+    let task_id_bg = task_id.clone();
+    let hint_bg = hint.clone();
+    let models_path_bg = models_path.clone();
+    let ai_bg = ai.clone();
+
+    tokio::spawn(async move {
+        let result =
+            run_ollama_model_pull(app_bg.clone(), &task_id_bg, &name_bg, ai_bg, hint_bg, models_path_bg)
+                .await;
+        OLLAMA_PULL_IN_FLIGHT.store(false, Ordering::SeqCst);
+        match result {
+            Ok(payload) => {
+                let models_path_out = payload
+                    .get("modelsPath")
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string());
+                set_ollama_pull_snapshot(OllamaPullSnapshot {
+                    phase: "succeeded".into(),
+                    model: name_bg.clone(),
+                    completed: 1,
+                    total: 1,
+                    task_id: task_id_bg.clone(),
+                    error: None,
+                    models_path: models_path_out,
+                });
+                tuffbox_core::task_progress::succeed(
+                    &task_id_bg,
+                    Some(format!("Installed {name_bg}")),
+                );
+                let _ = app_bg.emit(
+                    OLLAMA_PULL_FINISHED_EVENT,
+                    json!({
+                        "ok": true,
+                        "paused": false,
+                        "model": name_bg,
+                        "result": payload,
+                    }),
+                );
+            }
+            Err(err) if is_ollama_pull_paused(&err) => {
+                let snap = OLLAMA_PULL_SNAPSHOT
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                set_ollama_pull_snapshot(OllamaPullSnapshot {
+                    phase: "paused".into(),
+                    model: name_bg.clone(),
+                    completed: snap.completed,
+                    total: snap.total,
+                    task_id: task_id_bg.clone(),
+                    error: None,
+                    models_path: snap.models_path,
+                });
+                // emit_ollama_pull_paused already marked the task paused when cancel hit.
+                tuffbox_core::task_progress::pause(
+                    &task_id_bg,
+                    Some("Paused — resume anytime; download continues from here".into()),
+                );
+                let _ = app_bg.emit(
+                    OLLAMA_PULL_FINISHED_EVENT,
+                    json!({
+                        "ok": false,
+                        "paused": true,
+                        "model": name_bg,
+                        "completed": snap.completed,
+                        "total": snap.total,
+                    }),
+                );
+            }
+            Err(err) => {
+                set_ollama_pull_snapshot(OllamaPullSnapshot {
+                    phase: "failed".into(),
+                    model: name_bg.clone(),
+                    completed: 0,
+                    total: 0,
+                    task_id: task_id_bg.clone(),
+                    error: Some(err.clone()),
+                    models_path: None,
+                });
+                tuffbox_core::task_progress::fail(&task_id_bg, err.clone());
+                let _ = app_bg.emit(
+                    OLLAMA_PULL_FINISHED_EVENT,
+                    json!({
+                        "ok": false,
+                        "paused": false,
+                        "model": name_bg,
+                        "error": err,
+                    }),
+                );
+            }
+        }
+    });
+
+    Ok(json!({
+        "started": true,
+        "ok": true,
+        "model": name,
+        "taskId": task_id,
+    }))
+}
+
+async fn run_ollama_model_pull(
+    app: AppHandle,
+    task_id: &str,
+    name: &str,
+    ai: AiSettings,
+    hint: String,
+    models_path: String,
+) -> Result<serde_json::Value, String> {
     let before = if models_path.is_empty() {
         (0, 0)
     } else {
@@ -2179,24 +2472,36 @@ pub async fn pull_ollama_model(
         ensure_managed_pull_daemon(&ai).await?
     };
 
+    if OLLAMA_PULL_CANCEL.load(Ordering::SeqCst) {
+        emit_ollama_pull_paused(Some(&app), Some(task_id), name, 0, 0);
+        return Err(OLLAMA_PULL_PAUSED_MSG.into());
+    }
+
     let pull_host = pull_root
         .trim_start_matches("http://")
         .trim_start_matches("https://");
 
     // Prefer HTTP pull against the daemon that has OLLAMA_MODELS; CLI is a backup.
-    match ollama_pull_model(Some(&app), &pull_root, &name).await {
+    match ollama_pull_model(Some(&app), Some(task_id), &pull_root, name).await {
         Ok(()) => {}
+        Err(api_err) if is_ollama_pull_paused(&api_err) => {
+            return Err(api_err);
+        }
         Err(api_err) => {
             if let Err(cli_err) =
-                ollama_pull_model_cli(&hint, &models_path, &name, Some(pull_host)).await
+                ollama_pull_model_cli(&hint, &models_path, name, Some(pull_host)).await
             {
+                if is_ollama_pull_paused(&cli_err) {
+                    emit_ollama_pull_paused(Some(&app), Some(task_id), name, 0, 0);
+                    return Err(cli_err);
+                }
                 return Err(format!("{api_err} | CLI fallback: {cli_err}"));
             }
         }
     }
 
     if !models_path.is_empty() {
-        verify_pull_landed_in_path(&models_path, before, &name)?;
+        verify_pull_landed_in_path(&models_path, before, name)?;
         // Bring :11434 (or user endpoint) up on the same models dir for chat.
         if let Err(relaunch_err) = relaunch_user_endpoint_daemon(&ai).await {
             // Soft: weights are verified on disk.
@@ -2213,7 +2518,7 @@ pub async fn pull_ollama_model(
     // Persist as active model when pull succeeds.
     let mut next = read_settings();
     next.ai.provider = "ollama".into();
-    next.ai.model = name.clone();
+    next.ai.model = name.to_string();
     if !models_path.is_empty() {
         next.ai.ollama_models_path = models_path.clone();
     }

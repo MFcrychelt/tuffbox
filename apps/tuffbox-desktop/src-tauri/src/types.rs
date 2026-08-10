@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 // ── Project types ────────────────────────────────────────────────
 
-#[derive(serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummary {
     pub id: String,
@@ -80,6 +80,9 @@ pub struct ModInstallPreview {
     pub file_name: Option<String>,
     pub side: String,
     pub dependencies: Vec<tuffbox_core::ModDependencySpec>,
+    /// Dependency targets already present in the project (slug or provider project id).
+    #[serde(default)]
+    pub installed_dependencies: Vec<String>,
     /// Top-N Modrinth projects that require this one (search facet; may be empty).
     #[serde(default)]
     pub dependents: Vec<ModInstallDependent>,
@@ -381,6 +384,24 @@ pub struct LauncherDataState {
 pub struct RecentProjectEntry {
     pub path: String,
     pub info: RecentProjectInfo,
+    /// Materialized home-cache: listing icon as data URL (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_data_url: Option<String>,
+    /// Cached human-readable instance size (e.g. "1.2 GB").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_label: Option<String>,
+    /// Cached size in bytes (for invalidation / refresh decisions).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// Fingerprint of mods/config mtimes when size was scanned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_fingerprint: Option<String>,
+    /// Cached total playtime seconds from `.tuffbox/stats.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_playtime_seconds: Option<u64>,
+    /// Cached last launch RFC3339 timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats_last_launch: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

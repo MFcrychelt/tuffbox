@@ -108,7 +108,9 @@ pub fn set_project_listing_icon(path: String, source_file: String) -> Result<Pro
         seed_listing(&manifest)
     };
     listing.icon_path = Some(dest_rel.replace('\\', "/"));
-    save_listing(&manifest_path, listing)
+    let updated = save_listing(&manifest_path, listing)?;
+    crate::helpers::invalidate_recent_home_cache(&path);
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -122,7 +124,9 @@ pub fn clear_project_listing_icon(path: String) -> Result<ProjectListing, String
         let abs = project_dir.join(&rel);
         let _ = fs::remove_file(abs);
     }
-    save_listing(&manifest_path, listing)
+    let updated = save_listing(&manifest_path, listing)?;
+    crate::helpers::invalidate_recent_home_cache(&path);
+    Ok(updated)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -228,6 +232,21 @@ pub fn read_listing_asset(path: String, relative_path: String) -> Result<String,
     let abs = project_dir.join(&rel);
     let bytes = fs::read(&abs).map_err(|e| e.to_string())?;
     Ok(bytes_to_data_url(&bytes, &abs))
+}
+
+/// Best-effort listing icon → data URL for home bootstrap / sidebar cache.
+pub(crate) fn try_read_listing_icon_data_url(path: &str) -> Option<String> {
+    let (manifest_path, project_dir) = resolve_paths(path).ok()?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).ok()?;
+    let listing = seed_listing(&manifest);
+    let rel = listing.icon_path.as_ref()?;
+    let rel = rel.replace('\\', "/");
+    if rel.contains("..") || !rel.starts_with(".tuffbox/listing/") {
+        return None;
+    }
+    let abs = project_dir.join(&rel);
+    let bytes = fs::read(&abs).ok()?;
+    Some(bytes_to_data_url(&bytes, &abs))
 }
 
 #[tauri::command(rename_all = "camelCase")]

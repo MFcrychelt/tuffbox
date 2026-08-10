@@ -1,4 +1,5 @@
 use crate::{
+    action_plan::is_invented_vanilla_resource_mod_id,
     change_plan::{ChangeAction, ChangePlan, ChangeRisk},
     diagnostics::{Diagnostic, DiagnosticSeverity},
     graph::{DependencyGraph, NodeId},
@@ -1072,7 +1073,9 @@ pub fn analyze_text_for_suspects(
                         evidence(source, line_number, kind, line),
                         confidence_for_kind(kind),
                     );
-                } else if !is_noise_token(&mod_id) {
+                } else if !is_noise_token(&mod_id)
+                    && !is_invented_vanilla_resource_mod_id(&mod_id)
+                {
                     add_inferred_suspect(
                         &mut suspects,
                         &mod_id,
@@ -1427,57 +1430,63 @@ pub fn build_hints(signals: &[CrashSignal], suspects: &[SuspectedMod]) -> Vec<Di
         // Prefer ids explicitly marked missing in loader text ("… (sodium), which is missing").
         // Fall back to suspects that are not already in the pack manifest.
         let mut missing_ids: Vec<String> = Vec::new();
+        let push_missing = |ids: &mut Vec<String>, id: String| {
+            if is_invented_vanilla_resource_mod_id(&id) {
+                return;
+            }
+            if !ids.iter().any(|x| x == &id) {
+                ids.push(id);
+            }
+        };
         for signal in signals.iter().filter(|s| s.kind == CrashSignalKind::MissingDependency) {
             for id in extract_missing_dependency_ids(&signal.text) {
-                if !missing_ids.iter().any(|x| x == &id) {
-                    missing_ids.push(id);
-                }
+                push_missing(&mut missing_ids, id);
             }
         }
         if missing_ids.is_empty() {
             for s in suspects.iter().filter(|s| !s.known_in_manifest) {
-                if !missing_ids.iter().any(|x| x == &s.id) {
-                    missing_ids.push(s.id.clone());
-                }
+                push_missing(&mut missing_ids, s.id.clone());
             }
         }
         if missing_ids.is_empty() {
             for s in suspects {
-                if !missing_ids.iter().any(|x| x == &s.id) {
-                    missing_ids.push(s.id.clone());
-                }
+                push_missing(&mut missing_ids, s.id.clone());
             }
         }
 
-        let fixes: Vec<FixAction> = missing_ids
-            .iter()
-            .map(|id| FixAction {
-                kind: "installDependency".into(),
-                label: format!("Install {id}"),
-                mod_id: Some(id.clone()),
-            })
-            .collect();
+        // Only invent Install buttons for real mod ids. Vanilla resource paths
+        // compacted into fake slugs must not surface as missing dependencies.
+        if !missing_ids.is_empty() {
+            let fixes: Vec<FixAction> = missing_ids
+                .iter()
+                .map(|id| FixAction {
+                    kind: "installDependency".into(),
+                    label: format!("Install {id}"),
+                    mod_id: Some(id.clone()),
+                })
+                .collect();
 
-        push(DiagnosisHint {
-            id: "missing-dependency".into(),
-            title: if missing_ids.len() > 1 {
-                format!("{} missing mod dependencies", missing_ids.len())
-            } else {
-                "Missing mod dependency".into()
-            },
-            severity: "high".into(),
-            detail: "One or more mods require another mod that is not installed (or could not be \
-                loaded). The loader reports it as a ModResolutionException / missing dependency."
-                .into(),
-            steps: vec![
-                "Install each missing dependency for the same Minecraft + loader version.".into(),
-                "If the dependency is present, it may be the wrong version — update it.".into(),
-                "For JIJ (jar-in-jar) dependencies, update the parent mod.".into(),
-            ],
-            related_mods: missing_ids.clone(),
-            fix: fixes.first().cloned(),
-            fixes,
-        });
+            push(DiagnosisHint {
+                id: "missing-dependency".into(),
+                title: if missing_ids.len() > 1 {
+                    format!("{} missing mod dependencies", missing_ids.len())
+                } else {
+                    "Missing mod dependency".into()
+                },
+                severity: "high".into(),
+                detail: "One or more mods require another mod that is not installed (or could not be \
+                    loaded). The loader reports it as a ModResolutionException / missing dependency."
+                    .into(),
+                steps: vec![
+                    "Install each missing dependency for the same Minecraft + loader version.".into(),
+                    "If the dependency is present, it may be the wrong version — update it.".into(),
+                    "For JIJ (jar-in-jar) dependencies, update the parent mod.".into(),
+                ],
+                related_mods: missing_ids.clone(),
+                fix: fixes.first().cloned(),
+                fixes,
+            });
+        }
     }
 
     if kinds.contains(&CrashSignalKind::ModVersionMismatch) {
@@ -1922,9 +1931,14 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
 
     // ---- Dependency / version / loader resolution errors ----
     // These are the most actionable crash causes, so they take priority.
-    let is_resolution_error = lower.contains("which is missing")
-        || lower.contains("is missing!")
-        || (lower.contains("missing") && lower.contains("mod"))
+    // Avoid bare `contains("mod")` / `contains("missing mod")` — the latter
+    // matches "missing model" and invents Install minecraftbuiltinentity.
+    let mentions_missing_mod = contains_missing_mod_phrase(&lower)
+        || lower.contains("mod is missing")
+        || lower.contains("mods are missing")
+        || lower.contains("which is missing")
+        || lower.contains("is missing!");
+    let is_resolution_error = mentions_missing_mod
         || lower.contains("missing dependency")
         || lower.contains("could not be loaded")
         || lower.contains("dependency")
@@ -1962,8 +1976,7 @@ fn classify_signal_line(line: &str) -> Option<CrashSignalKind> {
             || lower.contains("conflict");
 
         // Explicit missing-dependency markers win over generic loader checks.
-        if lower.contains("which is missing")
-            || lower.contains("is missing!")
+        if mentions_missing_mod
             || lower.contains("modresolutionexception")
             || lower.contains("missing dependency")
             || lower.contains("could not be loaded")
@@ -2596,7 +2609,11 @@ fn extract_missing_dependency_ids(text: &str) -> Vec<String> {
             if let Some(open) = before.rfind('(') {
                 if let Some(close) = before[open..].find(')') {
                     let id = normalize_token(&before[open + 1..open + close]);
-                    if !id.is_empty() && !is_noise_token(&id) && id.len() >= 2 {
+                    if !id.is_empty()
+                        && !is_noise_token(&id)
+                        && !is_invented_vanilla_resource_mod_id(&id)
+                        && id.len() >= 2
+                    {
                         ids.push(id);
                     }
                 }
@@ -2612,14 +2629,19 @@ fn extract_missing_dependency_ids(text: &str) -> Vec<String> {
                     .next()
                     .unwrap_or("");
                 let id = normalize_token(raw);
-                if !id.is_empty() && !is_noise_token(&id) {
+                if !id.is_empty()
+                    && !is_noise_token(&id)
+                    && !is_invented_vanilla_resource_mod_id(&id)
+                {
                     ids.push(id);
                 }
                 search = &after[raw.len().min(after.len())..];
             }
         }
     }
-    ids.retain(|id| !is_noise_token(id));
+    ids.retain(|id| {
+        !is_noise_token(id) && !is_invented_vanilla_resource_mod_id(id)
+    });
     let mut uniq = Vec::new();
     for id in ids {
         if !uniq.iter().any(|x| x == &id) {
@@ -2698,7 +2720,9 @@ fn extract_named_mods(line: &str) -> Vec<String> {
             }
         }
     }
-    ids.retain(|id| !is_noise_token(id) && id.len() >= 3);
+    ids.retain(|id| {
+        !is_noise_token(id) && id.len() >= 3 && !is_invented_vanilla_resource_mod_id(id)
+    });
     ids
 }
 
@@ -2810,6 +2834,36 @@ fn is_noise_token(token: &str) -> bool {
             | "unknown"
             | "null"
     )
+}
+
+/// True for loader phrases like `missing mod` / `missing mods`, but not
+/// `missing model` (resource/model errors that invent fake install targets).
+fn contains_missing_mod_phrase(lower: &str) -> bool {
+    let mut search = lower;
+    while let Some(idx) = search.find("missing mod") {
+        let after = &search[idx + "missing mod".len()..];
+        let ok = match after.chars().next() {
+            None => true,
+            Some('s') => {
+                // `missing mods` ok; `missing modsFoo` not a real phrase but
+                // treat non-alnum after optional `s` as boundary.
+                let rest = &after[1..];
+                rest.is_empty()
+                    || !rest
+                        .chars()
+                        .next()
+                        .map(|c| c.is_ascii_alphanumeric())
+                        .unwrap_or(false)
+            }
+            Some(c) if !c.is_ascii_alphanumeric() => true,
+            Some(_) => false, // e.g. "missing model"
+        };
+        if ok {
+            return true;
+        }
+        search = &search[idx + 1..];
+    }
+    false
 }
 
 fn validate_report_id(report_id: &str) -> Result<PathBuf, CrashError> {
@@ -3464,6 +3518,68 @@ Failed to load required shader programs:\n\
         assert!(
             !hint.fixes.iter().any(|f| f.mod_id.as_deref() == Some("lithium")),
             "requester lithium must not get an Install button"
+        );
+    }
+
+    #[test]
+    fn missing_model_builtin_entity_does_not_suggest_fake_install() {
+        // `missing` + substring `mod` inside `model` used to classify this as
+        // MissingDependency and invent Install minecraftbuiltinentity.
+        let text = "Missing model 'minecraft:builtin/entity' referenced from: item/foo";
+        let (signals, suspects) =
+            analyze_text_for_suspects(text, "logs/latest.log", &manifest());
+        assert!(
+            !signals
+                .iter()
+                .any(|s| s.kind == CrashSignalKind::MissingDependency),
+            "resource model lines must not be MissingDependency, got {:?}",
+            signals.iter().map(|s| &s.kind).collect::<Vec<_>>()
+        );
+        assert!(
+            !suspects
+                .iter()
+                .any(|s| s.id == "minecraftbuiltinentity"
+                    || crate::action_plan::is_invented_vanilla_resource_mod_id(&s.id)),
+            "must not invent suspects from vanilla resource paths, got {:?}",
+            suspects.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
+
+        let hints = build_hints(&signals, &suspects);
+        assert!(
+            !hints.iter().any(|h| h.id == "missing-dependency"),
+            "must not emit missing-dependency Install hint, got {:?}",
+            hints
+        );
+        assert!(
+            !hints.iter().any(|h| {
+                h.fixes.iter().any(|f| {
+                    f.mod_id
+                        .as_deref()
+                        .is_some_and(crate::action_plan::is_invented_vanilla_resource_mod_id)
+                }) || h
+                    .related_mods
+                    .iter()
+                    .any(|id| crate::action_plan::is_invented_vanilla_resource_mod_id(id))
+            }),
+            "no Install for invented vanilla resource ids"
+        );
+    }
+
+    #[test]
+    fn invented_vanilla_resource_id_filtered_from_missing_dep_extract() {
+        let text = "Mod 'Foo' (foo) requires version 1.0.0 or later of mod 'minecraft:builtin/entity' (minecraft:builtin/entity), which is missing!";
+        let missing = extract_missing_dependency_ids(text);
+        assert!(
+            !missing
+                .iter()
+                .any(|id| crate::action_plan::is_invented_vanilla_resource_mod_id(id)),
+            "extract must drop compacted vanilla paths, got {missing:?}"
+        );
+        assert!(
+            !extract_named_mods(text)
+                .iter()
+                .any(|id| crate::action_plan::is_invented_vanilla_resource_mod_id(id)),
+            "named-mod extract must drop compacted vanilla paths"
         );
     }
 

@@ -82,8 +82,8 @@
   let depPreviewLoading = $state(false);
   let depPreviewSlug = $state("");
   let depPreviewName = $state("");
-  let depPreviewRequired = $state<{ target: string; reason?: string | null }[]>([]);
-  let depPreviewOptional = $state<{ target: string; reason?: string | null }[]>([]);
+  let depPreviewRequired = $state<{ target: string; reason?: string | null; alreadyInstalled?: boolean }[]>([]);
+  let depPreviewOptional = $state<{ target: string; reason?: string | null; alreadyInstalled?: boolean }[]>([]);
   let depPreviewInstallWithOptional = $state(true);
   let depInstallStatus = $state<"idle" | "downloading" | "done" | "failed">("idle");
   let depInstallMessage = $state("");
@@ -339,7 +339,7 @@
   async function hydrateMissingIcons() {
     if (!graph) return;
     const missing = graph.nodes.filter((n) => {
-      if (n.kind !== "Mod") return false;
+      if (!isModOrPackKind(n.kind)) return false;
       if (brokenIcons.has(n.id)) return !!modIconLookupKey(n);
       if (n.metadata?.icon_url) return false;
       return !!modIconLookupKey(n);
@@ -397,11 +397,19 @@
     return id.startsWith("__ghost__");
   }
 
+  function isContentPackKind(kind: string): boolean {
+    return kind === "ResourcePack" || kind === "ShaderPack";
+  }
+
+  function isModOrPackKind(kind: string): boolean {
+    return kind === "Mod" || isContentPackKind(kind);
+  }
+
   function edgeDanger(edge: GraphEdge) {
     if (edge.kind === "Conflicts" || edge.kind === "BreaksWith") {
       const from = nodeById(edge.from);
       const to = nodeById(edge.to);
-      return !!from && !!to && from.kind === "Mod" && to.kind === "Mod";
+      return !!from && !!to && isModOrPackKind(from.kind) && isModOrPackKind(to.kind);
     }
     return edge.kind === "Requires" && !nodeById(edge.to);
   }
@@ -637,9 +645,14 @@
       if (preview) {
         depPreviewName = preview.name ?? depId;
         const depsList = preview.dependencies ?? [];
+        const installed = new Set<string>(preview.installedDependencies ?? []);
         depsList.forEach((dep: any) => {
           const kind = (dep.type ?? "").toLowerCase();
-          const entry = { target: dep.target, reason: dep.reason ?? null };
+          const entry = {
+            target: dep.target,
+            reason: dep.reason ?? null,
+            alreadyInstalled: installed.has(dep.target),
+          };
           if (kind.includes("required") || kind.includes("requires")) {
             depPreviewRequired.push(entry);
           } else {
@@ -789,6 +802,21 @@
     }
     return map;
   })());
+  const missingRequirerIds = $derived(new Set(missingEdges.map((e) => e.from)));
+  /** Who asks for what — used by Missing spotlight side panel. */
+  const missingDemandList = $derived(
+    [...missingDepsByMod.entries()]
+      .map(([fromId, deps]) => ({
+        fromId,
+        fromLabel: resolveNodeLabel(fromId),
+        deps: deps.map((edge) => ({
+          id: edge.to,
+          label: resolveNodeLabel(edge.to),
+          edge,
+        })),
+      }))
+      .sort((a, b) => a.fromLabel.localeCompare(b.fromLabel)),
+  );
   const selectedMissingDeps = $derived(selectedId ? (missingDepsByMod.get(selectedId) ?? []) : []);
 
   function catalogResultFromNode(node: GraphNode) {
@@ -874,8 +902,8 @@
     return (
       !!from &&
       !!to &&
-      from.kind === "Mod" &&
-      to.kind === "Mod"
+      isModOrPackKind(from.kind) &&
+      isModOrPackKind(to.kind)
     );
   }));
 
@@ -972,6 +1000,18 @@
       key: "local",
       label: "Local",
       color: "rgba(148,163,184,0.55)",
+      matches: () => false,
+    },
+    {
+      key: "resourcepacks",
+      label: "Resource packs",
+      color: "rgba(56,189,248,0.55)",
+      matches: () => false,
+    },
+    {
+      key: "shaders",
+      label: "Shaders",
+      color: "rgba(192,132,252,0.55)",
       matches: () => false,
     },
     {
@@ -1146,6 +1186,8 @@
   ];
 
   const modNodes = $derived(nodes.filter((node) => node.kind === "Mod"));
+  const resourcePackNodes = $derived(nodes.filter((node) => node.kind === "ResourcePack"));
+  const shaderPackNodes = $derived(nodes.filter((node) => node.kind === "ShaderPack"));
   /// Side-panel grouping: mods bucketed by the same human categories used for
   /// the graph clusters, so the list reads top-to-bottom like the canvas.
   const groupedMods = $derived((() => {
@@ -1168,7 +1210,12 @@
         nodes: bucket.nodes.slice().sort((x, y) => x.label.localeCompare(y.label)),
       }));
   })());
-  const platformNodes = $derived(nodes.filter((node) => node.kind !== "Mod" && node.kind !== "Profile" && node.kind !== "Missing"));
+  const platformNodes = $derived(nodes.filter((node) =>
+    node.kind !== "Mod" &&
+    node.kind !== "Profile" &&
+    node.kind !== "Missing" &&
+    !isContentPackKind(node.kind)
+  ));
   const profileNodes = $derived(nodes.filter((node) => node.kind === "Profile"));
 
   // Synthesize ghost nodes for any edge endpoint that has no real node. This
@@ -1230,7 +1277,9 @@
   })());
   const hasMissingSpotlight = $derived(missingSpotlightIds.size > 0);
   const displayNodes = $derived([
-    ...nodes.filter((n) => n.kind === "Mod"),
+    ...modNodes,
+    ...resourcePackNodes,
+    ...shaderPackNodes,
     ...platformNodes,
     ...ghostNodes,
   ]);
@@ -1258,24 +1307,32 @@
       .filter(([, count]) => count >= HUB_FAN_IN_THRESHOLD)
       .map(([id]) => id),
   ));
-  const renderedEdges = $derived(showAllEdges
-    ? displayEdges
-    : displayEdges.filter((e) => {
-        // Pure runtime links (loader/minecraft/java) — only for the selected node.
-        if (RUNTIME_EDGE_KINDS.includes(e.kind)) {
-          return !!selectedId && (e.from === selectedId || e.to === selectedId);
-        }
-        // Hub fan-in (everything → fabric-api etc.) — hide unless selected.
-        if (e.kind === "Requires" && hubTargetIds.has(e.to)) {
-          return !!selectedId && (e.from === selectedId || e.to === selectedId);
-        }
-        // Optional integrations across the whole pack drown the canvas; keep
-        // them only when a node is selected or when the user opts into "All edges".
-        if (e.kind === "Optional") {
-          return !!selectedId && (e.from === selectedId || e.to === selectedId);
-        }
-        return true;
-      }));
+  const renderedEdges = $derived.by(() => {
+    const base = showAllEdges
+      ? displayEdges
+      : displayEdges.filter((e) => {
+          // Pure runtime links (loader/minecraft/java) — only for the selected node.
+          if (RUNTIME_EDGE_KINDS.includes(e.kind)) {
+            return !!selectedId && (e.from === selectedId || e.to === selectedId);
+          }
+          // Hub fan-in (everything → fabric-api etc.) — hide unless selected.
+          if (e.kind === "Requires" && hubTargetIds.has(e.to)) {
+            return !!selectedId && (e.from === selectedId || e.to === selectedId);
+          }
+          // Optional integrations across the whole pack drown the canvas; keep
+          // them only when a node is selected or when the user opts into "All edges".
+          if (e.kind === "Optional") {
+            return !!selectedId && (e.from === selectedId || e.to === selectedId);
+          }
+          return true;
+        });
+    // Missing spotlight must always draw requirer → missing edges, even when the
+    // missing target is a hub (normally filtered) so "who needs what" is visible.
+    if (highlightMode !== "missing" || missingEdges.length === 0) return base;
+    const keys = new Set(base.map((e) => `${e.from}:${e.to}:${e.kind}`));
+    const extra = missingEdges.filter((e) => !keys.has(`${e.from}:${e.to}:${e.kind}`));
+    return extra.length > 0 ? [...base, ...extra] : base;
+  });
 
   async function hydrateGhostNodes() {
     if (!$projectPath || !graph) return;
@@ -1400,7 +1457,10 @@
   }
 
   function toggleHighlight(mode: "conflicts" | "missing") {
-    highlightMode = highlightMode === mode ? null : mode;
+    const next = highlightMode === mode ? null : mode;
+    highlightMode = next;
+    // Clear selection so selection-dimming does not hide other requirer→dep links.
+    if (next) selectedId = null;
   }
 
   function nodeGroupKey(id: string): string | null {
@@ -1422,7 +1482,7 @@
     if (highlightMode === "conflicts") {
       return conflictEdges.some((e) => e.from === nodeId || e.to === nodeId);
     }
-    if (kind === "Missing") return true;
+    // Requirers (edge.from) + missing targets (edge.to / ghosts).
     return missingSpotlightIds.has(nodeId);
   }
 
@@ -1433,10 +1493,32 @@
         (e) => (e.from === from && e.to === to) || (e.from === to && e.to === from),
       );
     }
-    return (
-      missingEdges.some((e) => e.from === from && e.to === to) ||
-      (missingSpotlightIds.has(from) && missingSpotlightIds.has(to))
-    );
+    // Strict: only the actual "installed mod → missing dep" edges.
+    return missingEdges.some((e) => e.from === from && e.to === to);
+  }
+
+  /** When a spotlight is on, only that set dims; ignore selection/hover dimming. */
+  function nodeIsDimmed(node: { id: string; kind: string; groupKey?: string }): boolean {
+    if (highlightMode) return !nodeInHighlight(node.id, node.kind);
+    if (selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) {
+      return true;
+    }
+    if (
+      hoveredGroup !== null &&
+      node.groupKey !== hoveredGroup &&
+      node.groupKey !== "core" &&
+      node.groupKey !== "runtime"
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function edgeIsDimmed(from: string, to: string, kind: string, danger: boolean): boolean {
+    if (highlightMode) return !edgeInHighlight(from, to, kind, danger);
+    if (selectedId && from !== selectedId && to !== selectedId) return true;
+    if (!edgeInHoveredGroup(from, to)) return true;
+    return false;
   }
 
   let canvasWidth = $state(1600);
@@ -1567,6 +1649,14 @@
     const slug = id.replace(/^mod:/, "").replace(/^__ghost__/, "");
     const text = `${slug} ${label}`;
     const cats = nodeCategories(node);
+    const contentType = (node.metadata?.content_type ?? "").toLowerCase();
+
+    if (node.kind === "ResourcePack" || contentType === "resourcepack") {
+      return MOD_GROUPS.find((g) => g.key === "resourcepacks")!;
+    }
+    if (node.kind === "ShaderPack" || contentType === "shader") {
+      return MOD_GROUPS.find((g) => g.key === "shaders")!;
+    }
 
     if ((node.metadata?.source ?? "").toLowerCase() === "local") {
       return MOD_GROUPS.find((g) => g.key === "local")!;
@@ -1767,6 +1857,8 @@
       const isGhost = node.kind === "Missing";
       let tone: string;
       if (isGhost) tone = "ghost";
+      else if (node.kind === "ResourcePack") tone = "resourcepack";
+      else if (node.kind === "ShaderPack") tone = "shader";
       else if (node.kind === "Mod") tone = depNodeIds.has(node.id) ? "dep" : String(node.side ?? "both").toLowerCase();
       else if (node.kind === "Profile") tone = "profile";
       else tone = "runtime";
@@ -2417,7 +2509,7 @@
           class:active={highlightMode === "missing"}
           disabled={!hasMissingSpotlight}
           onclick={() => toggleHighlight("missing")}
-          title="Spotlight missing dependencies (high contrast)"
+          title="Spotlight missing deps and show which mod requires each"
         >
           <AlertTriangle size={14} /> Missing
         </button>
@@ -2446,7 +2538,10 @@
               <span class="legend-row"><i class="lg-dot server"></i> Server</span>
               <span class="legend-row"><i class="lg-dot both"></i> Both</span>
               <span class="legend-row"><i class="lg-dot dep"></i> Dependency</span>
+              <span class="legend-row"><i class="lg-dot resourcepack"></i> Resource pack</span>
+              <span class="legend-row"><i class="lg-dot shader"></i> Shader</span>
               <span class="legend-row"><i class="lg-dot missing"></i> Missing</span>
+              <span class="legend-row"><i class="lg-dot requirer"></i> Needs missing</span>
             </div>
             <div class="legend-block legend-groups">
               <span class="legend-title">Clusters</span>
@@ -2541,7 +2636,7 @@
             class:optional-edge={ep.kind === "Optional"}
             class:hub-edge={ep.hub && !ep.danger}
             class:runtime-edge={["RequiresLoader", "RequiresMinecraft", "RequiresJava"].includes(ep.kind)}
-            class:dimmed={(selectedId && ep.from !== selectedId && ep.to !== selectedId) || !edgeInHoveredGroup(ep.from, ep.to) || !edgeInHighlight(ep.from, ep.to, ep.kind, ep.danger)}
+            class:dimmed={edgeIsDimmed(ep.from, ep.to, ep.kind, ep.danger)}
             class:spotlight={inHl}
             class:spotlight-conflicts={inHl && highlightMode === "conflicts"}
             class:spotlight-missing={inHl && highlightMode === "missing"}
@@ -2569,15 +2664,17 @@
           {@const isInstalledDep = node.kind === "Mod" && depNodeIds.has(node.id)}
           {@const isClickableDep = isGhost || isInstalledDep}
           {@const inHl = !!highlightMode && nodeInHighlight(node.id, node.kind)}
+          {@const isMissingRequirer = highlightMode === "missing" && missingRequirerIds.has(node.id)}
           <g
             use:registerNode={node}
             class="svg-node tone-{node.tone}"
             class:selected={selectedId === node.id}
             class:clickable-dep={isInstalledDep}
-            class:dimmed={(selectedId && selectedId !== node.id && !selectedEdges.some((e) => e.from === node.id || e.to === node.id)) || (hoveredGroup !== null && node.groupKey !== hoveredGroup && node.groupKey !== "core" && node.groupKey !== "runtime") || !nodeInHighlight(node.id, node.kind)}
+            class:dimmed={nodeIsDimmed(node)}
             class:spotlight={inHl}
             class:spotlight-conflicts={inHl && highlightMode === "conflicts"}
             class:spotlight-missing={inHl && highlightMode === "missing"}
+            class:spotlight-requirer={isMissingRequirer}
             role="button"
             tabindex="0"
             onpointerdown={(e) => handleNodeMouseDown(e, node)}
@@ -2643,9 +2740,9 @@
               {/if}
             {/if}
             {#if isGhost}
-              <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {node.label.length > 14 ? node.label.slice(0, 13) + "…" : node.label}</text>
+              <text class="ghost-download" y={half + 14} text-anchor="middle">⬇ {selectedId === node.id || node.label.length <= 14 ? node.label : node.label.slice(0, 13) + "…"}</text>
             {:else}
-              <text class="node-label-text" y={half + 14} text-anchor="middle">{node.label.length > 18 ? node.label.slice(0, 17) + "…" : node.label}</text>
+              <text class="node-label-text" y={half + 14} text-anchor="middle">{selectedId === node.id || node.label.length <= 18 ? node.label : node.label.slice(0, 17) + "…"}</text>
               <g class="remove-btn" role="button" tabindex="-1" aria-label="Remove mod" onpointerdown={(e) => e.stopPropagation()} onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") removeConflictNode(node.id); } }>
                 <circle cx={half - 2} cy={-half + 2} r="8" />
                 <text x={half - 2} y={-half + 6} text-anchor="middle" class="remove-x">×</text>
@@ -2665,19 +2762,72 @@
     <aside class="details" aria-label="Selected node">
         <div class="details-header">
           <div>
-            <span class="eyebrow">Selected node</span>
-            {#if selected}
+            <span class="eyebrow">{highlightMode === "missing" ? "Missing map" : "Selected node"}</span>
+            {#if highlightMode === "missing"}
+              <h2>{missingDemandList.length} mod{missingDemandList.length === 1 ? "" : "s"} need deps</h2>
+            {:else if selected}
               <h2>{selected.label}</h2>
             {:else}
               <h2 class="details-placeholder">None selected</h2>
             {/if}
           </div>
-          {#if selected}
+          {#if highlightMode === "missing"}
+            <span class="tag missing-tag">Missing</span>
+          {:else if selected}
             <span class="tag">{selected.kind}</span>
           {/if}
         </div>
 
-        {#if selected}
+        {#if highlightMode === "missing"}
+          {#if missingDemandList.length === 0}
+            <div class="muted-box subtle-hint">
+              <Info size={15} />
+              <span>No installed mod → missing dependency links found.</span>
+            </div>
+          {:else}
+            <p class="missing-map-hint">Solid amber = mod that asks · dashed = missing dep · arrow = requires</p>
+            <div class="missing-map">
+              {#each missingDemandList as row (row.fromId)}
+                <div class="missing-map-row" class:active={selectedId === row.fromId || row.deps.some((d) => d.id === selectedId)}>
+                  <button
+                    type="button"
+                    class="missing-map-mod"
+                    class:active={selectedId === row.fromId}
+                    title="Focus {row.fromLabel}"
+                    onclick={() => (selectedId = row.fromId)}
+                  >
+                    <strong>{row.fromLabel}</strong>
+                    <span>needs {row.deps.length}</span>
+                  </button>
+                  <ul class="missing-map-deps">
+                    {#each row.deps as dep (dep.id)}
+                      <li>
+                        <button
+                          type="button"
+                          class="missing-map-dep"
+                          class:active={selectedId === dep.id}
+                          title="Focus {dep.label}"
+                          onclick={() => (selectedId = dep.id)}
+                        >
+                          {dep.label}
+                        </button>
+                        <button
+                          type="button"
+                          class="secondary mini"
+                          title="Install {dep.label}"
+                          onclick={() => installGhostNode(dep.id)}
+                          disabled={resolving}
+                        >
+                          <Download size={12} />
+                        </button>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {:else if selected}
           <div class="details-actions">
             {#if catalogResultFromNode(selected)}
               <button type="button" class="secondary mini details-action-btn" onclick={openSelectedInLauncher}>
@@ -2690,8 +2840,8 @@
                 <Download size={16} />
                 {resolving ? "Installing..." : "Install from Modrinth"}
               </button>
-            {:else if selected.kind === "Mod"}
-              {#if depNodeIds.has(selected.id)}
+            {:else if isModOrPackKind(selected.kind)}
+              {#if selected.kind === "Mod" && depNodeIds.has(selected.id)}
                 <button class="secondary mini details-action-btn" onclick={downloadMissingFiles} disabled={resolving}>
                   <Download size={14} />
                   Re-download files
@@ -2705,7 +2855,11 @@
               {/if}
               <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
                 <X size={16} />
-                Remove mod
+                {selected.kind === "ResourcePack"
+                  ? "Remove resource pack"
+                  : selected.kind === "ShaderPack"
+                    ? "Remove shader"
+                    : "Remove mod"}
               </button>
             {:else}
               <button class="remove-btn-panel" onclick={() => removeConflictNode(selected.id)} disabled={resolving}>
@@ -2827,7 +2981,7 @@
         {showNodeList ? "Hide list" : "Show list"}
         {#if !showNodeList}
           <span class="list-toggle-meta">
-            ({modNodes.length} mod{modNodes.length === 1 ? "" : "s"}{ghostNodes.length > 0 ? `, ${ghostNodes.length} missing` : ""})
+            ({modNodes.length} mod{modNodes.length === 1 ? "" : "s"}{resourcePackNodes.length > 0 ? `, ${resourcePackNodes.length} resource pack${resourcePackNodes.length === 1 ? "" : "s"}` : ""}{shaderPackNodes.length > 0 ? `, ${shaderPackNodes.length} shader${shaderPackNodes.length === 1 ? "" : "s"}` : ""}{ghostNodes.length > 0 ? `, ${ghostNodes.length} missing` : ""})
           </span>
         {/if}
       </button>
@@ -2837,6 +2991,155 @@
     <div class="graph-list">
       <section class="node-column mods-column">
         <h3><Box size={16} /> Mods ({modNodes.length})</h3>
+
+        {#if ghostNodes.length > 0}
+          <div class="missing-column">
+            <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
+            <p class="column-hint">Click or right-click a row to install from Modrinth.</p>
+            <div class="mod-grid">
+              {#each ghostNodes as node (node.id)}
+                {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
+                <div
+                  class="node-card compact missing-card"
+                  class:selected={selectedId === node.id}
+                  role="button"
+                  tabindex="0"
+                  title="Install {node.label}"
+                  onclick={() => installGhostNode(node.id)}
+                  oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                  onkeydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
+                >
+                  {#if icon}
+                    <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
+                  {:else}
+                    <span class="card-icon-fallback missing-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                  {/if}
+                  <div class="card-text">
+                    <span class="node-label">{node.label}</span>
+                    <span class="node-meta">{ghostMeta[node.id]?.description ?? "Required · not installed"}</span>
+                  </div>
+                  <button
+                    class="card-install-btn"
+                    type="button"
+                    title="Install {node.label}"
+                    onclick={(e) => { e.stopPropagation(); installGhostNode(node.id); } }
+                    disabled={resolving}
+                  >
+                    <Download size={14} strokeWidth={2.25} />
+                    <span>Install</span>
+                  </button>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        {#if shaderPackNodes.length > 0}
+          <div class="pack-column">
+            <h3>Shaders ({shaderPackNodes.length})</h3>
+            <div class="mod-grid">
+              {#each shaderPackNodes.slice().sort((a, b) => a.label.localeCompare(b.label)) as node (node.id)}
+                {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
+                {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
+                <div
+                  class="node-card compact shader-card"
+                  class:selected={selectedId === node.id}
+                  role="button"
+                  tabindex="0"
+                  onclick={() => (selectedId = node.id)}
+                  oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                  onkeydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
+                >
+                  {#if icon}
+                    <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
+                  {:else}
+                    <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                  {/if}
+                  <div class="card-text">
+                    <span class="node-label">{node.label}</span>
+                    <span class="node-meta">{node.version ?? "unknown"}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
+                  </div>
+                  {#if missingDeps.length > 0}
+                    <div class="card-missing-list">
+                      {#each missingDeps as edge (edge.to)}
+                        <button
+                          class="card-install-btn"
+                          type="button"
+                          title="Install {resolveNodeLabel(edge.to)}"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void installSingleMissingDep(edge);
+                          }}
+                          disabled={resolving}
+                        >
+                          <Download size={14} strokeWidth={2.25} />
+                          <span>Install {resolveNodeLabel(edge.to)}</span>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                  <span class="card-remove" role="button" tabindex="0" title="Remove shader" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") void removeConflictNode(node.id); } }>
+                    <X size={14} />
+                  </span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
+        {#if resourcePackNodes.length > 0}
+          <div class="pack-column">
+            <h3>Resource packs ({resourcePackNodes.length})</h3>
+            <div class="mod-grid">
+              {#each resourcePackNodes.slice().sort((a, b) => a.label.localeCompare(b.label)) as node (node.id)}
+                {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
+                {@const missingDeps = missingDepsByMod.get(node.id) ?? []}
+                <div
+                  class="node-card compact resourcepack-card"
+                  class:selected={selectedId === node.id}
+                  role="button"
+                  tabindex="0"
+                  onclick={() => (selectedId = node.id)}
+                  oncontextmenu={(e) => onNodeContextInstall(e, node)}
+                  onkeydown={(event) => (event.key === "Enter" || event.key === " ") && (selectedId = node.id)}
+                >
+                  {#if icon}
+                    <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
+                  {:else}
+                    <span class="card-icon-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
+                  {/if}
+                  <div class="card-text">
+                    <span class="node-label">{node.label}</span>
+                    <span class="node-meta">{node.version ?? "unknown"}{missingDeps.length > 0 ? ` · ${missingDeps.length} missing` : ""}</span>
+                  </div>
+                  {#if missingDeps.length > 0}
+                    <div class="card-missing-list">
+                      {#each missingDeps as edge (edge.to)}
+                        <button
+                          class="card-install-btn"
+                          type="button"
+                          title="Install {resolveNodeLabel(edge.to)}"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            void installSingleMissingDep(edge);
+                          }}
+                          disabled={resolving}
+                        >
+                          <Download size={14} strokeWidth={2.25} />
+                          <span>Install {resolveNodeLabel(edge.to)}</span>
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                  <span class="card-remove" role="button" tabindex="0" title="Remove resource pack" onclick={(e) => { e.stopPropagation(); removeConflictNode(node.id); } } onkeydown={(e) => { e.stopPropagation(); if (e.key === "Enter") void removeConflictNode(node.id); } }>
+                    <X size={14} />
+                  </span>
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+
         {#if modNodes.length === 0}
           <div class="muted-box">No mod nodes yet.</div>
         {:else}
@@ -2930,48 +3233,6 @@
             </div>
           {/each}
         {/if}
-
-      {#if ghostNodes.length > 0}
-        <div class="missing-column">
-          <h3><Download size={16} /> Missing dependencies ({ghostNodes.length})</h3>
-          <p class="column-hint">Click or right-click a row to install from Modrinth.</p>
-          <div class="mod-grid">
-            {#each ghostNodes as node (node.id)}
-              {@const icon = !brokenIcons.has(node.id) ? nodeIconUrl(node) : null}
-              <div
-                class="node-card compact missing-card"
-                class:selected={selectedId === node.id}
-                role="button"
-                tabindex="0"
-                title="Install {node.label}"
-                onclick={() => installGhostNode(node.id)}
-                oncontextmenu={(e) => onNodeContextInstall(e, node)}
-                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && installGhostNode(node.id)}
-              >
-                {#if icon}
-                  <img class="card-icon" src={icon} alt="" loading="lazy" onerror={() => handleIconError(node)} />
-                {:else}
-                  <span class="card-icon-fallback missing-fallback">{node.label?.[0]?.toUpperCase() ?? "?"}</span>
-                {/if}
-                <div class="card-text">
-                  <span class="node-label">{node.label}</span>
-                  <span class="node-meta">{ghostMeta[node.id]?.description ?? "Required · not installed"}</span>
-                </div>
-                <button
-                  class="card-install-btn"
-                  type="button"
-                  title="Install {node.label}"
-                  onclick={(e) => { e.stopPropagation(); installGhostNode(node.id); } }
-                  disabled={resolving}
-                >
-                  <Download size={14} strokeWidth={2.25} />
-                  <span>Install</span>
-                </button>
-              </div>
-            {/each}
-          </div>
-        </div>
-      {/if}
       </section>
     </div>
     {/if}
@@ -3075,26 +3336,38 @@
           <div class="loading"><Loader2 size={16} class="spin" /> Loading dependency info from Modrinth...</div>
         {:else}
           <div class="dep-list">
-            <h4>Required ({depPreviewRequired.length})</h4>
+            <h4>
+              Required ({depPreviewRequired.length})
+              {#if depPreviewRequired.some((d) => d.alreadyInstalled)}
+                <span class="dep-installed-count">{depPreviewRequired.filter((d) => d.alreadyInstalled).length} already installed</span>
+              {/if}
+            </h4>
             {#if depPreviewRequired.length === 0}
               <p class="muted">No hard dependencies — installing the mod alone should work.</p>
             {:else}
               {#each depPreviewRequired as dep (dep.target)}
-                <div class="dep-entry required">
+                <div class="dep-entry required" class:already-installed={dep.alreadyInstalled}>
                   <span class="dep-target">{dep.target}</span>
+                  {#if dep.alreadyInstalled}<span class="dep-installed-pill">Installed</span>{/if}
                   {#if dep.reason}<small>{dep.reason}</small>{/if}
                 </div>
               {/each}
             {/if}
           </div>
           <div class="dep-list">
-            <h4>Optional ({depPreviewOptional.length})</h4>
+            <h4>
+              Optional ({depPreviewOptional.length})
+              {#if depPreviewOptional.some((d) => d.alreadyInstalled)}
+                <span class="dep-installed-count">{depPreviewOptional.filter((d) => d.alreadyInstalled).length} already installed</span>
+              {/if}
+            </h4>
             {#if depPreviewOptional.length === 0}
               <p class="muted">No optional dependencies listed.</p>
             {:else}
               {#each depPreviewOptional as dep (dep.target)}
-                <div class="dep-entry optional">
+                <div class="dep-entry optional" class:already-installed={dep.alreadyInstalled}>
                   <span class="dep-target">{dep.target}</span>
+                  {#if dep.alreadyInstalled}<span class="dep-installed-pill">Installed</span>{/if}
                   {#if dep.reason}<small>{dep.reason}</small>{/if}
                 </div>
               {/each}
@@ -3551,6 +3824,18 @@
     fill: rgba(245, 158, 11, 0.2);
   }
 
+  /* Installed mod that requires a missing dep — solid amber (vs dashed missing). */
+  .svg-node.spotlight-requirer:not(.dimmed) rect {
+    stroke: #f59e0b;
+    stroke-width: 3.5;
+    stroke-dasharray: none;
+    fill: rgba(245, 158, 11, 0.28);
+  }
+
+  .svg-node.spotlight-requirer:not(.dimmed) .node-label-text {
+    fill: #fde68a;
+  }
+
   .svg-node .spotlight-ring {
     fill: none;
     pointer-events: none;
@@ -3701,7 +3986,10 @@
   .lg-dot.server { border-color: rgba(59,130,246,.8); }
   .lg-dot.both { border-color: color-mix(in srgb, var(--accent-primary) 80%, transparent); }
   .lg-dot.dep { border-color: rgba(245,158,11,.8); border-style: dashed; }
+  .lg-dot.resourcepack { border-color: #38bdf8; }
+  .lg-dot.shader { border-color: #c084fc; }
   .lg-dot.missing { border-color: rgba(113,113,122,.9); border-style: dashed; }
+  .lg-dot.requirer { border-color: #f59e0b; border-style: solid; background: rgba(245,158,11,.25); }
   .legend-groups { max-width: 240px; }
   .legend-chip {
     display: inline-flex; align-items: center;
@@ -3799,6 +4087,14 @@
   .svg-node.tone-both rect { stroke: color-mix(in srgb, var(--accent-primary) 65%, transparent); }
   .svg-node.tone-runtime rect { stroke: rgba(245,158,11,.7); }
   .svg-node.tone-profile rect { stroke: rgba(96,165,250,.7); }
+  .svg-node.tone-resourcepack rect {
+    stroke: #38bdf8;
+    fill: rgba(14, 116, 144, 0.22);
+  }
+  .svg-node.tone-shader rect {
+    stroke: #c084fc;
+    fill: rgba(126, 34, 168, 0.22);
+  }
   .svg-node.tone-ghost rect {
     stroke: rgba(113, 113, 122, 0.9);
     stroke-dasharray: 4 3;
@@ -4006,9 +4302,9 @@
   }
 
   .missing-column {
-    border-top: 1px solid var(--border-color);
-    padding-top: 14px;
-    margin-top: 14px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 14px;
+    margin-bottom: 14px;
   }
   .column-hint {
     color: var(--text-muted);
@@ -4023,6 +4319,27 @@
   .missing-card:hover {
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  }
+  .pack-column {
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 14px;
+    margin-bottom: 14px;
+  }
+  .shader-card {
+    border-color: rgba(192, 132, 252, 0.55);
+    background: rgba(126, 34, 168, 0.12);
+  }
+  .shader-card:hover {
+    border-color: #c084fc;
+    background: rgba(126, 34, 168, 0.2);
+  }
+  .resourcepack-card {
+    border-color: rgba(56, 189, 248, 0.55);
+    background: rgba(14, 116, 144, 0.12);
+  }
+  .resourcepack-card:hover {
+    border-color: #38bdf8;
+    background: rgba(14, 116, 144, 0.2);
   }
   .missing-fallback {
     background: linear-gradient(135deg, #27272a, #18181b);
@@ -4339,6 +4656,12 @@
     white-space: nowrap;
   }
 
+  .node-card.selected .node-label {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+  }
+
   .node-meta {
     color: var(--text-muted);
     font-size: 12px;
@@ -4461,6 +4784,103 @@
     font-size: 11px;
     font-weight: 800;
     text-transform: uppercase;
+  }
+
+  .tag.missing-tag {
+    background: rgba(245, 158, 11, 0.18);
+    color: #fbbf24;
+  }
+
+  .missing-map-hint {
+    margin: 0 0 12px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+
+  .missing-map {
+    display: grid;
+    gap: 10px;
+  }
+
+  .missing-map-row {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-md);
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+  }
+
+  .missing-map-row.active {
+    border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+    background: rgba(245, 158, 11, 0.08);
+  }
+
+  .missing-map-mod {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .missing-map-mod strong {
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .missing-map-mod span {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #fbbf24;
+    font-weight: 700;
+  }
+
+  .missing-map-mod.active strong,
+  .missing-map-dep.active {
+    color: #fde68a;
+  }
+
+  .missing-map-deps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+  }
+
+  .missing-map-deps li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .missing-map-dep {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px dashed rgba(251, 191, 36, 0.45);
+    background: rgba(251, 191, 36, 0.06);
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .missing-map-dep:hover,
+  .missing-map-mod:hover strong {
+    color: var(--text-primary);
   }
 
   .kv {
@@ -4663,6 +5083,10 @@
   .dep-list { margin-bottom: 14px; }
   .dep-list h4 { font-size: 13px; margin: 0 0 8px; color: var(--text-secondary); }
   .dep-entry {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 0;
     padding: 8px 10px;
     border-radius: var(--border-radius-sm);
     margin-bottom: 4px;
@@ -4671,8 +5095,28 @@
   }
   .dep-entry.required { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); border-left-color: color-mix(in srgb, var(--accent-primary) 60%, transparent); }
   .dep-entry.optional { background: rgba(245,158,11,0.08); border-left-color: rgba(245,158,11,0.6); }
+  .dep-entry.already-installed { opacity: 0.72; }
   .dep-target { font-weight: 600; }
-  .dep-entry small { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .dep-entry small { flex-basis: 100%; display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+  .dep-installed-pill {
+    margin-left: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--success, #22c55e);
+    background: color-mix(in srgb, var(--success, #22c55e) 16%, transparent);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .dep-installed-count {
+    margin-left: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+  }
   .checkbox-row {
     display: flex;
     align-items: center;

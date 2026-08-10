@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// Schema version for cache invalidation. Increment when the cache format or
 /// enrichment logic changes so old caches are rebuilt automatically.
-const CACHE_VERSION: u32 = 3;
+const CACHE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

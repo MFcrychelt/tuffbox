@@ -610,7 +610,7 @@ fn is_invented_mod_path(path: Option<&str>) -> bool {
 
 /// Compacted vanilla resource locations mistaken for Modrinth slugs
 /// (`minecraft:builtin/entity` → `minecraftbuiltinentity`).
-fn is_invented_vanilla_resource_mod_id(id: &str) -> bool {
+pub fn is_invented_vanilla_resource_mod_id(id: &str) -> bool {
     let compact: String = id
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())

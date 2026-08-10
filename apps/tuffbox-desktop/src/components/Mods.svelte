@@ -96,6 +96,7 @@ import { trapFocus } from "../lib/focusTrap";
     fileName?: string | null;
     side: string;
     dependencies: { type: string; target: string; versionConstraint?: string | null; reason?: string | null }[];
+    installedDependencies?: string[];
     dependents?: { id: string; slug: string; name: string }[];
   };
 
@@ -2475,6 +2476,23 @@ import { trapFocus } from "../lib/focusTrap";
     return (preview?.dependencies ?? []).filter((dep) => depKind(dep).includes("optional"));
   }
 
+  function installedDepTargets(preview: InstallPreview | null | undefined): Set<string> {
+    return new Set(preview?.installedDependencies ?? []);
+  }
+
+  function isDepAlreadyInstalled(preview: InstallPreview | null | undefined, target: string): boolean {
+    if (installedDepTargets(preview).has(target)) return true;
+    // Fallback: match against currently loaded mod list (slug / project id).
+    return mods.some((m) => m.id === target || m.projectId === target || m.projectId === String(target));
+  }
+
+  function countInstalledAmong(
+    preview: InstallPreview | null | undefined,
+    deps: { target: string }[],
+  ): number {
+    return deps.filter((dep) => isDepAlreadyInstalled(preview, dep.target)).length;
+  }
+
   function matchesInstalledQuery(m: ModRow, q: string): boolean {
     if (!q) return true;
     const haystacks = [m.name, m.id, m.version, m.fileName, m.projectId];
@@ -3721,36 +3739,55 @@ import { trapFocus } from "../lib/focusTrap";
               <span class="plan-slug">({previews[pendingInstall.id]?.slug ?? pendingInstall.slug})</span>
             </h3>
             {#if previews[pendingInstall.id]}
+              {@const pendingPreview = previews[pendingInstall.id]}
+              {@const pendingRequired = requiredDeps(pendingPreview)}
+              {@const pendingOptional = optionalDeps(pendingPreview)}
+              {@const pendingRequiredInstalled = countInstalledAmong(pendingPreview, pendingRequired)}
+              {@const pendingOptionalInstalled = countInstalledAmong(pendingPreview, pendingOptional)}
               <div class="dep-list">
-                <h4>Required ({requiredDeps(previews[pendingInstall.id]).length})</h4>
-                {#if requiredDeps(previews[pendingInstall.id]).length === 0}
+                <h4>
+                  Required ({pendingRequired.length})
+                  {#if pendingRequiredInstalled > 0}
+                    <span class="dep-installed-count">{pendingRequiredInstalled} already installed</span>
+                  {/if}
+                </h4>
+                {#if pendingRequired.length === 0}
                   <p class="muted">No hard dependencies.</p>
                 {:else}
-                  {#each requiredDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
-                    <div class="dep-entry required">
+                  {#each pendingRequired as dep (`${dep.type}:${dep.target}`)}
+                    {@const already = isDepAlreadyInstalled(pendingPreview, dep.target)}
+                    <div class="dep-entry required" class:already-installed={already}>
                       <span class="dep-target">{dep.target}</span>
+                      {#if already}<span class="dep-installed-pill">Installed</span>{/if}
                       {#if dep.reason}<small>{dep.reason}</small>{/if}
                     </div>
                   {/each}
                 {/if}
               </div>
               <div class="dep-list">
-                <h4>Optional ({optionalDeps(previews[pendingInstall.id]).length})</h4>
-                {#if optionalDeps(previews[pendingInstall.id]).length === 0}
+                <h4>
+                  Optional ({pendingOptional.length})
+                  {#if pendingOptionalInstalled > 0}
+                    <span class="dep-installed-count">{pendingOptionalInstalled} already installed</span>
+                  {/if}
+                </h4>
+                {#if pendingOptional.length === 0}
                   <p class="muted">No optional dependencies.</p>
                 {:else}
-                  {#each optionalDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
-                    <div class="dep-entry optional">
+                  {#each pendingOptional as dep (`${dep.type}:${dep.target}`)}
+                    {@const already = isDepAlreadyInstalled(pendingPreview, dep.target)}
+                    <div class="dep-entry optional" class:already-installed={already}>
                       <span class="dep-target">{dep.target}</span>
+                      {#if already}<span class="dep-installed-pill">Installed</span>{/if}
                       {#if dep.reason}<small>{dep.reason}</small>{/if}
                     </div>
                   {/each}
                 {/if}
               </div>
-              {#if (previews[pendingInstall.id]?.dependents?.length ?? 0) > 0}
+              {#if (pendingPreview?.dependents?.length ?? 0) > 0}
                 <div class="dep-list">
-                  <h4>Used by on Modrinth ({previews[pendingInstall.id]?.dependents?.length})</h4>
-                  {#each previews[pendingInstall.id]?.dependents ?? [] as dep (dep.id)}
+                  <h4>Used by on Modrinth ({pendingPreview?.dependents?.length})</h4>
+                  {#each pendingPreview?.dependents ?? [] as dep (dep.id)}
                     <div class="dep-entry optional">
                       <span class="dep-target">{dep.name}</span>
                       <small>{dep.slug}</small>
@@ -3758,12 +3795,20 @@ import { trapFocus } from "../lib/focusTrap";
                   {/each}
                 </div>
               {/if}
-              <p class="muted">Required dependencies install automatically. Optional are listed for reference only.</p>
-              {#if conflictDeps(previews[pendingInstall.id]).length}
+              <p class="muted">
+                {#if pendingRequiredInstalled > 0 && pendingRequiredInstalled === pendingRequired.length && pendingRequired.length > 0}
+                  All required dependencies are already installed — only this mod will be downloaded.
+                {:else if pendingRequiredInstalled > 0}
+                  Already installed dependencies will be skipped. Remaining required ones install automatically.
+                {:else}
+                  Required dependencies install automatically. Optional are listed for reference only.
+                {/if}
+              </p>
+              {#if conflictDeps(pendingPreview).length}
                 <div class="conflict-warning">
                   <strong><AlertTriangle size={14} /> Conflict warning</strong>
                   <span>This project declares incompatible dependencies. Review before installing.</span>
-                  {#each conflictDeps(previews[pendingInstall.id]) as dep (`${dep.type}:${dep.target}`)}
+                  {#each conflictDeps(pendingPreview) as dep (`${dep.type}:${dep.target}`)}
                     <code>{dep.type}:{dep.target}</code>
                   {/each}
                 </div>
@@ -4064,13 +4109,22 @@ import { trapFocus } from "../lib/focusTrap";
           </div>
 
           {#if planPreviewDeps && requiredDeps(planPreviewDeps).length > 0}
+            {@const planRequired = requiredDeps(planPreviewDeps)}
+            {@const planRequiredInstalled = countInstalledAmong(planPreviewDeps, planRequired)}
             <div class="plan-deps-section">
-              <strong>Required dependencies ({requiredDeps(planPreviewDeps).length})</strong>
+              <strong>
+                Required dependencies ({planRequired.length})
+                {#if planRequiredInstalled > 0}
+                  <span class="dep-installed-count"> · {planRequiredInstalled} already installed</span>
+                {/if}
+              </strong>
               <div class="plan-dep-list">
-                {#each requiredDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
-                  <div class="plan-dep-row">
+                {#each planRequired as dep (`${dep.type}:${dep.target}`)}
+                  {@const already = isDepAlreadyInstalled(planPreviewDeps, dep.target)}
+                  <div class="plan-dep-row" class:already-installed={already}>
                     <code>{dep.target}</code>
-                    {#if dep.versionConstraint}<span>{dep.versionConstraint}</span>{/if}
+                    {#if already}<span class="dep-installed-pill">Installed</span>
+                    {:else if dep.versionConstraint}<span>{dep.versionConstraint}</span>{/if}
                   </div>
                 {/each}
               </div>
@@ -4080,12 +4134,21 @@ import { trapFocus } from "../lib/focusTrap";
           {/if}
 
           {#if planPreviewDeps && optionalDeps(planPreviewDeps).length > 0}
+            {@const planOptional = optionalDeps(planPreviewDeps)}
+            {@const planOptionalInstalled = countInstalledAmong(planPreviewDeps, planOptional)}
             <div class="plan-deps-section">
-              <strong>Optional ({optionalDeps(planPreviewDeps).length})</strong>
+              <strong>
+                Optional ({planOptional.length})
+                {#if planOptionalInstalled > 0}
+                  <span class="dep-installed-count"> · {planOptionalInstalled} already installed</span>
+                {/if}
+              </strong>
               <div class="plan-dep-list">
-                {#each optionalDeps(planPreviewDeps) as dep (`${dep.type}:${dep.target}`)}
-                  <div class="plan-dep-row">
+                {#each planOptional as dep (`${dep.type}:${dep.target}`)}
+                  {@const already = isDepAlreadyInstalled(planPreviewDeps, dep.target)}
+                  <div class="plan-dep-row" class:already-installed={already}>
                     <code>{dep.target}</code>
+                    {#if already}<span class="dep-installed-pill">Installed</span>{/if}
                   </div>
                 {/each}
               </div>
@@ -6538,8 +6601,29 @@ import { trapFocus } from "../lib/focusTrap";
   .install-plan-panel .dep-entry { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; background: var(--bg-tertiary); margin-bottom: 4px; }
   .install-plan-panel .dep-entry.required { border-left: 3px solid var(--accent-primary); }
   .install-plan-panel .dep-entry.optional { border-left: 3px solid rgba(161,161,170,.4); }
+  .install-plan-panel .dep-entry.already-installed { opacity: 0.72; }
   .install-plan-panel .dep-target { font-family: ui-monospace,monospace; font-size: 12px; }
   .install-plan-panel .dep-entry small { color: var(--text-muted); font-size: 11px; }
+  .dep-installed-pill {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--success, #22c55e);
+    background: color-mix(in srgb, var(--success, #22c55e) 16%, transparent);
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .dep-installed-count {
+    margin-left: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: none;
+    letter-spacing: 0;
+  }
   .install-plan-panel .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 10px; border-radius: var(--border-radius-sm); background: var(--bg-tertiary); cursor: pointer; }
   .install-plan-panel .checkbox-row span { font-size: 13px; color: var(--text-primary); }
   .plan-deps { margin-top: 8px; max-height: 80px; overflow: auto; }
@@ -6564,6 +6648,7 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-dep-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-secondary); }
   .plan-dep-row code { font-size: 12px; }
   .plan-dep-row span { color: var(--text-muted); font-size: 11px; }
+  .plan-dep-row.already-installed { opacity: 0.72; }
   .plan-dep-row.conflict { border-left: 3px solid rgba(239,68,68,.6); }
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }

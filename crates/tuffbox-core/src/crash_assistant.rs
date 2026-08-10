@@ -283,6 +283,7 @@ fn extract_required_mod_ids(combined: &str) -> Vec<String> {
             let p = part.trim().to_lowercase();
             if p.len() >= 3
                 && p.len() <= 48
+                && !crate::action_plan::is_invented_vanilla_resource_mod_id(&p)
                 && !matches!(
                     p.as_str(),
                     "requires"

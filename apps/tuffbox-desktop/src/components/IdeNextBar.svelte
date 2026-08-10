@@ -10,6 +10,8 @@
     ideNeedsHealth,
     workTrail,
     clearWorkTrail,
+    escalateIgnoredWorkTrail,
+    WORK_TRAIL_ESCALATE_MS,
     computeIdeNextAction,
     briefDirty,
     tuneDirty,
@@ -83,6 +85,28 @@
   $effect(() => {
     void $ideIssuesRefresh;
     if ($ideIssuesRefresh > 0) void refreshIssues();
+  });
+
+  /** After 5 minutes ignored, swap contextual tip → main pack problems. */
+  $effect(() => {
+    const trail = $workTrail;
+    if (!trail || trail.escalated) return;
+
+    const createdAt = trail.createdAt;
+    const delay = Math.max(0, WORK_TRAIL_ESCALATE_MS - (Date.now() - createdAt));
+    const timer = setTimeout(() => {
+      void (async () => {
+        if ($workTrail?.createdAt !== createdAt || $workTrail?.escalated) return;
+        await refreshIssues();
+        if ($workTrail?.createdAt !== createdAt || $workTrail?.escalated) return;
+        escalateIgnoredWorkTrail({
+          issueCount: $ideIssueCount,
+          needsHealth: $ideNeedsHealth,
+        });
+      })();
+    }, delay);
+
+    return () => clearTimeout(timer);
   });
 
   function go(stage: string) {
@@ -164,7 +188,7 @@
 </div>
 
 {#if $workTrail}
-  <div class="ide-work-trail" role="status">
+  <div class="ide-work-trail" class:escalated={!!$workTrail.escalated} role="status">
     <span class="trail-msg">{$workTrail.message}</span>
     <div class="trail-actions">
       {#each $workTrail.actions as act (act.id)}
@@ -282,6 +306,10 @@
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
     font-size: 12px;
     flex-shrink: 0;
+  }
+  .ide-work-trail.escalated {
+    border-bottom-color: color-mix(in srgb, var(--accent-warning, #f59e0b) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-warning, #f59e0b) 12%, transparent);
   }
   .trail-msg { color: var(--text-primary); font-weight: 600; }
   .trail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

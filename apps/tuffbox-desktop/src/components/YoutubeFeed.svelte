@@ -3,8 +3,7 @@
   import { open } from "@tauri-apps/plugin-shell";
   import { Youtube, ChevronDown, PictureInPicture2 } from "@lucide/svelte";
   import { supabase } from "../lib/supabaseAuth";
-  import { api } from "../lib/api";
-  import { openYoutubePlayer } from "../lib/store";
+  import { launcherSettingsLive, openYoutubePlayer } from "../lib/store";
 
   type FeedVideo = {
     video_id: string;
@@ -215,17 +214,12 @@
     } catch {
       // ignore storage errors
     }
-
-    void api.launcher
-      .get()
-      .then((s) => {
-        inlinePlayer = s.youtubeInlinePlayer !== false;
-      })
-      .catch(() => {
-        // keep default true
-      });
-
     loadFeed();
+  });
+
+  $effect(() => {
+    const s = $launcherSettingsLive;
+    if (s) inlinePlayer = s.youtubeInlinePlayer !== false;
   });
 
   async function loadFeed() {

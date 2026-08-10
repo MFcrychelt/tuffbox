@@ -55,7 +55,10 @@ fn open_mca_selector_blocking(path: String, world_name: String) -> Result<(), St
     let javafx_lib = resolve_javafx_lib(&java)?;
     seed_mca_settings(&saves_dir, &world_dir)?;
 
-    let mut cmd = Command::new(&java);
+    // Prefer javaw.exe on Windows so the console subsystem of java.exe never flashes.
+    let launch_bin = gui_java_binary(&java);
+
+    let mut cmd = Command::new(&launch_bin);
     cmd.arg("-Xmx4G");
     if let Some(ref fx) = javafx_lib {
         cmd.arg("--module-path")
@@ -72,16 +75,20 @@ fn open_mca_selector_blocking(path: String, world_name: String) -> Result<(), St
     // Independent GUI child: do NOT use DETACHED_PROCESS — that flag can make the
     // parent briefly unresponsive and reset the Windows taskbar icon to the default.
     // CREATE_BREAKAWAY_FROM_JOB keeps the JavaFX window alive if TuffBox is in a job.
+    // CREATE_NO_WINDOW hides the java.exe console if javaw is unavailable.
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP);
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(
+            CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+        );
     }
 
     cmd.spawn()
-        .map_err(|e| format!("failed to launch MCA Selector ({java}): {e}"))?;
+        .map_err(|e| format!("failed to launch MCA Selector ({launch_bin}): {e}"))?;
 
     Ok(())
 }
@@ -235,6 +242,29 @@ fn resolve_javafx_lib(java_path: &str) -> Result<Option<PathBuf>, String> {
 fn java_bin_ok(path: &str) -> bool {
     let p = Path::new(path);
     p.is_file()
+}
+
+/// On Windows, swap `java.exe` → sibling `javaw.exe` when present (no console window).
+fn gui_java_binary(java_path: &str) -> String {
+    #[cfg(windows)]
+    {
+        let path = Path::new(java_path);
+        let file = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if file.eq_ignore_ascii_case("java.exe") || file.eq_ignore_ascii_case("java") {
+            let javaw = path.with_file_name("javaw.exe");
+            if javaw.is_file() {
+                return javaw.to_string_lossy().into_owned();
+            }
+        }
+        return java_path.to_string();
+    }
+    #[cfg(not(windows))]
+    {
+        java_path.to_string()
+    }
 }
 
 fn cache_java_path(path: String) -> String {

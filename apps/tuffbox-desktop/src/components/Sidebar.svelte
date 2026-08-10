@@ -16,13 +16,14 @@
     BRAND_ICON_CREEPER_SRC_SM,
   } from "../lib/store";
   import { api } from "../lib/api";
+  import { homeIcons } from "../lib/homeBootstrap";
   import { launchWithFeedback } from "../lib/launch";
 
   import type { View } from "../lib/types";
   let { currentView = $bindable() }: { currentView: View } = $props();
 
   /** Real pack icon (data URL from the instance listing) keyed by project path. */
-  let instanceIcons = $state<Record<string, string | null>>({});
+  const instanceIcons = $derived($homeIcons);
   const iconRequested = new SvelteSet<string>();
 
   async function loadInstanceIcon(path: string) {
@@ -30,22 +31,39 @@
       const listing = await api.project.getListing(path);
       const rel = listing.iconPath;
       if (!rel) {
-        instanceIcons[path] = null;
+        homeIcons.update((m) => ({ ...m, [path]: null }));
         return;
       }
-      instanceIcons[path] = await api.project.readListingAsset(rel, path);
+      const data = await api.project.readListingAsset(rel, path);
+      homeIcons.update((m) => ({ ...m, [path]: data }));
     } catch {
-      instanceIcons[path] = null;
+      homeIcons.update((m) => ({ ...m, [path]: null }));
     }
-    instanceIcons = { ...instanceIcons };
   }
 
   $effect(() => {
-    for (const p of $recentProjects) {
-      if (iconRequested.has(p.path)) continue;
-      iconRequested.add(p.path);
-      void loadInstanceIcon(p.path);
-    }
+    const missing = $recentProjects
+      .map((p) => p.path)
+      .filter((path) => !iconRequested.has(path) && instanceIcons[path] === undefined);
+    if (!missing.length) return;
+    // Prefer one batch invoke when several icons are cold.
+    for (const path of missing) iconRequested.add(path);
+    void api.home
+      .projectBriefs(missing)
+      .then((briefs) => {
+        const icons: Record<string, string | null> = {};
+        for (const b of briefs) {
+          icons[b.path] = b.iconDataUrl ?? null;
+        }
+        homeIcons.update((prev) => ({ ...prev, ...icons }));
+        // Fill any paths the batch skipped.
+        for (const path of missing) {
+          if (icons[path] === undefined) void loadInstanceIcon(path);
+        }
+      })
+      .catch(() => {
+        for (const path of missing) void loadInstanceIcon(path);
+      });
   });
 
   /**

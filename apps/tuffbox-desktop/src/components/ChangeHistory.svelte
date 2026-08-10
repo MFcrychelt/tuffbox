@@ -141,6 +141,41 @@
     return entries.find((e) => e.id === id);
   }
 
+  /** True when path is empty or a bare op token (e.g. mod_change), not a real file path. */
+  function isBareOpPath(path: string, kind?: string, op?: string) {
+    const p = (path ?? "").trim();
+    if (!p) return true;
+    if (kind && p === kind) return true;
+    if (op && p === op) return true;
+    // snake_case token with no path separator (mod_change, external_add, …)
+    if (!p.includes("/") && !p.includes("\\") && /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(p)) {
+      return true;
+    }
+    return false;
+  }
+
+  function entryTitle(entry: ChangeEntry) {
+    const path = (entry.path ?? "").trim();
+    const operation = (entry.operation ?? "").trim();
+    const kind = entry.kind ?? "";
+    const op = entry.op ?? "";
+    if (operation && isBareOpPath(path, kind, op)) return operation;
+    if (path && !isBareOpPath(path, kind, op)) return path;
+    return operation || path || kind;
+  }
+
+  /** Sidebar meta line: real file path, else humanized kind/category (avoid duplicating the title). */
+  function entrySidebarMeta(entry: ChangeEntry) {
+    const path = (entry.path ?? "").trim();
+    const kind = entry.kind ?? "";
+    const title = entryTitle(entry);
+    if (path && !isBareOpPath(path, kind, entry.op)) return path;
+    const humanKind = kind.replaceAll("_", " ");
+    if (humanKind && humanKind !== title) return humanKind;
+    if (entry.category && entry.category !== title) return entry.category;
+    return humanKind || entry.category || "";
+  }
+
   function resolveEpisodeActions(episode: HistoryEpisode): ChangeEntry[] {
     return episode.actionIds
       .map((id) => entryById(id))
@@ -579,14 +614,22 @@
       <select bind:value={actorFilter} title="Actor filter">
         {#each actors as a (a)}<option value={a}>{a === "All" ? "All actors" : actorLabel(a)}</option>{/each}
       </select>
-      {#if viewMode === "episodes"}
-        <select bind:value={outcomeFilter} title="Outcome filter">
-          {#each outcomes as o (o)}<option value={o}>{o === "All" ? "All outcomes" : outcomeLabel(o)}</option>{/each}
-        </select>
-        <select bind:value={methodFilter} title="Method filter">
-          {#each methods as m (m)}<option value={m}>{m === "All" ? "All methods" : methodLabel(m)}</option>{/each}
-        </select>
-      {/if}
+      <select
+        bind:value={outcomeFilter}
+        title="Outcome filter"
+        disabled={viewMode === "flat"}
+        class:filter-muted={viewMode === "flat"}
+      >
+        {#each outcomes as o (o)}<option value={o}>{o === "All" ? "All outcomes" : outcomeLabel(o)}</option>{/each}
+      </select>
+      <select
+        bind:value={methodFilter}
+        title="Method filter"
+        disabled={viewMode === "flat"}
+        class:filter-muted={viewMode === "flat"}
+      >
+        {#each methods as m (m)}<option value={m}>{m === "All" ? "All methods" : methodLabel(m)}</option>{/each}
+      </select>
       <button class="secondary" onclick={() => scanNow()} disabled={!$projectPath || scanning} title="Delta-scan disk vs baseline">
         <ScanSearch size={16} /> {scanning ? "Scanning…" : "Scan now"}
       </button>
@@ -624,260 +667,248 @@
     <div class="empty">Loading history…</div>
   {:else if !hasHistory}
     <EmptyState icon={History} title="No changes yet" description="Run Scan now to capture external edits, or edit via Tune / Content." />
-  {:else if viewMode === "episodes"}
-    {#if visibleEpisodes.length === 0}
-      <EmptyState
-        icon={History}
-        title={episodes.length === 0 ? "No episodes yet" : "No episodes match filters"}
-        description={episodes.length === 0 && entries.length > 0
-          ? "Crash→fix episodes appear after a launch crash and fix. Pack file edits are also grouped as Activity episodes — try Scan now, or switch to Flat."
-          : episodes.length === 0
-            ? "Run Scan now after editing the pack, or fix a crash to create a crash episode."
-            : "Clear search / outcome / method filters to see episodes again."}
-      />
-      {#if episodes.length === 0 && entries.length > 0}
-        <div class="empty-actions-row">
-          <button class="secondary" onclick={() => (viewMode = "flat")}>Open Flat timeline</button>
-        </div>
-      {/if}
-    {:else}
-    <div class="history-layout">
-      <aside class="change-tree">
-        <div class="timeline-line"></div>
-        {#each episodeDayKeys as day (day)}
-          <section>
-            <h3>{day}</h3>
-            {#each episodesByDay[day] as episode (episode.id)}
-              <div class="timeline-item">
-                <button
-                  type="button"
-                  class="file-strip episode"
-                  class:selected={selectedId === episode.id}
-                  onclick={() => {
-                    selectedId = episode.id;
-                    document.getElementById("episode-" + episode.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }}
-                  title={episode.summary}
-                >
-                  <span class="outcome-badge {outcomeClass(episode.outcome)}">{outcomeLabel(episode.outcome)}</span>
-                  <span class="file-title">{episode.summary || "Episode"}</span>
-                  <small>{methodLabel(episode.fixMethod)} · {episode.actionIds.length} action{episode.actionIds.length === 1 ? "" : "s"}</small>
-                </button>
-              </div>
-            {/each}
-          </section>
-        {/each}
-      </aside>
-
-      <section class="change-preview">
-        <div class="all-changes-list">
-          {#each visibleEpisodeSlice as episode (episode.id)}
-            {@const actions = resolveEpisodeActions(episode)}
-            <div class="change-card episode-card" id="episode-{episode.id}">
-              <div class="preview-header">
-                <div>
-                  <span class="eyebrow">Episode · {dayKey(episode.startedAt)}</span>
-                  <span class="outcome-badge {outcomeClass(episode.outcome)}">{outcomeLabel(episode.outcome)}</span>
-                  {#if episode.outcome !== "activity"}
-                    <span class="method-badge {methodClass(episode.fixMethod)}">{methodLabel(episode.fixMethod)}</span>
-                  {/if}
-                  {#if episode.planSource}
-                    <span class="plan-source-badge">{episode.planSource}</span>
-                  {/if}
-                  <h2><History size={18} /> {episode.summary || "Untitled episode"}</h2>
-                  <p>
-                    {episode.startedAt}{#if episode.endedAt} → {episode.endedAt}{/if}
-                    · {actions.length} action{actions.length === 1 ? "" : "s"}
-                  </p>
-                  {#if episode.resolutionSummary}
-                    <p class="resolution-blurb">{episode.resolutionSummary}</p>
-                  {/if}
-                </div>
-                <div class="preview-actions">
-                  {#if episode.outcome !== "activity"}
-                    <button type="button" class="secondary" onclick={() => explainEpisode(episode)} title="Explain this episode">
-                      <Sparkles size={16} /> Explain
-                    </button>
-                    <button
-                      type="button"
-                      class="secondary"
-                      onclick={() => openDiagnoseEpisode(episode)}
-                      title="Open Diagnose"
-                    >
-                      <Stethoscope size={16} /> Diagnose
-                    </button>
-                  {/if}
-                  {#if episode.snapshotId}
-                    <button
-                      type="button"
-                      class="secondary"
-                      onclick={() => openEpisodeSnapshot(episode)}
-                      title="Open related snapshot"
-                    >
-                      Snapshot
-                    </button>
-                  {/if}
-                </div>
-              </div>
-
-              <div
-                class="summary-card"
-                role="button"
-                tabindex="0"
-                onclick={() => toggleEpisodeExpanded(episode)}
-                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleEpisodeExpanded(episode)}
-              >
-                <div class="summary-row">
-                  <strong>{episode.summary || "Episode actions"}</strong>
-                  <span class="chev">{#if expanded[episode.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
-                </div>
-                {#if !expanded[episode.id]}
-                  <pre class="mini-preview">{actions.slice(0, 2).map((a) => a.preview || a.path).filter(Boolean).join("\n") || "No actions linked."}</pre>
-                {/if}
-              </div>
-
-              {#if expanded[episode.id]}
-                <div class="episode-actions">
-                  {#if actions.length === 0}
-                    <div class="empty-actions">No linked actions found for this episode.</div>
-                  {:else}
-                    {#each actions as entry (entry.id)}
-                      <div class="nested-action" id="change-{entry.id}">
-                        <div class="nested-head">
-                          <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
-                          <strong>{entry.path || entry.operation}</strong>
-                          <small>{entry.kind.replaceAll("_", " ")}</small>
-                        </div>
-                        <pre class="mini-preview nested">{entry.preview || "No preview available."}</pre>
-                        <div class="preview-actions nested">
-                          <button type="button" class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
-                            <Sparkles size={14} /> Explain
-                          </button>
-                          <button type="button" class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
-                            <Stethoscope size={14} /> Diagnose
-                          </button>
-                          <button type="button" class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
-                            <RotateCcw size={14} /> Rollback
-                          </button>
-                          <button type="button" class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
-                            <Maximize2 size={14} /> Open
-                          </button>
-                        </div>
-                      </div>
-                    {/each}
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/each}
-          {#if hasMoreVisible}
-            <div class="show-more-row">
-              <button type="button" class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
-                Show more ({remainingVisible} remaining)
-              </button>
-            </div>
-          {/if}
-        </div>
-      </section>
-    </div>
-    {/if}
   {:else}
     <div class="history-layout">
       <aside class="change-tree">
         <div class="timeline-line"></div>
-        {#each dayKeys as day (day)}
-          <section>
-            <h3>{day}</h3>
-            {#each byDay[day] as entry (entry.id)}
-              <div class="timeline-item">
-                <button
-                  class="file-strip {entry.kind}"
-                  class:selected={selectedId === entry.id}
-                  onclick={() => {
-                    selectedId = entry.id;
-                    document.getElementById("change-" + entry.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }}
-                  title={entry.path || entry.operation}
-                >
-                  <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
-                  <span class="file-title">{entry.operation || entry.path}</span>
-                  <small>{entry.path || entry.kind}</small>
-                </button>
-              </div>
-            {/each}
-          </section>
-        {/each}
+        {#if viewMode === "episodes"}
+          {#each episodeDayKeys as day (day)}
+            <section>
+              <h3>{day}</h3>
+              {#each episodesByDay[day] as episode (episode.id)}
+                <div class="timeline-item">
+                  <button
+                    type="button"
+                    class="file-strip episode"
+                    class:selected={selectedId === episode.id}
+                    onclick={() => {
+                      selectedId = episode.id;
+                      document.getElementById("episode-" + episode.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }}
+                    title={episode.summary}
+                  >
+                    <span class="outcome-badge {outcomeClass(episode.outcome)}">{outcomeLabel(episode.outcome)}</span>
+                    <span class="file-title">{episode.summary || "Episode"}</span>
+                    <small>{methodLabel(episode.fixMethod)} · {episode.actionIds.length} action{episode.actionIds.length === 1 ? "" : "s"}</small>
+                  </button>
+                </div>
+              {/each}
+            </section>
+          {/each}
+        {:else}
+          {#each dayKeys as day (day)}
+            <section>
+              <h3>{day}</h3>
+              {#each byDay[day] as entry (entry.id)}
+                <div class="timeline-item">
+                  <button
+                    class="file-strip {entry.kind}"
+                    class:selected={selectedId === entry.id}
+                    onclick={() => {
+                      selectedId = entry.id;
+                      document.getElementById("change-" + entry.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }}
+                    title={entryTitle(entry)}
+                  >
+                    <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
+                    <span class="file-title">{entryTitle(entry)}</span>
+                    <small>{entrySidebarMeta(entry)}</small>
+                  </button>
+                </div>
+              {/each}
+            </section>
+          {/each}
+        {/if}
       </aside>
 
       <section class="change-preview">
         <div class="all-changes-list">
-          {#each visibleSlice as entry (entry.id)}
-            <div class="change-card" id="change-{entry.id}" class:jar-drift={entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}>
-              <div class="preview-header">
-                <div>
-                  <span class="eyebrow">{entry.category} · {entry.kind.replaceAll("_", " ")}</span>
-                  <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
-                  {#if entry.fixMethod}
-                    <span class="method-badge {methodClass(entry.fixMethod)}">{methodLabel(entry.fixMethod)}</span>
-                  {/if}
-                  {#if entry.tags?.includes("crash_resolved") || entry.kind === "crash_resolved"}
-                    <span class="crash-resolved-badge">resolved{#if entry.planSource} · {entry.planSource}{/if}</span>
-                  {:else if entry.tags?.includes("crash_fix")}
-                    <span class="crash-fix-badge">crash_fix{#if entry.planSource} · {entry.planSource}{/if}</span>
-                  {/if}
-                  {#if entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}
-                    <span class="drift-badge"><AlertTriangle size={11} /> jar drift — import to manifest or remove</span>
-                  {/if}
-                  <h2><FileText size={18} /> {entry.path}</h2>
-                  <p>{entry.createdAt} · {entry.reason}</p>
-                </div>
-                <div class="preview-actions">
-                  <button class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
-                    <Sparkles size={16} /> Explain
-                  </button>
-                  <button class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
-                    <Stethoscope size={16} /> Diagnose
-                  </button>
-                  <button class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
-                    <RotateCcw size={16} /> Rollback
-                  </button>
-                  <button class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
-                    <Maximize2 size={16} /> Open
-                  </button>
-                </div>
-              </div>
-
-              <div
-                class="summary-card"
-                role="button"
-                tabindex="0"
-                onclick={() => toggleExpanded(entry)}
-                onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
-              >
-                <div class="summary-row">
-                  <strong>{entry.operation}</strong>
-                  <span class="chev">{#if expanded[entry.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
-                </div>
-                {#if !expanded[entry.id]}
-                  <pre class="mini-preview">{entry.preview || "No preview available."}</pre>
-                {/if}
-              </div>
-
-              {#if expanded[entry.id]}
-                <div class="diff-card">
-                  <div class="diff-title">Details</div>
-                  <pre>
-{#each (entry.diff || entry.preview || "No diff available.").split("\n") as line, i (i)}
-<span class={lineClass(line)}>{line}</span>
-{/each}
-                  </pre>
+          {#if viewMode === "episodes" && visibleEpisodes.length === 0}
+            <div class="mode-empty">
+              <EmptyState
+                icon={History}
+                title={episodes.length === 0 ? "No episodes yet" : "No episodes match filters"}
+                description={episodes.length === 0 && entries.length > 0
+                  ? "Crash→fix episodes appear after a launch crash and fix. Pack file edits are also grouped as Activity episodes — try Scan now, or switch to Flat."
+                  : episodes.length === 0
+                    ? "Run Scan now after editing the pack, or fix a crash to create a crash episode."
+                    : "Clear search / outcome / method filters to see episodes again."}
+              />
+              {#if episodes.length === 0 && entries.length > 0}
+                <div class="empty-actions-row">
+                  <button class="secondary" onclick={() => (viewMode = "flat")}>Open Flat timeline</button>
                 </div>
               {/if}
             </div>
-          {/each}
+          {:else if viewMode === "episodes"}
+            {#each visibleEpisodeSlice as episode (episode.id)}
+              {@const actions = resolveEpisodeActions(episode)}
+              <div class="change-card episode-card" id="episode-{episode.id}">
+                <div class="preview-header">
+                  <div>
+                    <span class="eyebrow">Episode · {dayKey(episode.startedAt)}</span>
+                    <span class="outcome-badge {outcomeClass(episode.outcome)}">{outcomeLabel(episode.outcome)}</span>
+                    {#if episode.outcome !== "activity"}
+                      <span class="method-badge {methodClass(episode.fixMethod)}">{methodLabel(episode.fixMethod)}</span>
+                    {/if}
+                    {#if episode.planSource}
+                      <span class="plan-source-badge">{episode.planSource}</span>
+                    {/if}
+                    <h2><History size={18} /> {episode.summary || "Untitled episode"}</h2>
+                    <p>
+                      {episode.startedAt}{#if episode.endedAt} → {episode.endedAt}{/if}
+                      · {actions.length} action{actions.length === 1 ? "" : "s"}
+                    </p>
+                    {#if episode.resolutionSummary}
+                      <p class="resolution-blurb">{episode.resolutionSummary}</p>
+                    {/if}
+                  </div>
+                  <div class="preview-actions">
+                    {#if episode.outcome !== "activity"}
+                      <button type="button" class="secondary" onclick={() => explainEpisode(episode)} title="Explain this episode">
+                        <Sparkles size={16} /> Explain
+                      </button>
+                      <button
+                        type="button"
+                        class="secondary"
+                        onclick={() => openDiagnoseEpisode(episode)}
+                        title="Open Diagnose"
+                      >
+                        <Stethoscope size={16} /> Diagnose
+                      </button>
+                    {/if}
+                    {#if episode.snapshotId}
+                      <button
+                        type="button"
+                        class="secondary"
+                        onclick={() => openEpisodeSnapshot(episode)}
+                        title="Open related snapshot"
+                      >
+                        Snapshot
+                      </button>
+                    {/if}
+                  </div>
+                </div>
+
+                <div
+                  class="summary-card"
+                  role="button"
+                  tabindex="0"
+                  onclick={() => toggleEpisodeExpanded(episode)}
+                  onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleEpisodeExpanded(episode)}
+                >
+                  <div class="summary-row">
+                    <strong>{episode.summary || "Episode actions"}</strong>
+                    <span class="chev">{#if expanded[episode.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
+                  </div>
+                  {#if !expanded[episode.id]}
+                    <pre class="mini-preview">{actions.slice(0, 2).map((a) => a.preview || a.path).filter(Boolean).join("\n") || "No actions linked."}</pre>
+                  {/if}
+                </div>
+
+                {#if expanded[episode.id]}
+                  <div class="episode-actions">
+                    {#if actions.length === 0}
+                      <div class="empty-actions">No linked actions found for this episode.</div>
+                    {:else}
+                      {#each actions as entry (entry.id)}
+                        <div class="nested-action" id="change-{entry.id}">
+                          <div class="nested-head">
+                            <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
+                            <strong>{entryTitle(entry)}</strong>
+                            <small>{entrySidebarMeta(entry)}</small>
+                          </div>
+                          <pre class="mini-preview nested">{entry.preview || "No preview available."}</pre>
+                          <div class="preview-actions nested">
+                            <button type="button" class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
+                              <Sparkles size={14} /> Explain
+                            </button>
+                            <button type="button" class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
+                              <Stethoscope size={14} /> Diagnose
+                            </button>
+                            <button type="button" class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
+                              <RotateCcw size={14} /> Rollback
+                            </button>
+                            <button type="button" class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                              <Maximize2 size={14} /> Open
+                            </button>
+                          </div>
+                        </div>
+                      {/each}
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          {:else}
+            {#each visibleSlice as entry (entry.id)}
+              <div class="change-card" id="change-{entry.id}" class:jar-drift={entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}>
+                <div class="preview-header">
+                  <div>
+                    <span class="eyebrow">{entry.category} · {entry.kind.replaceAll("_", " ")}</span>
+                    <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
+                    {#if entry.fixMethod}
+                      <span class="method-badge {methodClass(entry.fixMethod)}">{methodLabel(entry.fixMethod)}</span>
+                    {/if}
+                    {#if entry.tags?.includes("crash_resolved") || entry.kind === "crash_resolved"}
+                      <span class="crash-resolved-badge">resolved{#if entry.planSource} · {entry.planSource}{/if}</span>
+                    {:else if entry.tags?.includes("crash_fix")}
+                      <span class="crash-fix-badge">crash_fix{#if entry.planSource} · {entry.planSource}{/if}</span>
+                    {/if}
+                    {#if entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}
+                      <span class="drift-badge"><AlertTriangle size={11} /> jar drift — import to manifest or remove</span>
+                    {/if}
+                    <h2><FileText size={18} /> {entryTitle(entry)}</h2>
+                    <p>{entry.createdAt} · {entry.reason}</p>
+                  </div>
+                  <div class="preview-actions">
+                    <button class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
+                      <Sparkles size={16} /> Explain
+                    </button>
+                    <button class="secondary" onclick={() => openDiagnose(entry)} title="Open Diagnose">
+                      <Stethoscope size={16} /> Diagnose
+                    </button>
+                    <button class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
+                      <RotateCcw size={16} /> Rollback
+                    </button>
+                    <button class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                      <Maximize2 size={16} /> Open
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  class="summary-card"
+                  role="button"
+                  tabindex="0"
+                  onclick={() => toggleExpanded(entry)}
+                  onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleExpanded(entry)}
+                >
+                  <div class="summary-row">
+                    <strong>{entry.operation}</strong>
+                    <span class="chev">{#if expanded[entry.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
+                  </div>
+                  {#if !expanded[entry.id]}
+                    <pre class="mini-preview">{entry.preview || "No preview available."}</pre>
+                  {/if}
+                </div>
+
+                {#if expanded[entry.id]}
+                  <div class="diff-card">
+                    <div class="diff-title">Details</div>
+                    <pre>
+{#each (entry.diff || entry.preview || "No diff available.").split("\n") as line, i (i)}
+<span class={lineClass(line)}>{line}</span>
+{/each}
+                    </pre>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          {/if}
           {#if hasMoreVisible}
             <div class="show-more-row">
-              <button class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
+              <button type="button" class="secondary" onclick={() => (visibleLimit += VISIBLE_STEP)}>
                 Show more ({remainingVisible} remaining)
               </button>
             </div>
@@ -917,11 +948,16 @@
 <style>
   .change-history { width: 100%; }
   .toolbar, .toolbar-actions, .title, .preview-header, .preview-header h2, .editor-head, .editor-actions, .tracking-controls, .preview-actions, .summary-row { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
-  .title { gap: 10px; color: var(--text-secondary); font-weight: 800; }
-  .toolbar-actions { gap: 10px; flex-wrap: wrap; }
+  .toolbar { justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .title { gap: 10px; color: var(--text-secondary); font-weight: 800; flex-shrink: 0; }
+  .toolbar-actions { gap: 10px; flex-wrap: wrap; align-items: center; min-width: 0; }
+  .toolbar-actions select {
+    min-width: 132px;
+    flex: 0 1 auto;
+  }
   .view-toggle {
     display: inline-flex;
+    flex-shrink: 0;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     overflow: hidden;
@@ -946,11 +982,19 @@
     align-items: center;
     gap: 8px;
     min-width: 240px;
+    flex: 1 1 240px;
+    max-width: 320px;
     padding: 0 12px;
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-md);
     background: var(--bg-elevated);
     color: var(--text-muted);
+  }
+  .toolbar-actions select.filter-muted,
+  .toolbar-actions select:disabled {
+    opacity: 0.55;
+    color: var(--text-muted);
+    cursor: not-allowed;
   }
   .search :global(svg) {
     flex-shrink: 0;
@@ -1059,8 +1103,11 @@
   .empty-actions-row {
     display: flex;
     justify-content: center;
-    margin-top: -24px;
-    margin-bottom: 24px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+  }
+  .mode-empty {
+    padding: 24px 12px 12px;
   }
   .method-badge.ai { color: #c4b5fd; border-color: rgba(196,181,253,.4); }
   .method-badge.heuristic { color: #93c5fd; border-color: rgba(147,197,253,.35); }

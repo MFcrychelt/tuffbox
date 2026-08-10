@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import type { RunningInstance } from "./api";
 import { api } from "./api";
 
@@ -520,21 +520,81 @@ export type WorkTrail = {
   message: string;
   actions: WorkTrailAction[];
   createdAt: number;
+  /** True after ignore-timeout escalation to pack problems / verify nudge. */
+  escalated?: boolean;
 };
+
+/** How long a contextual work trail may sit ignored before escalating. */
+export const WORK_TRAIL_ESCALATE_MS = 5 * 60 * 1000;
 
 /** Contextual continue strip after Content / Resolve / Diagnose mutations. */
 export const workTrail = writable<WorkTrail | null>(null);
 
-export function pushWorkTrail(message: string, actions: WorkTrailAction[]) {
+export function pushWorkTrail(
+  message: string,
+  actions: WorkTrailAction[],
+  opts?: { escalated?: boolean },
+) {
   workTrail.set({
     message,
     actions,
     createdAt: Date.now(),
+    escalated: opts?.escalated ?? false,
   });
 }
 
 export function clearWorkTrail() {
   workTrail.set(null);
+}
+
+/**
+ * If a work trail was ignored long enough, replace it with the current
+ * main pack problems (or a soft Test-launch nudge when the graph is clean).
+ * Returns true when the trail was replaced.
+ */
+export function escalateIgnoredWorkTrail(opts: {
+  issueCount: number;
+  needsHealth: boolean;
+}): boolean {
+  const current = get(workTrail);
+  if (!current || current.escalated) return false;
+  if (Date.now() - current.createdAt < WORK_TRAIL_ESCALATE_MS) return false;
+
+  if (opts.issueCount > 0) {
+    pushWorkTrail(
+      `${opts.issueCount} pack issue${opts.issueCount === 1 ? "" : "s"} still need attention`,
+      [
+        { id: "resolve", label: "Fix in Resolve", kind: "stage", stage: "resolve" },
+        { id: "test", label: "Test launch", kind: "play" },
+        { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+      ],
+      { escalated: true },
+    );
+    return true;
+  }
+
+  if (opts.needsHealth) {
+    pushWorkTrail(
+      "Crash still needs a Health check",
+      [
+        { id: "diagnose", label: "Open Health", kind: "stage", stage: "diagnose" },
+        { id: "test", label: "Test launch", kind: "play" },
+        { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+      ],
+      { escalated: true },
+    );
+    return true;
+  }
+
+  pushWorkTrail(
+    "Still waiting — verify with a Test launch?",
+    [
+      { id: "test", label: "Test launch", kind: "play" },
+      { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+    ],
+    { escalated: true },
+  );
+  return true;
 }
 
 /** Bump to ask IdeNextBar to run its Next action (Ctrl+Enter). */

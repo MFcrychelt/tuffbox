@@ -384,6 +384,15 @@ fn load_auth_state() -> AuthState {
         .unwrap_or_default()
 }
 
+/// Disk-only auth snapshot (no Microsoft refresh) for home bootstrap P0.
+pub(crate) fn cached_auth_state() -> AuthState {
+    let mut state = load_auth_state();
+    let accounts = load_accounts_file();
+    state.accounts = accounts.accounts;
+    state.active_account_uuid = accounts.active_account_uuid;
+    state
+}
+
 fn save_auth_state(state: &AuthState) -> Result<(), String> {
     let _guard = AUTH_FILE_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     let path = auth_state_path();

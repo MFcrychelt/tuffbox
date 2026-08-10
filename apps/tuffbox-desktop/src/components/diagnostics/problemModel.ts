@@ -237,8 +237,21 @@ function normalizeFixAction(a: FixAction | { kind: string; label: string; modId?
   };
 }
 
+/** Compacted vanilla resource paths mistaken for Modrinth slugs (`minecraft:builtin/entity`). */
+export function isInventedVanillaResourceModId(id: string): boolean {
+  const compact = id.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  if (!compact.startsWith("minecraft") || compact === "minecraft") return false;
+  return (
+    compact.includes("builtin") ||
+    compact.includes("rendertype") ||
+    (compact.includes("core") && compact.includes("entity"))
+  );
+}
+
 function actionsFromHint(h: HintLike): FixAction[] {
-  const base = (h.fixes?.length ? [...h.fixes] : h.fix ? [h.fix] : []).map(normalizeFixAction);
+  const base = (h.fixes?.length ? [...h.fixes] : h.fix ? [h.fix] : [])
+    .map(normalizeFixAction)
+    .filter((a) => !(isInstallAction(a) && a.modId && isInventedVanillaResourceModId(a.modId)));
 
   // Missing-dep crash hint: always expose one Install button per related mod id.
   if (h.id === "missing-dependency" && (h.relatedMods?.length ?? 0) > 0) {
@@ -251,7 +264,7 @@ function actionsFromHint(h: HintLike): FixAction[] {
     const perMod: FixAction[] = [];
     for (const mid of h.relatedMods ?? []) {
       const id = String(mid || "").trim();
-      if (!id || seen.has(id)) continue;
+      if (!id || seen.has(id) || isInventedVanillaResourceModId(id)) continue;
       seen.add(id);
       perMod.push({ kind: "installDependency", label: `Install ${id}`, modId: id });
     }
@@ -270,6 +283,7 @@ function actionsFromHint(h: HintLike): FixAction[] {
         (a) =>
           isInstallAction(a) &&
           !!a.modId &&
+          !isInventedVanillaResourceModId(a.modId) &&
           !/try to install missing dependencies/i.test(a.label),
       ),
     ];
@@ -332,6 +346,9 @@ function graphActions(g: GraphDiagLike): FixAction[] {
   const code = String(g.code ?? "").toUpperCase();
   if (code.includes("MISSING")) {
     const { missing } = parseMissingDependency(g);
+    if (missing && isInventedVanillaResourceModId(missing)) {
+      return [{ kind: "openResolve", label: "Open Resolve", modId: null }];
+    }
     return [
       {
         kind: "installDependency",
@@ -452,7 +469,7 @@ export function buildUnifiedProblems(input: BuildProblemsInput): Problem[] {
   const missingByRequester = new Map<string, MissingGroup>();
   for (const g of missingGraph) {
     const parsed = parseMissingDependency(g);
-    if (!parsed.missing) continue;
+    if (!parsed.missing || isInventedVanillaResourceModId(parsed.missing)) continue;
     const key = parsed.requester ?? `__anon__:${parsed.requesterLabel}`;
     let group = missingByRequester.get(key);
     if (!group) {

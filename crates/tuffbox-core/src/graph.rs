@@ -212,6 +212,10 @@ impl DependencyGraph {
                 "source".to_string(),
                 module.source.kind.as_str().to_string(),
             );
+            metadata.insert(
+                "content_type".to_string(),
+                content_type_slug(module.content_type).to_string(),
+            );
             if let Some(project_id) = &module.source.project_id {
                 metadata.insert("project_id".to_string(), project_id.clone());
             }
@@ -220,6 +224,9 @@ impl DependencyGraph {
             }
             if let Some(icon_url) = &module.source.icon_url {
                 metadata.insert("icon_url".to_string(), icon_url.clone());
+            }
+            if let Some(file_name) = &module.file_name {
+                metadata.insert("file_name".to_string(), file_name.clone());
             }
             // Provider categories (Modrinth / normalized CF tags) drive graph
             // clustering. Pipe-separated so CF names with commas stay intact
@@ -232,33 +239,48 @@ impl DependencyGraph {
             }
 
             let mod_id = NodeId::module(&module.id);
+            let node_kind = node_kind_for_content(module.content_type);
             graph.nodes.push(GraphNode {
                 id: mod_id.clone(),
-                kind: NodeKind::Mod,
+                kind: node_kind,
                 label: module.name.clone(),
                 version: Some(module.version.clone()),
                 side: module.side,
                 metadata,
             });
 
-            graph.edges.push(GraphEdge {
-                from: mod_id.clone(),
-                to: loader_id.clone(),
-                kind: EdgeKind::RequiresLoader,
-                constraint: Some(format!(
-                    "{} {}",
-                    loader_kind_slug(&manifest.loader.kind),
-                    manifest.loader.version
-                )),
-                reason: Some("Mod is part of selected loader project".to_string()),
-            });
+            // Resource/shader packs live in their own folders — they don't load
+            // through Fabric/Forge, so skip RequiresLoader. Minecraft version
+            // still matters for pack format compatibility.
+            if matches!(module.content_type, crate::manifest::ContentType::Mod | crate::manifest::ContentType::Datapack)
+            {
+                graph.edges.push(GraphEdge {
+                    from: mod_id.clone(),
+                    to: loader_id.clone(),
+                    kind: EdgeKind::RequiresLoader,
+                    constraint: Some(format!(
+                        "{} {}",
+                        loader_kind_slug(&manifest.loader.kind),
+                        manifest.loader.version
+                    )),
+                    reason: Some("Mod is part of selected loader project".to_string()),
+                });
+            }
 
             graph.edges.push(GraphEdge {
                 from: mod_id.clone(),
                 to: minecraft_id.clone(),
                 kind: EdgeKind::RequiresMinecraft,
                 constraint: Some(manifest.minecraft.version.clone()),
-                reason: Some("Mod is part of selected Minecraft project".to_string()),
+                reason: Some(match module.content_type {
+                    crate::manifest::ContentType::Resourcepack => {
+                        "Resource pack targets project Minecraft version".to_string()
+                    }
+                    crate::manifest::ContentType::Shaderpack => {
+                        "Shader pack targets project Minecraft version".to_string()
+                    }
+                    _ => "Mod is part of selected Minecraft project".to_string(),
+                }),
             });
 
             for profile in &manifest.profiles {
@@ -296,21 +318,21 @@ impl DependencyGraph {
             }
         }
 
-        // Conflicts / BreaksWith only apply when the other mod is actually
+        // Conflicts / BreaksWith only apply when the other content is actually
         // installed. LambDynamicLights declaring "incompatible with ryoamiclights"
         // must not surface as a conflict when ryoamiclights isn't in the pack.
         {
-            let installed_mods: HashSet<NodeId> = graph
+            let installed_content: HashSet<NodeId> = graph
                 .nodes
                 .iter()
-                .filter(|n| n.kind == NodeKind::Mod)
+                .filter(|n| is_installable_content(&n.kind))
                 .map(|n| n.id.clone())
                 .collect();
             graph.edges.retain(|edge| {
                 if !matches!(edge.kind, EdgeKind::Conflicts | EdgeKind::BreaksWith) {
                     return true;
                 }
-                installed_mods.contains(&edge.from) && installed_mods.contains(&edge.to)
+                installed_content.contains(&edge.from) && installed_content.contains(&edge.to)
             });
         }
 
@@ -407,6 +429,59 @@ impl DependencyGraph {
 
     pub fn node(&self, id: &NodeId) -> Option<&GraphNode> {
         self.node_index.get(id).and_then(|&i| self.nodes.get(i))
+    }
+
+    /// Add resource/shader packs found on disk that are not already in the graph
+    /// (manual drops into `resourcepacks/` / `shaderpacks/`).
+    pub fn attach_disk_content_packs(&mut self, instance_dir: &std::path::Path) {
+        let known_files: HashSet<String> = self
+            .nodes
+            .iter()
+            .filter_map(|n| n.metadata.get("file_name").cloned())
+            .map(|f| f.to_ascii_lowercase())
+            .collect();
+        let known_ids: HashSet<String> = self.nodes.iter().map(|n| n.id.0.clone()).collect();
+
+        for (folder, kind, content_slug) in [
+            ("resourcepacks", NodeKind::ResourcePack, "resourcepack"),
+            ("shaderpacks", NodeKind::ShaderPack, "shader"),
+        ] {
+            let Ok(entries) = crate::content_packs::list_content_packs(instance_dir, folder) else {
+                continue;
+            };
+            for entry in entries {
+                let file_key = entry.file_name.to_ascii_lowercase();
+                if known_files.contains(&file_key) {
+                    continue;
+                }
+                let pack_id = pack_id_from_file_name(&entry.file_name);
+                let node_id = NodeId::module(&pack_id);
+                if known_ids.contains(&node_id.0) || self.has_node(&node_id) {
+                    continue;
+                }
+                let mut metadata = HashMap::new();
+                metadata.insert("source".into(), "local".into());
+                metadata.insert("content_type".into(), content_slug.into());
+                metadata.insert("file_name".into(), entry.file_name.clone());
+                if !entry.enabled {
+                    metadata.insert("disabled".into(), "true".into());
+                }
+                let label = if entry.name.trim().is_empty() {
+                    pack_id.clone()
+                } else {
+                    entry.name.clone()
+                };
+                self.nodes.push(GraphNode {
+                    id: node_id,
+                    kind: kind.clone(),
+                    label,
+                    version: None,
+                    side: Side::Client,
+                    metadata,
+                });
+            }
+        }
+        self.rebuild_index();
     }
 }
 
@@ -692,6 +767,90 @@ mod tests {
         assert_eq!(edge.to.0, "mod:fabric-api");
         assert!(!graph.nodes.iter().any(|n| n.kind == NodeKind::Missing));
     }
+
+    #[test]
+    fn resource_and_shader_packs_get_distinct_node_kinds_and_deps() {
+        let raw = r#"{
+          "schemaVersion": "0.1.0",
+          "project": { "id": "test", "name": "Test", "version": "1.0.0" },
+          "minecraft": { "version": "1.21.1" },
+          "loader": { "type": "fabric", "version": "0.16.0" },
+          "profiles": [{ "id": "client", "name": "Client", "side": "client" }],
+          "mods": [
+            {
+              "id": "iris",
+              "name": "Iris",
+              "source": { "type": "modrinth", "projectId": "YL57xq9U" },
+              "version": "1.0.0",
+              "side": "client",
+              "contentType": "mod",
+              "dependencies": []
+            },
+            {
+              "id": "complementary",
+              "name": "Complementary Shaders",
+              "source": { "type": "modrinth", "projectId": "shader1" },
+              "version": "1.0.0",
+              "side": "client",
+              "contentType": "shaderpack",
+              "dependencies": [{ "type": "requires", "target": "iris" }]
+            },
+            {
+              "id": "faithful",
+              "name": "Faithful",
+              "source": { "type": "modrinth", "projectId": "rp1" },
+              "version": "1.0.0",
+              "side": "client",
+              "contentType": "resourcepack",
+              "fileName": "Faithful.zip",
+              "dependencies": []
+            }
+          ]
+        }"#;
+        let manifest: ProjectManifest = serde_json::from_str(raw).unwrap();
+        let graph = DependencyGraph::from_manifest(&manifest);
+
+        let shader = graph
+            .node(&NodeId::module("complementary"))
+            .expect("shader node");
+        assert_eq!(shader.kind, NodeKind::ShaderPack);
+        assert_eq!(
+            shader.metadata.get("content_type").map(String::as_str),
+            Some("shader")
+        );
+
+        let rp = graph.node(&NodeId::module("faithful")).expect("rp node");
+        assert_eq!(rp.kind, NodeKind::ResourcePack);
+        assert_eq!(
+            rp.metadata.get("content_type").map(String::as_str),
+            Some("resourcepack")
+        );
+
+        let iris = graph.node(&NodeId::module("iris")).expect("iris");
+        assert_eq!(iris.kind, NodeKind::Mod);
+
+        let edge = graph
+            .edges
+            .iter()
+            .find(|e| e.from.0 == "mod:complementary" && e.kind == EdgeKind::Requires)
+            .expect("shader requires iris");
+        assert_eq!(edge.to.0, "mod:iris");
+
+        // Packs must not declare RequiresLoader.
+        assert!(
+            !graph.edges.iter().any(|e| {
+                e.from.0 == "mod:complementary" && e.kind == EdgeKind::RequiresLoader
+            }),
+            "shader packs should not require the mod loader"
+        );
+        assert!(
+            !graph
+                .edges
+                .iter()
+                .any(|e| e.from.0 == "mod:faithful" && e.kind == EdgeKind::RequiresLoader),
+            "resource packs should not require the mod loader"
+        );
+    }
 }
 
 fn dependency_kind_to_edge_kind(kind: DependencyKind) -> EdgeKind {
@@ -701,6 +860,58 @@ fn dependency_kind_to_edge_kind(kind: DependencyKind) -> EdgeKind {
         DependencyKind::Conflicts => EdgeKind::Conflicts,
         DependencyKind::BreaksWith => EdgeKind::BreaksWith,
         DependencyKind::Replaces => EdgeKind::Replaces,
+    }
+}
+
+fn node_kind_for_content(content_type: crate::manifest::ContentType) -> NodeKind {
+    match content_type {
+        crate::manifest::ContentType::Resourcepack => NodeKind::ResourcePack,
+        crate::manifest::ContentType::Shaderpack => NodeKind::ShaderPack,
+        crate::manifest::ContentType::Datapack | crate::manifest::ContentType::Mod => NodeKind::Mod,
+    }
+}
+
+fn content_type_slug(content_type: crate::manifest::ContentType) -> &'static str {
+    match content_type {
+        crate::manifest::ContentType::Mod => "mod",
+        crate::manifest::ContentType::Resourcepack => "resourcepack",
+        crate::manifest::ContentType::Shaderpack => "shader",
+        crate::manifest::ContentType::Datapack => "datapack",
+    }
+}
+
+fn is_installable_content(kind: &NodeKind) -> bool {
+    matches!(
+        kind,
+        NodeKind::Mod | NodeKind::ResourcePack | NodeKind::ShaderPack | NodeKind::Library
+    )
+}
+
+/// Stable slug from a pack filename (`Faithful 32x.zip` → `faithful-32x`).
+fn pack_id_from_file_name(file_name: &str) -> String {
+    let stem = file_name
+        .trim_end_matches(".disabled")
+        .trim_end_matches(".DISABLED")
+        .trim_end_matches(".zip")
+        .trim_end_matches(".ZIP")
+        .trim_end_matches(".jar")
+        .trim_end_matches(".JAR");
+    let mut out = String::with_capacity(stem.len());
+    let mut prev_dash = false;
+    for ch in stem.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "pack".into()
+    } else {
+        trimmed
     }
 }
 

@@ -14,9 +14,10 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
+  import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
   import { invoke, isTauri } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { toasts } from "./lib/toast";
@@ -124,6 +125,33 @@
     void ensureViewLoaded(currentView);
   });
 
+  /** Diagnostics are expensive — only refresh the IDE badge when IDE is open. */
+  $effect(() => {
+    if (currentView !== "ide") return;
+    const path = $projectPath;
+    if (!path) {
+      ideIssueCount.set(0);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const diags: { severity?: string }[] = await invoke("get_diagnostics", { path });
+        if (cancelled) return;
+        const blocking = (diags ?? []).filter((d) => {
+          const sev = String(d.severity ?? "");
+          return sev === "Error" || sev === "error" || sev === "critical";
+        });
+        ideIssueCount.set(blocking.length);
+      } catch {
+        /* keep last */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
   let showShortcuts = $state(false);
   let showCommandPalette = $state(false);
   let contentEl = $state<HTMLElement | undefined>(undefined);
@@ -224,6 +252,10 @@
     void registerProcessListeners();
     void refreshRunningInstances();
     const unlistenSoftVerify = registerSoftVerifyListeners();
+    let stopHomeEnrich: (() => void) | null = null;
+    void ensureHomeEnrichListener().then((stop) => {
+      stopHomeEnrich = stop;
+    });
     // Sync potato + concurrency from persisted launcher settings (best-effort).
     let launcherSnapshot: LauncherSettings | null = null;
     let scaleResizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -381,8 +413,6 @@
         markSwarmOnboardLocallyDone();
       }
       try {
-        // Restore rail instances after WebView2 profile wipe (localStorage only).
-        await recentProjects.hydrateFromDisk();
         // Desktop shortcut / CLI: `--launch <manifest>` opens the instance and starts the client.
         const pendingLaunch = await api.files.takePendingLaunch();
         if (pendingLaunch) {
@@ -399,6 +429,14 @@
             toasts.error(`Could not launch from shortcut: ${e}`);
           }
         } else {
+          // One invoke: recent + lastOpened + validate + auth cache + stats/icons.
+          const snap = await api.home.bootstrap();
+          applyHomeSnapshot(snap);
+        }
+      } catch {
+        // Fallback: hydrate recent list only (old binary / offline).
+        try {
+          await recentProjects.hydrateFromDisk();
           const lastPath = await api.session.getLastOpened();
           if (lastPath) {
             const info = await api.project.validate(lastPath);
@@ -407,13 +445,14 @@
             projectPath.set(manifestPath);
             projectInfo.set(info as any);
           }
+        } catch {
+          // no last project — that's fine
         }
-      } catch {
-        // no last project — that's fine
       }
     })();
 
     return () => {
+      stopHomeEnrich?.();
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
       window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);

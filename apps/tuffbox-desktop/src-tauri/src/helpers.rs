@@ -109,11 +109,31 @@ pub(crate) fn auto_snapshot_with_changed_files(
     auto_snapshot_detailed(manifest_path, operation, changed_files, &[])
 }
 
+/// Safety snapshot before a mod install/remove/update. Does **not** write a History
+/// journal entry — callers must call `finalize_mod_history` with human-readable lines
+/// after the mutation (avoids logging raw Modrinth/CF ids like `aC3cM3Vq`).
+pub(crate) fn auto_snapshot_before_mod_op(
+    manifest_path: &Path,
+    operation: &str,
+) -> anyhow::Result<Snapshot> {
+    auto_snapshot_detailed_ex(manifest_path, operation, &[], &[], false)
+}
+
 pub(crate) fn auto_snapshot_detailed(
     manifest_path: &Path,
     operation: &str,
     changed_files: &[PathBuf],
     actions_summary: &[String],
+) -> anyhow::Result<Snapshot> {
+    auto_snapshot_detailed_ex(manifest_path, operation, changed_files, actions_summary, true)
+}
+
+fn auto_snapshot_detailed_ex(
+    manifest_path: &Path,
+    operation: &str,
+    changed_files: &[PathBuf],
+    actions_summary: &[String],
+    journal: bool,
 ) -> anyhow::Result<Snapshot> {
     let project_dir = manifest_path.parent().ok_or_else(|| {
         anyhow::anyhow!("manifest path has no parent: {}", manifest_path.display())
@@ -147,14 +167,16 @@ pub(crate) fn auto_snapshot_detailed(
         changed_files,
         meta,
     )?;
-    let _ = pack_events::append_from_snapshot_with_summary(
-        project_dir,
-        operation,
-        &snapshot.id,
-        changed_files,
-        &reason,
-        &snapshot.actions_summary,
-    );
+    if journal {
+        let _ = pack_events::append_from_snapshot_with_summary(
+            project_dir,
+            operation,
+            &snapshot.id,
+            changed_files,
+            &reason,
+            &snapshot.actions_summary,
+        );
+    }
     Ok(snapshot)
 }
 
@@ -354,8 +376,176 @@ pub(crate) fn save_recent_projects(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    // Preserve materialized home-cache fields when the frontend saves path+info only.
+    let existing = load_recent_projects();
+    let by_path: std::collections::HashMap<&str, &crate::types::RecentProjectEntry> = existing
+        .iter()
+        .map(|e| (e.path.as_str(), e))
+        .collect();
+    let merged: Vec<crate::types::RecentProjectEntry> = projects
+        .iter()
+        .map(|p| {
+            let mut next = p.clone();
+            if let Some(prev) = by_path.get(p.path.as_str()) {
+                if next.icon_data_url.is_none() {
+                    next.icon_data_url = prev.icon_data_url.clone();
+                }
+                if next.size_label.is_none() {
+                    next.size_label = prev.size_label.clone();
+                    next.size_bytes = prev.size_bytes;
+                    next.size_fingerprint = prev.size_fingerprint.clone();
+                }
+                if next.stats_playtime_seconds.is_none() {
+                    next.stats_playtime_seconds = prev.stats_playtime_seconds;
+                    next.stats_last_launch = prev.stats_last_launch.clone();
+                }
+            }
+            next
+        })
+        .collect();
+    let json = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Clear size / icon / stats cache for one recent project (mods changed, launch, …).
+pub(crate) fn invalidate_recent_home_cache(manifest_path: &str) {
+    let mut projects = load_recent_projects();
+    let mut changed = false;
+    for entry in &mut projects {
+        if entry.path == manifest_path
+            || entry.path.replace('\\', "/") == manifest_path.replace('\\', "/")
+        {
+            entry.icon_data_url = None;
+            entry.size_label = None;
+            entry.size_bytes = None;
+            entry.size_fingerprint = None;
+            entry.stats_playtime_seconds = None;
+            entry.stats_last_launch = None;
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = save_recent_projects_raw(&projects);
+    }
+}
+
+/// Patch cache fields for a path without reordering the recent list.
+pub(crate) fn patch_recent_home_cache(
+    manifest_path: &str,
+    patch: RecentHomeCachePatch,
+) -> Result<(), String> {
+    let mut projects = load_recent_projects();
+    let mut found = false;
+    for entry in &mut projects {
+        if entry.path == manifest_path
+            || entry.path.replace('\\', "/") == manifest_path.replace('\\', "/")
+        {
+            if let Some(v) = patch.icon_data_url {
+                entry.icon_data_url = v;
+            }
+            if let Some(v) = patch.size_label {
+                entry.size_label = v;
+            }
+            if let Some(v) = patch.size_bytes {
+                entry.size_bytes = v;
+            }
+            if let Some(v) = patch.size_fingerprint {
+                entry.size_fingerprint = v;
+            }
+            if let Some(v) = patch.stats_playtime_seconds {
+                entry.stats_playtime_seconds = v;
+            }
+            if let Some(v) = patch.stats_last_launch {
+                entry.stats_last_launch = v;
+            }
+            found = true;
+            break;
+        }
+    }
+    if found {
+        save_recent_projects_raw(&projects)?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+pub(crate) struct RecentHomeCachePatch {
+    pub icon_data_url: Option<Option<String>>,
+    pub size_label: Option<Option<String>>,
+    pub size_bytes: Option<Option<u64>>,
+    pub size_fingerprint: Option<Option<String>>,
+    pub stats_playtime_seconds: Option<Option<u64>>,
+    pub stats_last_launch: Option<Option<String>>,
+}
+
+fn save_recent_projects_raw(
+    projects: &[crate::types::RecentProjectEntry],
+) -> Result<(), String> {
+    let path = recent_projects_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let json = serde_json::to_string_pretty(projects).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())
+}
+
+/// Recursive byte size of common instance subfolders (mods, config, …).
+pub(crate) fn compute_instance_size_bytes(project_dir: &Path) -> u64 {
+    let mut total: u64 = 0;
+    fn walk(dir: &Path, total: &mut u64) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                walk(&p, total);
+            } else if let Ok(meta) = p.metadata() {
+                *total += meta.len();
+            }
+        }
+    }
+    for sub in &[
+        "mods",
+        "config",
+        "resourcepacks",
+        "shaderpacks",
+        "datapacks",
+        "scripts",
+        "logs",
+    ] {
+        walk(&project_dir.join(sub), &mut total);
+    }
+    total
+}
+
+pub(crate) fn format_byte_size(total: u64) -> String {
+    if total < 1024 {
+        format!("{} B", total)
+    } else if total < 1024 * 1024 {
+        format!("{:.1} KB", total as f64 / 1024.0)
+    } else if total < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", total as f64 / 1024.0 / 1024.0)
+    } else {
+        format!("{:.1} GB", total as f64 / 1024.0 / 1024.0 / 1024.0)
+    }
+}
+
+/// Cheap fingerprint from mods + config directory mtimes (invalidates size cache).
+pub(crate) fn instance_size_fingerprint(project_dir: &Path) -> String {
+    let mut parts = Vec::new();
+    for sub in &["mods", "config"] {
+        let p = project_dir.join(sub);
+        let stamp = std::fs::metadata(&p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        parts.push(format!("{sub}:{stamp}"));
+    }
+    parts.join("|")
 }
 
 // ── Stats persistence ────────────────────────────────────────────
