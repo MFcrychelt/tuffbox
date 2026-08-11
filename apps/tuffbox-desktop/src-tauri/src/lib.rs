@@ -9209,6 +9209,132 @@ fn get_diagnostics(path: String) -> Result<Vec<tuffbox_core::Diagnostic>, String
     Ok(Resolver::analyze_project(&manifest, &graph))
 }
 
+/// Aggregated health report for a project. Combines the dependency-graph
+/// diagnostics with crash flags, Modrinth export blockers and missing-file
+/// counts so the Health screen can render one verdict instead of stitching
+/// together several unrelated endpoints (spec: «Один агрегат HealthReport»).
+#[tauri::command(rename_all = "camelCase")]
+fn get_health_report(path: String) -> Result<serde_json::Value, String> {
+    let manifest_path = resolve_manifest_path(&path).map_err(|e| e.to_string())?;
+    let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let graph = DependencyGraph::from_manifest(&manifest);
+    let diagnostics = Resolver::analyze_project(&manifest, &graph);
+    let project_dir = manifest_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_default();
+
+    let error_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Error)
+        .count();
+    let warning_count = diagnostics
+        .iter()
+        .filter(|d| d.severity == tuffbox_core::DiagnosticSeverity::Warning)
+        .count();
+
+    // Crash flags: any crash-report file present under crash-reports/.
+    let crash_reports = project_dir.join("crash-reports");
+    let has_crash = crash_reports.is_dir()
+        && std::fs::read_dir(&crash_reports)
+            .map(|rd| {
+                rd.flatten().any(|e| {
+                    e.path().is_file()
+                        && e.path()
+                            .extension()
+                            .map_or(false, |x| x.eq_ignore_ascii_case("txt"))
+                })
+            })
+            .unwrap_or(false);
+
+    // Modrinth export blockers (error-severity only are blockers).
+    let export_issues = tuffbox_core::validate_modrinth_export(&manifest);
+    let export_blockers: Vec<serde_json::Value> = export_issues
+        .iter()
+        .filter(|i| matches!(i.severity, tuffbox_core::exporter::ExportIssueSeverity::Error))
+        .map(|i| {
+            serde_json::json!({
+                "code": i.code,
+                "message": i.message,
+                "target": i.target,
+            })
+        })
+        .collect();
+
+    // Missing / hash-mismatched content files (best-effort: resolve against
+    // the instance dir; only a count + failed names so this stays cheap).
+    let mut missing_files: Vec<String> = Vec::new();
+    let mut missing_hashes: Vec<String> = Vec::new();
+    let instance_dir = tuffbox_core::instance_dir_for_manifest(&manifest_path)
+        .unwrap_or_else(|| project_dir.clone());
+    for module in &manifest.mods {
+        let Some(file_name) = module.file_name.as_deref().filter(|f| !f.is_empty()) else {
+            continue;
+        };
+        if module.source.kind == tuffbox_core::manifest::SourceKind::Local {
+            continue;
+        }
+        let content_dir = tuffbox_core::content_dir_for(&instance_dir, module.content_type);
+        let target = content_dir.join(file_name);
+        if !target.is_file() {
+            missing_files.push(file_name.to_string());
+            continue;
+        }
+        if let Some(expected) = module
+            .hashes
+            .as_ref()
+            .and_then(|h| h.sha1.as_deref())
+            .filter(|h| !h.is_empty())
+        {
+            if let Ok(actual) = tuffbox_core::mc_install::sha1_file(&target) {
+                if !actual.eq_ignore_ascii_case(expected) {
+                    missing_hashes.push(file_name.to_string());
+                }
+            }
+        }
+    }
+
+    let diag_json: Vec<serde_json::Value> = diagnostics
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "severity": format!("{:?}", d.severity).to_lowercase(),
+                "code": d.code,
+                "message": d.message,
+                "relatedNodes": d.related_nodes,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "manifestPath": manifest_path,
+        "diagnostics": diag_json,
+        "errorCount": error_count,
+        "warningCount": warning_count,
+        "hasCrash": has_crash,
+        "crashReports": if crash_reports.is_dir() {
+            std::fs::read_dir(&crash_reports)
+                .map(|rd| {
+                    rd.flatten()
+                        .filter(|e| {
+                            e.path().is_file()
+                                && e.path().extension().map_or(false, |x| x.eq_ignore_ascii_case("txt"))
+                        })
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        },
+        "exportBlockers": export_blockers,
+        "missingFiles": missing_files,
+        "missingHashes": missing_hashes,
+        "missingCount": missing_files.len(),
+        "hashMismatchCount": missing_hashes.len(),
+    }))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_resolve_change_plan(path: String) -> Result<Option<tuffbox_core::ChangePlan>, String> {
     let manifest = manifest_for_graph(&path)?;
@@ -15726,6 +15852,7 @@ pub fn run() {
             get_graph,
             refresh_graph,
             get_diagnostics,
+            get_health_report,
             run_project_validation,
             check_mod_compatibility,
             compare_modpacks,

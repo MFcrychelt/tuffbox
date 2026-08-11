@@ -163,6 +163,17 @@
   };
 
   let diagnosis = $state<CrashDiagnosis | null>(null);
+  /** Aggregated HealthReport (diagnostics + crash + export blockers + missing). */
+  let health = $state<{
+    errorCount?: number;
+    warningCount?: number;
+    hasCrash?: boolean;
+    crashReports?: string[];
+    exportBlockers?: { code: string; message: string; target?: string | null }[];
+    missingCount?: number;
+    hashMismatchCount?: number;
+  } | null>(null);
+  let healthLoading = $state(false);
   let selectedReportId = $state("");
   let preferLatestLog = $state(true);
   let preferLauncherLog = $state(false);
@@ -220,6 +231,18 @@
     }
   }
 
+  async function loadHealth() {
+    if (!$projectPath) return;
+    healthLoading = true;
+    try {
+      health = await invoke("get_health_report", { path: $projectPath });
+    } catch {
+      health = null;
+    } finally {
+      healthLoading = false;
+    }
+  }
+
   async function load(force = false) {
     if (!$projectPath) return;
     if (!force && lastLoadedPath === $projectPath && diagnosis) return;
@@ -251,6 +274,7 @@
         selectedReportId = data.selectedReport?.summary.id ?? selectedReportId;
       }
       plan = data.fixPlan ?? null;
+      void loadHealth();
       detectWrongLoaderMods();
       detectDuplicateModJars();
       if (data.sessionHealthy && preferLatestLog) {
@@ -2465,6 +2489,40 @@
       onScrollToWarnings={scrollToPackWarnings}
     />
 
+    {#if health}
+      <section class="health-strip panel" aria-label="Pack health summary">
+        {#if health.hasCrash}
+          <span class="health-chip bad" title={(health.crashReports ?? []).join("\n")}>
+            ⚠ {health.crashReports?.length ?? 1} crash report{((health.crashReports?.length ?? 1) !== 1) ? "s" : ""}
+          </span>
+        {/if}
+        <span class="health-chip" class:bad={(health.errorCount ?? 0) > 0}>
+          {health.errorCount ?? 0} errors
+        </span>
+        <span class="health-chip" class:bad={(health.warningCount ?? 0) > 0}>
+          {health.warningCount ?? 0} warnings
+        </span>
+        <span class="health-chip" class:bad={(health.missingCount ?? 0) > 0}>
+          {health.missingCount ?? 0} missing
+        </span>
+        {#if (health.hashMismatchCount ?? 0) > 0}
+          <span class="health-chip bad">{health.hashMismatchCount} hash mismatch</span>
+        {/if}
+        <span class="health-chip" class:bad={(health.exportBlockers?.length ?? 0) > 0}>
+          {health.exportBlockers?.length ?? 0} export blocker{((health.exportBlockers?.length ?? 0) !== 1) ? "s" : ""}
+        </span>
+        {#if (health.exportBlockers?.length ?? 0) > 0}
+          <div class="health-blockers">
+            {#each health.exportBlockers ?? [] as b (b.code)}
+              <code>{b.code}</code><span>{b.message}</span>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    {:else if healthLoading}
+      <div class="loading compact health-strip-loading">Loading health…</div>
+    {/if}
+
     {#if !sessionOk}
       <DiagnoseVerdictHero
         sessionOk={sessionOk}
@@ -2989,6 +3047,50 @@
     align-items: center;
     gap: 6px;
     padding-top: 10px;
+  }
+  .health-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+  }
+  .health-chip {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+    border: 1px solid var(--border-color);
+  }
+  .health-chip.bad {
+    color: #fca5a5;
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .health-blockers {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-sm);
+    background: rgba(251, 191, 36, 0.08);
+    border: 1px solid rgba(251, 191, 36, 0.25);
+  }
+  .health-blockers code {
+    font-size: 11px;
+    color: #fbbf24;
+  }
+  .health-blockers span {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .health-strip-loading {
+    margin-bottom: 14px;
   }
   .recent-pack-panel {
     margin-bottom: 14px;

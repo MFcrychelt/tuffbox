@@ -1331,6 +1331,21 @@ export const api = {
     getManifestSchema(p?: string) { return cmd<Record<string, unknown>>("get_manifest_schema", pathArg(p)); },
     runValidation(p?: string) { return cmd<Record<string, unknown>>("run_project_validation", pathArg(p)); },
     getDiagnostics(p?: string) { return cmd<Diagnostic[]>("get_diagnostics", pathArg(p)); },
+    getHealthReport(p?: string) {
+      return cmd<{
+        manifestPath: string;
+        diagnostics?: { severity: string; code: string; message: string; relatedNodes?: string[] }[];
+        errorCount?: number;
+        warningCount?: number;
+        hasCrash?: boolean;
+        crashReports?: string[];
+        exportBlockers?: { code: string; message: string; target?: string | null }[];
+        missingFiles?: string[];
+        missingHashes?: string[];
+        missingCount?: number;
+        hashMismatchCount?: number;
+      }>("get_health_report", pathArg(p));
+    },
     repair(p?: string) {
       return cmd<{
         downloaded?: string[];

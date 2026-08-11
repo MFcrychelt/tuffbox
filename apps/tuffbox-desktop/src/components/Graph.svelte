@@ -109,6 +109,17 @@
     simulation?.stop();
   }
 
+  /// Cancel a long in-flight graph load / layout: invalidates the generation
+  /// counter (so stale async results are dropped), stops the d3 simulation,
+  /// and clears the loading overlay. The last successful graph stays painted.
+  function cancelGraphLoad() {
+    changePlanGen++;
+    loading = false;
+    changePlanLoading = false;
+    graphRefreshing = false;
+    pauseSimulation();
+  }
+
   $effect(() => {
     if (!changePlan) return;
     const key = `${changePlan.summary}|${changePlan.actions?.length ?? 0}`;
@@ -2432,6 +2443,7 @@
         <div class="graph-loading-overlay" role="status">
           <Loader2 size={20} class="spin" />
           <span>Loading graph…</span>
+          <button type="button" class="ghost mini" onclick={cancelGraphLoad}>Cancel</button>
         </div>
       </section>
     </div>
@@ -2755,6 +2767,7 @@
         <div class="graph-loading-overlay" role="status">
           <Loader2 size={20} class="spin" />
           <span>Loading graph…</span>
+          <button type="button" class="ghost mini" onclick={cancelGraphLoad}>Cancel</button>
         </div>
       {/if}
     </section>
