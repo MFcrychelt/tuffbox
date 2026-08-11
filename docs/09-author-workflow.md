@@ -135,7 +135,8 @@ Live preview справа: переключатель Modrinth | CurseForge card
 - Format JSON/TOML; Lint on open/save;
 - snippets KubeJS / CraftTweaker (вставка в курсор);
 - auto snapshot перед сохранением + ссылки в History / Snapshots;
-- confirm при уходе со stage с unsaved edits.
+- confirm при уходе со stage с unsaved edits;
+- **Config AI** sidebar (закрыт по умолчанию; `localStorage` open state): goal chips + chat → ActionPlan `edit_config` → Review → Apply; sessions в `.tuffbox/tune_chats/` и в общем sidebar **Chats** (badge Tune / Open in Tune); unknown keys → allowlisted web research.
 
 Результат:
 
@@ -150,12 +151,15 @@ Live preview справа: переключатель Modrinth | CurseForge card
 Действия:
 
 - визуальный canvas + inspector (SNBT round-trip); AI sidebar **закрыт по умолчанию** (открыть кнопкой; состояние в `localStorage`);
+- inspector IA: **What to do → How to prove → What you get → What unlocks** (+ More); sentence case; Advanced свернут;
+- новый квест = item-task (пустой item + Choose item); **N** / double-click / Add quest;
 - **Ctrl/Cmd+S** — Save all (SNBT); уход со stage / Reload при dirty — confirm;
 - клик по validation issues → jump + fit к квесту; search: Enter = first match, Esc = clear;
 - **AI sidebar** — example chips, multi-turn chat, multi-pass для линий на 20+ квестов; Advanced: Force AI / Paste JSON / Lore / Extend;
 - Review → **Apply** обновляет editor в памяти; **Save** пишет SNBT (Apply ≠ Save);
-- Book / Groups — drawer под toolbar (dirty-dot); Save book/groups входит в Save all;
-- quest search; description formatting (`&` codes).
+- Book / Groups / Tables / Locales / KubeJS — sheet-модалки (не popover); Book toggle закрывает chrome;
+- один canvas toolbar (Filter · Fit · Add · layouts); stats chips в верхней tb;
+- quest search; description formatting (`&` codes) в overflow.
 
 Результат:
 

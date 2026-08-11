@@ -167,7 +167,7 @@
   function defaultsForTask(type: string): Partial<QuestTask> {
     switch (type) {
       case "item":
-        return { properties: { item: "minecraft:stone", count: 1 } };
+        return { properties: { count: 1 } };
       case "kill":
         return { properties: { entity: "minecraft:zombie", value: 1 } };
       case "dimension":
@@ -365,10 +365,10 @@
 
 <section class="tr ftbq-tr">
   <div class="tr-h">
-    <h4>Tasks</h4>
+    <h4>How to prove</h4>
     <div class="add-row">
       <select onchange={onPickTaskType}>
-        <option value="">+ Task type…</option>
+        <option value="">+ Task…</option>
         {#each TASK_TYPE_OPTIONS as t (t.id)}
           <option value={t.id}>{t.label}</option>
         {/each}
@@ -412,6 +412,8 @@
         <ItemStackEditor
           value={itemValueOf(task.properties)}
           allowFilters={true}
+          emphasizeEmpty={true}
+          emptyCta="Choose item"
           onChange={(v) => setItemValue(task, v)}
         />
         <label
@@ -433,24 +435,27 @@
             {/each}
           </select>
         </label>
-        <p class="hint">
-          Tip: “mine N blocks” in FTB Quests is usually an Item task with Count = N (drops enter
-          inventory). Native break-block tracking needs an addon (e.g. QNaturals).
-        </p>
-        <label
-          >Match components
-          <select
-            value={String(task.properties?.match_components ?? "none")}
-            onchange={(e) => {
-              const v = selectVal(e);
-              setProp(task, "match_components", v === "none" ? null : v);
-            }}
-          >
-            <option value="none">None / default</option>
-            <option value="fuzzy">Fuzzy</option>
-            <option value="strict">Strict</option>
-          </select>
-        </label>
+        <details class="raw">
+          <summary>Advanced</summary>
+          <p class="hint">
+            Tip: “mine N blocks” in FTB Quests is usually an Item task with Count = N (drops enter
+            inventory). Native break-block tracking needs an addon (e.g. QNaturals).
+          </p>
+          <label
+            >Match components
+            <select
+              value={String(task.properties?.match_components ?? "none")}
+              onchange={(e) => {
+                const v = selectVal(e);
+                setProp(task, "match_components", v === "none" ? null : v);
+              }}
+            >
+              <option value="none">None / default</option>
+              <option value="fuzzy">Fuzzy</option>
+              <option value="strict">Strict</option>
+            </select>
+          </label>
+        </details>
       {:else if task.type === "observation"}
         <label
           >Observation type
@@ -720,9 +725,6 @@
             <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(task.id)}
               >Open in KubeJS</button
             >
-            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(task.id)}
-              >Generate handler</button
-            >
           </div>
         {:else}
           <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customTask).</p>
@@ -738,7 +740,7 @@
       {/if}
 
       <details class="raw">
-        <summary>Raw properties</summary>
+        <summary>Advanced · raw properties</summary>
         <textarea
           rows="3"
           value={JSON.stringify(task.properties ?? {}, null, 0)}
@@ -756,7 +758,7 @@
   {/each}
 
   <div class="tr-h">
-    <h4>Rewards</h4>
+    <h4>What you get</h4>
     <div class="add-row">
       <select onchange={onPickRewardType}>
         <option value="">+ Reward type…</option>
@@ -950,9 +952,6 @@
             <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(reward.id)}
               >Open in KubeJS</button
             >
-            <button type="button" class="kjs-btn" onclick={() => onOpenKubeJs?.(reward.id)}
-              >Generate handler</button
-            >
           </div>
         {:else}
           <p class="hint">Wire logic in Book → KubeJS (FTBQuestsEvents.customReward).</p>
@@ -963,7 +962,7 @@
         >
       {/if}
       <details class="raw">
-        <summary>Raw properties</summary>
+        <summary>Advanced · raw properties</summary>
         <textarea
           rows="3"
           value={JSON.stringify(reward.properties ?? {}, null, 0)}
@@ -979,18 +978,6 @@
       </details>
     </div>
   {/each}
-
-  <div class="icon-row">
-    <ItemStackEditor
-      label="Quest icon"
-      value={quest.icon ?? null}
-      allowFilters={false}
-      onChange={(v) => {
-        quest.icon = v;
-        onDirty();
-      }}
-    />
-  </div>
 </section>
 
 <style>
@@ -1011,11 +998,11 @@
   }
   .tr-h h4 {
     margin: 0;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--ftbq-accent-teal, #3db8a8);
-    font-weight: 700;
+    font-weight: 600;
   }
   .add-row select {
     font-size: 10px;
@@ -1048,9 +1035,9 @@
   .card label {
     display: grid;
     gap: 3px;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .card input,
@@ -1093,11 +1080,6 @@
     font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
     text-transform: none;
-  }
-  .icon-row {
-    margin: 0;
-    padding: 8px 12px 12px;
-    border-top: 1px solid var(--ftbq-border);
   }
   .raw {
     margin-top: 4px;

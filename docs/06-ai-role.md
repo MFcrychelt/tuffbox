@@ -6,13 +6,14 @@
 
 ИИ — это помощник для анализа логов, объяснений и генерации гипотез. Исполняет изменения только детерминированный код лаунчера после подтверждения пользователя.
 
-## Три контура (не смешивать контракты)
+## Четыре контура (не смешивать контракты)
 
 | Контур | Контракт | UI | Источник |
 |--------|----------|-----|----------|
 | **Create Mode** | `PackBrief` → `PackDraft` | Sidebar **Chats** | LLM + catalog assemble |
 | **Ideas** | `{ slug, count, name? }` | Content modal | Co-occurrence graph (**не** LLM) |
 | **Crash diagnose** | `ActionPlan` | IDE **Diagnose** | LLM / KB / swarm lookup |
+| **Tune Config Advisor** | `ActionPlan` (`edit_config` only) | IDE **Tune** AI sidebar | LLM + local hints + allowlisted web research |
 
 Общая грамматика для игрока:
 
@@ -21,8 +22,8 @@ Context → Proposal → Review (чекбоксы / risk) → Confirm → valida
 ```
 
 - ИИ / граф **предлагает**; игрок **решает**; лаунчер **исполняет**.
-- Create Mode **не** эмитит ActionPlan; Ideas **не** зовёт crash planner.
-- Review UI обязателен: ActionPlanReviewPanel / DraftConfirmPanel / Ideas checkboxes — **не** silent `window.confirm` как единственный шаг (confirm может остаться только для Test-launch prompt).
+- Create Mode **не** эмитит ActionPlan; Ideas **не** зовёт crash planner; Tune Advisor **не** ставит/удаляет моды.
+- Review UI обязателен: ActionPlanReviewPanel / TunePlanReview / DraftConfirmPanel / Ideas checkboxes — **не** silent `window.confirm` как единственный шаг (confirm может остаться только для Test-launch prompt).
 
 ## Dual-mode диагностика крашей
 
@@ -64,7 +65,7 @@ API (ваш сервер):
 - объяснение stacktrace;
 - гипотезы и ранжирование подозрительных модов;
 - предложение **структурированного** плана (`ActionPlan`);
-- помощь с config values (через `edit_config`);
+- помощь с config values (через `edit_config`) — контур **Tune Config Advisor** во вкладке Tune;
 - предложение **квестовых глав** (`QuestPlan`) для FTB Quests editor.
 
 ## Что делает код
@@ -227,6 +228,33 @@ Fingerprint подставляется автоматически из теку�
 | **Resolution Distill** | После verified fix: сжать историю действий пользователя → показать план → **Confirm/Edit** → только тогда publish |
 
 Authored export из Diagnostics («Save KB case») — прямой вход в capsule format для будущей сети.
+
+## Tune Config Advisor
+
+Отдельный контур во вкладке **Tune** (сайдбар Config AI). Промпт: `TUNE_CONFIG_SYSTEM_PROMPT` в `tuffbox_core::tune_config_ai`.
+
+```text
+Goal / chat
+→ TuneContext (inventory, open file, key hints from comments, deterministic templates)
+→ LLM draft ActionPlan (edit_config only) + unknownKeys / researchQueries
+→ optional allowlisted web research (Settings → AI → tuneWebResearch)
+→ refine → validate_tune_action_plan
+→ TunePlanReview (checkboxes + dry-run diff) → Confirm → apply_action_plan → snapshot
+```
+
+Правила:
+
+- Только `op: edit_config` (`json_merge` | `toml_set` | `properties_set` | `replace_file`).
+- Неизвестный ключ **не** выдумывается: research (Modrinth / wiki.gg / GitHub / …) или остаётся в `unknownKeys`.
+- Silent rewrite запрещён — всегда Review.
+- Optimize Pack «Use AI for configs» вызывает тот же advisor (goal `fps_client`).
+
+### Ручной чеклист
+
+1. Tune → AI → **Explain file** на открытом toml без сети — explanation, `actions=[]`.
+2. **FPS** chip — plan с `edit_config`, Review показывает diff, Apply → snapshot, буфер обновляется.
+3. **Fill unknowns** на редком моде — researchLog в UI; Settings → выключить web research → skip lookup.
+4. Rollback через Snapshots после Apply.
 
 ## Create Mode (PackBrief → PackDraft)
 

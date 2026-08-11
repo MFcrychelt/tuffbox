@@ -7,6 +7,7 @@
     type LocaleMap,
   } from "../../lib/questLocale";
   import TaskRewardEditor from "./TaskRewardEditor.svelte";
+  import ItemStackEditor from "./ItemStackEditor.svelte";
 
   let {
     quest,
@@ -324,25 +325,24 @@
 
 <aside class="insp ftbq-view">
   <div class="insp-h">
-    <h3 title={quest.id}>{quest.title}</h3>
+    <h3 title={quest.id}>{quest.title || "Untitled quest"}</h3>
+    <button
+      type="button"
+      class="qid-mini"
+      title={idCopied ? "Copied" : "Copy quest id"}
+      onclick={() => void copyQuestId()}
+    >
+      {#if idCopied}
+        <Check size={12} />
+      {:else}
+        <Copy size={12} />
+      {/if}
+      <code>{quest.id.slice(0, 8)}</code>
+    </button>
     <button type="button" class="ico danger" title="Delete quest" aria-label="Delete quest" onclick={onRemove}>
       <Trash2 size={14} />
     </button>
   </div>
-  <button
-    type="button"
-    class="qid"
-    title="Click to copy quest id"
-    onclick={() => void copyQuestId()}
-  >
-    <code>{quest.id}</code>
-    {#if idCopied}
-      <Check size={12} />
-      <span class="qid-copied">Copied</span>
-    {:else}
-      <Copy size={12} />
-    {/if}
-  </button>
 
   {#if myIssues.length > 0}
     <div class="val-warn">
@@ -352,110 +352,32 @@
     </div>
   {/if}
 
-  <div class="fields">
-    {#if availableLocales.length > 1}
-      <label class="compare-pick"
-        >Compare with
-        <select
-          value={compareLocale ?? ""}
-          onchange={(e) => {
-            const v = (e.currentTarget as HTMLSelectElement).value;
-            onCompareLocaleChange?.(v || null);
-          }}
+  <!-- 1. What to do -->
+  <section class="block">
+    <h4 class="block-h">What to do</h4>
+    <div class="fields">
+      <div class="title-icon">
+        <label class="grow"
+          >Title<input
+            bind:value={quest.title}
+            oninput={() => {
+              quest.titleFromSnbt = true;
+              onDirty();
+            }}
+          /></label
         >
-          <option value="">(off)</option>
-          {#each availableLocales as c (c)}
-            {#if c !== activeLocale}
-              <option value={c}>{c}</option>
-            {/if}
-          {/each}
-        </select>
-      </label>
-    {/if}
-
-    {#if showCompare}
-      <div class="locale-cols">
-        <div class="locale-col">
-          <span class="col-h">{activeLocale ?? "active"}</span>
-          <label
-            >Title<input
-              bind:value={quest.title}
-              oninput={() => {
-                quest.titleFromSnbt = true;
-                onDirty();
-              }}
-            /></label
-          >
-          <label
-            >Subtitle<input
-              bind:value={quest.subtitle}
-              oninput={() => {
-                quest.subtitleFromSnbt = true;
-                onDirty();
-              }}
-              placeholder="Optional"
-            /></label
-          >
-          <label
-            >Description
-            <div class="fmt-bar">
-              <button type="button" onclick={() => wrapFmt("&l")}>Bold</button>
-              <button type="button" onclick={() => wrapFmt("&a")}>Green</button>
-              <button type="button" onclick={() => wrapFmt("&7")}>Gray</button>
-              <button type="button" onclick={() => wrapFmt("&e")}>Gold</button>
-            </div>
-            <textarea
-              rows="4"
-              value={descText}
-              oninput={autoGrowDescription}
-              onchange={commitDescription}
-              onblur={commitDescription}
-              placeholder="One line per paragraph"
-            ></textarea>
-          </label>
-        </div>
-        <div class="locale-col">
-          <span class="col-h">{compareLocale}</span>
-          <label
-            >Title<input
-              bind:value={cmpTitle}
-              oninput={() =>
-                patchCompare((map) => {
-                  map[`quest.${quest.id}.title`] = cmpTitle;
-                })}
-            /></label
-          >
-          <label
-            >Subtitle<input
-              bind:value={cmpSubtitle}
-              oninput={() =>
-                patchCompare((map) => {
-                  map[`quest.${quest.id}.quest_subtitle`] = cmpSubtitle;
-                })}
-            /></label
-          >
-          <label
-            >Description
-            <textarea
-              rows="4"
-              bind:value={cmpDesc}
-              onchange={commitCompareDesc}
-              onblur={commitCompareDesc}
-              placeholder="Compare locale description"
-            ></textarea>
-          </label>
+        <div class="icon-slot">
+          <ItemStackEditor
+            label="Icon"
+            value={quest.icon ?? null}
+            allowFilters={false}
+            onChange={(v) => {
+              quest.icon = v;
+              onDirty();
+            }}
+          />
         </div>
       </div>
-    {:else}
-      <label
-        >Title<input
-          bind:value={quest.title}
-          oninput={() => {
-            quest.titleFromSnbt = true;
-            onDirty();
-          }}
-        /></label
-      >
       <label
         >Subtitle<input
           bind:value={quest.subtitle}
@@ -468,73 +390,209 @@
       >
       <label
         >Description
-        <div class="fmt-bar">
-          <button type="button" onclick={() => wrapFmt("&l")}>Bold</button>
-          <button type="button" onclick={() => wrapFmt("&a")}>Green</button>
-          <button type="button" onclick={() => wrapFmt("&7")}>Gray</button>
-          <button type="button" onclick={() => wrapFmt("&e")}>Gold</button>
-          <button type="button" onclick={() => insertTemplate("objective")}>Objective</button>
-          <button type="button" onclick={() => insertTemplate("story")}>Story</button>
-        </div>
+        <details class="fmt-details">
+          <summary>Formatting</summary>
+          <div class="fmt-bar">
+            <button type="button" onclick={() => wrapFmt("&l")}>Bold</button>
+            <button type="button" onclick={() => wrapFmt("&a")}>Green</button>
+            <button type="button" onclick={() => wrapFmt("&7")}>Gray</button>
+            <button type="button" onclick={() => wrapFmt("&e")}>Gold</button>
+            <button type="button" onclick={() => insertTemplate("objective")}>Objective</button>
+            <button type="button" onclick={() => insertTemplate("story")}>Story</button>
+          </div>
+        </details>
         <textarea
-          rows="4"
+          rows="3"
           value={descText}
           oninput={autoGrowDescription}
           onchange={commitDescription}
           onblur={commitDescription}
-          placeholder="One line per paragraph · & codes · JSON text lines ok"
+          placeholder="What the player should do…"
         ></textarea>
-        <small class="fmt-hint">Lines starting with {"{"} or [ are treated as raw JSON text by FTB Quests.</small>
       </label>
-    {/if}
-    <label class="checkbox">
-      <input type="checkbox" bind:checked={quest.optional} onchange={onDirty} />
-      Optional quest
-    </label>
-    <label
-      >Shape
-      <select
-        value={quest.shape ?? ""}
-        onchange={(e) => {
-          quest.shape = selectVal(e) || null;
-          onDirty();
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={quest.optional} onchange={onDirty} />
+        Optional quest
+      </label>
+    </div>
+  </section>
+
+  <!-- 2–3. How to prove / What you get -->
+  <TaskRewardEditor {quest} {onDirty} {rewardTableIds} {onOpenKubeJs} />
+
+  <!-- 4. What unlocks it -->
+  <section class="block">
+    <h4 class="block-h"><Link2 size={12} /> What unlocks it</h4>
+    <div class="deps">
+      {#each quest.dependencies as dep (dep)}
+        <span class="dep-tag" title={dep}>
+          {titleOf(dep)}
+          <button type="button" class="dep-rm" onclick={() => onRemoveDep(dep)}>×</button>
+        </span>
+      {/each}
+      {#if quest.dependencies.length === 0}
+        <span class="deps-empty">No dependencies — available immediately</span>
+      {/if}
+    </div>
+    <div class="dep-add">
+      <input
+        type="search"
+        class="dep-filter"
+        placeholder="Filter quests…"
+        bind:value={depFilter}
+        onkeydown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            applyDepFromFilter();
+          }
         }}
-      >
-        {#each SHAPE_OPTIONS as s (s.id || "_default")}
-          <option value={s.id}>{s.label}</option>
+      />
+      <select bind:value={depPick} size={Math.min(6, Math.max(3, filteredDepOptions.length + 1))}>
+        <option value="">Add dependency…</option>
+        {#each filteredDepOptions as o (o.id)}
+          <option value={o.id}>{o.label}</option>
         {/each}
       </select>
-    </label>
-    <label
-      >Size<input
-        type="number"
-        step="0.25"
-        min="0.25"
-        bind:value={quest.size}
-        oninput={onDirty}
-        placeholder="1"
-      /></label
-    >
-    <label
-      >Position (quest space)
-      <div class="xy">
-        <input type="number" step="0.5" bind:value={quest.x} oninput={onDirty} />
-        <input type="number" step="0.5" bind:value={quest.y} oninput={onDirty} />
-      </div>
-    </label>
-  </div>
+      <button
+        type="button"
+        class="add-btn"
+        disabled={!depPick && filteredDepOptions.length === 0}
+        onclick={applyDepFromFilter}>Add</button
+      >
+    </div>
+  </section>
 
+  <!-- More: appearance, flags, locale -->
   <button
     type="button"
     class="adv-tog"
     aria-expanded={showAdvanced}
-    aria-controls="quest-ftb-flags"
+    aria-controls="quest-more"
     onclick={() => (showAdvanced = !showAdvanced)}
   >
-    {showAdvanced ? "▾" : "▸"} FTB flags
+    {showAdvanced ? "▾" : "▸"} More
   </button>
   {#if showAdvanced}
-    <div class="fields flags" id="quest-ftb-flags">
+    <div class="fields flags" id="quest-more">
+      {#if availableLocales.length > 1}
+        <label class="compare-pick"
+          >Compare locale
+          <select
+            value={compareLocale ?? ""}
+            onchange={(e) => {
+              const v = (e.currentTarget as HTMLSelectElement).value;
+              onCompareLocaleChange?.(v || null);
+            }}
+          >
+            <option value="">(off)</option>
+            {#each availableLocales as c (c)}
+              {#if c !== activeLocale}
+                <option value={c}>{c}</option>
+              {/if}
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      {#if showCompare}
+        <div class="locale-cols">
+          <div class="locale-col">
+            <span class="col-h">{activeLocale ?? "active"}</span>
+            <label
+              >Title<input
+                bind:value={quest.title}
+                oninput={() => {
+                  quest.titleFromSnbt = true;
+                  onDirty();
+                }}
+              /></label
+            >
+            <label
+              >Subtitle<input
+                bind:value={quest.subtitle}
+                oninput={() => {
+                  quest.subtitleFromSnbt = true;
+                  onDirty();
+                }}
+              /></label
+            >
+            <label
+              >Description
+              <textarea
+                rows="3"
+                value={descText}
+                oninput={autoGrowDescription}
+                onchange={commitDescription}
+                onblur={commitDescription}
+              ></textarea>
+            </label>
+          </div>
+          <div class="locale-col">
+            <span class="col-h">{compareLocale}</span>
+            <label
+              >Title<input
+                bind:value={cmpTitle}
+                oninput={() =>
+                  patchCompare((map) => {
+                    map[`quest.${quest.id}.title`] = cmpTitle;
+                  })}
+              /></label
+            >
+            <label
+              >Subtitle<input
+                bind:value={cmpSubtitle}
+                oninput={() =>
+                  patchCompare((map) => {
+                    map[`quest.${quest.id}.quest_subtitle`] = cmpSubtitle;
+                  })}
+              /></label
+            >
+            <label
+              >Description
+              <textarea
+                rows="3"
+                bind:value={cmpDesc}
+                onchange={commitCompareDesc}
+                onblur={commitCompareDesc}
+              ></textarea>
+            </label>
+          </div>
+        </div>
+      {/if}
+
+      <label
+        >Shape
+        <select
+          value={quest.shape ?? ""}
+          onchange={(e) => {
+            quest.shape = selectVal(e) || null;
+            onDirty();
+          }}
+        >
+          {#each SHAPE_OPTIONS as s (s.id || "_default")}
+            <option value={s.id}>{s.label}</option>
+          {/each}
+        </select>
+      </label>
+      <label
+        >Size<input
+          type="number"
+          step="0.25"
+          min="0.25"
+          bind:value={quest.size}
+          oninput={onDirty}
+          placeholder="1"
+        /></label
+      >
+      <label
+        >Position
+        <div class="xy">
+          <input type="number" step="0.5" bind:value={quest.x} oninput={onDirty} />
+          <input type="number" step="0.5" bind:value={quest.y} oninput={onDirty} />
+        </div>
+      </label>
+
+      <h4 class="sub-h">FTB flags</h4>
       <label
         >Hide dependency lines
         <select value={triVal(quest.hideDependencyLines)} onchange={(e) => tri("hideDependencyLines", e)}>
@@ -602,7 +660,7 @@
         </select>
       </label>
 
-      <h4>Extra SNBT</h4>
+      <h4 class="sub-h">Extra SNBT</h4>
       {#each Object.entries(quest.extras ?? {}) as [k, v] (k)}
         <div class="extra-row">
           <code>{k}</code>
@@ -617,45 +675,6 @@
       </div>
     </div>
   {/if}
-
-  <TaskRewardEditor {quest} {onDirty} {rewardTableIds} {onOpenKubeJs} />
-
-  <h4><Link2 size={12} /> Dependencies</h4>
-  <p class="hint">Quest or task id (FTB allows both).</p>
-  <div class="deps">
-    {#each quest.dependencies as dep (dep)}
-      <span class="dep-tag" title={dep}>
-        {titleOf(dep)}
-        <button type="button" class="dep-rm" onclick={() => onRemoveDep(dep)}>×</button>
-      </span>
-    {/each}
-  </div>
-  <div class="dep-add">
-    <input
-      type="search"
-      class="dep-filter"
-      placeholder="Filter dependencies…"
-      bind:value={depFilter}
-      onkeydown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          applyDepFromFilter();
-        }
-      }}
-    />
-    <select bind:value={depPick} size={Math.min(8, Math.max(3, filteredDepOptions.length + 1))}>
-      <option value="">Add dependency… ({filteredDepOptions.length})</option>
-      {#each filteredDepOptions as o (o.id)}
-        <option value={o.id}>{o.label}</option>
-      {/each}
-    </select>
-    <button
-      type="button"
-      class="add-btn"
-      disabled={!depPick && filteredDepOptions.length === 0}
-      onclick={applyDepFromFilter}>Add</button
-    >
-  </div>
 </aside>
 
 <style>
@@ -691,35 +710,83 @@
     white-space: nowrap;
     text-shadow: none;
   }
-  .qid {
-    display: flex;
+  .qid-mini {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    width: 100%;
-    font-size: 9px;
+    gap: 4px;
+    flex-shrink: 0;
+    margin-left: auto;
+    font-size: 10px;
     color: var(--ftbq-text-muted, #9a9aa0);
-    margin: 0;
-    padding: 4px 12px 8px;
-    word-break: break-all;
-    border: none;
-    border-bottom: 1px solid var(--ftbq-border);
+    padding: 2px 6px;
+    border: 1px solid var(--ftbq-frame);
+    border-radius: 4px;
     background: transparent;
     cursor: pointer;
-    text-align: left;
   }
-  .qid:hover {
+  .qid-mini:hover {
     color: var(--ftbq-text, #e8e8e8);
   }
-  .qid code {
-    flex: 1;
-    min-width: 0;
+  .qid-mini code {
     font-size: inherit;
     color: inherit;
   }
-  .qid-copied {
-    font-size: 10px;
+  .block {
+    display: grid;
+    gap: 0;
+  }
+  .block-h {
+    margin: 0;
+    padding: 8px 12px 6px;
+    font-size: 12px;
     font-weight: 600;
-    color: #86efac;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ftbq-accent-teal, #3db8a8);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: color-mix(in srgb, var(--ftbq-bg) 55%, transparent);
+    border-top: 1px solid var(--ftbq-frame);
+    border-bottom: 1px solid var(--ftbq-frame);
+  }
+  .title-icon {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: start;
+  }
+  .title-icon .grow {
+    min-width: 0;
+  }
+  .icon-slot {
+    min-width: 120px;
+  }
+  .fmt-details {
+    margin: 0 0 4px;
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+    text-transform: none;
+  }
+  .fmt-details summary {
+    cursor: pointer;
+    list-style: none;
+  }
+  .fmt-details summary::-webkit-details-marker {
+    display: none;
+  }
+  .deps-empty {
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .sub-h {
+    margin: 8px 0 0 !important;
+    padding: 0 !important;
+    font-size: 11px !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    border: none !important;
+    background: transparent !important;
   }
   .val-warn {
     padding: 8px 10px;
@@ -753,18 +820,18 @@
   }
   .col-h {
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 600;
     color: var(--ftbq-accent-teal, #3db8a8);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    text-transform: none;
+    letter-spacing: 0;
   }
   .fields label {
     display: grid;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--ftbq-text-muted, #9a9aa0);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    text-transform: none;
+    letter-spacing: 0;
   }
   .insp :global(input:not([type="checkbox"]):not([type="radio"])),
   .insp :global(textarea),
@@ -835,10 +902,10 @@
   }
   .flags h4 {
     margin: 8px 0 0;
-    font-size: 10px;
-    text-transform: uppercase;
+    font-size: 11px;
+    text-transform: none;
     color: var(--ftbq-accent-teal, #3db8a8);
-    letter-spacing: 0.05em;
+    letter-spacing: 0;
   }
   .extra-row {
     display: grid;
@@ -852,18 +919,12 @@
     grid-template-columns: 1fr 1fr auto;
     gap: 4px;
   }
-  .hint {
-    margin: 0 0 6px;
-    padding: 0 12px;
-    font-size: 10px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-  }
   h4 {
     margin: 0;
     padding: 8px 12px 6px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--ftbq-accent-teal, #3db8a8);
     display: flex;
     align-items: center;
@@ -989,11 +1050,6 @@
   .fmt-bar button:hover {
     background: var(--bg-hover, var(--ftbq-btn-hover-top));
     color: var(--ftbq-accent-green);
-  }
-  .fmt-hint {
-    color: var(--ftbq-text-muted, #9a9aa0);
-    font-size: 10px;
-    font-weight: 500;
   }
   .ico {
     border: none;

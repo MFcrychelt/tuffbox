@@ -416,6 +416,31 @@ impl ContentType {
         }
     }
 
+    /// Guess content type from a download / file name when folder or provider
+    /// metadata is missing (packwiz metafiles, local zip drops, etc.).
+    ///
+    /// Recognizes player-built VanillaTweaks packs from vanillatweaks.net
+    /// (`VanillaTweaks_r….zip` / any `VanillaTweaks_….zip`) as resource packs.
+    pub fn from_filename(name: &str) -> Self {
+        let lower = name.to_ascii_lowercase();
+        let base = Path::new(&lower)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(lower.as_str());
+        if base.starts_with("vanillatweaks_")
+            || lower.contains("resourcepack")
+            || (lower.ends_with(".zip") && lower.contains("resource"))
+        {
+            ContentType::Resourcepack
+        } else if lower.contains("shader") {
+            ContentType::Shaderpack
+        } else if lower.contains("datapack") {
+            ContentType::Datapack
+        } else {
+            ContentType::Mod
+        }
+    }
+
     /// The folder this content type lives in, relative to the instance
     /// root (or, for datapacks, relative to a world save directory).
     pub fn folder_name(self) -> &'static str {
@@ -517,7 +542,7 @@ pub struct OverridesSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::Side;
+    use super::{ContentType, Side};
 
     #[test]
     fn modrinth_client_only_is_client() {
@@ -550,5 +575,27 @@ mod tests {
     #[test]
     fn modrinth_missing_is_unknown() {
         assert_eq!(Side::from_modrinth(None, None), Side::Unknown);
+    }
+
+    #[test]
+    fn filename_detects_vanillatweaks_custom_resource_pack() {
+        assert_eq!(
+            ContentType::from_filename("VanillaTweaks_r123456.zip"),
+            ContentType::Resourcepack
+        );
+        assert_eq!(
+            ContentType::from_filename("vanillatweaks_abcDEF.zip"),
+            ContentType::Resourcepack
+        );
+        assert_eq!(
+            ContentType::from_filename(r"C:\Downloads\VanillaTweaks_r999.zip"),
+            ContentType::Resourcepack
+        );
+        // Unrelated zip stays a mod hint (folder/metadata decides later).
+        assert_eq!(
+            ContentType::from_filename("cool-shaders.zip"),
+            ContentType::Shaderpack
+        );
+        assert_eq!(ContentType::from_filename("sodium.jar"), ContentType::Mod);
     }
 }

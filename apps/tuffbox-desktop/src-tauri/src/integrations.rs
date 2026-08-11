@@ -357,6 +357,13 @@ pub struct AiSettings {
     /// Draft model id/tag (Ollama or OpenAI-compatible). Empty → `qwen2.5-coder:0.5b`.
     #[serde(default = "default_draft_model")]
     pub draft_model: String,
+    /// Tune Config Advisor: allow allowlisted web research for unknown config keys.
+    #[serde(default = "default_true_bool")]
+    pub tune_web_research: bool,
+}
+
+fn default_true_bool() -> bool {
+    true
 }
 
 fn default_diagnose_mode() -> String {
@@ -379,6 +386,7 @@ impl Default for AiSettings {
             ollama_models_path: String::new(),
             speculative_decoding: false,
             draft_model: default_draft_model(),
+            tune_web_research: true,
         }
     }
 }
@@ -2759,6 +2767,43 @@ fn parse_gemini_usage(body: &Value) -> Option<tuffbox_core::AiTokenUsage> {
 
 const AI_HTTP_MAX_RETRIES: u32 = 3;
 const AI_STREAM_MAX_BYTES: usize = 1024 * 1024;
+/// Connect deadline for AI HTTP (stream + non-stream).
+const AI_CONNECT_TIMEOUT_SECS: u64 = 30;
+/// Per-chunk idle timeout for streaming responses. Must NOT use a total
+/// `.timeout()` — that kills healthy long Ollama generations mid-body and
+/// surfaces as "error decoding response body".
+const AI_STREAM_READ_TIMEOUT_SECS: u64 = 300;
+
+fn ai_stream_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(AI_CONNECT_TIMEOUT_SECS))
+        .read_timeout(std::time::Duration::from_secs(AI_STREAM_READ_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))
+}
+
+fn map_ai_stream_read_err(provider: &str, err: reqwest::Error) -> String {
+    let msg = err.to_string();
+    let timed_out = err.is_timeout()
+        || msg.to_ascii_lowercase().contains("timed out")
+        || msg.to_ascii_lowercase().contains("timeout");
+    let body_decode = err.is_decode()
+        || err.is_body()
+        || msg.to_ascii_lowercase().contains("decoding response body");
+    if timed_out {
+        format!(
+            "{provider} stream stalled (no tokens for {AI_STREAM_READ_TIMEOUT_SECS}s). \
+             Large quest plans on slow local models need steady token flow — keep Ollama loaded and retry. ({msg})"
+        )
+    } else if body_decode {
+        format!(
+            "{provider} stream interrupted mid-response (connection closed while decoding the body). \
+             Often caused by Ollama restarting, OOM, or a total HTTP timeout — retry the turn. ({msg})"
+        )
+    } else {
+        format!("{provider} stream read failed: {msg}")
+    }
+}
 
 /// Retry AI HTTP on transport errors, 429, and 5xx (async counterpart to core `http::fetch` backoff).
 async fn send_ai_http_with_retry(
@@ -3039,10 +3084,7 @@ where
         return Ok((value, usage));
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let client = ai_stream_http_client()?;
 
     let mut api_messages = Vec::with_capacity(messages.len() + 1);
     api_messages.push(json!({"role": "system", "content": system}));
@@ -3081,7 +3123,7 @@ where
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| format!("Ollama stream read failed: {e}"))?
+            .map_err(|e| map_ai_stream_read_err("Ollama", e))?
         {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find('\n') {
@@ -3157,7 +3199,7 @@ where
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|e| format!("AI stream read failed: {e}"))?
+            .map_err(|e| map_ai_stream_read_err("AI provider", e))?
         {
             buf.push_str(&String::from_utf8_lossy(&chunk));
             while let Some(pos) = buf.find('\n') {

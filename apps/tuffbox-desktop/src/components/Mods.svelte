@@ -43,7 +43,7 @@
     FilePlus,
     MoreHorizontal,
   } from "@lucide/svelte";
-  import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest, pushWorkTrail, requestIdeIssuesRefresh, modsFocusId, modsFocusFileName } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
   import CatalogProjectView from "./CatalogProjectView.svelte";
   import ModInspector from "./ModInspector.svelte";
@@ -950,6 +950,33 @@ import { trapFocus } from "../lib/focusTrap";
     }
   });
 
+  $effect(() => {
+    const id = $modsFocusId;
+    const file = $modsFocusFileName;
+    if (!id && !file) return;
+    if (!mods.length) return;
+    modsFocusId.set(null);
+    modsFocusFileName.set(null);
+    const fileNorm = (file ?? "").toLowerCase().replace(/\.disabled$/i, "");
+    const mod =
+      (id ? mods.find((m) => m.id === id || m.projectId === id) : undefined) ??
+      (fileNorm
+        ? mods.find((m) => {
+            const fn = (m.fileName ?? "").toLowerCase().replace(/\.disabled$/i, "");
+            return fn === fileNorm || fn.endsWith(fileNorm) || fileNorm.endsWith(fn);
+          })
+        : undefined);
+    if (!mod) return;
+    selectionMode = false;
+    selectedModIds = {};
+    focusedModId = mod.id;
+    queueMicrotask(() => {
+      document
+        .querySelector(`[data-mod-id="${CSS.escape(mod.id)}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
+
   function clearSelection() {
     selectionMode = false;
     selectedModIds = {};
@@ -1513,10 +1540,12 @@ import { trapFocus } from "../lib/focusTrap";
 
   async function importLocalFiles() {
     if (!$projectPath || importingLocal) return;
+    // Allow zip alongside jars so VanillaTweaks_*.zip (and similar) can be
+    // auto-routed to resourcepacks even when the Mods tab is active.
     const filter =
       contentFilter === "resourcepack" || contentFilter === "datapack" || contentFilter === "shader"
         ? [{ name: "Zip packs", extensions: ["zip"] }]
-        : [{ name: "Mod jars", extensions: ["jar"] }];
+        : [{ name: "Mods / packs", extensions: ["jar", "zip"] }];
     const selected = await open({
       multiple: true,
       filters: filter,
@@ -3000,6 +3029,7 @@ import { trapFocus } from "../lib/focusTrap";
           class:disabled={mod.disabled}
           class:selected={!!selectedModIds[mod.id]}
           class:focused={focusedModId === mod.id && !selectionMode}
+          data-mod-id={mod.id}
           style="--i: {i}"
           role="button"
           tabindex="0"

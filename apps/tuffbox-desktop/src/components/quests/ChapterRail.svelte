@@ -35,6 +35,7 @@
   let editingId = $state<string | null>(null);
   let titleEditEl = $state<HTMLInputElement | null>(null);
   let menuId = $state<string | null>(null);
+  let menuPos = $state<{ top: number; left: number } | null>(null);
   let iconRevision = $state(0);
 
   let groupTitle = $derived(new Map(chapterGroups.map((g) => [g.id, g.title])));
@@ -54,10 +55,13 @@
   });
 
   $effect(() => {
-    if (!menuId) return;
+    if (!menuId) {
+      menuPos = null;
+      return;
+    }
     const onPtr = (e: PointerEvent) => {
       const el = e.target as HTMLElement | null;
-      if (!el?.closest?.(".ch-menu-wrap")) menuId = null;
+      if (!el?.closest?.(".ch-menu-wrap") && !el?.closest?.(".ch-menu")) menuId = null;
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -219,13 +223,27 @@
                   aria-label={`Chapter actions for ${stripMc(ch.title)}`}
                   onclick={(e) => {
                     e.stopPropagation();
-                    menuId = menuId === ch.id ? null : ch.id;
+                    if (menuId === ch.id) {
+                      menuId = null;
+                      return;
+                    }
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const width = 128;
+                    menuPos = {
+                      top: r.bottom + 4,
+                      left: Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8)),
+                    };
+                    menuId = ch.id;
                   }}
                 >
                   <MoreVertical size={12} class="flex-shrink-0" />
                 </button>
-                {#if menuId === ch.id}
-                  <div class="ch-menu" role="menu">
+                {#if menuId === ch.id && menuPos}
+                  <div
+                    class="ch-menu"
+                    role="menu"
+                    style="top: {menuPos.top}px; left: {menuPos.left}px;"
+                  >
                     {#if onMove}
                       <button type="button" role="menuitem" onclick={() => { onMove?.(ch.id, -1); menuId = null; }}>Move up</button>
                       <button type="button" role="menuitem" onclick={() => { onMove?.(ch.id, 1); menuId = null; }}>Move down</button>
@@ -379,10 +397,8 @@
     opacity: 1;
   }
   .ch-menu {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    z-index: 20;
+    position: fixed;
+    z-index: 80;
     min-width: 120px;
     display: flex;
     flex-direction: column;

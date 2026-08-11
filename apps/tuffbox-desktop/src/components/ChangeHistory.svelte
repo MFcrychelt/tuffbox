@@ -10,6 +10,9 @@
     historyFocusEventId,
     historyFocusFingerprintKey,
     historyFocusSnapshotId,
+    modsFocusId,
+    modsFocusFileName,
+    configFocusPath,
     ideStageRequest,
     projectPath,
   } from "../lib/store";
@@ -137,6 +140,15 @@
     return iso.slice(0, 10);
   }
 
+  /** Soft date range for episode subtitle — avoid identical started→ended dumps. */
+  function formatEpisodeRange(startedAt: string, endedAt?: string | null) {
+    const start = dayKey(startedAt);
+    if (!endedAt || endedAt === startedAt) return start;
+    const end = dayKey(endedAt);
+    if (end === start || end === "Unknown") return start;
+    return `${start} → ${end}`;
+  }
+
   function entryById(id: string) {
     return entries.find((e) => e.id === id);
   }
@@ -154,12 +166,27 @@
     return false;
   }
 
+  /** Human sentence ops (Install…, Edited file.js) vs raw path dumps. */
+  function isHumanOperation(operation: string) {
+    const o = (operation ?? "").trim();
+    if (!o) return false;
+    if (o.includes("+ //") || o.includes(": added (") || o.includes(": removed (")) return false;
+    if (
+      o.startsWith("Added on disk:") ||
+      o.startsWith("Removed from disk:") ||
+      o.startsWith("Changed on disk:")
+    ) {
+      return false;
+    }
+    return /^(Install|Remove|Update|Disable|Enable|Added|Edited|Removed|Fixed|Rolled back)\b/i.test(o);
+  }
+
   function entryTitle(entry: ChangeEntry) {
     const path = (entry.path ?? "").trim();
     const operation = (entry.operation ?? "").trim();
     const kind = entry.kind ?? "";
     const op = entry.op ?? "";
-    if (operation && isBareOpPath(path, kind, op)) return operation;
+    if (operation && (isBareOpPath(path, kind, op) || isHumanOperation(operation))) return operation;
     if (path && !isBareOpPath(path, kind, op)) return path;
     return operation || path || kind;
   }
@@ -169,11 +196,38 @@
     const path = (entry.path ?? "").trim();
     const kind = entry.kind ?? "";
     const title = entryTitle(entry);
-    if (path && !isBareOpPath(path, kind, entry.op)) return path;
+    if (path && !isBareOpPath(path, kind, entry.op) && path !== title) return path;
     const humanKind = kind.replaceAll("_", " ");
     if (humanKind && humanKind !== title) return humanKind;
     if (entry.category && entry.category !== title) return entry.category;
     return humanKind || entry.category || "";
+  }
+
+  /** Distinct short action titles for episode collapsed preview. */
+  function episodeActionTitles(actions: ChangeEntry[], limit = 3) {
+    const out: string[] = [];
+    for (const a of actions) {
+      const t = entryTitle(a).trim();
+      if (!t || out.includes(t)) continue;
+      out.push(t);
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  /** Nested mini-preview only when it adds info beyond the title/path. */
+  function previewAddsInfo(entry: ChangeEntry) {
+    const preview = (entry.preview ?? "").trim();
+    if (!preview) return false;
+    const title = entryTitle(entry).trim();
+    if (!title) return preview.length > 0;
+    if (preview === title || preview.startsWith(title)) return false;
+    const path = (entry.path ?? "").trim();
+    if (path && (preview === path || preview.startsWith(`${path}:`) || preview.startsWith(`${path} `))) {
+      return false;
+    }
+    if (preview.includes("+ //") || /^[+\-] /.test(preview)) return false;
+    return true;
   }
 
   function resolveEpisodeActions(episode: HistoryEpisode): ChangeEntry[] {
@@ -374,6 +428,78 @@
     } finally {
       loading = false;
     }
+  }
+
+  function isModHistoryEntry(entry: ChangeEntry) {
+    const kind = (entry.kind || entry.op || "").toLowerCase();
+    const cat = (entry.category || "").toLowerCase();
+    if (cat === "mods") return true;
+    if (kind === "mod_change" || kind === "jar_drift") return true;
+    if (kind.startsWith("mod_")) return true;
+    if (entry.tags?.includes("jar_drift")) return true;
+    const path = (entry.path || "").replace(/\\/g, "/").toLowerCase();
+    return /^mods\/.+\.jar(\.disabled)?$/i.test(path);
+  }
+
+  function isConfigHistoryPath(path: string) {
+    const p = path.replace(/\\/g, "/").toLowerCase();
+    if (!p || p.startsWith("crash://")) return false;
+    if (p === "options.txt" || p.endsWith("/options.txt")) return true;
+    return (
+      p.startsWith("config/") ||
+      p.startsWith("defaultconfigs/") ||
+      p.startsWith("kubejs/") ||
+      p.startsWith("scripts/") ||
+      p.startsWith("overrides/")
+    );
+  }
+
+  function resolveModFocus(entry: ChangeEntry): { id?: string; fileName?: string } | null {
+    const idMatch = entry.id.match(/:mod-(?:added|removed|updated):(.+)$/i);
+    if (idMatch?.[1]) return { id: idMatch[1] };
+    const path = (entry.path || "").replace(/\\/g, "/");
+    const jar = path.match(/^mods\/(.+\.jar(?:\.disabled)?)$/i)?.[1];
+    if (jar) return { fileName: jar.replace(/\.disabled$/i, "") };
+    // Operation lines like "Install Sodium 0.5.8" — no id; Content stage still useful
+    if (isModHistoryEntry(entry)) return {};
+    return null;
+  }
+
+  function canOpenEntryTarget(entry: ChangeEntry) {
+    if (isModHistoryEntry(entry) && resolveModFocus(entry)) return true;
+    const path = (entry.path || "").trim();
+    if (entry.canOpen && path && !path.startsWith("crash://")) return true;
+    if (path && isConfigHistoryPath(path)) return true;
+    return false;
+  }
+
+  function openTargetLabel(entry: ChangeEntry) {
+    if (isModHistoryEntry(entry)) return "Open in Mods";
+    const path = (entry.path || "").trim();
+    if ((entry.canOpen || isConfigHistoryPath(path)) && path && !path.startsWith("crash://")) {
+      return "Open in Configs";
+    }
+    return "Quick view";
+  }
+
+  async function openEntryTarget(entry: ChangeEntry) {
+    selectedId = entry.id;
+    if (isModHistoryEntry(entry)) {
+      const focus = resolveModFocus(entry);
+      if (focus) {
+        modsFocusId.set(focus.id ?? null);
+        modsFocusFileName.set(focus.fileName ?? null);
+        ideStageRequest.set("content");
+        return;
+      }
+    }
+    const path = (entry.path || "").trim();
+    if (path && !path.startsWith("crash://") && (entry.canOpen || isConfigHistoryPath(path))) {
+      configFocusPath.set(path.replace(/\\/g, "/"));
+      ideStageRequest.set("configs");
+      return;
+    }
+    if (entry.canOpen) await openFullFile(entry);
   }
 
   async function saveEditor() {
@@ -708,6 +834,9 @@
                       selectedId = entry.id;
                       document.getElementById("change-" + entry.id)?.scrollIntoView({ behavior: "smooth", block: "center" });
                     }}
+                    ondblclick={() => {
+                      if (canOpenEntryTarget(entry)) void openEntryTarget(entry);
+                    }}
                     title={entryTitle(entry)}
                   >
                     <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
@@ -756,7 +885,7 @@
                     {/if}
                     <h2><History size={18} /> {episode.summary || "Untitled episode"}</h2>
                     <p>
-                      {episode.startedAt}{#if episode.endedAt} → {episode.endedAt}{/if}
+                      {formatEpisodeRange(episode.startedAt, episode.endedAt)}
                       · {actions.length} action{actions.length === 1 ? "" : "s"}
                     </p>
                     {#if episode.resolutionSummary}
@@ -798,11 +927,11 @@
                   onkeydown={(e) => (e.key === "Enter" || e.key === " ") && toggleEpisodeExpanded(episode)}
                 >
                   <div class="summary-row">
-                    <strong>{episode.summary || "Episode actions"}</strong>
+                    <strong>{actions.length === 1 ? "Actions" : `${actions.length} changes`}</strong>
                     <span class="chev">{#if expanded[episode.id]}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}</span>
                   </div>
                   {#if !expanded[episode.id]}
-                    <pre class="mini-preview">{actions.slice(0, 2).map((a) => a.preview || a.path).filter(Boolean).join("\n") || "No actions linked."}</pre>
+                    <pre class="mini-preview">{episodeActionTitles(actions).join("\n") || "No actions linked."}</pre>
                   {/if}
                 </div>
 
@@ -812,13 +941,23 @@
                       <div class="empty-actions">No linked actions found for this episode.</div>
                     {:else}
                       {#each actions as entry (entry.id)}
-                        <div class="nested-action" id="change-{entry.id}">
+                        <div
+                          class="nested-action"
+                          id="change-{entry.id}"
+                          role="button"
+                          tabindex="0"
+                          ondblclick={() => {
+                            if (canOpenEntryTarget(entry)) void openEntryTarget(entry);
+                          }}
+                        >
                           <div class="nested-head">
                             <span class="actor-pill {actorClass(entry.actor)}">{actorLabel(entry.actor)}</span>
                             <strong>{entryTitle(entry)}</strong>
                             <small>{entrySidebarMeta(entry)}</small>
                           </div>
-                          <pre class="mini-preview nested">{entry.preview || "No preview available."}</pre>
+                          {#if previewAddsInfo(entry)}
+                            <pre class="mini-preview nested">{entry.preview}</pre>
+                          {/if}
                           <div class="preview-actions nested">
                             <button type="button" class="secondary" onclick={() => explainEntry(entry)} title="Explain this change">
                               <Sparkles size={14} /> Explain
@@ -829,7 +968,13 @@
                             <button type="button" class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
                               <RotateCcw size={14} /> Rollback
                             </button>
-                            <button type="button" class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                            <button
+                              type="button"
+                              class="secondary"
+                              onclick={() => void openEntryTarget(entry)}
+                              disabled={!canOpenEntryTarget(entry)}
+                              title={openTargetLabel(entry)}
+                            >
                               <Maximize2 size={14} /> Open
                             </button>
                           </div>
@@ -842,7 +987,22 @@
             {/each}
           {:else}
             {#each visibleSlice as entry (entry.id)}
-              <div class="change-card" id="change-{entry.id}" class:jar-drift={entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}>
+              <div
+                class="change-card"
+                id="change-{entry.id}"
+                class:jar-drift={entry.kind === "jar_drift" || entry.tags?.includes("jar_drift")}
+                role="button"
+                tabindex="0"
+                ondblclick={() => {
+                  if (canOpenEntryTarget(entry)) void openEntryTarget(entry);
+                }}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" && canOpenEntryTarget(entry)) {
+                    e.preventDefault();
+                    void openEntryTarget(entry);
+                  }
+                }}
+              >
                 <div class="preview-header">
                   <div>
                     <span class="eyebrow">{entry.category} · {entry.kind.replaceAll("_", " ")}</span>
@@ -871,7 +1031,12 @@
                     <button class="secondary" onclick={() => showRollbackConfirm(entry)} disabled={!canRollback(entry)}>
                       <RotateCcw size={16} /> Rollback
                     </button>
-                    <button class="secondary" onclick={() => openFullFile(entry)} disabled={!entry.canOpen}>
+                    <button
+                      class="secondary"
+                      onclick={() => void openEntryTarget(entry)}
+                      disabled={!canOpenEntryTarget(entry)}
+                      title={openTargetLabel(entry)}
+                    >
                       <Maximize2 size={16} /> Open
                     </button>
                   </div>

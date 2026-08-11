@@ -46,7 +46,7 @@
   }
   .cd-dialog {
     background: var(--bg-secondary); border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-xl); padding: 28px; width: 420px;
+    border-radius: var(--border-radius-xl); padding: 28px; width: min(420px, 92vw);
     text-align: center; box-shadow: var(--shadow-lg);
   }
   .cd-icon { margin-bottom: 12px; }

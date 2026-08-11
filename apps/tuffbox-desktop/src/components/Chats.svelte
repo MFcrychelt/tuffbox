@@ -19,9 +19,9 @@
     X,
     MoreHorizontal,
   } from "@lucide/svelte";
-  import { projectPath, projectInfo, ideStageRequest, questChatFocusId } from "../lib/store";
+  import { projectPath, projectInfo, ideStageRequest, questChatFocusId, tuneChatFocusId } from "../lib/store";
   import { toasts } from "../lib/toast";
-  import { api, type SearchResult, type QuestChatSession } from "../lib/api";
+  import { api, type SearchResult, type QuestChatSession, type TuneChatSession } from "../lib/api";
 
   let { currentView = $bindable() }: { currentView: string } = $props();
 
@@ -69,7 +69,7 @@
     updatedAt: string;
   };
   type UnifiedSession = {
-    kind: "create" | "quest";
+    kind: "create" | "quest" | "tune";
     id: string;
     title: string;
     messages: ChatMessage[];
@@ -79,7 +79,7 @@
 
   let sessions = $state<UnifiedSession[]>([]);
   let activeId = $state<string | null>(null);
-  let activeKind = $state<"create" | "quest">("create");
+  let activeKind = $state<"create" | "quest" | "tune">("create");
   let messages = $state<ChatMessage[]>([]);
   let brief = $state<CreateModeBrief | null>(null);
   let draft = $state<PackDraft | null>(null);
@@ -120,11 +120,12 @@
   let postInstallTrail = $state(false);
   let lastInstallCount = $state(0);
   let questPendingPlan = $state(false);
+  let tunePendingAdvise = $state(false);
   let moreMenuOpen = $state(false);
 
   type ContextualNext = "" | "build" | "rank" | "curate";
   const contextualNext = $derived.by((): ContextualNext => {
-    if (isQuestChat || !brief) return "";
+    if (isSideStageChat || !brief) return "";
     if (!draft?.mods?.length) return "build";
     if (!lastCuration) return "rank";
     return "curate";
@@ -166,6 +167,8 @@
   const loaderLabel = $derived($projectInfo?.loaderKind ?? "?");
   const draftConfirmCount = $derived(draft?.mods?.filter((m) => draftSelected[m.projectId || m.slug] !== false).length ?? 0);
   const isQuestChat = $derived(activeKind === "quest");
+  const isTuneChat = $derived(activeKind === "tune");
+  const isSideStageChat = $derived(isQuestChat || isTuneChat);
 
   function sortKey(updatedAt: string): number {
     const n = Number(updatedAt);
@@ -180,11 +183,13 @@
       return;
     }
     try {
-      const [createList, questChats] = await Promise.all([
+      const [createList, questChats, tuneChats] = await Promise.all([
         invoke<CreateChatSession[]>("list_create_chats", { path: $projectPath }),
         api.quests.listChats($projectPath).catch(() => ({ sessions: [], corruptSkipped: 0 })),
+        api.config.listChats($projectPath).catch(() => ({ sessions: [], corruptSkipped: 0 })),
       ]);
       const questList = questChats.sessions;
+      const tuneList = tuneChats.sessions;
       const unified: UnifiedSession[] = [
         ...createList.map((s) => ({
           kind: "create" as const,
@@ -198,6 +203,17 @@
           kind: "quest" as const,
           id: s.id,
           title: s.title || "Quest line",
+          messages: (s.messages ?? []).map((m) => ({
+            role: m.role,
+            content: m.content,
+            createdAt: m.createdAt,
+          })),
+          updatedAt: s.updatedAt,
+        })),
+        ...tuneList.map((s: TuneChatSession) => ({
+          kind: "tune" as const,
+          id: s.id,
+          title: s.title || "Tune configs",
           messages: (s.messages ?? []).map((m) => ({
             role: m.role,
             content: m.content,
@@ -221,11 +237,12 @@
     }
   }
 
-  async function selectSession(id: string, kind: "create" | "quest" = "create") {
+  async function selectSession(id: string, kind: "create" | "quest" | "tune" = "create") {
     if (!$projectPath) return;
     activeId = id;
     activeKind = kind;
     questPendingPlan = false;
+    tunePendingAdvise = false;
     if (kind === "quest") {
       try {
         const s = await api.quests.loadChat(id, $projectPath);
@@ -239,6 +256,26 @@
         candidates = [];
         questPendingPlan = !!s.pendingPlan;
         if (!sessions.some((x) => x.id === id && x.kind === "quest")) {
+          await refreshSessions();
+        }
+      } catch (e) {
+        toasts.error(String(e));
+      }
+      return;
+    }
+    if (kind === "tune") {
+      try {
+        const s = await api.config.loadChat(id, $projectPath);
+        messages = (s.messages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt,
+        }));
+        draft = null;
+        brief = null;
+        candidates = [];
+        tunePendingAdvise = !!s.pendingAdvise;
+        if (!sessions.some((x) => x.id === id && x.kind === "tune")) {
           await refreshSessions();
         }
       } catch (e) {
@@ -269,6 +306,12 @@
     currentView = "quests";
   }
 
+  function openTuneChatInEditor(id: string) {
+    tuneChatFocusId.set(id);
+    ideStageRequest.set("configs");
+    currentView = "ide";
+  }
+
   async function newChat() {
     if (!$projectPath) return;
     try {
@@ -285,18 +328,42 @@
       candidates = [];
       clearCurationPersist();
       questPendingPlan = false;
+      tunePendingAdvise = false;
       input = "";
     } catch (e) {
       toasts.error(String(e));
     }
   }
 
-  async function deleteChat(id: string, kind: "create" | "quest" = "create") {
+  async function newTuneChat() {
     if (!$projectPath) return;
-    if (!confirm(kind === "quest" ? "Delete this Quest AI chat?" : "Delete this chat?")) return;
+    try {
+      const s = await api.config.newChat("Tune configs", $projectPath);
+      await refreshSessions();
+      activeId = s.id;
+      activeKind = "tune";
+      messages = [];
+      draft = null;
+      brief = null;
+      candidates = [];
+      questPendingPlan = false;
+      tunePendingAdvise = false;
+      input = "";
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  async function deleteChat(id: string, kind: "create" | "quest" | "tune" = "create") {
+    if (!$projectPath) return;
+    const label =
+      kind === "quest" ? "Delete this Quest AI chat?" : kind === "tune" ? "Delete this Tune AI chat?" : "Delete this chat?";
+    if (!confirm(label)) return;
     try {
       if (kind === "quest") {
         await api.quests.deleteChat(id, $projectPath);
+      } else if (kind === "tune") {
+        await api.config.deleteChat(id, $projectPath);
       } else {
         await invoke("delete_create_chat", { path: $projectPath, chatId: id });
       }
@@ -308,6 +375,7 @@
         brief = null;
         candidates = [];
         questPendingPlan = false;
+        tunePendingAdvise = false;
       }
       await refreshSessions();
     } catch (e) {
@@ -716,7 +784,51 @@
       : "",
   );
 
+  async function sendTuneMessage() {
+    if (!$projectPath || !input.trim() || busy || activeKind !== "tune") return;
+    const text = input.trim();
+    input = "";
+    busy = true;
+    busyKind = "plan";
+    phase = "tune";
+    progressCurrent = "Config Advisor…";
+    try {
+      const res = await api.config.chatTurn(text, {
+        chatId: activeId,
+        goal: "free_text",
+      }, $projectPath);
+      activeId = res.session.id;
+      activeKind = "tune";
+      messages = (res.session.messages ?? []).map((m) => ({
+        role: m.role,
+        content: m.content,
+        createdAt: m.createdAt,
+      }));
+      tunePendingAdvise = !!res.session.pendingAdvise;
+      await refreshSessions();
+    } catch (e) {
+      toasts.error(String(e));
+      messages = [
+        ...messages,
+        {
+          role: "system",
+          content: `Tune advise failed: ${String(e)}`,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+    } finally {
+      busy = false;
+      busyKind = "";
+      phase = "";
+      progressCurrent = "";
+    }
+  }
+
   async function sendMessage(refine = false) {
+    if (activeKind === "tune") {
+      await sendTuneMessage();
+      return;
+    }
     if (!$projectPath || !input.trim() || busy) return;
     clampTargetCount();
     const text = input.trim();
@@ -1247,9 +1359,14 @@
     <aside class="sessions">
       <div class="sessions-head">
         <span>Chats</span>
-        <button type="button" class="icon-btn" title="New chat" onclick={newChat}>
-          <Plus size={16} />
-        </button>
+        <div class="sessions-head-actions">
+          <button type="button" class="icon-btn" title="New Tune chat" onclick={newTuneChat}>
+            <span class="head-tune">T</span>
+          </button>
+          <button type="button" class="icon-btn" title="New Create chat" onclick={newChat}>
+            <Plus size={16} />
+          </button>
+        </div>
       </div>
       <div class="session-list">
         {#each sessions as s (`${s.kind}-${s.id}`)}
@@ -1257,11 +1374,14 @@
             class="session-row"
             class:active={s.id === activeId && s.kind === activeKind}
             class:quest={s.kind === "quest"}
+            class:tune={s.kind === "tune"}
           >
             <button type="button" class="session-main" onclick={() => selectSession(s.id, s.kind)}>
               <span class="session-title-row">
                 {#if s.kind === "quest"}
                   <span class="kind-badge quest">Quests</span>
+                {:else if s.kind === "tune"}
+                  <span class="kind-badge tune">Tune</span>
                 {:else}
                   <span class="kind-badge create">Create</span>
                 {/if}
@@ -1287,8 +1407,8 @@
       </div>
     </aside>
 
-    <section class="thread" class:quest-thread={isQuestChat}>
-      <div class="thread-meta" class:quest={isQuestChat}>
+    <section class="thread" class:quest-thread={isQuestChat} class:tune-thread={isTuneChat}>
+      <div class="thread-meta" class:quest={isQuestChat} class:tune={isTuneChat}>
         <Sparkles size={16} />
         {#if isQuestChat}
           <span>Quest AI · FTB Quests</span>
@@ -1299,6 +1419,16 @@
           {/if}
           {#if questPendingPlan}
             <span class="pending-dot" title="Pending plan — Apply in Quest editor">plan ready</span>
+          {/if}
+        {:else if isTuneChat}
+          <span>Tune · Config AI</span>
+          {#if activeId}
+            <button type="button" class="btn ghost mini quest-open" onclick={() => activeId && openTuneChatInEditor(activeId)}>
+              Open in Tune
+            </button>
+          {/if}
+          {#if tunePendingAdvise}
+            <span class="pending-dot" title="Pending config plan — Review in Tune">plan ready</span>
           {/if}
         {:else}
           <span>Create Mode · {mcLabel} / {loaderLabel}</span>
@@ -1327,6 +1457,12 @@
                 This session was created in the Quests editor. Continue generating lore and quest lines there —
                 Apply updates the editor, Save writes SNBT.
               </p>
+            {:else if isTuneChat}
+              <h3>Tune Config AI</h3>
+              <p>
+                Ask for FPS / server / compat config patches. Review → Apply lives in the Tune tab
+                (snapshot first). You can also continue from here.
+              </p>
             {:else}
               <h3>Describe the pack you want</h3>
               <p>
@@ -1338,7 +1474,7 @@
           </div>
         {/if}
         {#each messages as m, i (m.createdAt ?? `${m.role}-${i}-${m.content.slice(0, 48)}`)}
-          <div class="bubble" class:user={m.role === "user"} class:assistant={m.role === "assistant"} class:system={m.role === "system"} class:quest={isQuestChat}>
+          <div class="bubble" class:user={m.role === "user"} class:assistant={m.role === "assistant"} class:system={m.role === "system"} class:quest={isQuestChat} class:tune={isTuneChat}>
             {m.content}
           </div>
         {/each}
@@ -1366,6 +1502,43 @@
               onclick={() => activeId && openQuestChatInEditor(activeId)}
             >
               <Sparkles size={14} /> Continue in Quests
+            </button>
+          </div>
+        </div>
+      {:else if isTuneChat}
+        <div class="composer quest-composer tune-composer">
+          <textarea
+            rows="2"
+            placeholder="e.g. lower render distance, optimize sodium…"
+            bind:value={input}
+            disabled={busy}
+            onkeydown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void sendTuneMessage();
+              }
+            }}
+          ></textarea>
+          <div class="actions">
+            <button
+              type="button"
+              class="btn primary"
+              disabled={busy || !input.trim()}
+              onclick={() => void sendTuneMessage()}
+            >
+              {#if busy}
+                <span class="spin"><Loader2 size={14} /></span> Advising…
+              {:else}
+                <Send size={14} /> Ask
+              {/if}
+            </button>
+            <button
+              type="button"
+              class="btn accent quest-cta"
+              disabled={!activeId}
+              onclick={() => activeId && openTuneChatInEditor(activeId)}
+            >
+              <Sparkles size={14} /> Open in Tune
             </button>
           </div>
         </div>
@@ -1517,7 +1690,7 @@
       {/if}
     </section>
 
-    <aside class="draft" class:quest-hidden={isQuestChat}>
+    <aside class="draft" class:quest-hidden={isSideStageChat}>
       {#if isQuestChat}
         <div class="draft-head quest">
           <span>Quest AI</span>
@@ -1911,12 +2084,34 @@
     font-size: 13px;
     color: var(--text-secondary, #9aa3b5);
   }
+  .sessions-head {
+    justify-content: space-between;
+  }
+  .sessions-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .head-tune {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 800;
+    color: var(--accent-primary);
+  }
   .draft-head {
     justify-content: space-between;
   }
   .thread-meta.quest {
     color: var(--ftbq-title-gold, #f2c94c);
     border-bottom-color: var(--ftbq-accent-teal, #3db8a8);
+  }
+  .thread-meta.tune {
+    color: var(--accent-primary);
+    border-bottom-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
   }
   .pending-dot {
     margin-left: auto;
@@ -2013,6 +2208,27 @@
     color: var(--ftbq-title-gold, #f2c94c);
     background: rgba(61, 184, 168, 0.15);
     border: 1px solid var(--ftbq-accent-teal, #3db8a8);
+  }
+  .kind-badge.tune {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  }
+  .bubble.tune.assistant {
+    border-left: 2px solid var(--accent-primary);
+  }
+  .tune-composer textarea {
+    width: 100%;
+    resize: none;
+    font: inherit;
+    font-size: 13px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    box-sizing: border-box;
   }
   .session-main {
     flex: 1;

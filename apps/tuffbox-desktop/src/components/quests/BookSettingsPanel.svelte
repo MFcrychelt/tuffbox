@@ -162,26 +162,26 @@
 
 <style>
   .drawer {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 40;
-    width: 280px;
-    padding: 12px;
+    position: relative;
+    top: auto;
+    right: auto;
+    z-index: auto;
+    width: 100%;
+    max-height: none;
+    padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    background: var(--ftbq-bg-panel);
-    border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 12px 28px rgba(0, 0, 0, 0.55);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: visible;
   }
   .drawer-wide {
-    width: 360px;
-    max-height: min(70vh, 560px);
-    overflow: auto;
+    width: 100%;
+    max-height: none;
+    overflow: visible;
   }
   .drawer-h {
     display: flex;

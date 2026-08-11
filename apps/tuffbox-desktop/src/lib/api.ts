@@ -354,6 +354,53 @@ export interface QuestChatSession {
   updatedAt: string;
 }
 
+export interface TuneChatMessage {
+  role: string;
+  content: string;
+  createdAt?: string | null;
+}
+
+export interface TunePendingAdvise {
+  plan: Record<string, unknown>;
+  explanation: string;
+  researchLog?: Record<string, unknown>[];
+  unknownKeys?: Record<string, unknown>[];
+  diffs?: Record<string, unknown>[];
+  validationOk?: boolean;
+  validationErrors?: string[];
+  validationWarnings?: string[];
+}
+
+export interface TuneChatSession {
+  id: string;
+  title: string;
+  messages: TuneChatMessage[];
+  pendingAdvise?: TunePendingAdvise | null;
+  updatedAt: string;
+  focusPath?: string | null;
+}
+
+export interface TuneChatTurnResult {
+  session: TuneChatSession;
+  advise: {
+    plan: Record<string, unknown>;
+    explanation: string;
+    researchLog: { step: string; detail: string; ok: boolean; url?: string | null }[];
+    unknownKeys: { path: string; key: string; modHint?: string | null }[];
+    diffs: {
+      path: string;
+      patchType: string;
+      beforeExcerpt: string;
+      afterExcerpt: string;
+      ok: boolean;
+      error?: string | null;
+    }[];
+    validationOk: boolean;
+    validationErrors: string[];
+    validationWarnings: string[];
+  };
+}
+
 export interface QuestChatTurnResult {
   session: QuestChatSession;
   merge: QuestPlanMergeResult;
@@ -1587,6 +1634,98 @@ export const api = {
     search(query: string, p?: string) { return cmd<ConfigSearchMatch[]>("search_in_configs", { ...pathArg(p), query }); },
     lint(relativePath: string, p?: string) { return cmd<LintResult[]>("lint_config", { ...pathArg(p), relativePath }); },
     formatToml(content: string) { return cmd<string>("format_toml", { content }); },
+    advise(opts: {
+      goal?: string;
+      userMessage?: string;
+      focusPath?: string | null;
+      focusKeys?: string[] | null;
+      sessionId?: string | null;
+      enableWebResearch?: boolean | null;
+      path?: string;
+    }) {
+      return cmd<{
+        plan: Record<string, unknown>;
+        explanation: string;
+        researchLog: { step: string; detail: string; ok: boolean; url?: string | null }[];
+        unknownKeys: { path: string; key: string; modHint?: string | null }[];
+        diffs: {
+          path: string;
+          patchType: string;
+          beforeExcerpt: string;
+          afterExcerpt: string;
+          ok: boolean;
+          error?: string | null;
+        }[];
+        validationOk: boolean;
+        validationErrors: string[];
+        validationWarnings: string[];
+      }>("tune_config_advise", {
+        ...pathArg(opts.path),
+        goal: opts.goal ?? "free_text",
+        userMessage: opts.userMessage ?? "",
+        focusPath: opts.focusPath ?? null,
+        focusKeys: opts.focusKeys ?? null,
+        sessionId: opts.sessionId ?? null,
+        enableWebResearch: opts.enableWebResearch ?? null,
+      });
+    },
+    previewDiffs(plan: Record<string, unknown>, p?: string) {
+      return cmd<
+        {
+          path: string;
+          patchType: string;
+          beforeExcerpt: string;
+          afterExcerpt: string;
+          ok: boolean;
+          error?: string | null;
+        }[]
+      >("tune_config_preview_diffs", { ...pathArg(p), plan });
+    },
+    listChats(p?: string) {
+      return cmd<{ sessions: TuneChatSession[]; corruptSkipped: number }>(
+        "list_tune_chat_sessions",
+        pathArg(p),
+      );
+    },
+    newChat(title?: string | null, p?: string) {
+      return cmd<TuneChatSession>("new_tune_chat_session", {
+        ...pathArg(p),
+        title: title ?? null,
+      });
+    },
+    loadChat(chatId: string, p?: string) {
+      return cmd<TuneChatSession>("load_tune_chat_session", {
+        ...pathArg(p),
+        chatId,
+      });
+    },
+    saveChat(session: TuneChatSession, p?: string) {
+      return cmd<void>("save_tune_chat_session", { ...pathArg(p), session });
+    },
+    deleteChat(chatId: string, p?: string) {
+      return cmd<void>("delete_tune_chat_session", { ...pathArg(p), chatId });
+    },
+    chatTurn(
+      message: string,
+      opts?: {
+        chatId?: string | null;
+        goal?: string | null;
+        focusPath?: string | null;
+        focusKeys?: string[] | null;
+        enableWebResearch?: boolean | null;
+      },
+      p?: string,
+    ) {
+      return cmd<TuneChatTurnResult>("tune_chat_turn", {
+        ...pathArg(p),
+        message,
+        chatId: opts?.chatId ?? null,
+        goal: opts?.goal ?? null,
+        focusPath: opts?.focusPath ?? null,
+        focusKeys: opts?.focusKeys ?? null,
+        enableWebResearch: opts?.enableWebResearch ?? null,
+      });
+    },
   },
 
   // ── Graph & Resolve ───────────────────────────────────────────────
@@ -2565,6 +2704,8 @@ export interface AiSettings {
   ollamaModelsPath?: string;
   speculativeDecoding?: boolean;
   draftModel?: string;
+  /** Tune Config Advisor: allowlisted web research for unknown keys (default true). */
+  tuneWebResearch?: boolean;
 }
 
 export interface OllamaModelInfo {

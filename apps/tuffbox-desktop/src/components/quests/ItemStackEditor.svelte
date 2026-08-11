@@ -27,11 +27,15 @@
     onChange,
     allowFilters = true,
     label = "Item",
+    emphasizeEmpty = false,
+    emptyCta = "Choose item",
   }: {
     value?: ItemValue | null;
     onChange: (next: ItemValue | null) => void;
     allowFilters?: boolean;
     label?: string;
+    emphasizeEmpty?: boolean;
+    emptyCta?: string;
   } = $props();
 
   let pickerOpen = $state(false);
@@ -42,6 +46,7 @@
 
   let mode = $derived(detectMode(value ?? null));
   let displayId = $derived(stackDisplayId(value ?? null));
+  let isEmpty = $derived(!displayId);
   let isFilter = $derived(isFilterCompound(value ?? null));
   let children = $derived(
     isItemObject(value) ? listFilterChildren(value) : ([] as ItemValue[]),
@@ -181,24 +186,30 @@
       <input
         value={typeof value === "string" ? value : (displayId ?? "")}
         oninput={(e) => onIdInput((e.currentTarget as HTMLInputElement).value)}
-        placeholder="modid:item"
+        placeholder="Pick item"
       />
       <button type="button" class="pick" onclick={() => openPicker("main")} title="Pick item"
         ><Package size={12} /></button
       >
     </div>
+    {#if emphasizeEmpty && isEmpty}
+      <button type="button" class="choose-cta" onclick={() => openPicker("main")}>{emptyCta}</button>
+    {/if}
   {:else if mode === "stack"}
     <div class="item-row">
       <QuestItemIcon itemId={displayId} fallback="?" size={28} />
       <input
         value={displayId ?? ""}
         oninput={(e) => onIdInput((e.currentTarget as HTMLInputElement).value)}
-        placeholder="modid:item"
+        placeholder="Pick item"
       />
       <button type="button" class="pick" onclick={() => openPicker("main")} title="Pick item"
         ><Package size={12} /></button
       >
     </div>
+    {#if emphasizeEmpty && isEmpty}
+      <button type="button" class="choose-cta" onclick={() => openPicker("main")}>{emptyCta}</button>
+    {/if}
     <label class="field"
       >Count<input
         type="number"
@@ -277,9 +288,9 @@
     flex-wrap: wrap;
   }
   .lbl {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--ftbq-text-muted, #9a9aa0);
   }
   .badge {
@@ -319,9 +330,24 @@
   .field {
     display: grid;
     gap: 3px;
-    font-size: 10px;
-    text-transform: uppercase;
+    font-size: 11px;
+    text-transform: none;
     color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .choose-cta {
+    width: 100%;
+    margin-top: 4px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary, #3db8a8) 55%, var(--ftbq-border));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent-primary, #3db8a8) 18%, transparent);
+    color: var(--text-primary, var(--ftbq-text));
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .choose-cta:hover {
+    background: color-mix(in srgb, var(--accent-primary, #3db8a8) 28%, transparent);
   }
   .pick,
   .mini {

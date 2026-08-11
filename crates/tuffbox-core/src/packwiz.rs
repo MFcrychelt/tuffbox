@@ -317,7 +317,7 @@ fn pw_to_modspec(pw: &PwToml) -> ModSpec {
         side,
         dependencies: vec![],
         status,
-        content_type: content_type_from_filename(&pw.filename),
+        content_type: ContentType::from_filename(&pw.filename),
         authors: Vec::new(),
         option,
     }
@@ -362,19 +362,6 @@ fn resolve_source(pw: &PwToml) -> (SourceKind, Option<String>, Option<String>) {
         return (SourceKind::Direct, None, None);
     }
     (SourceKind::Local, None, None)
-}
-
-fn content_type_from_filename(name: &str) -> ContentType {
-    let lower = name.to_ascii_lowercase();
-    if lower.contains("resourcepack") || lower.ends_with(".zip") && lower.contains("resource") {
-        ContentType::Resourcepack
-    } else if lower.contains("shader") {
-        ContentType::Shaderpack
-    } else if lower.contains("datapack") {
-        ContentType::Datapack
-    } else {
-        ContentType::Mod
-    }
 }
 
 fn slugify(name: &str) -> String {

@@ -17,7 +17,9 @@ mod speculative;
 mod swarm_api;
 mod swarm_node;
 mod task_progress_api;
+mod tune_config_api;
 mod types;
+mod web_research;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -545,14 +547,12 @@ async fn import_local_content_files(
                 .as_deref()
                 .unwrap_or("mod")
                 .to_lowercase();
-            let (dir_name, expected_ext) = match ct.as_str() {
+            let default_route = match ct.as_str() {
                 "resourcepack" | "resourcepacks" => ("resourcepacks", "zip"),
                 "shader" | "shaderpack" | "shaderpacks" => ("shaderpacks", "zip"),
                 "datapack" | "datapacks" => ("datapacks", "zip"),
                 _ => ("mods", "jar"),
             };
-            let dest_dir = project_dir.join(dir_name);
-            std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
             auto_snapshot(&manifest_path, "import-local-content").map_err(|e| e.to_string())?;
 
@@ -570,21 +570,35 @@ async fn import_local_content_files(
                     .and_then(|e| e.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                if ext != expected_ext {
-                    skipped.push(format!(
-                        "{}: expected .{}, got .{}",
-                        src.file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| src_raw.clone()),
-                        expected_ext,
-                        ext
-                    ));
-                    continue;
-                }
                 let base_name = src
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| format!("import.{}", expected_ext));
+                    .unwrap_or_else(|| format!("import.{}", default_route.1));
+
+                // Filename heuristics (e.g. VanillaTweaks_*.zip) override a generic
+                // "mod" import so custom texture packs land in resourcepacks/.
+                let (dir_name, expected_ext) = if ct == "mod" && ext == "zip" {
+                    match tuffbox_core::manifest::ContentType::from_filename(&base_name) {
+                        tuffbox_core::manifest::ContentType::Resourcepack => {
+                            ("resourcepacks", "zip")
+                        }
+                        tuffbox_core::manifest::ContentType::Shaderpack => ("shaderpacks", "zip"),
+                        tuffbox_core::manifest::ContentType::Datapack => ("datapacks", "zip"),
+                        tuffbox_core::manifest::ContentType::Mod => default_route,
+                    }
+                } else {
+                    default_route
+                };
+
+                if ext != expected_ext {
+                    skipped.push(format!(
+                        "{}: expected .{}, got .{}",
+                        base_name, expected_ext, ext
+                    ));
+                    continue;
+                }
+                let dest_dir = project_dir.join(dir_name);
+                std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
                 let mut dest_name = base_name.clone();
                 let mut dest = dest_dir.join(&dest_name);
                 if dest.exists() {
@@ -4349,10 +4363,12 @@ async fn install_curated_optimize_pack(
 
 #[tauri::command(rename_all = "camelCase")]
 async fn build_optimize_plan(
+    app: tauri::AppHandle,
     path: String,
     use_ai_configs: bool,
 ) -> Result<serde_json::Value, String> {
-    tokio::task::spawn_blocking(move || {
+    let path_for_ai = path.clone();
+    let mut base = tokio::task::spawn_blocking(move || {
         let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
         let project_dir = manifest_parent(&path)?;
         let loader = loader_slug_for_manifest(&manifest);
@@ -4383,20 +4399,12 @@ async fn build_optimize_plan(
 
         let tokens = tuffbox_core::optimize_pack::inventory_tokens(&manifest);
         let deny = tuffbox_core::optimize_pack::modernfix_denylist_hit(&tokens);
-        let (cfg_actions, mut warnings) =
+        let (cfg_actions, warnings) =
             tuffbox_core::optimize_pack::build_optimize_config_actions(
                 &project_dir,
                 &manifest,
                 deny.is_empty(),
             );
-
-        // Optional AI refine of configs only (best-effort / advisory in v1).
-        if use_ai_configs {
-            warnings.push(
-                "AI config refine requested — using deterministic templates; AI merge is advisory-only in v1."
-                    .into(),
-            );
-        }
 
         let findings = audit_performance(path)?;
         let plan = tuffbox_core::optimize_pack::config_actions_to_plan(
@@ -4404,7 +4412,7 @@ async fn build_optimize_plan(
             "Optimize pack custom: safe client/performance config patches",
         );
 
-        Ok(serde_json::json!({
+        Ok::<_, String>(serde_json::json!({
             "mode": "custom",
             "mods": offers,
             "plan": plan,
@@ -4416,7 +4424,59 @@ async fn build_optimize_plan(
         }))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if use_ai_configs {
+        match tune_config_api::tune_config_advise(
+            app,
+            path_for_ai,
+            Some("fps_client".into()),
+            Some("Optimize pack for client FPS using safe config patches.".into()),
+            None,
+            None,
+            Some("optimize-pack".into()),
+            None,
+        )
+        .await
+        {
+            Ok(advise) => {
+                let mut warnings = base
+                    .get("warnings")
+                    .and_then(|w| w.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                warnings.push(serde_json::json!(
+                    "AI Config Advisor refined performance patches — review before apply."
+                ));
+                for w in advise.validation_warnings {
+                    warnings.push(serde_json::json!(w));
+                }
+                if !advise.validation_ok {
+                    for e in &advise.validation_errors {
+                        warnings.push(serde_json::json!(format!("AI plan warning: {e}")));
+                    }
+                } else {
+                    base["plan"] = serde_json::to_value(&advise.plan).unwrap_or(base["plan"].clone());
+                }
+                base["warnings"] = serde_json::Value::Array(warnings);
+                base["aiResearchLog"] = serde_json::to_value(&advise.research_log).unwrap_or_default();
+                base["aiDiffs"] = serde_json::to_value(&advise.diffs).unwrap_or_default();
+            }
+            Err(e) => {
+                let mut warnings = base
+                    .get("warnings")
+                    .and_then(|w| w.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                warnings.push(serde_json::json!(format!(
+                    "AI config refine failed — using deterministic templates only ({e})"
+                )));
+                base["warnings"] = serde_json::Value::Array(warnings);
+            }
+        }
+    }
+
+    Ok(base)
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -9917,6 +9977,30 @@ fn episode_fix_method_for(entries: &[&ProjectChangeEntry]) -> String {
     "unknown".into()
 }
 
+fn short_history_action_label(entry: &ProjectChangeEntry) -> String {
+    let paths = if entry.path.is_empty() {
+        Vec::new()
+    } else {
+        vec![entry.path.clone()]
+    };
+    let prefer = if !entry.operation.trim().is_empty() {
+        entry.operation.as_str()
+    } else {
+        entry.preview.as_str()
+    };
+    // Prefer Install/Remove/Update/Disable/Enable operation lines as-is.
+    let trimmed = prefer.trim();
+    if trimmed.starts_with("Install ")
+        || trimmed.starts_with("Remove ")
+        || trimmed.starts_with("Update ")
+        || trimmed.starts_with("Disable ")
+        || trimmed.starts_with("Enable ")
+    {
+        return tuffbox_core::crash_kb::truncate_at_char_boundary(trimmed, 60).to_string();
+    }
+    pack_events::concise_event_summary(trimmed, &paths, &entry.op)
+}
+
 fn episode_summary_for(outcome: &str, method: &str, entries: &[&ProjectChangeEntry]) -> String {
     let method_label = match method {
         "ai" => "AI",
@@ -9935,15 +10019,19 @@ fn episode_summary_for(outcome: &str, method: &str, entries: &[&ProjectChangeEnt
                 || e.kind == "crash_resolved"
                 || e.op == "crash_detected"
         })
-        .or_else(|| entries.first())
-        .map(|e| {
-            let s = if e.operation.trim().is_empty() {
-                e.preview.as_str()
-            } else {
-                e.operation.as_str()
-            };
-            tuffbox_core::crash_kb::truncate_at_char_boundary(s, 120).to_string()
+        .or_else(|| {
+            // Prefer human Install/Remove/… lines over opaque file dumps.
+            entries.iter().find(|e| {
+                let s = e.operation.trim();
+                s.starts_with("Install ")
+                    || s.starts_with("Remove ")
+                    || s.starts_with("Update ")
+                    || s.starts_with("Disable ")
+                    || s.starts_with("Enable ")
+            })
         })
+        .or_else(|| entries.first())
+        .map(|e| short_history_action_label(e))
         .unwrap_or_else(|| "Crash episode".into());
     match outcome {
         "fixed" => format!("{method_label} plan fixed · {top}"),
@@ -9987,21 +10075,26 @@ fn build_activity_episodes(entries: &[ProjectChangeEntry]) -> Vec<HistoryEpisode
                 .unwrap_or_default();
             let ended_at = refs.last().map(|e| e.created_at.clone());
             let n = chunk.len();
-            let top = refs
-                .first()
-                .map(|e| {
-                    let s = if e.operation.trim().is_empty() {
-                        e.preview.as_str()
-                    } else {
-                        e.operation.as_str()
-                    };
-                    tuffbox_core::crash_kb::truncate_at_char_boundary(s, 100).to_string()
+            let highlight = refs
+                .iter()
+                .find(|e| {
+                    let s = e.operation.trim();
+                    s.starts_with("Install ")
+                        || s.starts_with("Remove ")
+                        || s.starts_with("Update ")
+                        || s.starts_with("Disable ")
+                        || s.starts_with("Enable ")
                 })
+                .or_else(|| refs.first())
+                .map(|e| short_history_action_label(e))
                 .unwrap_or_default();
             let summary = if n == 1 {
-                format!("Pack change · {top}")
+                highlight
             } else {
-                format!("Pack activity · {n} changes · {top}")
+                let head = format!("{n} pack changes · ");
+                let budget = 60usize.saturating_sub(head.len());
+                let top = tuffbox_core::crash_kb::truncate_at_char_boundary(&highlight, budget);
+                format!("{head}{top}")
             };
             let first_id = refs.first().map(|e| e.id.as_str()).unwrap_or("x");
             out.push(HistoryEpisode {
@@ -10348,9 +10441,15 @@ fn list_project_change_history(path: String) -> Result<HistoryListResult, String
             .and_then(|m| m.get("preview"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let summary = humanize_history_summary(&ev.summary, &manifest_mods);
+        let summary = {
+            let s = humanize_history_summary(&ev.summary, &manifest_mods);
+            pack_events::concise_event_summary(&s, &ev.paths, &ev.op)
+        };
         let preview = meta_preview
-            .map(|p| humanize_history_summary(&p, &manifest_mods))
+            .map(|p| {
+                let p = humanize_history_summary(&p, &manifest_mods);
+                pack_events::concise_event_summary(&p, &ev.paths, &ev.op)
+            })
             .unwrap_or_else(|| summary.clone());
         let diff = meta_diff.unwrap_or_else(|| {
             if !ev.paths.is_empty() {
@@ -12512,6 +12611,21 @@ async fn install_modpack(
 
         if !pack_path.is_file() {
             return Err(format!("pack not found: {}", pack_path.display()));
+        }
+
+        // Player-built VanillaTweaks texture packs from vanillatweaks.net are not
+        // modpacks — steer the user to the Resourcepacks import path.
+        if let Some(name) = pack_path.file_name().and_then(|n| n.to_str()) {
+            if matches!(
+                tuffbox_core::manifest::ContentType::from_filename(name),
+                tuffbox_core::manifest::ContentType::Resourcepack
+            ) && name.to_ascii_lowercase().starts_with("vanillatweaks_")
+            {
+                return Err(
+                    "VanillaTweaks_*.zip is a custom resource pack from vanillatweaks.net, not a modpack. Open the instance → Resourcepacks → Import…."
+                        .into(),
+                );
+            }
         }
 
         let ext = pack_path
@@ -15568,6 +15682,14 @@ pub fn run() {
             write_config_file,
             format_toml,
             search_in_configs,
+            tune_config_api::tune_config_advise,
+            tune_config_api::tune_config_preview_diffs,
+            tune_config_api::list_tune_chat_sessions,
+            tune_config_api::save_tune_chat_session,
+            tune_config_api::load_tune_chat_session,
+            tune_config_api::delete_tune_chat_session,
+            tune_config_api::new_tune_chat_session,
+            tune_config_api::tune_chat_turn,
             get_manifest_schema,
             record_launch,
             record_crash,

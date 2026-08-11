@@ -164,6 +164,16 @@
     findings = plan.findings ?? [];
     const actions = (plan.plan?.actions as Record<string, unknown>[] | undefined) ?? [];
     configRows = actions.map((a, i) => actionToRow(a, i));
+    const aiDiffs = (plan as any).aiDiffs as
+      | { path: string; ok: boolean; afterExcerpt?: string }[]
+      | undefined;
+    if (ai && Array.isArray(aiDiffs) && aiDiffs.length > 0) {
+      const ok = aiDiffs.filter((d) => d.ok).length;
+      warnings = [
+        ...warnings,
+        `AI preview: ${ok}/${aiDiffs.length} config patch(es) dry-run OK — review reasons for source: / cite: tags.`,
+      ];
+    }
     curatedMeta = {
       name: "Custom optimize",
       slug: "",
@@ -446,7 +456,7 @@
             disabled={applying || loading}
             onchange={() => refreshCustomWithAi()}
           />
-          Use AI for configs (opt-in; templates still apply in v1)
+          Use AI for configs (Config Advisor + templates; review before apply)
         </label>
       {/if}
 

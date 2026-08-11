@@ -446,22 +446,20 @@
 
 <style>
   .drawer-kjs {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 40;
-    width: min(860px, 94vw);
-    max-height: min(78vh, 640px);
+    position: relative;
+    top: auto;
+    right: auto;
+    z-index: auto;
+    width: 100%;
+    max-height: min(80vh, 820px);
     padding: 0;
     display: flex;
     flex-direction: column;
     gap: 0;
-    background: var(--ftbq-bg-panel);
-    border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 16px 40px rgba(0, 0, 0, 0.6);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
     overflow: hidden;
   }
   .drawer-h {

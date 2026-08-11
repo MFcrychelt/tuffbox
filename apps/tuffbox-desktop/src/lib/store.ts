@@ -662,6 +662,9 @@ export function computeIdeNextAction(opts: {
 /** One-shot: open Quests AI sidebar on this quest chat session id. Cleared by QuestAiSidebar. */
 export const questChatFocusId = writable<string | null>(null);
 
+/** One-shot: open Tune Config AI sidebar on this tune chat session id. Cleared by TuneAiSidebar. */
+export const tuneChatFocusId = writable<string | null>(null);
+
 /** Focus a History event id after navigating to History stage. Cleared by ChangeHistory. */
 export const historyFocusEventId = writable<string | null>(null);
 
@@ -670,6 +673,15 @@ export const historyFocusFingerprintKey = writable<string | null>(null);
 
 /** Focus History entries linked to this snapshot id (cleared by ChangeHistory). */
 export const historyFocusSnapshotId = writable<string | null>(null);
+
+/** History → Content (Mods): focus mod by manifest id/slug. Cleared by Mods. */
+export const modsFocusId = writable<string | null>(null);
+
+/** History → Content (Mods): fallback match by jar fileName. Cleared by Mods. */
+export const modsFocusFileName = writable<string | null>(null);
+
+/** History → Tune (ConfigEditor): open relative config path. Cleared by ConfigEditor. */
+export const configFocusPath = writable<string | null>(null);
 
 /** Optional paths to highlight when opening Diagnose from History. */
 export const diagnoseFocusPaths = writable<string[] | null>(null);

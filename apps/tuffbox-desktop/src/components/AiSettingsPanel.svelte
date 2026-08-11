@@ -48,6 +48,7 @@
         ollamaModelsPath?: string;
         speculativeDecoding?: boolean;
         draftModel?: string;
+        tuneWebResearch?: boolean;
       };
       swarm?: Record<string, unknown>;
     };
@@ -111,6 +112,7 @@
   let ollamaModelsPath = $state("");
   let diagnoseMode = $state<"server" | "local" | "kb_only">("server");
   let speculativeDecoding = $state(false);
+  let tuneWebResearch = $state(true);
   let draftModel = $state("qwen2.5-coder:0.5b");
   let crashKbEndpoint = $state("");
   let crashKbTokenDraft = $state("");
@@ -304,6 +306,7 @@
       diagnoseMode = dm === "local" || dm === "kb_only" ? dm : "server";
       speculativeDecoding = !!ai?.speculativeDecoding;
       draftModel = ai?.draftModel?.trim() || "qwen2.5-coder:0.5b";
+      tuneWebResearch = ai?.tuneWebResearch !== false;
       crashKbEndpoint = ai?.crashKbEndpoint ?? "";
       crashKbTokenSet = !!status.crashKbTokenSet;
       crashKbTokenDraft = "";
@@ -426,6 +429,7 @@
           ollamaModelsPath: ollamaModelsPath.trim(),
           speculativeDecoding,
           draftModel: draftModel.trim() || "qwen2.5-coder:0.5b",
+          tuneWebResearch,
         },
       },
     });
@@ -1009,6 +1013,14 @@
             Pull the draft tag in Ollama first. Not used on Fog L2.
           </p>
         {/if}
+        <label class="check-row">
+          <input type="checkbox" bind:checked={tuneWebResearch} />
+          Tune Config AI — allowlisted web research for unknown keys
+        </label>
+        <p class="hint">
+          When Tune AI does not know a config key, look up Modrinth / wiki / GitHub (allowlisted hosts only).
+          Off = local comments, templates, and inventory only.
+        </p>
         <label>
           Crash KB URL
           <input bind:value={crashKbEndpoint} placeholder="https://kb.example.com" autocomplete="off" />

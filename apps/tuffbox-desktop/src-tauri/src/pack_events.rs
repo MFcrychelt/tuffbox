@@ -583,9 +583,201 @@ fn remove_cached_config_content(project_dir: &Path, rel: &str) {
     let _ = std::fs::remove_file(content_cache_path(project_dir, rel));
 }
 
+fn path_basename(rel: &str) -> &str {
+    Path::new(rel)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(rel)
+}
+
+/// Short path for UI labels: basename, or mid-truncated relative path when deep.
+fn short_path_label(rel: &str) -> String {
+    let norm = rel.replace('\\', "/");
+    let base = path_basename(&norm);
+    if !norm.contains('/') || norm.len() <= 40 {
+        return base.to_string();
+    }
+    // e.g. kubejs/…/tuffbox_ftb_quests.js
+    let parts: Vec<&str> = norm.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 3 {
+        format!("{}/…/{}", parts[0], base)
+    } else {
+        base.to_string()
+    }
+}
+
+fn looks_like_human_operation(text: &str) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.contains("+ //") || t.contains("+ \t") || t.contains(": added (") || t.contains(": removed (")
+    {
+        return false;
+    }
+    if t.starts_with("Added on disk:")
+        || t.starts_with("Removed from disk:")
+        || t.starts_with("Changed on disk:")
+        || t.starts_with("Pack change ·")
+        || t.starts_with("Pack activity ·")
+    {
+        return false;
+    }
+    const PREFIXES: &[&str] = &[
+        "Install ",
+        "Remove ",
+        "Update ",
+        "Disable ",
+        "Enable ",
+        "Added ",
+        "Edited ",
+        "Removed ",
+        "Fixed ",
+        "Rolled back ",
+    ];
+    PREFIXES.iter().any(|p| t.starts_with(p))
+}
+
+fn truncate_label(s: &str, max_chars: usize) -> String {
+    tuffbox_core::crash_kb::truncate_at_char_boundary(s, max_chars).to_string()
+}
+
+fn keys_hint_from_preview(place: &str) -> Option<String> {
+    let place = place.trim();
+    if place.is_empty() || place.starts_with("content updated") {
+        return None;
+    }
+    let keys = place.strip_prefix("changed ").unwrap_or(place).trim();
+    if keys.is_empty() {
+        None
+    } else {
+        Some(keys.to_string())
+    }
+}
+
+fn concise_file_op_summary(op: &str, rel: &str, place: &str) -> String {
+    let base = short_path_label(rel);
+    match op {
+        "external_add" => format!("Added {base}"),
+        "external_remove" => format!("Removed {base}"),
+        _ => {
+            if let Some(keys) = keys_hint_from_preview(place) {
+                format!("Edited {base} · {keys}")
+            } else {
+                format!("Edited {base}")
+            }
+        }
+    }
+}
+
+/// Rewrite legacy noisy History summaries (path: added (+ //…), Changed on disk: …)
+/// into short human labels for display. Full diffs stay in meta.diff.
+pub fn concise_event_summary(summary: &str, paths: &[String], op: &str) -> String {
+    let s = summary.trim();
+    let path = paths
+        .iter()
+        .map(|p| p.replace('\\', "/"))
+        .find(|p| !p.is_empty() && p != op)
+        .unwrap_or_default();
+    let base = if path.is_empty() {
+        String::new()
+    } else {
+        short_path_label(&path)
+    };
+
+    if s.is_empty() {
+        return match op {
+            "external_add" if !base.is_empty() => format!("Added {base}"),
+            "external_remove" if !base.is_empty() => format!("Removed {base}"),
+            "external_edit" | "file_edit" | "file_changed" if !base.is_empty() => {
+                format!("Edited {base}")
+            }
+            _ if !base.is_empty() => format!("Changed {base}"),
+            _ => op.replace('_', " "),
+        };
+    }
+
+    if looks_like_human_operation(s) {
+        return truncate_label(s, 80);
+    }
+
+    // "Added on disk: path" / "Removed from disk: path" / "Changed on disk: path"
+    for (prefix, verb) in [
+        ("Added on disk:", "Added"),
+        ("Removed from disk:", "Removed"),
+        ("Changed on disk:", "Edited"),
+    ] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            let p = rest.trim();
+            let label = if p.is_empty() {
+                base.clone()
+            } else {
+                short_path_label(p)
+            };
+            if label.is_empty() {
+                return verb.to_string();
+            }
+            return format!("{verb} {label}");
+        }
+    }
+
+    // "rel/path.js: added (…)" / ": removed (…)" / ": changed …"
+    if let Some((left, right)) = s.split_once(": ") {
+        let left = left.trim();
+        let right = right.trim();
+        let label = if left.contains('/') || left.contains('\\') || left.contains('.') {
+            short_path_label(left)
+        } else if !base.is_empty() {
+            base.clone()
+        } else {
+            left.to_string()
+        };
+        if right.starts_with("added") {
+            return format!("Added {label}");
+        }
+        if right.starts_with("removed") {
+            return format!("Removed {label}");
+        }
+        if let Some(keys) = keys_hint_from_preview(right) {
+            return format!("Edited {label} · {keys}");
+        }
+        if right.starts_with("changed") || right.starts_with("content updated") {
+            return format!("Edited {label}");
+        }
+    }
+
+    // Raw diff dump leaked into summary/preview
+    if s.contains("+ //")
+        || s.lines().any(|l| l.starts_with("+ ") || l.starts_with("- "))
+        || s.contains(" · +")
+        || s.contains(" · -")
+    {
+        return match op {
+            "external_add" if !base.is_empty() => format!("Added {base}"),
+            "external_remove" if !base.is_empty() => format!("Removed {base}"),
+            _ if !base.is_empty() => format!("Edited {base}"),
+            _ => "Content updated".into(),
+        };
+    }
+
+    if !base.is_empty() && (s.contains(&path) || s.len() > 80) {
+        return match op {
+            "external_add" => format!("Added {base}"),
+            "external_remove" => format!("Removed {base}"),
+            "external_edit" | "file_edit" | "file_changed" => format!("Edited {base}"),
+            _ => truncate_label(s, 80),
+        };
+    }
+
+    truncate_label(s, 80)
+}
+
 /// Pull changed keys / assignment lines from a unified diff for a short preview.
 fn config_change_preview(diff: &str) -> String {
     let mut keys = Vec::new();
+    let mut changed_lines = 0usize;
+    let mut substantive_lines = 0usize;
     for line in diff.lines() {
         let trimmed = if let Some(rest) = line.strip_prefix("+ ").or_else(|| line.strip_prefix("- "))
         {
@@ -593,9 +785,11 @@ fn config_change_preview(diff: &str) -> String {
         } else {
             continue;
         };
+        changed_lines += 1;
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
             continue;
         }
+        substantive_lines += 1;
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             // TOML section
             let section = trimmed.trim_matches(|c| c == '[' || c == ']');
@@ -618,15 +812,18 @@ fn config_change_preview(diff: &str) -> String {
             break;
         }
     }
-    if keys.is_empty() {
-        // Fall back to first changed lines.
-        diff.lines()
-            .filter(|l| l.starts_with("+ ") || l.starts_with("- "))
-            .take(4)
-            .collect::<Vec<_>>()
-            .join(" · ")
+    if !keys.is_empty() {
+        return format!("changed {}", keys.join(", "));
+    }
+    let n = if substantive_lines > 0 {
+        substantive_lines
     } else {
-        format!("changed {}", keys.join(", "))
+        changed_lines
+    };
+    if n == 0 {
+        "content updated".into()
+    } else {
+        format!("content updated ({n} lines)")
     }
 }
 
@@ -636,11 +833,7 @@ fn enrich_external_file_event(
     op: &str,
 ) -> (String, Option<serde_json::Value>) {
     if !is_textish_config(rel) {
-        let summary = match op {
-            "external_add" => format!("Added on disk: {rel}"),
-            "external_remove" => format!("Removed from disk: {rel}"),
-            _ => format!("Changed on disk: {rel}"),
-        };
+        let summary = concise_file_op_summary(op, rel, "");
         return (summary, None);
     }
 
@@ -653,43 +846,39 @@ fn enrich_external_file_event(
     let before = read_cached_config_content(project_dir, rel).unwrap_or_default();
 
     let (summary, meta) = if op == "external_add" {
-        let preview = if after.is_empty() {
-            format!("Added on disk: {rel}")
-        } else {
-            let diff = crate::helpers::unified_text_diff("", &after);
-            let place = config_change_preview(&diff);
-            format!("{rel}: added ({place})")
-        };
         let diff = crate::helpers::unified_text_diff("", &after);
+        let place = if after.is_empty() {
+            String::new()
+        } else {
+            config_change_preview(&diff)
+        };
+        let summary = concise_file_op_summary(op, rel, &place);
         (
-            preview.clone(),
+            summary.clone(),
             Some(serde_json::json!({
                 "diff": diff,
-                "preview": preview,
+                "preview": summary,
             })),
         )
     } else if op == "external_remove" {
         let diff = crate::helpers::unified_text_diff(&before, "");
         let place = if before.is_empty() {
-            format!("Removed from disk: {rel}")
+            String::new()
         } else {
-            format!("{rel}: removed ({})", config_change_preview(&diff))
+            config_change_preview(&diff)
         };
+        let summary = concise_file_op_summary(op, rel, &place);
         (
-            place.clone(),
+            summary.clone(),
             Some(serde_json::json!({
                 "diff": diff,
-                "preview": place,
+                "preview": summary,
             })),
         )
     } else {
         let diff = crate::helpers::unified_text_diff(&before, &after);
         let place = config_change_preview(&diff);
-        let summary = if place.is_empty() {
-            format!("Changed on disk: {rel}")
-        } else {
-            format!("{rel}: {place}")
-        };
+        let summary = concise_file_op_summary(op, rel, &place);
         (
             summary.clone(),
             Some(serde_json::json!({
@@ -1139,11 +1328,73 @@ mod tests {
         fs::write(dir.join(rel), "enabled = true\nmax = 1\n").unwrap();
         let (summary, meta) = enrich_external_file_event(&dir, rel, "external_edit");
         assert!(summary.contains("enabled"), "{summary}");
+        assert!(summary.starts_with("Edited "), "{summary}");
+        assert!(!summary.contains("+ "), "{summary}");
         let meta = meta.expect("meta");
+        let preview = meta.get("preview").and_then(|v| v.as_str()).unwrap_or("");
+        assert_eq!(preview, summary);
         let diff = meta.get("diff").and_then(|v| v.as_str()).unwrap_or("");
         assert!(diff.contains("- enabled = false") || diff.contains("- enabled = false\n"));
         assert!(diff.contains("+ enabled = true") || diff.contains("+ enabled = true\n"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn external_add_comment_only_summary_is_concise() {
+        let dir = temp_project();
+        let rel = "kubejs/server_scripts/tuffbox_ftb_quests.js";
+        fs::create_dir_all(dir.join("kubejs/server_scripts")).unwrap();
+        fs::write(
+            dir.join(rel),
+            "// Generated / managed by TuffBox Quests\nlet x = 1;\n",
+        )
+        .unwrap();
+        let (summary, meta) = enrich_external_file_event(&dir, rel, "external_add");
+        assert!(summary.starts_with("Added "), "{summary}");
+        assert!(summary.contains("tuffbox_ftb_quests.js"), "{summary}");
+        assert!(!summary.contains("+ //"), "{summary}");
+        assert!(!summary.contains(": added"), "{summary}");
+        let meta = meta.expect("meta");
+        let preview = meta.get("preview").and_then(|v| v.as_str()).unwrap_or("");
+        assert_eq!(preview, summary);
+        let diff = meta.get("diff").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(diff.contains("+ //") || diff.contains("Generated"), "{diff}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concise_event_summary_rewrites_legacy_noise() {
+        let paths = vec!["kubejs/server_scripts/tuffbox_ftb_quests.js".into()];
+        let legacy = "kubejs/server_scripts/tuffbox_ftb_quests.js: added (+ // Generated / managed by TuffBox Quests · Ku";
+        let clean = concise_event_summary(legacy, &paths, "external_add");
+        assert_eq!(clean, "Added kubejs/…/tuffbox_ftb_quests.js");
+        assert!(!clean.contains("+ //"));
+
+        let edited = concise_event_summary(
+            "config/demo.toml: changed enabled",
+            &["config/demo.toml".into()],
+            "external_edit",
+        );
+        assert_eq!(edited, "Edited demo.toml · enabled");
+
+        let install = concise_event_summary(
+            "Install Mouse Tweaks 2.26",
+            &["mods/mousetweaks.jar".into()],
+            "mod_change",
+        );
+        assert_eq!(install, "Install Mouse Tweaks 2.26");
+    }
+
+    #[test]
+    fn config_preview_skips_comment_dump() {
+        let preview = config_change_preview(
+            "--- a\n+++ b\n+ // Generated / managed by TuffBox\n+ let x = 1;\n",
+        );
+        assert!(!preview.contains("+ //"), "{preview}");
+        assert!(
+            preview.starts_with("content updated") || preview.contains("changed"),
+            "{preview}"
+        );
     }
 
     #[test]

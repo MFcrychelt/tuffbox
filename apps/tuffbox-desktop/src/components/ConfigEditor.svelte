@@ -2,13 +2,14 @@
   import { invoke } from "@tauri-apps/api/core";
   import {
     FileCode2, RefreshCw, Save, Search, RotateCcw, AlertTriangle, FileSearch,
-    ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2,
+    ChevronRight, ChevronDown, File, Folder, FolderOpen, History, Camera, Code2, Sparkles,
   } from "@lucide/svelte";
   import { onDestroy, tick } from "svelte";
   import { EditorView } from "@codemirror/view";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import EmptyState from "./EmptyState.svelte";
-  import { ideStageRequest, projectPath, tuneDirty } from "../lib/store";
+  import TuneAiSidebar from "./tune/TuneAiSidebar.svelte";
+  import { configFocusPath, ideStageRequest, projectPath, tuneDirty, tuneChatFocusId } from "../lib/store";
   import CodeMirror from "svelte-codemirror-editor";
   import { json } from "@codemirror/lang-json";
   import { javascript } from "@codemirror/lang-javascript";
@@ -126,7 +127,7 @@
     },
   ];
 
-  let files: ConfigFile[] = [];
+  let files = $state<ConfigFile[]>([]);
   let selected = $state<ConfigFile | null>(null);
   let content = "";
   let originalContent = "";
@@ -146,6 +147,37 @@
   let searchError: string | null = null;
 
   let expandedDirs = $state(new Set<string>());
+  let aiOpen = $state(
+    typeof localStorage !== "undefined" && localStorage.getItem("tuffbox.tuneAiOpen") === "1",
+  );
+  let editorEpoch = $state(0);
+
+  function setAiOpen(next: boolean) {
+    aiOpen = next;
+    try {
+      localStorage.setItem("tuffbox.tuneAiOpen", next ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function onAiApplied(paths: string[]) {
+    message = `AI applied ${paths.length} config patch(es)`;
+    await loadFiles(true);
+    if (selected && paths.some((p) => p.replace(/\\/g, "/") === selected?.path)) {
+      try {
+        const text = await invoke<string>("read_config_file", {
+          path: $projectPath,
+          relativePath: selected.path,
+        });
+        content = text;
+        originalContent = text;
+        editorEpoch += 1;
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 
   let confirmOpen = false;
   let pendingFile: ConfigFile | null = null;
@@ -357,12 +389,42 @@
         originalContent = "";
         lintIssues = [];
       }
+      consumeConfigFocus();
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
   }
+
+  function consumeConfigFocus() {
+    const p = ($configFocusPath ?? "").trim().replace(/\\/g, "/");
+    if (!p || !files.length) return;
+    configFocusPath.set(null);
+    const norm = p.toLowerCase();
+    const file =
+      files.find((f) => f.path.replace(/\\/g, "/") === p) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase() === norm) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase().endsWith("/" + norm)) ??
+      files.find((f) => f.path.replace(/\\/g, "/").toLowerCase().endsWith(norm));
+    if (file) tryOpenFile(file);
+  }
+
+  $effect(() => {
+    const p = $configFocusPath;
+    if (!p) return;
+    if (files.length > 0) {
+      consumeConfigFocus();
+      return;
+    }
+    void loadFiles(false);
+  });
+
+  $effect(() => {
+    if ($tuneChatFocusId) {
+      setAiOpen(true);
+    }
+  });
 
   function tryOpenFile(file: ConfigFile, line?: number) {
     if (dirty && file.path !== selected?.path) {
@@ -596,6 +658,16 @@
       <span>Tune · configs</span>
     </div>
     <div class="toolbar-actions">
+      <button
+        class="secondary"
+        class:active-ai={aiOpen}
+        onclick={() => setAiOpen(!aiOpen)}
+        disabled={!$projectPath}
+        title="Config AI advisor"
+      >
+        <Sparkles size={16} />
+        AI
+      </button>
       <button class="ghost" onclick={() => loadFiles(true)} disabled={!$projectPath || loading}>
         <RefreshCw size={16} class={loading ? "spin" : ""} />
         Refresh
@@ -661,7 +733,7 @@
   {#if !$projectPath}
     <EmptyState icon={FileCode2} title="No project selected" description="Open a project to edit configs." />
   {:else}
-    <div class="layout">
+    <div class="layout" class:with-ai={aiOpen}>
       <aside class="file-panel">
         <div class="root-chips">
           <button class="chip" class:active={rootFilter === null} onclick={() => setRootChip(null)}>All</button>
@@ -762,7 +834,7 @@
             </div>
           </div>
           <div class="cm-wrapper" class:line-hl={highlightLine != null}>
-            {#key selected.path}
+            {#key selected.path + ':' + editorEpoch}
               <CodeMirror
                 value={content}
                 lang={currentLang}
@@ -789,6 +861,13 @@
           <EmptyState icon={FileCode2} compact={true} title="No file selected" description="Select a config from the tree. Roots: config, defaultconfigs, kubejs, scripts, overrides, options.txt." />
         {/if}
       </section>
+
+      <TuneAiSidebar
+        open={aiOpen}
+        focusPath={selected?.path ?? null}
+        onclose={() => setAiOpen(false)}
+        onapplied={onAiApplied}
+      />
     </div>
   {/if}
 </div>
@@ -825,6 +904,10 @@
     transform: none !important;
     padding: 5px 10px;
     font-size: 12px;
+  }
+  .toolbar-actions button.active-ai {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--accent-primary);
   }
   .notice { gap: 8px; padding: 8px 10px; border-radius: var(--border-radius-md); margin-bottom: 8px; border: 1px solid var(--border-color); flex-shrink: 0; justify-content: space-between; flex-wrap: wrap; font-size: 13px; }
   .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
@@ -863,6 +946,10 @@
     grid-template-columns: 300px minmax(0, 1fr);
     gap: 12px;
     overflow: hidden;
+  }
+  .layout.with-ai {
+    grid-template-columns: 260px minmax(0, 1fr) minmax(280px, 320px);
+    gap: 0 12px;
   }
   .file-panel, .editor-panel { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
   .file-panel {
@@ -996,5 +1083,8 @@
   .lint-item code { font-size: 10px; color: var(--accent-primary); }
   .lint-item span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lint-item small { color: var(--text-muted); font-size: 10px; }
-  @media (max-width: 1050px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 1050px) {
+    .layout { grid-template-columns: 1fr; }
+    .layout.with-ai { grid-template-columns: 1fr; }
+  }
 </style>

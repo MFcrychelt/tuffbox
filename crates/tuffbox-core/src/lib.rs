@@ -68,6 +68,8 @@ pub mod content_packs;
 pub mod servers_dat;
 pub mod overrides;
 pub mod optimize_pack;
+pub mod tune_chat;
+pub mod tune_config_ai;
 pub mod packwiz;
 pub mod properties_parser;
 pub mod recipe_layout;

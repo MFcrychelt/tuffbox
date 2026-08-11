@@ -40,6 +40,11 @@
     onLink,
     onSelectMultiple = () => {},
     fitToken = 0,
+    addQuestToken = 0,
+    questFilter = "",
+    filterTotal = 0,
+    onQuestFilterChange = undefined,
+    onApplyLayout = undefined,
   }: {
     quests: QuestData[];
     chapters?: QuestChapter[];
@@ -56,6 +61,11 @@
     onLink: (fromId: string, toDepId: string) => void;
     onSelectMultiple?: (ids: string[]) => void;
     fitToken?: number;
+    addQuestToken?: number;
+    questFilter?: string;
+    filterTotal?: number;
+    onQuestFilterChange?: (value: string) => void;
+    onApplyLayout?: (kind: "tree" | "grid" | "circle") => void;
   } = $props();
 
   const BASE = 24;
@@ -228,6 +238,14 @@
     if (fitToken !== lastFitToken) {
       lastFitToken = fitToken;
       tick().then(() => flowFitView({ padding: 0.2 }));
+    }
+  });
+
+  let lastAddQuestToken = $state(0);
+  $effect(() => {
+    if (addQuestToken !== lastAddQuestToken && addQuestToken > 0) {
+      lastAddQuestToken = addQuestToken;
+      tick().then(() => addAtCenter());
     }
   });
 
@@ -507,13 +525,41 @@
 
 <div class="canvas-wrap ftbq-canvas">
   <div class="canvas-toolbar">
+    {#if onQuestFilterChange}
+      <input
+        type="search"
+        class="tb-filter"
+        placeholder="Filter…"
+        value={questFilter}
+        oninput={(e) => onQuestFilterChange?.((e.currentTarget as HTMLInputElement).value)}
+        onkeydown={(e) => {
+          if (e.key === "Escape") {
+            onQuestFilterChange?.("");
+          }
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const first = quests[0];
+            if (first) onSelect(first);
+          }
+        }}
+      />
+      {#if questFilter}
+        <span class="filt-count">{quests.length}/{filterTotal}</span>
+      {/if}
+    {/if}
     <button type="button" class="tb" title="Fit view" aria-label="Fit view" onclick={() => flowFitView({ padding: 0.2 })}>
       <Maximize2 size={14} class="flex-shrink-0" /> Fit
     </button>
-    <button type="button" class="tb" title="Add quest at center" aria-label="Add quest at center" onclick={addAtCenter}>
+    <button type="button" class="tb" title="Add quest at center (N or double-click)" aria-label="Add quest at center" onclick={addAtCenter}>
       <Plus size={14} class="flex-shrink-0" /> Add quest
     </button>
-    <span class="hint">Drag · Scroll zoom · Connect · Dbl-click add · Shift/Ctrl multi · Marquee</span>
+    {#if onApplyLayout}
+      <div class="layout-btns" title="Auto-layout current chapter">
+        <button type="button" class="tb" onclick={() => onApplyLayout?.("tree")}>Tree</button>
+        <button type="button" class="tb" onclick={() => onApplyLayout?.("grid")}>Grid</button>
+        <button type="button" class="tb" onclick={() => onApplyLayout?.("circle")}>Circle</button>
+      </div>
+    {/if}
   </div>
 
   <!-- Focusable canvas widget: arrow/Home/End/Escape selection via existing onSelect -->
@@ -534,11 +580,13 @@
   >
     {#if quests.length === 0}
       <div class="empty-hint">
-        <span>{emptyHint}</span>
         {#if showEmptyAddCta}
           <button type="button" class="empty-add" onclick={(e) => { e.stopPropagation(); addAtCenter(); }}>
             Add quest
           </button>
+          <span class="empty-sub">or double-click / press N</span>
+        {:else}
+          <span>{emptyHint}</span>
         {/if}
       </div>
     {/if}
@@ -603,6 +651,27 @@
     border-bottom: 1px solid var(--ftbq-frame);
     background: var(--ftbq-bg-panel);
     flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .tb-filter {
+    min-width: 120px;
+    flex: 1;
+    max-width: 220px;
+    font-size: 12px;
+    padding: 4px 8px;
+    background: var(--ftbq-input-bg);
+    border: 1px solid var(--ftbq-frame);
+    color: var(--ftbq-text, #e8e8e8);
+    border-radius: 4px;
+  }
+  .filt-count {
+    font-size: 11px;
+    color: var(--ftbq-text-muted, #9a9aa0);
+  }
+  .layout-btns {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: auto;
   }
   .tb {
     display: inline-flex;
@@ -627,12 +696,6 @@
   .tb:active {
     background: var(--bg-active, var(--ftbq-btn-hover-bottom));
     box-shadow: none;
-  }
-  .hint {
-    margin-left: auto;
-    font-size: 9px;
-    color: var(--ftbq-text-muted, #9a9aa0);
-    letter-spacing: 0.02em;
   }
   .viewport {
     position: relative;
@@ -676,6 +739,11 @@
   }
   .empty-add:hover {
     background: rgba(61, 184, 168, 0.28);
+  }
+  .empty-sub {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .vignette {
     position: absolute;

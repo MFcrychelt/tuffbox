@@ -34,6 +34,7 @@
       { keys: ["Alt", "Click"], action: "Toggle simulate complete (Simulate mode)" },
       { keys: ["Space", "Drag"], action: "Pan canvas" },
       { keys: ["Scroll"], action: "Zoom in/out" },
+      { keys: ["N"], action: "Add quest at view center" },
       { keys: ["Double-click"], action: "Add new quest" },
       { keys: ["Shift", "Drag"], action: "Link quests (create dependency)" },
       { keys: ["Click + Drag"], action: "Marquee select" },
@@ -100,7 +101,7 @@
     background: var(--ftbq-bg-panel, #212126);
     border: 1px solid var(--ftbq-border, #3a3a42);
     border-radius: 3px;
-    width: 480px;
+    width: min(640px, 96vw);
     max-height: 80vh;
     overflow: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);

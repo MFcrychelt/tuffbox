@@ -148,6 +148,7 @@
   let savedChapterJson = $state<Record<string, string>>({});
   let lastLoadedPath = $state<string | null>(null);
   let fitToken = $state(0);
+  let addQuestToken = $state(0);
   let questSearch = $state("");
   let questSearchDebounced = $state("");
   $effect(() => {
@@ -587,14 +588,27 @@
     dirtyLocales = new Set([...dirtyLocales, code]);
   }
 
-  function openKubeJsForId(id: string) {
-    kubeJsFocusId = id;
-    showKubeJsPanel = true;
+  function closeBookChrome() {
+    bookMenuOpen = false;
     showBookPanel = false;
     showGroupsPanel = false;
     showTablesPanel = false;
     showLocalePanel = false;
-    bookMenuOpen = true;
+    showKubeJsPanel = false;
+  }
+
+  function openBookDrawer(panel: "book" | "groups" | "tables" | "locales" | "kubejs") {
+    showBookPanel = panel === "book";
+    showGroupsPanel = panel === "groups";
+    showTablesPanel = panel === "tables";
+    showLocalePanel = panel === "locales";
+    showKubeJsPanel = panel === "kubejs";
+    bookMenuOpen = false;
+  }
+
+  function openKubeJsForId(id: string) {
+    kubeJsFocusId = id;
+    openBookDrawer("kubejs");
   }
 
   function createCustomForKubeJs(
@@ -709,12 +723,10 @@
       return;
     }
     if (entry.groupId) {
-      showGroupsPanel = true;
-      showLocalePanel = false;
+      openBookDrawer("groups");
       return;
     }
-    showLocalePanel = true;
-    bookMenuOpen = true;
+    openBookDrawer("locales");
   }
 
   async function promptSnbtDiff(opts: {
@@ -832,18 +844,14 @@
   }
 
   async function saveAll() {
-    try {
-      await saveLocaleIfNeeded();
-    } catch (e) {
-      flashNotice("error", String(e));
-      return;
-    }
     const dirtyIds = [...dirtyChapters];
+    const localeCount = dirtyLocales.size;
     const parts: string[] = [];
     if (dirtyIds.length) parts.push(`${dirtyIds.length} chapter(s)`);
     if (rewardTablesDirty) parts.push("reward tables");
     if (bookDirty) parts.push("book data");
     if (groupsDirty) parts.push("chapter groups");
+    if (localeCount) parts.push(`${localeCount} locale(s)`);
     if (parts.length === 0) {
       flashNotice("success", "Nothing to save");
       return;
@@ -856,16 +864,10 @@
       (chapterNames.length
         ? `\n\nChapters:\n- ${chapterNames.join("\n- ")}${dirtyIds.length > chapterNames.length ? "\n- …" : ""}`
         : "");
-    const confirmed = await askConfirm({
-      title: "Save all changes?",
-      message: summary,
-      confirmLabel: "Save all",
-    });
-    if (!confirmed) return;
 
+    let diffs: SnbtDiffFile[] = [];
     if (dirtyIds.length > 0 && $projectPath) {
       const projectDir = await api.project.getDir($projectPath);
-      const diffs: SnbtDiffFile[] = [];
       for (const id of dirtyIds) {
         const ch = chapters.find((c) => c.id === id);
         if (!ch) continue;
@@ -877,17 +879,35 @@
           return;
         }
       }
-      if (diffs.length > 0) {
-        const ok = await promptSnbtDiff({
-          title: `Save ${diffs.length} chapter file(s)?`,
-          files: diffs,
-          confirmLabel: "Write all SNBT",
-        });
-        if (!ok) {
-          flashNotice("success", "Save cancelled");
-          return;
-        }
+    }
+
+    // Single confirm: SNBT review when chapter diffs exist, otherwise a plain confirm.
+    if (diffs.length > 0) {
+      const ok = await promptSnbtDiff({
+        title: `Save all? ${parts.join(", ")}`,
+        files: diffs,
+        confirmLabel: "Save all",
+      });
+      if (!ok) {
+        flashNotice("success", "Save cancelled");
+        return;
       }
+    } else {
+      const confirmed = await askConfirm({
+        title: "Save all changes?",
+        message: summary,
+        confirmLabel: "Save all",
+      });
+      if (!confirmed) return;
+    }
+
+    try {
+      await saveLocaleIfNeeded();
+    } catch (e) {
+      flashNotice("error", String(e));
+      return;
+    }
+    if (dirtyIds.length > 0) {
       for (const id of dirtyIds) {
         const result = await saveChapter(id, { skipDiff: true });
         if (result === "error") break;
@@ -1114,7 +1134,13 @@
       x,
       y,
       dependencies: [],
-      tasks: [{ id: crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase(), type: "checkmark" }],
+      tasks: [
+        {
+          id: crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase(),
+          type: "item",
+          properties: { count: 1 },
+        },
+      ],
       rewards: [],
       optional: false,
       size: 1,
@@ -1124,6 +1150,7 @@
     markDirty(selectedChapter);
     selectedQuest = newQ;
     selection = selectSingle(selection, newQ.id);
+    panelTab = "quest";
     if (questSearch.trim()) {
       questSearch = "";
       flashNotice("success", "Filter cleared so the new quest is visible");
@@ -1388,6 +1415,7 @@
     markDirty(selectedChapter);
     selection = selectAll(newQuests.map((q) => q.id));
     selectedQuest = newQuests[0] ?? null;
+    if (selectedQuest) panelTab = "quest";
     flashNotice("success", `Pasted ${newQuests.length} quest(s)`);
   }
 
@@ -1407,6 +1435,7 @@
     }
     selectedQuest = result.quest;
     selection = selectSingle(selection, result.quest.id);
+    panelTab = "quest";
     fitToken += 1;
   }
 
@@ -1446,6 +1475,7 @@
       if (first) {
         selectedQuest = first;
         selection = selectSingle(selection, first.id);
+        panelTab = "quest";
         fitToken += 1;
       }
     }
@@ -1504,20 +1534,19 @@
     }
 
     if (e.key === "Escape") {
-      if (bookMenuOpen) {
-        bookMenuOpen = false;
+      if (
+        bookMenuOpen ||
+        showBookPanel ||
+        showGroupsPanel ||
+        showTablesPanel ||
+        showLocalePanel ||
+        showKubeJsPanel
+      ) {
+        closeBookChrome();
         return;
       }
       if (issuesOpen) {
         issuesOpen = false;
-        return;
-      }
-      if (showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel) {
-        showBookPanel = false;
-        showGroupsPanel = false;
-        showTablesPanel = false;
-        showLocalePanel = false;
-        showKubeJsPanel = false;
         return;
       }
       if (aiSidebarOpen) {
@@ -1538,6 +1567,12 @@
     if ((e.key === "Delete" || e.key === "Backspace") && !isInput) {
       e.preventDefault();
       removeSelectedQuests();
+      return;
+    }
+
+    if (!isInput && (e.key === "n" || e.key === "N") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (selectedChapter) addQuestToken += 1;
       return;
     }
 
@@ -1689,12 +1724,15 @@
   }
 
   async function deleteChapter(id: string) {
+    const ch = chapters.find((c) => c.id === id);
+    const fileHint = ch?.sourceFile
+      ? `\n\nEditor-only: the SNBT file “${ch.sourceFile}” stays on disk — delete it manually if you no longer need it.`
+      : "\n\nEditor-only: any chapter SNBT file on disk is not deleted.";
     const ok = await askConfirm({
-      title: "Remove chapter?",
-      message:
-        "Remove this chapter from the editor? The SNBT file may remain on disk — delete or empty it manually if needed.",
+      title: "Remove chapter from editor?",
+      message: `Remove “${ch?.title || id}” from the quest book in this session?${fileHint}`,
       danger: true,
-      confirmLabel: "Remove",
+      confirmLabel: "Remove from editor",
     });
     if (!ok) return;
     pushHistory();
@@ -1704,6 +1742,7 @@
       selectedChapter = chapters[0]?.id ?? "";
       selectedQuest = null;
       selection = clearSelection();
+      if (panelTab === "quest") panelTab = "info";
     }
   }
 
@@ -1733,6 +1772,7 @@
         selectedChapter = ch.id;
         selectedQuest = q;
         selection = selectSingle(selection, q.id);
+        panelTab = "quest";
         fitToken += 1;
         return;
       }
@@ -1817,10 +1857,6 @@
       }
   });
   $effect(() => {
-    if (progressKey || progressOverlay) progressOpen = true;
-  });
-
-  $effect(() => {
     if ($questChatFocusId) {
         setAiSidebar(true);
       }
@@ -1839,61 +1875,82 @@
     }
     if (
       (bookMenuOpen || showBookPanel || showGroupsPanel || showTablesPanel || showLocalePanel || showKubeJsPanel) &&
-      !t.closest(".tb-pop")
+      !t.closest(".tb-pop") &&
+      !t.closest(".qe-sheet") &&
+      !t.closest(".qe-sheet-backdrop")
     ) {
-      bookMenuOpen = false;
-      showBookPanel = false;
-      showGroupsPanel = false;
-      showTablesPanel = false;
-      showLocalePanel = false;
-      showKubeJsPanel = false;
+      closeBookChrome();
     }
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} onpointerdown={onWindowPointerDown} />
+<svelte:window onkeydown={handleKeydown} onpointerdowncapture={onWindowPointerDown} />
 
 <div class="qe ftbq">
   <div class="qe-tb">
     <div class="qe-title">
       <ScrollText size={18} />
       {#if bookTitle}<span class="book-name">{stripMc(bookTitle)}</span>{:else}Quest editor{/if}
+      {#if $projectPath}
+        <span class="tb-chip">{chapters.length} ch</span>
+        <span class="tb-chip">{totalQuests} quests</span>
+        <div class="issues-wrap">
+          <button
+            type="button"
+            class="issues-btn"
+            class:warn={validationIssues.length > 0}
+            disabled={validationIssues.length === 0}
+            aria-haspopup="true"
+            aria-expanded={issuesOpen}
+            aria-controls="quest-issues-pop"
+            onclick={() => (issuesOpen = !issuesOpen)}
+          >
+            {validationIssues.length === 0 ? "✓" : `${validationIssues.length} issues`}
+          </button>
+          <button
+            type="button"
+            class="issues-btn"
+            title="Re-run Rust validate_quest_book on disk"
+            onclick={() => void revalidateFromDisk()}
+          >
+            Revalidate
+          </button>
+          {#if issuesOpen && validationIssues.length > 0}
+            <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
+              {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
+                <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
+                  <code>{iss.questId.slice(0, 8)}</code>
+                  <span>{iss.message}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        {#if progressSnap && progressOverlay}
+          <span class="tb-chip prog-stat"
+            >{progressSnap.completedCount} done · {progressSnap.startedCount} started</span
+          >
+        {/if}
+      {/if}
     </div>
     <div class="qe-actions">
-      <div class="locale-controls">
-        <select
-          class="locale-select"
-          value={activeLocale ?? ""}
-          title="Language overlay (lang/*.snbt)"
-          disabled={availableLocales.length === 0}
-          onchange={(e) => {
-            const v = (e.currentTarget as HTMLSelectElement).value;
-            if (v) switchLocale(v);
-          }}
-        >
-          {#if availableLocales.length === 0}
-            <option value="">No lang files</option>
-          {:else}
+      {#if availableLocales.length > 1}
+        <div class="locale-controls">
+          <select
+            class="locale-select"
+            value={activeLocale ?? ""}
+            title="Language overlay (lang/*.snbt)"
+            onchange={(e) => {
+              const v = (e.currentTarget as HTMLSelectElement).value;
+              if (v) switchLocale(v);
+            }}
+          >
             {#each availableLocales as code (code)}
               <option value={code}>{code}{#if dirtyLocales.has(code)} ●{/if}</option>
             {/each}
-          {/if}
-        </select>
-        <button
-          type="button"
-          class="ghost ico"
-          title="Locales — create, gaps, compare"
-          aria-label="Locales — create, gaps, compare"
-          onclick={() => {
-            showLocalePanel = true;
-            showBookPanel = false;
-            showGroupsPanel = false;
-            showTablesPanel = false;
-            showKubeJsPanel = false;
-            bookMenuOpen = true;
-          }}
-        >Locales</button>
-      </div>
+          </select>
+        </div>
+      {/if}
       <div class="tb-pop">
         <button
           type="button"
@@ -1905,13 +1962,17 @@
           aria-expanded={bookMenuOpen}
           aria-controls="quest-book-menu"
           onclick={() => {
-            bookMenuOpen = !bookMenuOpen;
-            if (!bookMenuOpen) {
-              showBookPanel = false;
-              showGroupsPanel = false;
-              showTablesPanel = false;
-              showLocalePanel = false;
-              showKubeJsPanel = false;
+            const chromeOpen =
+              bookMenuOpen ||
+              showBookPanel ||
+              showGroupsPanel ||
+              showTablesPanel ||
+              showLocalePanel ||
+              showKubeJsPanel;
+            if (chromeOpen) {
+              closeBookChrome();
+            } else {
+              bookMenuOpen = true;
             }
           }}
         >
@@ -1923,13 +1984,7 @@
               type="button"
               role="menuitem"
               class:active={showBookPanel}
-              onclick={() => {
-                showBookPanel = true;
-                showGroupsPanel = false;
-                showTablesPanel = false;
-                showLocalePanel = false;
-                showKubeJsPanel = false;
-              }}
+              onclick={() => openBookDrawer("book")}
             >
               Book settings{#if bookDirty}<span class="dot-mini">●</span>{/if}
             </button>
@@ -1937,13 +1992,7 @@
               type="button"
               role="menuitem"
               class:active={showGroupsPanel}
-              onclick={() => {
-                showGroupsPanel = true;
-                showBookPanel = false;
-                showTablesPanel = false;
-                showLocalePanel = false;
-                showKubeJsPanel = false;
-              }}
+              onclick={() => openBookDrawer("groups")}
             >
               Chapter groups{#if groupsDirty}<span class="dot-mini">●</span>{/if}
             </button>
@@ -1951,13 +2000,7 @@
               type="button"
               role="menuitem"
               class:active={showTablesPanel}
-              onclick={() => {
-                showTablesPanel = true;
-                showBookPanel = false;
-                showGroupsPanel = false;
-                showLocalePanel = false;
-                showKubeJsPanel = false;
-              }}
+              onclick={() => openBookDrawer("tables")}
             >
               Reward tables{#if rewardTablesDirty}<span class="dot-mini">●</span>{/if}
             </button>
@@ -1965,13 +2008,7 @@
               type="button"
               role="menuitem"
               class:active={showLocalePanel}
-              onclick={() => {
-                showLocalePanel = true;
-                showBookPanel = false;
-                showGroupsPanel = false;
-                showTablesPanel = false;
-                showKubeJsPanel = false;
-              }}
+              onclick={() => openBookDrawer("locales")}
             >
               Locales{#if dirtyLocales.size > 0}<span class="dot-mini">●</span>{/if}
             </button>
@@ -1979,157 +2016,11 @@
               type="button"
               role="menuitem"
               class:active={showKubeJsPanel}
-              onclick={() => {
-                showKubeJsPanel = true;
-                showBookPanel = false;
-                showGroupsPanel = false;
-                showTablesPanel = false;
-                showLocalePanel = false;
-              }}
+              onclick={() => openBookDrawer("kubejs")}
             >
               KubeJS
             </button>
           </div>
-        {/if}
-        {#if showBookPanel && $projectPath}
-          <BookSettingsPanel
-            {bookTitle}
-            {bookSubtitle}
-            {bookSettings}
-            {bookDirty}
-            {saving}
-            onclose={() => {
-              showBookPanel = false;
-              bookMenuOpen = false;
-            }}
-            onsave={() => void saveBookData()}
-            onpushhistory={pushHistory}
-            ontitlechange={(v) => {
-              bookTitle = v;
-              bookDirty = true;
-            }}
-            onsubtitlechange={(v) => {
-              bookSubtitle = v;
-              bookDirty = true;
-            }}
-            onsetsettings={(next) => {
-              bookSettings = next;
-              bookDirty = true;
-            }}
-          />
-        {/if}
-        {#if showGroupsPanel && $projectPath}
-          <ChapterGroupsPanel
-            {chapterGroups}
-            {groupsDirty}
-            {saving}
-            onclose={() => {
-              showGroupsPanel = false;
-              bookMenuOpen = false;
-            }}
-            onsave={() => void saveGroups()}
-            onadd={addChapterGroup}
-            onremove={removeChapterGroup}
-            onmove={moveChapterGroup}
-            ontitlechange={(id, title) => {
-              const g = chapterGroups.find((x) => x.id === id);
-              if (!g) return;
-              g.title = title;
-              g.titleFromSnbt = true;
-              groupsDirty = true;
-              chapterGroups = [...chapterGroups];
-            }}
-          />
-        {/if}
-        {#if showTablesPanel && $projectPath}
-          <div class="drawer drawer-tables">
-            <div class="drawer-h">
-              <strong>Reward tables</strong>
-              <button type="button" class="ghost ico" onclick={() => { showTablesPanel = false; bookMenuOpen = false; }}
-                ><X size={14} /></button
-              >
-            </div>
-            <RewardTablesPanel
-              tables={rewardTables}
-              dirty={rewardTablesDirty}
-              {saving}
-              tableIds={rewardTableIds}
-              onChange={() => {
-                if (!rewardTablesDirty) pushHistory();
-                rewardTablesDirty = true;
-                rewardTables = [...rewardTables];
-              }}
-              onSave={saveRewardTable}
-              onCreate={createRewardTable}
-            />
-          </div>
-        {/if}
-        {#if showLocalePanel && $projectPath}
-          <div class="drawer drawer-wide">
-            <div class="drawer-h">
-              <strong>Locales (lang/*.snbt)</strong>
-              <button
-                type="button"
-                class="ghost ico"
-                onclick={() => {
-                  showLocalePanel = false;
-                  bookMenuOpen = false;
-                }}><X size={14} /></button
-              >
-            </div>
-            <LocalePanel
-              {locales}
-              {activeLocale}
-              {compareLocale}
-              {chapterGroups}
-              {chapters}
-              onCreateLocale={createLocale}
-              onJumpGap={jumpToLocaleGap}
-              onCompareLocaleChange={(code) => {
-                compareLocale = code && code !== activeLocale ? code : null;
-              }}
-            />
-          </div>
-        {/if}
-        {#if showKubeJsPanel && $projectPath}
-          <QuestKubeJsPanel
-            {chapters}
-            {selectedQuest}
-            bind:focusId={kubeJsFocusId}
-            onclose={() => {
-              showKubeJsPanel = false;
-              bookMenuOpen = false;
-            }}
-            onjumpquest={(questId, chapterId) => {
-              if (chapterId && chapters.some((c) => c.id === chapterId)) {
-                selectedChapter = chapterId;
-              } else {
-                for (const ch of chapters) {
-                  if (ch.quests.some((q) => q.id === questId)) {
-                    selectedChapter = ch.id;
-                    break;
-                  }
-                }
-              }
-              const q = chapters
-                .flatMap((c) => c.quests.map((quest) => ({ quest, ch: c.id })))
-                .find((x) => x.quest.id === questId);
-              if (q) {
-                selectedChapter = q.ch;
-                selectedQuest = q.quest;
-                selection = selectSingle(selection, q.quest.id);
-                panelTab = "quest";
-              }
-              showKubeJsPanel = false;
-              bookMenuOpen = false;
-            }}
-            oncreatecustom={(kind, opts) => createCustomForKubeJs(kind, opts)}
-            ondirtyquest={() => {
-              if (selectedChapter && !dirtyChapters.has(selectedChapter)) pushHistory();
-              if (selectedChapter) markDirty(selectedChapter);
-              if (selectedQuest) selectedQuest = { ...selectedQuest };
-            }}
-          />
         {/if}
       </div>
       <button
@@ -2197,47 +2088,6 @@
   </div>
 
   {#if $projectPath}
-    <div class="qe-stats">
-      <span>{chapters.length} chapters</span>
-      <span>{totalQuests} quests</span>
-      <div class="issues-wrap">
-        <button
-          type="button"
-          class="issues-btn"
-          class:warn={validationIssues.length > 0}
-          disabled={validationIssues.length === 0}
-          aria-haspopup="true"
-          aria-expanded={issuesOpen}
-          aria-controls="quest-issues-pop"
-          onclick={() => (issuesOpen = !issuesOpen)}
-        >
-          {validationIssues.length === 0 ? "✓ valid" : `${validationIssues.length} issues`}
-        </button>
-        <button
-          type="button"
-          class="issues-btn"
-          title="Re-run Rust validate_quest_book on disk"
-          onclick={() => void revalidateFromDisk()}
-        >
-          Revalidate
-        </button>
-        {#if issuesOpen && validationIssues.length > 0}
-          <div class="issues-pop" id="quest-issues-pop" role="listbox" aria-label="Validation issues">
-            {#each validationIssues as iss, i (`${iss.questId}-${i}`)}
-              <button type="button" class="issue-row" onclick={() => jumpToIssue(iss)}>
-                <code>{iss.questId.slice(0, 8)}</code>
-                <span>{iss.message}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </div>
-      {#if progressSnap && progressOverlay}
-        <span class="prog-stat"
-          >{progressSnap.completedCount} done · {progressSnap.startedCount} started · {progressSnap.name}</span
-        >
-      {/if}
-    </div>
     <ProgressPanel
       bind:open={progressOpen}
       {progressMode}
@@ -2379,30 +2229,6 @@
         onpointerdown={(e) => startColResize("rail", e)}
       ></div>
       <div class="canvas-wrap">
-        <div class="canvas-tools">
-          <input
-            type="search"
-            placeholder="Filter quests… (Enter = jump, Esc = clear)"
-            bind:value={questSearch}
-            onkeydown={onSearchKey}
-          />
-          {#if questSearch}
-            <span class="filt-count">{filteredChapterQuests.length}/{chapterQuests.length}</span>
-            <button
-              type="button"
-              class="ghost clear-filter"
-              title="Clear filter"
-              onclick={() => (questSearch = "")}
-            >
-              Clear filter
-            </button>
-          {/if}
-          <div class="layout-btns" title="Auto-layout current chapter">
-            <button type="button" class="layout-btn" onclick={() => applyChapterLayout("tree")}>Tree</button>
-            <button type="button" class="layout-btn" onclick={() => applyChapterLayout("grid")}>Grid</button>
-            <button type="button" class="layout-btn" onclick={() => applyChapterLayout("circle")}>Circle</button>
-          </div>
-        </div>
         <SvelteFlowProvider>
           <QuestCanvas
             quests={filteredChapterQuests}
@@ -2411,11 +2237,16 @@
             selectedIds={selection.selectedIds}
             issues={validationIssues}
             {fitToken}
+            {addQuestToken}
             {progressOverlay}
             {progressStatuses}
+            questFilter={questSearch}
+            filterTotal={chapterQuests.length}
+            onQuestFilterChange={(v) => (questSearch = v)}
+            onApplyLayout={applyChapterLayout}
             emptyHint={questSearch.trim()
-              ? `No quests match “${questSearch.trim()}”`
-              : "Double-click to add a quest"}
+              ? `No quests match "${questSearch.trim()}"`
+              : "Add a quest to get started"}
             showEmptyAddCta={!questSearch.trim()}
             onSelect={(q, e) => {
               if (
@@ -2554,13 +2385,13 @@
                 />
               {:else}
                 <div class="sel-empty">
-                  <p class="sel-hint">Select a quest on the canvas</p>
                   <button
                     type="button"
-                    class="ghost"
+                    class="primary"
                     onclick={() => addQuestAt(0, 0)}
                     disabled={!selectedChapter}
                   >Add quest</button>
+                  <p class="sel-hint">Double-click canvas or press N</p>
                 </div>
               {/if}
             {:else if panelTab === "info"}
@@ -2608,16 +2439,184 @@
       />
     {/if}
     </div>
-    <div class="qe-footer">
-      <p class="hint">
-        Ctrl+S save · Ctrl+Z undo · Ctrl+F search · Ctrl+/ shortcuts · Shift/Ctrl multi-select. SNBT →
-        <code>config/ftbquests/quests/chapters/</code>.
-      </p>
-    </div>
   {/if}
 </div>
 
 <ShortcutsModal isOpen={showShortcuts} onClose={() => (showShortcuts = false)} />
+
+{#if $projectPath && showBookPanel}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="qe-sheet-backdrop" role="presentation" onclick={closeBookChrome}>
+    <div
+      class="qe-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Book settings"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <BookSettingsPanel
+        {bookTitle}
+        {bookSubtitle}
+        {bookSettings}
+        {bookDirty}
+        {saving}
+        onclose={closeBookChrome}
+        onsave={() => void saveBookData()}
+        onpushhistory={pushHistory}
+        ontitlechange={(v) => {
+          bookTitle = v;
+          bookDirty = true;
+        }}
+        onsubtitlechange={(v) => {
+          bookSubtitle = v;
+          bookDirty = true;
+        }}
+        onsetsettings={(next) => {
+          bookSettings = next;
+          bookDirty = true;
+        }}
+      />
+    </div>
+  </div>
+{/if}
+{#if $projectPath && showGroupsPanel}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="qe-sheet-backdrop" role="presentation" onclick={closeBookChrome}>
+    <div
+      class="qe-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Chapter groups"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <ChapterGroupsPanel
+        {chapterGroups}
+        {groupsDirty}
+        {saving}
+        onclose={closeBookChrome}
+        onsave={() => void saveGroups()}
+        onadd={addChapterGroup}
+        onremove={removeChapterGroup}
+        onmove={moveChapterGroup}
+        ontitlechange={(id, title) => {
+          const g = chapterGroups.find((x) => x.id === id);
+          if (!g) return;
+          g.title = title;
+          g.titleFromSnbt = true;
+          groupsDirty = true;
+          chapterGroups = [...chapterGroups];
+        }}
+      />
+    </div>
+  </div>
+{/if}
+{#if $projectPath && showTablesPanel}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="qe-sheet-backdrop" role="presentation" onclick={closeBookChrome}>
+    <div
+      class="qe-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Reward tables"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="drawer-h sheet-h">
+        <strong>Reward tables</strong>
+        <button type="button" class="ghost ico" onclick={closeBookChrome}><X size={14} /></button>
+      </div>
+      <RewardTablesPanel
+        tables={rewardTables}
+        dirty={rewardTablesDirty}
+        {saving}
+        tableIds={rewardTableIds}
+        onChange={() => {
+          if (!rewardTablesDirty) pushHistory();
+          rewardTablesDirty = true;
+          rewardTables = [...rewardTables];
+        }}
+        onSave={saveRewardTable}
+        onCreate={createRewardTable}
+      />
+    </div>
+  </div>
+{/if}
+{#if $projectPath && showLocalePanel}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="qe-sheet-backdrop" role="presentation" onclick={closeBookChrome}>
+    <div
+      class="qe-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Locales"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <div class="drawer-h sheet-h">
+        <strong>Locales (lang/*.snbt)</strong>
+        <button type="button" class="ghost ico" onclick={closeBookChrome}><X size={14} /></button>
+      </div>
+      <LocalePanel
+        {locales}
+        {activeLocale}
+        {compareLocale}
+        {chapterGroups}
+        {chapters}
+        onCreateLocale={createLocale}
+        onJumpGap={jumpToLocaleGap}
+        onCompareLocaleChange={(code) => {
+          compareLocale = code && code !== activeLocale ? code : null;
+        }}
+      />
+    </div>
+  </div>
+{/if}
+{#if $projectPath && showKubeJsPanel}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div class="qe-sheet-backdrop" role="presentation" onclick={closeBookChrome}>
+    <div
+      class="qe-sheet qe-sheet-wide"
+      role="dialog"
+      aria-modal="true"
+      aria-label="KubeJS"
+      onclick={(e) => e.stopPropagation()}
+    >
+      <QuestKubeJsPanel
+        {chapters}
+        {selectedQuest}
+        bind:focusId={kubeJsFocusId}
+        onclose={closeBookChrome}
+        onjumpquest={(questId, chapterId) => {
+          if (chapterId && chapters.some((c) => c.id === chapterId)) {
+            selectedChapter = chapterId;
+          } else {
+            for (const ch of chapters) {
+              if (ch.quests.some((q) => q.id === questId)) {
+                selectedChapter = ch.id;
+                break;
+              }
+            }
+          }
+          const q = chapters
+            .flatMap((c) => c.quests.map((quest) => ({ quest, ch: c.id })))
+            .find((x) => x.quest.id === questId);
+          if (q) {
+            selectedChapter = q.ch;
+            selectedQuest = q.quest;
+            selection = selectSingle(selection, q.quest.id);
+            panelTab = "quest";
+          }
+          closeBookChrome();
+        }}
+        oncreatecustom={(kind, opts) => createCustomForKubeJs(kind, opts)}
+        ondirtyquest={() => {
+          if (selectedChapter && !dirtyChapters.has(selectedChapter)) pushHistory();
+          if (selectedChapter) markDirty(selectedChapter);
+          if (selectedQuest) selectedQuest = { ...selectedQuest };
+        }}
+      />
+    </div>
+  </div>
+{/if}
+
 <SnbtDiffModal
   open={snbtDiffOpen}
   title={snbtDiffTitle}
@@ -2808,33 +2807,6 @@
     margin-left: 4px;
     font-size: 10px;
   }
-  .drawer {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 40;
-    width: 280px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    background: var(--ftbq-bg-panel);
-    border: 1px solid var(--ftbq-frame);
-    border-radius: 3px;
-    box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.06),
-      0 12px 28px rgba(0, 0, 0, 0.55);
-  }
-  .drawer-wide {
-    width: 360px;
-    max-height: min(70vh, 560px);
-    overflow: auto;
-  }
-  .drawer-tables {
-    width: min(520px, 90vw);
-    max-height: min(70vh, 560px);
-    overflow: auto;
-  }
   .drawer-h {
     display: flex;
     align-items: center;
@@ -2842,6 +2814,33 @@
   }
   .drawer-h strong {
     flex: 1;
+  }
+  .sheet-h {
+    padding: 12px 16px 0;
+  }
+  .qe-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    padding: 16px;
+  }
+  .qe-sheet {
+    width: min(720px, 96vw);
+    max-height: min(88vh, 900px);
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    background: var(--ftbq-bg-panel);
+    border: 1px solid var(--ftbq-frame);
+    border-radius: var(--border-radius-lg, 12px);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  }
+  .qe-sheet-wide {
+    width: min(1100px, 96vw);
   }
   .issues-wrap {
     position: relative;
@@ -2907,6 +2906,11 @@
     box-shadow: none;
   }
   .qe-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
     color: var(--text-muted, var(--ftbq-text-muted, #868e96));
     font-weight: 600;
     font-size: 13px;
@@ -2917,19 +2921,15 @@
     font-weight: 600;
     text-shadow: none;
   }
-  .qe-stats {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 6px;
+  .tb-chip {
     font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--ftbq-frame);
     color: var(--ftbq-text-muted, #9a9aa0);
-    flex-shrink: 0;
-    flex-wrap: wrap;
-    padding: 2px 6px;
-    text-shadow: none;
-  }
-  .qe-stats .warn {
-    color: var(--ftbq-quest-started, #f2c94c);
+    background: color-mix(in srgb, var(--ftbq-bg) 70%, transparent);
+    white-space: nowrap;
   }
   .prog-stat {
     color: var(--ftbq-quest-completed, #55c95a);
@@ -3285,20 +3285,12 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
-    padding: 8px 12px 12px;
-    border-top: 1px solid var(--ftbq-frame);
+    padding: 16px 12px;
   }
   .sel-empty .sel-hint {
     border-top: none;
     padding: 0;
-  }
-  .qe-footer {
-    margin-top: 8px;
-    flex-shrink: 0;
-  }
-  .qe-footer .hint {
     margin: 0;
-    color: var(--ftbq-text-muted, #9a9aa0);
   }
   .qe-actions .active {
     color: var(--text-primary, var(--ftbq-text));
