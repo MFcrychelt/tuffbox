@@ -8897,42 +8897,75 @@ fn export_project_report(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Batch export: generates .mrpack, server pack, Prism, CurseForge
-/// and GitHub release all at once.
+/// Batch export: generates .mrpack, server pack, Prism, and CurseForge zips
+/// into `<project>/export/`, recording each as a release artifact.
 #[tauri::command(rename_all = "camelCase")]
 fn batch_export_all(path: String) -> Result<Vec<serde_json::Value>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let project_dir = manifest_parent(&path)?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let project_dir = manifest_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .ok_or_else(|| "manifest has no parent directory".to_string())?;
     let base = project_dir.join("export");
     std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut results = Vec::new();
+    let id = &manifest.project.id;
+    let ver = &manifest.project.version;
+    let mp = manifest_path.to_string_lossy().to_string();
 
-    type ExportFn = Box<
-        dyn Fn(
-            &ProjectManifest,
-            &std::path::Path,
-            &std::path::Path,
-        ) -> Result<tuffbox_core::ExportResult, tuffbox_core::ExportError>,
-    >;
-    let exports: Vec<(&str, ExportFn)> = vec![
+    let jobs: Vec<(&str, &str, PathBuf)> = vec![
         (
             "mrpack",
-            Box::new(|m, p, o| tuffbox_core::exporter::export_modrinth_pack(m, p, o)),
+            "mrpack",
+            base.join(format!("{id}-{ver}.mrpack")),
         ),
         (
-            "server-pack",
-            Box::new(|m, p, o| tuffbox_core::exporter::export_server_pack(m, p, o)),
+            "server",
+            "server",
+            base.join(format!("{id}-{ver}-server.zip")),
+        ),
+        (
+            "prism",
+            "prism",
+            base.join(format!("{id}-{ver}-prism.zip")),
+        ),
+        (
+            "curseforge",
+            "curseforge",
+            base.join(format!("{id}-{ver}-curseforge.zip")),
         ),
     ];
 
-    for (kind, export_fn) in &exports {
-        let out = base.join(format!("{}-{}.zip", manifest.project.id, kind));
-        match export_fn(&manifest, &PathBuf::from(&path), &out) {
-            Ok(result) => results.push(serde_json::json!({"kind": kind, "path": result.path.to_string_lossy(), "files": result.file_count, "status": "ok"})),
-            Err(e) => results.push(serde_json::json!({"kind": kind, "status": "error", "error": e.to_string()})),
+    for (kind, artifact_kind, out) in jobs {
+        let run = match kind {
+            "mrpack" => tuffbox_core::export_modrinth_pack(&manifest, &manifest_path, &out),
+            "server" => tuffbox_core::export_server_pack(&manifest, &manifest_path, &out),
+            "prism" => tuffbox_core::export_prism_instance(&manifest, &manifest_path, &out),
+            "curseforge" => tuffbox_core::export_curseforge_pack(&manifest, &manifest_path, &out),
+            _ => unreachable!(),
+        };
+        match run {
+            Ok(result) => {
+                let _ = append_release_artifact(&mp, artifact_kind, &result);
+                results.push(serde_json::json!({
+                    "kind": kind,
+                    "path": result.path.to_string_lossy(),
+                    "files": result.file_count,
+                    "overrideCount": result.override_count,
+                    "status": "ok",
+                }));
+            }
+            Err(e) => results.push(serde_json::json!({
+                "kind": kind,
+                "status": "error",
+                "error": e.to_string(),
+            })),
         }
     }
 
+    swarm_api::spawn_pack_cooccurrence(mp, "pack_export");
     Ok(results)
 }
 
@@ -10842,7 +10875,9 @@ fn rollback_history_file(
 
 #[tauri::command]
 fn get_project_dir(path: String) -> Result<String, String> {
-    PathBuf::from(path)
+    // Accept either a `.tuffbox.json` path or a project directory.
+    let resolved = resolve_manifest_path(&path)?;
+    resolved
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .ok_or_else(|| "manifest has no parent directory".to_string())
@@ -11066,7 +11101,9 @@ fn get_snapshot_file_diff(
 
 #[tauri::command(rename_all = "camelCase")]
 fn validate_modrinth_export(path: String) -> Result<Vec<tuffbox_core::ExportIssue>, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
     Ok(tuffbox_core::validate_modrinth_export(&manifest))
 }
 
@@ -11163,25 +11200,59 @@ fn create_release_snapshot(
     })
 }
 
+fn resolve_export_output(
+    manifest_path: &Path,
+    manifest: &ProjectManifest,
+    target_path: Option<String>,
+    suffix: &str,
+    ext: &str,
+) -> PathBuf {
+    if let Some(tp) = target_path.filter(|s| !s.trim().is_empty()) {
+        return PathBuf::from(tp);
+    }
+    let dir = manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("export");
+    let _ = std::fs::create_dir_all(&dir);
+    let name = if suffix.is_empty() {
+        format!("{}-{}.{}", manifest.project.id, manifest.project.version, ext)
+    } else {
+        format!(
+            "{}-{}-{}.{}",
+            manifest.project.id, manifest.project.version, suffix, ext
+        )
+    };
+    dir.join(name)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn export_modrinth_pack(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(&path)
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!(
-                "{}-{}.mrpack",
-                manifest.project.id, manifest.project.version
-            ))
-    });
-    let result =
-        tuffbox_core::export_modrinth_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
-    append_release_artifact(&path, "mrpack", &result).map_err(|e| e.to_string())?;
-    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    // Hard-block known fatal issues before writing a broken pack.
+    let issues = tuffbox_core::validate_modrinth_export(&manifest);
+    if issues
+        .iter()
+        .any(|i| matches!(i.severity, tuffbox_core::ExportIssueSeverity::Error))
+    {
+        let msgs: Vec<_> = issues
+            .iter()
+            .filter(|i| matches!(i.severity, tuffbox_core::ExportIssueSeverity::Error))
+            .map(|i| i.message.clone())
+            .collect();
+        return Err(format!("export blocked: {}", msgs.join("; ")));
+    }
+    let output = resolve_export_output(&manifest_path, &manifest, target_path, "", "mrpack");
+    let result = tuffbox_core::export_modrinth_pack(&manifest, &manifest_path, &output)
+        .map_err(|e| e.to_string())?;
+    let mp = manifest_path.to_string_lossy().to_string();
+    append_release_artifact(&mp, "mrpack", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(mp, "pack_export");
     Ok(result)
 }
 
@@ -11190,20 +11261,16 @@ fn export_server_pack(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(&path)
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!(
-                "{}-{}-server.zip",
-                manifest.project.id, manifest.project.version
-            ))
-    });
-    let result =
-        tuffbox_core::export_server_pack(&manifest, &path, &output).map_err(|e| e.to_string())?;
-    append_release_artifact(&path, "server", &result).map_err(|e| e.to_string())?;
-    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let output =
+        resolve_export_output(&manifest_path, &manifest, target_path, "server", "zip");
+    let result = tuffbox_core::export_server_pack(&manifest, &manifest_path, &output)
+        .map_err(|e| e.to_string())?;
+    let mp = manifest_path.to_string_lossy().to_string();
+    append_release_artifact(&mp, "server", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(mp, "pack_export");
     Ok(result)
 }
 
@@ -11212,20 +11279,16 @@ fn export_prism_instance(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(&path)
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!(
-                "{}-{}-prism.zip",
-                manifest.project.id, manifest.project.version
-            ))
-    });
-    let result = tuffbox_core::export_prism_instance(&manifest, &path, &output)
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let output =
+        resolve_export_output(&manifest_path, &manifest, target_path, "prism", "zip");
+    let result = tuffbox_core::export_prism_instance(&manifest, &manifest_path, &output)
         .map_err(|e| e.to_string())?;
-    append_release_artifact(&path, "prism", &result).map_err(|e| e.to_string())?;
-    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
+    let mp = manifest_path.to_string_lossy().to_string();
+    append_release_artifact(&mp, "prism", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(mp, "pack_export");
     Ok(result)
 }
 
@@ -11234,21 +11297,52 @@ fn export_curseforge_pack(
     path: String,
     target_path: Option<String>,
 ) -> Result<tuffbox_core::ExportResult, String> {
-    let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-    let output = target_path.map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(&path)
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(format!(
-                "{}-{}-curseforge.zip",
-                manifest.project.id, manifest.project.version
-            ))
-    });
-    let result = tuffbox_core::export_curseforge_pack(&manifest, &path, &output)
+    let manifest_path = resolve_manifest_path(&path)?;
+    let manifest =
+        ProjectManifest::load_from_path(&manifest_path).map_err(|e| e.to_string())?;
+    let output =
+        resolve_export_output(&manifest_path, &manifest, target_path, "curseforge", "zip");
+    let result = tuffbox_core::export_curseforge_pack(&manifest, &manifest_path, &output)
         .map_err(|e| e.to_string())?;
-    append_release_artifact(&path, "curseforge", &result).map_err(|e| e.to_string())?;
-    swarm_api::spawn_pack_cooccurrence(path, "pack_export");
+    let mp = manifest_path.to_string_lossy().to_string();
+    append_release_artifact(&mp, "curseforge", &result).map_err(|e| e.to_string())?;
+    swarm_api::spawn_pack_cooccurrence(mp, "pack_export");
     Ok(result)
+}
+
+/// Open the exported file or its parent folder in the OS file manager.
+/// Creates the directory when a non-existent folder path is requested
+/// (e.g. first-time "Open export folder").
+#[tauri::command(rename_all = "camelCase")]
+#[allow(deprecated)]
+fn reveal_export_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+    let pb = PathBuf::from(&path);
+    let target = if pb.is_file() {
+        pb.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| pb.clone())
+    } else if pb.is_dir() {
+        pb
+    } else if path.ends_with('/')
+        || path.ends_with('\\')
+        || pb.extension().is_none()
+    {
+        // Treat as a directory that may not exist yet.
+        std::fs::create_dir_all(&pb).map_err(|e| e.to_string())?;
+        pb
+    } else {
+        // File path that doesn't exist yet — open parent.
+        let parent = pb
+            .parent()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| "invalid path".to_string())?;
+        std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+        parent
+    };
+    app.shell()
+        .open(target.to_string_lossy().to_string(), None)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -15798,6 +15892,7 @@ pub fn run() {
             export_server_pack,
             export_prism_instance,
             export_curseforge_pack,
+            reveal_export_path,
             list_release_artifacts,
             create_release_draft,
             generate_lockfile,

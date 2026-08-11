@@ -167,6 +167,22 @@ struct ModrinthHashes {
 
 pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> {
     let mut issues = Vec::new();
+    if manifest.project.id.trim().is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Error,
+            "MISSING_PROJECT_ID",
+            "Project id is required for export filenames and indexes.",
+            None,
+        ));
+    }
+    if manifest.project.version.trim().is_empty() {
+        issues.push(issue(
+            ExportIssueSeverity::Error,
+            "MISSING_PROJECT_VERSION",
+            "Project version is required for .mrpack / pack indexes.",
+            None,
+        ));
+    }
     if manifest.minecraft.version.trim().is_empty() {
         issues.push(issue(
             ExportIssueSeverity::Error,
@@ -193,17 +209,24 @@ pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> 
             None,
         ));
     }
+    let mut remote_count = 0usize;
+    let mut local_only = 0usize;
     for module in &manifest.mods {
-        if module.source.url.as_deref().unwrap_or_default().is_empty() {
+        let has_url = !module.source.url.as_deref().unwrap_or_default().is_empty();
+        if has_url {
+            remote_count += 1;
+        } else {
+            local_only += 1;
             issues.push(issue(
                 ExportIssueSeverity::Warning,
                 "MOD_WITHOUT_DOWNLOAD_URL",
-                "This mod cannot be represented as a remote Modrinth pack download and will be embedded in overrides instead.",
+                "No download URL — this content will be embedded under overrides/ (not a Modrinth remote file).",
                 Some(module.id.clone()),
             ));
         }
         let hashes = module.hashes.as_ref();
-        if hashes.and_then(|h| h.sha1.as_ref()).is_none()
+        if has_url
+            && hashes.and_then(|h| h.sha1.as_ref()).is_none()
             && hashes.and_then(|h| h.sha512.as_ref()).is_none()
         {
             issues.push(issue(
@@ -221,6 +244,25 @@ pub fn validate_modrinth_export(manifest: &ProjectManifest) -> Vec<ExportIssue> 
                 Some(module.id.clone()),
             ));
         }
+        if matches!(module.source.kind, SourceKind::Curseforge)
+            && (module.source.project_id.as_deref().unwrap_or("").is_empty()
+                || module.source.file_id.as_deref().unwrap_or("").is_empty())
+        {
+            issues.push(issue(
+                ExportIssueSeverity::Warning,
+                "CURSEFORGE_MISSING_IDS",
+                "CurseForge entry is missing projectID/fileID — it will be packed as an override jar if present on disk.",
+                Some(module.id.clone()),
+            ));
+        }
+    }
+    if remote_count == 0 && local_only > 0 {
+        issues.push(issue(
+            ExportIssueSeverity::Warning,
+            "NO_REMOTE_DOWNLOADS",
+            "No mods have download URLs. The .mrpack index will only list dependencies; all content is in overrides/.",
+            None,
+        ));
     }
     issues
 }
@@ -654,10 +696,15 @@ fn modrinth_files_and_overrides(
             .unwrap_or_default();
         let hashes = module.hashes.as_ref();
 
+        // Modrinth index files MUST have at least one download URL.
+        // Local-only content goes into overrides/ only (never a hollow index row).
         if downloads.is_empty() {
             if let Some(local) = resolve_content_path(project_dir, module) {
                 override_content.push((local, format!("overrides/{index_path}")));
+                // Still skip walking this path again from content folders.
+                skip_paths.insert(index_path);
             }
+            continue;
         }
 
         skip_paths.insert(index_path.clone());
@@ -1275,8 +1322,9 @@ mod tests {
         );
         let res = result.unwrap();
         assert!(out.exists(), "output mrpack not created");
-        // Both "both"-side and "client"-side mods get a download entry
-        assert_eq!(res.file_count, 3);
+        // fixture has 3 mods with URLs (sodium, clientmod, cf-jei) — all index rows.
+        // CF entry has no url so it is override-only if a jar exists; fixture has no jei.jar.
+        assert_eq!(res.file_count, 2);
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1377,7 +1425,8 @@ mod tests {
         let result = export_modrinth_pack(&manifest, &manifest_path, &out);
         assert!(result.is_ok(), "{:?}", result.err());
         let res = result.unwrap();
-        assert_eq!(res.file_count, 2);
+        // Local jar is override-only; remote RP is the sole index download entry.
+        assert_eq!(res.file_count, 1);
         assert_eq!(res.override_count, 1, "only local jar embedded, not remote rp on disk");
 
         let file = fs::File::open(&out).unwrap();
@@ -1390,22 +1439,14 @@ mod tests {
             .unwrap();
         let index_json: serde_json::Value = serde_json::from_str(&index).unwrap();
         let files = index_json.get("files").and_then(|v| v.as_array()).unwrap();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 1, "local-only mods must not appear in index files[]");
 
-        let local_entry = files
-            .iter()
-            .find(|f| f.get("path").and_then(|p| p.as_str()) == Some("mods/localmod.jar"))
-            .expect("local mod in index");
         assert!(
-            local_entry
-                .get("downloads")
-                .and_then(|d| d.as_array())
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            local_entry.get("hashes").and_then(|h| h.get("sha1")).and_then(|s| s.as_str()),
-            Some("local-sha1")
+            files
+                .iter()
+                .find(|f| f.get("path").and_then(|p| p.as_str()) == Some("mods/localmod.jar"))
+                .is_none(),
+            "local jar must not be a hollow index row"
         );
 
         let rp_entry = files
