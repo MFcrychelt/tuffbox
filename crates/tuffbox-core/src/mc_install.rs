@@ -86,6 +86,19 @@ fn store_disk_install(launcher_dir: &Path, key: &str, version: &InstalledVersion
     }
 }
 
+/// Drop cached metadata and extracted natives after an integrity failure.
+/// Native archives may still be valid in `libraries/`, but their old per-archive
+/// markers would otherwise suppress re-extraction of a file antivirus or a
+/// partial cleanup removed from `natives/`.
+fn invalidate_cached_install(launcher_dir: &Path, key: &str, version: &InstalledVersion) {
+    INSTALL_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .remove(key);
+    let _ = fs::remove_file(disk_cache_path(launcher_dir, key));
+    let _ = fs::remove_dir_all(&version.natives_dir);
+}
+
 const MOJANG_VERSION_MANIFEST: &str =
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const RESOURCES_URL: &str = "https://resources.download.minecraft.net";
@@ -106,6 +119,8 @@ pub enum InstallError {
     UnsupportedLoader(String),
     #[error("path traversal in archive: {0}")]
     PathTraversal(String),
+    #[error("installed game integrity check failed: {0}")]
+    Integrity(String),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -120,6 +135,105 @@ pub struct InstalledVersion {
     pub log_config: Option<PathBuf>,
     pub jvm_args: Vec<String>,
     pub game_args: Vec<String>,
+}
+
+/// Verify that an installed Minecraft runtime is safe to hand to the JVM.
+///
+/// Downloads already validate SHA-1 values, so this launch-time preflight is
+/// intentionally metadata based: it catches the failures users actually hit
+/// after an interrupted cleanup / antivirus action (missing or truncated jars,
+/// assets, or native extraction) without hashing every asset on every Play.
+/// The asset index carries the expected byte length for every object, which is
+/// enough to identify partial downloads and lets `install_game` repair them.
+pub fn verify_install_integrity(version: &InstalledVersion) -> Result<(), InstallError> {
+    verify_nonempty_file(&version.client_jar, "Minecraft client jar")?;
+    if version.libraries.is_empty() {
+        return Err(InstallError::Integrity("classpath has no libraries".to_string()));
+    }
+    for library in &version.libraries {
+        verify_nonempty_file(library, "classpath library")?;
+    }
+
+    if !has_native_library(&version.natives_dir)? {
+        return Err(InstallError::Integrity(format!(
+            "no extracted native library found in {}",
+            version.natives_dir.display()
+        )));
+    }
+
+    let index_path = version
+        .asset_dir
+        .join("indexes")
+        .join(format!("{}.json", version.asset_index_id));
+    verify_nonempty_file(&index_path, "asset index")?;
+    let asset_index: AssetIndex = serde_json::from_str(&fs::read_to_string(&index_path)?)?;
+    for (name, object) in &asset_index.objects {
+        let hash = object.hash.trim();
+        if hash.len() < 2 {
+            return Err(InstallError::Integrity(format!(
+                "asset '{name}' has an invalid SHA-1 in {}",
+                index_path.display()
+            )));
+        }
+        let object_path = version.asset_dir.join("objects").join(&hash[..2]).join(hash);
+        let metadata = fs::metadata(&object_path).map_err(|_| {
+            InstallError::Integrity(format!("asset '{name}' is missing: {}", object_path.display()))
+        })?;
+        if !metadata.is_file() {
+            return Err(InstallError::Integrity(format!(
+                "asset '{name}' is not a file: {}",
+                object_path.display()
+            )));
+        }
+        if object.size > 0 && metadata.len() != object.size {
+            return Err(InstallError::Integrity(format!(
+                "asset '{name}' has {} bytes; expected {}",
+                metadata.len(), object.size
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn verify_nonempty_file(path: &Path, label: &str) -> Result<(), InstallError> {
+    let metadata = fs::metadata(path).map_err(|_| {
+        InstallError::Integrity(format!("{label} is missing: {}", path.display()))
+    })?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err(InstallError::Integrity(format!(
+            "{label} is empty or not a file: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn has_native_library(dir: &Path) -> Result<bool, InstallError> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if has_native_library(&path)? {
+                return Ok(true);
+            }
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if matches!(extension.as_str(), "dll" | "so" | "dylib" | "jnilib") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub struct InstallProgress {
@@ -216,13 +330,29 @@ pub fn install_game(
     // re-scan/re-extract/re-merge work below.
     let cache_key = install_cache_key(mc_version, loader_kind, loader_version);
     if let Some(cached) = cached_install(&cache_key) {
-        progress.log("# Using in-process cached install metadata (files verified present).");
-        return Ok(cached);
+        match verify_install_integrity(&cached) {
+            Ok(()) => {
+                progress.log("# Using in-process cached install metadata (integrity verified).");
+                return Ok(cached);
+            }
+            Err(error) => {
+                progress.log(&format!("# Cached install needs repair: {error}"));
+                invalidate_cached_install(launcher_dir, &cache_key, &cached);
+            }
+        }
     }
     if let Some(cached) = load_disk_install(launcher_dir, &cache_key) {
-        progress.log("# Using on-disk cached install metadata (files verified present).");
-        store_install(&cache_key, cached.clone());
-        return Ok(cached);
+        match verify_install_integrity(&cached) {
+            Ok(()) => {
+                progress.log("# Using on-disk cached install metadata (integrity verified).");
+                store_install(&cache_key, cached.clone());
+                return Ok(cached);
+            }
+            Err(error) => {
+                progress.log(&format!("# Cached install needs repair: {error}"));
+                invalidate_cached_install(launcher_dir, &cache_key, &cached);
+            }
+        }
     }
 
     fs::create_dir_all(&versions_dir)?;
@@ -296,7 +426,8 @@ pub fn install_game(
         return Err(InstallError::UnsupportedLoader(loader_kind.to_string()));
     }
 
-    progress.log("# Installation complete.");
+    verify_install_integrity(&vanilla)?;
+    progress.log("# Installation complete (integrity verified).");
     store_install(&cache_key, vanilla.clone());
     store_disk_install(launcher_dir, &cache_key, &vanilla);
     Ok(vanilla)
@@ -337,7 +468,7 @@ fn install_vanilla(
     };
 
     let client_jar = version_dir.join(format!("{}.jar", version_json.id));
-    if !client_jar.exists() {
+    if !client_jar.is_file() || fs::metadata(&client_jar).map(|m| m.len() == 0).unwrap_or(true) {
         progress.log("# Downloading client jar...");
         download_with_sha1(
             &version_json.downloads.client.url,
@@ -358,7 +489,7 @@ fn install_vanilla(
         }
         let artifact = &lib.downloads.artifact;
         let path = maven_path(libraries_dir, &artifact.path);
-        if !path.exists() {
+        if !path.is_file() || fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true) {
             lib_tasks.push((artifact.url.clone(), path.clone(), artifact.sha1.clone()));
         }
         libraries.push(path);
@@ -366,7 +497,9 @@ fn install_vanilla(
         if let Some(classifiers) = lib.downloads.classifiers.as_ref() {
             if let Some(native) = classifiers.get(native_classifier()) {
                 let native_path = maven_path(libraries_dir, &native.path);
-                if !native_path.exists() {
+                if !native_path.is_file()
+                    || fs::metadata(&native_path).map(|m| m.len() == 0).unwrap_or(true)
+                {
                     native_tasks.push((
                         native.url.clone(),
                         native_path.clone(),
@@ -426,7 +559,7 @@ fn install_vanilla(
     let asset_index_path = assets_dir
         .join("indexes")
         .join(format!("{}.json", version_json.asset_index.id));
-    if !asset_index_path.exists() {
+    if !asset_index_path.is_file() {
         progress.log("# Downloading asset index...");
         if let Some(parent) = asset_index_path.parent() {
             fs::create_dir_all(parent)?;
@@ -437,7 +570,27 @@ fn install_vanilla(
             Some(&version_json.asset_index.sha1),
         )?;
     }
-    let asset_index: AssetIndex = serde_json::from_str(&fs::read_to_string(&asset_index_path)?)?;
+    // A truncated index used to survive because the cache fast path only
+    // checked file existence. Re-fetch it once before declaring preflight
+    // failure so a repair is automatic when the network is available.
+    let asset_index: AssetIndex = match fs::read_to_string(&asset_index_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+    {
+        Some(index) => index,
+        None => {
+            progress.log("# Asset index is unreadable; downloading a fresh copy...");
+            if asset_index_path.is_file() {
+                fs::remove_file(&asset_index_path)?;
+            }
+            download_with_sha1(
+                &version_json.asset_index.url,
+                &asset_index_path,
+                Some(&version_json.asset_index.sha1),
+            )?;
+            serde_json::from_str(&fs::read_to_string(&asset_index_path)?)?
+        }
+    };
     install_assets_index(&asset_index, assets_dir, progress)?;
 
     let log_config = version_json
@@ -595,6 +748,13 @@ fn merge_fabric_profile(
     Ok(())
 }
 
+fn asset_file_is_usable(path: &Path, expected_size: u64) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file() && (expected_size == 0 || metadata.len() == expected_size)
+}
+
 fn install_assets_index(
     index: &AssetIndex,
     assets_dir: &Path,
@@ -605,7 +765,7 @@ fn install_assets_index(
     for (_name, obj) in &index.objects {
         let prefix = &obj.hash[..2];
         let object_path = objects_dir.join(prefix).join(&obj.hash);
-        if !object_path.exists() {
+        if !asset_file_is_usable(&object_path, obj.size) {
             to_download.push((prefix.to_string(), obj.hash.clone()));
         }
     }
@@ -801,13 +961,31 @@ pub fn download_with_sha1(
     expected_sha1: Option<&str>,
 ) -> Result<(), InstallError> {
     if path.exists() {
+        let usable_without_checksum = path
+            .metadata()
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false);
         if let Some(expected) = expected_sha1 {
-            let existing = sha1_file(path)?;
-            if existing.eq_ignore_ascii_case(expected) {
-                return Ok(());
+            if usable_without_checksum {
+                let existing = sha1_file(path)?;
+                if existing.eq_ignore_ascii_case(expected) {
+                    return Ok(());
+                }
             }
-        } else {
+        } else if usable_without_checksum {
             return Ok(());
+        }
+
+        // `download_streaming` writes atomically through a `.part` file. A
+        // bad/empty destination must be removed first or a no-checksum
+        // artifact would be mistaken for a completed download forever.
+        if path.is_file() {
+            fs::remove_file(path)?;
+        } else {
+            return Err(InstallError::Integrity(format!(
+                "download destination is not a file: {}",
+                path.display()
+            )));
         }
     }
 
@@ -834,13 +1012,27 @@ pub fn download_with_progress(
     progress: &ProgressCallback,
 ) -> Result<(), InstallError> {
     if path.exists() {
+        let usable_without_checksum = path
+            .metadata()
+            .map(|metadata| metadata.is_file() && metadata.len() > 0)
+            .unwrap_or(false);
         if let Some(expected) = expected_sha1 {
-            let existing = sha1_file(path)?;
-            if existing.eq_ignore_ascii_case(expected) {
-                return Ok(());
+            if usable_without_checksum {
+                let existing = sha1_file(path)?;
+                if existing.eq_ignore_ascii_case(expected) {
+                    return Ok(());
+                }
             }
-        } else {
+        } else if usable_without_checksum {
             return Ok(());
+        }
+        if path.is_file() {
+            fs::remove_file(path)?;
+        } else {
+            return Err(InstallError::Integrity(format!(
+                "download destination is not a file: {}",
+                path.display()
+            )));
         }
     }
 
@@ -920,17 +1112,19 @@ fn native_classifier() -> &'static str {
 fn extract_natives(archive_path: &Path, natives_dir: &Path) -> Result<(), InstallError> {
     fs::create_dir_all(natives_dir)?;
 
-    // Optimization: native libraries don't change between launches. If the
-    // target directory already contains extracted files, skip the (relatively
-    // expensive) re-read + re-write of every native on each startup. This
-    // cuts per-launch I/O significantly — extraction used to run on every
-    // single `build_command` call.
-    let already_extracted = match fs::read_dir(natives_dir) {
-        Ok(entries) => entries.flatten().any(|e| e.path().is_file()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-        Err(e) => return Err(e.into()),
-    };
-    if already_extracted {
+    // A directory-level "has any file" shortcut is not enough: Minecraft
+    // commonly has several native archives, so it could leave only the first
+    // one extracted. Keep one marker per archive instead. Existing installs
+    // without markers are safely re-extracted once and then become fast.
+    let archive_name = archive_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("native")
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>();
+    let marker = natives_dir.join(format!(".tuffbox-native-{archive_name}.ok"));
+    if marker.is_file() {
         return Ok(());
     }
 
@@ -951,6 +1145,7 @@ fn extract_natives(archive_path: &Path, natives_dir: &Path) -> Result<(), Instal
             std::io::copy(&mut entry, &mut out)?;
         }
     }
+    fs::write(marker, b"ok\n")?;
     Ok(())
 }
 
@@ -1167,4 +1362,68 @@ struct FabricLibrary {
 
 fn default_fabric_maven_url() -> String {
     "https://maven.fabricmc.net/".to_string()
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+
+    fn minimal_install(root: &std::path::Path) -> InstalledVersion {
+        let versions = root.join("versions");
+        let libraries = root.join("libraries");
+        let natives = root.join("natives");
+        let assets = root.join("assets");
+        fs::create_dir_all(&versions).unwrap();
+        fs::create_dir_all(&libraries).unwrap();
+        fs::create_dir_all(&natives).unwrap();
+        fs::create_dir_all(assets.join("indexes")).unwrap();
+        fs::create_dir_all(assets.join("objects").join("ab")).unwrap();
+
+        let client = versions.join("client.jar");
+        let library = libraries.join("library.jar");
+        fs::write(&client, b"client").unwrap();
+        fs::write(&library, b"library").unwrap();
+        // The verifier accepts platform native extensions so this fixture is
+        // deterministic on every CI host.
+        fs::write(natives.join("fixture.so"), b"native").unwrap();
+        fs::write(
+            assets.join("indexes").join("fixture.json"),
+            r#"{"objects":{"example":{"hash":"abcdef","size":3}}}"#,
+        )
+        .unwrap();
+        fs::write(assets.join("objects").join("ab").join("abcdef"), b"abc").unwrap();
+
+        InstalledVersion {
+            id: "fixture".to_string(),
+            main_class: "example.Main".to_string(),
+            client_jar: client,
+            libraries: vec![library],
+            natives_dir: natives,
+            asset_index_id: "fixture".to_string(),
+            asset_dir: assets,
+            log_config: None,
+            jvm_args: Vec::new(),
+            game_args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn integrity_preflight_rejects_missing_asset_before_launch() {
+        let temp = tempfile::tempdir().unwrap();
+        let install = minimal_install(temp.path());
+        assert!(verify_install_integrity(&install).is_ok());
+
+        fs::remove_file(
+            install
+                .asset_dir
+                .join("objects")
+                .join("ab")
+                .join("abcdef"),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_install_integrity(&install),
+            Err(InstallError::Integrity(message)) if message.contains("asset 'example' is missing")
+        ));
+    }
 }

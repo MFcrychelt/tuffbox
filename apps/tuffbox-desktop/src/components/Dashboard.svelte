@@ -29,7 +29,8 @@
     authState,
     skinPath,
     newProjectOpen,
-    isLaunching,
+    launchSessions,
+    isProjectLaunching,
     runningInstances,
     isProjectRunning,
     loginTypeLabel,
@@ -76,6 +77,10 @@
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
+  const selectedLaunching = $derived(isProjectLaunching(selectedPath, $launchSessions));
+  const selectedLaunchMessage = $derived(
+    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
+  );
   const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
   const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
 
@@ -402,14 +407,14 @@
         <div class="hero-left">
           <button
             class="play-btn"
-            class:stop={selectedRunning && !$isLaunching}
-            onclick={selectedRunning && !$isLaunching ? stopGame : launch}
-            disabled={!selectedPath || $isLaunching}
-            aria-busy={$isLaunching}
+            class:stop={selectedRunning && !selectedLaunching}
+            onclick={selectedRunning && !selectedLaunching ? stopGame : launch}
+            disabled={!selectedPath || selectedLaunching}
+            aria-busy={selectedLaunching}
           >
-            {#if $isLaunching}
+            {#if selectedLaunching}
               <span class="spinner" aria-hidden="true"></span>
-              <span class="play-text">Launching...</span>
+              <span class="play-text">{selectedLaunchMessage}</span>
             {:else if selectedRunning}
               <Square size={24} fill="currentColor" />
               <span class="play-text">Stop</span>

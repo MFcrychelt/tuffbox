@@ -1,5 +1,5 @@
-import { get, writable } from "svelte/store";
-import type { RunningInstance } from "./api";
+import { derived, get, writable } from "svelte/store";
+import type { LaunchErrorInfo, LaunchLifecycleEvent, LaunchPhase, RunningInstance } from "./api";
 import { api } from "./api";
 
 export interface ProjectInfo {
@@ -456,9 +456,176 @@ export const newProjectOpen = writable<boolean>(false);
 /** Open a Library tab (`discover` / `yours` / `create`). Cleared by Library when applied. */
 export const libraryTabRequest = writable<"yours" | "discover" | "create" | null>(null);
 
-// Global launch state — true while a launch is in progress.
-// Used by Header to show spinner, and by Dashboard to disable play button.
-export const isLaunching = writable<boolean>(false);
+// ─── Shared launch lifecycle ─────────────────────────────────────
+//
+// `launch_profile` is deliberately fire-and-forget: a successful invoke only
+// says the backend has spawned (or is about to spawn) Java. These per-instance
+// sessions are driven by the backend `launch-phase` / process events, so every
+// Play surface renders the same truth rather than resetting a local `finally`
+// flag as soon as invoke resolves.
+export interface LaunchSession {
+  id: string;
+  profile: string;
+  phase: LaunchPhase;
+  message: string;
+  logPath?: string;
+  pid?: number;
+  startedAt?: number;
+  exitCode?: number | null;
+  stopped?: boolean;
+  error?: LaunchErrorInfo;
+  updatedAt: number;
+}
+
+export const launchSessions = writable<Record<string, LaunchSession>>({});
+
+const ACTIVE_LAUNCH_PHASES = new Set<LaunchPhase>([
+  "preflight",
+  "resolving_java",
+  "downloading",
+  "starting",
+  "stopping",
+]);
+
+/** A Play request is still being prepared (not yet a running process). */
+export function isProjectLaunching(
+  path: string | null | undefined,
+  sessions: Record<string, LaunchSession>,
+): boolean {
+  if (!path) return false;
+  const phase = sessions[path]?.phase;
+  return phase != null && ACTIVE_LAUNCH_PHASES.has(phase);
+}
+
+export function isProjectStopping(
+  path: string | null | undefined,
+  sessions: Record<string, LaunchSession>,
+): boolean {
+  return !!path && sessions[path]?.phase === "stopping";
+}
+
+export function getLaunchSession(
+  path: string | null | undefined,
+  sessions: Record<string, LaunchSession>,
+): LaunchSession | null {
+  return path ? sessions[path] ?? null : null;
+}
+
+function patchLaunchSession(
+  id: string,
+  patch: Omit<Partial<LaunchSession>, "id" | "updatedAt"> & { phase: LaunchPhase },
+) {
+  if (!id) return;
+  launchSessions.update((sessions) => {
+    const current = sessions[id];
+    const resetsAttempt = patch.phase === "preflight";
+    const next: LaunchSession = {
+      id,
+      profile: patch.profile ?? current?.profile ?? "client",
+      phase: patch.phase,
+      message: patch.message ?? current?.message ?? "",
+      logPath: patch.logPath ?? current?.logPath,
+      pid: patch.pid ?? (resetsAttempt ? undefined : current?.pid),
+      startedAt: patch.startedAt ?? (resetsAttempt ? undefined : current?.startedAt),
+      exitCode: patch.exitCode ?? (resetsAttempt ? undefined : current?.exitCode),
+      stopped: patch.stopped ?? (resetsAttempt ? false : current?.stopped),
+      error: patch.error ?? (resetsAttempt ? undefined : current?.error),
+      updatedAt: Date.now(),
+    };
+    return { ...sessions, [id]: next };
+  });
+}
+
+/** Start an optimistic session before invoke so a fast click is visible even
+ * before the first Tauri event arrives. */
+export function beginLaunchSession(id: string, profile: string, message = "Preparing launch…") {
+  patchLaunchSession(id, { profile, phase: "preflight", message, stopped: false });
+}
+
+function isTerminalSessionFor(
+  instance: Pick<RunningInstance, "id" | "startedAt">,
+  session = get(launchSessions)[instance.id],
+): boolean {
+  return !!session
+    && (session.phase === "exited" || session.phase === "failed")
+    && session.startedAt != null
+    && session.startedAt === instance.startedAt;
+}
+
+export function applyLaunchLifecycle(event: LaunchLifecycleEvent) {
+  if (!event?.id || !event.phase) return;
+  // A JVM can exit so quickly that its wait thread emits Exited before the
+  // caller finishes emitting Running. Do not resurrect that terminal session
+  // when both events carry the same process start timestamp.
+  if (
+    event.phase === "running"
+    && event.startedAt != null
+    && isTerminalSessionFor({ id: event.id, startedAt: event.startedAt })
+  ) {
+    return;
+  }
+  patchLaunchSession(event.id, {
+    profile: event.profile,
+    phase: event.phase,
+    message: event.message,
+    logPath: event.logPath,
+    pid: event.pid,
+    startedAt: event.startedAt,
+    exitCode: event.exitCode,
+    stopped: event.stopped,
+    error: event.error,
+  });
+}
+
+export function failLaunchSession(id: string, error: LaunchErrorInfo) {
+  patchLaunchSession(id, {
+    phase: "failed",
+    message: error.message,
+    logPath: error.logPath,
+    error,
+    stopped: false,
+  });
+}
+
+export function markLaunchRunning(instance: RunningInstance, message = "Game is running.") {
+  if (isTerminalSessionFor(instance)) return;
+  patchLaunchSession(instance.id, {
+    profile: instance.profile,
+    phase: "running",
+    message,
+    pid: instance.pid,
+    startedAt: instance.startedAt,
+    stopped: false,
+  });
+}
+
+export function markLaunchExited(
+  id: string,
+  opts?: {
+    profile?: string;
+    startedAt?: number;
+    code?: number | null;
+    stopped?: boolean;
+    error?: LaunchErrorInfo;
+  },
+) {
+  patchLaunchSession(id, {
+    profile: opts?.profile,
+    phase: "exited",
+    startedAt: opts?.startedAt,
+    message: opts?.stopped ? "Game stopped." : opts?.error ? "Game exited unexpectedly." : "Game exited.",
+    exitCode: opts?.code,
+    stopped: !!opts?.stopped,
+    error: opts?.error,
+  });
+}
+
+// Global busy indicator remains useful for the header, but it is now derived
+// from the same lifecycle source rather than being manually flipped around an
+// invoke call.
+export const isLaunching = derived(launchSessions, (sessions) =>
+  Object.values(sessions).some((session) => ACTIVE_LAUNCH_PHASES.has(session.phase)),
+);
 
 /** Currently running Minecraft processes, keyed by project manifest path (`id`). */
 export const runningInstances = writable<RunningInstance[]>([]);
@@ -469,14 +636,26 @@ export function isProjectRunning(path: string | null | undefined, list: RunningI
 }
 
 export function upsertRunning(inst: RunningInstance) {
+  if (isTerminalSessionFor(inst)) return;
   runningInstances.update((list) => {
     const without = list.filter((r) => r.id !== inst.id);
     return [...without, inst];
   });
+  markLaunchRunning(inst);
 }
 
-export function removeRunning(id: string) {
+export function removeRunning(
+  id: string,
+  opts?: {
+    profile?: string;
+    startedAt?: number;
+    code?: number | null;
+    stopped?: boolean;
+    error?: LaunchErrorInfo;
+  },
+) {
   runningInstances.update((list) => list.filter((r) => r.id !== id));
+  markLaunchExited(id, opts);
 }
 
 /** Opens the live launch-log modal for the given project manifest path. */

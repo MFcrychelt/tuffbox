@@ -117,10 +117,12 @@ async function onOutcome(payload: SoftVerifyOutcome) {
   }
 }
 
-async function onLaunchCrash(payload?: { path?: string } | null) {
-  // Fallback if registerLaunchCrashListener missed the path — both are idempotent.
+async function onLaunchCrash(payload?: { path?: string; id?: string } | null) {
+  // New lifecycle events carry the manifest id. Keep `path` for compatibility
+  // with older emitters and only fall back to the active project as a last resort.
   const path =
     (payload?.path && String(payload.path).trim()) ||
+    (payload?.id && String(payload.id).trim()) ||
     get(projectPath)?.trim() ||
     "";
   if (!path) return;
@@ -139,7 +141,7 @@ export function registerSoftVerifyListeners(): () => void {
     unlistenOutcome = u;
   });
   void listen("launch-crashed", (event) => {
-    const payload = (event.payload ?? {}) as { path?: string };
+    const payload = (event.payload ?? {}) as { path?: string; id?: string };
     void onLaunchCrash(payload);
   }).then((u) => {
     unlistenCrash = u;

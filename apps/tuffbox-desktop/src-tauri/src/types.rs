@@ -326,6 +326,74 @@ pub struct CrashExitCtx {
     pub game_dir: std::path::PathBuf,
 }
 
+// ── Launch lifecycle ─────────────────────────────────────────────
+
+/// Stable phases emitted on `launch-phase`. The frontend uses these events,
+/// rather than the return timing of `launch_profile`, to decide when a Play
+/// button becomes Running / Stop.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchPhase {
+    Preflight,
+    ResolvingJava,
+    Downloading,
+    Starting,
+    Running,
+    Stopping,
+    Exited,
+    Failed,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchLifecycleEvent {
+    /// Manifest path, the same id exposed by `list_running_instances`.
+    pub id: String,
+    pub profile: String,
+    pub phase: LaunchPhase,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub stopped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<tuffbox_core::launch_error::LaunchErrorInfo>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchCrashEvent {
+    pub id: String,
+    /// Compatibility alias for listeners that predate the lifecycle contract.
+    pub path: String,
+    pub profile: String,
+    /// Keep kind/message/logPath at the top level for pre-lifecycle frontend
+    /// listeners while the nested copy is the typed new contract.
+    #[serde(flatten)]
+    pub legacy_error: tuffbox_core::launch_error::LaunchErrorInfo,
+    pub error: tuffbox_core::launch_error::LaunchErrorInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessExitedEvent {
+    pub id: String,
+    pub profile: String,
+    pub started_at: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(default)]
+    pub stopped: bool,
+}
+
 // ── Optimization types ───────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

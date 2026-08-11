@@ -34,6 +34,8 @@
     newProjectOpen,
     runningInstances,
     isProjectRunning,
+    launchSessions,
+    isProjectLaunching,
     formatPlaytime,
     authState,
     skinPath,
@@ -69,7 +71,6 @@
   const MOVE_CANCEL_PX = 10;
 
   let selectedPath = $state<string | null>($projectPath);
-  let launching = $state<string | null>(null);
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
@@ -146,6 +147,12 @@
   const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
   const selectedRunning = $derived(
     isProjectRunning(selectedPath, $runningInstances),
+  );
+  const selectedLaunching = $derived(
+    isProjectLaunching(selectedPath, $launchSessions),
+  );
+  const selectedLaunchMessage = $derived(
+    selectedPath ? $launchSessions[selectedPath]?.message ?? "Launching…" : "Launching…",
   );
   let selectingPath = false;
   $effect(() => {
@@ -264,23 +271,19 @@
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
-    launching = project.path;
-    try {
-      const path = await selectInstance(project);
-      if (
-        isProjectRunning(path, $runningInstances) ||
-        isProjectRunning(project.path, $runningInstances)
-      ) {
-        await killWithFeedback(path);
-        if (path !== project.path) await killWithFeedback(project.path);
-        return;
-      }
-      await invoke("set_last_opened_project", { path });
-      await launchWithFeedback({ path, profile: "client" });
-    } finally {
-      launching = null;
-      void loadStats(selectedPath ?? project.path);
+    const path = await selectInstance(project);
+    if (
+      isProjectRunning(path, $runningInstances) ||
+      isProjectRunning(project.path, $runningInstances)
+    ) {
+      await killWithFeedback(path);
+      if (path !== project.path) await killWithFeedback(project.path);
+      return;
     }
+    if (isProjectLaunching(path, $launchSessions)) return;
+    await invoke("set_last_opened_project", { path });
+    await launchWithFeedback({ path, profile: "client" });
+    void loadStats(selectedPath ?? project.path);
   }
 
   async function stopInstance(project: RecentProject) {
@@ -1063,11 +1066,11 @@
               <button
                 type="button"
                 class="side-btn launch"
-                disabled={actionBusy || launching === selected.path || selectedRunning}
+                disabled={actionBusy || selectedLaunching || selectedRunning}
                 onclick={() => void runAction("launch", selected)}
               >
-                {#if launching === selected.path}
-                  <span class="mini-spinner"></span> Launching…
+                {#if selectedLaunching}
+                  <span class="mini-spinner"></span> {selectedLaunchMessage}
                 {:else}
                   <Play size={16} fill="currentColor" /> Launch
                 {/if}
@@ -1176,7 +1179,7 @@
     style={`position:fixed; left:${ctxMenu.x}px; top:${ctxMenu.y}px; z-index:10000`}
     role="menu"
   >
-    <button type="button" role="menuitem" onclick={() => void runAction("launch", menuProject)} disabled={actionBusy}>
+    <button type="button" role="menuitem" onclick={() => void runAction("launch", menuProject)} disabled={actionBusy || isProjectLaunching(menuProject.path, $launchSessions)}>
       {#if isProjectRunning(menuProject.path, $runningInstances)}
         <Square size={14} /> Stop
       {:else}

@@ -11,19 +11,22 @@
     ideStageRequest,
     ideSuggestedStage,
     openLaunchLog,
-    isLaunching,
+    launchSessions,
+    isProjectLaunching,
     brandIcon,
     BRAND_ICON_CREEPER_SRC_SM,
   } from "../lib/store";
   import { api } from "../lib/api";
   import { homeIcons } from "../lib/homeBootstrap";
-  import { launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
 
   import type { View } from "../lib/types";
   let { currentView = $bindable() }: { currentView: View } = $props();
 
   /** Real pack icon (data URL from the instance listing) keyed by project path. */
   const instanceIcons = $derived($homeIcons);
+  const currentRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  const currentLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
   const iconRequested = new SvelteSet<string>();
 
   async function loadInstanceIcon(path: string) {
@@ -116,7 +119,11 @@
   }
 
   async function playClient() {
-    if (!$projectPath || $isLaunching) return;
+    if (!$projectPath || currentLaunching) return;
+    if (currentRunning) {
+      await killWithFeedback($projectPath);
+      return;
+    }
     await launchWithFeedback({ path: $projectPath, profile: "client" });
   }
 
@@ -237,12 +244,16 @@
       <button
         type="button"
         class="rail-btn ghost"
-        title="Play"
-        aria-label="Play"
-        disabled={!$projectPath || $isLaunching}
+        title={currentRunning ? "Stop" : currentLaunching ? "Launching" : "Play"}
+        aria-label={currentRunning ? "Stop" : "Play"}
+        disabled={!$projectPath || currentLaunching}
         onclick={playClient}
       >
-        <Play size={21} />
+        {#if currentRunning}
+          <span class="rail-stop-glyph" aria-hidden="true"></span>
+        {:else}
+          <Play size={21} />
+        {/if}
       </button>
     </div>
     <div class="rail-item">
@@ -285,6 +296,14 @@
 </aside>
 
 <style>
+  .rail-stop-glyph {
+    width: 15px;
+    height: 15px;
+    display: block;
+    background: currentColor;
+    border-radius: 2px;
+  }
+
   .rail {
     width: 72px;
     flex-shrink: 0;

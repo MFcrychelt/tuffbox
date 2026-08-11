@@ -8,9 +8,18 @@
     Camera, FolderOpen,
   } from "@lucide/svelte";
   import { onDestroy, onMount, tick } from "svelte";
-  import { ideStageRequest, openLaunchLog, projectPath, projectInfo } from "../lib/store";
+  import {
+    ideStageRequest,
+    isProjectLaunching,
+    isProjectRunning,
+    launchSessions,
+    openLaunchLog,
+    projectPath,
+    projectInfo,
+    runningInstances,
+  } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
-  import { launchWithFeedback } from "../lib/launch";
+  import { killWithFeedback, launchWithFeedback } from "../lib/launch";
   import type { TestRunRecord } from "../lib/api";
 
   type Profile = {
@@ -118,6 +127,10 @@
   let capturedRunIds: Record<string, boolean> = {};
 
   const selected = $derived(profiles.find((p) => p.id === selectedProfile));
+  const sharedLaunch = $derived($launchSessions[$projectPath ?? ""] ?? null);
+  const sharedLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
+  const sharedRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  const launchBusy = $derived(running || matrixRunning || sharedLaunching || sharedRunning);
   const elapsed = $derived(startedAt ? Math.floor((now - startedAt) / 1000) : 0);
   const hostRamPct = $derived(live && live.hostMemoryTotalMb > 0
     ? pct(live.hostMemoryUsedMb, live.hostMemoryTotalMb)
@@ -147,7 +160,7 @@
   }));
   const statusLabel = $derived((() => {
     switch (livePhase) {
-      case "launching": return "Launching…";
+      case "launching": return sharedLaunch?.message || "Launching…";
       case "bootstrapping": return `Bootstrapping… ${elapsed}s`;
       case "pass": return `Pass (${startupSeconds ?? elapsed}s)`;
       case "fail": return "Fail";
@@ -156,6 +169,38 @@
       default: return live?.instance || running ? `${elapsed}s` : "idle";
     }
   })());
+
+  // Process lifecycle is authoritative. The debug sampler below remains for
+  // CPU/RAM and log metrics, but it no longer decides whether a Play action
+  // became a running game or silently reset after invoke.
+  $effect(() => {
+    const lifecycle = sharedLaunch;
+    if (!lifecycle) return;
+    if (lifecycle.phase === "running") {
+      sawProcess = true;
+      if (!startedAt) startedAt = (lifecycle.startedAt || 0) * 1000 || Date.now();
+      if (livePhase === "idle" || livePhase === "launching") livePhase = "bootstrapping";
+      if (!watching) startPolling();
+      return;
+    }
+    if (lifecycle.phase === "failed" && (livePhase === "launching" || livePhase === "bootstrapping")) {
+      error = lifecycle.error?.message || lifecycle.message || "Launch failed.";
+      verdictReason = error;
+      livePhase = "fail";
+      running = false;
+      return;
+    }
+    if (lifecycle.phase === "exited" && live?.instance) {
+      live = { ...live, instance: null };
+    }
+    if (lifecycle.phase === "exited" && running && !finalizeInFlight && livePhase === "bootstrapping") {
+      void finalizeActive(
+        lifecycle.error ? "crashed" : "fail",
+        lifecycle.error?.message || lifecycle.message || "Process exited before pass signal",
+      );
+    }
+  });
+
   $effect(() => {
     if ($projectPath && lastLoadedPath !== $projectPath) loadProfiles(true);
   });
@@ -365,7 +410,7 @@
   }
 
   function canLaunch(): boolean {
-    if (!$projectPath || running || matrixRunning) return false;
+    if (!$projectPath || launchBusy) return false;
     if (validationCritical && !forceRun) {
       error = "Validation has critical issues. Enable Force run to launch anyway.";
       return false;
@@ -408,7 +453,6 @@
           targetDir: opts.serverDir,
         });
       }
-      await invoke("record_launch", { path: $projectPath });
       const res = await launchWithFeedback(
         {
           path: $projectPath!,
@@ -427,8 +471,10 @@
         },
       );
       if (!res) {
+        const lifecycle = $launchSessions[$projectPath ?? ""];
         running = false;
-        livePhase = "idle";
+        livePhase = lifecycle?.phase === "failed" ? "fail" : "idle";
+        if (lifecycle?.error?.message) error = lifecycle.error.message;
         activeLogRoot = null;
         return false;
       }
@@ -511,8 +557,7 @@
     const shouldKill = kill || matrixRunning;
     if (shouldKill && $projectPath) {
       try {
-        await invoke("kill_running_instance", { instanceId: $projectPath });
-        live = live ? { ...live, instance: null } : null;
+        await killWithFeedback($projectPath);
       } catch {
         // ignore
       }
@@ -666,25 +711,24 @@
     killing = true;
     error = null;
     try {
-      message = await invoke("kill_running_instance", { instanceId: $projectPath });
-      live = live ? { ...live, instance: null } : null;
+      const stopped = await killWithFeedback($projectPath);
+      if (!stopped) return;
+      message = "Stopping game…";
       if (running && !finalizeInFlight && livePhase === "bootstrapping") {
-        await finalizeActive("fail", "Killed by user");
+        await finalizeActive("fail", "Stopped by user");
       } else {
         running = false;
         if (livePhase === "launching" || livePhase === "bootstrapping") livePhase = "idle";
       }
       await refreshLog();
       await loadRuns();
-    } catch (e) {
-      error = String(e);
     } finally {
       killing = false;
     }
   }
 
   async function runMatrix() {
-    if (!$projectPath || running || matrixRunning) return;
+    if (!$projectPath || launchBusy) return;
     if (validationCritical && !forceRun) {
       error = "Validation has critical issues. Enable Force run to launch matrix.";
       return;
@@ -851,7 +895,7 @@
           {validationBadge.label}
         </span>
       {/if}
-      <button class="danger" onclick={killInstance} disabled={!$projectPath || !live?.instance || killing} title="Kill game/server process">
+      <button class="danger" onclick={killInstance} disabled={!$projectPath || (!live?.instance && !sharedRunning) || killing} title="Kill game/server process">
         <Square size={16} />
         {killing ? "Stopping…" : "Kill"}
       </button>
@@ -869,24 +913,24 @@
       <div class="launch-bar">
         <label class="profile-select">
           Profile
-          <select bind:value={selectedProfile} disabled={running || matrixRunning}>
+          <select bind:value={selectedProfile} disabled={launchBusy}>
             {#each profiles as p (p.id)}
               <option value={p.id}>{p.name} ({p.id})</option>
             {/each}
           </select>
         </label>
         <div class="launch-actions">
-          <button class="preset primary" onclick={smokeClient} disabled={running || matrixRunning || !selectedProfile}>
+          <button class="preset primary" onclick={smokeClient} disabled={launchBusy || !selectedProfile}>
             <PlayCircle size={16} /> Smoke client
           </button>
-          <button class="preset" onclick={runServer} disabled={running || matrixRunning} title="Stage both+server mods into a folder and open Server console">
+          <button class="preset" onclick={runServer} disabled={launchBusy} title="Stage both+server mods into a folder and open Server console">
             <Server size={16} /> Run server
           </button>
-          <button class="preset" onclick={runClient4Ram} disabled={running || matrixRunning} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
+          <button class="preset" onclick={runClient4Ram} disabled={launchBusy} title={`Launch client with ${CLIENT_4G_MEMORY_MB} MB RAM`}>
             <Zap size={16} /> Run client 4 RAM
           </button>
         </div>
-        <div class="status" class:running={!!live?.instance || running} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
+        <div class="status" class:running={!!live?.instance || running || sharedRunning || sharedLaunching} class:pass={livePhase === "pass"} class:fail={livePhase === "fail" || livePhase === "crashed" || livePhase === "timedOut"}>
           <TimerReset size={16} />
           {statusLabel}
         </div>
@@ -913,13 +957,13 @@
             <button class="ghost mini" onclick={openDiagnose}><Stethoscope size={12} /> Open in Diagnose</button>
             {#if watching}
               <button class="ghost mini" onclick={stopWatching}>Stop watching</button>
-            {:else if running || live?.instance}
+            {:else if running || live?.instance || sharedRunning}
               <button class="ghost mini" onclick={startPolling}>Watch log</button>
             {/if}
           </div>
         </div>
         <pre class="log" bind:this={logEl}>{displayLog || "latest.log will appear here after the first run."}</pre>
-        {#if live?.instance}
+        {#if live?.instance || sharedRunning}
           <button class="secondary stop danger-outline" onclick={killInstance} disabled={killing}>
             <Square size={16} /> {killing ? "Stopping…" : "Kill process"}
           </button>
@@ -963,7 +1007,7 @@
                 {/if}
               </select>
             </label>
-            <button class="secondary" onclick={quickPlay} disabled={running || matrixRunning || !quickPlayWorld}>
+            <button class="secondary" onclick={quickPlay} disabled={launchBusy || !quickPlayWorld}>
               Launch Quick Play
             </button>
           </div>
@@ -1063,7 +1107,7 @@
           <div class="matrix-panel">
             <div class="matrix-head">
               <label class="chk"><input type="checkbox" bind:checked={matrixStopOnFail} /> Stop on fail</label>
-              <button class="secondary" onclick={runMatrix} disabled={running || matrixRunning}>Run matrix</button>
+              <button class="secondary" onclick={runMatrix} disabled={launchBusy}>Run matrix</button>
               {#if matrixRunning}
                 <button class="danger" onclick={stopMatrix}>Stop queue</button>
               {/if}
@@ -1157,7 +1201,7 @@
                     <button class="ghost mini" onclick={openDiagnose} title="Open Diagnose stage">
                       <Stethoscope size={12} /> Diagnose
                     </button>
-                    <button class="ghost mini" onclick={() => reRun(run)} disabled={running || matrixRunning}>Re-run</button>
+                    <button class="ghost mini" onclick={() => reRun(run)} disabled={launchBusy}>Re-run</button>
                   </div>
                 </div>
               {/each}

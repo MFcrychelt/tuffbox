@@ -805,10 +805,18 @@ export interface TestRunRecord {
   capturedPaths?: string[];
 }
 
-export interface LaunchResult {
-  exitCode: number | null;
-  logPath: string;
-}
+/// Stable lifecycle phases emitted by the desktop backend on `launch-phase`.
+/// A command returning only means spawn preparation completed; controls must
+/// use this stream (and `runningInstances`) for their visible state.
+export type LaunchPhase =
+  | "preflight"
+  | "resolving_java"
+  | "downloading"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "exited"
+  | "failed";
 
 /// Structured launch error returned by the launch Tauri commands
 /// (mirrors `tuffbox_core::launch_error::LaunchErrorInfo`).
@@ -816,6 +824,50 @@ export interface LaunchErrorInfo {
   kind: string;
   message: string;
   logPath?: string;
+}
+
+export interface LaunchLifecycleEvent {
+  /** Manifest path — the same key used by `list_running_instances`. */
+  id: string;
+  profile: string;
+  phase: LaunchPhase;
+  message: string;
+  logPath?: string;
+  pid?: number;
+  startedAt?: number;
+  exitCode?: number | null;
+  stopped?: boolean;
+  error?: LaunchErrorInfo;
+}
+
+export interface LaunchCrashEvent {
+  id: string;
+  /** Compatibility alias for older event consumers. */
+  path?: string;
+  profile: string;
+  /** Flattened compatibility copy of `error`. */
+  kind?: string;
+  message?: string;
+  logPath?: string;
+  error: LaunchErrorInfo;
+  exitCode?: number | null;
+}
+
+export interface ProcessExitedEvent {
+  id: string;
+  profile?: string;
+  startedAt?: number;
+  code?: number | null;
+  stopped?: boolean;
+}
+
+export interface LaunchResult {
+  exitCode: number | null;
+  logPath: string;
+  instanceId: string;
+  profile: string;
+  pid: number;
+  startedAt: number;
 }
 
 export interface ExportResult {

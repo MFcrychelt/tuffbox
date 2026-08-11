@@ -1,7 +1,7 @@
 <script lang="ts">
   import { X, Zap, Loader2, Check } from "@lucide/svelte";
   import { api } from "../lib/api";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { isProjectLaunching, launchSessions, projectPath, projectInfo } from "../lib/store";
   import { launchWithFeedback } from "../lib/launch";
   import { toasts } from "../lib/toast";
   import { trapFocus } from "../lib/focusTrap";
@@ -49,6 +49,7 @@
   };
 
   let mode = $state<Mode>("curated");
+  const projectLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
   let loading = $state(false);
   let applying = $state(false);
   let error = $state<string | null>(null);
@@ -293,7 +294,7 @@
 
   async function testLaunch() {
     const path = get(projectPath);
-    if (!path) return;
+    if (!path || projectLaunching) return;
     await launchWithFeedback({ path, profile: "client" });
   }
 
@@ -488,8 +489,8 @@
       <div class="opt-footer">
         <button class="ghost" type="button" onclick={close} disabled={applying}>Close</button>
         {#if doneMessage}
-          <button class="secondary" type="button" onclick={testLaunch} disabled={applying}>
-            Test launch
+          <button class="secondary" type="button" onclick={testLaunch} disabled={applying || projectLaunching}>
+            {projectLaunching ? "Launching…" : "Test launch"}
           </button>
         {/if}
         <button

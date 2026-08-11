@@ -17,6 +17,9 @@ pub struct RunningProcess {
     pub log_path: PathBuf,
     /// Unix epoch seconds when the process was spawned.
     pub started_at: u64,
+    /// Set by [`kill_instance`] before it signals the child. This lets the
+    /// exit callback distinguish a user-requested Stop from a JVM crash.
+    pub stop_requested: bool,
 }
 
 /// Outcome of a spawned process exiting, handed to [`OnExit`] callbacks.
@@ -25,6 +28,11 @@ pub struct ProcessExit {
     pub code: Option<i32>,
     /// Wall-clock seconds the process was alive (best-effort).
     pub duration_secs: u64,
+    /// Unix epoch seconds captured when the child was spawned.
+    pub started_at: u64,
+    /// True when TuffBox initiated the stop via [`kill_instance`]. A forced
+    /// stop is an expected lifecycle transition, not a crash.
+    pub stop_requested: bool,
 }
 
 /// Callback invoked once the spawned process exits. Used by the launcher to
@@ -88,6 +96,22 @@ pub fn spawn_and_track_with_cleanup(
     show_console: bool,
 ) -> std::io::Result<RunningProcess> {
     let log_path = log_path.as_ref().to_path_buf();
+
+    // The registry is the source of truth for a running instance. Refuse a
+    // second JVM for the same manifest before touching its live console log;
+    // otherwise a duplicate Play click can truncate the first session's log.
+    let already_running = PROCESSES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .any(|process| process.id == instance_id);
+    if already_running {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("instance {instance_id} is already running"),
+        ));
+    }
+
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -151,6 +175,7 @@ pub fn spawn_and_track_with_cleanup(
         pid,
         log_path: log_path.clone(),
         started_at,
+        stop_requested: false,
     };
     PROCESSES
         .lock()
@@ -161,10 +186,12 @@ pub fn spawn_and_track_with_cleanup(
         let started = std::time::Instant::now();
         let exit = child.wait();
         let duration_secs = started.elapsed().as_secs();
-        PROCESSES
+        let stop_requested = PROCESSES
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .remove(&pid);
+            .remove(&pid)
+            .map(|process| process.stop_requested)
+            .unwrap_or(false);
         for path in cleanup_paths {
             let _ = std::fs::remove_file(path);
         }
@@ -172,6 +199,8 @@ pub fn spawn_and_track_with_cleanup(
             cb(ProcessExit {
                 code: exit.ok().and_then(|s| s.code()),
                 duration_secs,
+                started_at,
+                stop_requested,
             });
         }
     });
@@ -191,15 +220,34 @@ pub fn list_running() -> Vec<RunningProcess> {
 /// Force-kill every tracked process for `instance_id`. The wait thread still
 /// runs `on_exit` afterward (playtime / crash classification / UI events).
 pub fn kill_instance(instance_id: &str) -> std::io::Result<usize> {
-    let pids: Vec<u32> = PROCESSES
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .filter(|(_, p)| p.id == instance_id)
-        .map(|(pid, _)| *pid)
-        .collect();
+    // Mark before sending the signal so the wait thread cannot race us and
+    // report a user Stop as a crash. The entry remains registered until
+    // `Child::wait` completes, which keeps `list_running` truthful.
+    let pids: Vec<u32> = {
+        let mut processes = PROCESSES.lock().unwrap_or_else(|e| e.into_inner());
+        processes
+            .iter_mut()
+            .filter(|(_, process)| process.id == instance_id)
+            .map(|(pid, process)| {
+                process.stop_requested = true;
+                *pid
+            })
+            .collect()
+    };
     for pid in &pids {
-        kill_pid(*pid)?;
+        if let Err(error) = kill_pid(*pid) {
+            // Do not leave a process marked as stopped when delivering the
+            // signal itself failed. Any processes signalled earlier still
+            // retain their requested-stop marker.
+            if let Some(process) = PROCESSES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(pid)
+            {
+                process.stop_requested = false;
+            }
+            return Err(error);
+        }
     }
     Ok(pids.len())
 }

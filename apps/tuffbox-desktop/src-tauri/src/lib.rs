@@ -7112,34 +7112,88 @@ async fn launch_server(
     level_seed: Option<String>,
     online_mode: Option<bool>,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
-    record_launch(path.clone()).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
-    })?;
-
+    let profile = "server";
     let server_dir_buf = PathBuf::from(server_dir.trim());
+    let stage_log = server_dir_buf.join("logs").join("tuffbox-console.log");
+    emit_launch_phase(
+        &app,
+        &path,
+        profile,
+        LaunchPhase::Preflight,
+        "Preparing server launch…",
+        Some(&stage_log),
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
     if server_dir_buf.as_os_str().is_empty() {
-        return Err(LaunchErrorInfo::new(
-            LaunchErrorKind::Install,
-            "server directory is required",
-        ));
+        let info = LaunchErrorInfo::new(LaunchErrorKind::Install, "server directory is required")
+            .with_log(&stage_log);
+        emit_launch_phase(
+            &app,
+            &path,
+            profile,
+            LaunchPhase::Failed,
+            info.message.clone(),
+            Some(&stage_log),
+            None,
+            None,
+            None,
+            false,
+            Some(info.clone()),
+        );
+        return Err(info);
     }
 
+    if let Err(error) = record_launch(path.clone()) {
+        let info = LaunchErrorInfo::new(LaunchErrorKind::Unknown, error.to_string())
+            .with_log(&stage_log);
+        emit_launch_phase(
+            &app,
+            &path,
+            profile,
+            LaunchPhase::Failed,
+            info.message.clone(),
+            Some(&stage_log),
+            None,
+            None,
+            None,
+            false,
+            Some(info.clone()),
+        );
+        return Err(info);
+    }
+
+    emit_launch_phase(
+        &app,
+        &path,
+        profile,
+        LaunchPhase::Downloading,
+        "Staging the server instance…",
+        Some(&stage_log),
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
     let path_for_prep = path.clone();
     let server_dir_for_prep = server_dir_buf.clone();
     let seed = level_seed.clone();
     let online = online_mode;
-    tokio::task::spawn_blocking(move || {
-        let manifest_path = resolve_manifest_path(&path_for_prep).map_err(|e| {
-            LaunchErrorInfo::new(LaunchErrorKind::Install, e)
-        })?;
+    let prep = tokio::task::spawn_blocking(move || {
+        let manifest_path = resolve_manifest_path(&path_for_prep)
+            .map_err(|error| LaunchErrorInfo::new(LaunchErrorKind::Install, error))?;
         let project_dir = manifest_path.parent().ok_or_else(|| {
             LaunchErrorInfo::new(
                 LaunchErrorKind::Unknown,
                 "manifest has no parent directory",
             )
         })?;
-        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| {
-            LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string())
+        let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|error| {
+            LaunchErrorInfo::new(LaunchErrorKind::Install, error.to_string())
         })?;
 
         tuffbox_core::TestLauncher::prepare_server_instance(
@@ -7148,9 +7202,7 @@ async fn launch_server(
             &server_dir_for_prep,
             &manifest_path,
         )
-        .map_err(|e| {
-            LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string())
-        })?;
+        .map_err(|error| LaunchErrorInfo::new(LaunchErrorKind::Install, error.to_string()))?;
 
         write_server_properties_file(
             &server_dir_for_prep,
@@ -7158,21 +7210,44 @@ async fn launch_server(
             seed.as_deref(),
             online,
         )
-        .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Install, e))?;
+        .map_err(|error| LaunchErrorInfo::new(LaunchErrorKind::Install, error))?;
         Ok::<(), LaunchErrorInfo>(())
     })
     .await
-    .map_err(|e| {
+    .map_err(|error| {
         LaunchErrorInfo::new(
             LaunchErrorKind::Unknown,
-            format!("server prepare task panicked: {e}"),
+            format!("server prepare task panicked: {error}"),
         )
-    })??;
+    })
+    .and_then(|result| result);
+
+    if let Err(info) = prep {
+        let info = if info.log_path.is_some() {
+            info
+        } else {
+            info.with_log(&stage_log)
+        };
+        emit_launch_phase(
+            &app,
+            &path,
+            profile,
+            LaunchPhase::Failed,
+            info.message.clone(),
+            Some(&stage_log),
+            None,
+            None,
+            None,
+            false,
+            Some(info.clone()),
+        );
+        return Err(info);
+    }
 
     launch_profile_impl(
         app,
         path,
-        "server".into(),
+        profile.into(),
         None,
         None,
         None,
@@ -11609,6 +11684,43 @@ async fn launch_profile(
     .await
 }
 
+/// Emit the one lifecycle contract consumed by every frontend Play control.
+/// The command return only means spawn preparation finished; this event stream
+/// carries the user-visible state through preflight, JVM startup and exit.
+fn emit_launch_phase(
+    app: &tauri::AppHandle,
+    id: &str,
+    profile: &str,
+    phase: LaunchPhase,
+    message: impl Into<String>,
+    log_path: Option<&Path>,
+    pid: Option<u32>,
+    started_at: Option<u64>,
+    exit_code: Option<i32>,
+    stopped: bool,
+    error: Option<LaunchErrorInfo>,
+) {
+    let _ = app.emit(
+        "launch-phase",
+        LaunchLifecycleEvent {
+            id: id.to_string(),
+            profile: profile.to_string(),
+            phase,
+            message: message.into(),
+            log_path: log_path.map(|path| path.to_string_lossy().into_owned()),
+            pid,
+            started_at,
+            exit_code,
+            stopped,
+            error,
+        },
+    );
+}
+
+/// Outer error boundary for every client/profile launch. It deliberately
+/// converts *all* failures (including setup before the blocking task starts)
+/// into the same structured `LaunchErrorInfo` event used by asynchronous JVM
+/// crashes, so the frontend never has to guess whether a spinner may clear.
 async fn launch_profile_impl(
     app: tauri::AppHandle,
     path: String,
@@ -11620,15 +11732,72 @@ async fn launch_profile_impl(
     show_console: bool,
     skip_client_bridges: bool,
 ) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
-    let path = resolve_manifest_path(&path).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Install, e)
-    })?
-    .to_string_lossy()
-    .to_string();
+    let id_hint = path.clone();
+    let profile_hint = profile.clone();
+    emit_launch_phase(
+        &app,
+        &id_hint,
+        &profile_hint,
+        LaunchPhase::Preflight,
+        "Preparing launch…",
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+    let result = launch_profile_impl_inner(
+        app.clone(),
+        path,
+        profile,
+        quick_play_type,
+        quick_play_value,
+        memory_mb_override,
+        game_dir_override,
+        show_console,
+        skip_client_bridges,
+    )
+    .await;
+
+    if let Err(info) = &result {
+        emit_launch_phase(
+            &app,
+            &id_hint,
+            &profile_hint,
+            LaunchPhase::Failed,
+            info.message.clone(),
+            info.log_path.as_deref().map(|log_path| Path::new(log_path)),
+            None,
+            None,
+            None,
+            false,
+            Some(info.clone()),
+        );
+    }
+
+    result
+}
+
+async fn launch_profile_impl_inner(
+    app: tauri::AppHandle,
+    path: String,
+    profile: String,
+    quick_play_type: Option<String>,
+    quick_play_value: Option<String>,
+    memory_mb_override: Option<u32>,
+    game_dir_override: Option<PathBuf>,
+    show_console: bool,
+    skip_client_bridges: bool,
+) -> Result<tuffbox_core::LaunchResult, LaunchErrorInfo> {
+    let path = resolve_manifest_path(&path)
+        .map_err(|error| LaunchErrorInfo::new(LaunchErrorKind::Install, error))?
+        .to_string_lossy()
+        .to_string();
 
     let project_dir = PathBuf::from(&path)
         .parent()
-        .map(|p| p.to_path_buf())
+        .map(|parent| parent.to_path_buf())
         .ok_or_else(|| {
             LaunchErrorInfo::new(
                 LaunchErrorKind::Unknown,
@@ -11645,17 +11814,20 @@ async fn launch_profile_impl(
     let console_log = logs_dir.join("tuffbox-console.log");
     let latest_log = logs_dir.join("latest.log");
 
+    std::fs::create_dir_all(&logs_dir).map_err(|error| {
+        LaunchErrorInfo::new(LaunchErrorKind::Unknown, error.to_string()).with_log(&console_log)
+    })?;
     {
         use std::io::Write;
-        std::fs::create_dir_all(&logs_dir).map_err(|e| {
-            LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
-        })?;
         let mut console = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
             .open(&console_log)
-            .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
+            .map_err(|error| {
+                LaunchErrorInfo::new(LaunchErrorKind::Unknown, error.to_string())
+                    .with_log(&console_log)
+            })?;
         writeln!(console, "# TuffBox launching profile {profile}").ok();
         if game_dir_override.is_some() {
             writeln!(console, "# Game directory override: {}", game_dir.display()).ok();
@@ -11663,25 +11835,43 @@ async fn launch_profile_impl(
         if let Some(mb) = memory_mb_override {
             writeln!(console, "# Memory override: {mb} MB").ok();
         }
-        if let (Some(ref t), Some(ref v)) = (&quick_play_type, &quick_play_value) {
-            writeln!(console, "# Quick Play: {t} → {v}").ok();
+        if let (Some(ref launch_type), Some(ref value)) = (&quick_play_type, &quick_play_value) {
+            writeln!(console, "# Quick Play: {launch_type} → {value}").ok();
         }
         let launcher_log = project_dir.join("launcher_log.txt");
         let mut launcher = std::fs::OpenOptions::new()
             .append(true)
             .create(true)
             .open(&launcher_log)
-            .map_err(|e| LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string()))?;
+            .map_err(|error| {
+                LaunchErrorInfo::new(LaunchErrorKind::Unknown, error.to_string())
+                    .with_log(&console_log)
+            })?;
         writeln!(launcher, "# TuffBox launching profile {profile}").ok();
     }
 
-    append_test_run_record(&path, &profile, &latest_log).map_err(|e| {
-        LaunchErrorInfo::new(LaunchErrorKind::Unknown, e.to_string())
+    emit_launch_phase(
+        &app,
+        &path,
+        &profile,
+        LaunchPhase::Preflight,
+        "Checking launch prerequisites…",
+        Some(&console_log),
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+
+    append_test_run_record(&path, &profile, &latest_log).map_err(|error| {
+        LaunchErrorInfo::new(LaunchErrorKind::Unknown, error.to_string()).with_log(&console_log)
     })?;
 
     let console_log_clone = console_log.clone();
     let latest_log_clone = latest_log.clone();
     let game_dir_clone = game_dir_override.clone();
+    let app_for_task = app.clone();
     // Run the (blocking) install + spawn on a blocking thread, then await the
     // result so install/prepare failures surface to the UI as a structured,
     // categorized error instead of being swallowed into the log file.
@@ -11691,7 +11881,7 @@ async fn launch_profile_impl(
             profile,
             console_log_clone,
             latest_log_clone,
-            app,
+            app_for_task,
             quick_play_type,
             quick_play_value,
             memory_mb_override,
@@ -11701,18 +11891,22 @@ async fn launch_profile_impl(
         )
     })
     .await
-    .map_err(|e| {
+    .map_err(|error| {
         LaunchErrorInfo::new(
             LaunchErrorKind::Unknown,
-            format!("launch task panicked: {e}"),
+            format!("launch task panicked: {error}"),
         )
         .with_log(&latest_log)
     })?;
 
     match result {
-        Ok(()) => Ok(tuffbox_core::LaunchResult {
+        Ok(running) => Ok(tuffbox_core::LaunchResult {
             exit_code: None,
             log_path: latest_log,
+            instance_id: running.id,
+            profile: running.profile_id,
+            pid: running.pid,
+            started_at: running.started_at,
         }),
         Err(info) => Err(info),
     }
@@ -11730,7 +11924,7 @@ fn build_and_spawn(
     game_dir_override: Option<PathBuf>,
     show_console: bool,
     skip_client_bridges: bool,
-) -> Result<(), LaunchErrorInfo> {
+) -> Result<tuffbox_core::process::RunningProcess, LaunchErrorInfo> {
     use tuffbox_core::{LaunchOptions, TestLauncher};
 
     let manifest_path = resolve_manifest_path(&path).map_err(|e| {
@@ -11768,6 +11962,20 @@ fn build_and_spawn(
         log_path: console_log.clone(),
     };
 
+    emit_launch_phase(
+        &app,
+        &path,
+        &profile,
+        LaunchPhase::ResolvingJava,
+        "Resolving a compatible Java runtime…",
+        Some(&console_log),
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
+
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
             LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&console_log)
@@ -11797,16 +12005,9 @@ fn build_and_spawn(
     progress.log(&format!("# Java: {} (major {})", java.path, java.major));
     progress.log(&format!("# Java version: {}", java.version));
     let required_java = tuffbox_core::jre::required_java_major(&manifest.minecraft.version);
-    if java.major < required_java {
-        return Err(LaunchErrorInfo::new(
-            LaunchErrorKind::JavaMissing,
-            format!(
-                "Minecraft {} needs Java {required_java}+, but selected runtime is Java {} ({}). Install the right JDK and pick it in Project Settings.",
-                manifest.minecraft.version, java.major, java.path
-            ),
-        )
-        .with_log(&console_log));
-    }
+    TestLauncher::preflight_java_runtime(&manifest.minecraft.version, &java).map_err(|error| {
+        LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, error.to_string()).with_log(&console_log)
+    })?;
     if java.major != required_java {
         progress.log(&format!(
             "# WARNING: Minecraft {} typically needs Java {required_java}, but the selected runtime is Java {}. \
@@ -11841,6 +12042,20 @@ fn build_and_spawn(
     if let Err(e) = launcher_settings::run_hook(launch_settings.pre_launch_hook.as_deref(), "pre-launch hook") {
         return Err(LaunchErrorInfo::new(LaunchErrorKind::Unknown, e).with_log(&console_log));
     }
+
+    emit_launch_phase(
+        &app,
+        &path,
+        &profile,
+        LaunchPhase::Downloading,
+        "Verifying mods, libraries, natives and assets…",
+        Some(&console_log),
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
 
     // Safety net: make sure every mod declared in the manifest actually has
     // its .jar on disk before we launch. Mods can end up missing here if
@@ -12015,6 +12230,19 @@ fn build_and_spawn(
     }
 
     progress.log("# Starting Java process...");
+    emit_launch_phase(
+        &app,
+        &path,
+        &profile,
+        LaunchPhase::Starting,
+        "Starting the Java process…",
+        Some(&console_log),
+        None,
+        None,
+        None,
+        false,
+        None,
+    );
 
     // Crash callback + playtime + Discord presence cleanup
     let crash_ctx = CrashExitCtx {
@@ -12027,6 +12255,8 @@ fn build_and_spawn(
     };
     let app_for_exit = app.clone();
     let stats_path_for_exit = path.clone();
+    let profile_for_exit = profile.clone();
+    let latest_log_for_exit = latest_log.clone();
     let post_exit_hook = launch_settings.post_exit_hook.clone();
     let instance_label = manifest.project.name.clone();
     let _ = presence::set_playing_activity(&instance_label, "In Minecraft");
@@ -12034,55 +12264,101 @@ fn build_and_spawn(
     launcher_presence::spawn_game_session_start(instance_label.clone());
     let on_exit: Option<OnExit> = Some(Box::new(move |exit: ProcessExit| {
         let _ = presence::clear_activity();
-        launcher_presence::spawn_game_session_end(exit.duration_secs, exit.code != Some(0));
+        launcher_presence::spawn_game_session_end(
+            exit.duration_secs,
+            !exit.stop_requested && exit.code != Some(0),
+        );
         if let Some(ref hook) = post_exit_hook {
             let _ = launcher_settings::run_hook(Some(hook), "post-exit hook");
         }
-        // Accumulate playtime for every session (including crashes).
+        // Accumulate playtime for every session (including crashes / manual stops).
         if let Ok(project_dir) = manifest_parent(&stats_path_for_exit) {
             let mut stats = load_stats(&project_dir);
-            let entry = stats.instances.entry("client".into()).or_default();
+            let entry = stats
+                .instances
+                .entry(profile_for_exit.clone())
+                .or_default();
             entry.total_playtime_seconds = entry
                 .total_playtime_seconds
                 .saturating_add(exit.duration_secs);
             let _ = save_stats(&project_dir, &stats);
         }
+
+        overlay_hook::stop_ipc_server();
+        let crash_info = if exit.stop_requested || exit.code == Some(0) {
+            None
+        } else {
+            Some(classify_crash(&crash_ctx, exit.code))
+        };
+        let exit_message = if exit.stop_requested {
+            "Game stopped."
+        } else if exit.code == Some(0) {
+            "Game exited normally."
+        } else {
+            "Game exited unexpectedly."
+        };
+        emit_launch_phase(
+            &app_for_exit,
+            &stats_path_for_exit,
+            &profile_for_exit,
+            LaunchPhase::Exited,
+            exit_message,
+            Some(&latest_log_for_exit),
+            None,
+            Some(exit.started_at),
+            exit.code,
+            exit.stop_requested,
+            crash_info.clone(),
+        );
         let _ = app_for_exit.emit(
             "process-exited",
-            serde_json::json!({
-                "id": stats_path_for_exit,
-                "code": exit.code,
-            }),
+            ProcessExitedEvent {
+                id: stats_path_for_exit.clone(),
+                profile: profile_for_exit.clone(),
+                started_at: exit.started_at,
+                code: exit.code,
+                stopped: exit.stop_requested,
+            },
         );
-        overlay_hook::stop_ipc_server();
-        if exit.code == Some(0) {
+
+        let Some(info) = crash_info else {
             return;
-        }
+        };
         let _ = record_crash(stats_path_for_exit.clone());
-        let info = classify_crash(&crash_ctx, exit.code);
         // Start / continue a History episode for this crash.
         if let Ok(project_dir) = manifest_parent(&stats_path_for_exit) {
             let log_for_fp = info
                 .log_path
                 .as_deref()
                 .map(PathBuf::from)
-                .filter(|p| p.is_file())
+                .filter(|path| path.is_file())
                 .unwrap_or_else(|| crash_ctx.log_path.clone());
-            let log_text = tuffbox_core::process::read_log_tail(&log_for_fp, 1200).unwrap_or_default();
-            let fp = tuffbox_core::crash_kb::fingerprint_from_text(
+            let log_text = tuffbox_core::process::read_log_tail(&log_for_fp, 1200)
+                .unwrap_or_default();
+            let fingerprint = tuffbox_core::crash_kb::fingerprint_from_text(
                 &log_text,
                 &crash_ctx.mc_version,
                 &crash_ctx.loader_kind,
             );
             let _ = pack_events::append_crash_detected(
                 &project_dir,
-                &fp.key,
+                &fingerprint.key,
                 exit.code,
                 info.log_path.as_deref(),
                 &info.message,
             );
         }
-        let _ = app_for_exit.emit("launch-crashed", info);
+        let _ = app_for_exit.emit(
+            "launch-crashed",
+            LaunchCrashEvent {
+                id: stats_path_for_exit.clone(),
+                path: stats_path_for_exit.clone(),
+                profile: profile_for_exit.clone(),
+                legacy_error: info.clone(),
+                error: info,
+                exit_code: exit.code,
+            },
+        );
     }));
 
     // Tee JVM stdout/stderr to TuffBox console log; Minecraft owns logs/latest.log.
@@ -12104,11 +12380,24 @@ fn build_and_spawn(
     let _ = app.emit(
         "process-started",
         serde_json::json!({
-            "id": running.id,
+            "id": running.id.clone(),
             "pid": running.pid,
-            "profile": running.profile_id,
+            "profile": running.profile_id.clone(),
             "startedAt": running.started_at,
         }),
+    );
+    emit_launch_phase(
+        &app,
+        &running.id,
+        &running.profile_id,
+        LaunchPhase::Running,
+        "Game is running.",
+        Some(&console_log),
+        Some(running.pid),
+        Some(running.started_at),
+        None,
+        false,
+        None,
     );
 
     if overlay_env.is_some() {
@@ -12123,7 +12412,7 @@ fn build_and_spawn(
         });
     }
 
-    Ok(())
+    Ok(running)
 }
 
 fn ensure_authlib_injector_agent(authority: &str) -> Result<String, String> {
@@ -13237,14 +13526,36 @@ async fn get_instance_size(path: String) -> Result<String, String> {
         .map_err(|e| e.to_string())?
 }
 
+/// Resolve a manifest normally, while still supporting a staged server log
+/// before `prepare_server_instance` has copied `tuffbox.project.json` into the
+/// selected folder. The latter is important because the Live modal opens at
+/// the beginning of a server launch, not only after staging succeeds.
+fn launch_log_parent(path: &str) -> Result<PathBuf, String> {
+    manifest_parent(path).or_else(|_| {
+        PathBuf::from(path)
+            .parent()
+            .map(|parent| parent.to_path_buf())
+            .ok_or_else(|| "manifest has no parent directory".to_string())
+    })
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn get_launch_log(path: String) -> Result<String, String> {
-    let project_dir = PathBuf::from(&path)
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "manifest has no parent directory".to_string())?;
+    let project_dir = launch_log_parent(&path)?;
     let log_path = resolve_live_launch_log(&project_dir.join("logs"));
-    tuffbox_core::process::read_log_tail(&log_path, 2500).map_err(|e| e.to_string())
+    tuffbox_core::process::read_log_tail(&log_path, 2500).map_err(|error| error.to_string())
+}
+
+/// Exposes the exact file currently selected by `get_launch_log` without
+/// duplicating its latest.log/console fallback in the frontend. This is used
+/// by LaunchLogModal to label the Live tab truthfully while Minecraft takes
+/// ownership of latest.log during startup.
+#[tauri::command(rename_all = "camelCase")]
+fn resolve_live_launch_log_path(path: String) -> Result<String, String> {
+    let project_dir = launch_log_parent(&path)?;
+    Ok(resolve_live_launch_log(&project_dir.join("logs"))
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Same source the Live tab tails: prefer Minecraft `latest.log` once it has
@@ -15026,12 +15337,54 @@ fn list_running_instances() -> Result<Vec<serde_json::Value>, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-fn kill_running_instance(instance_id: String) -> Result<String, String> {
-    let n = tuffbox_core::process::kill_instance(&instance_id).map_err(|e| e.to_string())?;
-    if n == 0 {
+fn kill_running_instance(app: tauri::AppHandle, instance_id: String) -> Result<String, String> {
+    let running: Vec<_> = tuffbox_core::process::list_running()
+        .into_iter()
+        .filter(|process| process.id == instance_id)
+        .collect();
+    if running.is_empty() {
         return Err(format!("no running instance {instance_id}"));
     }
-    Ok(format!("Killed {n} process(es) for {instance_id}"))
+    for process in &running {
+        emit_launch_phase(
+            &app,
+            &process.id,
+            &process.profile_id,
+            LaunchPhase::Stopping,
+            "Stopping game…",
+            Some(&process.log_path),
+            Some(process.pid),
+            Some(process.started_at),
+            None,
+            true,
+            None,
+        );
+    }
+    let count = match tuffbox_core::process::kill_instance(&instance_id) {
+        Ok(count) => count,
+        Err(error) => {
+            // Restore the lifecycle if the OS rejected the signal. Without
+            // this, a failed Stop could leave every Play surface stuck on
+            // "Stopping…" until the next app restart.
+            for process in &running {
+                emit_launch_phase(
+                    &app,
+                    &process.id,
+                    &process.profile_id,
+                    LaunchPhase::Running,
+                    "Game is still running.",
+                    Some(&process.log_path),
+                    Some(process.pid),
+                    Some(process.started_at),
+                    None,
+                    false,
+                    None,
+                );
+            }
+            return Err(error.to_string());
+        }
+    };
+    Ok(format!("Stopping {count} process(es) for {instance_id}"))
 }
 
 /// Cached sysinfo sampler so successive polls get real CPU deltas (no sleep).
@@ -15840,6 +16193,7 @@ pub fn run() {
             get_java_version,
             get_default_java_version,
             get_launch_log,
+            resolve_live_launch_log_path,
             share_log_mclogs,
             analyze_log_text,
             list_instance_logs,

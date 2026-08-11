@@ -566,10 +566,19 @@ fn main() -> anyhow::Result<()> {
             let (mut cmd, log_path) =
                 tuffbox_core::TestLauncher::build_command(&manifest, profile, &options, &java, &launcher_dir, &progress, None, None, None, None)?;
             let mut child = cmd.spawn()?;
+            let pid = child.id();
+            let started_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             let status = child.wait()?;
             let result = tuffbox_core::LaunchResult {
                 exit_code: status.code(),
                 log_path,
+                instance_id: manifest_path.to_string_lossy().to_string(),
+                profile: profile_id.clone(),
+                pid,
+                started_at,
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }

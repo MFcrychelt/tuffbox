@@ -37,7 +37,8 @@
     Save,
     Eraser,
   } from "@lucide/svelte";
-  import { projectPath } from "../lib/store";
+  import { isProjectLaunching, launchSessions, projectPath } from "../lib/store";
+  import { launchWithFeedback } from "../lib/launch";
   import VanillaClientJarPrompt from "./VanillaClientJarPrompt.svelte";
 
   type FocusMode = "recipes" | "uses";
@@ -101,6 +102,7 @@
   let runtimeStatus = $state<RecipeRuntimeStatus | null>(null);
   let runtimeCategories = $state<RuntimeRecipeCategory[]>([]);
   let runtimePoller: ReturnType<typeof setInterval> | null = null;
+  const projectLaunching = $derived(isProjectLaunching($projectPath, $launchSessions));
 
   let editorOpen = $state(false);
   let editorKind = $state<EditorKind>("crafting");
@@ -445,7 +447,8 @@
       const profiles = await api.project.listProfiles($projectPath);
       const profile = profiles.find((entry) => entry.side.toLowerCase() !== "server") ?? profiles[0];
       if (!profile) throw new Error("Create a client profile before launching JEI Live.");
-      await api.launch.profile(profile.id, $projectPath);
+      const result = await launchWithFeedback({ path: $projectPath, profile: profile.id });
+      if (!result) return;
       message = `Launching ${profile.name}. Live recipes connect after JEI finishes loading.`;
       runtimeStatus = { connected: false, supported: true, message: "Waiting for JEI…", minecraftVersion: null, pid: null };
     } catch (e) {
@@ -1295,8 +1298,8 @@
         <Bookmark size={16} />
       </button>
       {#if runtimeStatus?.supported && !runtimeStatus.connected}
-        <button class="live-launch" onclick={launchJeiLive} disabled={!$projectPath || loading} title={runtimeStatus.message}>
-          <Play size={15} /> Launch JEI Live
+        <button class="live-launch" onclick={launchJeiLive} disabled={!$projectPath || loading || projectLaunching} title={projectLaunching ? "Launch in progress" : runtimeStatus.message}>
+          <Play size={15} /> {projectLaunching ? "Launching…" : "Launch JEI Live"}
         </button>
       {/if}
       <button class="ghost" onclick={() => openNewRecipeEditor("crafting")} disabled={!$projectPath || loading} title="New recipe or tag edit">
