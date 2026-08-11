@@ -2592,7 +2592,9 @@ export const api = {
 
   // ── File Operations ───────────────────────────────────────────────
   files: {
-    openFolder(p?: string) { return cmd<void>("open_project_folder", pathArg(p)); },
+    openFolder(p?: string, subdir?: string | null) {
+      return cmd<void>("open_project_folder", { ...pathArg(p), subdir: subdir ?? null });
+    },
     deleteProject(p?: string) { return cmd<void>("delete_project", pathArg(p)); },
     cloneProject(newName: string, p?: string) { return cmd<string>("clone_project", { ...pathArg(p), newName }); },
     createDesktopShortcut(p?: string) {

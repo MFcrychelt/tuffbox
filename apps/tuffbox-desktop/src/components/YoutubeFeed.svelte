@@ -39,9 +39,12 @@
 
   let videoPool = $state<FeedVideo[]>([]);
   let visibleCount = $state(FEED_PAGE_RAIL);
-  let loading = $state(true);
+  /** False until first expand (or storage says already expanded). */
+  let loading = $state(false);
   let loadError = $state("");
-  let expanded = $state(true);
+  /** Default collapsed; localStorage overrides when set. */
+  let expanded = $state(false);
+  let feedRequested = $state(false);
   let inlinePlayer = $state(true);
   let loadMoreEl = $state<HTMLElement | null>(null);
 
@@ -214,7 +217,8 @@
     } catch {
       // ignore storage errors
     }
-    loadFeed();
+    // Defer network until expanded (opt-in). Restore + load if already open.
+    if (expanded) void loadFeed();
   });
 
   $effect(() => {
@@ -223,6 +227,7 @@
   });
 
   async function loadFeed() {
+    feedRequested = true;
     loading = true;
     loadError = "";
     try {
@@ -308,6 +313,7 @@
     } catch {
       // ignore storage errors
     }
+    if (expanded && !feedRequested) void loadFeed();
   }
 
   async function openVideo(videoId: string) {
@@ -327,86 +333,90 @@
   }
 </script>
 
-{#if loading || videoPool.length > 0 || loadError !== "" || (!loading && videoPool.length === 0)}
-  <section
-    class="youtube-feed"
-    class:rail={variant === "rail"}
-    class:grid={variant === "grid"}
-    aria-busy={loading}
+<section
+  class="youtube-feed"
+  class:rail={variant === "rail"}
+  class:grid={variant === "grid"}
+  class:is-collapsed={!expanded}
+  aria-busy={loading && expanded}
+>
+  <button
+    type="button"
+    class="section-header"
+    onclick={toggleExpanded}
+    aria-expanded={expanded}
   >
-    <button type="button" class="section-header" onclick={toggleExpanded} disabled={loading}>
-      <Youtube size={18} />
-      <h2>Minecraft on YouTube</h2>
-      <span class="chevron" class:rotated={expanded} aria-hidden="true">
-        <ChevronDown size={18} />
-      </span>
-    </button>
-    {#if expanded}
-      {#if loading}
-        <div class="feed-row home-skel-stagger" aria-hidden="true" onwheel={onFeedWheel}>
-          {#each Array(skelCount) as _, i (i)}
-            <div class="video-card skel-card" style={`--i: ${i}`}>
-              <div class="thumb skeleton skeleton-block skeleton-card"></div>
-              <span class="skeleton skeleton-block skeleton-line medium"></span>
-              <span class="skeleton skeleton-block skeleton-line short"></span>
-            </div>
-          {/each}
-        </div>
-      {:else if loadError}
-        <div class="feed-status">
-          <p>Couldn’t load YouTube feed.</p>
-          <span class="feed-status-detail">{loadError}</span>
-          <button type="button" class="retry-btn" onclick={() => loadFeed()}>Retry</button>
-        </div>
-      {:else if videoPool.length === 0}
-        <div class="feed-status">
-          <p>No videos yet. The feed fills every few hours.</p>
-          <button type="button" class="retry-btn" onclick={() => loadFeed()}>Refresh</button>
-        </div>
-      {:else}
-        <div class="feed-row tb-anim-fade-in" onwheel={onFeedWheel}>
-          {#each visibleVideos as video (video.video_id)}
-            <div class="video-card-wrap">
+    <Youtube size={18} />
+    <h2>Minecraft on YouTube</h2>
+    <span class="chevron" class:rotated={expanded} aria-hidden="true">
+      <ChevronDown size={18} />
+    </span>
+  </button>
+  {#if expanded}
+    {#if loading}
+      <div class="feed-row home-skel-stagger" aria-hidden="true" onwheel={onFeedWheel}>
+        {#each Array(skelCount) as _, i (i)}
+          <div class="video-card skel-card" style={`--i: ${i}`}>
+            <div class="thumb skeleton skeleton-block skeleton-card"></div>
+            <span class="skeleton skeleton-block skeleton-line medium"></span>
+            <span class="skeleton skeleton-block skeleton-line short"></span>
+          </div>
+        {/each}
+      </div>
+    {:else if loadError}
+      <div class="feed-status">
+        <p>Couldn’t load YouTube feed.</p>
+        <span class="feed-status-detail">{loadError}</span>
+        <button type="button" class="retry-btn" onclick={() => loadFeed()}>Retry</button>
+      </div>
+    {:else if videoPool.length === 0}
+      <div class="feed-status">
+        <p>No videos yet. The feed fills every few hours.</p>
+        <button type="button" class="retry-btn" onclick={() => loadFeed()}>Refresh</button>
+      </div>
+    {:else}
+      <div class="feed-row tb-anim-fade-in" onwheel={onFeedWheel}>
+        {#each visibleVideos as video (video.video_id)}
+          <div class="video-card-wrap">
+            <button
+              type="button"
+              class="video-card"
+              onclick={(e) => onCardClick(video, e)}
+            >
+              <div class="thumb">
+                {#if video.thumbnail_url}
+                  <img src={video.thumbnail_url} alt="" loading="lazy" />
+                {/if}
+              </div>
+              <span class="title">{video.title}</span>
+              {#if video.channel_name}
+                <span class="channel">{video.channel_name}</span>
+              {/if}
+            </button>
+            {#if inlinePlayer}
               <button
                 type="button"
-                class="video-card"
-                onclick={(e) => onCardClick(video, e)}
+                class="pip-btn"
+                title="Play in mini window"
+                aria-label="Play in mini window"
+                onclick={(e) => onCardMini(video, e)}
               >
-                <div class="thumb">
-                  {#if video.thumbnail_url}
-                    <img src={video.thumbnail_url} alt="" loading="lazy" />
-                  {/if}
-                </div>
-                <span class="title">{video.title}</span>
-                {#if video.channel_name}
-                  <span class="channel">{video.channel_name}</span>
-                {/if}
+                <PictureInPicture2 size={14} />
               </button>
-              {#if inlinePlayer}
-                <button
-                  type="button"
-                  class="pip-btn"
-                  title="Play in mini window"
-                  aria-label="Play in mini window"
-                  onclick={(e) => onCardMini(video, e)}
-                >
-                  <PictureInPicture2 size={14} />
-                </button>
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {#if canLoadMore}
-          <div class="load-more-wrap" bind:this={loadMoreEl}>
-            <button type="button" class="load-more-btn" onclick={loadMoreFromPool}>
-              Load more ({videoPool.length - visibleCount} left)
-            </button>
+            {/if}
           </div>
-        {/if}
+        {/each}
+      </div>
+      {#if canLoadMore}
+        <div class="load-more-wrap" bind:this={loadMoreEl}>
+          <button type="button" class="load-more-btn" onclick={loadMoreFromPool}>
+            Load more ({videoPool.length - visibleCount} left)
+          </button>
+        </div>
       {/if}
     {/if}
-  </section>
-{/if}
+  {/if}
+</section>
 
 <style>
   .youtube-feed {
@@ -425,6 +435,10 @@
     cursor: pointer;
     color: var(--text-primary);
     text-align: left;
+  }
+
+  .youtube-feed.is-collapsed .section-header {
+    margin-bottom: 0;
   }
 
   .section-header :global(svg) {
@@ -641,11 +655,6 @@
 
   .skel-card .thumb {
     border-color: transparent;
-  }
-
-  .section-header:disabled {
-    cursor: default;
-    opacity: 0.85;
   }
 
   .video-card:hover {

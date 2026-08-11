@@ -1,28 +1,43 @@
 <script lang="ts">
-  import { X, Folder, Loader2, Download, Search, Package, ImagePlus } from "@lucide/svelte";
+  import { X, Folder, Loader2, Download, ImagePlus } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import { open } from "@tauri-apps/plugin-dialog";
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { open as openExternal } from "@tauri-apps/plugin-shell";
   import { projectPath, libraryTabRequest } from "../lib/store";
   import { trapFocus } from "../lib/focusTrap";
   import LoadingButton from "./LoadingButton.svelte";
-  import CatalogProjectView from "./CatalogProjectView.svelte";
 
   let {
     onclose,
     oncreated,
+    initialMode = "blank",
   }: {
     onclose?: () => void;
     oncreated?: (path: string) => void;
+    /** Mode to open on — remounted each time the modal is shown. `"catalog"` redirects to Library Discover. */
+    initialMode?: "blank" | "import" | "catalog";
   } = $props();
 
-  // Each "input type" on the home screen is an isolated, self-validating
-  // page (PrismLauncher-style: page-per-type) instead of one shared
-  // form whose fields leak across modes.
-  type CreateMode = "blank" | "import" | "catalog";
+  // Blank and import only — catalog browsing lives in Library Discover.
+  type CreateMode = "blank" | "import";
   let mode: CreateMode = $state("blank");
+  const redirectedToDiscover = $derived(initialMode === "catalog");
+
+  function goToDiscover() {
+    libraryTabRequest.set("discover");
+    onclose?.();
+    window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
+  }
+
+  // Apply before first paint; modal remounts on each open so this is once per show.
+  $effect.pre(() => {
+    if (initialMode === "catalog") {
+      goToDiscover();
+      return;
+    }
+    mode = initialMode === "import" ? "import" : "blank";
+  });
 
   // --- Blank instance (explicit, typed inputs) ---
   let name = $state("New Instance");
@@ -54,31 +69,6 @@
   // --- Import pack (.mrpack / zip) ---
   let importName = $state("New Instance");
   let importPath = $state("");
-
-  // --- Catalog browse (Modrinth / CurseForge) ---
-  let catalogProvider = $state<"modrinth" | "curseforge">("modrinth");
-  let cfName = $state("New Instance");
-  let cfQuery = $state("");
-  let cfHits = $state<any[]>([]);
-  let cfLoading = $state(false);
-  let cfSelected = $state<any>(null);
-  let cfFiles = $state<any[]>([]);
-  let cfFilesLoading = $state(false);
-  let cfFileId = $state<number | null>(null);
-  let catalogViewResult = $state<{
-    id: string;
-    slug: string;
-    name: string;
-    description: string;
-    projectType: string;
-    iconUrl?: string | null;
-    author?: string | null;
-    downloads?: number | null;
-    follows?: number | null;
-    categories?: string[];
-    provider?: string;
-  } | null>(null);
-  let catalogInstalling = $state(false);
 
   // --- Shared ---
   let location = $state("");
@@ -112,6 +102,7 @@
   }
 
   onMount(async () => {
+    if (redirectedToDiscover) return;
     loadingMc = true;
     try {
       try {
@@ -148,7 +139,7 @@
 
   function guessLocation(): string {
     const home = (defaultHome ?? "").replace(/[\\/]+$/, "");
-    if (mode === "import" || mode === "catalog") {
+    if (mode === "import") {
       // Pack install uses this as the parent folder; instance subfolder is created inside.
       return home;
     }
@@ -223,12 +214,6 @@
     }
   }
 
-  function goToDiscover() {
-    libraryTabRequest.set("discover");
-    onclose?.();
-    window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
-  }
-
   function setMemoryPresetGb(gb: number) {
     memoryMode = "manual";
     memoryMb = Math.min(MEMORY_MAX_MB, Math.max(MEMORY_MIN_MB, gb * 1024));
@@ -289,18 +274,12 @@
   // Name for the current mode drives the default location slug.
   function activeName(): string {
     if (mode === "import") return importName || name;
-    if (mode === "catalog") return cfName || name;
     return name;
   }
 
   // Page-per-type validation: each mode validates only its own inputs.
   const blankValid = $derived(!!minecraftVersion && (loader === "vanilla" || !!loaderVersion));
   const importValid = $derived(!!importPath);
-  const cfValid = $derived(
-    catalogProvider === "curseforge"
-      ? !!cfSelected && cfFileId !== null
-      : !!cfSelected,
-  );
 
   async function create() {
     if (!blankValid) {
@@ -350,74 +329,6 @@
     void loadLoaderVersions();
   }
 
-  function openPackInCatalog(hit: any) {
-    const id = String(hit.id ?? "");
-    const slug = String(hit.slug || hit.id || "");
-    if (!id && !slug) return;
-    cfSelected = hit;
-    cfName = hit.name || cfName;
-    catalogViewResult = {
-      id,
-      slug,
-      name: hit.name || slug,
-      description: hit.summary || hit.description || "",
-      projectType: "modpack",
-      iconUrl: hit.iconUrl ?? null,
-      author: hit.authors?.[0] ?? hit.author ?? null,
-      downloads: hit.downloadCount ?? hit.downloads ?? null,
-      follows: hit.follows ?? null,
-      categories: hit.categories ?? [],
-      provider: catalogProvider,
-    };
-    if (catalogProvider === "curseforge") {
-      void selectCfPack(hit);
-    } else {
-      cfFiles = [];
-      cfFileId = null;
-      cfFilesLoading = false;
-    }
-  }
-
-  async function openCatalogExternal() {
-    if (!catalogViewResult) return;
-    const slugOrId = (catalogViewResult.slug || catalogViewResult.id || "").trim();
-    if (!slugOrId) return;
-    const url =
-      catalogViewResult.provider === "curseforge"
-        ? /^\d+$/.test(slugOrId)
-          ? `https://www.curseforge.com/projects/${slugOrId}`
-          : `https://www.curseforge.com/minecraft/modpacks/${slugOrId}`
-        : `https://modrinth.com/modpack/${slugOrId}`;
-    try {
-      await openExternal(url);
-    } catch (e) {
-      error = `Could not open link: ${e}`;
-    }
-  }
-
-  async function installFromCatalogView() {
-    if (!catalogViewResult) return;
-    catalogInstalling = true;
-    try {
-      if (catalogViewResult.provider === "curseforge") {
-        if (!cfSelected || cfFileId == null) {
-          await selectCfPack({
-            id: Number(catalogViewResult.id) || catalogViewResult.id,
-            slug: catalogViewResult.slug,
-            name: catalogViewResult.name,
-          });
-        }
-        catalogViewResult = null;
-        await installFromCurseForge();
-      } else {
-        catalogViewResult = null;
-        await installFromModrinth(cfSelected);
-      }
-    } finally {
-      catalogInstalling = false;
-    }
-  }
-
   async function installFromFile() {
     if (!importValid) {
       error = "Pick a modpack file first.";
@@ -447,146 +358,6 @@
     }
   }
 
-  async function searchCatalog() {
-    cfLoading = true;
-    error = "";
-    installMessage = "";
-    cfSelected = null;
-    cfFiles = [];
-    cfFileId = null;
-    try {
-      if (catalogProvider === "curseforge") {
-        cfHits = await invoke("search_curseforge_modpacks", {
-          query: cfQuery,
-          gameVersion: null,
-          offset: 0,
-        });
-      } else {
-        const page = await invoke<{ results: any[]; total: number }>("search_modrinth_mods", {
-          path: "",
-          query: cfQuery.trim(),
-          gameVersion: null,
-          loader: null,
-          category: null,
-          environment: null,
-          license: null,
-          sort: "downloads",
-          contentType: "modpack",
-          page: 1,
-          pageSize: 30,
-        });
-        cfHits = (page.results ?? []).map((r) => ({
-          ...r,
-          summary: r.description,
-          downloadCount: r.downloads,
-          authors: r.author ? [r.author] : [],
-        }));
-      }
-      if (cfHits.length === 0) {
-        installMessage = "No modpacks found.";
-      }
-    } catch (e) {
-      error = `${e}`;
-      cfHits = [];
-    } finally {
-      cfLoading = false;
-    }
-  }
-
-  async function selectCfPack(hit: any) {
-    cfSelected = hit;
-    cfName = hit.name || cfName;
-    cfFilesLoading = true;
-    cfFiles = [];
-    cfFileId = null;
-    try {
-      cfFiles = await invoke("get_curseforge_modpack_files", {
-        modId: hit.id,
-        gameVersion: null,
-      });
-      cfFileId = cfFiles[0]?.id ?? null;
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      cfFilesLoading = false;
-    }
-  }
-
-  function onCfFileChange(e: Event) {
-    const v = (e.currentTarget as HTMLSelectElement).value;
-    cfFileId = v ? Number(v) : null;
-  }
-
-  async function installFromModrinth(hit: any) {
-    if (!hit?.id && !hit?.slug) {
-      error = "Select a Modrinth modpack first.";
-      return;
-    }
-    loading = true;
-    error = "";
-    installMessage = "Downloading Modrinth modpack…";
-    try {
-      const targetDir = location.replace(/[\\/]+$/, "") || defaultHome;
-      const projectId = String(hit.id || hit.slug);
-      const source = await invoke<string>("get_modrinth_pack_download", { projectId });
-      const result: any = await invoke("install_modpack", {
-        source,
-        targetDir,
-        instanceName: cfName || hit.name,
-      });
-      const failed = result?.download?.failed?.length ?? 0;
-      if (failed > 0) {
-        error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
-      }
-      oncreated?.(result.path as string);
-      onclose?.();
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      loading = false;
-      installMessage = "";
-      packPhase = "";
-    }
-  }
-
-  async function installFromCurseForge() {
-    if (!cfValid) {
-      error = "Select a modpack file version.";
-      return;
-    }
-    loading = true;
-    error = "";
-    installMessage = "Downloading CurseForge modpack…";
-    try {
-      const targetDir = location.replace(/[\\/]+$/, "") || defaultHome;
-      const result: any = await invoke("install_modpack", {
-        source: `cf:${cfSelected.id}:${cfFileId}`,
-        targetDir,
-        instanceName: cfName,
-      });
-      const failed = result?.download?.failed?.length ?? 0;
-      if (failed > 0) {
-        error = `Installed with ${failed} download failure(s) — open Content and Retry.`;
-      }
-      oncreated?.(result.path as string);
-      onclose?.();
-    } catch (e) {
-      error = `${e}`;
-    } finally {
-      loading = false;
-      installMessage = "";
-      packPhase = "";
-    }
-  }
-
-  async function installFromCatalogFooter() {
-    if (catalogProvider === "modrinth") {
-      await installFromModrinth(cfSelected);
-    } else {
-      await installFromCurseForge();
-    }
-  }
-
   $effect(() => {
     if (mode !== "blank") return;
     const mc = minecraftVersion;
@@ -597,8 +368,9 @@
   });
 </script>
 
+{#if !redirectedToDiscover}
 <div class="modal-backdrop" onclick={(e) => e.target === e.currentTarget && onclose?.()} role="button" tabindex="-1" aria-label="Close" onkeydown={(e) => e.key === 'Enter' && onclose?.()}>
-  <div class="modal" class:wide={mode !== "blank"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => onclose?.() }}>
+  <div class="modal" class:wide={mode === "import"} role="dialog" aria-modal="true" aria-labelledby="add-instance-title" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <div class="modal-hero">
       <div class="hero-copy">
         <h2 id="add-instance-title">Create modpack</h2>
@@ -778,8 +550,8 @@
           <label for="inst-jvm">Launch arguments</label>
           <input id="inst-jvm" bind:value={jvmArgs} placeholder="Extra Java arguments" />
         </div>
-      {:else if mode === "import"}
-         <!-- Page 2: import — name derived from file, isolated -->
+      {:else}
+         <!-- Import — name derived from file, isolated -->
          <p class="muted">Import a Modrinth <code>.mrpack</code>, CurseForge zip, or Prism instance zip — mods download automatically (Prism-style).</p>
          <div class="field">
            <label for="inst-pack-file">Pack file</label>
@@ -791,98 +563,6 @@
          <div class="field">
            <label for="inst-name-imp">Instance name</label>
            <input id="inst-name-imp" bind:value={importName} oninput={() => (location = guessLocation())} />
-         </div>
-       {:else}
-         <!-- Page 3: Modrinth / CurseForge browse — opens CatalogProjectView -->
-         <p class="muted">Search Modrinth or CurseForge modpacks. Click a result for the in-app project page.</p>
-         <div class="loader-chips" role="radiogroup" aria-label="Catalog provider">
-           <button
-             type="button"
-             class="loader-chip"
-             class:active={catalogProvider === "modrinth"}
-             role="radio"
-             aria-checked={catalogProvider === "modrinth"}
-             onclick={() => {
-               catalogProvider = "modrinth";
-               cfHits = [];
-               cfSelected = null;
-               cfFiles = [];
-               cfFileId = null;
-             }}
-           >Modrinth</button>
-           <button
-             type="button"
-             class="loader-chip"
-             class:active={catalogProvider === "curseforge"}
-             role="radio"
-             aria-checked={catalogProvider === "curseforge"}
-             onclick={() => {
-               catalogProvider = "curseforge";
-               cfHits = [];
-               cfSelected = null;
-               cfFiles = [];
-               cfFileId = null;
-             }}
-           >CurseForge</button>
-         </div>
-         <div class="search-row">
-           <div class="search">
-             <Search size={16} />
-             <input
-               aria-label="Search modpacks"
-               bind:value={cfQuery}
-               placeholder="Search modpacks…"
-               onkeydown={(e) => e.key === "Enter" && searchCatalog()}
-             />
-           </div>
-           <button class="secondary" onclick={searchCatalog} disabled={cfLoading}>
-             {#if cfLoading}<Loader2 size={16} class="spin" />{:else}<Search size={16} />{/if}
-             Search
-           </button>
-         </div>
-         <div class="cf-layout">
-           <div class="cf-list">
-             {#each cfHits as hit (hit.id)}
-               <button class="cf-row" class:active={cfSelected?.id === hit.id} onclick={() => openPackInCatalog(hit)}>
-                 {#if hit.iconUrl}
-                   <img src={hit.iconUrl} alt="" />
-                 {:else}
-                   <span class="cf-icon"><Package size={18} /></span>
-                 {/if}
-                 <div>
-                   <strong>{hit.name}</strong>
-                   <span>{(hit.summary || hit.description || "").slice(0, 100)}</span>
-                 </div>
-               </button>
-             {:else}
-               <div class="muted compact">{cfLoading ? "Searching…" : "Search for a modpack to begin."}</div>
-             {/each}
-           </div>
-           <div class="cf-detail">
-             {#if cfSelected}
-               <h3>{cfSelected.name}</h3>
-               {#if catalogProvider === "curseforge"}
-                 {#if cfFilesLoading}
-                   <div class="field-loader"><Loader2 size={16} class="spin" /> Loading versions…</div>
-                 {:else}
-                   <label for="cf-file">Pack version</label>
-                   <select id="cf-file" value={cfFileId ?? ""} onchange={onCfFileChange}>
-                     {#each cfFiles as f (f.id)}
-                       <option value={f.id}>{f.displayName} · {(f.gameVersions || []).slice(0, 3).join(", ")}</option>
-                     {/each}
-                   </select>
-                 {/if}
-               {:else}
-                 <p class="muted compact">Open the project page for details, or install the latest pack below.</p>
-               {/if}
-               <div class="field" style="margin-top:12px">
-                 <label for="inst-name-cf">Instance name</label>
-                 <input id="inst-name-cf" bind:value={cfName} oninput={() => (location = guessLocation())} />
-               </div>
-             {:else}
-               <div class="muted compact">Select a pack (opens the in-app catalog page).</div>
-             {/if}
-           </div>
          </div>
        {/if}
 
@@ -904,44 +584,14 @@
           <LoadingButton {loading} disabled={!blankValid} onclick={create}>
             Create
           </LoadingButton>
-        {:else if mode === "import"}
-          <LoadingButton {loading} disabled={!importValid} onclick={installFromFile}>
-            <Download size={16} /> Install pack
-          </LoadingButton>
         {:else}
-          <LoadingButton {loading} disabled={!cfValid} onclick={installFromCatalogFooter}>
+          <LoadingButton {loading} disabled={!importValid} onclick={installFromFile}>
             <Download size={16} /> Install pack
           </LoadingButton>
         {/if}
       </div>
   </div>
 </div>
-
-{#if catalogViewResult}
-  <div
-    class="modal-backdrop catalog-backdrop"
-    role="button"
-    tabindex="-1"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) catalogViewResult = null;
-    }}
-    onkeydown={() => {}}
-  >
-    <div
-      class="modal catalog-modal"
-      role="dialog"
-      aria-modal="true"
-      use:trapFocus={{ onEscape: () => (catalogViewResult = null) }}
-    >
-      <CatalogProjectView
-        result={catalogViewResult}
-        installing={catalogInstalling || loading}
-        onback={() => (catalogViewResult = null)}
-        oninstall={() => void installFromCatalogView()}
-        onopenexternal={() => void openCatalogExternal()}
-      />
-    </div>
-  </div>
 {/if}
 
 <style>
@@ -960,7 +610,7 @@
     border-radius: 18px;
     display: flex; flex-direction: column;
   }
-  .modal.wide { width: min(880px, 100%); }
+  .modal.wide { width: min(640px, 100%); }
   .modal-hero {
     position: relative;
     padding: 22px 20px 16px;
@@ -1008,8 +658,7 @@
   .field.grow { flex: 1; min-width: 0; }
   .field label, .field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; }
   .field input:not([type="radio"]):not([type="range"]):not([type="checkbox"]),
-  .field select,
-  .cf-detail select {
+  .field select {
     box-sizing: border-box; width: 100%; height: 42px; padding: 0 12px; border-radius: 10px;
     border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
     font-size: 14px; line-height: 1;
@@ -1078,15 +727,6 @@
     font-size: 11px;
     cursor: pointer;
     text-decoration: underline;
-  }
-  .catalog-backdrop {
-    z-index: 90;
-  }
-  .catalog-modal {
-    width: min(920px, 96vw);
-    max-height: min(90vh, 900px);
-    overflow: auto;
-    padding: 0;
   }
   .loader-chips {
     display: flex;
@@ -1190,7 +830,6 @@
   }
   .muted { color: var(--text-muted); font-size: 13px; }
   .path-hint { font-size: 11px; color: var(--text-muted); }
-  .muted.compact { padding: 16px; text-align: center; }
   .field-loader { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 13px; }
   .template-btn { align-self: flex-start; }
   .template-list { display: grid; gap: 6px; }
@@ -1199,40 +838,12 @@
     border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); color: var(--text-primary);
   }
   .template-row span { color: var(--text-muted); font-size: 12px; }
-  .search-row { display: flex; gap: 8px; }
-  .search {
-    flex: 1; display: flex; align-items: center; gap: 8px;
-    padding: 0 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary);
-  }
-  .search input { border: 0; background: transparent; color: var(--text-primary); width: 100%; padding: 10px 0; }
-  .cf-layout {
-    display: grid; grid-template-columns: 1.2fr 0.9fr; gap: 12px;
-    min-height: 300px; max-height: 380px;
-  }
-  .cf-list { overflow: auto; display: grid; gap: 6px; align-content: start; }
-  .cf-row {
-    display: grid; grid-template-columns: 40px 1fr; gap: 10px; text-align: left;
-    padding: 10px; border-radius: var(--border-radius-md); border: 1px solid var(--border-color);
-    background: var(--bg-tertiary); color: var(--text-secondary);
-  }
-  .cf-row.active, .cf-row:hover { border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent); background: color-mix(in srgb, var(--accent-primary) 6%, transparent); }
-  .cf-row img, .cf-icon {
-    width: 40px; height: 40px; border-radius: 10px; object-fit: cover;
-    background: var(--bg-elevated); display: flex; align-items: center; justify-content: center;
-  }
-  .cf-row strong { display: block; color: var(--text-primary); font-size: 13px; }
-  .cf-row span { font-size: 11px; color: var(--text-muted); }
-  .cf-detail {
-    border: 1px solid var(--border-color); border-radius: 14px; padding: 12px;
-    background: var(--bg-tertiary); overflow: auto;
-  }
-  .cf-detail h3 { margin: 0 0 12px; font-size: 16px; }
   .icon-btn {
     background: transparent; border: 0; color: var(--text-muted); cursor: pointer;
   }
   :global(.spin) { animation: spin 900ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (max-width: 720px) {
-    .cf-layout, .field-row { grid-template-columns: 1fr; }
+    .field-row { grid-template-columns: 1fr; }
   }
 </style>

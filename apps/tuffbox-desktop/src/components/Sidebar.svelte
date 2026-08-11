@@ -1,8 +1,8 @@
 <script lang="ts">
   import { SvelteSet } from "svelte/reactivity";
-  import { Home, Workflow, Plus, Settings, User, Play, Terminal } from "@lucide/svelte";
+  import { Home, Library, Workflow, Plus, Settings, User, Play, Square, Terminal } from "@lucide/svelte";
   import {
-    newProjectOpen,
+    openAddInstance,
     projectPath,
     projectInfo,
     recentProjects,
@@ -12,18 +12,29 @@
     ideSuggestedStage,
     openLaunchLog,
     isLaunching,
+    launchProgress,
     brandIcon,
     BRAND_ICON_CREEPER_SRC_SM,
   } from "../lib/store";
   import { api } from "../lib/api";
   import { homeIcons } from "../lib/homeBootstrap";
-  import { launchWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
 
   import type { View } from "../lib/types";
   let { currentView = $bindable() }: { currentView: View } = $props();
 
   /** Real pack icon (data URL from the instance listing) keyed by project path. */
   const instanceIcons = $derived($homeIcons);
+  const selectedRunning = $derived(isProjectRunning($projectPath, $runningInstances));
+  const playTitle = $derived.by(() => {
+    if ($isLaunching) {
+      const msg = $launchProgress?.message ?? "Launching…";
+      const pct = $launchProgress?.percent;
+      return pct != null ? `${msg} (${pct}%)` : msg;
+    }
+    if (selectedRunning) return "Stop";
+    return "Play";
+  });
   const iconRequested = new SvelteSet<string>();
 
   async function loadInstanceIcon(path: string) {
@@ -112,12 +123,17 @@
     // Dashboard owns the modal, so make sure we're on that view before
     // raising the flag — otherwise the modal component wouldn't be mounted.
     currentView = "dashboard";
-    newProjectOpen.set(true);
+    openAddInstance("blank");
   }
 
   async function playClient() {
     if (!$projectPath || $isLaunching) return;
     await launchWithFeedback({ path: $projectPath, profile: "client" });
+  }
+
+  async function stopClient() {
+    if (!$projectPath || $isLaunching) return;
+    await killWithFeedback($projectPath);
   }
 
   function openLogs() {
@@ -174,6 +190,18 @@
         onclick={openHome}
       >
         <Home size={21} />
+      </button>
+    </div>
+    <div class="rail-item">
+      <button
+        type="button"
+        class="rail-btn ghost"
+        class:active={currentView === "library"}
+        title="Library"
+        aria-label="Library"
+        onclick={() => (currentView = "library")}
+      >
+        <Library size={21} />
       </button>
     </div>
     <div class="rail-item">
@@ -237,12 +265,21 @@
       <button
         type="button"
         class="rail-btn ghost"
-        title="Play"
-        aria-label="Play"
+        class:launching={$isLaunching}
+        class:stop={selectedRunning && !$isLaunching}
+        title={playTitle}
+        aria-label={playTitle}
+        aria-busy={$isLaunching}
         disabled={!$projectPath || $isLaunching}
-        onclick={playClient}
+        onclick={selectedRunning && !$isLaunching ? stopClient : playClient}
       >
-        <Play size={21} />
+        {#if $isLaunching}
+          <span class="rail-spinner" aria-hidden="true"></span>
+        {:else if selectedRunning}
+          <Square size={18} fill="currentColor" />
+        {:else}
+          <Play size={21} />
+        {/if}
       </button>
     </div>
     <div class="rail-item">
@@ -467,6 +504,42 @@
     background: transparent;
     color: var(--text-muted);
     border-radius: var(--rail-btn-radius, 50%);
+  }
+
+  /* Play → launching / stop: share Home's phase store, keep rail compact. */
+  .rail .rail-btn.ghost.launching,
+  .rail .rail-btn.ghost.launching:disabled,
+  .rail .rail-btn.ghost.launching:disabled:hover {
+    opacity: 1;
+    cursor: wait;
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  }
+
+  .rail .rail-btn.ghost.stop {
+    color: var(--accent-danger, #ef4444);
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 14%, transparent);
+  }
+
+  .rail .rail-btn.ghost.stop:hover {
+    background: color-mix(in srgb, var(--accent-danger, #ef4444) 22%, transparent);
+    color: var(--accent-danger, #ef4444);
+  }
+
+  .rail-spinner {
+    width: 18px;
+    height: 18px;
+    box-sizing: border-box;
+    border: 2px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    border-top-color: var(--accent-primary);
+    border-radius: 50%;
+    animation: rail-spin 0.7s linear infinite;
+  }
+
+  @keyframes rail-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Add instance: quiet amber plus. */

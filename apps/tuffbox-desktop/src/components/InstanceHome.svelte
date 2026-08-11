@@ -12,10 +12,12 @@
     FolderOpen,
     ExternalLink,
     Play,
+    Search,
     ChevronDown,
     ChevronUp,
   } from "@lucide/svelte";
   import { api, type WorldListItem } from "../lib/api";
+  import { libraryTabRequest } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { launchWithFeedback } from "../lib/launch";
 
@@ -190,16 +192,26 @@
   }
 
   async function openFolder() {
-    const folder = tab === "shaderpacks" ? "shaderpacks" : tab === "resourcepacks" ? "resourcepacks" : tab === "worlds" ? "saves" : null;
-    if (!folder) {
-      await api.files.openFolder(projectPath);
-      return;
-    }
+    const folder =
+      tab === "shaderpacks"
+        ? "shaderpacks"
+        : tab === "resourcepacks"
+          ? "resourcepacks"
+          : tab === "worlds"
+            ? "saves"
+            : tab === "mods"
+              ? "mods"
+              : null;
     try {
-      await api.files.openFolder(projectPath);
+      await api.files.openFolder(projectPath, folder);
     } catch (e) {
       toasts.error(String(e));
     }
+  }
+
+  function openCatalog() {
+    libraryTabRequest.set("discover");
+    window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
   }
 
   async function addServer() {
@@ -292,7 +304,21 @@
     <button class="icon-btn" onclick={() => load({ force: true })} title="Refresh" disabled={loading}>
       <RefreshCw size={14} class={loading ? "spin" : ""} />
     </button>
-    <button class="icon-btn" onclick={openFolder} title="Open instance folder">
+    <button
+      class="icon-btn"
+      onclick={openFolder}
+      title={
+        tab === "shaderpacks"
+          ? "Open shaderpacks folder"
+          : tab === "resourcepacks"
+            ? "Open resourcepacks folder"
+            : tab === "worlds"
+              ? "Open saves folder"
+              : tab === "mods"
+                ? "Open mods folder"
+                : "Open instance folder"
+      }
+    >
       <FolderOpen size={14} />
     </button>
     <button
@@ -317,7 +343,7 @@
         <div class="list home-skel-stagger" aria-busy="true" aria-hidden="true">
           {#each Array(4) as _, i (i)}
             <div class="row skel-row" style={`--i: ${i}`}>
-              <div class="row-main" style="gap: 8px; width: 100%;">
+              <div class="row-main skel">
                 <span class="skeleton skeleton-block skeleton-line medium" style="height: 12px;"></span>
                 <span class="skeleton skeleton-block skeleton-line short" style="height: 10px;"></span>
               </div>
@@ -326,24 +352,48 @@
           {/each}
         </div>
       {:else if tab === "mods"}
-        <div class="mods-cta">
-          <div>
-            {#if loading && modCount == null}
-              <strong class="skeleton skeleton-block" style="display:inline-block; width: 28px; height: 18px; vertical-align: middle;"></strong>
-            {:else}
-              <strong>{modCount == null ? "—" : modCount}</strong>
-            {/if}
-            <span>mods in this instance</span>
+        {#if !loading && modCount === 0}
+          <div class="mods-cta empty-mods">
+            <div>
+              <strong class="empty-title">No mods yet</strong>
+              <span>Install from the catalog or open the Mods view.</span>
+            </div>
+            <div class="empty-actions">
+              <button class="accent" onclick={onOpenMods}>
+                <ExternalLink size={14} /> Open Mods
+              </button>
+              <button class="ghost" onclick={openCatalog}>
+                <Search size={14} /> Browse catalog
+              </button>
+            </div>
           </div>
-          <button class="accent" onclick={onOpenMods}>
-            <ExternalLink size={14} /> Open Mods
-          </button>
-        </div>
+        {:else}
+          <div class="mods-cta">
+            <div>
+              {#if loading && modCount == null}
+                <strong class="skeleton skeleton-block" style="display:inline-block; width: 28px; height: 18px; vertical-align: middle;"></strong>
+              {:else}
+                <strong>{modCount == null ? "—" : modCount}</strong>
+              {/if}
+              <span>mods in this instance</span>
+            </div>
+            <button class="accent" onclick={onOpenMods}>
+              <ExternalLink size={14} /> Open Mods
+            </button>
+          </div>
+        {/if}
       {:else if tab === "resourcepacks" || tab === "shaderpacks"}
         {#if packs.length === 0}
           <div class="empty">
             <p>No {tab === "shaderpacks" ? "shader packs" : "resource packs"} yet.</p>
-            <p class="hint">Drop `.zip` files into the folder or install from Mods → content type filter.</p>
+            <div class="empty-actions">
+              <button class="ghost" onclick={openFolder}>
+                <FolderOpen size={14} /> Open folder
+              </button>
+              <button class="accent" onclick={openCatalog}>
+                <Search size={14} /> Browse catalog
+              </button>
+            </div>
           </div>
         {:else}
           <div class="list">
@@ -369,7 +419,18 @@
         {/if}
       {:else if tab === "worlds"}
         {#if worlds.length === 0}
-          <div class="empty"><p>No worlds in `saves/`.</p></div>
+          <div class="empty">
+            <p>No worlds yet.</p>
+            <p class="hint">Create one in-game, or open the saves folder.</p>
+            <div class="empty-actions">
+              <button class="ghost" onclick={openFolder}>
+                <FolderOpen size={14} /> Open saves
+              </button>
+              <button class="accent" onclick={onOpenWorld}>
+                <Globe size={14} /> World tools
+              </button>
+            </div>
+          </div>
         {:else}
           <div class="list">
             {#each worlds as world (world.name)}
@@ -399,7 +460,12 @@
           </button>
         </form>
         {#if servers.length === 0}
-          <div class="empty"><p>No servers in `servers.dat`.</p></div>
+          <div class="empty">
+            <p>Add a server above, or join from the game.</p>
+            <button class="ghost quiet-link" onclick={openFolder}>
+              <FolderOpen size={14} /> Open instance folder
+            </button>
+          </div>
         {:else}
           <div class="list">
             {#each servers as srv (srv.address)}
@@ -452,7 +518,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 8px 10px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border-color);
     flex-wrap: wrap;
   }
@@ -460,7 +526,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 10px;
+    padding: 5px 9px;
     border-radius: var(--border-radius-sm);
     border: 1px solid transparent;
     background: transparent;
@@ -477,7 +543,7 @@
   .tabs button:hover:not(.active) { color: var(--text-primary); background: var(--bg-hover); }
   .tabs-spacer { flex: 1; }
   .icon-btn {
-    width: 30px; height: 30px; padding: 0;
+    width: 28px; height: 28px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: var(--border-radius-sm); border: 1px solid var(--border-color);
     background: var(--bg-primary); color: var(--text-muted); cursor: pointer;
@@ -485,7 +551,7 @@
   .icon-btn:hover { color: var(--text-primary); }
 
   .collapsed-summary {
-    padding: 6px 14px 10px;
+    padding: 4px 12px 8px;
     font-size: 12px;
     font-weight: 600;
     color: var(--text-muted);
@@ -495,10 +561,10 @@
   }
 
   .panel {
-    padding: 8px;
-    min-height: 120px;
-    height: 160px;
-    max-height: 160px;
+    padding: 6px;
+    min-height: 132px;
+    height: auto;
+    max-height: 200px;
     overflow: auto;
     box-sizing: border-box;
   }
@@ -509,9 +575,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 10px;
     min-height: 100%;
-    padding: 12px;
+    padding: 10px;
     border-radius: var(--border-radius-md);
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -520,21 +586,41 @@
   .empty {
     color: var(--text-muted);
     font-size: 13px;
-    padding: 12px 8px;
+    padding: 8px 6px;
     text-align: center;
     min-height: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 6px;
     box-sizing: border-box;
   }
-  .empty .hint { font-size: 12px; margin-top: 6px; }
+  .empty p { margin: 0; }
+  .empty .hint { font-size: 12px; margin-top: 0; }
+  .empty-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .quiet-link {
+    margin-top: 4px;
+    opacity: 0.85;
+  }
+  .mods-cta.empty-mods {
+    flex-wrap: wrap;
+  }
+  .mods-cta .empty-actions {
+    margin-top: 0;
+  }
 
-  .list { display: flex; flex-direction: column; gap: 6px; }
+  .list { display: flex; flex-direction: column; gap: 4px; }
   .row {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 10px; border-radius: 10px;
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; border-radius: var(--border-radius-sm);
     background: var(--bg-primary); border: 1px solid var(--border-color);
   }
   .row.disabled { opacity: 0.55; }
@@ -543,6 +629,7 @@
     background: color-mix(in srgb, var(--bg-primary) 70%, transparent);
   }
   .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .row-main.skel { width: 100%; }
   .row-main strong { font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-main span { font-size: 11px; color: var(--text-muted); }
 
@@ -559,6 +646,10 @@
 
   .mods-cta strong { display: block; font-size: 28px; color: var(--accent-primary); }
   .mods-cta span { color: var(--text-muted); font-size: 12px; }
+  .mods-cta strong.empty-title {
+    font-size: 16px;
+    color: var(--text-primary);
+  }
 
   .add-server {
     display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 8px; margin-bottom: 10px;

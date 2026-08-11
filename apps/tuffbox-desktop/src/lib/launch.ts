@@ -3,13 +3,18 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
 import { toasts } from "./toast";
 import type { LaunchResult, LaunchErrorInfo, RunningInstance } from "./api";
+import { api } from "./api";
 import {
   isLaunching,
+  launchProgress,
   openLaunchLog,
   projectPath,
   runningInstances,
   upsertRunning,
   removeRunning,
+  authState,
+  loginModalOpen,
+  openLauncherSettings,
 } from "./store";
 import { shareCrashLogWithFeedback } from "./mclogs";
 import { get } from "svelte/store";
@@ -60,6 +65,57 @@ function isRetryable(info: LaunchErrorInfo): boolean {
 // that started but then exited non-zero after the launch command returned.
 let lastLaunch: LaunchParams | null = null;
 let lastOnStarted: ((r: LaunchResult) => void) | null = null;
+type LaunchFeedbackOpts = {
+  onStarted?: (r: LaunchResult) => void;
+  showSuccess?: boolean;
+  openLog?: boolean;
+  logPath?: string | null;
+  logTitle?: string | null;
+  skipAuthGate?: boolean;
+};
+let lastOpts: LaunchFeedbackOpts | null = null;
+
+type LaunchProgressPayload = {
+  phase?: string;
+  message?: string;
+  percent?: number | null;
+};
+
+async function pollDownloadOverlay() {
+  try {
+    const items = await api.system.getDownloadProgress();
+    if (!Array.isArray(items) || items.length === 0) return;
+    let downloaded = 0;
+    let total = 0;
+    for (const raw of items) {
+      const it = raw as { downloaded?: number; total?: number; percent?: number };
+      downloaded += Number(it.downloaded) || 0;
+      total += Number(it.total) || 0;
+    }
+    const percent =
+      total > 0 ? Math.min(99, Math.round((downloaded / total) * 100)) : null;
+    const current = get(launchProgress);
+    const baseMsg = current?.message?.replace(/\s·\s\d+%.*/, "") || "Downloading…";
+    launchProgress.set({
+      phase: current?.phase || "mods",
+      message: percent != null ? `${baseMsg} · ${percent}%` : baseMsg,
+      percent: percent ?? current?.percent ?? null,
+    });
+  } catch {
+    /* optional overlay */
+  }
+}
+
+function openInAppLaunchLog(info?: LaunchErrorInfo | null) {
+  const path = lastLaunch?.path || get(projectPath);
+  if (path) {
+    openLaunchLog(path);
+    return;
+  }
+  if (info?.logPath) {
+    open(info.logPath).catch(() => {});
+  }
+}
 
 async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
   const profile = params.profile ?? "client";
@@ -97,21 +153,58 @@ async function doLaunch(params: LaunchParams): Promise<LaunchResult> {
 /// toast has been shown.
 export async function launchWithFeedback(
   params: LaunchParams,
-  opts?: {
-    onStarted?: (r: LaunchResult) => void;
-    showSuccess?: boolean;
-    openLog?: boolean;
-    /** Manifest path for the log modal (e.g. staged server dir). */
-    logPath?: string | null;
-    logTitle?: string | null;
-  },
+  opts?: LaunchFeedbackOpts,
 ): Promise<LaunchResult | null> {
   lastLaunch = params;
   lastOnStarted = opts?.onStarted ?? null;
+  lastOpts = opts ?? null;
+
+  const profile = params.profile ?? "client";
+  if (profile !== "server" && !opts?.skipAuthGate) {
+    const auth = get(authState);
+    if (!auth.loggedIn || !auth.profile) {
+      toasts.warning(
+        "Sign in to play with your Minecraft account, or continue offline.",
+        12000,
+        [
+          {
+            label: "Sign in",
+            run: () => loginModalOpen.set(true),
+          },
+          {
+            label: "Play offline",
+            run: () => {
+              void launchWithFeedback(params, { ...opts, skipAuthGate: true });
+            },
+          },
+        ],
+      );
+      return null;
+    }
+  }
+
   const showLog = opts?.openLog !== false;
   if (showLog) openLaunchLog(opts?.logPath ?? params.path, opts?.logTitle ?? null);
   isLaunching.set(true);
+  launchProgress.set({ phase: "preparing", message: "Preparing…", percent: 0 });
+
+  let unlistenProgress: UnlistenFn | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
   try {
+    unlistenProgress = await listen<LaunchProgressPayload>("launch-progress", (ev) => {
+      const p = ev.payload ?? {};
+      const phase = String(p.phase || "preparing");
+      const message = String(p.message || "Launching…");
+      const percent =
+        typeof p.percent === "number" && Number.isFinite(p.percent)
+          ? Math.max(0, Math.min(100, Math.round(p.percent)))
+          : null;
+      launchProgress.set({ phase, message, percent });
+    });
+    pollTimer = setInterval(() => {
+      void pollDownloadOverlay();
+    }, 450);
+
     const result = await doLaunch(params);
     if (opts?.showSuccess) toasts.success("Launch started");
     opts?.onStarted?.(result);
@@ -130,7 +223,10 @@ export async function launchWithFeedback(
     showLaunchError(e, () => launchWithFeedback(params, opts));
     return null;
   } finally {
+    if (pollTimer) clearInterval(pollTimer);
+    void unlistenProgress?.();
     isLaunching.set(false);
+    launchProgress.set(null);
   }
 }
 
@@ -142,6 +238,13 @@ export async function killWithFeedback(path: string): Promise<boolean> {
     toasts.info("Game stopped");
     return true;
   } catch (e) {
+    const msg = String(e).toLowerCase();
+    // Stale UI / race: process already gone — treat as stopped.
+    if (msg.includes("no running instance") || msg.includes("not found") || msg.includes("not running")) {
+      removeRunning(path);
+      toasts.info("Game already stopped");
+      return true;
+    }
     toasts.error(`Stop failed: ${e}`);
     return false;
   }
@@ -166,12 +269,11 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
   if (retry && isRetryable(info)) {
     actions.push({ label: "Retry", run: retry });
   }
-  if (info.logPath) {
+  const canOpenLog = !!(lastLaunch?.path || get(projectPath) || info.logPath);
+  if (canOpenLog) {
     actions.push({
       label: "Open log",
-      run: () => {
-        open(info.logPath as string).catch(() => {});
-      },
+      run: () => openInAppLaunchLog(info),
     });
   }
   // A JVM crash produced a fresh latest.log / crash-report — jump straight into
@@ -187,7 +289,7 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
     actions.push({
       label: "Share log",
       run: () => {
-        const path = get(projectPath);
+        const path = lastLaunch?.path || get(projectPath);
         if (!path) {
           toasts.warning("Open a project to share the crash log");
           return;
@@ -199,9 +301,7 @@ export function showLaunchError(e: unknown, retry?: () => void): void {
   if (info.kind === "java_missing") {
     actions.push({
       label: "Java settings",
-      run: () => {
-        window.dispatchEvent(new Event("tuffbox:open-project-settings"));
-      },
+      run: () => openLauncherSettings("java"),
     });
   }
   toasts.error(info.message, 16000, actions);
@@ -220,13 +320,17 @@ export function registerLaunchCrashListener(): Promise<UnlistenFn> {
       const path = lastLaunch?.path ?? get(projectPath);
       if (path) {
         void reportSoftVerifyCrash(path);
+        // Keep the live log modal open on the crashed session.
+        openLaunchLog(path);
       }
+      // Already played once — don't re-prompt the soft auth gate on Retry.
       const retry = lastLaunch
         ? () =>
-            launchWithFeedback(
-              lastLaunch!,
-              lastOnStarted ? { onStarted: lastOnStarted } : undefined,
-            )
+            launchWithFeedback(lastLaunch!, {
+              ...(lastOpts ?? {}),
+              onStarted: lastOnStarted ?? lastOpts?.onStarted,
+              skipAuthGate: true,
+            })
         : undefined;
       showLaunchError(info, retry);
     });

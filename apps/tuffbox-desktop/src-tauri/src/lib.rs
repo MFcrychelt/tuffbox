@@ -11817,6 +11817,23 @@ async fn launch_profile_impl(
     }
 }
 
+fn emit_launch_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    message: &str,
+    percent: Option<u32>,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "launch-progress",
+        serde_json::json!({
+            "phase": phase,
+            "message": message,
+            "percent": percent,
+        }),
+    );
+}
+
 fn build_and_spawn(
     path: String,
     profile: String,
@@ -11831,6 +11848,8 @@ fn build_and_spawn(
     skip_client_bridges: bool,
 ) -> Result<(), LaunchErrorInfo> {
     use tuffbox_core::{LaunchOptions, TestLauncher};
+
+    emit_launch_progress(&app, "preparing", "Preparing…", Some(5));
 
     let manifest_path = resolve_manifest_path(&path).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e).with_log(&console_log)
@@ -11867,6 +11886,8 @@ fn build_and_spawn(
         log_path: console_log.clone(),
     };
 
+    emit_launch_progress(&app, "java", "Checking Java…", Some(15));
+
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
             LaunchErrorInfo::new(LaunchErrorKind::JavaMissing, e.to_string()).with_log(&console_log)
@@ -11878,6 +11899,7 @@ fn build_and_spawn(
         // fails deep inside Forge's bootstrap launcher with a confusing
         // module-system error instead of launching at all.
         // If nothing is installed, download the latest GraalVM Community JDK.
+        emit_launch_progress(&app, "java", "Installing Java…", Some(20));
         tuffbox_core::jre::ensure_java_for_minecraft_with_log(
             &manifest.minecraft.version,
             |line| progress.log(line),
@@ -11949,6 +11971,7 @@ fn build_and_spawn(
     // UI still shows a full mod list.
     // For server runs, verify against the author project (source of jars);
     // the staged server dir already has a filtered copy.
+    emit_launch_progress(&app, "mods", "Checking mods…", Some(35));
     progress.log("# Verifying mod files...");
     let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &project_dir);
     if !sync_report.downloaded.is_empty() {
@@ -11982,6 +12005,7 @@ fn build_and_spawn(
         .with_log(&console_log));
     }
 
+    emit_launch_progress(&app, "install", "Installing Minecraft…", Some(55));
     progress.log("# Installing Minecraft (this may take a while)...");
 
     let mut launch_jvm_args = project_profile.jvm_args.clone();
@@ -12113,6 +12137,7 @@ fn build_and_spawn(
         cmd.env("TUFFBOX_OVERLAY_SESSION", session);
     }
 
+    emit_launch_progress(&app, "starting", "Starting…", Some(95));
     progress.log("# Starting Java process...");
 
     // Crash callback + playtime + Discord presence cleanup
@@ -12897,15 +12922,46 @@ async fn retry_failed_mod_downloads(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 #[allow(deprecated)]
-fn open_project_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let dir = PathBuf::from(&path)
+fn open_project_folder(
+    app: tauri::AppHandle,
+    path: String,
+    subdir: Option<String>,
+) -> Result<(), String> {
+    let project_dir = PathBuf::from(&path)
         .parent()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(|p| p.to_path_buf())
         .ok_or_else(|| "manifest has no parent directory".to_string())?;
+    let dir = match subdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(sub) => {
+            // Only allow known instance content folders (no path traversal).
+            const ALLOWED: &[&str] = &[
+                "resourcepacks",
+                "shaderpacks",
+                "saves",
+                "mods",
+                "config",
+                "screenshots",
+            ];
+            if !ALLOWED.contains(&sub) || sub.contains('/') || sub.contains('\\') || sub.contains("..")
+            {
+                return Err(format!("unsupported instance subfolder: {sub}"));
+            }
+            let target = project_dir.join(sub);
+            std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            target
+        }
+        None => project_dir,
+    };
     use tauri_plugin_shell::ShellExt;
-    app.shell().open(dir, None).map_err(|e| e.to_string())
+    app.shell()
+        .open(dir.to_string_lossy().to_string(), None)
+        .map_err(|e| e.to_string())
 }
 
 static PENDING_LAUNCH_PROJECT: Lazy<Mutex<Option<String>>> =

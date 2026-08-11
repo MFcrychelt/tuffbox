@@ -62,6 +62,7 @@
     { id: "action:optimize-pack", label: "Optimize pack (Content)", category: "Actions" },
     { id: "action:export-mrpack", label: "Export mrpack", category: "Actions" },
     { id: "settings", label: "Settings", category: "Actions" },
+    { id: "settings-java", label: "Java settings (Launcher)", category: "Actions" },
     { id: "project-settings", label: "Project Settings", category: "Actions" },
     { id: "new-instance", label: "Create New Instance", category: "Actions" },
     { id: "shortcuts", label: "Keyboard Shortcuts", category: "Actions" },

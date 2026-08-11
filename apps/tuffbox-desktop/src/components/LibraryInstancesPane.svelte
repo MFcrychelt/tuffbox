@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { fade, fly, scale, slide } from "svelte/transition";
-  import { quintOut, backOut } from "svelte/easing";
+  import { fade, fly, slide } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import {
     Plus,
     Folder,
@@ -31,7 +31,7 @@
     projectPath,
     projectInfo,
     ideStageRequest,
-    newProjectOpen,
+    openAddInstance,
     runningInstances,
     isProjectRunning,
     formatPlaytime,
@@ -98,10 +98,6 @@
   let longPressTimer = $state<ReturnType<typeof setTimeout> | null>(null);
   let pressOrigin = $state<{ x: number; y: number; project: RecentProject } | null>(null);
   let dragging = $state(false);
-  /** Path that just received a folder merge — brief celebrate pulse. */
-  let celebratePath = $state<string | null>(null);
-  let celebrateGroup = $state<string | null>(null);
-  let celebrateTimer = $state<ReturnType<typeof setTimeout> | null>(null);
   let holdingPath = $state<string | null>(null);
 
   function prefersReducedMotion(): boolean {
@@ -110,37 +106,19 @@
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
-  function tileIntro(node: Element, params: { i?: number }) {
+  function tileIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    const i = params.i ?? 0;
-    return scale(node, {
-      start: 0.86,
-      duration: 380,
-      delay: Math.min(i, 14) * 42,
-      opacity: 0,
-      easing: backOut,
-    });
+    return fade(node, { duration: 160 });
   }
 
   function sideIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    return fly(node, { x: 18, duration: 280, opacity: 0, easing: quintOut });
+    return fly(node, { x: 12, duration: 200, opacity: 0, easing: quintOut });
   }
 
   function groupBodyIntro(node: Element) {
     if (prefersReducedMotion()) return { duration: 0 };
-    return slide(node, { duration: 260, easing: quintOut });
-  }
-
-  function pulseCelebrate(path: string | null, groupName: string) {
-    if (celebrateTimer) clearTimeout(celebrateTimer);
-    celebratePath = path;
-    celebrateGroup = groupName;
-    celebrateTimer = setTimeout(() => {
-      celebratePath = null;
-      celebrateGroup = null;
-      celebrateTimer = null;
-    }, 900);
+    return slide(node, { duration: 200, easing: quintOut });
   }
 
   const selected = $derived($recentProjects.find((p) => p.path === selectedPath) ?? null);
@@ -394,7 +372,6 @@
       if (collapsed.has(result.groupName)) {
         collapsed = toggleCollapsed(collapsed, result.groupName);
       }
-      pulseCelebrate(target.path, result.groupName);
       toasts.success(
         result.created
           ? `Folder “${result.groupName}” created`
@@ -408,7 +385,6 @@
       if (collapsed.has(name)) {
         collapsed = toggleCollapsed(collapsed, name);
       }
-      pulseCelebrate(null, name);
       toasts.success(
         name === DEFAULT_GROUP ? "Removed from folder" : `Moved into “${name}”`,
       );
@@ -826,7 +802,6 @@
 
   onDestroy(() => {
     clearLongPressTimer();
-    if (celebrateTimer) clearTimeout(celebrateTimer);
     endDrag();
   });
 </script>
@@ -847,7 +822,7 @@
         </button>
         {#if addMenuOpen}
           <div class="tb-menu" role="menu">
-            <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; newProjectOpen.set(true); }}>
+            <button type="button" role="menuitem" onclick={() => { addMenuOpen = false; openAddInstance("blank"); }}>
               <Plus size={14} /> Create new…
             </button>
             <button type="button" role="menuitem" onclick={importPackFile} disabled={actionBusy}>
@@ -940,7 +915,7 @@
         <div class="empty-state">
           <h3>No instances yet</h3>
           <p>Create or import a pack to build your library.</p>
-          <button type="button" class="empty-cta" onclick={() => newProjectOpen.set(true)}>
+          <button type="button" class="empty-cta" onclick={() => openAddInstance("blank")}>
             <Plus size={16} /> Add Instance
           </button>
         </div>
@@ -948,12 +923,8 @@
         <p class="drag-hint" class:visible={dragging}>
           Drop on another instance to make a folder
         </p>
-        {#each grouped as group, gi (group.name)}
-          <section
-            class="inst-group"
-            class:celebrate={celebrateGroup === group.name}
-            style={`--gi: ${gi}`}
-          >
+        {#each grouped as group (group.name)}
+          <section class="inst-group">
             <button
               type="button"
               class="group-header"
@@ -972,7 +943,7 @@
             </button>
             {#if !group.collapsed}
               <div class="inst-grid" transition:groupBodyIntro>
-                {#each group.projects as project, pi (project.path)}
+                {#each group.projects as project (project.path)}
                   <div
                     class="inst-tile"
                     class:selected={selectedPath === project.path}
@@ -980,14 +951,11 @@
                     class:dragging={dragSource?.path === project.path}
                     class:drop-target={dropTargetPath === project.path}
                     class:holding={holdingPath === project.path && !dragging}
-                    class:celebrate={celebratePath === project.path || (celebrateGroup === group.name && !celebratePath)}
-                    class:jiggle={dragging && dragSource?.path !== project.path}
                     data-path={project.path}
-                    style={`--i: ${pi}; --jiggle-delay: ${pi * 40}ms`}
                     role="button"
                     tabindex="0"
                     aria-label={`${project.info.name}. Hold and drag onto another instance to create a folder`}
-                    in:tileIntro={{ i: pi }}
+                    in:tileIntro
                     onclick={() => onTileClick(project)}
                     ondblclick={() => !dragging && void launchInstance(project)}
                     onkeydown={(e) => e.key === "Enter" && selectInstance(project)}
@@ -1288,10 +1256,10 @@
   }
 
   .lib-toolbar-enter {
-    animation: lib-toolbar-in var(--motion-enter) var(--ease-spring) both;
+    animation: lib-toolbar-in 160ms var(--ease-out) both;
   }
   .lib-side-enter {
-    animation: lib-side-in var(--motion-enter) var(--ease-spring) 60ms both;
+    animation: lib-side-in 160ms var(--ease-out) both;
   }
 
   .prism-toolbar {
@@ -1459,11 +1427,6 @@
   }
   .inst-group {
     margin-bottom: 14px;
-    animation: lib-group-in var(--motion-enter) var(--ease-spring) both;
-    animation-delay: calc(var(--gi, 0) * 50ms);
-  }
-  .inst-group.celebrate {
-    animation: lib-group-celebrate 700ms var(--ease-spring);
   }
   .group-header {
     display: inline-flex;
@@ -1481,15 +1444,13 @@
     transition:
       color var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-fast) var(--ease-out),
-      transform var(--motion-fast) var(--ease-spring);
+      box-shadow var(--motion-fast) var(--ease-out);
   }
-  .group-header:hover { color: var(--text-primary); transform: translateX(2px); }
+  .group-header:hover { color: var(--text-primary); }
   .group-header.drop-target {
     background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
     color: var(--accent-primary);
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 40%, transparent);
-    animation: lib-drop-pulse 0.9s ease-in-out infinite;
   }
   .group-count {
     font-size: 11px;
@@ -1516,16 +1477,16 @@
     touch-action: manipulation;
     position: relative;
     transition:
-      transform var(--motion-med) var(--ease-spring),
+      transform var(--motion-fast) var(--ease-out),
       background var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out),
       opacity var(--motion-fast) var(--ease-out),
-      box-shadow var(--motion-med) var(--ease-out);
+      box-shadow var(--motion-fast) var(--ease-out);
   }
-  .inst-tile:hover { background: var(--bg-hover); transform: translateY(-3px); }
+  .inst-tile:hover { background: var(--bg-hover); }
   .inst-tile:hover .inst-icon {
-    transform: translateY(-2px) scale(1.06);
-    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.35);
+    transform: translateY(-1px);
+    filter: brightness(1.04);
   }
   .inst-tile.selected {
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
@@ -1533,37 +1494,41 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 18%, transparent);
   }
   .inst-tile.selected .inst-icon {
-    animation: lib-select-ring 1.8s var(--ease-out) infinite;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent);
   }
   .inst-tile.running .inst-icon {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 55%, transparent);
-    animation: lib-running-glow 2.2s ease-in-out infinite;
+  }
+  .inst-tile.running::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--bg-primary, transparent);
+    z-index: 3;
   }
   .inst-tile.dragging {
     opacity: 0.28;
-    transform: scale(0.88);
     filter: saturate(0.7);
+  }
+  .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+    opacity: 0.7;
   }
   .inst-tile.drop-target {
     background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
-    transform: scale(1.08);
     z-index: 2;
-    animation: lib-drop-pulse 0.85s ease-in-out infinite;
   }
   .inst-tile.holding .inst-icon {
-    transform: scale(0.94);
+    filter: brightness(0.96);
   }
   .inst-tile.holding .hold-ring {
     opacity: 1;
     animation: lib-hold-ring 420ms linear forwards;
-  }
-  .inst-tile.jiggle {
-    animation: lib-jiggle 0.55s ease-in-out infinite;
-    animation-delay: var(--jiggle-delay, 0ms);
-  }
-  .inst-tile.celebrate {
-    animation: lib-tile-celebrate 720ms var(--ease-spring);
   }
   .inst-tile:focus-visible {
     outline: 2px solid var(--accent-primary);
@@ -1586,8 +1551,8 @@
       var(--accent-primary) var(--hold),
       transparent 0
     );
-    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-    mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 1px));
     z-index: 1;
   }
 
@@ -1606,13 +1571,13 @@
     position: relative;
     z-index: 2;
     transition:
-      transform var(--motion-med) var(--ease-spring),
-      border-radius var(--motion-med) var(--ease-spring),
-      box-shadow var(--motion-med) var(--ease-out);
+      transform var(--motion-fast) var(--ease-out),
+      border-radius var(--motion-fast) var(--ease-out),
+      box-shadow var(--motion-fast) var(--ease-out),
+      filter var(--motion-fast) var(--ease-out);
   }
   .inst-icon.folder-preview {
-    border-radius: 18px;
-    animation: lib-folder-morph 380ms var(--ease-spring) both;
+    border-radius: var(--border-radius-lg);
   }
   .folder-stack {
     position: relative;
@@ -1624,17 +1589,16 @@
     position: absolute;
     width: 34px;
     height: 34px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-sm);
     background: rgba(0, 0, 0, 0.28);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 16px;
     font-weight: 800;
-    animation: lib-stack-pop 320ms var(--ease-spring) both;
   }
   .folder-stack .stack-a { top: 10px; left: 10px; }
-  .folder-stack .stack-b { bottom: 10px; right: 10px; animation-delay: 60ms; }
+  .folder-stack .stack-b { bottom: 10px; right: 10px; }
   .inst-name {
     font-size: 12px;
     font-weight: 600;
@@ -1665,17 +1629,17 @@
     font-weight: 900;
     color: #fff;
     pointer-events: none;
-    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.5), 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent);
-    animation: lib-ghost-in 220ms var(--ease-spring) both;
-    will-change: transform, left, top;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 30%, transparent);
+    opacity: 0.95;
+    will-change: left, top;
   }
   .ghost-letter { position: relative; z-index: 1; }
   .ghost-ring {
     position: absolute;
-    inset: -6px;
+    inset: -5px;
     border-radius: 50%;
-    border: 2px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
-    animation: lib-ghost-ring 1s ease-out infinite;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, transparent);
+    opacity: 0.7;
   }
 
   .prism-side {
@@ -1700,40 +1664,24 @@
     font-size: 24px;
     font-weight: 900;
     color: #fff;
-    animation: lib-side-icon-in 420ms var(--ease-spring) both;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
   }
   .side-title {
     font-size: 13px;
     font-weight: 700;
     color: var(--text-primary);
     margin-bottom: 4px;
-    animation: lib-fade-up 280ms var(--ease-out) 40ms both;
   }
   .side-meta {
     font-size: 11px;
     color: var(--text-muted);
     text-transform: capitalize;
-    animation: lib-fade-up 280ms var(--ease-out) 80ms both;
   }
   .side-actions {
     display: flex;
     flex-direction: column;
     gap: 4px;
   }
-  .side-actions .side-btn {
-    animation: lib-fade-up 260ms var(--ease-out) both;
-    animation-delay: calc(100ms + var(--bi, 0) * 28ms);
-  }
-  .side-actions .side-btn:nth-child(1) { --bi: 0; }
-  .side-actions .side-btn:nth-child(2) { --bi: 1; }
-  .side-actions .side-btn:nth-child(3) { --bi: 2; }
-  .side-actions .side-btn:nth-child(4) { --bi: 3; }
-  .side-actions .side-btn:nth-child(5) { --bi: 4; }
-  .side-actions .side-btn:nth-child(6) { --bi: 5; }
-  .side-actions .side-btn:nth-child(7) { --bi: 6; }
-  .side-actions .side-btn:nth-child(8) { --bi: 7; }
-  .side-actions .side-btn:nth-child(9) { --bi: 8; }
   .side-btn {
     display: inline-flex;
     align-items: center;
@@ -1749,7 +1697,6 @@
     cursor: pointer;
     text-align: left;
     transition:
-      transform var(--motion-fast) var(--ease-spring),
       background var(--motion-fast) var(--ease-out),
       color var(--motion-fast) var(--ease-out),
       border-color var(--motion-fast) var(--ease-out);
@@ -1757,9 +1704,8 @@
   .side-btn:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
     color: var(--accent-primary);
-    transform: translateX(3px);
   }
-  .side-btn:active:not(:disabled) { transform: scale(0.97) translateX(2px); }
+  .side-btn:active:not(:disabled) { opacity: 0.9; }
   .side-btn:disabled { opacity: 0.4; cursor: default; }
   .side-btn.launch {
     background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
@@ -1972,127 +1918,46 @@
     from { --hold: 0deg; opacity: 1; }
     to { --hold: 360deg; opacity: 1; }
   }
-  @keyframes lib-ambient-in {
+  @keyframes lib-toolbar-in {
     from { opacity: 0; }
     to { opacity: 1; }
   }
-  @keyframes lib-toolbar-in {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: none; }
-  }
   @keyframes lib-side-in {
-    from { opacity: 0; transform: translateX(16px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-status-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-group-in {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-group-celebrate {
-    0% { box-shadow: inset 0 0 0 0 transparent; }
-    35% { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-    100% { box-shadow: inset 0 0 0 0 transparent; }
-  }
-  @keyframes lib-jiggle {
-    0%, 100% { transform: rotate(-1.4deg); }
-    50% { transform: rotate(1.4deg); }
-  }
-  @keyframes lib-drop-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-    50% { box-shadow: 0 0 0 8px transparent; }
-  }
-  @keyframes lib-select-ring {
-    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-primary) 35%, transparent); }
-    50% { box-shadow: 0 0 0 6px transparent; }
-  }
-  @keyframes lib-running-glow {
-    0%, 100% { filter: brightness(1); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 45%, transparent); }
-    50% { filter: brightness(1.08); box-shadow: 0 0 12px 2px color-mix(in srgb, var(--accent-primary) 55%, transparent); }
-  }
-  @keyframes lib-tile-celebrate {
-    0% { transform: scale(1); }
-    35% { transform: scale(1.12); }
-    70% { transform: scale(0.96); }
-    100% { transform: scale(1); }
-  }
-  @keyframes lib-folder-morph {
-    from { border-radius: 50%; transform: scale(0.9); }
-    to { border-radius: 18px; transform: scale(1); }
-  }
-  @keyframes lib-stack-pop {
-    from { opacity: 0; transform: scale(0.6); }
-    to { opacity: 1; transform: scale(1); }
-  }
-  @keyframes lib-ghost-in {
-    from { opacity: 0; transform: scale(0.7) rotate(-8deg); }
-    to { opacity: 0.95; transform: scale(1.05) rotate(0deg); }
-  }
-  @keyframes lib-ghost-ring {
-    from { transform: scale(1); opacity: 0.8; }
-    to { transform: scale(1.45); opacity: 0; }
-  }
-  @keyframes lib-side-icon-in {
-    from { opacity: 0; transform: scale(0.7) rotate(-12deg); }
-    to { opacity: 1; transform: none; }
-  }
-  @keyframes lib-fade-up {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: none; }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .drag-mode .prism-grid-pane {
-    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent-primary) 4%, transparent), transparent 70%);
+    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--accent-primary) 3%, transparent), transparent 70%);
   }
 
   :global(.potato-pc) .lib-motion::before,
   :global(.potato-pc) .lib-toolbar-enter,
   :global(.potato-pc) .lib-side-enter,
-  :global(.potato-pc) .inst-group,
-  :global(.potato-pc) .inst-tile.jiggle,
-  :global(.potato-pc) .inst-tile.selected .inst-icon,
-  :global(.potato-pc) .inst-tile.running .inst-icon,
-  :global(.potato-pc) .drag-ghost,
-  :global(.potato-pc) .ghost-ring,
-  :global(.potato-pc) .side-icon,
-  :global(.potato-pc) .side-title,
-  :global(.potato-pc) .side-meta,
-  :global(.potato-pc) .side-actions .side-btn {
+  :global(.potato-pc) .hold-ring {
     animation: none !important;
   }
-  :global(.potato-pc) .inst-tile:hover,
-  :global(.potato-pc) .inst-tile:hover .inst-icon,
-  :global(.potato-pc) .side-btn:hover:not(:disabled) {
+  :global(.potato-pc) .inst-tile:hover .inst-icon {
     transform: none !important;
+    filter: none !important;
+  }
+  :global(.potato-pc) .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+    opacity: 1;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .lib-motion::before,
     .lib-toolbar-enter,
     .lib-side-enter,
-    .inst-group,
-    .inst-tile.jiggle,
-    .inst-tile.selected .inst-icon,
-    .inst-tile.running .inst-icon,
-    .inst-tile.celebrate,
-    .inst-tile.drop-target,
-    .group-header.drop-target,
-    .drag-ghost,
-    .ghost-ring,
-    .side-icon,
-    .side-title,
-    .side-meta,
-    .side-actions .side-btn,
     .hold-ring {
       animation: none !important;
     }
-    .inst-tile:hover,
-    .inst-tile:hover .inst-icon,
-    .side-btn:hover:not(:disabled) {
+    .inst-tile:hover .inst-icon {
       transform: none !important;
+      filter: none !important;
+    }
+    .drag-mode .inst-tile:not(.dragging):not(.drop-target) {
+      opacity: 1;
     }
   }
 </style>

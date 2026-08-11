@@ -24,6 +24,7 @@
     brandIcon,
     BRAND_ICON_CREEPER_SRC,
     BRAND_ICON_CREEPER_SRC_SM,
+    settingsNavRequest,
     type BrandIconId,
   } from "../lib/store";
   import ConfettiBurst from "./ConfettiBurst.svelte";
@@ -35,8 +36,19 @@
   import JavaPickerModal from "./JavaPickerModal.svelte";
   import { copyText } from "../lib/clipboard";
 
-  type SettingsTab = "general" | "appearance" | "java" | "commands" | "runtime" | "ai" | "integrations" | "about";
+  type SettingsTab = "appearance" | "launcher" | "ai" | "integrations" | "about";
   let tab = $state<SettingsTab>("appearance");
+  let launcherSub = $state<"general" | "java" | "commands" | "runtime">("general");
+
+  $effect(() => {
+    const req = $settingsNavRequest;
+    if (!req) return;
+    tab = req.tab;
+    if (req.tab === "launcher" && req.launcherSub) {
+      launcherSub = req.launcherSub;
+    }
+    settingsNavRequest.set(null);
+  });
 
   type AiSettings = {
     provider: string;
@@ -206,13 +218,17 @@
 
   const tabs: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
     { id: "appearance", label: "Appearance", icon: Palette },
-    { id: "general", label: "General", icon: Settings2 },
-    { id: "java", label: "Java", icon: Coffee },
-    { id: "commands", label: "Commands", icon: Terminal },
-    { id: "runtime", label: "Runtime", icon: HardDrive },
+    { id: "launcher", label: "Launcher", icon: Settings2 },
     { id: "ai", label: "AI", icon: Bot },
     { id: "integrations", label: "Integrations", icon: Plug },
     { id: "about", label: "About", icon: Info },
+  ];
+
+  const launcherSubs: { id: typeof launcherSub; label: string }[] = [
+    { id: "general", label: "General" },
+    { id: "java", label: "Java" },
+    { id: "commands", label: "Commands" },
+    { id: "runtime", label: "Paths" },
   ];
 
   function syncResModeFromLauncher() {
@@ -1059,6 +1075,21 @@
     {/each}
   </nav>
 
+  {#if tab === "launcher"}
+    <nav class="launcher-subnav" aria-label="Launcher settings">
+      {#each launcherSubs as s (s.id)}
+        <button
+          type="button"
+          class="launcher-sub press-effect"
+          class:active={launcherSub === s.id}
+          onclick={() => (launcherSub = s.id)}
+        >
+          {s.label}
+        </button>
+      {/each}
+    </nav>
+  {/if}
+
   {#if launcherErr}<div class="notice error"><AlertTriangle size={14} /> {launcherErr}</div>{/if}
   {#if launcherMsg}<div class="notice success"><CheckCircle2 size={14} /> {launcherMsg}</div>{/if}
 
@@ -1137,7 +1168,7 @@
       </section>
     {/if}
 
-    {#if tab === "general"}
+    {#if tab === "launcher" && launcherSub === "general"}
       <section class="card card-wide">
         <div class="card-title">
           <Settings2 size={18} />
@@ -1373,7 +1404,7 @@
       </section>
     {/if}
 
-    {#if tab === "java"}
+    {#if tab === "launcher" && launcherSub === "java"}
       <section class="card card-wide">
         <div class="card-title">
           <Coffee size={18} />
@@ -1428,7 +1459,7 @@
       </section>
     {/if}
 
-    {#if tab === "commands"}
+    {#if tab === "launcher" && launcherSub === "commands"}
       <section class="card card-wide">
         <div class="card-title">
           <Terminal size={18} />
@@ -1475,7 +1506,7 @@
       </section>
     {/if}
 
-    {#if tab === "runtime"}
+    {#if tab === "launcher" && launcherSub === "runtime"}
       <section class="card card-wide">
         <div class="card-title">
           <HardDrive size={18} />
@@ -2039,6 +2070,38 @@
     color: var(--text-primary);
     background: var(--bg-elevated);
     border-color: var(--border-color);
+    box-shadow: 0 0 0 1px var(--accent-primary);
+  }
+
+  .launcher-subnav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: -6px 0 16px;
+  }
+
+  .launcher-sub {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 11px;
+    border-radius: var(--border-radius-sm);
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .launcher-sub:hover {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+  }
+
+  .launcher-sub.active {
+    color: var(--text-primary);
+    background: var(--bg-elevated);
+    border-color: var(--accent-primary);
     box-shadow: 0 0 0 1px var(--accent-primary);
   }
 

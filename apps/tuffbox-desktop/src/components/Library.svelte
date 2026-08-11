@@ -20,6 +20,8 @@
     projectInfo,
     newProjectOpen,
     libraryTabRequest,
+    addInstanceMode,
+    openAddInstance,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
@@ -81,7 +83,7 @@
   }
 
   function openNewPack() {
-    newProjectOpen.set(true);
+    openAddInstance("blank");
   }
 
   async function resolveImportTargetDir(): Promise<string> {
@@ -727,7 +729,7 @@
         <div class="create-hero-top">
           <div>
             <h2>Start a pack</h2>
-            <p>Blank instance, import an existing pack, or steal ideas from what’s popular.</p>
+            <p>Blank instance, import a pack file, or browse Modrinth / CurseForge in Discover.</p>
           </div>
           {#if swarmEnabled && (kudosLoading || kudosBalance)}
             <KudosBalanceStrip
@@ -746,19 +748,30 @@
           <span class="plus-ring"><Plus size={28} strokeWidth={2.25} /></span>
           <div class="create-copy">
             <strong>Create modpack</strong>
-            <span>Blank · Fabric / Forge · CurseForge browse</span>
+            <span>Blank · Fabric / Forge / NeoForge / Quilt</span>
           </div>
         </button>
         <button
           type="button"
           class="create-plus import"
-          onclick={() => (importMenuOpen = true)}
+          onclick={() => openAddInstance("import")}
           disabled={importing}
         >
           <span class="plus-ring"><Download size={26} strokeWidth={2.25} /></span>
           <div class="create-copy">
             <strong>{importing ? "Importing…" : "Import pack"}</strong>
             <span>.mrpack · zip · Prism · MultiMC · CurseForge</span>
+          </div>
+        </button>
+        <button
+          type="button"
+          class="create-plus browse"
+          onclick={() => switchTab("discover")}
+        >
+          <span class="plus-ring"><Compass size={26} strokeWidth={2.25} /></span>
+          <div class="create-copy">
+            <strong>Browse packs</strong>
+            <span>Modrinth · CurseForge — Library Discover</span>
           </div>
         </button>
       </div>
@@ -772,6 +785,7 @@
 
 {#if $newProjectOpen}
   <AddInstanceModal
+    initialMode={$addInstanceMode}
     onclose={() => newProjectOpen.set(false)}
     oncreated={onPackCreated}
   />
@@ -1053,7 +1067,7 @@
   }
   .create-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
   }
   .create-plus {
@@ -1087,6 +1101,17 @@
     color: #60a5fa;
     border-color: rgba(59, 130, 246, 0.35);
   }
+  .create-plus.browse {
+    border-color: rgba(245, 158, 11, 0.28);
+    background:
+      linear-gradient(135deg, rgba(245, 158, 11, 0.1), transparent 55%),
+      var(--bg-secondary);
+  }
+  .create-plus.browse .plus-ring {
+    background: rgba(245, 158, 11, 0.14);
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.35);
+  }
   .create-plus:hover {
     border-color: color-mix(in srgb, var(--accent-primary) 55%, transparent);
     color: var(--text-primary);
@@ -1094,6 +1119,9 @@
   }
   .create-plus.import:hover {
     border-color: rgba(59, 130, 246, 0.55);
+  }
+  .create-plus.browse:hover {
+    border-color: rgba(245, 158, 11, 0.55);
   }
   .create-plus:disabled {
     opacity: 0.6;

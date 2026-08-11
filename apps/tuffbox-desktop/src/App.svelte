@@ -14,7 +14,7 @@
   import { onMount, tick } from "svelte";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
-  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, type LauncherSettings } from "./lib/store";
+  import { projectPath, projectInfo, recentProjects, launchLogPath, launchLogTitle, closeLaunchLog, autoHideWorkflowRail, sidebarMode, normalizeSidebarMode, applyUiScale, applyUiScaleFromSettings, applyRoundedCorners, detectWeakHardware, suggestUiScalePercent, resolveUiScaleMode, youtubePlayerSession, closeYoutubePlayer, ideStageRequest, ideSuggestedStage, requestIdeNextAction, pushIdeRecent, launcherSettingsLive, ideIssueCount, loginModalOpen, type LauncherSettings } from "./lib/store";
   import YoutubePlayer from "./components/YoutubePlayer.svelte";
   import { api } from "./lib/api";
   import { applyHomeSnapshot, ensureHomeEnrichListener } from "./lib/homeBootstrap";
@@ -22,6 +22,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { toasts } from "./lib/toast";
   import LaunchLogModal from "./components/LaunchLogModal.svelte";
+  import MinecraftLogin from "./components/MinecraftLogin.svelte";
   import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances } from "./lib/launch";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
 
@@ -334,10 +335,14 @@
     window.addEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
 
     const onOpenProjectSettings = () => {
-      ideStageRequest.set("setup");
-      currentView = "ide";
+      currentView = "project-settings";
     };
     window.addEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
+
+    const onOpenSettings = () => {
+      currentView = "settings";
+    };
+    window.addEventListener("tuffbox:open-settings", onOpenSettings);
 
     const onOpenMe = () => {
       currentView = "me";
@@ -456,6 +461,7 @@
       window.removeEventListener("tuffbox:open-graph", onOpenGraph);
       window.removeEventListener("tuffbox:open-diagnostics", onOpenDiagnostics);
       window.removeEventListener("tuffbox:open-project-settings", onOpenProjectSettings);
+      window.removeEventListener("tuffbox:open-settings", onOpenSettings);
       window.removeEventListener("tuffbox:open-me", onOpenMe);
       window.removeEventListener("tuffbox:open-library", onOpenLibrary);
       window.removeEventListener("tuffbox:open-crash-votes", onOpenCrashVotes);
@@ -572,9 +578,15 @@
 
   function handleCommandPaletteNavigate(id: string) {
     if (id === "new-instance") {
-      import("./lib/store").then(({ newProjectOpen }) => {
+      import("./lib/store").then(({ openAddInstance }) => {
         currentView = "dashboard";
-        newProjectOpen.set(true);
+        openAddInstance("blank");
+      });
+      return;
+    }
+    if (id === "settings-java") {
+      import("./lib/store").then(({ openLauncherSettings }) => {
+        openLauncherSettings("java");
       });
       return;
     }
@@ -583,8 +595,7 @@
       return;
     }
     if (id === "project-settings") {
-      ideStageRequest.set("setup");
-      currentView = "ide";
+      currentView = "project-settings";
       return;
     }
     if (id.startsWith("ide:")) {
@@ -712,6 +723,9 @@
 
 <ToastContainer />
 <TaskProgressPanel />
+{#if $loginModalOpen}
+  <MinecraftLogin onclose={() => loginModalOpen.set(false)} />
+{/if}
 {#if showShortcuts}
   <KeyboardHelp onclose={() => (showShortcuts = false)} />
 {/if}

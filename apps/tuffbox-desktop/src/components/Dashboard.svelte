@@ -8,20 +8,21 @@
     LogIn,
     User,
     Package,
-    GitGraph,
-    Stethoscope,
-    History,
-    Puzzle,
-    Sparkles,
     FolderOpen,
+    FolderInput,
     HardDrive,
     Clock,
     Users,
     ShieldAlert,
-    Gamepad2,
+    Search,
+    MoreHorizontal,
+    Pencil,
+    Copy,
+    Trash2,
   } from "@lucide/svelte";
   import HeadAvatar from "./HeadAvatar.svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { confirm } from "@tauri-apps/plugin-dialog";
   import {
     recentProjects,
     projectPath,
@@ -29,7 +30,9 @@
     authState,
     skinPath,
     newProjectOpen,
+    loginModalOpen,
     isLaunching,
+    launchProgress,
     runningInstances,
     isProjectRunning,
     loginTypeLabel,
@@ -38,6 +41,9 @@
     ideSuggestedStage,
     ideIssueCount,
     launcherSettingsLive,
+    libraryTabRequest,
+    addInstanceMode,
+    openAddInstance,
     type RecentProject,
   } from "../lib/store";
   import { toasts } from "../lib/toast";
@@ -46,16 +52,17 @@
   import { fetchCrashFixBanner, rollbackLastCrashFix } from "../lib/softVerify";
   import {
     homeCrashFixBanner,
+    homeIcons,
     homeSizes,
     homeSkinPaths,
     homeStats,
   } from "../lib/homeBootstrap";
   import AddInstanceModal from "./AddInstanceModal.svelte";
-  import MinecraftLogin from "./MinecraftLogin.svelte";
   import SkinPreview3D from "./SkinPreview3D.svelte";
   import AccountManager from "./AccountManager.svelte";
   import InstanceHome from "./InstanceHome.svelte";
   import YoutubeFeed from "./YoutubeFeed.svelte";
+  import PromptDialog from "./PromptDialog.svelte";
 
   import type { View } from "../lib/types";
 
@@ -63,21 +70,43 @@
 
   let authReady = $state(false);
 
+  function browseLibrary() {
+    libraryTabRequest.set("discover");
+    currentView = "library";
+  }
+
   const projectStats = $derived($homeStats);
   const instanceSizes = $derived($homeSizes);
   const accountSkinPaths = $derived($homeSkinPaths);
   const crashFixBanner = $derived($homeCrashFixBanner);
 
   let selectedPath = $state<string | null>($projectPath);
-  let showLoginModal = $state(false);
   let showAccountManager = $state(false);
   let potatoPc = $state(false);
   let accountSwitchBusy = $state(false);
+  let heroOverflowOpen = $state(false);
+  let heroActionBusy = $state(false);
+  let showRenamePrompt = $state(false);
+  let showClonePrompt = $state(false);
+  let renameDefault = $state("");
+  let cloneDefault = $state("");
 
   const selectedProject = $derived($recentProjects.find((p) => p.path === selectedPath));
   const selectedRunning = $derived(isProjectRunning(selectedPath, $runningInstances));
   const hasInstanceHome = $derived(!!(selectedPath && selectedProject));
   const hideInstanceHome = $derived(!!$launcherSettingsLive?.hideInstanceHome);
+  /** Pack icon data URL from listing / home bootstrap (null = loaded, none). */
+  const selectedPackIcon = $derived(
+    selectedPath ? ($homeIcons[selectedPath] ?? null) : null
+  );
+  const selectedInstanceMeta = $derived.by(() => {
+    const info = selectedProject?.info;
+    if (!info) return "";
+    const loader = info.loaderVersion?.trim()
+      ? `${info.loaderKind} ${info.loaderVersion.trim()}`
+      : info.loaderKind;
+    return `${info.minecraftVersion} · ${loader}`;
+  });
 
   // The sidebar rail switches instances through the global store — mirror it here.
   $effect(() => {
@@ -326,8 +355,7 @@
   }
 
   function openSettings() {
-    ideStageRequest.set("setup");
-    currentView = "ide";
+    currentView = "project-settings";
   }
 
   function openIdeStage(stage: string) {
@@ -339,65 +367,134 @@
     ideStageRequest.set($ideSuggestedStage || "content");
     currentView = "ide";
   }
+
+  function closeHeroOverflow() {
+    heroOverflowOpen = false;
+  }
+
+  function toggleHeroOverflow() {
+    if (heroActionBusy) return;
+    heroOverflowOpen = !heroOverflowOpen;
+  }
+
+  function openRenamePrompt() {
+    if (!selectedProject || heroActionBusy) return;
+    closeHeroOverflow();
+    renameDefault = selectedProject.info.name;
+    showRenamePrompt = true;
+  }
+
+  function openClonePrompt() {
+    if (!selectedProject || heroActionBusy) return;
+    closeHeroOverflow();
+    cloneDefault = `${selectedProject.info.name} copy`;
+    showClonePrompt = true;
+  }
+
+  async function confirmRename(newName: string) {
+    showRenamePrompt = false;
+    const project = selectedProject;
+    const name = newName.trim();
+    if (!project || !name) return;
+    if (name === project.info.name) return;
+    heroActionBusy = true;
+    try {
+      const listing = await api.project.getListing(project.path);
+      await api.project.updateListing({ ...listing, name }, project.path);
+      const info = await api.project.validate(project.path);
+      const updated: RecentProject = {
+        path: project.path,
+        info: info as RecentProject["info"],
+      };
+      recentProjects.add(updated, { reorder: false });
+      projectInfo.set(updated.info);
+      toasts.success(`Renamed to “${name}”`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      heroActionBusy = false;
+    }
+  }
+
+  async function confirmClone(newName: string) {
+    showClonePrompt = false;
+    const project = selectedProject;
+    const name = newName.trim();
+    if (!project || !name) return;
+    heroActionBusy = true;
+    try {
+      const clonedPath = await api.files.cloneProject(name, project.path);
+      await loadProject(clonedPath);
+      toasts.success(`Cloned to “${name}”`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      heroActionBusy = false;
+    }
+  }
+
+  async function deleteSelectedInstance() {
+    const project = selectedProject;
+    if (!project || heroActionBusy) return;
+    closeHeroOverflow();
+    const ok = await confirm(`Delete "${project.info.name}" from disk?`, {
+      title: "Delete instance",
+      kind: "warning",
+    });
+    if (!ok) return;
+    heroActionBusy = true;
+    try {
+      await api.files.deleteProject(project.path);
+      const next = $recentProjects.find((p) => p.path !== project.path) ?? null;
+      recentProjects.remove(project.path);
+      selectedPath = next?.path ?? null;
+      projectPath.set(selectedPath);
+      projectInfo.set(next?.info ?? null);
+      toasts.success(`Deleted “${project.info.name}”`);
+    } catch (e) {
+      toasts.error(String(e));
+    } finally {
+      heroActionBusy = false;
+    }
+  }
+
+  function onHeroOverflowPointerDown(e: MouseEvent) {
+    if (!heroOverflowOpen) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.(".hero-overflow")) return;
+    closeHeroOverflow();
+  }
+
+  function onHeroOverflowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && heroOverflowOpen) closeHeroOverflow();
+  }
 </script>
 
-<div class="home fade-slide-in">
-  <!-- Top bar: Quick actions left, Avatar right -->
-  <div class="top-bar">
-    <div class="quick-nav">
-      <button class="quick-action" onclick={() => openIdeStage("content")} title="Mods">
-        <Package size={18} />
-        <span>Mods</span>
-      </button>
-      <button class="quick-action" onclick={() => openIdeStage("resolve")} title="Dependency Graph">
-        <GitGraph size={18} />
-        <span>Graph</span>
-      </button>
-      <button class="quick-action" onclick={() => openIdeStage("diagnose")} title="Diagnostics">
-        <Stethoscope size={18} />
-        <span>Diagnostics</span>
-      </button>
-      <button class="quick-action" onclick={() => openIdeStage("snapshots")} title="Snapshots">
-        <History size={18} />
-        <span>Snapshots</span>
-      </button>
-      {#if selectedProject}
-        <button class="quick-action" onclick={() => openIdeStage("recipes")} title="Recipes">
-          <Puzzle size={18} />
-          <span>Recipes</span>
-        </button>
-        <button class="quick-action" onclick={() => openIdeStage("quests")} title="Quests">
-          <Sparkles size={18} />
-          <span>Quests</span>
-        </button>
-      {/if}
-    </div>
+<svelte:window onmousedown={onHeroOverflowPointerDown} onkeydown={onHeroOverflowKeydown} />
 
-    <!-- Account avatar in top-right (sign-in lives in the skin panel) -->
-    <div class="account-avatar-section">
-      {#if $authState.loggedIn && $authState.profile}
-        <button class="account-avatar-btn" onclick={() => (currentView = "me")} title="Me — account & playtime">
-          <HeadAvatar skinSrc={$skinPath} size={32} alt={$authState.profile.name} />
-          <span class="avatar-name">{$authState.profile.name}</span>
-          <span
-            class="avatar-badge"
-            class:microsoft={$authState.loginType === "microsoft"}
-            class:offline={$authState.loginType === "offline"}
-            class:ygg={$authState.loginType === "yggdrasil"}
-          >
-            {loginTypeLabel(
-              $authState.loginType,
-              $authState.accounts.find((a) => a.uuid === $authState.activeAccountUuid)?.authority
-            )}
-          </span>
-        </button>
-      {/if}
+<div class="home fade-slide-in">
+  <!-- Top bar: Open IDE left (account lives in the skin panel; Me via sidebar) -->
+  <div class="top-bar">
+    <div class="ide-entry">
+      <button
+        type="button"
+        class="ide-entry-btn"
+        onclick={openIdeSuggested}
+        disabled={!selectedProject}
+        title={selectedProject ? "Open IDE" : "Select an instance first"}
+      >
+        <Workflow size={18} />
+        <span>Open IDE</span>
+        {#if $ideIssueCount > 0}
+          <span class="ide-issue-badge" title="{$ideIssueCount} pack issue{$ideIssueCount === 1 ? '' : 's'}">{$ideIssueCount}</span>
+        {/if}
+      </button>
     </div>
   </div>
 
   <div class="main-layout">
     <div class="home-main">
-      <!-- Hero: Play button + project info -->
+      <!-- Hero: Play/Stop CTA + instance identity -->
       <section class="hero">
         <div class="hero-left">
           <button
@@ -406,10 +503,16 @@
             onclick={selectedRunning && !$isLaunching ? stopGame : launch}
             disabled={!selectedPath || $isLaunching}
             aria-busy={$isLaunching}
+            title={$isLaunching ? ($launchProgress?.message ?? "Launching…") : undefined}
           >
             {#if $isLaunching}
               <span class="spinner" aria-hidden="true"></span>
-              <span class="play-text">Launching...</span>
+              <span class="play-text play-phase">
+                {$launchProgress?.message ?? "Launching…"}
+              </span>
+              {#if $launchProgress?.percent != null}
+                <span class="play-pct" aria-hidden="true">{$launchProgress.percent}%</span>
+              {/if}
             {:else if selectedRunning}
               <Square size={24} fill="currentColor" />
               <span class="play-text">Stop</span>
@@ -420,66 +523,164 @@
           </button>
 
           <div class="hero-main">
-            {#if !selectedProject}
-              <div class="project-quick-info">
-                <span class="project-name muted">No instance selected</span>
-                <span class="project-hint">Pick an instance in the left rail or create a new one</span>
-              </div>
-            {/if}
-
-            <div class="hero-actions">
-              {#if selectedProject}
-                <button class="action-btn primary ide-open-btn" onclick={openIdeSuggested}>
-                  <Workflow size={15} />
-                  IDE
-                  {#if $ideIssueCount > 0}
-                    <span class="ide-issue-badge" title="{$ideIssueCount} pack issue{$ideIssueCount === 1 ? '' : 's'}">{$ideIssueCount}</span>
+            {#if selectedProject}
+              <div class="hero-identity">
+                <div
+                  class="hero-pack-icon"
+                  class:has-image={!!selectedPackIcon}
+                  aria-hidden="true"
+                >
+                  {#if selectedPackIcon}
+                    <img src={selectedPackIcon} alt="" draggable="false" />
+                  {:else}
+                    <span class="hero-pack-letter">{selectedProject.info.name[0] ?? "?"}</span>
                   {/if}
-                </button>
-                <button class="action-btn" onclick={openSettings}>
+                </div>
+                <div class="hero-identity-text">
+                  <h2 class="hero-instance-name">{selectedProject.info.name}</h2>
+                  <p class="hero-instance-meta">{selectedInstanceMeta}</p>
+                </div>
+              </div>
+
+              <div class="hero-actions">
+                <button class="action-btn" onclick={openSettings} disabled={heroActionBusy}>
                   <Settings size={15} />
                   Settings
                 </button>
-                <button class="action-btn" onclick={() => invoke("open_project_folder", { path: selectedProject.path })}>
+                <button
+                  class="action-btn"
+                  onclick={() => invoke("open_project_folder", { path: selectedProject.path })}
+                  disabled={heroActionBusy}
+                >
                   <FolderOpen size={15} />
                   Folder
                 </button>
-              {/if}
-            </div>
+                <div class="hero-overflow">
+                  <button
+                    type="button"
+                    class="action-btn hero-overflow-btn"
+                    aria-label="More instance actions"
+                    aria-expanded={heroOverflowOpen}
+                    aria-haspopup="menu"
+                    disabled={heroActionBusy}
+                    onclick={toggleHeroOverflow}
+                  >
+                    <MoreHorizontal size={15} />
+                  </button>
+                  {#if heroOverflowOpen}
+                    <div class="hero-overflow-menu" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={heroActionBusy}
+                        onclick={openRenamePrompt}
+                      >
+                        <Pencil size={14} />
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={heroActionBusy}
+                        onclick={openClonePrompt}
+                      >
+                        <Copy size={14} />
+                        Clone
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        class="danger"
+                        disabled={heroActionBusy}
+                        onclick={() => void deleteSelectedInstance()}
+                      >
+                        <Trash2 size={14} />
+                        Delete
+                      </button>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {:else if $recentProjects.length === 0}
+              <div class="hero-empty hero-empty-zero">
+                <p class="hero-empty-title">No instances yet</p>
+                <p class="hero-empty-hint">
+                  Create a blank pack, import one you already have, or browse the library.
+                </p>
+                <div class="hero-empty-ctas">
+                  <button
+                    type="button"
+                    class="action-btn hero-empty-cta"
+                    onclick={() => openAddInstance("blank")}
+                  >
+                    <Package size={15} />
+                    Create
+                  </button>
+                  <button
+                    type="button"
+                    class="action-btn hero-empty-cta"
+                    onclick={() => openAddInstance("import")}
+                  >
+                    <FolderInput size={15} />
+                    Import
+                  </button>
+                  <button
+                    type="button"
+                    class="action-btn hero-empty-cta"
+                    onclick={browseLibrary}
+                  >
+                    <Search size={15} />
+                    Browse
+                  </button>
+                </div>
+              </div>
+            {:else}
+              <div class="hero-empty">
+                <p class="hero-empty-title">Select an instance</p>
+                <p class="hero-empty-hint">
+                  Choose one from the list on the left, or create a new instance to get started.
+                </p>
+                <button
+                  type="button"
+                  class="action-btn hero-empty-cta"
+                  onclick={() => openAddInstance("blank")}
+                >
+                  <Package size={15} />
+                  Create instance
+                </button>
+              </div>
+            {/if}
 
             {#if crashFixBanner}
               <div class="crash-fix-banner" role="status">
                 <ShieldAlert size={16} />
                 <div class="crash-fix-banner-body">
-                  <strong>Crash fix applied</strong>
+                  <strong>Fix applied</strong>
                   <span>
                     {#if crashFixBanner.softVerifyStartedUnix}
-                      Soft-verify: ~{softVerifyRemainingSecs ?? 0}s left (≥{crashFixBanner.minPlaytimeSecs}s stable play)
+                      Play about {softVerifyRemainingSecs ?? 0}s more to confirm it works.
                     {:else}
-                      Launch to soft-verify. One-click restore available.
+                      Launch the game to confirm the fix. You can restore anytime.
                     {/if}
                   </span>
-                  {#if crashFixBanner.actionsSummary?.length}
-                    <span class="crash-fix-actions">
-                      {crashFixBanner.actionsSummary.slice(0, 3).join(" · ")}
-                    </span>
-                  {/if}
                 </div>
-                <button
-                  class="action-btn"
-                  type="button"
-                  disabled={crashFixBusy}
-                  onclick={onRollbackCrashFix}
-                >
-                  Restore snapshot
-                </button>
-                <button
-                  class="action-btn"
-                  type="button"
-                  onclick={() => (currentView = "diagnostics")}
-                >
-                  <Stethoscope size={14} /> Diagnostics
-                </button>
+                <div class="crash-fix-banner-actions">
+                  <button
+                    class="action-btn accent"
+                    type="button"
+                    disabled={crashFixBusy}
+                    onclick={onRollbackCrashFix}
+                  >
+                    Restore
+                  </button>
+                  <button
+                    class="ghost crash-fix-diag"
+                    type="button"
+                    onclick={() => (currentView = "diagnostics")}
+                  >
+                    Diagnostics
+                  </button>
+                </div>
               </div>
             {/if}
           </div>
@@ -488,10 +689,6 @@
         {#if selectedProject}
           <div class="hero-right">
             <div class="instance-stats">
-              <div class="stat version-stat" title="Minecraft version · loader">
-                <Gamepad2 size={14} />
-                <span>{selectedProject.info.minecraftVersion} · {selectedProject.info.loaderKind}</span>
-              </div>
               <div
                 class="stat size-stat"
                 title={instanceSizes[selectedProject.path] || "Calculating size…"}
@@ -528,7 +725,7 @@
         />
       {/if}
 
-      <YoutubeFeed variant="grid" />
+      <YoutubeFeed variant="row" />
     </div>
 
     <aside class="home-side">
@@ -620,11 +817,21 @@
           {/if}
         {:else}
           <div class="skin-panel-empty">
-            <User size={48} />
-            <p>Sign in to see your skin</p>
-            <button class="action-btn accent" onclick={() => (showLoginModal = true)}>
+            <User size={48} aria-hidden="true" />
+            <h2 class="skin-panel-empty-title">Not signed in</h2>
+            <p class="skin-panel-empty-copy">
+              Sign in with Microsoft or an offline account to play.
+            </p>
+            <button class="action-btn accent" onclick={() => loginModalOpen.set(true)}>
               <LogIn size={16} />
               Sign In
+            </button>
+            <button
+              type="button"
+              class="skin-panel-empty-manage"
+              onclick={() => (showAccountManager = true)}
+            >
+              Manage accounts
             </button>
           </div>
         {/if}
@@ -633,18 +840,39 @@
   </div>
 </div>
 
-{#if showLoginModal}
-  <MinecraftLogin onclose={() => (showLoginModal = false)} />
-{/if}
-
 {#if showAccountManager}
   <AccountManager onclose={() => (showAccountManager = false)} />
 {/if}
 
 {#if $newProjectOpen}
   <AddInstanceModal
+    initialMode={$addInstanceMode}
     onclose={() => (newProjectOpen.set(false))}
     oncreated={(path) => loadProject(path)}
+  />
+{/if}
+
+{#if showRenamePrompt && selectedProject}
+  <PromptDialog
+    title="Rename instance"
+    message={`Rename “${selectedProject.info.name}”`}
+    mode="text"
+    defaultValue={renameDefault}
+    confirmLabel="Rename"
+    onconfirm={(v) => void confirmRename(v)}
+    oncancel={() => (showRenamePrompt = false)}
+  />
+{/if}
+
+{#if showClonePrompt && selectedProject}
+  <PromptDialog
+    title="Clone instance"
+    message={`Create a copy of “${selectedProject.info.name}”`}
+    mode="text"
+    defaultValue={cloneDefault}
+    confirmLabel="Clone"
+    onconfirm={(v) => void confirmClone(v)}
+    oncancel={() => (showClonePrompt = false)}
   />
 {/if}
 
@@ -663,17 +891,17 @@
     gap: 16px;
   }
 
-  .quick-nav {
-    display: flex;
-    gap: 4px;
-    flex-wrap: wrap;
-  }
-
-  .quick-action {
+  .ide-entry {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
+  }
+
+  .ide-entry-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
     border-radius: var(--border-radius-md);
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
@@ -683,67 +911,15 @@
     transition: all 0.15s ease;
   }
 
-  .quick-action:hover {
+  .ide-entry-btn:hover:not(:disabled) {
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--bg-hover);
   }
 
-  /* ─── Account Avatar ─────────────────────────────── */
-  .account-avatar-section {
-    flex-shrink: 0;
-  }
-
-  .account-avatar-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px 6px 6px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--border-radius-lg);
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .account-avatar-btn:hover {
-    border-color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 4%, transparent);
-  }
-
-  .avatar-name {
-    font-family: var(--font-minecraft);
-    font-weight: 400;
-    font-size: 10px;
-    letter-spacing: 0.4px;
-    color: var(--text-primary);
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .avatar-badge {
-    font-size: 9px;
-    font-weight: 800;
-    padding: 1px 4px;
-    border-radius: 3px;
-    text-transform: uppercase;
-  }
-
-  .avatar-badge.microsoft {
-    color: #00a4ef;
-    background: rgba(0, 164, 239, 0.12);
-  }
-
-  .avatar-badge.offline {
-    color: var(--text-muted);
-    background: var(--bg-hover);
-  }
-
-  .avatar-badge.ygg {
-    color: #e9d5ff;
-    background: rgba(168, 85, 247, 0.15);
+  .ide-entry-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 
   /* ─── Main Layout (2-column stack) ─── */
@@ -765,6 +941,11 @@
   .home-main :global(.youtube-feed) {
     min-width: 0;
     width: 100%;
+  }
+
+  /* Row strip: keep horizontal scroll inside home-main, not the page. */
+  .home-main :global(.youtube-feed .feed-row) {
+    max-width: 100%;
   }
 
   .home-side {
@@ -968,8 +1149,36 @@
     color: var(--text-muted);
   }
 
-  .skin-panel-empty p {
+  .skin-panel-empty-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .skin-panel-empty-copy {
+    margin: 0;
+    max-width: 220px;
     font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+
+  .skin-panel-empty-manage {
+    margin-top: 4px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .skin-panel-empty-manage:hover {
+    color: var(--text-secondary);
   }
 
   .skin-static-fallback {
@@ -1033,12 +1242,12 @@
     justify-content: space-between;
     align-items: center;
     flex-wrap: wrap;
-    padding: 24px 32px;
+    padding: 20px 24px;
     background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 6%, transparent), color-mix(in srgb, var(--accent-secondary) 4%, transparent));
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
     margin-bottom: 0;
-    gap: 24px;
+    gap: 16px;
   }
 
   .hero-left {
@@ -1098,16 +1307,18 @@
   }
 
   .play-btn {
-    width: 160px;
+    min-width: 160px;
+    width: auto;
+    max-width: 280px;
     height: 56px;
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 8px;
     font-size: 18px;
     border-radius: var(--border-radius-lg);
     box-shadow: 0 8px 24px color-mix(in srgb, var(--accent-primary) 30%, transparent);
-    padding: 0 24px;
+    padding: 0 20px;
     flex-shrink: 0;
   }
 
@@ -1134,37 +1345,133 @@
     font-weight: 800;
   }
 
-  .project-quick-info {
+  .play-text.play-phase {
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+
+  .play-pct {
+    font-size: 11px;
+    font-weight: 700;
+    opacity: 0.85;
+    flex-shrink: 0;
+  }
+
+  .hero-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    max-width: 520px;
+  }
+
+  .hero-pack-icon {
+    width: 52px;
+    height: 52px;
+    flex-shrink: 0;
+    border-radius: var(--border-radius-md);
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-secondary));
+    border: 1px solid var(--border-color);
+  }
+
+  .hero-pack-icon.has-image {
+    background: var(--bg-secondary);
+  }
+
+  .hero-pack-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .hero-pack-letter {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    line-height: 1;
+  }
+
+  .hero-identity-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .hero-instance-name {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.2;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hero-instance-meta {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text-secondary);
+    text-transform: capitalize;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .hero-empty {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: 6px;
     max-width: 420px;
   }
 
-  .project-name {
+  .hero-empty-zero {
+    max-width: 480px;
+  }
+
+  .hero-empty-title {
+    margin: 0;
+    font-size: 18px;
     font-weight: 700;
-    font-size: 15px;
-    line-height: 1.3;
+    line-height: 1.25;
     color: var(--text-primary);
   }
 
-  .project-name.muted {
-    color: var(--text-muted);
-  }
-
-  .version-stat {
+  .hero-empty-hint {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
     color: var(--text-secondary);
-    font-weight: 600;
-    text-transform: capitalize;
   }
 
-  /* Empty-state copy — do not Title-Case the sentence. */
-  .project-hint {
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--text-muted);
-    text-transform: none;
+  .hero-empty-cta {
+    margin-top: 4px;
+  }
+
+  .hero-empty-ctas {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .hero-empty-ctas .hero-empty-cta {
+    margin-top: 0;
   }
 
   .hero-actions {
@@ -1174,6 +1481,85 @@
     align-items: center;
   }
 
+  .hero-actions .action-btn {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: transparent;
+    border-color: color-mix(in srgb, var(--border-color) 80%, transparent);
+  }
+
+  .hero-actions .action-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+  }
+
+  .hero-actions .action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .hero-overflow {
+    position: relative;
+  }
+
+  .hero-overflow-btn {
+    padding-inline: 8px;
+  }
+
+  .hero-overflow-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 40;
+    min-width: 160px;
+    padding: 6px;
+    border-radius: var(--border-radius-md);
+    border: 1px solid var(--border-color);
+    background: var(--bg-elevated, var(--bg-secondary));
+    box-shadow: var(--shadow-lg, 0 12px 28px rgba(0, 0, 0, 0.35));
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .hero-overflow-menu button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .hero-overflow-menu button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    color: var(--accent-primary);
+  }
+
+  .hero-overflow-menu button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .hero-overflow-menu button.danger {
+    color: var(--danger, #e5484d);
+  }
+
+  .hero-overflow-menu button.danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger, #e5484d) 12%, transparent);
+    color: var(--danger, #e5484d);
+  }
+
   .crash-fix-banner {
     display: flex;
     flex-wrap: wrap;
@@ -1181,7 +1567,7 @@
     gap: 10px;
     margin-top: 12px;
     padding: 10px 12px;
-    border-radius: 10px;
+    border-radius: var(--border-radius-md);
     border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
     background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-secondary));
     max-width: 560px;
@@ -1202,8 +1588,18 @@
     font-size: 13px;
   }
 
-  .crash-fix-actions {
-    opacity: 0.85;
+  .crash-fix-banner-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .crash-fix-diag {
+    padding: 6px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    border-radius: var(--border-radius-sm);
   }
 
   .action-btn {
@@ -1223,20 +1619,6 @@
   .action-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
-  }
-
-  .action-btn.primary {
-    background: var(--bg-elevated);
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
-  }
-
-  .action-btn.primary:hover {
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-  }
-
-  .ide-open-btn {
-    position: relative;
   }
 
   .ide-issue-badge {

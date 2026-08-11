@@ -453,12 +453,57 @@ export const skinPath = writable<string | null>(null);
 // including the sidebar's + button which lives outside the Dashboard tree.
 export const newProjectOpen = writable<boolean>(false);
 
+/** Global Minecraft login modal (Home skin panel, Play auth-gate, etc.). */
+export const loginModalOpen = writable<boolean>(false);
+
+/** Mode for AddInstanceModal when `newProjectOpen` is set. `"catalog"` redirects to Library Discover. */
+export type AddInstanceMode = "blank" | "import" | "catalog";
+export const addInstanceMode = writable<AddInstanceMode>("blank");
+
 /** Open a Library tab (`discover` / `yours` / `create`). Cleared by Library when applied. */
 export const libraryTabRequest = writable<"yours" | "discover" | "create" | null>(null);
+
+export function openAddInstance(mode: AddInstanceMode = "blank") {
+  if (mode === "catalog") {
+    libraryTabRequest.set("discover");
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("tuffbox:open-library"));
+    }
+    return;
+  }
+  addInstanceMode.set(mode);
+  newProjectOpen.set(true);
+}
+
+/** Deep-link into Settings (consumed once by Settings.svelte). */
+export type SettingsNavRequest = {
+  tab: "appearance" | "launcher" | "ai" | "integrations" | "about";
+  launcherSub?: "general" | "java" | "commands" | "runtime";
+};
+export const settingsNavRequest = writable<SettingsNavRequest | null>(null);
+
+/** Open Settings → Launcher (optionally a sub-tab such as Java). */
+export function openLauncherSettings(
+  launcherSub: NonNullable<SettingsNavRequest["launcherSub"]> = "general",
+) {
+  settingsNavRequest.set({ tab: "launcher", launcherSub });
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("tuffbox:open-settings"));
+  }
+}
 
 // Global launch state — true while a launch is in progress.
 // Used by Header to show spinner, and by Dashboard to disable play button.
 export const isLaunching = writable<boolean>(false);
+
+/** Structured launch phase while `isLaunching` (Java → mods → install → starting). */
+export type LaunchProgressState = {
+  phase: string;
+  message: string;
+  percent: number | null;
+};
+
+export const launchProgress = writable<LaunchProgressState | null>(null);
 
 /** Currently running Minecraft processes, keyed by project manifest path (`id`). */
 export const runningInstances = writable<RunningInstance[]>([]);
