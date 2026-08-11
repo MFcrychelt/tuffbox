@@ -16,9 +16,10 @@
 mod mpi_analytics;
 
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    extract::{Query, Request, State},
+    http::{header::AUTHORIZATION, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -43,9 +44,12 @@ const MPI_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 #[command(name = "tuffswarm-hub")]
 #[command(about = "Shared TuffSwarm hub for durable crash→fix capsules (no raw logs)")]
 struct Args {
-    /// Listen address (default 0.0.0.0:8787 so LAN clients can join).
-    #[arg(long, default_value = "0.0.0.0:8787")]
+    /// Listen address (default localhost — use 0.0.0.0 only behind a firewall + hub token).
+    #[arg(long, default_value = "127.0.0.1:8787")]
     bind: String,
+    /// Bearer token for `/v1/*` (or env `TUFFSWARM_HUB_TOKEN`). Required for non-loopback binds.
+    #[arg(long)]
+    hub_token: Option<String>,
     /// Directory for durable JSONL capsule store.
     #[arg(long)]
     data_dir: Option<PathBuf>,
@@ -68,6 +72,8 @@ struct HubState {
     supabase: Option<mpi_analytics::SupabaseCreds>,
     /// Short TTL cache for MPI proxy responses (modpacks / categories).
     mpi_cache: Mutex<HashMap<String, CacheEntry>>,
+    /// Empty = auth disabled (only allowed on loopback).
+    hub_token: Arc<String>,
 }
 
 #[tokio::main]
@@ -94,6 +100,31 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let hub_token = args
+        .hub_token
+        .filter(|t| !t.trim().is_empty())
+        .or_else(|| {
+            std::env::var("TUFFSWARM_HUB_TOKEN")
+                .ok()
+                .filter(|t| !t.trim().is_empty())
+        })
+        .unwrap_or_default();
+
+    let addr: SocketAddr = args.bind.parse()?;
+    let is_loopback = addr.ip().is_loopback();
+    if !is_loopback && hub_token.is_empty() {
+        anyhow::bail!(
+            "refusing to bind {addr} without --hub-token / TUFFSWARM_HUB_TOKEN (use 127.0.0.1 for local-only)"
+        );
+    }
+    if hub_token.is_empty() {
+        tracing::warn!(
+            "hub token unset — /v1/* is open on loopback only; set TUFFSWARM_HUB_TOKEN for production"
+        );
+    } else {
+        tracing::info!("hub bearer auth enabled for /v1/*");
+    }
+
     let data_dir = args.data_dir.unwrap_or_else(default_data_dir);
     std::fs::create_dir_all(&data_dir)?;
     let capsules_path = data_dir.join("capsules.jsonl");
@@ -112,10 +143,10 @@ async fn main() -> anyhow::Result<()> {
         cooccur_path,
         supabase,
         mpi_cache: Mutex::new(HashMap::new()),
+        hub_token: Arc::new(hub_token),
     });
 
-    let app = Router::new()
-        .route("/health", get(health))
+    let protected = Router::new()
         .route("/v1/crash/capsules", post(publish_capsule))
         .route("/v1/crash/lookup", post(lookup))
         .route("/v1/crash/diagnose", post(diagnose))
@@ -125,15 +156,47 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/v1/mods/modpacks", get(modpacks_get))
         .route("/v1/mods/modpack-categories", get(modpack_categories_get))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bearer,
+        ));
+
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(protected)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr: SocketAddr = args.bind.parse()?;
     tracing::info!(%addr, "listening — point TuffBox Settings → TuffSwarm hub URL here");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn require_bearer(
+    State(state): State<Arc<HubState>>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let expected = state.hub_token.as_str();
+    if expected.is_empty() {
+        return Ok(next.run(req).await);
+    }
+    let header = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let token = header
+        .strip_prefix("Bearer ")
+        .or_else(|| header.strip_prefix("bearer "))
+        .unwrap_or("");
+    if token == expected {
+        Ok(next.run(req).await)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
 }
 
 fn default_data_dir() -> PathBuf {
@@ -206,6 +269,22 @@ async fn publish_capsule(
             Json(json!({ "error": e })),
         )
     })?;
+
+    match capsule.verify_signature() {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "unsigned capsule rejected — Ed25519 signature required" })),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": e })),
+            ));
+        }
+    }
 
     let stored = {
         let lib = state.library.lock().map_err(|_| {

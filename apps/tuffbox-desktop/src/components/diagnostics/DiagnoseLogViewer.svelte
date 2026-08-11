@@ -1,48 +1,63 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { Terminal, Search, Maximize2, Copy, Share2 } from "lucide-svelte";
+  import { Terminal, Search, Maximize2, Copy, Share2 } from "@lucide/svelte";
 
-  /** Crash/game log viewer: search, syntax coloring, virtualized render window,
-   *  error cycling. Parent (Diagnostics.svelte) owns log source selection,
-   *  copy/share (network) actions, and the "jump to error" API shared with
-   *  the verdict hero / tools strip / triage panel — this component exposes
-   *  `scrollToLine()` so the parent can drive scrolling into this viewer's
-   *  own (otherwise private) render window. */
-  export let logDisplayText = "";
-  export let currentLogTextLength = 0;
-  export let sourceLabel = "log";
-  export let signalLineMap: Map<number, string> = new Map();
-  export let errorHits: number[] = [];
-  export let activeErrorHit = -1;
-  export let sharingLog = false;
-  export let hasLogText = false;
-  /** Changes whenever the user switches log source — resets the truncation window. */
-  export let sourceKey = "";
+  let {
+    logDisplayText = "",
+    currentLogTextLength = 0,
+    sourceLabel = "log",
+    signalLineMap = new Map<number, string>(),
+    errorHits = [],
+    activeErrorHit = -1,
+    sharingLog = false,
+    hasLogText = false,
+    sourceKey = "",
+    onJumpNextError,
+    onCopy,
+    onShare,
+  }: {
+    logDisplayText?: string;
+    currentLogTextLength?: number;
+    sourceLabel?: string;
+    signalLineMap?: Map<number, string>;
+    errorHits?: number[];
+    activeErrorHit?: number;
+    sharingLog?: boolean;
+    hasLogText?: boolean;
+    sourceKey?: string;
+    onJumpNextError?: () => void;
+    onCopy?: () => void;
+    onShare?: () => void;
+  } = $props();
 
-  const dispatch = createEventDispatcher<{ jumpNextError: void; copy: void; share: void }>();
-
-  let logQuery = "";
-  let logMatches: { line: number }[] = [];
-  let activeMatch = 0;
-  let logWrap = true;
-  let logExpanded = false;
-  let logPreEl: HTMLElement | null = null;
+  let logQuery = $state("");
+  let logMatches = $state<{ line: number }[]>([]);
+  let activeMatch = $state(0);
+  let logWrap = $state(true);
+  let logExpanded = $state(false);
+  let logPreEl: HTMLElement | null = $state(null);
 
   const LOG_RENDER_CAP = 400;
-  let logShowAll = false;
-  let lastSourceKey = "";
-  $: if (sourceKey !== lastSourceKey) {
-    lastSourceKey = sourceKey;
-    logShowAll = false;
-  }
+  let logShowAll = $state(false);
+  let lastSourceKey = $state("");
 
-  $: logLines = logDisplayText ? logDisplayText.split("\n") : [];
-  $: logLineCount = logLines.length;
-  $: recomputeLogMatches(logDisplayText);
-  $: logRenderOffset =
-    logShowAll || logLineCount <= LOG_RENDER_CAP ? 0 : logLineCount - LOG_RENDER_CAP;
-  $: visibleLogLines = logLines.slice(logRenderOffset);
-  $: hiddenLogLineCount = logRenderOffset;
+  $effect(() => {
+    if (sourceKey !== lastSourceKey) {
+      lastSourceKey = sourceKey;
+      logShowAll = false;
+    }
+  });
+
+  const logLines = $derived(logDisplayText ? logDisplayText.split("\n") : []);
+  const logLineCount = $derived(logLines.length);
+  const logRenderOffset = $derived(
+    logShowAll || logLineCount <= LOG_RENDER_CAP ? 0 : logLineCount - LOG_RENDER_CAP,
+  );
+  const visibleLogLines = $derived(logLines.slice(logRenderOffset));
+  const hiddenLogLineCount = $derived(logRenderOffset);
+
+  $effect(() => {
+    recomputeLogMatches(logDisplayText);
+  });
 
   function escapeHtml(s: string): string {
     return s
@@ -161,7 +176,7 @@
           type="search"
           placeholder="Find in log…"
           bind:value={logQuery}
-          on:keydown={(e) => {
+          onkeydown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
               jumpToMatch(e.shiftKey ? -1 : 1);
@@ -172,27 +187,27 @@
           <span class="log-match-count">
             {logMatches.length ? `${activeMatch + 1}/${logMatches.length}` : "0"}
           </span>
-          <button type="button" class="ghost mini" on:click={() => jumpToMatch(-1)} disabled={!logMatches.length}>↑</button>
-          <button type="button" class="ghost mini" on:click={() => jumpToMatch(1)} disabled={!logMatches.length}>↓</button>
+          <button type="button" class="ghost mini" onclick={() => jumpToMatch(-1)} disabled={!logMatches.length}>↑</button>
+          <button type="button" class="ghost mini" onclick={() => jumpToMatch(1)} disabled={!logMatches.length}>↓</button>
         {/if}
       </label>
-      <button type="button" class="ghost mini" class:active={logWrap} on:click={() => (logWrap = !logWrap)} title="Toggle wrap">
+      <button type="button" class="ghost mini" class:active={logWrap} onclick={() => (logWrap = !logWrap)} title="Toggle wrap">
         Wrap
       </button>
-      <button type="button" class="ghost mini" on:click={() => (logExpanded = !logExpanded)} title="Toggle height">
+      <button type="button" class="ghost mini" onclick={() => (logExpanded = !logExpanded)} title="Toggle height">
         <Maximize2 size={13} /> {logExpanded ? "Compact" : "Tall"}
       </button>
       <button
         type="button"
         class="ghost mini"
-        on:click={() => dispatch("jumpNextError")}
+        onclick={() => onJumpNextError?.()}
         disabled={!errorHits.length}
         title={errorHits.length ? `Next error (${errorHits.length})` : "No error lines"}
       >
         Error{errorHits.length ? ` ${(activeErrorHit < 0 ? 0 : activeErrorHit) + 1}/${errorHits.length}` : ""}
       </button>
-      <button type="button" class="ghost mini" on:click={() => dispatch("copy")} disabled={!hasLogText}><Copy size={13} /></button>
-      <button type="button" class="ghost mini" on:click={() => dispatch("share")} disabled={sharingLog || !hasLogText}>
+      <button type="button" class="ghost mini" onclick={() => onCopy?.()} disabled={!hasLogText}><Copy size={13} /></button>
+      <button type="button" class="ghost mini" onclick={() => onShare?.()} disabled={sharingLog || !hasLogText}>
         <Share2 size={13} />
       </button>
     </div>
@@ -202,7 +217,7 @@
     {#if hiddenLogLineCount > 0 && !logShowAll}
       <div class="log-trunc-banner">
         <span>Showing last {LOG_RENDER_CAP.toLocaleString()} of {logLineCount.toLocaleString()} lines</span>
-        <button type="button" class="secondary small" on:click={() => (logShowAll = true)}>
+        <button type="button" class="secondary small" onclick={() => (logShowAll = true)}>
           Show {hiddenLogLineCount.toLocaleString()} earlier lines
         </button>
       </div>
@@ -288,7 +303,7 @@
   }
   .log-match-count { font-size: 11px; color: var(--text-muted); min-width: 36px; text-align: center; }
   .log-viewer-actions .ghost.mini.active {
-    border-color: rgba(27, 217, 106, 0.45);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
     color: var(--accent-primary);
   }
   .log-stage {

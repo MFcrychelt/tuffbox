@@ -1,19 +1,22 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
-  import { X, Loader2, CheckCircle2, AlertTriangle } from "lucide-svelte";
+  import { X, Loader2, CheckCircle2, AlertTriangle, Pause, Play } from "@lucide/svelte";
+  import { toasts } from "../lib/toast";
 
   type BackgroundTask = {
     id: string;
     title: string;
-    status: "running" | "succeeded" | "failed" | "dismissed";
+    status: "running" | "paused" | "succeeded" | "failed" | "dismissed";
     progress?: number | null;
     detail?: string | null;
     error?: string | null;
   };
 
-  let tasks: BackgroundTask[] = [];
+  let tasks = $state<BackgroundTask[]>([]);
   let timer: ReturnType<typeof setInterval> | null = null;
+  let unlistenPullDone: UnlistenFn | null = null;
 
   async function refresh() {
     try {
@@ -32,38 +35,109 @@
     }
   }
 
+  function isOllamaPull(id: string) {
+    return id.startsWith("ollama-pull-");
+  }
+
+  function ollamaModelFromTaskId(id: string) {
+    return id.slice("ollama-pull-".length);
+  }
+
+  async function pauseOllamaPull() {
+    try {
+      await invoke("pause_ollama_model_pull");
+      toasts.info("Pausing model download…", 3000);
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
+  async function resumeOllamaPull(id: string) {
+    const model = ollamaModelFromTaskId(id);
+    if (!model) return;
+    try {
+      await invoke("pull_ollama_model", {
+        model,
+        endpoint: null,
+        binaryPath: null,
+        modelsPath: null,
+      });
+      toasts.info(`Resumed ${model} in background`, 4000);
+      await refresh();
+    } catch (e) {
+      toasts.error(String(e));
+    }
+  }
+
   onMount(() => {
     void refresh();
     timer = setInterval(() => {
       void refresh();
     }, 800);
+    void listen<{
+      ok: boolean;
+      paused?: boolean;
+      model: string;
+      error?: string;
+    }>("ollama-pull-finished", (ev) => {
+      const p = ev.payload;
+      if (p.paused) {
+        toasts.info(`Paused ${p.model} — resume from the task panel or AI settings`, 6000);
+      } else if (p.ok) {
+        toasts.success(`AI model installed: ${p.model}`, 6000);
+      } else if (p.error) {
+        toasts.error(`AI model download failed: ${p.error}`, 10000);
+      }
+      void refresh();
+    }).then((u) => {
+      unlistenPullDone = u;
+    });
   });
 
   onDestroy(() => {
     if (timer) clearInterval(timer);
+    void unlistenPullDone?.();
   });
 
-  $: visible = tasks.filter((t) => t.status === "running" || t.status === "failed");
+  const visible = $derived(
+    tasks.filter((t) => t.status === "running" || t.status === "failed" || t.status === "paused"),
+  );
 </script>
 
 {#if visible.length}
   <aside class="task-panel" aria-label="Background tasks">
     {#each visible as t (t.id)}
-      <div class="task" class:failed={t.status === "failed"} class:running={t.status === "running"}>
+      <div
+        class="task"
+        class:failed={t.status === "failed"}
+        class:running={t.status === "running"}
+        class:paused={t.status === "paused"}
+      >
         <div class="row">
           {#if t.status === "running"}
             <Loader2 size={14} class="spin" />
           {:else if t.status === "failed"}
             <AlertTriangle size={14} />
+          {:else if t.status === "paused"}
+            <Pause size={14} />
           {:else}
             <CheckCircle2 size={14} />
           {/if}
           <strong>{t.title}</strong>
-          <button type="button" class="ghost" title="Dismiss" on:click={() => dismiss(t.id)}>
+          {#if t.status === "running" && isOllamaPull(t.id)}
+            <button type="button" class="ghost" title="Pause download" onclick={() => pauseOllamaPull()}>
+              <Pause size={14} />
+            </button>
+          {:else if t.status === "paused" && isOllamaPull(t.id)}
+            <button type="button" class="ghost" title="Resume download" onclick={() => resumeOllamaPull(t.id)}>
+              <Play size={14} />
+            </button>
+          {/if}
+          <button type="button" class="ghost" title="Dismiss" onclick={() => dismiss(t.id)}>
             <X size={14} />
           </button>
         </div>
-        {#if t.status === "running" && t.progress != null}
+        {#if (t.status === "running" || t.status === "paused") && t.progress != null}
           <div class="bar"><div class="fill" style={`width: ${Math.round((t.progress || 0) * 100)}%`}></div></div>
         {/if}
         {#if t.detail}
@@ -100,6 +174,9 @@
   .task.failed {
     border-color: #c44;
   }
+  .task.paused {
+    border-color: #64748b;
+  }
   .row {
     display: flex;
     align-items: center;
@@ -128,6 +205,9 @@
     height: 100%;
     background: var(--accent, #6cf);
     transition: width 0.2s ease;
+  }
+  .paused .fill {
+    background: #94a3b8;
   }
   :global(html.potato-pc) .fill {
     transition: none;

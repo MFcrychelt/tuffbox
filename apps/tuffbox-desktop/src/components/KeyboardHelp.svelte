@@ -1,12 +1,11 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { X } from "lucide-svelte";
+  import { X } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ close: void }>();
+  let { onclose }: { onclose?: () => void } = $props();
 
   const shortcuts = [
-    { keys: ["Ctrl", "K"], label: "Quick navigate" },
+    { keys: ["Ctrl", "K"], label: "Command palette" },
     { keys: ["Ctrl", "1"], label: "Launcher" },
     { keys: ["Ctrl", "2"], label: "Open IDE" },
     { keys: ["Ctrl", "3"], label: "Mods" },
@@ -14,12 +13,16 @@
     { keys: ["Ctrl", "5"], label: "Configs" },
     { keys: ["Ctrl", "6"], label: "Diagnostics" },
     { keys: ["Ctrl", "7"], label: "Snapshots" },
+    { keys: ["Ctrl", "Enter"], label: "IDE · Next Action" },
+    { keys: ["Ctrl", "Shift", "P"], label: "IDE · Play / Test launch" },
+    { keys: ["["], label: "IDE · Prev stage in phase" },
+    { keys: ["]"], label: "IDE · Next stage in phase" },
     { keys: ["?"], label: "Show shortcuts" },
   ];
 </script>
 
-<div class="kh-backdrop" role="button" tabindex="-1" on:click={(e) => e.target === e.currentTarget && dispatch("close")} on:keydown={() => {}}>
-  <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => dispatch("close") }}>
+<div class="kh-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && onclose?.()} onkeydown={() => {}}>
+  <div class="kh-dialog" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" use:trapFocus={{ onEscape: () => onclose?.() }}>
     <h3>Keyboard Shortcuts</h3>
     <div class="kh-list">
       {#each shortcuts as s}
@@ -32,7 +35,7 @@
       {/each}
     </div>
     <p class="kh-hint">Press <kbd>?</kbd> anywhere to toggle this panel</p>
-    <button class="kh-close" on:click={() => dispatch("close")} aria-label="Close shortcuts">
+    <button class="kh-close" onclick={() => onclose?.()} aria-label="Close shortcuts">
       <X size={16} />
     </button>
   </div>

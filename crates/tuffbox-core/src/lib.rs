@@ -6,6 +6,7 @@
 pub mod action_plan;
 pub mod change_plan;
 pub mod create_mode;
+pub mod create_mode_curation;
 pub mod mod_suggest;
 pub mod modpack_index;
 pub mod crash;
@@ -13,11 +14,13 @@ pub mod crash_remote;
 pub mod diagnostics;
 pub mod exporter;
 pub mod forge_install;
+pub mod fs_util;
 pub mod graph;
 pub mod graph_service;
 pub mod http;
 pub mod importer;
 pub mod item_icons;
+pub mod item_catalog;
 pub mod jre;
 pub mod launcher;
 pub mod launch_error;
@@ -33,6 +36,7 @@ pub mod mod_files;
 pub mod mod_index_cache;
 pub mod quest_plan;
 pub mod quest_chat;
+pub mod quest_kubejs;
 pub mod mod_scan;
 pub mod murmur2;
 pub mod process;
@@ -50,6 +54,7 @@ pub mod ai_explanation;
 pub mod api_cache;
 pub mod crash_assistant;
 pub mod crash_kb;
+pub mod creation_marketplace;
 pub mod swarm;
 pub mod swarm_supabase;
 pub mod task_progress;
@@ -62,11 +67,13 @@ pub mod region_edit;
 pub mod content_packs;
 pub mod servers_dat;
 pub mod overrides;
+pub mod optimize_pack;
 pub mod packwiz;
 pub mod properties_parser;
 pub mod recipe_layout;
 pub mod recipe_runtime;
 pub mod cosmetics_runtime;
+pub mod overlay_runtime;
 pub mod recipe_scan;
 pub mod registry;
 pub mod tag_normalizer;
@@ -104,6 +111,10 @@ pub use recipe_runtime::*;
 pub use cosmetics_runtime::{
     prepare_cosmetics_bridge, resolve_cosmetics_artifact, CosmeticsBridgeLaunch,
     CosmeticsLaunchExtras, COSMETICS_ANCHORS, McVersion,
+};
+pub use overlay_runtime::{
+    prepare_overlay_bridge, resolve_overlay_artifact, write_overlay_session, OverlayBridgeLaunch,
+    OverlaySessionFile, OVERLAY_ANCHORS,
 };
 pub use resolver::*;
 pub use snapshot::*;

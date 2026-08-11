@@ -1,24 +1,29 @@
 <script lang="ts">
-  import { createEventDispatcher } from "svelte";
-  import { Network } from "lucide-svelte";
+  import { Network } from "@lucide/svelte";
   import { trapFocus } from "../lib/focusTrap";
 
-  const dispatch = createEventDispatcher<{ enable: void; skip: void }>();
+  let {
+    onEnable,
+    onSkip,
+  }: {
+    onEnable?: () => void;
+    onSkip?: () => void;
+  } = $props();
 </script>
 
 <div
   class="sw-backdrop"
-  role="button"
-  tabindex="-1"
-  on:click={(e) => e.target === e.currentTarget && dispatch("skip")}
-  on:keydown={() => {}}
+  role="presentation"
+  onclick={(e) => {
+    if (e.target === e.currentTarget) onSkip?.();
+  }}
 >
   <div
     class="sw-dialog"
     role="dialog"
     aria-modal="true"
     aria-labelledby="swarm-onboard-title"
-    use:trapFocus={{ onEscape: () => dispatch("skip") }}
+    use:trapFocus={{ onEscape: () => onSkip?.() }}
   >
     <div class="sw-icon"><Network size={28} /></div>
     <h3 id="swarm-onboard-title">Use TuffSwarm network?</h3>
@@ -27,8 +32,8 @@
       (modpack trends). Without the network, those modes stay unavailable. You can change this anytime in Settings.
     </p>
     <div class="sw-actions">
-      <button class="ghost" type="button" on:click={() => dispatch("skip")}>Not now</button>
-      <button type="button" on:click={() => dispatch("enable")}>Use network</button>
+      <button class="ghost" type="button" onclick={(e) => { e.stopPropagation(); onSkip?.(); }}>Not now</button>
+      <button type="button" onclick={(e) => { e.stopPropagation(); onEnable?.(); }}>Use network</button>
     </div>
   </div>
 </div>
@@ -42,9 +47,11 @@
     align-items: center;
     justify-content: center;
     z-index: 220;
-    backdrop-filter: blur(8px);
+    /* WebView2: backdrop-filter can eat clicks; keep a plain dim instead. */
   }
   .sw-dialog {
+    position: relative;
+    z-index: 1;
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-xl);
@@ -72,5 +79,10 @@
     display: flex;
     gap: 10px;
     justify-content: center;
+  }
+  .sw-actions button {
+    position: relative;
+    z-index: 2;
+    cursor: pointer;
   }
 </style>

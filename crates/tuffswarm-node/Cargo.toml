@@ -35,6 +35,8 @@ libp2p = { version = "0.54", features = [
   "autonat",
   "relay",
   "dcutr",
+  "request-response",
+  "json",
 ] }
 tuffbox-core = { path = "../tuffbox-core" }
 ed25519-dalek = { version = "2", features = ["rand_core"] }

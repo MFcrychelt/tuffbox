@@ -1,7 +1,19 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { PackageOpen, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle } from "lucide-svelte";
-  import { projectPath, projectInfo } from "../lib/store";
+  import { save } from "@tauri-apps/plugin-dialog";
+  import {
+    PackageOpen,
+    RefreshCw,
+    UploadCloud,
+    CheckCircle2,
+    AlertTriangle,
+    FolderOpen,
+    Layers,
+    Server,
+    Box,
+    FileArchive,
+  } from "@lucide/svelte";
+  import { projectPath, projectInfo, pushWorkTrail } from "../lib/store";
   import EmptyState from "./EmptyState.svelte";
 
   type ExportResult = {
@@ -10,28 +22,115 @@
     overrideCount: number;
   };
 
-  let targetPath = "";
-  let serverTargetPath = "";
-  let prismTargetPath = "";
-  let curseforgeTargetPath = "";
-  let projectDir = "";
-  let exporting = false;
-  let result: ExportResult | null = null;
-  let error: string | null = null;
-  let issues: { severity: "error" | "warning"; code: string; message: string; target?: string | null }[] = [];
-  let exportMode: "mrpack" | "server" | "prism" | "curseforge" = "mrpack";
+  type ExportIssue = {
+    severity: "error" | "warning";
+    code: string;
+    message: string;
+    target?: string | null;
+  };
 
-  let lastPathForDefaults = "";
+  type ExportMode = "mrpack" | "server" | "prism" | "curseforge";
+
+  type BatchRow = {
+    kind: string;
+    status: string;
+    path?: string;
+    files?: number;
+    overrideCount?: number;
+    error?: string;
+  };
+
+  let targetPath = $state("");
+  let serverTargetPath = $state("");
+  let prismTargetPath = $state("");
+  let curseforgeTargetPath = $state("");
+  let projectDir = $state("");
+  let exporting = $state(false);
+  let batching = $state(false);
+  let result = $state<ExportResult | null>(null);
+  let batchResults = $state<BatchRow[]>([]);
+  let error = $state<string | null>(null);
+  let issues = $state<ExportIssue[]>([]);
+  let issuesLoading = $state(false);
+  let exportMode = $state<ExportMode>("mrpack");
+
+  let lastPathForDefaults = $state("");
+
+  const modeMeta: Record<
+    ExportMode,
+    { title: string; ext: string; filters: { name: string; extensions: string[] }[] }
+  > = {
+    mrpack: {
+      title: "Modrinth pack",
+      ext: "mrpack",
+      filters: [{ name: "Modrinth pack", extensions: ["mrpack"] }],
+    },
+    server: {
+      title: "Server pack",
+      ext: "zip",
+      filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+    },
+    prism: {
+      title: "Prism instance",
+      ext: "zip",
+      filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+    },
+    curseforge: {
+      title: "CurseForge pack",
+      ext: "zip",
+      filters: [{ name: "ZIP archive", extensions: ["zip"] }],
+    },
+  };
+
+  function pathForMode(mode: ExportMode): string {
+    switch (mode) {
+      case "mrpack":
+        return targetPath;
+      case "server":
+        return serverTargetPath;
+      case "prism":
+        return prismTargetPath;
+      case "curseforge":
+        return curseforgeTargetPath;
+    }
+  }
+
+  function setPathForMode(mode: ExportMode, value: string) {
+    switch (mode) {
+      case "mrpack":
+        targetPath = value;
+        break;
+      case "server":
+        serverTargetPath = value;
+        break;
+      case "prism":
+        prismTargetPath = value;
+        break;
+      case "curseforge":
+        curseforgeTargetPath = value;
+        break;
+    }
+  }
 
   async function loadDefaultPaths(path: string) {
-    projectDir = await invoke("get_project_dir", { path });
-    issues = await invoke("validate_modrinth_export", { path });
-    const id = $projectInfo?.id ?? "modpack";
-    const version = $projectInfo?.version ?? "1.0.0";
-    targetPath = `${projectDir}/${id}-${version}.mrpack`;
-    serverTargetPath = `${projectDir}/${id}-${version}-server.zip`;
-    prismTargetPath = `${projectDir}/${id}-${version}-prism.zip`;
-    curseforgeTargetPath = `${projectDir}/${id}-${version}-curseforge.zip`;
+    issuesLoading = true;
+    error = null;
+    try {
+      projectDir = await invoke<string>("get_project_dir", { path });
+      issues = await invoke<ExportIssue[]>("validate_modrinth_export", { path });
+      const id = $projectInfo?.id ?? "modpack";
+      const version = $projectInfo?.version ?? "1.0.0";
+      const exportDir = `${projectDir}/export`;
+      targetPath = `${exportDir}/${id}-${version}.mrpack`;
+      serverTargetPath = `${exportDir}/${id}-${version}-server.zip`;
+      prismTargetPath = `${exportDir}/${id}-${version}-prism.zip`;
+      curseforgeTargetPath = `${exportDir}/${id}-${version}-curseforge.zip`;
+    } catch (e) {
+      error = String(e);
+      issues = [];
+    } finally {
+      issuesLoading = false;
+    }
   }
 
   function refreshDefaultPath() {
@@ -42,7 +141,29 @@
   function onProjectPathChange(path: string | null) {
     if (!path || path === lastPathForDefaults) return;
     lastPathForDefaults = path;
+    result = null;
+    batchResults = [];
     void loadDefaultPaths(path);
+  }
+
+  async function browseSave(mode: ExportMode) {
+    const meta = modeMeta[mode];
+    const current = pathForMode(mode);
+    const defaultPath = current || undefined;
+    try {
+      const picked = await save({
+        title: `Save ${meta.title}`,
+        defaultPath,
+        filters: meta.filters,
+      });
+      if (typeof picked === "string" && picked.trim()) {
+        setPathForMode(mode, picked);
+      }
+    } catch (e) {
+      // User cancelled or dialog unavailable — keep typed path.
+      if (String(e).toLowerCase().includes("cancel")) return;
+      error = String(e);
+    }
   }
 
   async function exportMrpack() {
@@ -66,11 +187,28 @@
     exporting = true;
     error = null;
     result = null;
+    batchResults = [];
     try {
-      result = await invoke(command, {
+      // Re-validate before mrpack so the button can't race a stale issues list.
+      if (command === "export_modrinth_pack") {
+        issues = await invoke<ExportIssue[]>("validate_modrinth_export", {
+          path: $projectPath,
+        });
+        if (issues.some((i) => i.severity === "error")) {
+          error = "Fix blocking export issues before building a .mrpack.";
+          return;
+        }
+      }
+      result = await invoke<ExportResult>(command, {
         path: $projectPath,
-        targetPath: pathValue,
+        targetPath: pathValue && pathValue.trim() ? pathValue.trim() : null,
       });
+      if (result) {
+        pushWorkTrail(`Export ready · ${result.path}`, [
+          { id: "release", label: "Open Release", kind: "stage", stage: "release" },
+          { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+        ]);
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -78,51 +216,194 @@
     }
   }
 
-  $: onProjectPathChange($projectPath);
+  async function exportAll() {
+    if (!$projectPath) return;
+    batching = true;
+    exporting = true;
+    error = null;
+    result = null;
+    batchResults = [];
+    try {
+      batchResults = await invoke<BatchRow[]>("batch_export_all", {
+        path: $projectPath,
+      });
+      const failed = batchResults.filter((r) => r.status !== "ok");
+      if (failed.length === batchResults.length && batchResults.length > 0) {
+        error = failed.map((f) => `${f.kind}: ${f.error ?? "failed"}`).join("; ");
+      } else if (failed.length > 0) {
+        error = `Partial export — ${failed.length} format(s) failed.`;
+      } else if (batchResults.length > 0) {
+        const first = batchResults.find((r) => r.path);
+        if (first?.path) {
+          pushWorkTrail(`Exported ${batchResults.length} formats · ${first.path}`, [
+            { id: "release", label: "Open Release", kind: "stage", stage: "release" },
+            { id: "dismiss", label: "Dismiss", kind: "dismiss" },
+          ]);
+        }
+      }
+    } catch (e) {
+      error = String(e);
+    } finally {
+      batching = false;
+      exporting = false;
+    }
+  }
+
+  async function revealPath(filePath: string) {
+    try {
+      await invoke("reveal_export_path", { path: filePath });
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function openExportFolder() {
+    if (!projectDir) return;
+    try {
+      // Prefer export/ if it exists; otherwise open the project root.
+      await invoke("reveal_export_path", { path: `${projectDir}/export` });
+    } catch {
+      try {
+        await invoke("reveal_export_path", { path: projectDir });
+      } catch {
+        try {
+          await invoke("open_project_folder", { path: $projectPath });
+        } catch (e) {
+          error = String(e);
+        }
+      }
+    }
+  }
+
+  const blockingErrors = $derived(issues.filter((i) => i.severity === "error"));
+  const warnings = $derived(issues.filter((i) => i.severity === "warning"));
+  const busy = $derived(exporting || batching || issuesLoading);
+
+  $effect(() => {
+    onProjectPathChange($projectPath);
+  });
 </script>
 
 <div class="export-builder">
   <div class="toolbar">
     <div class="title"><UploadCloud size={18} /> Export builder</div>
-    <button class="ghost" on:click={refreshDefaultPath} disabled={!$projectPath}>
-      <RefreshCw size={16} />
-      Default path
-    </button>
+    <div class="toolbar-actions">
+      <button class="ghost" onclick={refreshDefaultPath} disabled={!$projectPath || busy}>
+        <RefreshCw size={16} />
+        Refresh paths
+      </button>
+      <button class="ghost" onclick={openExportFolder} disabled={!projectDir || busy}>
+        <FolderOpen size={16} />
+        Open export folder
+      </button>
+    </div>
   </div>
 
-  {#if error}<div class="notice error"><AlertTriangle size={16} /> {error}</div>{/if}
+  {#if error}
+    <div class="notice error" role="alert">
+      <AlertTriangle size={16} />
+      <span>{error}</span>
+    </div>
+  {/if}
   {#if result}
-    <div class="notice success"><CheckCircle2 size={16} /> Exported {result.fileCount} remote mods and {result.overrideCount} override files to {result.path}</div>
+    <div class="notice success" role="status">
+      <CheckCircle2 size={16} />
+      <div class="notice-body">
+        <strong>Export complete</strong>
+        <span>
+          {result.fileCount} remote entries · {result.overrideCount} override files
+        </span>
+        <code class="path-chip">{result.path}</code>
+        <button class="linkish" onclick={() => void revealPath(result!.path)}>
+          <FolderOpen size={14} /> Show in folder
+        </button>
+      </div>
+    </div>
+  {/if}
+  {#if batchResults.length > 0}
+    <div class="batch-results" role="status">
+      <h3>Batch export</h3>
+      <ul>
+        {#each batchResults as row (row.kind)}
+          <li class:ok={row.status === "ok"} class:bad={row.status !== "ok"}>
+            <strong>{row.kind}</strong>
+            {#if row.status === "ok"}
+              <span>{row.files ?? 0} files · {row.overrideCount ?? 0} overrides</span>
+              {#if row.path}
+                <code>{row.path}</code>
+                <button class="linkish" onclick={() => void revealPath(row.path!)}>
+                  Show
+                </button>
+              {/if}
+            {:else}
+              <span class="err-text">{row.error ?? "failed"}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
   {/if}
 
   {#if !$projectPath}
-    <EmptyState icon={PackageOpen} title="No project selected" description="Open a project to export a modpack." />
+    <EmptyState
+      icon={PackageOpen}
+      title="No project selected"
+      description="Open a project to export a modpack."
+    />
   {:else}
     <section class="panel">
-      <div class="format-grid">
-        <button class="format-card" class:active={exportMode === "mrpack"} on:click={() => (exportMode = "mrpack")}>
+      <div class="format-grid" role="tablist" aria-label="Export format">
+        <button
+          type="button"
+          role="tab"
+          class="format-card"
+          class:active={exportMode === "mrpack"}
+          aria-selected={exportMode === "mrpack"}
+          onclick={() => (exportMode = "mrpack")}
+        >
           <PackageOpen size={28} />
           <div>
             <h2>Modrinth .mrpack</h2>
             <p>modrinth.index.json + remote downloads + overrides.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "server"} on:click={() => (exportMode = "server")}>
-          <PackageOpen size={28} />
+        <button
+          type="button"
+          role="tab"
+          class="format-card"
+          class:active={exportMode === "server"}
+          aria-selected={exportMode === "server"}
+          onclick={() => (exportMode = "server")}
+        >
+          <Server size={28} />
           <div>
             <h2>Server pack</h2>
             <p>Server-safe mods, configs, manifest and start scripts.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "prism"} on:click={() => (exportMode = "prism")}>
-          <PackageOpen size={28} />
+        <button
+          type="button"
+          role="tab"
+          class="format-card"
+          class:active={exportMode === "prism"}
+          aria-selected={exportMode === "prism"}
+          onclick={() => (exportMode = "prism")}
+        >
+          <Box size={28} />
           <div>
             <h2>Prism instance</h2>
             <p>instance.cfg + mmc-pack.json + mods/configs.</p>
           </div>
         </button>
-        <button class="format-card" class:active={exportMode === "curseforge"} on:click={() => (exportMode = "curseforge")}>
-          <PackageOpen size={28} />
+        <button
+          type="button"
+          role="tab"
+          class="format-card"
+          class:active={exportMode === "curseforge"}
+          aria-selected={exportMode === "curseforge"}
+          onclick={() => (exportMode = "curseforge")}
+        >
+          <FileArchive size={28} />
           <div>
             <h2>CurseForge zip</h2>
             <p>manifest.json + overrides + remote mod manifest.</p>
@@ -130,35 +411,81 @@
         </button>
       </div>
 
-      <div class="paths-grid">
+      <div class="path-row">
         <label>
-          .mrpack output path
-          <input bind:value={targetPath} placeholder=".../my-pack-1.0.0.mrpack" />
+          Output path
+          {#if exportMode === "mrpack"}
+            <input bind:value={targetPath} placeholder="…/export/my-pack-1.0.0.mrpack" />
+          {:else if exportMode === "server"}
+            <input
+              bind:value={serverTargetPath}
+              placeholder="…/export/my-pack-1.0.0-server.zip"
+            />
+          {:else if exportMode === "prism"}
+            <input
+              bind:value={prismTargetPath}
+              placeholder="…/export/my-pack-1.0.0-prism.zip"
+            />
+          {:else}
+            <input
+              bind:value={curseforgeTargetPath}
+              placeholder="…/export/my-pack-1.0.0-curseforge.zip"
+            />
+          {/if}
         </label>
-        <label>
-          Server pack output path
-          <input bind:value={serverTargetPath} placeholder=".../my-pack-1.0.0-server.zip" />
-        </label>
-        <label>
-          Prism instance output path
-          <input bind:value={prismTargetPath} placeholder=".../my-pack-1.0.0-prism.zip" />
-        </label>
-        <label>
-          CurseForge output path
-          <input bind:value={curseforgeTargetPath} placeholder=".../my-pack-1.0.0-curseforge.zip" />
-        </label>
+        <button
+          type="button"
+          class="ghost browse"
+          onclick={() => void browseSave(exportMode)}
+          disabled={busy}
+        >
+          Browse…
+        </button>
       </div>
 
       <div class="checks">
-        <div><strong>Dependencies</strong><span>Minecraft + selected loader are written to the index.</span></div>
-        <div><strong>Mods</strong><span>Modrinth/direct URL mods are exported as remote downloads.</span></div>
-        <div><strong>Overrides</strong><span>config/defaultconfigs/kubejs/scripts/resourcepacks/shaderpacks are embedded.</span></div>
-        <div><strong>Server pack</strong><span>Excludes client-only mods, includes local server jars, download manifest, configs and start scripts.</span></div>
+        <div>
+          <strong>Dependencies</strong>
+          <span>Minecraft + selected loader are written to the index.</span>
+        </div>
+        <div>
+          <strong>Mods</strong>
+          <span>Modrinth/direct URL mods export as remote downloads; local jars go to overrides.</span>
+        </div>
+        <div>
+          <strong>Overrides</strong>
+          <span
+            >config / defaultconfigs / kubejs / scripts / resourcepacks / shaderpacks / datapacks
+            (+ .tuffboxignore).</span
+          >
+        </div>
+        <div>
+          <strong>Server pack</strong>
+          <span>Skips client-only mods; includes start scripts and download manifest.</span>
+        </div>
       </div>
 
-      {#if issues.length > 0}
+      {#if issuesLoading}
+        <div class="notice muted">Checking pack for export issues…</div>
+      {:else if issues.length > 0}
         <div class="issues">
-          {#each issues as issue (issue.code + (issue.target ?? '') + issue.message)}
+          <div class="issues-head">
+            {#if blockingErrors.length > 0}
+              <AlertTriangle size={16} />
+              <strong
+                >{blockingErrors.length} blocking error{blockingErrors.length === 1
+                  ? ""
+                  : "s"}</strong
+              >
+            {:else}
+              <CheckCircle2 size={16} />
+              <strong>Ready to export</strong>
+              <span class="muted-inline"
+                >({warnings.length} warning{warnings.length === 1 ? "" : "s"})</span
+              >
+            {/if}
+          </div>
+          {#each issues as issue (issue.code + (issue.target ?? "") + issue.message)}
             <div class="issue {issue.severity}">
               <strong>{issue.code}</strong>
               <span>{issue.message}</span>
@@ -166,76 +493,315 @@
             </div>
           {/each}
         </div>
+      {:else}
+        <div class="notice muted success-lite">
+          <CheckCircle2 size={16} /> No export issues detected.
+        </div>
       {/if}
 
       <div class="publish-section">
         <h3>Publish is in Release</h3>
         <p>
-          This stage only builds local artifacts. Configure tokens in Settings, then open the
-          Release stage to publish to Modrinth, CurseForge or GitHub Releases.
+          This stage only builds local artifacts (and records them for Release). Configure tokens
+          in Settings, then open the Release stage to publish to Modrinth, CurseForge or GitHub
+          Releases.
         </p>
       </div>
 
       <div class="export-actions">
         {#if exportMode === "mrpack"}
-          <button class="export" on:click={exportMrpack} disabled={exporting || issues.some((i) => i.severity === "error")}>
+          <button
+            class="export"
+            onclick={exportMrpack}
+            disabled={busy || blockingErrors.length > 0}
+          >
             <UploadCloud size={16} />
-            {exporting ? "Exporting..." : "Export .mrpack"}
+            {exporting && !batching ? "Exporting…" : "Export .mrpack"}
           </button>
         {:else if exportMode === "server"}
-          <button class="export" on:click={exportServerPack} disabled={exporting}>
-            <PackageOpen size={16} />
-            {exporting ? "Exporting..." : "Export server pack"}
+          <button class="export" onclick={exportServerPack} disabled={busy}>
+            <Server size={16} />
+            {exporting && !batching ? "Exporting…" : "Export server pack"}
           </button>
         {:else if exportMode === "prism"}
-          <button class="export" on:click={exportPrismInstance} disabled={exporting}>
-            <PackageOpen size={16} />
-            {exporting ? "Exporting..." : "Export Prism instance"}
+          <button class="export" onclick={exportPrismInstance} disabled={busy}>
+            <Box size={16} />
+            {exporting && !batching ? "Exporting…" : "Export Prism instance"}
           </button>
         {:else if exportMode === "curseforge"}
-          <button class="export" on:click={exportCurseForgePack} disabled={exporting}>
-            <PackageOpen size={16} />
-            {exporting ? "Exporting..." : "Export CurseForge zip"}
+          <button class="export" onclick={exportCurseForgePack} disabled={busy}>
+            <FileArchive size={16} />
+            {exporting && !batching ? "Exporting…" : "Export CurseForge zip"}
           </button>
         {/if}
+
+        <button class="secondary" onclick={exportAll} disabled={busy || blockingErrors.length > 0}>
+          <Layers size={16} />
+          {batching ? "Exporting all…" : "Export all formats"}
+        </button>
       </div>
     </section>
   {/if}
 </div>
 
 <style>
-  .export-builder { max-width: none; width: 100%; }
-  .toolbar, .title, .notice, .format-card { display: flex; align-items: center; }
-  .toolbar { justify-content: space-between; margin-bottom: 16px; }
-  .title { gap: 10px; color: var(--text-secondary); font-weight: 700; }
-  .notice { gap: 10px; padding: 12px 14px; border-radius: var(--border-radius-lg); margin-bottom: 14px; border: 1px solid var(--border-color); }
-  .notice.error { color: #fecaca; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .notice.success { color: var(--accent-primary); background: rgba(27, 217, 106, 0.08); border-color: rgba(27, 217, 106, 0.25); }
-  .panel, .empty { background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--border-radius-lg); }
-  .panel { padding: 22px; display: grid; gap: 18px; }
-  .format-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .format-card { gap: 14px; padding: 18px; text-align: left; justify-content: flex-start; color: var(--text-secondary); border-radius: var(--border-radius-lg); background: var(--bg-tertiary); border: 1px solid var(--border-color); transform: none; }
-  .format-card.active { background: radial-gradient(circle at top left, rgba(27, 217, 106, 0.12), transparent 45%), var(--bg-tertiary); border-color: rgba(27, 217, 106, 0.45); color: var(--text-primary); }
-  .format-card.planned { opacity: .76; }
-  .format-card h2 { margin: 0 0 4px; }
-  .format-card p, .checks span { color: var(--text-muted); }
-  label { display: grid; gap: 8px; color: var(--text-secondary); font-weight: 700; }
-  input { width: 100%; }
-  .paths-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-  .checks { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-  .checks div { background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 14px; padding: 14px; display: grid; gap: 4px; }
-  .issues { display: grid; gap: 8px; }
-  .issue { display: grid; gap: 4px; padding: 12px; border-radius: var(--border-radius-md); background: var(--bg-tertiary); border: 1px solid var(--border-color); }
-  .issue.warning { border-color: rgba(245, 158, 11, 0.3); }
-  .issue.error { border-color: rgba(239, 68, 68, 0.3); }
-  .issue span { color: var(--text-muted); }
-  code { color: var(--text-secondary); font-family: ui-monospace, monospace; }
-  .publish-section { padding: 16px; border: 1px solid rgba(27,217,106,.25); border-radius: var(--border-radius-lg); background: rgba(27,217,106,.03); }
-  .publish-section h3 { color: var(--text-primary); font-size: 14px; margin: 0 0 4px; }
-  .publish-section p { color: var(--text-muted); font-size: 12px; margin: 0; line-height: 1.45; }
-
-  .export-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-  .export { justify-self: start; }
-  .empty { color: var(--text-muted); padding: 80px; text-align: center; }
-  @media (max-width: 900px) { .checks, .paths-grid, .format-grid { grid-template-columns: 1fr; } }
+  .export-builder {
+    max-width: none;
+    width: 100%;
+  }
+  .toolbar,
+  .title,
+  .notice,
+  .format-card,
+  .toolbar-actions,
+  .path-row,
+  .export-actions,
+  .issues-head {
+    display: flex;
+    align-items: center;
+  }
+  .toolbar {
+    justify-content: space-between;
+    margin-bottom: 16px;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .toolbar-actions {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .title {
+    gap: 10px;
+    color: var(--text-secondary);
+    font-weight: 700;
+  }
+  .notice {
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: var(--border-radius-lg);
+    margin-bottom: 14px;
+    border: 1px solid var(--border-color);
+  }
+  .notice.error {
+    color: #fecaca;
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.28);
+  }
+  .notice.success {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    align-items: flex-start;
+  }
+  .notice.muted,
+  .notice.success-lite {
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+  }
+  .notice-body {
+    display: grid;
+    gap: 4px;
+  }
+  .path-chip {
+    display: block;
+    word-break: break-all;
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .linkish {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    color: var(--accent-primary);
+    cursor: pointer;
+    padding: 0;
+    font: inherit;
+    width: fit-content;
+  }
+  .panel {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    padding: 22px;
+    display: grid;
+    gap: 18px;
+  }
+  .format-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .format-card {
+    gap: 14px;
+    padding: 18px;
+    text-align: left;
+    justify-content: flex-start;
+    color: var(--text-secondary);
+    border-radius: var(--border-radius-lg);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    transform: none;
+    cursor: pointer;
+  }
+  .format-card.active {
+    background: radial-gradient(
+        circle at top left,
+        color-mix(in srgb, var(--accent-primary) 12%, transparent),
+        transparent 45%
+      ),
+      var(--bg-tertiary);
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent);
+    color: var(--text-primary);
+  }
+  .format-card h2 {
+    margin: 0 0 4px;
+    font-size: 15px;
+  }
+  .format-card p,
+  .checks span {
+    color: var(--text-muted);
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  label {
+    display: grid;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-weight: 700;
+    flex: 1;
+    min-width: 0;
+  }
+  input {
+    width: 100%;
+  }
+  .path-row {
+    gap: 10px;
+    align-items: end;
+  }
+  .browse {
+    flex-shrink: 0;
+    height: 40px;
+  }
+  .checks {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .checks div {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 14px;
+    display: grid;
+    gap: 4px;
+  }
+  .issues {
+    display: grid;
+    gap: 8px;
+  }
+  .issues-head {
+    gap: 8px;
+    color: var(--text-secondary);
+  }
+  .muted-inline {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .issue {
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+  }
+  .issue.warning {
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .issue.error {
+    border-color: rgba(239, 68, 68, 0.3);
+  }
+  .issue span {
+    color: var(--text-muted);
+  }
+  code {
+    color: var(--text-secondary);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .publish-section {
+    padding: 16px;
+    border: 1px solid color-mix(in srgb, var(--accent-primary) 25%, transparent);
+    border-radius: var(--border-radius-lg);
+    background: color-mix(in srgb, var(--accent-primary) 3%, transparent);
+  }
+  .publish-section h3 {
+    color: var(--text-primary);
+    font-size: 14px;
+    margin: 0 0 4px;
+  }
+  .publish-section p {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin: 0;
+    line-height: 1.45;
+  }
+  .export-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .export {
+    justify-self: start;
+  }
+  .batch-results {
+    margin-bottom: 14px;
+    padding: 14px 16px;
+    border-radius: var(--border-radius-lg);
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+  }
+  .batch-results h3 {
+    margin: 0 0 10px;
+    font-size: 14px;
+  }
+  .batch-results ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 8px;
+  }
+  .batch-results li {
+    display: grid;
+    gap: 2px;
+    padding: 10px 12px;
+    border-radius: var(--border-radius-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+  }
+  .batch-results li.ok {
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  }
+  .batch-results li.bad {
+    border-color: rgba(239, 68, 68, 0.35);
+  }
+  .err-text {
+    color: #fecaca;
+  }
+  @media (max-width: 900px) {
+    .checks,
+    .format-grid {
+      grid-template-columns: 1fr;
+    }
+    .path-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+  }
 </style>

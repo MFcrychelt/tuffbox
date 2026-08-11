@@ -5,7 +5,10 @@
   import CodeMirror from "svelte-codemirror-editor";
   import { markdown } from "@codemirror/lang-markdown";
   import { oneDark } from "@codemirror/theme-one-dark";
+  import { EditorView } from "@codemirror/view";
+  import PromptDialog from "./PromptDialog.svelte";
   import { marked } from "marked";
+  import { sanitizeHtml } from "../lib/sanitizeHtml";
   import {
     Bold,
     Italic,
@@ -20,50 +23,57 @@
     Rocket,
     X,
     Plus,
-  } from "lucide-svelte";
+  } from "@lucide/svelte";
   import { api, type ListingGalleryItem, type PackBrief, type ProjectListing } from "../lib/api";
   import { projectPath, projectInfo, ideStageRequest, briefDirty } from "../lib/store";
   import ListingCardPreview from "./ListingCardPreview.svelte";
 
   const SUMMARY_LIMIT = 256;
 
-  let name = "";
-  let summary = "";
-  let bodyMarkdown = "";
-  let categories: string[] = [];
-  let iconPath: string | null = null;
-  let gallery: ListingGalleryItem[] = [];
-  let iconUrl: string | null = null;
-  let galleryUrls: Record<string, string> = {};
+  let name = $state("");
+  let summary = $state("");
+  let bodyMarkdown = $state("");
+  let categories = $state<string[]>([]);
+  let iconPath = $state<string | null>(null);
+  let gallery = $state<ListingGalleryItem[]>([]);
+  let iconUrl = $state<string | null>(null);
+  let galleryUrls = $state<Record<string, string>>({});
 
-  let briefGoal = "";
-  let briefAudience = "";
-  let briefPillars = "";
-  let briefConstraints = "";
-  let briefReleaseTargets = "";
-  let briefNotes = "";
+  let briefGoal = $state("");
+  let briefAudience = $state("");
+  let briefPillars = $state("");
+  let briefConstraints = $state("");
+  let briefReleaseTargets = $state("");
+  let briefNotes = $state("");
 
-  let cardStyle: "modrinth" | "curseforge" = "modrinth";
-  let message = "";
-  let error = "";
-  let loading = false;
-  let saving = false;
-  let lastPath: string | null = null;
-  let dirty = false;
-  let mdView: "split" | "edit" | "preview" = "split";
-  let renderedHtml = "";
+  let cardStyle = $state<"modrinth" | "curseforge">("modrinth");
+  let message = $state("");
+  let error = $state("");
+  let loading = $state(false);
+  let saving = $state(false);
+  let lastPath = $state<string | null>(null);
+  let dirty = $state(false);
+  let mdView = $state<"split" | "edit" | "preview">("split");
+  let renderedHtml = $state("");
   let mdDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   const MD_DEBOUNCE_MS = 200;
 
-  let modrinthCategories: Array<{ name: string; header: string; icon: string }> = [];
-  let categoriesLoading = false;
-  let categoriesError = "";
+  let cmView: EditorView | null = $state(null);
 
-  $: briefDirty.set(dirty);
-  $: summaryLen = summary.length;
-  $: summaryWarn = summaryLen > 200;
-  $: summaryOver = summaryLen > SUMMARY_LIMIT;
-  $: nameEmpty = !name.trim();
+  let showGalleryUrlPrompt = $state(false);
+  let galleryUrlMode = $state<"gallery" | "insert">("gallery");
+
+  let modrinthCategories = $state<Array<{ name: string; header: string; icon: string }>>([]);
+  let categoriesLoading = $state(false);
+  let categoriesError = $state("");
+
+  $effect(() => {
+    briefDirty.set(dirty);
+  });
+  const summaryLen = $derived(summary.length);
+  const summaryWarn = $derived(summaryLen > 200);
+  const summaryOver = $derived(summaryLen > SUMMARY_LIMIT);
+  const nameEmpty = $derived(!name.trim());
 
   function scheduleMarkdownRender(src: string, assets: Record<string, string>) {
     if (mdDebounceTimer) clearTimeout(mdDebounceTimer);
@@ -72,7 +82,9 @@
     }, MD_DEBOUNCE_MS);
   }
 
-  $: scheduleMarkdownRender(bodyMarkdown, galleryUrls);
+  $effect(() => {
+    scheduleMarkdownRender(bodyMarkdown, galleryUrls);
+  });
 
   function lines(value: string) {
     return value
@@ -323,12 +335,16 @@
 
   async function addGalleryUrl() {
     if (!$projectPath) return;
-    const url = window.prompt("Image URL");
-    if (!url?.trim()) return;
+    galleryUrlMode = "gallery";
+    showGalleryUrlPrompt = true;
+  }
+
+  async function addGalleryUrlDirect(url: string) {
+    if (!$projectPath) return;
     try {
       await flushForm();
       const listing = await api.project.addListingGalleryImage(
-        { url: url.trim() },
+        { url },
         $projectPath,
       );
       applyIconGallery(listing);
@@ -369,27 +385,81 @@
     return null;
   }
 
+  function insertAtCursor(insert: string, selectPlaceholder = true) {
+    if (!cmView) {
+      bodyMarkdown = bodyMarkdown + insert;
+      markDirty();
+      return;
+    }
+    const pos = cmView.state.selection.main.head;
+    const selected = cmView.state.sliceDoc(
+      cmView.state.selection.main.from,
+      cmView.state.selection.main.to,
+    );
+    const needsSelect = selectPlaceholder && !selected;
+    const text = needsSelect ? "text" : selected;
+    let finalInsert = insert.replace("{sel}", text);
+    let from = pos;
+    let to = pos;
+    if (selected) {
+      from = cmView.state.selection.main.from;
+      to = cmView.state.selection.main.to;
+    }
+    cmView.dispatch({
+      changes: { from, to, insert: finalInsert },
+      selection: { anchor: from + finalInsert.length },
+    });
+    bodyMarkdown = cmView.state.doc.toString();
+    markDirty();
+  }
+
   function insertAround(before: string, after = before) {
-    const sel = window.getSelection()?.toString() ?? "";
-    bodyMarkdown = `${bodyMarkdown}${before}${sel || "text"}${after}`;
+    if (!cmView) {
+      bodyMarkdown = bodyMarkdown + before + "text" + after;
+      markDirty();
+      return;
+    }
+    const { from, to } = cmView.state.selection.main;
+    const selected = cmView.state.sliceDoc(from, to);
+    if (selected) {
+      cmView.dispatch({
+        changes: { from, to, insert: before + selected + after },
+        selection: { anchor: from + before.length + selected.length + after.length },
+      });
+    } else {
+      const placeholder = "text";
+      const insert = before + placeholder + after;
+      cmView.dispatch({
+        changes: { from, insert },
+        selection: { anchor: from + before.length, head: from + before.length + placeholder.length },
+      });
+    }
+    bodyMarkdown = cmView.state.doc.toString();
     markDirty();
   }
 
   function insertHeading() {
-    bodyMarkdown = `${bodyMarkdown}${bodyMarkdown.endsWith("\n") || !bodyMarkdown ? "" : "\n"}## Heading\n`;
-    markDirty();
+    const prefix = bodyMarkdown.endsWith("\n") || !bodyMarkdown ? "" : "\n";
+    insertAtCursor(prefix + "## Heading\n", false);
   }
 
   function insertLink() {
-    bodyMarkdown = `${bodyMarkdown}[label](https://example.com)`;
-    markDirty();
+    insertAtCursor("[label](https://example.com)", false);
   }
 
   async function insertImageUrl() {
-    const url = window.prompt("Image URL to insert");
-    if (!url?.trim()) return;
-    bodyMarkdown = `${bodyMarkdown}\n![image](${url.trim()})\n`;
-    markDirty();
+    galleryUrlMode = "insert";
+    showGalleryUrlPrompt = true;
+  }
+
+  function onGalleryUrlConfirm(url: string) {
+    showGalleryUrlPrompt = false;
+    if (!url.trim()) return;
+    if (galleryUrlMode === "gallery") {
+      void addGalleryUrlDirect(url.trim());
+    } else {
+      insertAtCursor(`\n![image](${url.trim()})\n`, false);
+    }
   }
 
   async function insertLocalImage() {
@@ -409,8 +479,7 @@
       applyIconGallery(listing);
       const last = listing.gallery[listing.gallery.length - 1];
       if (last?.path) {
-        bodyMarkdown = `${bodyMarkdown}\n![image](${last.path})\n`;
-        dirty = true;
+        insertAtCursor(`\n![image](${last.path})\n`, false);
       }
       await refreshAssets();
     } catch (e) {
@@ -422,8 +491,7 @@
     const src = item.path || item.url;
     if (!src) return;
     const alt = item.caption?.trim() || "image";
-    bodyMarkdown = `${bodyMarkdown}\n![${alt}](${src})\n`;
-    markDirty();
+    insertAtCursor(`\n![${alt}](${src})\n`, false);
   }
 
   async function copySummary() {
@@ -465,7 +533,7 @@
       },
     );
     try {
-      return marked.parse(rewritten) as string;
+      return sanitizeHtml(marked.parse(rewritten) as string);
     } catch {
       return "<p>Preview failed.</p>";
     }
@@ -473,6 +541,8 @@
 
   async function handlePaste(e: ClipboardEvent) {
     if (!$projectPath) return;
+    const target = e.target as HTMLElement;
+    if (!target.closest?.(".cm-wrap")) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
@@ -510,11 +580,46 @@
     }
   }
 
-  $: if ($projectPath) void loadAll();
-  $: if (!$projectPath) {
-    lastPath = null;
-    dirty = false;
+  $effect(() => {
+    if ($projectPath) void loadAll();
+  });
+  $effect(() => {
+    if (!$projectPath) {
+      lastPath = null;
+      dirty = false;
+    }
+  });
+
+  function handleBeforeUnload(e: BeforeUnloadEvent) {
+    if (dirty) {
+      e.preventDefault();
+    }
   }
+
+  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  const AUTO_SAVE_MS = 5000;
+
+  function scheduleAutoSave() {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    if (!dirty || !$projectPath) return;
+    autoSaveTimer = setTimeout(async () => {
+      if (dirty && $projectPath && !saving) {
+        await saveAll();
+      }
+    }, AUTO_SAVE_MS);
+  }
+
+  $effect(() => {
+    if (dirty) scheduleAutoSave();
+    return () => {
+      if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    };
+  });
+
+  $effect(() => {
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  });
 
   onDestroy(() => {
     briefDirty.set(false);
@@ -522,7 +627,7 @@
   });
 </script>
 
-<div class="brief-editor" on:paste={handlePaste}>
+<div class="brief-editor" onpaste={handlePaste}>
   <div class="page-header">
     <div>
       <h2>Storefront listing</h2>
@@ -532,7 +637,7 @@
       </p>
     </div>
     <div class="header-actions">
-      <button type="button" on:click={saveAll} disabled={!$projectPath || saving || nameEmpty}>
+      <button type="button" onclick={saveAll} disabled={!$projectPath || saving || nameEmpty}>
         <Save size={14} /> {saving ? "Saving…" : dirty ? "Save*" : "Save"}
       </button>
     </div>
@@ -556,7 +661,7 @@
                 Pack name
                 <input
                   bind:value={name}
-                  on:input={markDirty}
+                  oninput={markDirty}
                   placeholder="My Pack"
                   class:invalid={nameEmpty}
                 />
@@ -566,7 +671,7 @@
                 Summary
                 <textarea
                   bind:value={summary}
-                  on:input={markDirty}
+                  oninput={markDirty}
                   maxlength={512}
                   rows="3"
                   placeholder="Short card blurb (Modrinth soft limit 256)"
@@ -588,8 +693,8 @@
                 {/if}
               </div>
               <div class="icon-actions">
-                <button type="button" on:click={pickIcon}>Choose…</button>
-                <button type="button" class="ghost" on:click={clearIcon} disabled={!iconPath}>
+                <button type="button" onclick={pickIcon}>Choose…</button>
+                <button type="button" class="ghost" onclick={clearIcon} disabled={!iconPath}>
                   Clear
                 </button>
               </div>
@@ -607,7 +712,7 @@
                     type="button"
                     class="cat-chip"
                     class:on={isCategorySelected(cat.name)}
-                    on:click={() => toggleCategory(cat.name)}
+                    onclick={() => toggleCategory(cat.name)}
                     title={cat.name}
                   >
                     {prettyCat(cat.name)}
@@ -634,12 +739,12 @@
                 <button
                   type="button"
                   class:active={cardStyle === "modrinth"}
-                  on:click={() => (cardStyle = "modrinth")}>Modrinth</button
+                  onclick={() => (cardStyle = "modrinth")}>Modrinth</button
                 >
                 <button
                   type="button"
                   class:active={cardStyle === "curseforge"}
-                  on:click={() => (cardStyle = "curseforge")}>CurseForge</button
+                  onclick={() => (cardStyle = "curseforge")}>CurseForge</button
                 >
               </div>
             </div>
@@ -665,38 +770,38 @@
         <div class="panel-head">
           <h3>Description</h3>
           <div class="seg">
-            <button type="button" class:active={mdView === "edit"} on:click={() => (mdView = "edit")}
+            <button type="button" class:active={mdView === "edit"} onclick={() => (mdView = "edit")}
               >Edit</button
             >
             <button
               type="button"
               class:active={mdView === "split"}
-              on:click={() => (mdView = "split")}>Split</button
+              onclick={() => (mdView = "split")}>Split</button
             >
             <button
               type="button"
               class:active={mdView === "preview"}
-              on:click={() => (mdView = "preview")}>Preview</button
+              onclick={() => (mdView = "preview")}>Preview</button
             >
           </div>
         </div>
         <div class="md-toolbar">
-          <button type="button" class="ghost" title="Bold" on:click={() => insertAround("**")}
+          <button type="button" class="ghost" title="Bold" onclick={() => insertAround("**")}
             ><Bold size={14} /></button
           >
-          <button type="button" class="ghost" title="Italic" on:click={() => insertAround("_")}
+          <button type="button" class="ghost" title="Italic" onclick={() => insertAround("_")}
             ><Italic size={14} /></button
           >
-          <button type="button" class="ghost" title="Heading" on:click={insertHeading}
+          <button type="button" class="ghost" title="Heading" onclick={insertHeading}
             ><Heading size={14} /></button
           >
-          <button type="button" class="ghost" title="Link" on:click={insertLink}
+          <button type="button" class="ghost" title="Link" onclick={insertLink}
             ><Link size={14} /></button
           >
-          <button type="button" class="ghost" title="Image URL" on:click={insertImageUrl}
+          <button type="button" class="ghost" title="Image URL" onclick={insertImageUrl}
             ><ImageIcon size={14} /></button
           >
-          <button type="button" class="ghost" on:click={insertLocalImage}>Insert local image</button>
+          <button type="button" class="ghost" onclick={insertLocalImage}>Insert local image</button>
         </div>
         <div class="md-split" class:edit-only={mdView === "edit"} class:preview-only={mdView === "preview"}>
           {#if mdView !== "preview"}
@@ -706,6 +811,7 @@
                 lang={markdown()}
                 theme={oneDark}
                 on:change={onBodyChange}
+                on:ready={(e) => (cmView = e.detail)}
               />
             </div>
           {/if}
@@ -726,10 +832,10 @@
           <div class="panel-head">
             <h3>Gallery</h3>
             <div class="row-actions">
-              <button type="button" class="ghost" on:click={addGalleryFile}
+              <button type="button" class="ghost" onclick={addGalleryFile}
                 ><Plus size={14} /> File</button
               >
-              <button type="button" class="ghost" on:click={addGalleryUrl}
+              <button type="button" class="ghost" onclick={addGalleryUrl}
                 ><Plus size={14} /> URL</button
               >
             </div>
@@ -746,19 +852,19 @@
                     <div class="gal-ph">?</div>
                   {/if}
                   <div class="gal-actions">
-                    <button type="button" class="ghost" on:click={() => insertGalleryIntoBody(item)}
+                    <button type="button" class="ghost" onclick={() => insertGalleryIntoBody(item)}
                       >Insert</button
                     >
-                    <button type="button" class="ghost" on:click={() => moveGallery(i, i - 1)} disabled={i === 0}
+                    <button type="button" class="ghost" onclick={() => moveGallery(i, i - 1)} disabled={i === 0}
                       >↑</button
                     >
                     <button
                       type="button"
                       class="ghost"
-                      on:click={() => moveGallery(i, i + 1)}
+                      onclick={() => moveGallery(i, i + 1)}
                       disabled={i === gallery.length - 1}>↓</button
                     >
-                    <button type="button" class="ghost danger" on:click={() => removeGallery(i)}
+                    <button type="button" class="ghost danger" onclick={() => removeGallery(i)}
                       ><X size={12} /></button
                     >
                   </div>
@@ -769,24 +875,26 @@
           {/if}
         </section>
 
-        <details class="panel author-notes">
-          <summary>Author notes (planning)</summary>
+        <section class="panel author-notes">
+          <div class="panel-head">
+            <h3>Author notes (planning)</h3>
+          </div>
           <div class="brief-grid">
             <label
-              >Pack goal<textarea bind:value={briefGoal} on:input={markDirty} rows="3"></textarea
+              >Pack goal<textarea bind:value={briefGoal} oninput={markDirty} rows="3"></textarea
               ></label
             >
             <label
               >Target player<textarea
                 bind:value={briefAudience}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
               ></textarea></label
             >
             <label
               >Gameplay pillars<textarea
                 bind:value={briefPillars}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
                 placeholder="One per line"
               ></textarea></label
@@ -794,7 +902,7 @@
             <label
               >Hard constraints<textarea
                 bind:value={briefConstraints}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
                 placeholder="One per line"
               ></textarea></label
@@ -802,37 +910,37 @@
             <label
               >Release targets<textarea
                 bind:value={briefReleaseTargets}
-                on:input={markDirty}
+                oninput={markDirty}
                 rows="3"
                 placeholder="One per line"
               ></textarea></label
             >
             <label
-              >Notes<textarea bind:value={briefNotes} on:input={markDirty} rows="3"></textarea
+              >Notes<textarea bind:value={briefNotes} oninput={markDirty} rows="3"></textarea
               ></label
             >
           </div>
-        </details>
+        </section>
 
         <details class="panel extras-panel">
           <summary>More · copy, folder, workflow</summary>
           <div class="extras-grid">
             <div class="extras-actions">
-              <button type="button" class="ghost" on:click={copySummary} disabled={!summary}>
+              <button type="button" class="ghost" onclick={copySummary} disabled={!summary}>
                 <Copy size={14} /> Copy summary
               </button>
-              <button type="button" class="ghost" on:click={openListingFolder} disabled={!$projectPath}>
+              <button type="button" class="ghost" onclick={openListingFolder} disabled={!$projectPath}>
                 <FolderOpen size={14} /> Listing folder
               </button>
             </div>
             <div class="trail">
-              <button type="button" class="ghost" on:click={() => goTrail("history")}
+              <button type="button" class="ghost" onclick={() => goTrail("history")}
                 ><History size={14} /> History</button
               >
-              <button type="button" class="ghost" on:click={() => goTrail("export")}
+              <button type="button" class="ghost" onclick={() => goTrail("export")}
                 ><UploadCloud size={14} /> Export</button
               >
-              <button type="button" class="ghost" on:click={() => goTrail("release")}
+              <button type="button" class="ghost" onclick={() => goTrail("release")}
                 ><Rocket size={14} /> Release</button
               >
             </div>
@@ -842,6 +950,16 @@
     </div>
   {/if}
 </div>
+
+{#if showGalleryUrlPrompt}
+  <PromptDialog
+    title={galleryUrlMode === "gallery" ? "Add gallery image URL" : "Insert image URL"}
+    message={galleryUrlMode === "gallery" ? "Paste an image URL to add to the gallery." : "Paste an image URL to insert into the description."}
+    confirmLabel={galleryUrlMode === "gallery" ? "Add to gallery" : "Insert"}
+    onconfirm={onGalleryUrlConfirm}
+    oncancel={() => (showGalleryUrlPrompt = false)}
+  />
+{/if}
 
 <style>
   .brief-editor {
@@ -860,7 +978,9 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
   }
 
   .page-header {
@@ -906,7 +1026,7 @@
   .top-split {
     flex-shrink: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+    grid-template-columns: minmax(0, 1fr) minmax(440px, 560px);
     gap: 14px;
     align-items: start;
   }
@@ -939,51 +1059,56 @@
 
   .listing-preview-compact :global(.mr-card),
   .listing-preview-compact :global(.cf-card) {
-    gap: 10px;
-    padding: 10px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px;
   }
 
   .listing-preview-compact :global(.mr-icon) {
-    width: 64px;
-    height: 64px;
+    width: 80px;
+    height: 80px;
   }
 
   .listing-preview-compact :global(.cf-icon) {
-    width: 72px;
-    height: 72px;
+    width: 80px;
+    height: 80px;
   }
 
   .listing-preview-compact :global(.mr-title-line h3),
   .listing-preview-compact :global(.cf-body h3) {
-    font-size: 14px;
+    font-size: 15px;
   }
 
   .listing-preview-compact :global(.mr-summary),
   .listing-preview-compact :global(.cf-summary) {
     font-size: 12px;
-    line-height: 1.35;
+    line-height: 1.4;
   }
 
   .listing-preview-compact :global(.mr-center),
   .listing-preview-compact :global(.cf-body) {
-    gap: 4px;
+    gap: 6px;
+    min-width: 0;
   }
 
   .listing-preview-compact :global(.mr-actions) {
-    gap: 4px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
   }
 
   .listing-preview-compact :global(.mr-dl-btn.card-dl) {
-    height: 26px;
+    height: 28px;
     font-size: 12px;
-    padding: 0 10px;
+    padding: 0 12px;
   }
 
   .listing-preview-compact :global(.card-summary) {
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
   }
-
   .identity-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1007,22 +1132,22 @@
   }
 
   .description-panel {
-    flex: 1;
     min-height: 220px;
     width: 100%;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    flex-shrink: 0;
   }
 
   .description-panel .md-split {
-    flex: 1;
-    min-height: 200px;
+    min-height: 240px;
+    height: clamp(240px, 36vh, 400px);
   }
 
   .description-panel .cm-wrap,
   .description-panel .md-preview {
-    min-height: 200px;
+    min-height: 0;
+    height: 100%;
   }
 
   .brief-below {
@@ -1030,8 +1155,6 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 38vh;
-    overflow: auto;
     padding-top: 2px;
   }
 
@@ -1098,14 +1221,14 @@
   }
 
   .cat-chip:hover {
-    border-color: rgba(27, 217, 106, 0.4);
+    border-color: color-mix(in srgb, var(--accent-primary) 40%, transparent);
     color: var(--text-primary);
     transform: none !important;
   }
 
   .cat-chip.on {
-    border-color: rgba(27, 217, 106, 0.5);
-    background: rgba(27, 217, 106, 0.12);
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     color: var(--accent-primary);
   }
 
@@ -1174,7 +1297,7 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
-    min-height: 180px;
+    min-height: 0;
   }
 
   .md-split.edit-only,
@@ -1186,12 +1309,12 @@
     border: 1px solid var(--border-color);
     border-radius: var(--border-radius-sm);
     overflow: hidden;
-    min-height: 180px;
+    min-height: 0;
+    height: 100%;
   }
 
   .cm-wrap :global(.cm-editor) {
     height: 100%;
-    min-height: 180px;
   }
 
   .md-preview {
@@ -1199,7 +1322,8 @@
     border-radius: var(--border-radius-sm);
     padding: 12px;
     background: var(--bg-tertiary);
-    min-height: 180px;
+    min-height: 0;
+    height: 100%;
     overflow: auto;
   }
 
@@ -1258,7 +1382,7 @@
     color: #f87171;
   }
 
-  .author-notes summary,
+  .author-notes .panel-head h3,
   .extras-panel summary {
     cursor: pointer;
     font-weight: 700;
@@ -1341,15 +1465,11 @@
 
   .inline-success {
     color: var(--accent-primary);
-    background: rgba(27, 217, 106, 0.08);
-    border-color: rgba(27, 217, 106, 0.25);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent-primary) 25%, transparent);
   }
 
   @media (max-width: 1100px) {
-    .main-body {
-      overflow: auto;
-    }
-
     .top-split {
       grid-template-columns: 1fr;
     }
@@ -1379,10 +1499,6 @@
 
     .description-panel {
       min-height: 280px;
-    }
-
-    .brief-below {
-      max-height: none;
     }
   }
 </style>

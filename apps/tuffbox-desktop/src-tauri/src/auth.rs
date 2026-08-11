@@ -4,21 +4,27 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 const KEYRING_SERVICE: &str = "dev.tuffbox.ide";
+/// Azure AD public client (device-code flow when microsoftonline is reachable).
 const MICROSOFT_CLIENT_ID: &str = "89484d4e-6ac2-4643-a786-21386f3269c5";
-/// Official Minecraft launcher public client — used for device code + auth-code URL login.
+/// Official Minecraft launcher public client — live.com auth-code / WebView login.
+const MS_LIVE_CLIENT_ID: &str = "00000000402b5328";
 const MS_OAUTH_TOKEN_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const MS_OAUTH_AUTHORIZE_URL: &str =
     "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const MS_OAUTH_DEVICE_CODE_URL: &str =
     "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
+const MS_LIVE_AUTHORIZE_URL: &str = "https://login.live.com/oauth20_authorize.srf";
+const MS_LIVE_TOKEN_URL: &str = "https://login.live.com/oauth20_token.srf";
 const MS_REDIRECT_NATIVE: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
 const MS_REDIRECT_LIVE_DESKTOP: &str = "https://login.live.com/oauth20_desktop.srf";
 const MS_SCOPE: &str = "XboxLive.signin offline_access";
 const MC_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
+const MS_AUTH_WINDOW_LABEL: &str = "ms-auth";
 
 // Mutex protecting concurrent reads/writes to auth.json and mc_accounts.json.
 // Lock is held only during file I/O (brief), so a std::sync::Mutex is fine
@@ -231,6 +237,31 @@ struct TextureInfo {
 
 // ─── Multi-account types ─────────────────────────────────────────
 
+/// Which Microsoft OAuth endpoint issued the refresh token.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MsOauthBackend {
+    #[default]
+    Azure,
+    Live,
+}
+
+impl MsOauthBackend {
+    fn client_id(self) -> &'static str {
+        match self {
+            Self::Azure => MICROSOFT_CLIENT_ID,
+            Self::Live => MS_LIVE_CLIENT_ID,
+        }
+    }
+
+    fn token_url(self) -> &'static str {
+        match self {
+            Self::Azure => MS_OAUTH_TOKEN_URL,
+            Self::Live => MS_LIVE_TOKEN_URL,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountEntry {
@@ -242,6 +273,9 @@ pub struct AccountEntry {
     /// Yggdrasil / authlib-injector API root (e.g. Ely.by, LittleSkin).
     #[serde(default)]
     pub authority: Option<String>,
+    /// Microsoft OAuth backend for refresh (`azure` device-code vs `live` WebView/paste).
+    #[serde(default)]
+    pub ms_oauth_backend: Option<MsOauthBackend>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,6 +382,15 @@ fn load_auth_state() -> AuthState {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default()
+}
+
+/// Disk-only auth snapshot (no Microsoft refresh) for home bootstrap P0.
+pub(crate) fn cached_auth_state() -> AuthState {
+    let mut state = load_auth_state();
+    let accounts = load_accounts_file();
+    state.accounts = accounts.accounts;
+    state.active_account_uuid = accounts.active_account_uuid;
+    state
 }
 
 fn save_auth_state(state: &AuthState) -> Result<(), String> {
@@ -1128,12 +1171,15 @@ pub async fn apply_minecraft_cape(mc_token: &str, cape_id: &str) -> Result<(), S
 
 // ─── Refresh token ───────────────────────────────────────────────
 
-pub async fn refresh_minecraft_token(refresh_token: &str) -> Result<TokenResponse, String> {
+pub async fn refresh_minecraft_token(
+    refresh_token: &str,
+    backend: MsOauthBackend,
+) -> Result<TokenResponse, String> {
     let c = client()?;
     let resp = c
-        .post(MS_OAUTH_TOKEN_URL)
+        .post(backend.token_url())
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", backend.client_id()),
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh_token),
             ("scope", MS_SCOPE),
@@ -1157,9 +1203,33 @@ pub async fn refresh_minecraft_token(refresh_token: &str) -> Result<TokenRespons
     serde_json::from_value(body).map_err(|e| format!("token refresh parse failed: {e}"))
 }
 
-// ─── Authorization-code (paste URL) flow ─────────────────────────
+fn account_ms_oauth_backend(uuid: &str) -> Option<MsOauthBackend> {
+    load_accounts_file()
+        .accounts
+        .iter()
+        .find(|a| a.uuid == uuid)
+        .and_then(|a| a.ms_oauth_backend)
+}
 
+// ─── Authorization-code (paste URL / WebView) flow ───────────────
+
+/// Live.com authorize URL (public Minecraft launcher client) — WebView + paste fallback.
+pub fn microsoft_live_authorize_url() -> String {
+    format!(
+        "{MS_LIVE_AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&scope={}&display=touch",
+        urlencoding_encode(MS_LIVE_CLIENT_ID),
+        urlencoding_encode(MS_REDIRECT_LIVE_DESKTOP),
+        urlencoding_encode(MS_SCOPE),
+    )
+}
+
+/// Prefer live.com (Azure may be blocked).
 pub fn microsoft_authorize_url() -> String {
+    microsoft_live_authorize_url()
+}
+
+#[allow(dead_code)]
+fn microsoft_azure_authorize_url() -> String {
     format!(
         "{MS_OAUTH_AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&scope={}&prompt=select_account",
         urlencoding_encode(MICROSOFT_CLIENT_ID),
@@ -1194,11 +1264,14 @@ pub fn extract_oauth_code(input: &str) -> Result<(String, &'static str), String>
         if code.len() < 8 {
             return Err("Authorization code looks too short".into());
         }
-        return Ok((code.to_string(), MS_REDIRECT_NATIVE));
+        return Ok((code.to_string(), MS_REDIRECT_LIVE_DESKTOP));
     }
 
     let lower = trimmed.to_ascii_lowercase();
-    let redirect = if lower.contains("oauth20_desktop.srf") || lower.contains("login.live.com")
+    let redirect = if lower.contains("oauth20_desktop.srf")
+        || lower.contains("login.live.com")
+        || lower.contains("://live.com")
+        || lower.contains("://www.live.com")
     {
         MS_REDIRECT_LIVE_DESKTOP
     } else {
@@ -1247,6 +1320,24 @@ pub fn extract_oauth_code(input: &str) -> Result<(String, &'static str), String>
     Ok((code, redirect))
 }
 
+/// True when the WebView navigated to an OAuth redirect carrying `code` or `error`.
+fn is_ms_oauth_callback(url: &url::Url) -> bool {
+    let has_params = url
+        .query_pairs()
+        .any(|(k, _)| k == "code" || k == "error");
+    if !has_params {
+        return false;
+    }
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let path = url.path().to_ascii_lowercase();
+    host == "login.live.com"
+        || host == "live.com"
+        || host.ends_with(".live.com")
+        || host.contains("microsoftonline.com")
+        || path.contains("oauth20_desktop.srf")
+        || path.contains("nativeclient")
+}
+
 fn urlencoding_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -1273,12 +1364,13 @@ fn urlencoding_decode(s: &str) -> String {
 pub async fn exchange_authorization_code(
     code: &str,
     redirect_uri: &str,
+    backend: MsOauthBackend,
 ) -> Result<TokenResponse, String> {
     let c = client()?;
     let resp = c
-        .post(MS_OAUTH_TOKEN_URL)
+        .post(backend.token_url())
         .form(&[
-            ("client_id", MICROSOFT_CLIENT_ID),
+            ("client_id", backend.client_id()),
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", redirect_uri),
@@ -1309,6 +1401,8 @@ pub async fn exchange_authorization_code(
 #[serde(rename_all = "camelCase")]
 pub struct LoginResult {
     pub profile: McProfile,
+    /// Never returned to the webview — tokens stay in the OS keyring.
+    #[serde(skip_serializing)]
     pub mc_access_token: String,
 }
 
@@ -1324,7 +1418,10 @@ pub async fn complete_microsoft_login(ms_token: &str) -> Result<LoginResult, Str
 }
 
 /// MS access → Minecraft profile, then persist tokens + account list.
-async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<LoginResult, String> {
+async fn finalize_microsoft_token_login(
+    token_resp: TokenResponse,
+    backend: MsOauthBackend,
+) -> Result<LoginResult, String> {
     let login = complete_microsoft_login(&token_resp.access_token).await?;
 
     // Soft entitlement gate — warn via Err only when we are sure ownership is missing.
@@ -1346,7 +1443,7 @@ async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<Log
         save_token(&account_refresh_key(&login.profile.uuid), rt)?;
     } else {
         return Err(
-            "Microsoft did not return a refresh token. Try device-code login again (do not revoke offline_access)."
+            "Microsoft did not return a refresh token. Try signing in again (do not revoke offline_access)."
                 .into(),
         );
     }
@@ -1363,6 +1460,7 @@ async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<Log
         skin_source: SkinSource::Mojang,
         added_at: now_secs(),
         authority: None,
+        ms_oauth_backend: Some(backend),
     };
     add_account_to_list(&entry)?;
 
@@ -1401,8 +1499,20 @@ async fn finalize_microsoft_token_login(token_resp: TokenResponse) -> Result<Log
 
 pub async fn login_with_refresh_token(
     refresh_token: &str,
+    backend: Option<MsOauthBackend>,
 ) -> Result<(LoginResult, Option<String>), String> {
-    let token_resp = refresh_minecraft_token(refresh_token).await?;
+    let token_resp = match backend {
+        Some(b) => refresh_minecraft_token(refresh_token, b).await?,
+        None => match refresh_minecraft_token(refresh_token, MsOauthBackend::Azure).await {
+            Ok(t) => t,
+            Err(azure_err) => match refresh_minecraft_token(refresh_token, MsOauthBackend::Live)
+                .await
+            {
+                Ok(t) => t,
+                Err(_) => return Err(azure_err),
+            },
+        },
+    };
     let login = complete_microsoft_login(&token_resp.access_token).await?;
     Ok((login, token_resp.refresh_token))
 }
@@ -1558,7 +1668,7 @@ pub async fn mc_poll_device_code() -> Result<LoginResult, String> {
     let token_resp = poll_device_code_token_once(&device_code).await?;
 
     // Only clear after Xbox/MC chain succeeds — otherwise the user can retry poll.
-    let result = finalize_microsoft_token_login(token_resp).await?;
+    let result = finalize_microsoft_token_login(token_resp, MsOauthBackend::Azure).await?;
     let _ = clear_token("mc-device-code");
     let _ = clear_token("mc-device-interval");
     Ok(result)
@@ -1573,8 +1683,88 @@ pub fn mc_get_microsoft_login_url() -> Result<String, String> {
 #[tauri::command(rename_all = "camelCase")]
 pub async fn mc_login_with_auth_url(url_or_code: String) -> Result<LoginResult, String> {
     let (code, redirect_uri) = extract_oauth_code(&url_or_code)?;
-    let token_resp = exchange_authorization_code(&code, redirect_uri).await?;
-    finalize_microsoft_token_login(token_resp).await
+    let backend = if redirect_uri == MS_REDIRECT_LIVE_DESKTOP {
+        MsOauthBackend::Live
+    } else {
+        MsOauthBackend::Azure
+    };
+    let token_resp = exchange_authorization_code(&code, redirect_uri, backend).await?;
+    finalize_microsoft_token_login(token_resp, backend).await
+}
+
+/// Open an in-app WebView for Microsoft login; intercept live.com redirect and finish auth.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mc_start_microsoft_webview_auth(app: AppHandle) -> Result<LoginResult, String> {
+    if let Some(existing) = app.get_webview_window(MS_AUTH_WINDOW_LABEL) {
+        let _ = existing.close();
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<(String, String), String>>();
+    let tx = Arc::new(Mutex::new(Some(tx)));
+
+    let auth_url = microsoft_live_authorize_url();
+    let parsed: url::Url = auth_url
+        .parse()
+        .map_err(|e| format!("invalid auth URL: {e}"))?;
+
+    let tx_nav = Arc::clone(&tx);
+    let app_nav = app.clone();
+    let tx_close = Arc::clone(&tx);
+
+    let auth_window = WebviewWindowBuilder::new(
+        &app,
+        MS_AUTH_WINDOW_LABEL,
+        WebviewUrl::External(parsed),
+    )
+    .title("Sign in with Microsoft")
+    .inner_size(500.0, 650.0)
+    .resizable(false)
+    .center()
+    .on_navigation(move |url| {
+        if !is_ms_oauth_callback(&url) {
+            return true;
+        }
+        match extract_oauth_code(url.as_str()) {
+            Ok((code, redirect)) => {
+                if let Ok(mut guard) = tx_nav.lock() {
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(Ok((code, redirect.to_string())));
+                    }
+                }
+            }
+            Err(e) => {
+                if let Ok(mut guard) = tx_nav.lock() {
+                    if let Some(sender) = guard.take() {
+                        let _ = sender.send(Err(e));
+                    }
+                }
+            }
+        }
+        if let Some(w) = app_nav.get_webview_window(MS_AUTH_WINDOW_LABEL) {
+            let _ = w.close();
+        }
+        false
+    })
+    .build()
+    .map_err(|e| format!("Failed to open Microsoft login window: {e}"))?;
+
+    auth_window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::Destroyed) {
+            if let Ok(mut guard) = tx_close.lock() {
+                if let Some(sender) = guard.take() {
+                    let _ = sender.send(Err("Microsoft login cancelled".into()));
+                }
+            }
+        }
+    });
+
+    let (code, redirect_uri) = rx
+        .await
+        .map_err(|_| "Microsoft login cancelled".to_string())??;
+
+    let token_resp =
+        exchange_authorization_code(&code, &redirect_uri, MsOauthBackend::Live).await?;
+    finalize_microsoft_token_login(token_resp, MsOauthBackend::Live).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1619,6 +1809,7 @@ pub async fn mc_offline_login(
         skin_source: skin_source.clone(),
         added_at: now_secs(),
         authority: None,
+        ms_oauth_backend: None,
     };
     add_account_to_list(&entry)?;
 
@@ -1661,7 +1852,8 @@ pub async fn mc_get_auth_status() -> Result<AuthState, String> {
     if should_refresh {
         if let Some(ref uuid) = state.active_account_uuid {
             if let Ok(refresh_token) = load_token(&account_refresh_key(uuid)) {
-                match login_with_refresh_token(&refresh_token).await {
+                let backend = account_ms_oauth_backend(uuid);
+                match login_with_refresh_token(&refresh_token, backend).await {
                     Ok((login, new_refresh)) => {
                         let mut profile = login.profile.clone();
                         // Keep the selected display cape provider (OptiFine / TLauncher / …)
@@ -1755,7 +1947,8 @@ pub async fn mc_refresh_profile() -> Result<McProfile, String> {
     if state.login_type == LoginType::Microsoft {
         if let Some(ref uuid) = state.active_account_uuid {
             let refresh_token = load_token(&account_refresh_key(uuid))?;
-            let (login, new_refresh) = login_with_refresh_token(&refresh_token).await?;
+            let backend = account_ms_oauth_backend(uuid);
+            let (login, new_refresh) = login_with_refresh_token(&refresh_token, backend).await?;
             save_token(&account_access_key(uuid), &login.mc_access_token)?;
             save_token("mc-access-token", &login.mc_access_token)?;
             if let Some(rt) = new_refresh {
@@ -2073,6 +2266,7 @@ pub async fn mc_yggdrasil_login(
         skin_source: skin_source.clone(),
         added_at: now_secs(),
         authority: Some(authority),
+        ms_oauth_backend: None,
     };
     add_account_to_list(&entry)?;
     set_active_account(&auth.uuid)?;
@@ -2151,7 +2345,10 @@ pub async fn mc_switch_account(uuid: String) -> Result<AuthState, String> {
             let mut profile = None;
             let mut expires = None;
             if let Ok(refresh_token) = load_token(&account_refresh_key(&uuid)) {
-                if let Ok((login, new_refresh)) = login_with_refresh_token(&refresh_token).await {
+                let backend = entry.ms_oauth_backend;
+                if let Ok((login, new_refresh)) =
+                    login_with_refresh_token(&refresh_token, backend).await
+                {
                     let _ = save_token(&account_access_key(&uuid), &login.mc_access_token);
                     let _ = save_token("mc-access-token", &login.mc_access_token);
                     if let Some(rt) = new_refresh {
@@ -2480,7 +2677,11 @@ mod tests {
     fn auth_state_serializes() {
         let state = AuthState::default();
         let json = serde_json::to_string(&state).unwrap();
-        assert!(json.contains("logged_in"));
+        // AuthState uses rename_all = "camelCase".
+        assert!(
+            json.contains("loggedIn"),
+            "expected camelCase loggedIn in {json}"
+        );
     }
 
     #[test]
@@ -2524,6 +2725,7 @@ mod tests {
             skin_source: SkinSource::Mojang,
             added_at: 12345,
             authority: None,
+            ms_oauth_backend: Some(MsOauthBackend::Live),
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("uuid"));

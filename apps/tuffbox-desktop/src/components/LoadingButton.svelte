@@ -1,12 +1,24 @@
 <script lang="ts">
-  import { Loader2 } from "lucide-svelte";
+  import type { Snippet } from "svelte";
+  import { Loader2 } from "@lucide/svelte";
 
-  export let loading = false;
-  export let disabled = false;
-  export let variant: "primary" | "secondary" | "ghost" | "danger" = "primary";
-  export let type: "button" | "submit" = "button";
+  let {
+    loading = false,
+    disabled = false,
+    variant = "primary",
+    type = "button",
+    onclick,
+    children,
+  }: {
+    loading?: boolean;
+    disabled?: boolean;
+    variant?: "primary" | "secondary" | "ghost" | "danger";
+    type?: "button" | "submit";
+    onclick?: (e: MouseEvent) => void;
+    children?: Snippet;
+  } = $props();
 
-  $: isDisabled = disabled || loading;
+  let isDisabled = $derived(disabled || loading);
 </script>
 
 <button
@@ -14,12 +26,12 @@
   class={variant}
   disabled={isDisabled}
   class:loading
-  on:click
+  {onclick}
 >
   {#if loading}
     <Loader2 size={16} class="spin-icon" />
   {/if}
-  <slot />
+  {@render children?.()}
 </button>
 
 <style>

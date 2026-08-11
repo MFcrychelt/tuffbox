@@ -2,12 +2,13 @@ use crate::adapters::{FabricAdapter, ForgeAdapter, LoaderAdapter, NeoForgeAdapte
 use crate::{DependencyGraph, DependencyKind, LoaderKind, ModDependencySpec, ProjectManifest};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// Schema version for cache invalidation. Increment when the cache format or
 /// enrichment logic changes so old caches are rebuilt automatically.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,15 +97,15 @@ pub fn enrich_manifest_from_installed_jars(manifest_path: &Path, manifest: &mut 
         LoaderKind::Neoforge => Box::new(NeoForgeAdapter),
         LoaderKind::Vanilla => return,
     };
+    // Snapshot ids so we can rename Local mods to their jar mod id without collisions.
+    let mut occupied: HashSet<String> = manifest.mods.iter().map(|m| m.id.clone()).collect();
+
     for module in &mut manifest.mods {
-        if !module.dependencies.is_empty() {
-            continue;
-        }
         let Some(file_name) = module.file_name.as_ref() else {
             continue;
         };
         let path = instance_dir.join("mods").join(file_name);
-        let Ok(file) = std::fs::File::open(path) else {
+        let Ok(file) = std::fs::File::open(&path) else {
             continue;
         };
         let Ok(mut archive) = zip::ZipArchive::new(file) else {
@@ -113,10 +114,36 @@ pub fn enrich_manifest_from_installed_jars(manifest_path: &Path, manifest: &mut 
         let Ok(metadata) = adapter.extract_metadata(&mut archive) else {
             continue;
         };
+
+        // Local drop-ins often used the jar filename as `id`. Rewrite to the
+        // descriptor id so Requires("meteor-client") resolves to the local jar.
+        if matches!(module.source.kind, crate::manifest::SourceKind::Local)
+            && !metadata.mod_id.is_empty()
+            && metadata.mod_id != "unknown"
+            && module.id != metadata.mod_id
+            && !occupied.contains(&metadata.mod_id)
+        {
+            occupied.remove(&module.id);
+            module.id = metadata.mod_id.clone();
+            occupied.insert(module.id.clone());
+            if module.name.ends_with(".jar") || module.name == file_name.as_str() {
+                module.name = metadata.display_name.clone();
+            }
+            if module.version == "unknown" && metadata.version != "0.0.0" {
+                module.version = metadata.version.clone();
+            }
+        }
+
+        if !module.dependencies.is_empty() {
+            continue;
+        }
         module.dependencies = metadata
             .dependencies
             .into_iter()
-            .filter(|dependency| dependency.mod_id != module.id)
+            .filter(|dependency| {
+                dependency.mod_id != module.id
+                    && !is_platform_dependency(&dependency.mod_id)
+            })
             .map(|dependency| ModDependencySpec {
                 target: dependency.mod_id,
                 kind: if dependency.required {
@@ -129,6 +156,22 @@ pub fn enrich_manifest_from_installed_jars(manifest_path: &Path, manifest: &mut 
             })
             .collect();
     }
+}
+
+/// Loader/runtime ids that appear in fabric.mod.json `depends` but are not pack mods.
+fn is_platform_dependency(id: &str) -> bool {
+    matches!(
+        id.to_ascii_lowercase().as_str(),
+        "minecraft"
+            | "java"
+            | "fabricloader"
+            | "fabric-loader"
+            | "quilt_loader"
+            | "quilt-loader"
+            | "forge"
+            | "neoforge"
+            | "neoforge-loader"
+    )
 }
 
 #[cfg(test)]
@@ -168,7 +211,7 @@ mod tests {
         let mut cache = GraphCache::new(&manifest, manifest.clone());
         cache.cache_version = 0;
         cache.save(&manifest_path).unwrap();
-        // Should be rejected: cache.cache_version (0) != CACHE_VERSION (2)
+        // Should be rejected: cache.cache_version (0) != CACHE_VERSION
         assert!(
             GraphCache::load_if_current(&manifest_path, &manifest)
                 .unwrap()
