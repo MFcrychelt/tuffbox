@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-  import { launchWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, launchingPath } from "../lib/launch";
   import { onMount, tick } from "svelte";
   import {
     Stethoscope,
@@ -191,7 +191,9 @@
   let planning = $state(false);
   let applying = $state(false);
   let applyingHintId = $state<string | null>(null);
-  let launching = $state(false);
+  // launching is derived from the shared launch store so the button stays in the
+  // launching state until the game is running or the run ends.
+  const launching = $derived($launchingPath === $projectPath);
   let fixingIdx = $state<number | null>(null);
   let disablingModId = $state<string | null>(null);
   let error = $state<string | null>(null);
@@ -1779,9 +1781,9 @@
   /// (do not invoke confirm again here).
   async function runTest() {
     if (!$projectPath || launching) return;
-    launching = true;
     error = null;
     message = "Launching Test profile — reproduce the crash, then come back.";
+    // launchWithFeedback drives the shared launch store; no local reset.
     const result = await launchWithFeedback(
       { path: $projectPath, profile: "client" },
       {
@@ -1795,7 +1797,6 @@
       message =
         "Test launch started. Soft-verify continues until a healthy post-fix session passes the playtime gate (or the game crashes / you Restore).";
     }
-    launching = false;
   }
 
   /// Opens the project folder in the OS file manager (quick access to

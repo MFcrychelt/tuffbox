@@ -3740,19 +3740,40 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
             resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
 
         let mut updates = Vec::new();
+        let project_loader = loader_slug.as_str();
+        let project_mc = manifest.minecraft.version.as_str();
         for (idx, latest) in pending {
             let m = &manifest.mods[idx];
             let file = ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
+            let new_file_name = file.as_ref().map(|f| f.filename.as_str()).unwrap_or("");
+            let current_file_name = m.file_name.as_deref().unwrap_or("");
+            // Quilt can run Fabric builds; treat those as non-breaking.
+            let loader_ok = latest
+                .loaders
+                .iter()
+                .any(|l| l == project_loader || (project_loader == "quilt" && l == "fabric"));
+            let mc_ok = latest.game_versions.iter().any(|v| v == project_mc);
+            let changelog = latest.changelog.trim();
+            let changelog_snippet: String = changelog
+                .chars()
+                .take(400)
+                .collect::<String>()
+                .trim()
+                .to_string();
             updates.push(serde_json::json!({
                 "modId": m.id,
                 "name": m.name,
                 "currentVersion": m.version,
                 "latestVersion": latest.version_number,
                 "versionId": latest.id,
-                "fileName": file.as_ref().map(|f| &f.filename),
+                "fileName": new_file_name,
+                "currentFileName": if current_file_name.is_empty() { None } else { Some(current_file_name) },
+                "fileNameChanged": !current_file_name.is_empty() && current_file_name != new_file_name,
+                "breakingLoader": !loader_ok,
+                "breakingMinecraft": !mc_ok,
                 "gameVersions": latest.game_versions,
                 "loaders": latest.loaders,
-                "changelog": latest.changelog,
+                "changelog": changelog_snippet,
                 "datePublished": latest.date_published,
                 "versionType": latest.version_type,
                 "iconUrl": m.source.icon_url,
@@ -3768,10 +3789,15 @@ async fn check_mod_updates(path: String) -> Result<Vec<serde_json::Value>, Strin
 /// a single auto-snapshot before the changes. Uses Modrinth's batch
 /// update API to resolve all updates in one request.
 #[tauri::command(rename_all = "camelCase")]
-async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_json::Value, String> {
+async fn update_all_mods(
+    app: tauri::AppHandle,
+    path: String,
+    dry_run: Option<bool>,
+) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || {
         use tauri::Emitter;
 
+        let dry_run = dry_run.unwrap_or(false);
         let _guard = MODS_IO_LOCK
             .lock()
             .map_err(|_| "mods I/O lock poisoned".to_string())?;
@@ -3793,6 +3819,61 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         let provider = tuffbox_core::ModrinthProvider::new();
         let (loader_slug, pending) =
             resolve_pending_mod_updates(&manifest_path, &manifest, &provider)?;
+
+        // Mandatory dry-run: resolve the preview but do NOT create a snapshot,
+        // touch the manifest, or download anything. The UI uses this to render
+        // a confirm-with-diff modal before committing (spec: no update-all
+        // without a preview). Reuses the enriched preview shape of
+        // `check_mod_updates` (breaking flags + changelog snippet + rename).
+        if dry_run {
+            let project_loader = loader_slug.as_str();
+            let project_mc = manifest.minecraft.version.as_str();
+            let preview: Vec<serde_json::Value> = pending
+                .into_iter()
+                .map(|(idx, latest)| {
+                    let m = &manifest.mods[idx];
+                    let file =
+                        ProviderFileInfo::select_file_for_loader(&latest, &loader_slug).cloned();
+                    let new_file_name = file.as_ref().map(|f| f.filename.as_str()).unwrap_or("");
+                    let current_file_name = m.file_name.as_deref().unwrap_or("");
+                    let loader_ok = latest.loaders.iter().any(|l| {
+                        l == project_loader || (project_loader == "quilt" && l == "fabric")
+                    });
+                    let mc_ok = latest.game_versions.iter().any(|v| v == project_mc);
+                    let changelog_snippet: String = latest
+                        .changelog
+                        .trim()
+                        .chars()
+                        .take(400)
+                        .collect::<String>()
+                        .trim()
+                        .to_string();
+                    serde_json::json!({
+                        "modId": m.id,
+                        "name": m.name,
+                        "currentVersion": m.version,
+                        "latestVersion": latest.version_number,
+                        "versionId": latest.id,
+                        "fileName": new_file_name,
+                        "currentFileName": if current_file_name.is_empty() { None } else { Some(current_file_name) },
+                        "fileNameChanged": !current_file_name.is_empty() && current_file_name != new_file_name,
+                        "breakingLoader": !loader_ok,
+                        "breakingMinecraft": !mc_ok,
+                        "gameVersions": latest.game_versions,
+                        "loaders": latest.loaders,
+                        "changelog": changelog_snippet,
+                        "datePublished": latest.date_published,
+                        "versionType": latest.version_type,
+                        "iconUrl": m.source.icon_url,
+                    })
+                })
+                .collect();
+            return Ok(serde_json::json!({
+                "dryRun": true,
+                "preview": preview,
+                "count": preview.len(),
+            }));
+        }
 
         emit_mod_update_progress(
             &app,
@@ -3965,6 +4046,7 @@ async fn update_all_mods(app: tauri::AppHandle, path: String) -> Result<serde_js
         Ok(serde_json::json!({
             "updated": updated,
             "errors": skipped_errors,
+            "skipped": download.skipped,
             "download": download,
         }))
     })
@@ -11718,6 +11800,21 @@ async fn launch_profile_impl(
     }
 }
 
+/// Emit an explicit launch lifecycle phase to the frontend. Phases are
+/// `preparing` → `resolving_java` → `downloading` → `starting` → `running` →
+/// `exited`, keyed by the manifest path (the same id used by
+/// `process-started` / `process-exited` and `runningInstances`).
+fn emit_launch_phase(app: &tauri::AppHandle, path: &str, phase: &str, message: &str) {
+    let _ = app.emit(
+        "launch-phase",
+        serde_json::json!({
+            "path": path,
+            "phase": phase,
+            "message": message,
+        }),
+    );
+}
+
 fn build_and_spawn(
     path: String,
     profile: String,
@@ -11737,6 +11834,8 @@ fn build_and_spawn(
         LaunchErrorInfo::new(LaunchErrorKind::Install, e).with_log(&console_log)
     })?;
     let path = manifest_path.to_string_lossy().to_string();
+
+    emit_launch_phase(&app, &path, "preparing", "Preparing profile…");
 
     let manifest = ProjectManifest::load_from_path(&manifest_path).map_err(|e| {
         LaunchErrorInfo::new(LaunchErrorKind::Install, e.to_string()).with_log(&console_log)
@@ -11767,6 +11866,8 @@ fn build_and_spawn(
     let progress = tuffbox_core::mc_install::InstallProgress {
         log_path: console_log.clone(),
     };
+
+    emit_launch_phase(&app, &path, "resolving_java", "Resolving Java runtime…");
 
     let java = if let Some(java_path) = java_path {
         tuffbox_core::jre::check_java_at_path(&PathBuf::from(&java_path)).map_err(|e| {
@@ -11850,6 +11951,7 @@ fn build_and_spawn(
     // UI still shows a full mod list.
     // For server runs, verify against the author project (source of jars);
     // the staged server dir already has a filtered copy.
+    emit_launch_phase(&app, &path, "downloading", "Verifying content files…");
     progress.log("# Verifying mod files...");
     let sync_report = tuffbox_core::ensure_project_mods_downloaded(&manifest, &project_dir);
     if !sync_report.downloaded.is_empty() {
@@ -11883,6 +11985,7 @@ fn build_and_spawn(
         .with_log(&console_log));
     }
 
+    emit_launch_phase(&app, &path, "starting", "Installing Minecraft & starting JVM…");
     progress.log("# Installing Minecraft (this may take a while)...");
 
     let mut launch_jvm_args = project_profile.jvm_args.clone();
@@ -12054,6 +12157,16 @@ fn build_and_spawn(
                 "code": exit.code,
             }),
         );
+        emit_launch_phase(
+            &app_for_exit,
+            &stats_path_for_exit,
+            "exited",
+            if exit.code == Some(0) {
+                "Game exited"
+            } else {
+                "Game exited (crashed)"
+            },
+        );
         overlay_hook::stop_ipc_server();
         if exit.code == Some(0) {
             return;
@@ -12110,6 +12223,7 @@ fn build_and_spawn(
             "startedAt": running.started_at,
         }),
     );
+    emit_launch_phase(&app, &path, "running", "Running");
 
     if overlay_env.is_some() {
         let pid = running.pid;
@@ -13033,18 +13147,32 @@ fn clone_project(path: String, new_name: String) -> Result<String, String> {
 /// action — it doesn't pretend to fix arbitrary problems, but it does fix
 /// the most common real one (missing or corrupted content files).
 #[tauri::command(rename_all = "camelCase")]
-async fn repair_project(path: String) -> Result<tuffbox_core::ModSyncReport, String> {
-    tokio::task::spawn_blocking(move || {
-        let manifest = ProjectManifest::load_from_path(&path).map_err(|e| e.to_string())?;
-        let instance_dir = tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path))
-            .ok_or_else(|| "manifest has no parent directory".to_string())?;
-        Ok(tuffbox_core::ensure_project_mods_downloaded(
-            &manifest,
-            &instance_dir,
-        ))
+async fn repair_project(path: String) -> Result<serde_json::Value, String> {
+    let path2 = path.clone();
+    // Re-download missing / hash-mismatched content files (the honest fix).
+    let sync = tokio::task::spawn_blocking(move || {
+        let manifest = ProjectManifest::load_from_path(&path2).map_err(|e| e.to_string())?;
+        let instance_dir =
+            tuffbox_core::instance_dir_for_manifest(&PathBuf::from(&path2))
+                .ok_or_else(|| "manifest has no parent directory".to_string())?;
+        Ok::<_, String>(tuffbox_core::ensure_project_mods_downloaded(&manifest, &instance_dir))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    // Also surface duplicate jars and wrong-loader jars in the same report so
+    // a single "Repair" pass reports everything the user must act on.
+    let duplicates = detect_duplicate_mod_jars(path.clone()).await.unwrap_or_default();
+    let wrong_loader = detect_wrong_loader_mods(path).await.unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "downloaded": sync.downloaded,
+        "failed": sync.failed,
+        "alreadyPresent": sync.already_present,
+        "skipped": sync.skipped,
+        "duplicates": duplicates,
+        "wrongLoader": wrong_loader,
+    }))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -14082,7 +14210,12 @@ fn finalize_mod_history(
 /// whose sha1 still matches the pre-update artifact. Filename-only cleanup
 /// misses Modrinth renames (`mod-1.0.0.jar` → `mod-1.0.1.jar`) when the
 /// manifest path was already out of sync with disk.
-fn remove_superseded_mod_files(manifest_path: &Path, old_mod: &ModSpec, new_mod: &ModSpec) {
+fn remove_superseded_mod_files(
+    manifest_path: &Path,
+    old_mod: &ModSpec,
+    new_mod: &ModSpec,
+    tracked_bases: &std::collections::HashSet<String>,
+) {
     let Some(instance_dir) = tuffbox_core::instance_dir_for_manifest(manifest_path) else {
         return;
     };
@@ -14110,6 +14243,12 @@ fn remove_superseded_mod_files(manifest_path: &Path, old_mod: &ModSpec, new_mod:
             continue;
         }
         if keep_name == Some(base) {
+            continue;
+        }
+        // Never remove a file still tracked by ANOTHER live mod (e.g. a
+        // sibling like sodium-extra when updating sodium) — the slug-prefix
+        // heuristic below must not cross mod boundaries.
+        if tracked_bases.contains(base) {
             continue;
         }
 
@@ -14290,8 +14429,20 @@ fn commit_single_mod_update(
         ));
     }
 
-    remove_superseded_mod_files(manifest_path, &old_for_cleanup, &new_mod);
+    // Base file names of all other tracked mods — never removed by cleanup.
+    let tracked_bases: std::collections::HashSet<String> = updated_manifest
+        .mods
+        .iter()
+        .filter(|m| m.id != new_mod.id)
+        .filter_map(|m| m.file_name.as_deref().map(strip_disabled_suffix))
+        .collect();
+    remove_superseded_mod_files(manifest_path, &old_for_cleanup, &new_mod, &tracked_bases);
     Ok(report)
+}
+
+/// Strip a trailing `.disabled` from a jar name, if present.
+fn strip_disabled_suffix(name: &str) -> String {
+    name.strip_suffix(".disabled").unwrap_or(name).to_string()
 }
 
 fn apply_change_action(
@@ -15904,4 +16055,170 @@ pub fn run() {
                 launcher_presence::goodbye_on_exit();
             }
         });
+}
+
+#[cfg(test)]
+mod mods_cleanup_tests {
+    use super::*;
+    use std::fs;
+    use tuffbox_core::manifest::{
+        ContentType, FileHashes, ModSource, ModSpec, Side, SourceKind,
+    };
+
+    /// Minimal Modrinth mod spec for cleanup tests.
+    fn spec(id: &str, file_name: &str, sha1: Option<&str>) -> ModSpec {
+        ModSpec {
+            id: id.to_string(),
+            name: id.to_string(),
+            source: ModSource {
+                kind: SourceKind::Modrinth,
+                project_id: Some("proj-123".to_string()),
+                file_id: Some("ver-1".to_string()),
+                url: Some("https://example.com/file.jar".to_string()),
+                path: None,
+                icon_url: None,
+                categories: Vec::new(),
+            },
+            version: "1.0.0".to_string(),
+            file_name: Some(file_name.to_string()),
+            hashes: sha1.map(|h| FileHashes {
+                sha1: Some(h.to_string()),
+                sha512: None,
+            }),
+            side: Side::Both,
+            dependencies: Vec::new(),
+            status: Vec::new(),
+            content_type: ContentType::Mod,
+            authors: Vec::new(),
+            option: None,
+        }
+    }
+
+    fn make_project() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let mods_dir = dir.path().join("mods");
+        fs::create_dir_all(&mods_dir).unwrap();
+        let manifest_path = dir.path().join("proj.tuffbox.json");
+        // Manifest doesn't need to exist for cleanup to run — only the parent
+        // dir (instance root) and the content folder matter.
+        (dir, manifest_path)
+    }
+
+    fn tracked_from(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    fn files_in(dir: &std::path::Path) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(rd) = fs::read_dir(dir) {
+            for e in rd.flatten() {
+                if let Some(n) = e.file_name().to_str() {
+                    out.push(n.to_string());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Rename: the old filename (same mod slug prefix) is removed; the new file
+    /// and unrelated jars are kept.
+    #[test]
+    fn removes_renamed_old_jar_keeps_new_and_unrelated() {
+        let (dir, manifest_path) = make_project();
+        let mods = dir.path().join("mods");
+        fs::write(mods.join("sodium-fabric-0.5.0.jar"), b"old bytes").unwrap();
+        fs::write(mods.join("sodium-fabric-0.5.8.jar"), b"new bytes").unwrap();
+        // A different mod whose filename does NOT share the `sodium` slug.
+        fs::write(mods.join("iris-fabric-1.6.0.jar"), b"unrelated").unwrap();
+
+        let old = spec("sodium", "sodium-fabric-0.5.0.jar", None);
+        let new = spec("sodium", "sodium-fabric-0.5.8.jar", Some("newsha1"));
+        let tracked = tracked_from(&["iris-fabric-1.6.0.jar", "sodium-fabric-0.5.8.jar"]);
+        remove_superseded_mod_files(&manifest_path, &old, &new, &tracked);
+
+        let files = files_in(&mods);
+        assert!(files.contains(&"sodium-fabric-0.5.8.jar".to_string()), "new jar kept: {files:?}");
+        assert!(files.contains(&"iris-fabric-1.6.0.jar".to_string()), "unrelated kept: {files:?}");
+        assert!(!files.contains(&"sodium-fabric-0.5.0.jar".to_string()), "old jar removed: {files:?}");
+    }
+
+    /// `.disabled` leftover for the same mod slug is cleaned up too.
+    #[test]
+    fn removes_disabled_leftover() {
+        let (dir, manifest_path) = make_project();
+        let mods = dir.path().join("mods");
+        fs::write(mods.join("sodium-fabric-0.5.0.jar.disabled"), b"old bytes").unwrap();
+        fs::write(mods.join("sodium-fabric-0.5.8.jar"), b"new bytes").unwrap();
+
+        let old = spec("sodium", "sodium-fabric-0.5.0.jar", None);
+        let new = spec("sodium", "sodium-fabric-0.5.8.jar", Some("newsha1"));
+        let tracked = tracked_from(&["sodium-fabric-0.5.8.jar"]);
+        remove_superseded_mod_files(&manifest_path, &old, &new, &tracked);
+
+        let files = files_in(&mods);
+        assert!(files.contains(&"sodium-fabric-0.5.8.jar".to_string()));
+        assert!(!files.contains(&"sodium-fabric-0.5.0.jar.disabled".to_string()));
+    }
+
+    /// A jar whose bytes hash to the old sha1 is removed even when its
+    /// filename drifted (manifest metadata out of sync with disk).
+    #[test]
+    fn removes_same_hash_even_with_different_name() {
+        let (dir, manifest_path) = make_project();
+        let mods = dir.path().join("mods");
+        // Write content, then compute the real sha1 for that file.
+        let content = b"identical-bytes-123";
+        fs::write(mods.join("sodium-custom-name.jar"), content).unwrap();
+        let hash = tuffbox_core::mc_install::sha1_file(&mods.join("sodium-custom-name.jar")).unwrap();
+        fs::write(mods.join("sodium-fabric-0.5.8.jar"), b"new bytes").unwrap();
+
+        // old spec claims a filename that no longer exists on disk, but its
+        // sha1 matches the real leftover file.
+        let old = spec("sodium", "sodium-fabric-0.5.0.jar", Some(&hash));
+        let new = spec("sodium", "sodium-fabric-0.5.8.jar", Some("newsha1"));
+        let tracked = tracked_from(&["sodium-fabric-0.5.8.jar"]);
+        remove_superseded_mod_files(&manifest_path, &old, &new, &tracked);
+
+        let files = files_in(&mods);
+        assert!(files.contains(&"sodium-fabric-0.5.8.jar".to_string()));
+        assert!(!files.contains(&"sodium-custom-name.jar".to_string()), "same-hash leftover removed: {files:?}");
+    }
+
+    /// The new file must never be removed even though it shares the mod slug
+    /// prefix (guards against the cleanup deleting the fresh download).
+    #[test]
+    fn never_removes_the_new_file() {
+        let (dir, manifest_path) = make_project();
+        let mods = dir.path().join("mods");
+        fs::write(mods.join("sodium-fabric-0.5.8.jar"), b"new bytes").unwrap();
+
+        let old = spec("sodium", "sodium-fabric-0.5.0.jar", None);
+        let new = spec("sodium", "sodium-fabric-0.5.8.jar", None);
+        let tracked = tracked_from(&["sodium-fabric-0.5.8.jar"]);
+        remove_superseded_mod_files(&manifest_path, &old, &new, &tracked);
+
+        let files = files_in(&mods);
+        assert!(files.contains(&"sodium-fabric-0.5.8.jar".to_string()));
+    }
+
+    /// A sibling mod (e.g. sodium-extra) whose filename shares the updated
+    /// mod's slug prefix must NOT be removed by the cleanup heuristic.
+    #[test]
+    fn does_not_remove_sibling_mod_sharing_slug_prefix() {
+        let (dir, manifest_path) = make_project();
+        let mods = dir.path().join("mods");
+        fs::write(mods.join("sodium-extra-0.4.0.jar"), b"sibling bytes").unwrap();
+        fs::write(mods.join("sodium-fabric-0.5.8.jar"), b"new bytes").unwrap();
+
+        let old = spec("sodium", "sodium-fabric-0.5.0.jar", None);
+        let new = spec("sodium", "sodium-fabric-0.5.8.jar", Some("newsha1"));
+        // sodium-extra is a separate tracked mod — its jar must survive.
+        let tracked = tracked_from(&["sodium-extra-0.4.0.jar", "sodium-fabric-0.5.8.jar"]);
+        remove_superseded_mod_files(&manifest_path, &old, &new, &tracked);
+
+        let files = files_in(&mods);
+        assert!(files.contains(&"sodium-fabric-0.5.8.jar".to_string()));
+        assert!(files.contains(&"sodium-extra-0.4.0.jar".to_string()), "sibling kept: {files:?}");
+    }
 }

@@ -23,6 +23,7 @@
   import { toasts } from "./lib/toast";
   import LaunchLogModal from "./components/LaunchLogModal.svelte";
   import { launchWithFeedback, registerLaunchCrashListener, registerProcessListeners, refreshRunningInstances } from "./lib/launch";
+  import { registerDownloadListeners } from "./lib/downloadProgress";
   import { registerSoftVerifyListeners } from "./lib/softVerify";
 
   const SWARM_ONBOARD_KEY = "tuffbox.swarm.onboarding.done";
@@ -250,6 +251,10 @@
     applyRoundedCorners(storedRounded !== "0");
     void registerLaunchCrashListener();
     void registerProcessListeners();
+    // Shared mod download/update progress feed (single source for any consumer,
+    // e.g. a TaskProgressPanel). Registered app-wide so the Mods pane and the
+    // dependency-install flow read the same store.
+    void registerDownloadListeners();
     void refreshRunningInstances();
     const unlistenSoftVerify = registerSoftVerifyListeners();
     let stopHomeEnrich: (() => void) | null = null;

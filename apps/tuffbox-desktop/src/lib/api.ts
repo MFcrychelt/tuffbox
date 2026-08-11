@@ -1331,7 +1331,16 @@ export const api = {
     getManifestSchema(p?: string) { return cmd<Record<string, unknown>>("get_manifest_schema", pathArg(p)); },
     runValidation(p?: string) { return cmd<Record<string, unknown>>("run_project_validation", pathArg(p)); },
     getDiagnostics(p?: string) { return cmd<Diagnostic[]>("get_diagnostics", pathArg(p)); },
-    repair(p?: string) { return cmd<ModSyncReport>("repair_project", pathArg(p)); },
+    repair(p?: string) {
+      return cmd<{
+        downloaded?: string[];
+        failed?: { modId: string; error: string }[];
+        alreadyPresent?: string[];
+        skipped?: string[];
+        duplicates?: Record<string, unknown>[];
+        wrongLoader?: Record<string, unknown>[];
+      }>("repair_project", pathArg(p));
+    },
     cleanup(p?: string) { return cmd<Record<string, unknown>>("cleanup_project", pathArg(p)); },
     listProfiles(p?: string) { return cmd<ProfileSummary[]>("list_profiles", pathArg(p)); },
   },
@@ -1402,8 +1411,16 @@ export const api = {
     changeVersion(modId: string, newVersionId: string, p?: string) { return cmd<Record<string, unknown>>("change_mod_version", { ...pathArg(p), modId, newVersionId }); },
     getVersions(modId: string, minecraftVersion: string, loader?: string | null) { return cmd<Record<string, unknown>[]>("get_mod_versions", { modId, minecraftVersion, loader }); },
     checkUpdates(p?: string) { return cmd<Record<string, unknown>[]>("check_mod_updates", pathArg(p)); },
-    updateAll(p?: string) {
-      return cmd<{ updated: string[]; errors?: string[]; download?: Record<string, unknown> }>("update_all_mods", pathArg(p));
+    updateAll(p?: string, dryRun?: boolean) {
+      return cmd<{
+        dryRun?: boolean;
+        count?: number;
+        preview?: Record<string, unknown>[];
+        updated?: string[];
+        errors?: string[];
+        skipped?: string[];
+        download?: Record<string, unknown>;
+      }>("update_all_mods", { ...pathArg(p), dryRun: dryRun ?? false });
     },
     retryFailedDownloads(modIds: string[], p?: string) {
       return cmd<Record<string, unknown>>("retry_failed_mod_downloads", { ...pathArg(p), modIds });

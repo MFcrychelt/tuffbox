@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { Stethoscope, ArrowRight, X, AlertTriangle } from "@lucide/svelte";
-  import { launchWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, launchingPath } from "../lib/launch";
   import {
     projectPath,
     ideStageRequest,
@@ -28,7 +28,9 @@
   } = $props();
 
   let refreshing = $state(false);
-  let launching = $state(false);
+  // launching is derived from the shared launch store so the Play button stays
+  // disabled until the game is actually running (process-started) or exits.
+  const launching = $derived($launchingPath === $projectPath);
 
   const next = $derived(
     computeIdeNextAction({
@@ -120,12 +122,8 @@
 
   async function runPlay() {
     if (!$projectPath || launching) return;
-    launching = true;
-    try {
-      await launchWithFeedback({ path: $projectPath, profile: "client" });
-    } finally {
-      launching = false;
-    }
+    // launchWithFeedback drives the shared launch store; no local reset needed.
+    await launchWithFeedback({ path: $projectPath, profile: "client" });
   }
 
   function onTrailAction(kind: string, stage?: string) {

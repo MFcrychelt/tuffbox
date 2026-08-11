@@ -43,7 +43,7 @@
   import { toasts } from "../lib/toast";
   import { api } from "../lib/api";
   import { copyText } from "../lib/clipboard";
-  import { launchWithFeedback, killWithFeedback } from "../lib/launch";
+  import { launchWithFeedback, killWithFeedback, launchingPath } from "../lib/launch";
   import {
     DEFAULT_GROUP,
     loadGroupMap,
@@ -69,7 +69,6 @@
   const MOVE_CANCEL_PX = 10;
 
   let selectedPath = $state<string | null>($projectPath);
-  let launching = $state<string | null>(null);
   let actionBusy = $state(false);
   let exportMenuOpen = $state(false);
   let addMenuOpen = $state(false);
@@ -264,7 +263,9 @@
 
   async function launchInstance(project: RecentProject) {
     closeMenus();
-    launching = project.path;
+    // `launchingPath` is driven by the shared launch store — it stays set until
+    // the backend reports the game `running` (process-started) or the run ends
+    // (process-exited / launch-crashed), so the Play button keeps its spinner.
     try {
       const path = await selectInstance(project);
       if (
@@ -278,7 +279,6 @@
       await invoke("set_last_opened_project", { path });
       await launchWithFeedback({ path, profile: "client" });
     } finally {
-      launching = null;
       void loadStats(selectedPath ?? project.path);
     }
   }
@@ -731,16 +731,26 @@
       case "repair":
         actionBusy = true;
         try {
-          const report: { downloaded?: unknown[]; failed?: unknown[] } = await invoke(
-            "repair_project",
-            { path: project.path },
-          );
+          const report: {
+            downloaded?: unknown[];
+            failed?: unknown[];
+            duplicates?: unknown[];
+            wrongLoader?: unknown[];
+          } = await invoke("repair_project", { path: project.path });
           const downloaded = report.downloaded?.length ?? 0;
           const failed = report.failed?.length ?? 0;
+          const dupGroups = report.duplicates?.length ?? 0;
+          const wrongLoader = report.wrongLoader?.length ?? 0;
+          const bits: string[] = [];
+          if (downloaded > 0) bits.push(`${downloaded} re-downloaded`);
+          if (failed > 0) bits.push(`${failed} failed`);
+          if (dupGroups > 0) bits.push(`${dupGroups} duplicate group${dupGroups > 1 ? "s" : ""}`);
+          if (wrongLoader > 0) bits.push(`${wrongLoader} wrong-loader jar${wrongLoader > 1 ? "s" : ""}`);
           toasts.success(
-            downloaded === 0 && failed === 0
+            bits.length === 0
               ? "All mod files present and valid."
-              : `Repaired: ${downloaded} file(s) re-downloaded${failed ? `, ${failed} failed` : ""}.`,
+              : `Repair report: ${bits.join(", ")}.`,
+            bits.length > 0 ? 8000 : undefined,
           );
         } catch (e) {
           toasts.error(String(e));
@@ -1063,10 +1073,10 @@
               <button
                 type="button"
                 class="side-btn launch"
-                disabled={actionBusy || launching === selected.path || selectedRunning}
+                disabled={actionBusy || $launchingPath === selected.path || selectedRunning}
                 onclick={() => void runAction("launch", selected)}
               >
-                {#if launching === selected.path}
+                {#if $launchingPath === selected.path}
                   <span class="mini-spinner"></span> Launching…
                 {:else}
                   <Play size={16} fill="currentColor" /> Launch

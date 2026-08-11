@@ -1114,6 +1114,8 @@ import { trapFocus } from "../lib/focusTrap";
   let updateList = $state<any[]>([]);
   let updateCheckLoading = $state(false);
   let updateApplying = $state(false);
+  /** Confirm-before-apply modal for Update All (spec: no update-all without a preview). */
+  let updateConfirmOpen = $state(false);
 
   async function checkForUpdates() {
     if (!$projectPath) return;
@@ -1130,14 +1132,26 @@ import { trapFocus } from "../lib/focusTrap";
     }
   }
 
+  /** Ensure a preview exists, then open the confirm-with-diff modal. */
+  async function openUpdateConfirm() {
+    if (!$projectPath) return;
+    if (updateList.length === 0) {
+      await checkForUpdates();
+    }
+    if (updateList.length === 0) {
+      message = "All mods are up to date for this Minecraft version.";
+      return;
+    }
+    updateConfirmOpen = true;
+  }
+
+  /** Apply the confirmed update batch (only reachable after a preview). */
   async function applyAllUpdates() {
+    updateConfirmOpen = false;
     if (!$projectPath) return;
     updateApplying = true;
     error = null;
     message = null;
-    if (updateList.length === 0) {
-      await checkForUpdates();
-    }
     if (updateList.length === 0) {
       message = "All mods are up to date for this Minecraft version.";
       updateApplying = false;
@@ -2791,9 +2805,9 @@ import { trapFocus } from "../lib/focusTrap";
             class="more-item"
             class:has-updates={updateList.length > 0}
             role="menuitem"
-            onclick={() => { actionsMenuOpen = false; void applyAllUpdates(); }}
+            onclick={() => { actionsMenuOpen = false; void openUpdateConfirm(); }}
             disabled={!$projectPath || updateApplying || updateCheckLoading || contentFilter !== "mod"}
-            title="Update all mods to the latest build for this Minecraft version"
+            title="Preview and update all mods to the latest build for this Minecraft version"
           >
             <Sparkles size={14} />
             {#if updateApplying}
@@ -3142,6 +3156,8 @@ import { trapFocus } from "../lib/focusTrap";
         mod={focusedMod}
         onclose={clearFocusedMod}
         onopenlink={(url) => void openExternalUrl(url)}
+        ontoggleDisabled={(m) => void toggleDisabled(m as ModRow)}
+        onopenversions={(m) => void openVersionPicker(m as ModRow)}
       />
     {/key}
   {/if}
@@ -4219,6 +4235,60 @@ import { trapFocus } from "../lib/focusTrap";
     onconfirm={() => { if (deleteTarget) deleteList(deleteTarget); showDeleteConfirm = false; }}
     oncancel={() => (showDeleteConfirm = false)}
   />
+{/if}
+
+{#if updateConfirmOpen}
+  <div class="modal-backdrop" role="button" tabindex="-1" onclick={(e) => e.target === e.currentTarget && (updateConfirmOpen = false)} onkeydown={() => {}}>
+    <div class="modal plan-modal update-confirm-modal" role="dialog" aria-modal="true" use:trapFocus={{ onEscape: () => (updateConfirmOpen = false) }}>
+      <div class="modal-header">
+        <div>
+          <h2>Update {updateList.length} mod{#if updateList.length !== 1}s{/if}?</h2>
+          <p>Preview below. A safety snapshot is created before applying.</p>
+        </div>
+        <button class="icon-btn" onclick={() => (updateConfirmOpen = false)} aria-label="Close"><X size={18} /></button>
+      </div>
+
+      <div class="update-confirm-list">
+        {#each updateList as u (`${u.modId}:${u.latestVersion}`)}
+          <div class="update-confirm-row" class:breaking={(u.breakingLoader || u.breakingMinecraft)}>
+            <div class="update-confirm-main">
+              <span class="update-confirm-name">{u.name}</span>
+              <span class="update-confirm-vers">
+                {u.currentVersion || "?"} → <strong>{u.latestVersion}</strong>
+              </span>
+              {#if u.fileNameChanged}
+                <span class="update-confirm-chip rename" title={`${u.currentFileName ?? ""} → ${u.fileName}`}>renamed file</span>
+              {/if}
+              {#if u.breakingLoader}
+                <span class="update-confirm-chip loader">loader changed</span>
+              {/if}
+              {#if u.breakingMinecraft}
+                <span class="update-confirm-chip mc">MC version changed</span>
+              {/if}
+            </div>
+            {#if u.changelog}
+              <div class="update-confirm-changelog">{u.changelog}</div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      {#if updateList.some((u) => u.breakingLoader || u.breakingMinecraft)}
+        <div class="plan-conflicts">
+          <strong>⚠ Some updates change loader / Minecraft version</strong>
+          <span>These may require a different loader or Minecraft version. Verify before applying.</span>
+        </div>
+      {/if}
+
+      <div class="plan-modal-actions">
+        <button class="ghost" onclick={() => (updateConfirmOpen = false)}>Cancel</button>
+        <button class="secondary" onclick={() => void applyAllUpdates()} disabled={updateApplying}>
+          <Download size={16} />
+          {updateApplying ? "Updating…" : `Apply ${updateList.length} update${updateList.length !== 1 ? "s" : ""}`}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -6652,6 +6722,21 @@ import { trapFocus } from "../lib/focusTrap";
   .plan-dep-row.conflict { border-left: 3px solid rgba(239,68,68,.6); }
   .plan-no-deps { color: var(--text-muted); font-size: 12px; padding: 8px; }
   .plan-modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 14px; border-top: 1px solid var(--border-color); margin-top: 8px; }
+
+  .update-confirm-modal { max-width: 600px; }
+  .update-confirm-list { display: grid; gap: 8px; max-height: 50vh; overflow: auto; padding: 4px 2px; }
+  .update-confirm-row { padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--bg-tertiary); display: grid; gap: 6px; }
+  .update-confirm-row.breaking { border-color: rgba(239,68,68,.5); }
+  .update-confirm-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .update-confirm-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .update-confirm-vers { color: var(--text-muted); font-size: 12px; }
+  .update-confirm-vers strong { color: var(--accent-primary); }
+  .update-confirm-chip { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: 2px 6px; border-radius: 999px; }
+  .update-confirm-chip.rename { background: color-mix(in srgb, var(--accent-secondary) 18%, transparent); color: var(--accent-secondary); }
+  .update-confirm-chip.loader { background: rgba(251,191,36,.14); color: #fbbf24; }
+  .update-confirm-chip.mc { background: rgba(251,191,36,.14); color: #fbbf24; }
+  .update-confirm-changelog { color: var(--text-muted); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; max-height: 72px; overflow: hidden; }
+  .update-confirm-changelog:empty { display: none; }
 
   .recs-panel {
     margin-bottom: 12px;
